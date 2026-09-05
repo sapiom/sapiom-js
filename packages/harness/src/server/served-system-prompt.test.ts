@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startServer, type HarnessServer } from "./index.js";
+import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import type {
   HarnessAdapter,
@@ -90,7 +91,7 @@ describe("served system prompt reaches the launched session", () => {
 
     const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
 
-    expect(await systemPromptFile(session.id)).toBe(SERVED_PROMPT);
+    expect(await systemPromptFile(session.id)).toBe(`${SERVED_PROMPT}\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 
   it("re-reads it on resume, so a redeployed prompt reaches a continued session", async () => {
@@ -106,7 +107,7 @@ describe("served system prompt reaches the launched session", () => {
     served = "# Redeployed prompt";
     await server.sessionManager.resume(session.id);
 
-    expect(await systemPromptFile(session.id)).toBe("# Redeployed prompt");
+    expect(await systemPromptFile(session.id)).toBe(`# Redeployed prompt\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 
   it("falls back to the bundled profile when the load fails", async () => {
@@ -118,6 +119,6 @@ describe("served system prompt reaches the launched session", () => {
 
     const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
 
-    expect(await systemPromptFile(session.id)).toBe(DEFAULT_SYSTEM_PROMPT);
+    expect(await systemPromptFile(session.id)).toBe(`${DEFAULT_SYSTEM_PROMPT}\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 });

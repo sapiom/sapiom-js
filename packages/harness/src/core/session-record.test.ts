@@ -47,10 +47,18 @@ function event(spec: EventSpec): AnalyticsEvent {
   };
 }
 
-const prompt = (ts: string, text: string, rest: Partial<EventSpec> = {}): AnalyticsEvent =>
+const prompt = (
+  ts: string,
+  text: string,
+  rest: Partial<EventSpec> = {},
+): AnalyticsEvent =>
   event({ type: "prompt.submitted", ts, payload: { prompt: text }, ...rest });
 
-const tool = (ts: string, name: string, rest: Partial<EventSpec> = {}): AnalyticsEvent =>
+const tool = (
+  ts: string,
+  name: string,
+  rest: Partial<EventSpec> = {},
+): AnalyticsEvent =>
   event({
     type: "tool.call",
     ts,
@@ -58,7 +66,11 @@ const tool = (ts: string, name: string, rest: Partial<EventSpec> = {}): Analytic
     ...rest,
   });
 
-const completed = (ts: string, text: string | null, rest: Partial<EventSpec> = {}): AnalyticsEvent =>
+const completed = (
+  ts: string,
+  text: string | null,
+  rest: Partial<EventSpec> = {},
+): AnalyticsEvent =>
   event({
     type: "turn.completed",
     ts,
@@ -73,12 +85,20 @@ const completed = (ts: string, text: string | null, rest: Partial<EventSpec> = {
 describe("foldSessionRecord", () => {
   it("folds prompt → tool calls → completion into one closed turn", () => {
     const record = foldSessionRecord([
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd: "/repo" } }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd: "/repo" },
+      }),
       prompt("2026-07-01T10:00:01.000Z", "add the screening step"),
       tool("2026-07-01T10:00:02.000Z", "Read"),
       tool("2026-07-01T10:00:03.000Z", "Edit"),
       completed("2026-07-01T10:00:04.000Z", "Added it."),
-      event({ type: "session.end", ts: "2026-07-01T10:00:05.000Z", payload: { reason: "exit" } }),
+      event({
+        type: "session.end",
+        ts: "2026-07-01T10:00:05.000Z",
+        payload: { reason: "exit" },
+      }),
     ]);
 
     expect(record.cwd).toBe("/repo");
@@ -96,7 +116,10 @@ describe("foldSessionRecord", () => {
       completedAt: "2026-07-01T10:00:04.000Z",
       incomplete: false,
     });
-    expect(record.turns[0].toolCalls.map((call) => call.name)).toEqual(["Read", "Edit"]);
+    expect(record.turns[0].toolCalls.map((call) => call.name)).toEqual([
+      "Read",
+      "Edit",
+    ]);
   });
 
   it("orders by (ts, seq), so a seq restart across a resume doesn't reorder turns", () => {
@@ -110,8 +133,13 @@ describe("foldSessionRecord", () => {
       completed("2026-07-01T11:00:02.000Z", "second reply", { seq: 1 }),
     ]);
 
-    expect(record.turns.map((turn) => turn.prompt)).toEqual(["first", "second"]);
-    expect(record.turns[1].toolCalls.map((call) => call.name)).toEqual(["Bash"]);
+    expect(record.turns.map((turn) => turn.prompt)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(record.turns[1].toolCalls.map((call) => call.name)).toEqual([
+      "Bash",
+    ]);
     // Sorting by seq alone would have put the resume's events first.
     expect(record.turns[0].assistantText).toBe("first reply");
   });
@@ -121,7 +149,10 @@ describe("foldSessionRecord", () => {
       completed("2026-07-01T10:00:00.000Z", "reply", { seq: 2 }),
       prompt("2026-07-01T10:00:00.000Z", "ask", { seq: 1 }),
     ]);
-    expect(ordered.map((e) => e.type)).toEqual(["prompt.submitted", "turn.completed"]);
+    expect(ordered.map((e) => e.type)).toEqual([
+      "prompt.submitted",
+      "turn.completed",
+    ]);
   });
 
   it("keeps a trailing open turn and marks it incomplete", () => {
@@ -132,7 +163,11 @@ describe("foldSessionRecord", () => {
     ]);
 
     expect(record.turns).toHaveLength(1);
-    expect(record.turns[0]).toMatchObject({ prompt: "deploy it", incomplete: true, completedAt: null });
+    expect(record.turns[0]).toMatchObject({
+      prompt: "deploy it",
+      incomplete: true,
+      completedAt: null,
+    });
     expect(record.turns[0].toolCalls).toHaveLength(1);
     expect(record.limitations).toContain("incomplete-final-turn");
   });
@@ -140,7 +175,11 @@ describe("foldSessionRecord", () => {
   it("session.end never closes the open turn — a session that died mid-turn says so", () => {
     const record = foldSessionRecord([
       prompt("2026-07-01T10:00:00.000Z", "deploy it"),
-      event({ type: "session.end", ts: "2026-07-01T10:00:01.000Z", payload: { reason: "other" } }),
+      event({
+        type: "session.end",
+        ts: "2026-07-01T10:00:01.000Z",
+        payload: { reason: "other" },
+      }),
     ]);
 
     expect(record.turns[0].incomplete).toBe(true);
@@ -164,20 +203,26 @@ describe("foldSessionRecord", () => {
   });
 
   it("gives a turn.completed with nothing open its own promptless turn", () => {
-    const record = foldSessionRecord([completed("2026-07-01T10:00:00.000Z", "unprompted")]);
+    const record = foldSessionRecord([
+      completed("2026-07-01T10:00:00.000Z", "unprompted"),
+    ]);
     expect(record.turns).toHaveLength(1);
-    expect(record.turns[0]).toMatchObject({ prompt: null, assistantText: "unprompted", incomplete: false });
+    expect(record.turns[0]).toMatchObject({
+      prompt: null,
+      assistantText: "unprompted",
+      incomplete: false,
+    });
   });
 
-  it("hides planner control input while retaining its assistant greeting", () => {
+  it("hides project-bootstrap control input while retaining its assistant response", () => {
     const record = foldSessionRecord([
       event({
         type: "prompt.submitted",
         ts: "2026-07-01T10:00:00.000Z",
         payload: {
-          prompt: "private infrastructure greeting instruction",
-          plannerOrigin: "infrastructure",
-          plannerAttemptId: "attempt-1",
+          prompt: "private infrastructure bootstrap instruction",
+          projectBootstrapOrigin: "infrastructure",
+          projectBootstrapAttemptId: "attempt-1",
         },
       }),
       completed("2026-07-01T10:00:01.000Z", "What would you like to build?"),
@@ -190,7 +235,32 @@ describe("foldSessionRecord", () => {
       assistantText: "What would you like to build?",
     });
     expect(JSON.stringify(record)).not.toContain(
-      "private infrastructure greeting instruction",
+      "private infrastructure bootstrap instruction",
+    );
+  });
+
+  it("keeps released pre-unification bootstrap events out of the human transcript", () => {
+    const record = foldSessionRecord([
+      event({
+        type: "prompt.submitted",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: {
+          prompt: "private released bootstrap instruction",
+          ["plannerOrigin"]: "infrastructure",
+        },
+      }),
+      completed("2026-07-01T10:00:01.000Z", "What would you like to build?"),
+    ]);
+
+    expect(record.turnCount).toBe(0);
+    expect(record.turns).toHaveLength(1);
+    expect(record.turns[0]).toMatchObject({
+      prompt: null,
+      promptAt: null,
+      assistantText: "What would you like to build?",
+    });
+    expect(JSON.stringify(record)).not.toContain(
+      "private released bootstrap instruction",
     );
   });
 
@@ -203,9 +273,15 @@ describe("foldSessionRecord", () => {
     ]);
 
     expect(record.turns).toHaveLength(2);
-    expect(record.turns[0]).toMatchObject({ prompt: "first", incomplete: true });
+    expect(record.turns[0]).toMatchObject({
+      prompt: "first",
+      incomplete: true,
+    });
     expect(record.turns[0].toolCalls).toHaveLength(1);
-    expect(record.turns[1]).toMatchObject({ prompt: "actually, do this instead", incomplete: false });
+    expect(record.turns[1]).toMatchObject({
+      prompt: "actually, do this instead",
+      incomplete: false,
+    });
     // The incomplete turn isn't the LAST one, so that limitation doesn't apply.
     expect(record.limitations).not.toContain("incomplete-final-turn");
   });
@@ -246,15 +322,28 @@ describe("foldSessionRecord", () => {
 
   it("flags missing assistant text — the Codex shape (no Stop-hook message)", () => {
     const record = foldSessionRecord([
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd: "/repo" } }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd: "/repo" },
+      }),
       prompt("2026-07-01T10:00:01.000Z", "summarize this"),
       tool("2026-07-01T10:00:02.000Z", "shell"),
       // The codex tailer emits Stop with no last_assistant_message, so the
       // normalizer records assistantText: null and no model/usage.
-      event({ type: "turn.completed", ts: "2026-07-01T10:00:03.000Z", payload: { stopHookActive: false, assistantText: null } }),
+      event({
+        type: "turn.completed",
+        ts: "2026-07-01T10:00:03.000Z",
+        payload: { stopHookActive: false, assistantText: null },
+      }),
     ]);
 
-    expect(record.turns[0]).toMatchObject({ assistantText: null, model: null, usage: null, incomplete: false });
+    expect(record.turns[0]).toMatchObject({
+      assistantText: null,
+      model: null,
+      usage: null,
+      incomplete: false,
+    });
     expect(record.turns[0].toolCalls).toHaveLength(1);
     expect(record.limitations).toContain("missing-assistant-text");
   });
@@ -262,7 +351,11 @@ describe("foldSessionRecord", () => {
   it("ignores UI-interaction events, counting them but never rendering them as turns", () => {
     const record = foldSessionRecord([
       prompt("2026-07-01T10:00:00.000Z", "go"),
-      event({ type: "macro.invoked", ts: "2026-07-01T10:00:01.000Z", payload: { surface: "ui" } }),
+      event({
+        type: "macro.invoked",
+        ts: "2026-07-01T10:00:01.000Z",
+        payload: { surface: "ui" },
+      }),
       completed("2026-07-01T10:00:02.000Z", "done"),
     ]);
 
@@ -272,7 +365,13 @@ describe("foldSessionRecord", () => {
 
   it("is empty, not broken, for a session with no events", () => {
     const record = foldSessionRecord([]);
-    expect(record).toMatchObject({ turns: [], turnCount: 0, eventCount: 0, limitations: [], reconstructed: true });
+    expect(record).toMatchObject({
+      turns: [],
+      turnCount: 0,
+      eventCount: 0,
+      limitations: [],
+      reconstructed: true,
+    });
   });
 });
 
@@ -295,7 +394,11 @@ describe("createSessionRecordReader", () => {
   });
 
   async function writeEvents(events: AnalyticsEvent[]): Promise<void> {
-    await fs.writeFile(filePath, events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+    await fs.writeFile(
+      filePath,
+      events.map((e) => `${JSON.stringify(e)}\n`).join(""),
+      "utf8",
+    );
   }
 
   it("reads one session's record out of an interleaved log", async () => {
@@ -329,7 +432,10 @@ describe("createSessionRecordReader", () => {
     ]);
     // A half-written line with no trailing newline — exactly what a crash
     // between write() and flush leaves behind.
-    const torn = JSON.stringify(tool("2026-07-01T10:00:02.000Z", "Read")).slice(0, 60);
+    const torn = JSON.stringify(tool("2026-07-01T10:00:02.000Z", "Read")).slice(
+      0,
+      60,
+    );
     await fs.appendFile(filePath, torn, "utf8");
 
     const reader = createSessionRecordReader(createEventStore(filePath));
@@ -343,7 +449,9 @@ describe("createSessionRecordReader", () => {
   it("looks a record up by the agent's session id too (transcript-only rows)", async () => {
     await writeEvents([
       prompt("2026-07-01T10:00:00.000Z", "go", { agentSessionId: "agent-1" }),
-      completed("2026-07-01T10:00:01.000Z", "done", { agentSessionId: "agent-1" }),
+      completed("2026-07-01T10:00:01.000Z", "done", {
+        agentSessionId: "agent-1",
+      }),
     ]);
 
     const reader = createSessionRecordReader(createEventStore(filePath));
@@ -354,10 +462,22 @@ describe("createSessionRecordReader", () => {
 
   it("merges harness sessions that share an agent session (a resumed conversation)", async () => {
     await writeEvents([
-      prompt("2026-07-01T10:00:00.000Z", "first", { session: "sess-a", agentSessionId: "agent-1" }),
-      completed("2026-07-01T10:00:01.000Z", "first reply", { session: "sess-a", agentSessionId: "agent-1" }),
-      prompt("2026-07-01T11:00:00.000Z", "second", { session: "sess-b", agentSessionId: "agent-1" }),
-      completed("2026-07-01T11:00:01.000Z", "second reply", { session: "sess-b", agentSessionId: "agent-1" }),
+      prompt("2026-07-01T10:00:00.000Z", "first", {
+        session: "sess-a",
+        agentSessionId: "agent-1",
+      }),
+      completed("2026-07-01T10:00:01.000Z", "first reply", {
+        session: "sess-a",
+        agentSessionId: "agent-1",
+      }),
+      prompt("2026-07-01T11:00:00.000Z", "second", {
+        session: "sess-b",
+        agentSessionId: "agent-1",
+      }),
+      completed("2026-07-01T11:00:01.000Z", "second reply", {
+        session: "sess-b",
+        agentSessionId: "agent-1",
+      }),
     ]);
 
     const reader = createSessionRecordReader(createEventStore(filePath));
@@ -379,20 +499,33 @@ describe("createSessionRecordReader", () => {
     const reader = createSessionRecordReader(createEventStore(filePath));
     expect(await reader.read("nope")).toBeNull();
 
-    const absent = createSessionRecordReader(createEventStore(path.join(tmpDir, "gone.ndjson")));
+    const absent = createSessionRecordReader(
+      createEventStore(path.join(tmpDir, "gone.ndjson")),
+    );
     expect(await absent.read("sess-a")).toBeNull();
     expect(await absent.turnCounts()).toEqual(new Map());
   });
 
   it("exposes exact turn counts keyed by both harness and agent session id", async () => {
     await writeEvents([
-      prompt("2026-07-01T10:00:00.000Z", "one", { session: "sess-a", agentSessionId: "agent-1" }),
-      completed("2026-07-01T10:00:01.000Z", "ok", { session: "sess-a", agentSessionId: "agent-1" }),
-      prompt("2026-07-01T10:00:02.000Z", "two", { session: "sess-a", agentSessionId: "agent-1" }),
+      prompt("2026-07-01T10:00:00.000Z", "one", {
+        session: "sess-a",
+        agentSessionId: "agent-1",
+      }),
+      completed("2026-07-01T10:00:01.000Z", "ok", {
+        session: "sess-a",
+        agentSessionId: "agent-1",
+      }),
+      prompt("2026-07-01T10:00:02.000Z", "two", {
+        session: "sess-a",
+        agentSessionId: "agent-1",
+      }),
       prompt("2026-07-01T10:00:03.000Z", "elsewhere", { session: "sess-b" }),
     ]);
 
-    const counts = await createSessionRecordReader(createEventStore(filePath)).turnCounts();
+    const counts = await createSessionRecordReader(
+      createEventStore(filePath),
+    ).turnCounts();
     expect(counts.get("sess-a")).toBe(2);
     expect(counts.get("agent-1")).toBe(2);
     expect(counts.get("sess-b")).toBe(1);
@@ -414,14 +547,26 @@ describe("createSessionRecordReader", () => {
 
   it("still renders when the vendor transcript is gone — enrichment is optional", async () => {
     await writeEvents([
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd: "/repo/does-not-exist" } }),
-      prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-missing" }),
-      event({ type: "turn.completed", ts: "2026-07-01T10:00:02.000Z", payload: { assistantText: null } }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd: "/repo/does-not-exist" },
+      }),
+      prompt("2026-07-01T10:00:01.000Z", "go", {
+        agentSessionId: "agent-missing",
+      }),
+      event({
+        type: "turn.completed",
+        ts: "2026-07-01T10:00:02.000Z",
+        payload: { assistantText: null },
+      }),
     ]);
 
     const reader = createSessionRecordReader(createEventStore(filePath), {
       // Points at a home directory with no ~/.claude/projects at all.
-      enrichFinalTurn: createClaudeTranscriptEnricher({ homeDir: path.join(tmpDir, "home") }),
+      enrichFinalTurn: createClaudeTranscriptEnricher({
+        homeDir: path.join(tmpDir, "home"),
+      }),
     });
 
     const record = await reader.read("sess-a");
@@ -434,7 +579,12 @@ describe("createSessionRecordReader", () => {
     const cwd = "/repo/enriched";
     const homeDir = path.join(tmpDir, "home");
     // Mirrors Claude Code's own encoding of a project path (see the adapter).
-    const projectDir = path.join(homeDir, ".claude", "projects", cwd.replace(/:/g, "").replace(/[/.]/g, "-"));
+    const projectDir = path.join(
+      homeDir,
+      ".claude",
+      "projects",
+      cwd.replace(/:/g, "").replace(/[/.]/g, "-"),
+    );
     await fs.mkdir(projectDir, { recursive: true });
     await fs.writeFile(
       path.join(projectDir, "agent-enriched.jsonl"),
@@ -451,8 +601,14 @@ describe("createSessionRecordReader", () => {
     );
 
     await writeEvents([
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd } }),
-      prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-enriched" }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd },
+      }),
+      prompt("2026-07-01T10:00:01.000Z", "go", {
+        agentSessionId: "agent-enriched",
+      }),
       event({
         type: "turn.completed",
         ts: "2026-07-01T10:00:02.000Z",
@@ -483,19 +639,32 @@ describe("createSessionRecordReader", () => {
     // missing. Patching the one code instead of recomputing under-reported it.
     const cwd = "/repo/reopens-gap";
     const homeDir = path.join(tmpDir, "home");
-    const projectDir = path.join(homeDir, ".claude", "projects", cwd.replace(/:/g, "").replace(/[/.]/g, "-"));
+    const projectDir = path.join(
+      homeDir,
+      ".claude",
+      "projects",
+      cwd.replace(/:/g, "").replace(/[/.]/g, "-"),
+    );
     await fs.mkdir(projectDir, { recursive: true });
     await fs.writeFile(
       path.join(projectDir, "agent-gap.jsonl"),
       `${JSON.stringify({
         type: "assistant",
-        message: { role: "assistant", model: "claude-opus-4-6", content: "the final word" },
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          content: "the final word",
+        },
       })}\n`,
       "utf8",
     );
 
     await writeEvents([
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd } }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd },
+      }),
       prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-gap" }),
       tool("2026-07-01T10:00:02.000Z", "Read", { agentSessionId: "agent-gap" }),
       event({
@@ -536,15 +705,25 @@ describe("createSessionRecordReader", () => {
       path.join(projectDir, "agent-symlinked.jsonl"),
       `${JSON.stringify({
         type: "assistant",
-        message: { role: "assistant", model: "claude-opus-4-6", content: "found via realpath" },
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-6",
+          content: "found via realpath",
+        },
       })}\n`,
       "utf8",
     );
 
     await writeEvents([
       // The event carries the UNRESOLVED cwd, as the hook payload does.
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd } }),
-      prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-symlinked" }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd },
+      }),
+      prompt("2026-07-01T10:00:01.000Z", "go", {
+        agentSessionId: "agent-symlinked",
+      }),
       event({
         type: "turn.completed",
         ts: "2026-07-01T10:00:02.000Z",
@@ -564,20 +743,35 @@ describe("createSessionRecordReader", () => {
   it("never lets enrichment overwrite what our own events recorded", async () => {
     const cwd = "/repo/ours-wins";
     const homeDir = path.join(tmpDir, "home");
-    const projectDir = path.join(homeDir, ".claude", "projects", cwd.replace(/:/g, "").replace(/[/.]/g, "-"));
+    const projectDir = path.join(
+      homeDir,
+      ".claude",
+      "projects",
+      cwd.replace(/:/g, "").replace(/[/.]/g, "-"),
+    );
     await fs.mkdir(projectDir, { recursive: true });
     await fs.writeFile(
       path.join(projectDir, "agent-ours.jsonl"),
       `${JSON.stringify({
         type: "assistant",
-        message: { role: "assistant", model: "some-other-model", content: "transcript text" },
+        message: {
+          role: "assistant",
+          model: "some-other-model",
+          content: "transcript text",
+        },
       })}\n`,
       "utf8",
     );
 
     await writeEvents([
-      event({ type: "session.start", ts: "2026-07-01T10:00:00.000Z", payload: { cwd } }),
-      prompt("2026-07-01T10:00:01.000Z", "go", { agentSessionId: "agent-ours" }),
+      event({
+        type: "session.start",
+        ts: "2026-07-01T10:00:00.000Z",
+        payload: { cwd },
+      }),
+      prompt("2026-07-01T10:00:01.000Z", "go", {
+        agentSessionId: "agent-ours",
+      }),
       event({
         type: "turn.completed",
         ts: "2026-07-01T10:00:02.000Z",
@@ -615,7 +809,9 @@ describe("createSessionRecordReader with a record archive", () => {
   const ARCHIVED_AT = "2026-07-01T11:00:00.000Z";
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "harness-record-archive-"));
+    tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "harness-record-archive-"),
+    );
     filePath = path.join(tmpDir, "events.ndjson");
     recordsRoot = path.join(tmpDir, "records");
   });
@@ -625,11 +821,18 @@ describe("createSessionRecordReader with a record archive", () => {
   });
 
   function makeArchive(): RecordArchive {
-    return createRecordArchive({ root: recordsRoot, now: () => Date.parse(ARCHIVED_AT) });
+    return createRecordArchive({
+      root: recordsRoot,
+      now: () => Date.parse(ARCHIVED_AT),
+    });
   }
 
   async function writeLines(events: AnalyticsEvent[]): Promise<void> {
-    await fs.writeFile(filePath, events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+    await fs.writeFile(
+      filePath,
+      events.map((e) => `${JSON.stringify(e)}\n`).join(""),
+      "utf8",
+    );
   }
 
   /** The conversation every test here starts from: two completed turns, the
@@ -646,11 +849,19 @@ describe("createSessionRecordReader with a record archive", () => {
       type: "tool.call",
       ts: "2026-07-01T10:00:02.000Z",
       agentSessionId: "agent-1",
-      payload: { toolName: "Edit", toolInput: LONG_INPUT, toolResponseSummary: "ok" },
+      payload: {
+        toolName: "Edit",
+        toolInput: LONG_INPUT,
+        toolResponseSummary: "ok",
+      },
     }),
-    completed("2026-07-01T10:00:03.000Z", "first reply", { agentSessionId: "agent-1" }),
+    completed("2026-07-01T10:00:03.000Z", "first reply", {
+      agentSessionId: "agent-1",
+    }),
     prompt("2026-07-01T10:00:04.000Z", "second", { agentSessionId: "agent-1" }),
-    completed("2026-07-01T10:00:05.000Z", "second reply", { agentSessionId: "agent-1" }),
+    completed("2026-07-01T10:00:05.000Z", "second reply", {
+      agentSessionId: "agent-1",
+    }),
   ];
 
   /** Fold the conversation and archive it, as the server does at session end. */
@@ -669,13 +880,18 @@ describe("createSessionRecordReader with a record archive", () => {
     // What a 30-day sweep leaves behind for this session: nothing.
     await fs.writeFile(filePath, "", "utf8");
 
-    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    const record = await createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    }).read("sess-a");
     expect(record?.turns.map((t) => t.prompt)).toEqual(["first", "second"]);
     expect(record?.archivedAt).toBe(ARCHIVED_AT);
     expect(record?.limitations).toContain("compacted-archive");
     // Reachable by the agent's own session id too, which is all a
     // transcript-sourced history row has.
-    const byAgent = await createSessionRecordReader(createEventStore(filePath), { archive }).read("agent-1");
+    const byAgent = await createSessionRecordReader(
+      createEventStore(filePath),
+      { archive },
+    ).read("agent-1");
     expect(byAgent?.harnessSessionId).toBe("sess-a");
   });
 
@@ -687,7 +903,9 @@ describe("createSessionRecordReader with a record archive", () => {
     // sweepNdjson truncates oldest-first: the last two lines survive.
     await writeLines(conversation().slice(-2));
 
-    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    const record = await createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    }).read("sess-a");
     // The archive is the only source that still has the first turn.
     expect(record?.turns.map((t) => t.prompt)).toEqual(["first", "second"]);
     expect(record?.archivedAt).toBe(ARCHIVED_AT);
@@ -698,7 +916,9 @@ describe("createSessionRecordReader with a record archive", () => {
     const archive = makeArchive();
     await archiveNow(archive);
 
-    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    const record = await createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    }).read("sess-a");
     expect(record?.archivedAt).toBeNull();
     // The whole tool input, not the archive's 512-character excerpt.
     expect(record?.turns[0].toolCalls[0].input).toBe(LONG_INPUT);
@@ -718,7 +938,9 @@ describe("createSessionRecordReader with a record archive", () => {
       completed("2026-07-01T12:00:01.000Z", "third reply"),
     ]);
 
-    const record = await createSessionRecordReader(createEventStore(filePath), { archive }).read("sess-a");
+    const record = await createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    }).read("sess-a");
     expect(record?.archivedAt).toBeNull();
     expect(record?.turns.map((t) => t.prompt)).toEqual(["second", "third"]);
   });
@@ -726,7 +948,9 @@ describe("createSessionRecordReader with a record archive", () => {
   it("scans events when nothing was ever archived, and reports honestly when neither source has anything", async () => {
     await writeLines(conversation());
     const archive = makeArchive();
-    const reader = createSessionRecordReader(createEventStore(filePath), { archive });
+    const reader = createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    });
 
     expect((await reader.read("sess-a"))?.turns).toHaveLength(2);
     expect(await reader.read("sess-never-existed")).toBeNull();
@@ -739,7 +963,9 @@ describe("createSessionRecordReader with a record archive", () => {
     await writeLines(conversation());
     const archive = makeArchive();
     await archiveNow(archive);
-    const reader = createSessionRecordReader(createEventStore(filePath), { archive });
+    const reader = createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    });
 
     await fs.writeFile(filePath, "", "utf8");
     expect(await reader.readFromEvents("sess-a")).toBeNull();
@@ -751,7 +977,9 @@ describe("createSessionRecordReader with a record archive", () => {
     await writeLines(conversation());
     const archive = makeArchive();
     await archiveNow(archive);
-    const reader = createSessionRecordReader(createEventStore(filePath), { archive });
+    const reader = createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    });
 
     await fs.writeFile(filePath, "", "utf8");
     const counts = await reader.turnCounts();
@@ -772,18 +1000,31 @@ describe("createSessionRecordReader with a record archive", () => {
       completed("2026-07-01T12:00:01.000Z", "third reply"),
     ]);
 
-    const counts = await createSessionRecordReader(createEventStore(filePath), { archive }).turnCounts();
+    const counts = await createSessionRecordReader(createEventStore(filePath), {
+      archive,
+    }).turnCounts();
     expect(counts.get("sess-a")).toBe(3);
   });
 
   it("lists conversations newest-first for the backfill, merging resumed segments", async () => {
     await writeLines([
-      prompt("2026-07-01T10:00:00.000Z", "old", { session: "sess-old", agentSessionId: "agent-old" }),
-      prompt("2026-07-02T10:00:00.000Z", "first", { session: "sess-a", agentSessionId: "agent-1" }),
-      prompt("2026-07-03T10:00:00.000Z", "resumed", { session: "sess-b", agentSessionId: "agent-1" }),
+      prompt("2026-07-01T10:00:00.000Z", "old", {
+        session: "sess-old",
+        agentSessionId: "agent-old",
+      }),
+      prompt("2026-07-02T10:00:00.000Z", "first", {
+        session: "sess-a",
+        agentSessionId: "agent-1",
+      }),
+      prompt("2026-07-03T10:00:00.000Z", "resumed", {
+        session: "sess-b",
+        agentSessionId: "agent-1",
+      }),
     ]);
 
-    const ids = await createSessionRecordReader(createEventStore(filePath)).conversationIds();
+    const ids = await createSessionRecordReader(
+      createEventStore(filePath),
+    ).conversationIds();
     // sess-a and sess-b are one conversation, named by where it began, and it
     // sorts ahead of the older one on its most recent activity.
     expect(ids).toEqual(["sess-a", "sess-old"]);

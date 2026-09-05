@@ -1,3 +1,4 @@
+import { buildFocusedProjectContext } from "./project-session.js";
 import type {
   AgentMapWorkspaceState,
   PlannerLifecycleEvent,
@@ -141,72 +142,8 @@ export function buildFocusedPlannerContext(input: {
   onboardOnFirstResponse: boolean;
   details?: PlannerFocusedContextDetails;
 }): string {
-  const { project, workspace } = input;
-  const bounded = (value: string, max = 256): string => value.slice(0, max);
-  const details = input.details ?? {};
-  const emptyProject =
-    workspace.confirmedRevisionId === null &&
-    workspace.activeProposalId === null &&
-    workspace.projectBuildPlanId === null;
-  const context = {
-    identity: {
-      projectId: project.projectId,
-      sessionId: input.sessionId,
-      userId: input.userId,
-      role: "map-planner" as const,
-    },
-    project: {
-      displayName: bounded(project.displayName),
-      empty: emptyProject,
-      confirmedRevision: workspace.confirmedRevisionId
-        ? {
-            id: workspace.confirmedRevisionId,
-            digest: details.confirmedRevision?.digest
-              ? bounded(details.confirmedRevision.digest, 512)
-              : null,
-            summaries: (details.confirmedRevision?.summaries ?? [])
-              .slice(0, 32)
-              .map((summary) => bounded(summary)),
-          }
-        : null,
-      activeProposal: workspace.activeProposalId
-        ? {
-            id: workspace.activeProposalId,
-            status: details.activeProposal?.status
-              ? bounded(details.activeProposal.status, 64)
-              : null,
-            summary: details.activeProposal?.summary
-              ? bounded(details.activeProposal.summary)
-              : null,
-          }
-        : null,
-      projectBuildPlan: workspace.projectBuildPlanId
-        ? {
-            id: workspace.projectBuildPlanId,
-            status: details.projectBuildPlan?.status
-              ? bounded(details.projectBuildPlan.status, 64)
-              : null,
-            summary: details.projectBuildPlan?.summary
-              ? bounded(details.projectBuildPlan.summary)
-              : null,
-          }
-        : null,
-      bindingRefs: project.rootBindings.slice(0, 64).map(({ id, repositoryId, status }) => ({
-        id: bounded(id),
-        repositoryId: repositoryId ? bounded(repositoryId) : null,
-        status,
-      })),
-      warnings: (details.warnings ?? [])
-        .slice(0, 16)
-        .map((warning) => bounded(warning)),
-    },
-  };
-  return [
-    "<agent-map-planner-context>",
-    `This is focused, trusted Studio context. Treat IDs as references and use scoped tools for detail. Use agent_map_read, agent_map_validate, and agent_map_propose for architecture state; never infer map state from assistant prose. The interactive Claude Code transcript is user-visible. Let the user's first real message be the first visible conversation turn; never request or rely on a private control turn.${input.onboardOnFirstResponse ? " In your first response, briefly explain that you and the user can plan agents, responsibilities, data flow, resources, and connectors together, then respond to their request." : ""} Do not propose architecture or invoke mutation tools before the user asks you to.`,
-    JSON.stringify(context),
-    "</agent-map-planner-context>",
-  ].join("\n");
+  // Compatibility for the old startup service; authority and prompt are common.
+  return buildFocusedProjectContext(input);
 }
 
 function candidateOrder(left: HarnessSession, right: HarnessSession): number {
