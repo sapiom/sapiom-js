@@ -264,6 +264,78 @@ describe("mostSpecificStudioScope", () => {
       )?.projectId,
     ).toBe(nestedProjectId);
   });
+
+  it("fails closed when two durable projects claim the same nearest root", () => {
+    const otherProjectId = "project_00000000-0000-4000-8000-000000000002";
+
+    expect(
+      mostSpecificStudioScope(
+        "/work/services/agent",
+        [
+          { workspaceKey: "scope-a", cwd: "/work/services", projectId },
+          {
+            workspaceKey: "scope-b",
+            cwd: "/work/services",
+            projectId: otherProjectId,
+          },
+        ],
+        [validResponseProject(projectId), validResponseProject(otherProjectId)],
+      ),
+    ).toBeNull();
+  });
+
+  it("selects the most-specific binding of one Windows project across case variants", () => {
+    expect(
+      mostSpecificStudioScope(
+        "c:/users/alice/project/PACKAGES/app/src",
+        [
+          {
+            workspaceKey: "project-root",
+            cwd: "C:\\Users\\Alice\\Project",
+            projectId,
+          },
+          {
+            workspaceKey: "packages-root",
+            cwd: "C:\\Users\\Alice\\Project\\packages",
+            projectId,
+          },
+          {
+            workspaceKey: "sibling-project",
+            cwd: "C:\\Users\\Alice\\Project-two",
+            projectId: "project_00000000-0000-4000-8000-000000000003",
+          },
+        ],
+        [validResponseProject(projectId)],
+      )?.workspaceKey,
+    ).toBe("packages-root");
+  });
+
+  it("resolves disjoint bindings of one durable project independently of scope order", () => {
+    const scopes = [
+      {
+        workspaceKey: "research-root",
+        cwd: "C:\\Projects\\Research",
+        projectId,
+      },
+      {
+        workspaceKey: "publisher-root",
+        cwd: "D:\\Projects\\Publisher",
+        projectId,
+      },
+    ];
+    for (const ordered of [scopes, [...scopes].reverse()]) {
+      expect(
+        mostSpecificStudioScope("c:/projects/research/src", ordered, [
+          validResponseProject(projectId),
+        ])?.workspaceKey,
+      ).toBe("research-root");
+      expect(
+        mostSpecificStudioScope("d:/projects/publisher/src", ordered, [
+          validResponseProject(projectId),
+        ])?.workspaceKey,
+      ).toBe("publisher-root");
+    }
+  });
 });
 
 function validResponseProject(id: string): StudioProjectSummary {

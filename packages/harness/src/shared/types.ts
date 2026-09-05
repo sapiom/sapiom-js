@@ -1087,6 +1087,9 @@ export interface AgentScaffoldResponse {
 export type UiTheme = "light" | "dark";
 
 export interface CreateSessionRequest {
+  /** An explicit UI action already owns the first user input. Bootstrap consumes
+   * this hint when activated; it never contributes session authority. */
+  initialUserInputPending?: boolean;
   cwd: string;
   harness: HarnessKind;
   /** Profile id; omit for default. */

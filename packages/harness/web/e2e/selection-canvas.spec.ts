@@ -36,12 +36,10 @@ import type { Page } from "@playwright/test";
  *  in this fixture are used — `services/workers` is opened as its own project
  *  as well as nested, so its agents have two rows each. */
 const select = async (page: Page, name: string): Promise<void> => {
-  await page.getByTestId(`workflow-${name}`).locator(".workflow-item-trigger").click();
-  // A root-agent row belongs to the Project axis first: its label opens the
-  // Project graph, and the graph card is the separate agent-selection door.
-  if (await page.getByTestId("workspace-graph-view").isVisible()) {
-    await page.getByRole("button", { name: `Open ${name}`, exact: true }).click();
-  }
+  await page
+    .getByTestId(`workflow-${name}`)
+    .locator(".workflow-item-trigger")
+    .click();
   await expect(page.getByTestId(`workflow-${name}`)).toHaveClass(/is-focused/);
 };
 
@@ -68,7 +66,6 @@ async function openRightPane(page: Page): Promise<void> {
   const expand = page.getByTestId("right-expand");
   if ((await expand.count()) > 0) await expand.click();
 }
-
 
 /** The agent the pane says it is about (Steps surface). */
 const paneSubject = (page: Page) =>
@@ -102,7 +99,9 @@ const boardFrame = (page: Page) => page.locator(".canvas-iframe");
  * unavailable), so the accident is gone.
  */
 const boardMounted = async (page: Page): Promise<void> => {
-  await expect.poll(() => boardFrame(page).count(), { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect
+    .poll(() => boardFrame(page).count(), { timeout: 10_000 })
+    .toBeGreaterThan(0);
 };
 
 /**
@@ -143,7 +142,7 @@ async function startSessionOn(page: Page, name: string): Promise<string> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?mockFixtures=deep");
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });
@@ -161,7 +160,10 @@ test.describe("the board follows the selection; the session does not", () => {
     // The board is `outreach`'s, served by the workflow-keyed route — which is
     // reached ONLY when the subject and the session's binding differ, so this
     // attribute is itself the proof that they have.
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock agent board/);
+    await expect(boardFrame(page)).toHaveAttribute(
+      "srcdoc",
+      /outreach — mock agent board/,
+    );
     // …while the session below it is untouched. Both halves matter: either one
     // alone is satisfied by the old coupled behaviour.
     expect(await activeSessionId(page)).toBe(sessionId);
@@ -178,11 +180,16 @@ test.describe("the board follows the selection; the session does not", () => {
     await select(page, "outreach");
     await boardMounted(page);
     // Canvas: the document on screen is outreach's.
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /outreach — mock agent board/);
+    await expect(boardFrame(page)).toHaveAttribute(
+      "srcdoc",
+      /outreach — mock agent board/,
+    );
     // Steps: the same agent, read from the other projection.
     await openSteps(page);
     await expect(paneSubject(page)).toHaveText("outreach");
-    await expect(page.getByTestId("canvas-steps-count")).toHaveText("2 steps · 1 exit");
+    await expect(page.getByTestId("canvas-steps-count")).toHaveText(
+      "2 steps · 1 exit",
+    );
   });
 
   test("a selection in another project MOVES the active session, and back again", async ({
@@ -219,7 +226,9 @@ test.describe("verb gating", () => {
     await startSessionOn(page, "mailer");
     const prod = page.getByTestId("session-step-prod");
     await expect(prod).toBeEnabled();
-    await expect(prod).toHaveAccessibleName("Open mailer in the Sapiom dashboard");
+    await expect(prod).toHaveAccessibleName(
+      "Open mailer in the Sapiom dashboard",
+    );
     await page.getByRole("button", { name: "Choose run target" }).click();
     await expect(page.getByTestId("session-step-run")).toBeEnabled();
     await page.keyboard.press("Escape");
@@ -228,14 +237,20 @@ test.describe("verb gating", () => {
     // underneath a session that is still bound to the deployed agent.
     const sessionId = await activeSessionId(page);
     await select(page, "sender");
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /sender — mock agent board/);
+    await expect(boardFrame(page)).toHaveAttribute(
+      "srcdoc",
+      /sender — mock agent board/,
+    );
     // The session did not move, so the binding is still the DEPLOYED agent.
     expect(await activeSessionId(page)).toBe(sessionId);
 
     // Prod: disabled, and its reason readable from BOTH channels.
     await expect(prod).toBeDisabled();
     await expect(prod).toHaveAccessibleName("Prod: Not deployed yet");
-    await expect(prod).toHaveAttribute("data-tooltip", "Prod: Not deployed yet");
+    await expect(prod).toHaveAttribute(
+      "data-tooltip",
+      "Prod: Not deployed yet",
+    );
 
     // Run (the cloud target): same.
     await page.getByRole("button", { name: "Choose run target" }).click();
@@ -256,18 +271,24 @@ test.describe("verb gating", () => {
     await expect(page.getByTestId("session-step-prod")).toBeEnabled();
   });
 
-  test("the run sheet opens on the SELECTION, not on the bound agent", async ({ page }) => {
+  test("the run sheet opens on the SELECTION, not on the bound agent", async ({
+    page,
+  }) => {
     // Gating is only half of it: the action target has to move too, and the
     // sheet's own title is the honest readout of which agent is about to run.
     await startSessionOn(page, "mailer");
     await select(page, "sender");
     await page.getByTestId("session-step-local").click();
-    await expect(page.getByRole("dialog", { name: "Run sender" })).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Run sender" }),
+    ).toBeVisible();
   });
 });
 
 test.describe("boards for agents with no session", () => {
-  test("an agent that has never hosted a session shows a REAL board", async ({ page }) => {
+  test("an agent that has never hosted a session shows a REAL board", async ({
+    page,
+  }) => {
     // No fixture session is rooted in polsia, so `gateway` has never had one:
     // before IA-01's workflow-keyed route this pane could only say "no running
     // session for gateway". The board is now served from `sapiom.json` alone.
@@ -280,7 +301,10 @@ test.describe("boards for agents with no session", () => {
     await expect(
       page.frameLocator(".canvas-iframe").getByTestId("mock-workflow-board"),
     ).toBeVisible();
-    await expect(boardFrame(page)).toHaveAttribute("srcdoc", /gateway — mock agent board/);
+    await expect(boardFrame(page)).toHaveAttribute(
+      "srcdoc",
+      /gateway — mock agent board/,
+    );
     // The theme bridge: a `srcdoc` frame has no URL, so the served document's
     // `?theme=` reader has nothing to read and the app hands it the theme in an
     // appended script instead. Without it the board uses the light product
@@ -292,23 +316,33 @@ test.describe("boards for agents with no session", () => {
     // the count is read from the posted graph, not from the document's markup.
     await openSteps(page);
     await expect(paneSubject(page)).toHaveText("gateway");
-    await expect(page.getByTestId("canvas-steps-count")).toHaveText("2 steps · 1 exit");
+    await expect(page.getByTestId("canvas-steps-count")).toHaveText(
+      "2 steps · 1 exit",
+    );
     // The state this replaces is gone, not merely covered up.
     await expect(page.getByTestId("canvas-empty-no-session")).toHaveCount(0);
   });
 
-  test("`preparing`, `empty` and `error` are three distinct honest states", async ({ page }) => {
+  test("`preparing`, `empty` and `error` are three distinct honest states", async ({
+    page,
+  }) => {
     // Not one generic failure: `preparing` is a fresh scaffold with no deps
     // installed and must never surface a build error to someone who has just
     // created an agent; `empty` is a registered agent with no readable
     // sapiom.json (absent ⇒ empty); `error` is an extraction that ran and
     // failed. Collapsing them was how the first became the third.
-    const seed = async (status: string, reason: string | null): Promise<void> => {
+    const seed = async (
+      status: string,
+      reason: string | null,
+    ): Promise<void> => {
       await page.evaluate(
         ({ status, reason }) => {
           (
             window as unknown as {
-              __MOCK_WORKFLOW_GRAPH__?: Record<string, { status: string; reason: string | null }>;
+              __MOCK_WORKFLOW_GRAPH__?: Record<
+                string,
+                { status: string; reason: string | null }
+              >;
             }
           ).__MOCK_WORKFLOW_GRAPH__ = {
             "/Users/demo/polsia/services/gateway": { status, reason },
@@ -329,7 +363,10 @@ test.describe("boards for agents with no session", () => {
     await expect(page.getByTestId("canvas-empty-route-error")).toHaveCount(0);
     await expect(page.getByTestId("canvas-empty-route-empty")).toHaveCount(0);
 
-    await seed("empty", "This agent has no sapiom.json, so there is no graph to render yet.");
+    await seed(
+      "empty",
+      "This agent has no sapiom.json, so there is no graph to render yet.",
+    );
     await select(page, "rollup");
     await expect(page.getByTestId("canvas-empty-route-empty")).toContainText(
       "no sapiom.json",
@@ -352,7 +389,9 @@ test.describe("run evidence", () => {
     // account of what ran, in the surface whose whole job is to say what ran.
     await startSessionOn(page, "mailer");
     await page.getByTestId("session-step-local").click();
-    await expect(page.getByRole("dialog", { name: "Run mailer" })).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Run mailer" }),
+    ).toBeVisible();
     await page.getByTestId("run-sheet-submit").click();
     await openSteps(page);
     await expect(page.getByTestId("run-workspace")).toBeVisible();

@@ -24,6 +24,7 @@ import type {
 } from "../shared/types.js";
 import {
   SessionManager,
+  ProjectSessionScopeUnavailableError,
   SessionNotReadyError,
   UnknownSessionError,
 } from "../core/session-manager.js";
@@ -108,6 +109,20 @@ function exitedSession(
     ready: false,
     ...overrides,
   };
+}
+
+/** A valid legacy record normalized by SessionManager during boot. */
+function migratedProjectSession(): HarnessSession {
+  const identity = { projectId: "project-1", sessionId: "migrated-1", userId: "user-1" };
+  return exitedSession({
+    id: identity.sessionId,
+    agentMapIdentity: identity,
+    planning: {
+      identity: { ...identity, role: "map-planner" },
+      greeting: { status: "delivered", messageId: "message-1" },
+      queuedInputIds: [],
+    },
+  });
 }
 
 /** A history adapter whose resumability answer and transcript listing are both
@@ -440,6 +455,27 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions", () => {
+    it("accepts the composer's content-free first-input hint", async () => {
+      const sessionManager = fakeSessionManager();
+      (sessionManager.create as ReturnType<typeof vi.fn>).mockResolvedValue(
+        exitedSession({ status: "starting" }),
+      );
+      start({ sessionManager });
+      const response = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({
+          cwd: "/tmp/proj",
+          harness: "claude-code",
+          initialUserInputPending: true,
+        }),
+      });
+      expect(response.status).toBe(201);
+      expect(sessionManager.create).toHaveBeenCalledWith(
+        expect.objectContaining({ initialUserInputPending: true }),
+      );
+    });
+
     it("calls onSessionCreated with the new session's cwd and id", async () => {
       const onSessionCreated = vi.fn();
       const sessionManager = fakeSessionManager();
@@ -738,6 +774,37 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/input", () => {
+    it("routes migrated session input through the durable lifecycle boundary", async () => {
+      const session = migratedProjectSession();
+      const sessionManager = fakeSessionManager([session]);
+      const submitSessionInput = vi.fn(async () => true);
+      start({ sessionManager, submitSessionInput });
+      const response = await fetch(`${baseUrl}/sessions/${session.id}/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "keep this request" }),
+      });
+      expect(response.status).toBe(200);
+      expect(submitSessionInput).toHaveBeenCalledWith(session.id, "keep this request", true);
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
+    it("returns a scope conflict when a migrated session loses authority", async () => {
+      const session = migratedProjectSession();
+      const sessionManager = fakeSessionManager([session]);
+      const submitSessionInput = vi.fn(async () => {
+        throw new ProjectSessionScopeUnavailableError(session.id);
+      });
+      start({ sessionManager, submitSessionInput });
+      const response = await fetch(`${baseUrl}/sessions/${session.id}/input`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ text: "must not dispatch" }),
+      });
+      expect(response.status).toBe(409);
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
     it("submits input and returns ok:true", async () => {
       const sessionManager = fakeSessionManager();
       start({ sessionManager });
@@ -965,6 +1032,19 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
+    it("resumes a migrated project session by its exact ordinary session id", async () => {
+      const session = migratedProjectSession();
+      const sessionManager = fakeSessionManager([session]);
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue(session);
+      start({ sessionManager });
+      const response = await fetch(`${baseUrl}/sessions/${session.id}/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+      expect(response.status).toBe(200);
+      expect(sessionManager.resume).toHaveBeenCalledWith(session.id);
+    });
+
     it("requires planner resume to use the trusted project resolver", async () => {
       const planner = exitedSession({
         id: "planner-1",
@@ -1398,6 +1478,16 @@ describe("createRestRouter", () => {
       expect((await adopt(body)).status).toBe(200);
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
       expect(sessionManager.resume).toHaveBeenCalledWith("sess-existing");
+    });
+
+    it("adopts a migrated project conversation through its existing session", async () => {
+      const session = { ...migratedProjectSession(), agentSessionId: body.agentSessionId };
+      const sessionManager = fakeSessionManager([session]);
+      (sessionManager.resume as ReturnType<typeof vi.fn>).mockResolvedValue(session);
+      start({ sessionManager, adapters: { "claude-code": historyAdapter() } });
+      expect((await adopt(body)).status).toBe(200);
+      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
+      expect(sessionManager.resume).toHaveBeenCalledWith(session.id);
     });
 
     it("requires an existing foreign-owned planner to use its scoped route without mutation", async () => {

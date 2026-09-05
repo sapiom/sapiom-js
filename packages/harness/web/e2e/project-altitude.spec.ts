@@ -122,15 +122,23 @@ test("E3.3 — the tab strip is the PROJECT's sessions, including the ones bound
   // Both, in tab order (oldest first — the order Cmd/Ctrl+1..9 selects).
   const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
   await expect(tabs).toHaveCount(2);
-  await expect(page.getByTestId("session-tab-sess-polsia-mailer")).toBeVisible();
-  await expect(page.getByTestId("session-tab-sess-polsia-rollup")).toBeVisible();
+  await expect(
+    page.getByTestId("session-tab-sess-polsia-mailer"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("session-tab-sess-polsia-rollup"),
+  ).toBeVisible();
 
   // And they stay put when the selection drops to one agent's board: the tabs
   // are the PROJECT's, so a sibling selection cannot re-key them (E3.4).
-  await page.getByTestId("system-graph-node-local:scripts/tools/rollup").click();
+  await page
+    .getByTestId("system-graph-node-local:scripts/tools/rollup")
+    .click();
   await expect(page.getByTestId("workflow-rollup")).toHaveClass(/is-focused/);
   await expect(tabs).toHaveCount(2);
-  await expect(page.getByTestId("session-tab-sess-polsia-mailer")).toBeVisible();
+  await expect(
+    page.getByTestId("session-tab-sess-polsia-mailer"),
+  ).toBeVisible();
 });
 
 test("E3.4 — selecting a sibling agent moves the right pane and NOTHING else", async ({
@@ -247,7 +255,7 @@ test("E3.5 — crossing to another project DOES hand the conversation over", asy
   );
 });
 
-test("E3.7/E3.8 — drilling from a map node cuts down and the way back cuts up, rail following both", async ({
+test("E3.7/E3.8 — drilling from a map node cuts down and only the project name returns to the map", async ({
   page,
 }) => {
   await page.getByTestId("project-select-acme-app").click();
@@ -268,9 +276,8 @@ test("E3.7/E3.8 — drilling from a map node cuts down and the way back cuts up,
   );
   await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
 
-  const up = page.getByTestId("canvas-altitude-up");
-  await expect(up).toHaveAttribute("aria-label", "Back to the acme-app map");
-  await up.click();
+  await expect(page.getByTestId("canvas-altitude-up")).toHaveCount(0);
+  await page.getByTestId("project-select-acme-app").click();
 
   // ...and back, with the rail agreeing again.
   await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
@@ -340,9 +347,17 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
      project selected over an EXITED session gave the strip the project's tabs
      and the handler the exited session's own subject, and Cmd+1 activated a
      session that was not tab 1. */
-  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await page.goto(
+    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+  );
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
-  await page.evaluate(() => {
+  await page.getByTestId("project-select-polsia").click();
+  await expect(page.getByTestId("agent-map-live")).toBeVisible();
+  const projectId = await page
+    .getByTestId("agent-map-live")
+    .getAttribute("data-project-id");
+  expect(projectId).toBeTruthy();
+  await page.evaluate((selectedProjectId) => {
     const publish = (
       window as unknown as {
         __HARNESS_TEST__?: {
@@ -367,6 +382,11 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
         title: "mailer",
         createdAt: "2026-08-01T10:00:00.000Z",
         lastActiveAt: "2026-08-01T10:00:00.000Z",
+        agentMapIdentity: {
+          projectId: selectedProjectId,
+          userId: "user_mock",
+          sessionId: "sess-polsia-1",
+        },
       },
     });
     publish?.({
@@ -378,12 +398,16 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
         title: "rollup",
         createdAt: "2026-08-01T11:00:00.000Z",
         lastActiveAt: "2026-08-01T11:00:00.000Z",
+        agentMapIdentity: {
+          projectId: selectedProjectId,
+          userId: "user_mock",
+          sessionId: "sess-polsia-2",
+        },
       },
     });
-  });
+  }, projectId!);
 
-  await page.getByTestId("project-select-polsia").click();
-  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
   const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
   await expect(tabs).toHaveCount(2);
 
@@ -398,15 +422,17 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
     "data-session-id",
     "sess-polsia-1",
   );
-  // ...and the project is still the subject: a number key is a tab jump, not a
-  // navigation out of the project the tabs belong to.
-  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  // A number key is exact conversation navigation, just like clicking the
+  // corresponding tab. The project map therefore gives way to that ordinary
+  // session's Canvas/Steps experience while the project-wide tab set remains.
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+  await expect(page.getByTestId("agent-view")).toBeVisible();
+  await expect(page.getByTestId("right-tab-canvas")).toBeEnabled();
 
-  // The state where the two resolvers actually diverge: the ACTIVE session has
-  // exited, so it can no longer name the subject, and only the selected project
-  // can. Both of this project's remaining conversations are BOUND to its
-  // agents, so the agent rule finds none of them and Cmd+1 reaches nothing.
-  await page.evaluate(() => {
+  // Even after the active tab exits, its neutral project identity keeps the
+  // shortcut resolver on the exact same project-wide set. The remaining live
+  // tab becomes Cmd/Ctrl+1 rather than disappearing behind an agent-path rule.
+  await page.evaluate((selectedProjectId) => {
     (
       window as unknown as {
         __HARNESS_TEST__?: {
@@ -428,9 +454,14 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
         ready: false,
         createdAt: "2026-08-01T10:00:00.000Z",
         lastActiveAt: "2026-08-01T10:00:00.000Z",
+        agentMapIdentity: {
+          projectId: selectedProjectId,
+          userId: "user_mock",
+          sessionId: "sess-polsia-1",
+        },
       },
     });
-  });
+  }, projectId!);
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+1");
   await expect(page.getByTestId("session-context")).toHaveAttribute(
@@ -439,12 +470,12 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
   );
 });
 
-test("Cmd/Ctrl+1..9 follows a TAB CLICK, the one activation that moves nothing else", async ({
+test("Cmd/Ctrl+1..9 follows an exact ordinary session-tab activation", async ({
   page,
 }) => {
   /* The key handler closes over its inputs, so it needs every input the strip
-     has — the active session included. Clicking a tab moves neither the focus
-     nor the project selection, so with `activeSessionId` missing from the
+     has — the active session included. Clicking a tab now opens that exact
+     session's ordinary subject; with `activeSessionId` missing from the
      effect's deps the listener kept the previous active session and resolved a
      different list, healing only on the next session event.
 
@@ -503,14 +534,15 @@ test("Cmd/Ctrl+1..9 follows a TAB CLICK, the one activation that moves nothing e
   const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
   await expect(tabs).toHaveCount(2);
 
-  // Click the NESTED project's tab. Nothing else moves: the rail selection and
-  // the focus are untouched, and the map stays open.
+  // Click the nested project's tab. The exact session becomes active and its
+  // ordinary conversation/canvas replaces the project map.
   await page.getByTestId("session-tab-sess-nested").click();
   await expect(page.getByTestId("session-context")).toHaveAttribute(
     "data-session-id",
     "sess-nested",
   );
-  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
+  await expect(page.getByTestId("agent-view")).toBeVisible();
   // The strip re-keyed to the nested project, which holds only this session...
   await expect(tabs).toHaveCount(1);
   // ...so tab 1 is this session, and Cmd+1 must not reach past it into the
@@ -522,13 +554,12 @@ test("Cmd/Ctrl+1..9 follows a TAB CLICK, the one activation that moves nothing e
   );
 });
 
-test("the tab + and a tab click stay INSIDE the project — the map does not close under them", async ({
+test("the tab + and every tab click open an ordinary project session", async ({
   page,
 }) => {
-  /* Measured, because it is one line of state away from being wrong: every
-     session door used to clear the project selection unconditionally, so
-     starting one of the project's own tabs closed the map it was started
-     beside — the same mode switch, one click later. */
+  /* The map is selected only through the project label. Tabs are real session
+     handles, so choosing an existing tab or creating a sibling leaves the map
+     and opens that exact conversation/canvas. */
   await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
 
@@ -537,15 +568,17 @@ test("the tab + and a tab click stay INSIDE the project — the map does not clo
     "data-session-id",
     "sess-leasing-2",
   );
-  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
+  await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
+  await expect(page.getByTestId("agent-view")).toBeVisible();
 
   await page.getByTestId("session-tab-new").click();
   await expect(page.getByTestId("session-context")).toHaveAttribute(
     "data-session-id",
     /^sess-mock-/,
   );
-  await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
-  await expect(page.getByTestId("project-row-acme-app")).toHaveClass(
+  await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
+  await expect(page.getByTestId("agent-view")).toBeVisible();
+  await expect(page.getByTestId("project-row-acme-app")).not.toHaveClass(
     /is-selected/,
   );
 });

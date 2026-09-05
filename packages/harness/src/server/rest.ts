@@ -86,6 +86,7 @@ const createSessionSchema = z.object({
   profile: z.string().optional(),
   rehydrateFrom: z.string().min(1).optional(),
   theme: z.enum(["light", "dark"]).optional(),
+  initialUserInputPending: z.boolean().optional(),
 }).strict() satisfies z.ZodType<CreateSessionRequest>;
 
 const injectInputSchema = z.object({
@@ -232,6 +233,13 @@ export interface RestRouterOptions {
    * session in a new project discovers them without a manual "+ Connect")
    * and, when the scan discovers one, render the new session's canvas. */
   onSessionCreated?: (cwd: string, harnessSessionId: string) => void;
+  /** Keeps migrated sessions on their durable startup FIFO while the
+   * project bootstrap coordinator replaces the legacy implementation. */
+  submitSessionInput?: (
+    sessionId: string,
+    text: string,
+    submit: boolean,
+  ) => Promise<boolean>;
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
@@ -728,9 +736,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const { agentSessionId, harness, title, lastActiveAt } = parsed.data;
     const cwd = normalizeCwd(parsed.data.cwd);
     try {
-      // Resolve an already-owned registry row before probing or mutating any
-      // adapter state. Generic adoption must never bypass the project/user
-      // authority and focused-context checks on the scoped planner route.
+      // Resolve ownership before probing or mutating adapter state. Valid
+      // migrated records use ordinary resume, whose manager revalidates their
+      // neutral project identity. Unmigrated legacy authority stays fenced.
       const durableOwner = sessionManager.getAgentSessionOwner(agentSessionId);
       const identityReserved =
         sessionManager.isAgentSessionIdentityReserved(agentSessionId);
@@ -738,8 +746,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
         .list()
         .filter((session) => session.agentSessionId === agentSessionId);
       if (
-        durableOwner?.planning !== undefined ||
-        identityOwners.some((session) => session.planning !== undefined)
+        (durableOwner?.planning !== undefined && !durableOwner.agentMapIdentity) ||
+        identityOwners.some(
+          (session) => session.planning !== undefined && !session.agentMapIdentity,
+        )
       ) {
         res.status(409).json({
           code: "planner_session_requires_scoped_route",
@@ -747,10 +757,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
         });
         return;
       }
-      // For ordinary sessions, cwd remains part of the historical-record
-      // identity. It is deliberately checked only after the vendor id has
-      // been fenced from every planner owner above: client-supplied cwd must
-      // not alias around the scoped planner route.
+      // Cwd remains part of the historical-record identity. Client-supplied
+      // paths cannot alias around current ownership or a durable reservation.
       const existing = identityOwners.find(
         (session) => normalizeCwd(session.cwd) === cwd,
       );
@@ -825,7 +833,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   router.post("/sessions/:id/resume", async (req, res, next) => {
-    if (sessionManager.get(req.params.id)?.planning) {
+    const existing = sessionManager.get(req.params.id);
+    if (existing?.planning && !existing.agentMapIdentity) {
       res.status(409).json({
         code: "planner_session_requires_scoped_route",
         error: "Planner sessions must be resumed through their project route",
@@ -857,7 +866,11 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    if (sessionManager.get(req.params.id)?.planning) {
+    const existing = sessionManager.get(req.params.id);
+    if (
+      existing?.planning &&
+      (!existing.agentMapIdentity || !options.submitSessionInput)
+    ) {
       res.status(409).json({
         code: "planner_session_requires_scoped_route",
         error: "Planner input must use the project-scoped message route",
@@ -866,11 +879,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
     try {
       const submit = parsed.data.submit ?? true;
-      const ok = await sessionManager.submitInput(
-        req.params.id,
-        parsed.data.text,
-        submit,
-      );
+      const ok = options.submitSessionInput
+        ? await options.submitSessionInput(req.params.id, parsed.data.text, submit)
+        : await sessionManager.submitInput(req.params.id, parsed.data.text, submit);
       if (!ok) {
         res.status(404).json({ error: "session not found or has no live pty" });
         return;
@@ -879,7 +890,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
     } catch (err) {
       if (
         err instanceof SessionNotReadyError ||
-        err instanceof ExternalHarnessError
+        err instanceof ExternalHarnessError ||
+        err instanceof ProjectSessionScopeUnavailableError
       ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;
