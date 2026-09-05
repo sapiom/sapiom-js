@@ -101,11 +101,15 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
-    // The internal `workflows`-service naming must never reach this customer-facing
-    // primer — the per-step debugging endpoint lives in the docs guide, not spelled
-    // out here verbatim (matches this package's own scaffold terminology guard).
+    // The per-step debugging endpoint lives in the docs guide, not spelled out here
+    // verbatim (matches this package's own scaffold terminology guard). Until 2.9 this
+    // was a blanket ban on `/v1/workflows/`; the receipts/replay REST surface the primer
+    // now points at lives under that prefix (as do the signals and step-I/O routes
+    // docs.sapiom.ai publishes), so the guard is scoped to the executions path.
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
-    expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/executions/");
+    // `LlmRunSpec` has no `deadlineMinutes`; 2.9 dropped the clause that offered it.
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("deadlineMinutes");
     // Structured/forced-tool output has no `text` block — the reply lives in the
     // `tool_use` block's `input`. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
@@ -164,12 +168,31 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.8 (App Links + `sapiom_dev_app_publish`).
+    // Current release: 2.9 (Vault semantics, `agents.launch`, receipts/replay, App Link
+    // webhooks — SAP-3180).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "7f518d9c4a80122e51d45e9e28dc5f6cacfd3b05f4101aa1a5b8ae5d4494c0df",
+      "541f72e7db0e4d7109569f97bccaaac8e60ee88a23acf23dfbb0de5af23393cc",
     );
+  });
+
+  it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // Each shipped and was then misused or unknown in a customer session, because no
+    // served text mentioned it. Byte-identical to the backend copy, so asserted here too.
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
+    expect(AUTHORING_INSTRUCTIONS).toContain("agent code cannot write");
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.launch");
+    expect(AUTHORING_INSTRUCTIONS).toContain("GET /v1/workflows/receipts");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "POST /v1/workflows/fires/{id}/replay",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("webhooksEnabled");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("byte-exact");
+    expect(AUTHORING_INSTRUCTIONS).toContain("held up to 60 s");
   });
 });

@@ -11,7 +11,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "f9128ff6afed47242b7bc7946b2e1dab20627171371191cdd2c45537198ce8ed";
+  "77cf50265a0d00e4b5d8a26d689aed898489e7933392c687391d0b21fd76fd64";
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("stays byte-identical to the copy the backend serves (cross-repo pin, SAP-2810)", () => {

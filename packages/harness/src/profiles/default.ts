@@ -25,7 +25,10 @@ active for the whole session. Follow them.
 **Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
 platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a
 one-shot — it overthinks); dispatching a deployed agent by slug →
-\`ctx.sapiom.agents.run\`. Structured output = tool-use/schema output — read
+\`ctx.sapiom.agents.run\` (waits for the terminal state) or
+\`ctx.sapiom.agents.launch\` (same spec, returns a handle at once — use it
+wherever the caller must return fast, e.g. a webhook receiver, or with
+\`pauseUntilSignal\` for a long child). Structured output = tool-use/schema output — read
 the \`tool_use\` block's input, never string-parse; a plain-text reply reads
 only \`type === 'text'\` blocks. **Omit \`model\` entirely** — the platform
 routes it, and \`smart\` is already the default, so naming it changes
@@ -34,6 +37,19 @@ deliberately. Raw provider ids are never
 honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented in the guide.
 Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
+
+**Secrets, inbound events, App Link webhooks:** secrets are set in the
+dashboard per deployed agent and reach a step as env vars or via the read-only
+\`ctx.sapiom.vault.get\` — agent code cannot write the Vault, and a
+Sapiom-managed resource is used through its handle, never by copying its
+credentials into Vault. Every inbound event or webhook leaves a receipt
+(matched or unmatched) and a failed fire can be replayed by hand, never
+automatically; until a tool exists use \`GET /v1/workflows/receipts\` and
+\`POST /v1/workflows/{receipts|fires}/{id}/replay\`. An App Link receives
+webhooks only once \`webhooksEnabled\` is on (off by default):
+\`https://apps.sapiom.ai/{org}/{slug}/hook/<path>\` forwards the body byte-exact
+(third-party signatures verify inside the app) and holds a request up to 60 s
+while the app wakes. Details: https://docs.sapiom.ai/capabilities/app-links.
 
 **When something about Sapiom is wrong, send it upstream.** If the user hits a
 bug, calls something confusing or broken, or wishes it worked differently,
