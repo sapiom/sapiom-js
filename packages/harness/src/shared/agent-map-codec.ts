@@ -13,6 +13,9 @@ import {
   type PlanRelationshipId,
   type ProposalActor,
   type ProposalBatchResult,
+  type AgentMapGraph,
+  type ProjectAgentActorRef,
+  type ProjectMutationOrigin,
 } from "./agent-map.js";
 
 export const AGENT_MAP_UUID_V7_PATTERN =
@@ -123,6 +126,83 @@ function parseRelationship(value: unknown): PlanRelationship {
   )
     throw new Error("invalid Agent Map relationship");
   return structuredClone(value) as unknown as PlanRelationship;
+}
+
+export function parseAgentMapGraph(value: unknown): AgentMapGraph {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["nodes", "relationships"]) ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.relationships) ||
+    value.nodes.length > 4_096 ||
+    value.relationships.length > 16_384
+  )
+    throw new Error("invalid Agent Map graph");
+  const nodes = value.nodes.map(parseNode);
+  const relationships = value.relationships.map(parseRelationship);
+  const nodeIds = new Set(nodes.map(({ id }) => id));
+  if (
+    nodeIds.size !== nodes.length ||
+    new Set(relationships.map(({ id }) => id)).size !== relationships.length ||
+    nodes.some(
+      ({ ownerAgentId }) => ownerAgentId !== null && !nodeIds.has(ownerAgentId),
+    ) ||
+    relationships.some(
+      ({ fromNodeId, toNodeId }) =>
+        !nodeIds.has(fromNodeId) || !nodeIds.has(toNodeId),
+    )
+  )
+    throw new Error("inconsistent Agent Map graph");
+  return { nodes, relationships };
+}
+
+export function parseProjectAgentActorRef(
+  value: unknown,
+): ProjectAgentActorRef {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["userId", "sessionId"]) ||
+    !isAgentMapBoundedText(value.userId, 256) ||
+    !isAgentMapBoundedText(value.sessionId, 256)
+  )
+    throw new Error("invalid project agent actor");
+  return { userId: value.userId, sessionId: value.sessionId };
+}
+
+export function parseProjectMutationOrigin(
+  value: unknown,
+): ProjectMutationOrigin {
+  const requestKeys = ["kind", "requestDigest", "operationIds", "touchKeys"];
+  const migrationKeys = [
+    ...requestKeys,
+    "legacyProposalId",
+    "legacyAcceptedVersion",
+  ];
+  if (
+    !isRecord(value) ||
+    !["request", "migration"].includes(String(value.kind)) ||
+    !hasExactKeys(value, value.kind === "migration" ? migrationKeys : requestKeys) ||
+    typeof value.requestDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(value.requestDigest) ||
+    !Array.isArray(value.operationIds) ||
+    value.operationIds.length > 4_096 ||
+    !value.operationIds.every((id) => isPlanId(id, "operation")) ||
+    new Set(value.operationIds).size !== value.operationIds.length ||
+    !Array.isArray(value.touchKeys) ||
+    value.touchKeys.length > 16_384 ||
+    !value.touchKeys.every((key) => isAgentMapBoundedText(key, 512)) ||
+    new Set(value.touchKeys).size !== value.touchKeys.length
+  )
+    throw new Error("invalid project mutation origin");
+  if (
+    value.kind === "migration" &&
+    ((value.legacyProposalId !== null && !isPlanId(value.legacyProposalId, "proposal")) ||
+      (value.legacyAcceptedVersion !== null &&
+        (!Number.isSafeInteger(value.legacyAcceptedVersion) ||
+          (value.legacyAcceptedVersion as number) < 1)))
+  )
+    throw new Error("invalid project mutation origin");
+  return structuredClone(value) as unknown as ProjectMutationOrigin;
 }
 
 function parseNodeChanges(value: unknown) {
