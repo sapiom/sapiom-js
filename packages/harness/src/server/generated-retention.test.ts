@@ -70,7 +70,7 @@ describe("generated-dir retention wiring", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function boot(options: Pick<Parameters<typeof startServer>[0], "buildLaunchOpts"> = {}): Promise<HarnessServer> {
+  async function boot(options: Pick<Parameters<typeof startServer>[0], "buildLaunchOpts" | "adapters"> = {}): Promise<HarnessServer> {
     return startServer({
       port: 0,
       bootToken: "test-token",
@@ -131,9 +131,9 @@ describe("generated-dir retention wiring", () => {
         const mcpConfigFile = join(sessionDir, "mcp-config.json");
         await writeFile(mcpConfigFile, '{"mcpServers":{}}');
         if (++builds === 2) {
-          // Resume has awaited the prior exit's cleanup but still carries
-          // status=exited until its launch configuration is complete. An
-          // asynchronous workspace scan can publish a binding update here.
+          // Resume has awaited the prior exit's cleanup. A workspace scan
+          // may publish metadata while the new configuration is being built.
+          expect(server!.sessionManager.get(id)?.status).toBe("starting");
           server!.sessionManager.setBoundWorkflowPath(id, cwd);
           // No second removal may begin against the regenerated files.
           expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(1);
@@ -162,10 +162,10 @@ describe("generated-dir retention wiring", () => {
       await mkdir(sessionDir, { recursive: true });
       const mcpConfigFile = join(sessionDir, "mcp-config.json");
       await writeFile(mcpConfigFile, '{"mcpServers":{}}');
-      if (server!.sessionManager.get(id)?.status === "exited") {
-        // This server has not observed an exit transition for restored or
-        // imported history. Its first exited broadcast must still not delete
-        // the files that this resume is preparing.
+      if (server!.sessionManager.get(id)) {
+        // Restored/imported history also enters its new lifetime before
+        // generation, so metadata broadcasts cannot remove these files.
+        expect(server!.sessionManager.get(id)?.status).toBe("starting");
         server!.sessionManager.setBoundWorkflowPath(id, cwd);
         expect(removeGeneratedSessionDir).not.toHaveBeenCalled();
       }
@@ -200,5 +200,48 @@ describe("generated-dir retention wiring", () => {
     await server.sessionManager.kill(id);
     expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(1);
     await vi.waitFor(async () => expect(await exists(join(generatedRoot, id))).toBe(false));
+  });
+
+  it.each(["configuration", "adapter"])("cleans regenerated files when resume fails during %s", async (failure) => {
+    let fail = true;
+    const adapter = fakeClaudeAdapter();
+    const resume = adapter.resume;
+    adapter.resume = (agentSessionId, opts) => {
+      if (fail && failure === "adapter") throw new Error("resume preparation failed");
+      return resume(agentSessionId, opts);
+    };
+    server = await boot({
+      adapters: { "claude-code": adapter },
+      buildLaunchOpts: async (id) => {
+        const sessionDir = join(generatedRoot, id);
+        await mkdir(sessionDir, { recursive: true });
+        const mcpConfigFile = join(sessionDir, "mcp-config.json");
+        await writeFile(mcpConfigFile, '{"mcpServers":{}}');
+        if (fail && failure === "configuration") throw new Error("resume preparation failed");
+        return { mcpConfigFile };
+      },
+    });
+    const session = await server.sessionManager.registerHistorical({
+      harness: "claude-code",
+      cwd,
+      agentSessionId: "failed-resume-rollout",
+      title: "Imported session",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+    });
+    await expect(server.sessionManager.resume(session.id)).rejects.toThrow("resume preparation failed");
+    expect(server.sessionManager.get(session.id)).toMatchObject({
+      status: "exited",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+    });
+    await vi.waitFor(async () => expect(await exists(join(generatedRoot, session.id))).toBe(false));
+    expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(1);
+
+    // The failed attempt must not prevent a retry or that lifetime's cleanup.
+    fail = false;
+    await server.sessionManager.resume(session.id);
+    expect(await exists(join(generatedRoot, session.id, "mcp-config.json"))).toBe(true);
+    await server.sessionManager.kill(session.id);
+    await vi.waitFor(async () => expect(await exists(join(generatedRoot, session.id))).toBe(false));
+    expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(2);
   });
 });

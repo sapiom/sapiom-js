@@ -836,20 +836,6 @@ export class SessionManager {
             resume: true as const,
           }
         : undefined;
-    const opts: LaunchOpts = {
-      harnessSessionId: id,
-      cwd: session.cwd,
-      ...(await (launchContext
-        ? this.buildLaunchOpts(id, session, launchContext)
-        : this.buildLaunchOpts(id, session))),
-    };
-    let spec: SpawnSpec;
-    try {
-      spec = adapter.resume(session.agentSessionId, opts);
-    } catch (error) {
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
     // Kept so the failure path below can put it back: `lastActiveAt` is
     // stamped here only to keep sweepDeadSessions() from reaping this record
     // during the pre-pty window (it reaps non-exited records with no pty once
@@ -864,6 +850,16 @@ export class SessionManager {
     try {
       await this.persist();
       this.emitStatus(session);
+      // Preparation is part of the new lifetime: metadata broadcasts must not
+      // describe it as exited, and any failure must run the exit cleanup below.
+      const opts: LaunchOpts = {
+        harnessSessionId: id,
+        cwd: session.cwd,
+        ...(await (launchContext
+          ? this.buildLaunchOpts(id, session, launchContext)
+          : this.buildLaunchOpts(id, session))),
+      };
+      const spec = adapter.resume(session.agentSessionId, opts);
       // Schema-aware and strict: the caller leaves a valid current file
       // untouched, translates a valid legacy file, and reconstructs anything
       // missing/invalid from this session plus the live registry. Await it in
