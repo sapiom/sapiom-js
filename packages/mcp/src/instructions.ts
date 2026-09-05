@@ -74,6 +74,22 @@ and self-contained; republishing the same slug replaces the app in place at the 
 Org-scoped by default; \`public\` needs an explicit confirmation and a daily spend cap because
 your org pays for every wake. See https://docs.sapiom.ai/capabilities/app-links.
 
+## Triggers (run a deployed agent without a human)
+\`sapiom_dev_agents_schedule\` creates a trigger of one of four kinds on a deployed agent:
+\`schedule_cron\` (recurring), \`schedule_once\` (one future time), \`event\` (fires whenever this
+tenant emits its \`eventType\` through the tenant events API), and \`webhook\` (fires whenever an
+external system POSTs to a public hook URL minted for the trigger). "Run this agent when X POSTs
+to us" is a \`webhook\` trigger, not a hand-built HTTP server: the create result carries the hook
+URL, a shown-once secret, and the signing scheme — HMAC-SHA256 over \`timestamp.eventId.rawBody\`,
+sent as \`X-Sapiom-Timestamp\` / \`X-Sapiom-Event-Id\` / \`X-Sapiom-Signature\`. Only a sender you
+control can sign that way; Slack, Meta, Stripe and GitHub sign with their own schemes and cannot
+produce our HMAC, so route those to an App Link \`/hook/*\` receiver (\`webhooksEnabled\`) that
+verifies their signature, or through a small translator that re-signs into a webhook trigger.
+\`_schedule_inspect\` / \`_schedule_cancel\` cover every kind; \`sapiom_dev_agents_schedule_secret\`
+rotates or revokes a webhook secret. The \`event\` and \`webhook\` kinds and the secret tool need
+\`@sapiom/mcp\` >= 0.15 — on an older client, use the REST trigger routes in the guide:
+https://docs.sapiom.ai/guides/triggers.
+
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
 - Import \`defineAgent\`, \`defineStep\`, and the directives
   (\`goto\` / \`terminate\` / \`fail\` / \`retry\` / \`pauseUntilSignal\`) from \`@sapiom/agent\`.
