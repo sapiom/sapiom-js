@@ -94,6 +94,7 @@ export interface CodingRunSpec {
    * sent before this field existed, and the run dispatches immediately. Give it
    * a value and the platform may park the run in `awaiting_capacity` until a
    * cheaper lane is free, dispatching in time to finish within the deadline.
+   * `wait()`'s default poll budget widens to cover the deadline you asked for.
    */
   deadlineMinutes?: number;
 }
@@ -318,6 +319,27 @@ function workflowResumeHeaders(
   return token ? { "x-sapiom-workflow-token": token } : {};
 }
 
+/**
+ * Default poll budget for a handle's `wait()`, widened to cover a deadline the
+ * caller asked for. A deferred run sits in `awaiting_capacity` for up to its
+ * deadline, so a fixed default would throw on exactly the runs the deadline
+ * exists for — `run({ deadlineMinutes: 60 })` against a 20-minute default.
+ *
+ * The deadline bounds when the run FINISHES, so the surface default is added on
+ * top as slack rather than replaced: it covers dispatch latency at the far end
+ * of the window plus poll granularity. Never shrinks the default (a deadline
+ * under it, or a non-positive one, leaves the default alone), and an explicit
+ * `wait({ timeoutMs })` still wins over all of this.
+ */
+function defaultWaitMs(
+  deadlineMinutes: number | undefined,
+  surfaceDefaultMs: number,
+): number {
+  if (typeof deadlineMinutes !== "number" || !(deadlineMinutes > 0))
+    return surfaceDefaultMs;
+  return deadlineMinutes * 60_000 + surfaceDefaultMs;
+}
+
 // --- wire shapes (snake_case, as served by the gateway serializer) ---
 
 interface WireResult {
@@ -447,7 +469,10 @@ export async function codingLaunch(
     async status() {
       return (await fetchDoc()).data.attributes.status;
     },
-    async wait({ timeoutMs = 20 * 60_000, pollMs = 3_000 } = {}) {
+    async wait({
+      timeoutMs = defaultWaitMs(spec.deadlineMinutes, 20 * 60_000),
+      pollMs = 3_000,
+    } = {}) {
       const deadline = Date.now() + timeoutMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
@@ -494,8 +519,22 @@ export const coding = { run: codingRun, launch: codingLaunch };
  */
 export const MODEL_RUN_RESULT_SIGNAL = "models.run.result";
 
-/** Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`). */
-export type ModelRunStatus = "pending" | "running" | "completed" | "failed";
+/**
+ * Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`).
+ *
+ * `awaiting_capacity` carries the same meaning as on {@link RunStatus} and is
+ * likewise NOT terminal. This surface accepts a
+ * {@link ModelRunSpec.deadlineMinutes}, so a deferred model run is a state the
+ * types have to be able to represent — a union too narrow to hold a value the
+ * server can send would mis-type `handle.status()` and make
+ * `modelRunResultSchema.parse` reject a real payload.
+ */
+export type ModelRunStatus =
+  | "pending"
+  | "awaiting_capacity"
+  | "running"
+  | "completed"
+  | "failed";
 const MODEL_TERMINAL = new Set<ModelRunStatus>(["completed", "failed"]);
 
 /** A remote MCP server (Streamable HTTP) the agent may call tools on. */
@@ -528,8 +567,9 @@ export interface ModelRunSpec {
    *
    * Omit it (the default) for `run_now`: the request is byte-identical to one
    * sent before this field existed, and the run dispatches immediately. Give it
-   * a value and the platform may defer the run until a cheaper lane is free,
-   * dispatching in time to finish within the deadline.
+   * a value and the platform may park the run in `awaiting_capacity` until a
+   * cheaper lane is free, dispatching in time to finish within the deadline.
+   * `wait()`'s default poll budget widens to cover the deadline you asked for.
    */
   deadlineMinutes?: number;
   /** Max output tokens per turn. */
@@ -632,7 +672,7 @@ export const modelRunResultSchema = {
     if (!value || typeof value !== "object") fail("not an object");
     const v = value as Record<string, unknown>;
     if (typeof v.runId !== "string") fail("runId must be a string");
-    if (!(["pending", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
+    if (!(["pending", "awaiting_capacity", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
       fail("status must be a valid ModelRunStatus");
     if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
     if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
@@ -767,7 +807,10 @@ export async function launch(
     async status() {
       return (await fetchDoc()).data.attributes.status;
     },
-    async wait({ timeoutMs = 10 * 60_000, pollMs = 2_000 } = {}) {
+    async wait({
+      timeoutMs = defaultWaitMs(spec.deadlineMinutes, 10 * 60_000),
+      pollMs = 2_000,
+    } = {}) {
       const deadline = Date.now() + timeoutMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
