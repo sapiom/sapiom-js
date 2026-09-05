@@ -571,13 +571,16 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
-    const promptPromise =
+    const promptPromise = loadSystemPrompt().catch((err: unknown) => {
+      console.error("[harness] system-prompt load failed:", err);
+      return DEFAULT_SYSTEM_PROMPT;
+    });
+    // A project planning session is an ordinary session that also has the
+    // Agent Map tools: same served prompt, with the map context appended.
+    const agentMapContext =
       context?.agentMapIdentity?.role === "map-planner"
-        ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
-        : loadSystemPrompt().catch((err: unknown) => {
-            console.error("[harness] system-prompt load failed:", err);
-            return DEFAULT_SYSTEM_PROMPT;
-          });
+        ? AGENT_MAP_PLANNER_SYSTEM_PROMPT
+        : null;
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -600,7 +603,11 @@ function createDefaultBuildLaunchOpts(
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
-    const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
+    const appendices = [
+      viaSystemPrompt ? brief : null,
+      agentMapContext,
+      context?.promptAppendix,
+    ]
       .filter(
         (value): value is string =>
           typeof value === "string" && value.trim() !== "",

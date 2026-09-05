@@ -218,25 +218,36 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     `Bearer ${metadata!.bearerToken}`,
   );
   const systemPrompt = await fs.readFile(launchOpts!.systemPromptFile!, "utf8");
-  expect(systemPrompt).toContain("<agent-map-planner-context>");
+  // A planner session is an ordinary session plus map context (SAP-3143): the
+  // served authoring prompt comes first, the Agent Map instructions are
+  // appended, and nothing tells the model it may not build.
+  expect(systemPrompt.startsWith(codingPrompt)).toBe(true);
   expect(systemPrompt).toContain(
-    "Do not act as a coding or implementation agent",
+    "This session is also the project planning agent for Agent Studio.",
   );
+  expect(systemPrompt).toContain("agent_map_validate to check a change");
+  expect(systemPrompt).toContain(
+    "When the user asks you to build, scaffold, edit, run, or deploy an agent, do it",
+  );
+  expect(systemPrompt).toContain("<agent-map-planner-context>");
   expect(systemPrompt).toContain(
     "Let the user's first real message be the first visible conversation turn",
   );
   expect(systemPrompt).not.toContain("In your first response, briefly explain");
-  expect(systemPrompt).not.toContain(codingPrompt);
-  expect(systemPrompt).not.toContain("You are the coding agent");
+  expect(systemPrompt).not.toMatch(/Do not (act as|scaffold|edit|deploy)/);
+  expect(systemPrompt).not.toContain("implementation agent");
   expect(systemPrompt).not.toContain(
     "This is a private Agent Studio control turn",
   );
-  expect(loadSystemPrompt).not.toHaveBeenCalled();
+  expect(loadSystemPrompt).toHaveBeenCalledOnce();
   expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
     [
       "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+      "Use this session to plan and build. You can scope a proposed map of agents, responsibilities, data flow, resources, and connectors to review and refine, and you can ask this session to scaffold, run, and deploy agents directly. Start by describing the outcome you want.",
     ].join("\n"),
+  );
+  expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).not.toContain(
+    "not to implement",
   );
   const plannerEmitter = await fs.readFile(
     path.join(path.dirname(launchOpts.settingsFile!), "emit.cjs"),
@@ -337,7 +348,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(ordinaryEmitter).not.toContain(
     JSON.stringify(AGENT_MAP_PLANNER_SESSION_START_MESSAGE),
   );
-  expect(loadSystemPrompt).toHaveBeenCalledOnce();
+  expect(loadSystemPrompt).toHaveBeenCalledTimes(2);
   const ordinaryConfig = JSON.parse(
     await fs.readFile(ordinaryLaunch.mcpConfigFile!, "utf8"),
   );

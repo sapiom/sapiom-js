@@ -66,7 +66,7 @@ describe("generateClaudeSettings", () => {
   it("shows planner onboarding only for a fresh SessionStart hook", async () => {
     const message = [
       "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet.",
+      "Use this session to plan and build.",
     ].join("\n");
     const { emitScriptPath } = await generateClaudeSettings({
       harnessSessionId: "planner-session",
