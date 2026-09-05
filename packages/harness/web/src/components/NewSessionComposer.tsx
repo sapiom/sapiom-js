@@ -8,14 +8,8 @@ import {
 } from "@shared/types";
 
 import type { FsListResponse } from "../lib/api";
-import {
-  FALLBACK_HARNESSES,
-  harnessLabel,
-  isHarnessSelectable,
-  orderHarnesses,
-} from "../lib/harness-registry";
+import { harnessLabel } from "../lib/harness-registry";
 import { formatComplexity, type GalleryTemplate } from "../lib/templates";
-import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import { getDesktopBridge } from "../lib/desktop";
 import {
   filesToAttachments,
@@ -79,6 +73,9 @@ function chipSlug(label: string): string {
 }
 
 interface NewSessionComposerProps {
+  harness: HarnessKind;
+  entries: HarnessEntry[];
+  onHarnessChange: (harness: HarnessKind) => void;
   /** Genuine first run (AppState.firstRun): changes the greeting and shows the
    *  one-time telemetry opt-in + docs footer. */
   firstRun: boolean;
@@ -95,8 +92,7 @@ interface NewSessionComposerProps {
   onUseTemplate: (template: GalleryTemplate, harness: HarnessKind) => void;
   /** Navigate to the full templates catalog. */
   onBrowseTemplates: (harness: HarnessKind) => void;
-  /** Adapter registry + template catalog fetches. */
-  listHarnesses: () => Promise<HarnessEntry[]>;
+  /** Template catalog fetch. */
   listTemplates: () => Promise<TemplateListResponse>;
   /** First-run telemetry opt-in (SAP-1988): off by default, folded in from the
    *  retired WelcomePanel. */
@@ -114,12 +110,14 @@ interface NewSessionComposerProps {
 }
 
 export function NewSessionComposer({
+  harness,
+  entries,
+  onHarnessChange,
   firstRun,
   onSubmitIdea,
   onAttachmentError,
   onUseTemplate,
   onBrowseTemplates,
-  listHarnesses,
   listTemplates,
   telemetryOptIn,
   onToggleTelemetry,
@@ -132,10 +130,6 @@ export function NewSessionComposer({
   onSaveProjectRoot,
 }: NewSessionComposerProps): JSX.Element {
   const [idea, setIdea] = useState("");
-  const [harness, setHarness] = useState<HarnessKind>(
-    () => loadUiPrefs().preferredHarness ?? "claude-code",
-  );
-  const [entries, setEntries] = useState<HarnessEntry[]>(FALLBACK_HARNESSES);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [templates, setTemplates] = useState<GalleryTemplate[]>([]);
   const [addOpen, setAddOpen] = useState(false);
@@ -158,27 +152,6 @@ export function NewSessionComposer({
   const pendingQueueCountRef = useRef(0);
   const closePicker = useCallback(() => setPickerOpen(false), []);
 
-  // Registry-driven agent picker, same correction NewSessionModal applies: an
-  // uninstalled/external default is never left selected.
-  useEffect(() => {
-    let cancelled = false;
-    listHarnesses()
-      .then((registry) => {
-        if (cancelled || registry.length === 0) return;
-        setEntries(orderHarnesses(registry));
-        const selectable = registry.filter(isHarnessSelectable);
-        setHarness((current) =>
-          selectable.some((entry) => entry.id === current)
-            ? current
-            : ((selectable[0]?.id as HarnessKind | undefined) ?? current),
-        );
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [listHarnesses]);
-
   // The first few catalog templates for the home's starter row. On failure the
   // row simply doesn't render (the box is still the primary path).
   useEffect(() => {
@@ -199,8 +172,7 @@ export function NewSessionComposer({
   }, [listTemplates]);
 
   const pickHarness = (kind: HarnessKind): void => {
-    setHarness(kind);
-    saveUiPrefs({ preferredHarness: kind === "codex" ? "codex" : "claude-code" });
+    onHarnessChange(kind);
     closePicker();
   };
 
