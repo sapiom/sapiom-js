@@ -6218,9 +6218,12 @@ button.system-graph-node.is-navigable:focus-visible {
   box-shadow: var(--shadow-sm);
 }
 
-/* Render-failure card, app-side (the document's own error text is hidden by
-   the board snippet): short claim, one-line reason, direct actions, full
-   reason folded behind Details. Sits on the board's dotted grid. */
+/* Render-failure card, app-side: short claim, one-line reason, direct actions,
+   full reason folded behind Details. Sits transparently on the board's dotted
+   grid, so the document underneath must not paint a message of its own. The
+   canvas template hides the failed panel's prose while it is embedded
+   (`[data-canvas-embedded] .canvas-render-error-note`, canvas-template.ts).
+   Without that the two error strings drew through each other (SAP-3199). */
 .canvas-render-error {
   position: absolute;
   inset: 0;

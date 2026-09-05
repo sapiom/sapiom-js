@@ -172,6 +172,13 @@ body {
   position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap; margin: 0; padding: 0;
 }
+/* Same reason as the header above, for the failed render. The SPA paints its
+   own Render-failed card (short claim, one-line reason, actions, full reason
+   behind Details) as a transparent layer directly over this document, so the
+   document's copy of the reason drew straight through it (SAP-3199). Embedded,
+   the card is the one message and this prose steps aside; opened standalone
+   there is no card, so it stays and is the only message. */
+:root[data-canvas-embedded] .canvas-render-error-note { display: none; }
 .canvas-interconnections { display: flex; flex-direction: column; gap: 12px; }
 .canvas-panel-title { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--canvas-text-dim); }
 .canvas-interconnection-row { display: grid; grid-template-columns: 12px 1fr auto; column-gap: 8px; row-gap: 2px; align-items: baseline; }
@@ -260,9 +267,23 @@ template { display: none; }
 `.trim();
 }
 
+/** Marks the document as embedded so the stylesheet can stand down the chrome
+ *  the SPA already draws around the iframe. Its own head script, not a branch
+ *  inside the run-state bundle, so a parse error in that much larger script
+ *  can never leave the flag unset, and in the head, so the flag is on the
+ *  root element before the body paints and nothing flashes.
+ *
+ *  `window.parent` is readable from a sandboxed frame and comparing the two
+ *  references is not a cross-origin access, so this is safe under the
+ *  `allow-scripts`-only sandbox the SPA loads the board with. */
+const EMBED_SCRIPT = `
+(function () {
+  if (window.parent !== window) document.documentElement.setAttribute("data-canvas-embedded", "");
+})();
+`.trim();
+
 /** Reads the current theme from `?theme=light|dark`, falling back to the
- *  Studio's light product default when the param is absent — the only script
- *  in the whole document. */
+ *  Studio's light product default when the param is absent. */
 const THEME_SCRIPT = `
 (function () {
   var params = new URLSearchParams(location.search);
@@ -399,6 +420,9 @@ export function renderCanvasDocument(bodyHtml: string): string {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Agent Studio canvas</title>
+<script>
+${EMBED_SCRIPT}
+</script>
 <script>
 ${THEME_SCRIPT}
 </script>

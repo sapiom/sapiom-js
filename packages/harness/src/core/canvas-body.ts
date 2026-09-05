@@ -205,7 +205,14 @@ ${renderGraphSvg(graph, enrichment)}
 
 /** A degraded panel for a workflow whose graph couldn't be extracted — never
  *  a crash, never a silent fallback to the LLM path, just an honest reason
- *  styled through the same shell. */
+ *  styled through the same shell.
+ *
+ *  The prose carries `canvas-render-error-note` so the template can hide it
+ *  while the document is embedded: the SPA paints its own Render-failed card
+ *  (short claim, one-line reason, actions, full reason behind Details)
+ *  transparently over this document, and two error strings drawn through each
+ *  other was SAP-3199. Opened standalone there is no card, so the prose stays
+ *  as the only message. */
 export function buildErrorPanelHtml(title: string, reason: string): string {
   const errorData = JSON.stringify({ title, reason }).replace(/</g, "\\u003c");
   return `<section class="canvas-panel">
@@ -216,7 +223,7 @@ export function buildErrorPanelHtml(title: string, reason: string): string {
     </div>
   </header>
   <div class="canvas-diagram-panel">
-    <p class="canvas-empty-note">Could not extract this agent's step graph: ${esc(reason)}. Use the workbench actions to ask your coding agent to fix it or retry the deterministic render.</p>
+    <p class="canvas-empty-note canvas-render-error-note">Could not extract this agent's step graph: ${esc(reason)}. Use the workbench actions to ask your coding agent to fix it or retry the deterministic render.</p>
   </div>
   <script type="application/json" id="sapiom-render-error">${errorData}</script>
 </section>`;
