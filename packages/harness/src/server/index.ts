@@ -31,7 +31,7 @@ import type {
   SystemPromptDelivery,
   WorkflowInfo,
 } from "../shared/types.js";
-import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
+import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import type {
   ProjectBootstrapLifecycleEvent,
   ProjectAgentSession,
@@ -227,7 +227,8 @@ import {
   moveTargetDirs,
   remapSessions,
 } from "./agent-move.js";
-import { createAgentScaffoldRouter } from "./scaffold.js";
+import { createAgentScaffoldRouter, type AgentScaffoldDeps } from "./scaffold.js";
+import { prepareFirstRequest } from "./first-request.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -892,6 +893,7 @@ export const startServer = async (
     const settings = await loadSettings(statePaths.settings);
     return [
       ...pendingProjectCwds,
+      ...(sessionManager ? sessionManager.listPendingCreates().map((session) => session.cwd) : []),
       ...settings.recentDirs,
       ...(sessionManager
         ? sessionManager.list().map((session) => session.cwd)
@@ -926,6 +928,19 @@ export const startServer = async (
           })),
       );
       const retainedProjectSessionRoots = new Set<string>();
+      // Pending launches contribute their trusted PROJECT root just like live
+      // sessions, not a descendant cwd that would mint a competing project.
+      const pendingCwds = [
+        ...pendingProjectCwds,
+        ...(sessionManager ? sessionManager.listPendingCreates() : []).flatMap((session) => {
+          if (!session.agentMapIdentity) return [session.cwd];
+          const root = projectSessionRoot(
+            { cwd: session.cwd, projectId: session.agentMapIdentity.projectId },
+            durableRootCandidates,
+          );
+          return root ? [root] : [];
+        }),
+      ];
       const sessions = sessionManager
         ? sessionManager.list().flatMap((session) => {
             if (!session.agentMapIdentity) {
@@ -962,7 +977,7 @@ export const startServer = async (
           })
         : [];
       const candidates = [
-        ...pendingProjectCwds,
+        ...pendingCwds,
         ...settings.recentDirs,
         ...sessions.map((session) => session.cwd),
       ];
@@ -982,7 +997,7 @@ export const startServer = async (
       const visibleRoots = projectRoots({
         recentDirs: settings.recentDirs,
         sessions,
-        pendingCwds: [...pendingProjectCwds],
+        pendingCwds,
         pinnedRoots: durableRoots,
         agentPaths: [
           ...workflowsCache.map((workflow) => workflow.path),
@@ -1309,6 +1324,56 @@ export const startServer = async (
       },
     });
 
+  const scaffoldDeps: AgentScaffoldDeps = {
+      listProjectDirs: async () => {
+        const stored = await loadSettings(statePaths.settings);
+        return moveTargetDirs(
+          [
+            ...stored.recentDirs,
+            ...(stored.projectRoot ? [stored.projectRoot] : []),
+            // THE HOST'S DEFAULT, which the move route does not need and this
+            // one does. `AppState.defaultProjectRoot` is where the SPA puts a
+            // NEW project when the user has saved no `projectRoot` of their own
+            // — `<launchDir>/projects` under Electron — and the host does not
+            // persist it into settings. Without it, the first template a user
+            // ever starts from is refused at its own suggested destination
+            // ("Studio doesn't show that folder as a project"), and the flow
+            // cannot bootstrap: `recentDirs` only learns a root once a session
+            // has been created there, and creation now happens FIRST.
+            defaultProjectRoot ?? launchDir,
+            ...sessionManager.list().map((session) => session.cwd),
+          ],
+          workflowsCache.map((w) => w.path),
+        );
+      },
+      resolveAgent: (agentPath) =>
+        workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
+      scaffoldAgent: async ({ targetDir, template }) => {
+        // `installDependencies: true` for the same reason the MCP tool passes
+        // it: the Canvas bundles the project on its first, unprompted render
+        // and resolves `@sapiom/agent`/`zod` from the project's own
+        // node_modules, so a never-installed agent opens on a "Could not
+        // resolve …" error. Best-effort inside agent-core — a failed install
+        // still returns a created project.
+        const result = await scaffold({
+          targetDir,
+          template,
+          templatesDir: agentCoreTemplatesDir(),
+          installDependencies: true,
+        });
+        return { dependenciesInstalled: result.dependenciesInstalled };
+      },
+      // Rescan the PROJECT root, not the agent directory: the registry has to
+      // learn the new agent under the project the rail draws it in, and the
+      // scan broadcasts `workflows.changed` so the row is there before the
+      // dialog's caller opens a session on it.
+      onScaffolded: async (agentDir) => {
+        await scanWorkflowsAndBroadcast(dirname(agentDir), "agent-created", {
+          dirty: true,
+        });
+      },
+    };
+
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ??
     createDefaultBuildLaunchOpts(
@@ -1327,8 +1392,13 @@ export const startServer = async (
     context,
   ) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
+    // Scope/bootstrap ownership is already resolved; prepare the user's new
+    // project before config generation and PTY spawn, never during resume.
+    const initialPrompt = context?.resume
+      ? undefined
+      : await prepareFirstRequest(req, scaffoldDeps);
     if (!context?.agentMapIdentity) {
-      return innerBuildLaunchOpts(harnessSessionId, req, context);
+      return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
     }
     if (!agentMapMcpUrl) {
       throw new Error("Agent Map MCP endpoint is not bound");
@@ -1346,7 +1416,7 @@ export const startServer = async (
         ...context,
         agentMapMcp: agentMapMcpMetadata,
       });
-      return { ...generated, agentMapMcp: agentMapMcpMetadata };
+      return { ...generated, agentMapMcp: agentMapMcpMetadata, ...(initialPrompt ? { initialPrompt } : {}) };
     } catch (error) {
       agentMapCapabilities.revokeSession(harnessSessionId);
       throw error;
@@ -1499,6 +1569,7 @@ export const startServer = async (
       }
       const metadata = await projectBootstrap?.claimProject(
         identity,
+        Boolean(request.initialPrompt || request.initialAttachments?.length) ||
         request.initialUserInputPending === true ||
           Boolean(request.rehydrateFrom),
       );
@@ -3592,6 +3663,11 @@ export const startServer = async (
   // (base64 data URLs, up to ~13 MiB encoded) can be parsed — see
   // JSON_BODY_LIMIT_BYTES. This is the parser that actually gates every /api
   // route; the rest router mounts its own with the same limit for standalone use.
+  app.post(
+    "/api/sessions",
+    createBootTokenMiddleware(options.bootToken),
+    express.json({ limit: CREATE_SESSION_JSON_LIMIT_BYTES }),
+  );
   app.use(
     "/api",
     createBootTokenMiddleware(options.bootToken),
@@ -3979,57 +4055,7 @@ export const startServer = async (
   // against the SAME directory list the move route drops into — so "a folder
   // the rail can show" and "a folder the studio will create a project in" stay
   // one answer.
-  app.use(
-    createAgentScaffoldRouter({
-      listProjectDirs: async () => {
-        const stored = await loadSettings(statePaths.settings);
-        return moveTargetDirs(
-          [
-            ...stored.recentDirs,
-            ...(stored.projectRoot ? [stored.projectRoot] : []),
-            // THE HOST'S DEFAULT, which the move route does not need and this
-            // one does. `AppState.defaultProjectRoot` is where the SPA puts a
-            // NEW project when the user has saved no `projectRoot` of their own
-            // — `<launchDir>/projects` under Electron — and the host does not
-            // persist it into settings. Without it, the first template a user
-            // ever starts from is refused at its own suggested destination
-            // ("Studio doesn't show that folder as a project"), and the flow
-            // cannot bootstrap: `recentDirs` only learns a root once a session
-            // has been created there, and creation now happens FIRST.
-            ...(defaultProjectRoot ? [defaultProjectRoot] : []),
-            ...sessionManager.list().map((session) => session.cwd),
-          ],
-          workflowsCache.map((w) => w.path),
-        );
-      },
-      resolveAgent: (agentPath) =>
-        workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
-      scaffoldAgent: async ({ targetDir, template }) => {
-        // `installDependencies: true` for the same reason the MCP tool passes
-        // it: the Canvas bundles the project on its first, unprompted render
-        // and resolves `@sapiom/agent`/`zod` from the project's own
-        // node_modules, so a never-installed agent opens on a "Could not
-        // resolve …" error. Best-effort inside agent-core — a failed install
-        // still returns a created project.
-        const result = await scaffold({
-          targetDir,
-          template,
-          templatesDir: agentCoreTemplatesDir(),
-          installDependencies: true,
-        });
-        return { dependenciesInstalled: result.dependenciesInstalled };
-      },
-      // Rescan the PROJECT root, not the agent directory: the registry has to
-      // learn the new agent under the project the rail draws it in, and the
-      // scan broadcasts `workflows.changed` so the row is there before the
-      // dialog's caller opens a session on it.
-      onScaffolded: async (agentDir) => {
-        await scanWorkflowsAndBroadcast(dirname(agentDir), "agent-created", {
-          dirty: true,
-        });
-      },
-    }),
-  );
+  app.use(createAgentScaffoldRouter(scaffoldDeps));
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
     createFsRouter(),

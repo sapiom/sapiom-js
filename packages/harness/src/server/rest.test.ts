@@ -505,6 +505,57 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions", () => {
+    it("preserves the initial task and scaffold request without an input-route round trip", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.create).mockResolvedValue(exitedSession());
+      start({ sessionManager });
+      const request = {
+        cwd: "/tmp/proj", harness: "claude-code",
+        initialPrompt: "Build ticket triage.\nUse my files.",
+        scaffold: { template: "default" },
+        initialAttachments: [{ kind: "path", path: "/tmp/brief.pdf" }],
+      };
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request),
+      });
+      expect(res.status).toBe(201);
+      expect(sessionManager.create).toHaveBeenCalledExactlyOnceWith(request);
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { initialPrompt: "bad\0argument" },
+      { initialPrompt: "x".repeat(32_001) },
+      { initialAttachments: [{ kind: "path", path: "bad\0path" }] },
+      { initialAttachments: [{ kind: "inline", filename: "bad.png", dataUrl: "data:image/png;base64,invalid!" }] },
+      { scaffold: { template: "../../escape" } },
+    ])("rejects malformed first-turn input before session creation", async (input) => {
+      const sessionManager = fakeSessionManager();
+      start({ sessionManager });
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code", ...input }),
+      });
+      expect(res.status).toBe(400);
+      expect(sessionManager.create).not.toHaveBeenCalled();
+    });
+
+    it("accepts multiple initial files above the individual-upload JSON limit", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.create).mockResolvedValue(exitedSession());
+      start({ sessionManager });
+      const dataUrl = `data:application/octet-stream;base64,${Buffer.alloc(6 * 1024 * 1024).toString("base64")}`;
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          cwd: "/tmp/proj", harness: "codex",
+          initialAttachments: [1, 2].map((i) => ({ kind: "inline", filename: `file${i}.bin`, dataUrl })),
+        }),
+      });
+      expect(res.status).toBe(201);
+      expect(sessionManager.create).toHaveBeenCalledOnce();
+    });
+
     it("calls onSessionCreated with the new session's cwd and id", async () => {
       const onSessionCreated = vi.fn();
       const sessionManager = fakeSessionManager();

@@ -50,6 +50,7 @@ import {
 import type { JSX } from "react";
 import type {
   AppState,
+  CreateSessionRequest,
   HarnessKind,
   HarnessSession,
   MacroDef,
@@ -159,8 +160,6 @@ import {
   type NavigationVisit,
 } from "./lib/navigation-history";
 import {
-  buildIdeaWithAttachments,
-  materializeAttachments,
   type NewSessionAttachment,
 } from "./lib/new-session-attachments";
 import {
@@ -251,6 +250,9 @@ const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
 const HELD_PROMPT_HINT_DELAY_MS = 4_000;
 
 interface CreateSessionAtOptions {
+  initialPrompt?: CreateSessionRequest["initialPrompt"];
+  initialAttachments?: CreateSessionRequest["initialAttachments"];
+  scaffold?: CreateSessionRequest["scaffold"];
   /** Keep the create-new queue mounted while inline files are materialized. */
   keepComposerOpen?: boolean;
   /** Keep an explicit new-agent builder active when its root joins Studio. */
@@ -1779,6 +1781,9 @@ export const App = (): JSX.Element => {
         {
           cwd,
           harness: agentHarness,
+          ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
+          ...(options.initialAttachments?.length ? { initialAttachments: options.initialAttachments } : {}),
+          ...(options.scaffold ? { scaffold: options.scaffold } : {}),
           ...((options.initialUserInputPending ?? options.standaloneBuilder)
             ? { initialUserInputPending: true }
             : {}),
@@ -2179,33 +2184,20 @@ export const App = (): JSX.Element => {
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
-    const session = await createSessionAt(cwd, agentHarness, {
+    await createSessionAt(cwd, agentHarness, {
       keepComposerOpen: true,
       standaloneBuilder: true,
+      scaffold: { template: "default" },
+      initialPrompt: idea.trim(),
+      initialAttachments: attachments.map((attachment) =>
+        attachment.kind === "path"
+          ? { kind: "path", path: attachment.path }
+          : { kind: "inline", filename: attachment.name, dataUrl: attachment.dataUrl },
+      ),
     });
-    try {
-      const resolved = await materializeAttachments(
-        session.id,
-        attachments,
-        harness.attachFile,
-      );
-      sendScaffoldPrompt(
-        session,
-        cwd,
-        buildIdeaWithAttachments(idea, resolved),
-      );
-      setComposing(false);
-    } catch (error) {
-      // The first prompt is registered only after every upload succeeds. Kill
-      // the provisional session on failure so retrying reuses the same folder
-      // and queue instead of leaving a blank tab behind.
-      await harness.closeSession(session.id).catch((rollbackError: unknown) => {
-        console.error("[harness] attachment rollback failed:", rollbackError);
-      });
-      pendingStandaloneBuilderSessionsRef.current.delete(cwd);
-      harness.removePendingWorkspace(cwd);
-      throw error;
-    }
+    // Only a successful create clears the draft. Scaffolding and uploads
+    // complete server-side before the vendor receives its first user turn.
+    setComposing(false);
   };
 
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {

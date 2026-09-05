@@ -5,6 +5,7 @@
  * touches the network — this is what lets the SPA build ahead of a running
  * server.
  */
+import { buildIdeaWithAttachments } from "@shared/initial-prompt";
 import type {
   AccountPlanView,
   AgentSecret,
@@ -2737,14 +2738,28 @@ export class MockApi implements HarnessApi {
         lastCreateSession: { req },
         createSessionCalls: [...previous, { req }],
       };
-      recordCreateStep("session", req.cwd);
       if (win.__MOCK_CREATE_SESSION_FAIL_ONCE__) {
         win.__MOCK_CREATE_SESSION_FAIL_ONCE__ = false;
         throw new Error("mock: couldn't create session");
       }
     }
+    if (req.scaffold) {
+      const separator = req.cwd.lastIndexOf("/");
+      await this.scaffoldAgent(req.cwd.slice(0, separator), req.cwd.slice(separator + 1), req.scaffold.template);
+    }
+    const id = `sess-mock-${this.sessions.length + 1}`;
+    const attachments: { path: string }[] = [];
+    for (const attachment of req.initialAttachments ?? []) {
+      attachments.push(attachment.kind === "path" ? attachment : await this.materializeMockFile(id, req.cwd, attachment));
+    }
+    const initialPrompt = buildIdeaWithAttachments(req.initialPrompt ?? "", attachments);
+    recordCreateStep("session", req.cwd);
+    if (typeof window !== "undefined" && initialPrompt) {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastInitialInput: { id, text: initialPrompt } };
+    }
     let session: HarnessSession = {
-      id: `sess-mock-${this.sessions.length + 1}`,
+      id,
       agentSessionId: null,
       boundWorkflowPath: null,
       harness: req.harness,
@@ -2819,6 +2834,11 @@ export class MockApi implements HarnessApi {
     if (!session)
       throw new ApiError(404, "session not found", "session not found");
 
+    return this.materializeMockFile(id, session.cwd, req);
+  }
+
+  private async materializeMockFile(id: string, cwd: string, req: AttachFileRequest): Promise<AttachFileResponse> {
+    await delay();
     const testWindow =
       typeof window === "undefined"
         ? undefined
@@ -2830,7 +2850,7 @@ export class MockApi implements HarnessApi {
       throw new ApiError(
         500,
         "attachment materialization failed",
-        "attachment materialization failed",
+        `Couldn't attach ${req.filename}: attachment materialization failed`,
       );
     }
 
@@ -2839,7 +2859,7 @@ export class MockApi implements HarnessApi {
       throw new ApiError(400, "invalid attachment", "invalid attachment");
     const filename = req.filename.split(/[\\/]/).pop() || "pasted-file";
     const response: AttachFileResponse = {
-      path: `${session.cwd}/.sapiom/uploads/mock-${filename}`,
+      path: `${cwd}/.sapiom/uploads/mock-${filename}`,
       mediaType: match[1]!,
       bytes: atob(match[2]!).length,
     };

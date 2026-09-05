@@ -3305,6 +3305,28 @@ describe("SessionManager", () => {
     }
   });
 
+  it("prepares files before handing the first request to the CLI and never replays it on resume", async () => {
+    const prepared = deferred<void>();
+    const buildLaunchOpts = vi.fn(async (_id: string, _req: CreateSessionRequest) => { await prepared.promise; return {}; });
+    const { manager, adapter, spawns } = makeManager({ buildLaunchOpts });
+    const initialPrompt = "Build my ticket triage agent.";
+    const creating = manager.create({ cwd: "/tmp/proj", harness: "claude-code", initialPrompt });
+    await vi.waitFor(() => expect(buildLaunchOpts).toHaveBeenCalledOnce());
+    expect(adapter.launch).not.toHaveBeenCalled();
+    prepared.resolve();
+    const session = await creating;
+    expect(adapter.launch).toHaveBeenCalledOnce();
+    expect(adapter.launch).toHaveBeenCalledWith(expect.objectContaining({ initialPrompt }));
+    expect(spawns[0]!.pty.write).not.toHaveBeenCalled();
+    expect(await readFile(sessionsPath, "utf8")).not.toContain(initialPrompt);
+    await manager.setAgentSessionId(session.id, "native-first-task");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    await manager.resume(session.id);
+    expect(adapter.resume).toHaveBeenCalledWith("native-first-task", expect.not.objectContaining({ initialPrompt }));
+    expect(buildLaunchOpts.mock.calls[1]?.[1]).not.toHaveProperty("initialPrompt");
+  });
+
   it("awaits an async buildLaunchOpts and merges its result into launch opts", async () => {
     const buildLaunchOpts = vi.fn(async (harnessSessionId: string) => {
       await new Promise((resolve) => setTimeout(resolve, 5));

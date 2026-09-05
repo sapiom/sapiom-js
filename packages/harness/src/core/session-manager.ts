@@ -851,6 +851,10 @@ export class SessionManager {
   /** Publish project sessions in claim order so the first durable/visible row
    * is also the one that owns the first-session lifecycle. */
   private readonly projectCreateQueues = new Map<string, Promise<void>>();
+  private readonly pendingCreates = new Map<
+    string,
+    Pick<HarnessSession, "cwd" | "agentMapIdentity">
+  >();
   private agentSessionOwnerWriteSeq = 0;
   private subsessionBindingWriteSeq = 0;
   private subsessionBindingQueue: Promise<void> = Promise.resolve();
@@ -1102,6 +1106,12 @@ export class SessionManager {
     return this.createWithId(this.generateId(), req, trusted);
   }
 
+  /** Keep ordinary project roots discoverable during asynchronous launch
+   * preparation, before their session rows can be published. Server-only. */
+  listPendingCreates(): Pick<HarnessSession, "cwd" | "agentMapIdentity">[] {
+    return [...this.pendingCreates.values()];
+  }
+
   /**
    * Server-only reserved-ID create. The private marker is committed before a
    * session row or process can exist, closing the row-before-binding crash
@@ -1224,6 +1234,9 @@ export class SessionManager {
         ) {
           throw new ProjectBootstrapClaimUnavailableError();
         }
+        // Retain only AFTER claiming first-session ownership. Advertising the
+        // root earlier could start an automatic session ahead of this request.
+        this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
         const promptAppendix = trusted.promptAppendix?.(id);
         const focusedContext = trusted.focusedContext?.(id);
         if (focusedContext && !agentMapIdentity)
@@ -1244,6 +1257,7 @@ export class SessionManager {
         opts = {
           harnessSessionId: id,
           cwd: req.cwd,
+          ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
           ...(await (launchContext
             ? this.buildLaunchOpts(id, req, launchContext)
             : this.buildLaunchOpts(id, req))),
@@ -1324,9 +1338,13 @@ export class SessionManager {
       }
       return session;
     };
-    return agentMapIdentity
-      ? this.serializeProjectCreate(agentMapIdentity.projectId, createResolved)
-      : createResolved();
+    try {
+      return await (agentMapIdentity
+        ? this.serializeProjectCreate(agentMapIdentity.projectId, createResolved)
+        : createResolved());
+    } finally {
+      this.pendingCreates.delete(id);
+    }
   }
 
   /**

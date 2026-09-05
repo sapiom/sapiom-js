@@ -104,6 +104,11 @@ export const MAX_INLINE_ATTACHMENTS_TOTAL_BYTES = 50 * 1024 * 1024;
  */
 export const JSON_BODY_LIMIT_BYTES = 15 * 1024 * 1024;
 
+/** First-turn uploads arrive together, bounded by the composer's 50 MiB cap.
+ * Other endpoints keep the smaller JSON limit. */
+export const CREATE_SESSION_JSON_LIMIT_BYTES =
+  Math.ceil(MAX_INLINE_ATTACHMENTS_TOTAL_BYTES * 4 / 3) + 1024 * 1024;
+
 /**
  * Workspace-state convention: Agent Studio mirrors this session's binding,
  * the full agent registry, and its own identity here, relative to the
@@ -326,6 +331,9 @@ export interface LaunchOpts {
    * --plugin-dir (e.g. codex) silently ignore this field.
    */
   pluginDir?: string;
+  /** User-authored first turn, passed to the interactive CLI at fresh launch.
+   * Never persisted in session metadata or replayed by resume. */
+  initialPrompt?: string;
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
@@ -1106,6 +1114,16 @@ export interface CreateSessionRequest {
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+  /** First user turn. The CLI owns delivery after its trust/login screens. */
+  initialPrompt?: string;
+  /** Files to materialize before spawning, in the user's selected order. */
+  initialAttachments?: Array<
+    | { kind: "path"; path: string }
+    | ({ kind: "inline" } & AttachFileRequest)
+  >;
+  /** Create a new project at cwd using the same guarded scaffold as agent +.
+   * Omitted for sessions in existing projects. */
+  scaffold?: { template: string };
   /**
    * Content-free lifecycle hint: the UI already owns a real first input that
    * will be delivered after readiness/attachments. A new-project bootstrap

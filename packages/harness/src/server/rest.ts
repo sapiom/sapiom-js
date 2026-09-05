@@ -7,16 +7,13 @@
 import express, { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-
 import { randomUUID } from "node:crypto";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
+
 import type {
   AdoptSessionRequest,
   AnalyticsEvent,
   AppState,
   AttachFileRequest,
-  AttachFileResponse,
   BackgroundTask,
   BindWorkflowRequest,
   CreateSessionRequest,
@@ -36,9 +33,8 @@ import type {
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import type { StudioProjectSummary } from "../shared/agent-map.js";
 import {
-  HARNESS_UPLOADS_DIR,
+  CREATE_SESSION_JSON_LIMIT_BYTES,
   JSON_BODY_LIMIT_BYTES,
-  MAX_INLINE_ATTACHMENT_BYTES,
   SPAWNABLE_HARNESS_KINDS,
   EDITOR_KINDS,
 } from "../shared/types.js";
@@ -65,28 +61,10 @@ import {
   getHarnessAdapter,
   listHarnessAdapters,
 } from "../core/adapters/registry.js";
-import { resolveWithinRoot } from "../core/path-safety.js";
+import { AttachmentError, writeAttachment } from "./attachments.js";
+import { ScaffoldError } from "./scaffold.js";
+import { validateInitialAttachments } from "./first-request.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
-
-const DATA_URL_RE = /^data:([a-z0-9.+/-]+);base64,([\s\S]+)$/i;
-
-/** Validate standard padded base64 in one pass and return decoded size. */
-function decodedBase64Size(encoded: string): number | null {
-  if (encoded.length === 0 || encoded.length % 4 !== 0) return null;
-  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
-  const contentLength = encoded.length - padding;
-  for (let index = 0; index < encoded.length; index += 1) {
-    const code = encoded.charCodeAt(index);
-    const isDataCharacter =
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122) ||
-      (code >= 48 && code <= 57) ||
-      code === 43 ||
-      code === 47;
-    if (index < contentLength ? !isDataCharacter : code !== 61) return null;
-  }
-  return (encoded.length / 4) * 3 - padding;
-}
 
 // Derived from SPAWNABLE_HARNESS_KINDS (shared/types.ts) so the zod
 // validation and the TypeScript type can never drift from each other.
@@ -97,6 +75,12 @@ const createSessionSchema = z
     cwd: z.string().min(1),
     harness: z.enum(SPAWNABLE_HARNESS_KINDS),
     profile: z.string().optional(),
+    initialPrompt: z.string().max(32_000).refine((text) => !text.includes("\0")).optional(),
+    initialAttachments: z.array(z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("path"), path: z.string().min(1).max(4096).refine((text) => !text.includes("\0")) }).strict(),
+      z.object({ kind: z.literal("inline"), dataUrl: z.string().min(1), filename: z.string().trim().min(1).max(255) }).strict(),
+    ])).max(100).optional(),
+    scaffold: z.object({ template: z.string().regex(/^[a-z0-9][a-z0-9-]*$/i) }).strict().optional(),
     initialUserInputPending: z.boolean().optional(),
     rehydrateFrom: z.string().min(1).optional(),
     theme: z.enum(["light", "dark"]).optional(),
@@ -351,6 +335,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     standardHeaders: true,
     legacyHeaders: false,
   });
+  router.post("/sessions", express.json({ limit: CREATE_SESSION_JSON_LIMIT_BYTES }));
   router.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
   router.get("/state", async (_req, res, next) => {
@@ -483,7 +468,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
-  router.post("/sessions", async (req, res, next) => {
+  router.post("/sessions", attachmentUploadRateLimiter, async (req, res, next) => {
     const parsed = createSessionSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
@@ -496,10 +481,15 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // sessionManager.create() writes the initial harness-context.json
       // itself (before spawning) so every entry point gets it, not just
       // this REST route — see SessionManager.create().
+      validateInitialAttachments(request.initialAttachments);
       const session = await sessionManager.create(request);
       res.status(201).json(session);
       options.onSessionCreated?.(request.cwd, session.id);
     } catch (err) {
+      if (err instanceof ScaffoldError || err instanceof AttachmentError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
       if (
         err instanceof AdapterNotFoundError ||
         err instanceof SpawnTargetError
@@ -538,70 +528,13 @@ export function createRestRouter(options: RestRouterOptions): Router {
         return;
       }
 
-      const match = DATA_URL_RE.exec(parsed.data.dataUrl);
-      if (!match) {
-        res.status(400).json({ error: "dataUrl must be a base64 data: URL" });
-        return;
-      }
-
-      const mediaType = match[1]!.toLowerCase();
-      const encoded = match[2]!;
-      const decodedSize = decodedBase64Size(encoded);
-      if (decodedSize === null) {
-        res
-          .status(400)
-          .json({ error: "attachment payload is not valid base64" });
-        return;
-      }
-      if (decodedSize === 0) {
-        res.status(400).json({ error: "attachment payload is empty" });
-        return;
-      }
-      if (decodedSize > MAX_INLINE_ATTACHMENT_BYTES) {
-        res.status(413).json({
-          error: `Attachment is ${decodedSize} bytes; the limit is ${MAX_INLINE_ATTACHMENT_BYTES} bytes`,
-        });
-        return;
-      }
-      const buffer = Buffer.from(encoded, "base64");
-
-      const uploadsDir = resolveWithinRoot(session.cwd, HARNESS_UPLOADS_DIR);
-      if (!uploadsDir) {
-        res
-          .status(500)
-          .json({ error: "could not resolve the uploads directory" });
-        return;
-      }
-      const requestedExtension = path.extname(
-        path.basename(parsed.data.filename),
-      );
-      const extension = /^\.[a-z0-9]{1,12}$/i.test(requestedExtension)
-        ? requestedExtension.toLowerCase()
-        : ".bin";
       try {
-        await fs.mkdir(uploadsDir, { recursive: true });
-        const [realCwd, realUploadsDir] = await Promise.all([
-          fs.realpath(session.cwd),
-          fs.realpath(uploadsDir),
-        ]);
-        if (!resolveWithinRoot(realCwd, realUploadsDir)) {
-          res.status(400).json({
-            error: "uploads directory escapes the session cwd",
-          });
+        res.json(await writeAttachment(session.cwd, parsed.data));
+      } catch (error) {
+        if (error instanceof AttachmentError) {
+          res.status(error.status).json({ error: error.message });
           return;
         }
-        const filePath = path.join(
-          realUploadsDir,
-          `${randomUUID()}${extension}`,
-        );
-        await fs.writeFile(filePath, buffer);
-        const response: AttachFileResponse = {
-          path: filePath,
-          mediaType,
-          bytes: buffer.byteLength,
-        };
-        res.json(response);
-      } catch (error) {
         next(error);
       }
     },
