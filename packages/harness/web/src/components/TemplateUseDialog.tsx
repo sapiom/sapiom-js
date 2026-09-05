@@ -15,15 +15,13 @@
  * textbox was a worse second answer to it.
  */
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { JSX, RefObject } from "react";
 
 import { errorMessage, type FsListResponse } from "../lib/api";
 import type { StudioTemplate } from "../lib/templates";
-import { useDismissable } from "../lib/use-dismissable";
+import { Dialog } from "./Dialog";
 import { FolderField } from "./FolderField";
-import { Icon } from "./Icon";
-import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 export function TemplateUseDialog({
   template,
@@ -49,10 +47,6 @@ export function TemplateUseDialog({
   const [dest, setDest] = useState(initialDest);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  // Never dismissable mid-flight: the session is already being created, and
-  // pulling the dialog would leave the user with no report of how it went.
-  useDismissable(!busy, { onDismiss: onCancel, containerRef: panelRef, triggerRef });
 
   const submit = async (): Promise<void> => {
     const trimmed = dest.trim();
@@ -72,52 +66,23 @@ export function TemplateUseDialog({
   };
 
   return (
-    <div className="modal-backdrop">
-      <div
-        className="modal modal-confirm modal-template-use"
-        role="dialog"
-        aria-label={`Use ${template.name}`}
-        // No `object: "template"` here: it would shadow the nested
-        // FolderField's `object: "directory"`, and that value is what makes
-        // before-send drop the user's folder names from click text.
-        {...trackingAttrs({ dialog: "template_use" })}
-        data-testid="template-use-dialog"
-        ref={panelRef}
-      >
-        <div className="modal-header">
-          Use {template.name}
-          <button
-            className="theme-toggle modal-close"
-            aria-label="Close"
-            title="Close"
-            disabled={busy}
-            onClick={onCancel}
-          >
-            <Icon name="X" size={14} />
-          </button>
-        </div>
-
-        <div className="modal-body">
-          <FolderField
-            value={dest}
-            onChange={setDest}
-            onSubmit={() => void submit()}
-            recentDirs={recentDirs}
-            listDir={listDir}
-          />
-          {error ? (
-            <p className="modal-error" data-testid="template-use-error">
-              {error}
-            </p>
-          ) : (
-            <p className="modal-field-hint">
-              A session starts here and sets the template up in it. A folder that does not exist yet
-              is created.
-            </p>
-          )}
-        </div>
-
-        <div className="modal-actions">
+    <Dialog
+      className="modal-confirm modal-template-use"
+      testId="template-use-dialog"
+      title={`Use ${template.name}`}
+      onClose={onCancel}
+      onSubmit={() => void submit()}
+      // Never dismissable mid-flight: the session is already being created, and
+      // pulling the dialog would leave the user with no report of how it went.
+      dismissable={!busy}
+      closeDisabled={busy}
+      triggerRef={triggerRef}
+      // No `object: "template"` here: it would shadow the nested FolderField's
+      // `object: "directory"`, and that value is what makes before-send drop
+      // the user's folder names from click text.
+      tracking={{ dialog: "template_use" }}
+      actions={
+        <>
           <button className="btn-ghost" disabled={busy} onClick={onCancel}>
             Cancel
           </button>
@@ -129,8 +94,26 @@ export function TemplateUseDialog({
           >
             {busy ? "Starting…" : "Start session"}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <FolderField
+        value={dest}
+        onChange={setDest}
+        onSubmit={() => void submit()}
+        recentDirs={recentDirs}
+        listDir={listDir}
+      />
+      {error ? (
+        <p className="modal-error" data-testid="template-use-error">
+          {error}
+        </p>
+      ) : (
+        <p className="modal-field-hint">
+          A session starts here and sets the template up in it. A folder that does not exist yet
+          is created.
+        </p>
+      )}
+    </Dialog>
   );
 }

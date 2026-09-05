@@ -1116,6 +1116,42 @@ describe("SubsessionCoordinatorStore", () => {
     );
   });
 
+  it("retains unfinished dormant cleanup beyond receipt and tombstone retention", async () => {
+    const root = await fixture();
+    const options = { receiptRetentionLimit: 1, historyTombstoneLimit: 1 };
+    const store = new SubsessionCoordinatorStore(root, options);
+    const reserved = await store.reserveDelegations(identity, delegate("cleanup-history", [
+      { delegationKey: "research", outcome: "Collect evidence" },
+      { delegationKey: "publisher", outcome: "Publish evidence" },
+    ]), target);
+    for (const binding of reserved.bindings) {
+      await store.transitionSession(identity, binding.bindingId, {
+        expectedLifecycleEpoch: binding.lifecycleEpoch,
+        expectedSpawnEpoch: binding.spawnEpoch,
+        expectedRuntimeToken: null,
+        state: "failed",
+      });
+    }
+    const [first, second] = reserved.bindings;
+    await store.reserveDormantReleases(identity, releaseDormant("cleanup-first", 1), [first!.bindingId]);
+    await store.reserveDormantReleases(identity, releaseDormant("cleanup-second", 1), [second!.bindingId]);
+
+    const restarted = new SubsessionCoordinatorStore(root, options);
+    expect((await restarted.read(projectId)).bindingTombstones).toHaveLength(2);
+    await expect(restarted.reserveDormantReleases(identity, releaseDormant("cleanup-first", 1), []))
+      .rejects.toMatchObject({ code: "request_key_expired" });
+    const retry = await restarted.reserveDormantReleases(identity,
+      releaseDormant("cleanup-retry", 1), [first!.bindingId]);
+    expect(retry.bindings).toMatchObject([{
+      state: "released", binding: { bindingId: first!.bindingId },
+    }]);
+    await restarted.reserveDormantReleases(identity, releaseDormant("advance-cleanup", 1), []);
+    await restarted.completeDormantReleaseCleanup(identity, first!.bindingId, first!.sessionId);
+    const remaining = (await restarted.read(projectId)).bindingTombstones;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.bindingId).toBe(second!.bindingId);
+  });
+
   it("reclaims released capacity so a sixty-fifth delegation can be reserved", async () => {
     const root = await fixture();
     const store = new SubsessionCoordinatorStore(root, {

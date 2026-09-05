@@ -307,10 +307,17 @@ export class SubsessionCoordinator {
     let reserved;
     try {
       const aggregate = await this.options.store.read(identity.projectId);
-      const candidateBindingIds = aggregate.bindings
-        .filter(({ sessionState }) =>
+      const pendingCleanup = aggregate.bindingTombstones
+        .filter(({ disposition, cleanupComplete }) =>
+          disposition === "dormant-evicted" && !cleanupComplete,
+        );
+      const candidates = [
+        ...pendingCleanup.map((binding) => ({ ...binding, updatedAt: binding.closedAt })),
+        ...aggregate.bindings.filter(({ sessionState }) =>
           ["exited", "failed"].includes(sessionState),
-        )
+        ),
+      ];
+      const candidateBindingIds = candidates
         .sort((left, right) =>
           left.updatedAt.localeCompare(right.updatedAt) ||
           left.bindingId.localeCompare(right.bindingId),
@@ -375,6 +382,12 @@ export class SubsessionCoordinator {
             }
             await this.options.sessionManager.closeBound(privateMarker);
           }
+          if (binding.disposition === "dormant-evicted")
+            await this.options.store.completeDormantReleaseCleanup(
+              identity,
+              binding.bindingId,
+              binding.sessionId,
+            );
           results.push(this.releasedResult(binding));
         } catch (cause) {
           const detail = this.itemError(cause);

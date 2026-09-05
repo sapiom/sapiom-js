@@ -1,17 +1,18 @@
 import { useRef } from "react";
 import type { JSX, RefObject } from "react";
 
-import { useDismissable } from "../lib/use-dismissable";
-import { Icon } from "./Icon";
+import { Dialog } from "./Dialog";
 
 /**
  * The one confirm dialog before a live session ends — ending it kills a real
  * PTY, so it never happens on a bare click. It is opened from the active
  * session tab's options menu.
  *
- * Dismisses like every other layer: Escape and a backdrop click both
- * mean "Keep session", and Escape hands focus back to the control the flow
- * started from. Only the explicit danger button ends the session.
+ * Dismissal, focus containment and the inert background are the shared
+ * `Dialog`'s: Escape and a backdrop click both mean "Keep session" here by the
+ * same code that makes them mean the safe thing everywhere else. Only the
+ * explicit danger button ends the session, and the dialog takes no `onSubmit`
+ * so a stray Return cannot reach it.
  */
 export function EndSessionConfirm({
   onCancel,
@@ -27,44 +28,31 @@ export function EndSessionConfirm({
   /** Surface-specific consequence while retaining one confirmation primitive. */
   description?: string;
 }): JSX.Element {
-  const confirmRef = useRef<HTMLDivElement>(null);
-  useDismissable(true, { onDismiss: onCancel, containerRef: confirmRef, triggerRef });
+  // Initial focus lands on the SAFE action: Enter keeps the session; ending it
+  // takes a deliberate Tab or click.
+  const keepRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div
-        ref={confirmRef}
-        className="modal modal-confirm"
-        role="alertdialog"
-        aria-label="End session"
-        data-testid="end-session-confirm"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          End session?
-          <button
-            className="theme-toggle modal-close"
-            aria-label="Close"
-            title="Close"
-            onClick={onCancel}
-          >
-            <Icon name="X" size={14} />
-          </button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-copy">{description}</p>
-        </div>
-        <div className="modal-actions">
-          {/* Initial focus lands on the SAFE action: Enter keeps the session;
-              ending it takes a deliberate Tab or click. */}
-          <button className="btn-ghost" autoFocus onClick={onCancel}>
+    <Dialog
+      role="alertdialog"
+      className="modal-confirm"
+      testId="end-session-confirm"
+      title="End session?"
+      onClose={onCancel}
+      triggerRef={triggerRef}
+      initialFocusRef={keepRef}
+      actions={
+        <>
+          <button className="btn-ghost" ref={keepRef} onClick={onCancel}>
             Keep session
           </button>
           <button className="btn-danger" data-testid="end-session-confirm-btn" onClick={onConfirm}>
             End session
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <p className="modal-copy">{description}</p>
+    </Dialog>
   );
 }

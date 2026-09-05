@@ -1,3 +1,4 @@
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,22 +14,21 @@ import type {
 import { CodexAdapter } from "./adapters/codex.js";
 import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 import {
-  ProjectBootstrapClaimUnavailableError,
-  ProjectSessionScopeUnavailableError,
-  SessionBackgroundInputPreemptedError,
   SessionInputGuardRejectedError,
+  SessionBackgroundInputPreemptedError,
   SessionInputIsolationError,
-  SessionManager,
   SessionManagerClosingError,
   SubsessionBindingMismatchError,
   SubsessionFreshRestartForbiddenError,
+  type TrustedSubsessionBindingMarker,
+  ProjectSessionScopeUnavailableError,
+  ProjectBootstrapClaimUnavailableError,
+  SessionManager,
   sanitizeExitTail,
   type PtySpawnFn,
   type SessionManagerOptions,
-  type TrustedSubsessionBindingMarker,
 } from "./session-manager.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
-import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 
 /** Minimal fake IPty: lets tests drive onData/onExit and observe write/resize/kill.
  *  `pid` is only set when a test passes one explicitly — sweep tests need a
@@ -37,9 +37,7 @@ import type { FocusedSessionContextProjection } from "./focused-session-context.
  *  leaves it undefined, which the sweep must treat as "can't tell, hands off". */
 function createFakePty(pid?: number) {
   const dataListeners: Array<(chunk: string) => void> = [];
-  const exitListeners: Array<
-    (e: { exitCode: number; signal?: number }) => void
-  > = [];
+  const exitListeners: Array<(e: { exitCode: number; signal?: number }) => void> = [];
   const pty = {
     pid,
     onData: (cb: (chunk: string) => void) => {
@@ -61,9 +59,7 @@ function createFakePty(pid?: number) {
   };
 }
 
-function createFakeAdapter(
-  overrides: Partial<HarnessAdapter> = {},
-): HarnessAdapter {
+function createFakeAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
   return {
     id: "claude-code",
     eventSource: "hooks",
@@ -102,6 +98,7 @@ function deferred<T>(): {
   });
   return { promise, resolve };
 }
+
 
 describe("SessionManager", () => {
   let dir: string;
@@ -561,75 +558,6 @@ describe("SessionManager", () => {
     expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
   });
 
-  it("reports exact input write phases and kills only an exact runtime", async () => {
-    const { manager, spawns } = makeManager();
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    const runtime = manager.getRuntimeEpoch(session.id)!;
-    manager.setReady(session.id, runtime);
-
-    const submitted = await manager.submitInputTracked(
-      session.id,
-      "Implement the scoped task",
-    );
-    expect(submitted).toEqual({ accepted: true, phase: "enter-written" });
-    expect(await manager.killIfRuntime(session.id, "foreign-runtime")).toBe(
-      false,
-    );
-    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
-
-    spawns[0]!.pty.write.mockImplementationOnce(() => {
-      throw new Error("ambiguous write");
-    });
-    const ambiguous = await manager.submitInputTracked(
-      session.id,
-      "Retry-sensitive task",
-    );
-    expect(ambiguous).toMatchObject({
-      accepted: false,
-      phase: "text-staged",
-      error: expect.any(Error),
-    });
-  });
-
-  it("closes PTY admission before shutdown and rejects creates and resumes", async () => {
-    let releaseLaunchOptions!: () => void;
-    const launchOptionsReady = new Promise<void>((resolve) => {
-      releaseLaunchOptions = resolve;
-    });
-    const spawnPty = vi.fn<PtySpawnFn>(() => {
-      return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
-    });
-    const { manager } = makeManager({
-      spawnPty,
-      buildLaunchOpts: async () => {
-        await launchOptionsReady;
-        return { prompt: "not-used-by-interactive-launch" };
-      },
-    });
-
-    const creating = manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    manager.beginShutdown();
-    releaseLaunchOptions();
-
-    await expect(creating).rejects.toBeInstanceOf(SessionManagerClosingError);
-    expect(spawnPty).not.toHaveBeenCalled();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited" }),
-    ]);
-    await expect(
-      manager.create({ cwd: "/tmp/second", harness: "claude-code" }),
-    ).rejects.toBeInstanceOf(SessionManagerClosingError);
-    await expect(manager.resume(manager.list()[0]!.id)).rejects.toBeInstanceOf(
-      SessionManagerClosingError,
-    );
-  });
-
   it("persists sessions to disk and reconciles non-exited sessions to exited on reload", async () => {
     const { manager } = makeManager();
     const session = await manager.create({
@@ -779,6 +707,60 @@ describe("SessionManager", () => {
     ]);
     expect(persisted[0]?.agentSessionId).toBe(planner.agentSessionId);
     expect(persisted[1]?.agentSessionId).toBe(manual.agentSessionId);
+  });
+
+  it("restores a scope-unavailable bootstrap failure and resumes once authority is valid", async () => {
+    const identity = {
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId: "bootstrap-scope-failure",
+    };
+    const session: HarnessSession = {
+      id: identity.sessionId,
+      agentSessionId: "provider-scope-failure",
+      harness: "claude-code",
+      cwd: "/tmp/project",
+      title: "Keep my conversation",
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-02T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+      agentMapIdentity: identity,
+      projectBootstrap: {
+        projectId: identity.projectId,
+        userId: identity.userId,
+        targetSessionId: identity.sessionId,
+        bootstrap: {
+          status: "failed",
+          errorCode: "scope_unavailable",
+          retryable: false,
+        },
+        queuedInputIds: ["retained-input"],
+      },
+    };
+    await writeFile(sessionsPath, JSON.stringify([session]), "utf8");
+    const migrations = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity: async () => identity,
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.get(session.id)?.projectBootstrap).toEqual(session.projectBootstrap);
+    expect(migrations).not.toHaveBeenCalled();
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      agentSessionId: session.agentSessionId,
+      title: session.title,
+      agentMapIdentity: identity,
+      projectBootstrap: session.projectBootstrap,
+      status: "running",
+    });
+    expect(adapter.resume).toHaveBeenCalledTimes(1);
+    expect(spawns).toHaveLength(1);
   });
 
   it("preserves malformed or conflicting legacy identity records without deleting or duplicating them", async () => {
@@ -1157,86 +1139,6 @@ describe("SessionManager", () => {
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
     });
 
-    it("lets raw user input preempt a staged background turn without combining either prompt", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-
-      const background = manager.submitInput(
-        session.id,
-        "automatic map bootstrap",
-        true,
-        undefined,
-        true,
-      );
-      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
-      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
-        "automatic map bootstrap",
-      );
-
-      expect(manager.write(session.id, "implement the API now\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: false,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
-        3,
-        "implement the API now\r",
-      );
-
-      const assertion = expect(background).rejects.toMatchObject({
-        code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
-        staged: true,
-      });
-      await vi.advanceTimersByTimeAsync(300);
-      await assertion;
-
-      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(3);
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
-      await expect(background).rejects.toBeInstanceOf(
-        SessionBackgroundInputPreemptedError,
-      );
-    });
-
-    it("lets durable API input cancel only a staged background turn", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({ onTerminalInput });
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-
-      const background = manager.submitInput(
-        session.id,
-        "automatic map bootstrap",
-        true,
-        undefined,
-        true,
-      );
-      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
-        "automatic map bootstrap",
-      );
-
-      expect(manager.preemptBackgroundInput(session.id)).toBe(true);
-      expect(manager.preemptBackgroundInput(session.id)).toBe(false);
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(onTerminalInput).not.toHaveBeenCalled();
-
-      const assertion = expect(background).rejects.toMatchObject({
-        code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
-        staged: true,
-      });
-      await vi.advanceTimersByTimeAsync(300);
-      await assertion;
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
-    });
-
     it("rechecks a scoped guard before Enter and leaves staged text unsubmitted after a rebind", async () => {
       const { manager, spawns } = makeManager();
       const session = await manager.create({
@@ -1264,327 +1166,6 @@ describe("SessionManager", () => {
       expect(remainsAuthorized).toHaveBeenCalledTimes(2);
       expect(spawns[0]?.pty.write).toHaveBeenCalledWith("planner message");
       expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(2);
-      expect(spawns[0]?.pty.write).toHaveBeenLastCalledWith("\x15");
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
-    });
-
-    it("waits for the durable pre-write hook before crossing the PTY boundary", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      const phase = deferred<void>();
-      const beforeFirstWrite = vi.fn(() => phase.promise);
-
-      const submitting = manager.submitInput(
-        session.id,
-        "durable turn",
-        true,
-        undefined,
-        false,
-        { beforeFirstWrite, canWriteNow: () => true },
-      );
-      await Promise.resolve();
-      expect(beforeFirstWrite).toHaveBeenCalledOnce();
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
-
-      phase.resolve();
-      await vi.advanceTimersByTimeAsync(300);
-      await expect(submitting).resolves.toBe(true);
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
-    });
-
-    it("records positive not-submitted evidence when the PTY rejects text before Enter", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      const beforeFirstWrite = vi.fn(async () => {});
-      const onNotSubmitted = vi.fn(async () => {});
-      spawns[0]?.pty.write.mockImplementationOnce(() => {
-        throw new Error("PTY rejected text");
-      });
-
-      await expect(
-        manager.submitInput(session.id, "durable turn", true, undefined, true, {
-          beforeFirstWrite,
-          onNotSubmitted,
-        }),
-      ).rejects.toThrow("PTY rejected text");
-
-      expect(beforeFirstWrite).toHaveBeenCalledOnce();
-      expect(onNotSubmitted).toHaveBeenCalledOnce();
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
-    });
-
-    it("withholds not-submitted evidence when a partial text line cannot be cleared", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      const onNotSubmitted = vi.fn(async () => {});
-      spawns[0]?.pty.write
-        .mockImplementationOnce(() => {
-          throw new Error("PTY rejected text after a possible prefix");
-        })
-        .mockImplementationOnce(() => {
-          throw new Error("PTY also rejected line cleanup");
-        });
-
-      await expect(
-        manager.submitInput(session.id, "durable turn", true, undefined, true, {
-          onNotSubmitted,
-        }),
-      ).rejects.toThrow("PTY rejected text after a possible prefix");
-
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
-      expect(onNotSubmitted).not.toHaveBeenCalled();
-    });
-
-    it("closes a partial bracketed paste before proving the composer line was cleared", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      spawns[0]?.emitData("\x1b[?2004h");
-      const onNotSubmitted = vi.fn(async () => {});
-      spawns[0]?.pty.write.mockImplementationOnce(() => {
-        throw new Error("partial bracketed paste");
-      });
-
-      await expect(
-        manager.submitInput(session.id, "line one\nline two", true, undefined, true, {
-          onNotSubmitted,
-        }),
-      ).rejects.toThrow("partial bracketed paste");
-
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
-        1,
-        "\x1b[200~line one\nline two\x1b[201~",
-      );
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
-      expect(onNotSubmitted).toHaveBeenCalledOnce();
-    });
-
-    it("withholds retry proof when a partial bracketed paste cannot be closed", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      spawns[0]?.emitData("\x1b[?2004h");
-      const onNotSubmitted = vi.fn(async () => {});
-      spawns[0]?.pty.write
-        .mockImplementationOnce(() => {
-          throw new Error("partial bracketed paste");
-        })
-        .mockImplementationOnce(() => {
-          throw new Error("paste closer rejected");
-        });
-
-      await expect(
-        manager.submitInput(session.id, "unsafe paste", true, undefined, true, {
-          onNotSubmitted,
-        }),
-      ).rejects.toThrow("partial bracketed paste");
-
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
-      expect(onNotSubmitted).not.toHaveBeenCalled();
-    });
-
-    it("withholds retry proof when line cleanup fails after closing a partial paste", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      spawns[0]?.emitData("\x1b[?2004h");
-      const onNotSubmitted = vi.fn(async () => {});
-      spawns[0]?.pty.write
-        .mockImplementationOnce(() => {
-          throw new Error("partial bracketed paste");
-        })
-        .mockImplementationOnce(() => {})
-        .mockImplementationOnce(() => {
-          throw new Error("line cleanup rejected");
-        });
-
-      await expect(
-        manager.submitInput(session.id, "unsafe paste", true, undefined, true, {
-          onNotSubmitted,
-        }),
-      ).rejects.toThrow("partial bracketed paste");
-
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
-      expect(onNotSubmitted).not.toHaveBeenCalled();
-    });
-
-    it("blocks later raw input on a poisoned composer until a reset succeeds", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      let call = 0;
-      spawns[0]?.pty.write.mockImplementation(() => {
-        call += 1;
-        if (call <= 3) throw new Error(`injected write failure ${call}`);
-      });
-
-      await expect(
-        manager.submitInput(session.id, "partial A", true, undefined, true),
-      ).rejects.toThrow("injected write failure 1");
-      expect(() => manager.write(session.id, "must not append to A")).toThrow(
-        SessionInputIsolationError,
-      );
-      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith(
-        "must not append to A",
-      );
-
-      expect(manager.write(session.id, "safe after reset")).toBe(true);
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(4, "\x15");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
-        5,
-        "safe after reset",
-      );
-    });
-
-    it("uses Ctrl-C only as a fallback after a complete staged paste", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      spawns[0]?.emitData("\x1b[?2004h");
-      const onNotSubmitted = vi.fn(async () => {});
-      const background = manager.submitInput(
-        session.id,
-        "complete staged paste",
-        true,
-        undefined,
-        true,
-        { onNotSubmitted },
-      );
-      const rejected = expect(background).rejects.toBeInstanceOf(
-        SessionBackgroundInputPreemptedError,
-      );
-      spawns[0]?.pty.write.mockImplementationOnce(() => {
-        throw new Error("Ctrl-U rejected");
-      });
-
-      expect(manager.preemptBackgroundInput(session.id)).toBe(true);
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x03");
-      await vi.advanceTimersByTimeAsync(300);
-      await rejected;
-      expect(onNotSubmitted).toHaveBeenCalledOnce();
-    });
-
-    it("poisons arbitrary submit:false text after a partial write", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      spawns[0]?.pty.write.mockImplementationOnce(() => {
-        throw new Error("partial draft");
-      });
-
-      await expect(
-        manager.submitInput(session.id, "multi-byte draft", false),
-      ).rejects.toThrow("partial draft");
-      expect(manager.write(session.id, "new raw input")).toBe(true);
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "new raw input");
-    });
-
-    it("does not claim not-submitted proof when the Enter write is ambiguous", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      const onNotSubmitted = vi.fn(async () => {});
-      spawns[0]?.pty.write
-        .mockImplementationOnce(() => {})
-        .mockImplementationOnce(() => {
-          throw new Error("PTY Enter outcome unknown");
-        });
-
-      const submission = manager.submitInput(
-        session.id,
-        "durable turn",
-        true,
-        undefined,
-        true,
-        { onNotSubmitted },
-      );
-      const rejected = expect(submission).rejects.toThrow(
-        "PTY Enter outcome unknown",
-      );
-      await vi.advanceTimersByTimeAsync(300);
-      await rejected;
-
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
-      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
-      expect(onNotSubmitted).not.toHaveBeenCalled();
-    });
-
-    it("clears staged text and never writes Enter when shutdown wins the final admission boundary", async () => {
-      const { manager, spawns } = makeManager();
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      manager.setReady(session.id);
-      const finalAuthorization = deferred<boolean>();
-      const canWrite = vi
-        .fn<() => boolean | Promise<boolean>>()
-        .mockReturnValueOnce(true)
-        .mockImplementationOnce(() => finalAuthorization.promise);
-
-      const submitting = manager.submitInput(
-        session.id,
-        "must not submit after shutdown",
-        true,
-        canWrite,
-        false,
-        { canWriteNow: () => true },
-      );
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
-        "must not submit after shutdown",
-      );
-      await vi.advanceTimersByTimeAsync(300);
-      manager.beginShutdown();
-      finalAuthorization.resolve(true);
-
-      await expect(submitting).rejects.toMatchObject({ staged: true });
       expect(spawns[0]?.pty.write).toHaveBeenLastCalledWith("\x15");
       expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
     });
@@ -1721,37 +1302,12 @@ describe("SessionManager", () => {
       });
     });
 
-    it("classifies raw input on a recognized trust screen without blocking the user's bytes", async () => {
-      const onTerminalInput = vi.fn();
-      const { manager, spawns } = makeManager({
-        onTerminalInput,
-        adapter: createFakeAdapter({
-          detectBlockingPrompt: (output) => output.includes("Do you trust"),
-        }),
-      });
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      spawns[0]?.emitData("Do you trust the files in this folder?\r\n");
-
-      expect(manager.write(session.id, "y\r")).toBe(true);
-      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
-        blockingPrompt: true,
-        runtimeEpoch: manager.getRuntimeEpoch(session.id),
-      });
-      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("y\r");
-    });
-
     it(
       "THE RACE REPRO: submitInput() against a not-yet-ready session queues and succeeds once " +
         "setReady() fires before the grace period elapses (macro fired a beat before onboarding finished)",
       async () => {
         const { manager, spawns } = makeManager();
-        const session = await manager.create({
-          cwd: "/tmp/proj",
-          harness: "claude-code",
-        });
+        const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
         const submitPromise = manager.submitInput(session.id, "hello", true);
         // Not ready yet — must NOT have written anything, this is exactly the
@@ -2369,9 +1925,7 @@ describe("SessionManager", () => {
       vi.restoreAllMocks();
     });
 
-    const hookTimeoutAdapter = (
-      detect: (scrollback: string) => boolean = () => false,
-    ) =>
+    const hookTimeoutAdapter = (detect: (scrollback: string) => boolean = () => false) =>
       createFakeAdapter({
         readyFallback: "hook-timeout",
         detectBlockingPrompt: vi.fn(detect),
@@ -3397,428 +2951,6 @@ describe("SessionManager", () => {
     );
   });
 
-  it("claims the starting lifecycle before asynchronous resume config is regenerated", async () => {
-    const resumeConfig = deferred<void>();
-    let buildCount = 0;
-    const buildLaunchOpts = vi.fn(async () => {
-      buildCount += 1;
-      if (buildCount === 2) await resumeConfig.promise;
-      return {};
-    });
-    const { manager, adapter, spawns } = makeManager({ buildLaunchOpts });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    await manager.setAgentSessionId(session.id, "agent-uuid-1");
-    spawns[0]?.emitExit(0);
-    await manager.flush();
-
-    const statuses: HarnessSession["status"][] = [];
-    const unsubscribe = manager.onStatusChange((updated) => {
-      if (updated.id === session.id) statuses.push(updated.status);
-    });
-    const resumed = manager.resume(session.id);
-    await vi.waitFor(() => expect(buildCount).toBe(2));
-    expect(manager.get(session.id)?.status).toBe("starting");
-
-    // Bootstrap exit bookkeeping can finish after kill() resolves. Its metadata
-    // update must observe the claimed resume lifecycle, so server cleanup does
-    // not remove the config currently being regenerated.
-    await manager.setProjectBootstrapMetadata(session.id, {
-      projectId: "project-1",
-      userId: "user-1",
-      targetSessionId: session.id,
-      bootstrap: { status: "skipped", reason: "user-proceeded" },
-      queuedInputIds: [],
-    });
-    expect(statuses.at(-1)).toBe("starting");
-    expect(adapter.resume).not.toHaveBeenCalled();
-
-    resumeConfig.resolve();
-    await resumed;
-    unsubscribe();
-    expect(manager.get(session.id)?.status).toBe("running");
-  });
-
-  it.each([
-    "prepareProjectSession",
-    "promptAppendix",
-    "buildLaunchOpts",
-    "adapter.launch",
-  ] as const)(
-    "releases project launch authority when create setup fails in $stage",
-    async (stage) => {
-      const setupError = new Error(`setup failed in ${stage}`);
-      const cleanupError = new Error("cleanup also failed");
-      let claimedSessionId = "";
-      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
-        claimedSessionId = sessionId;
-        return {
-          projectId: "project-1",
-          userId: "user-1",
-          sessionId,
-        };
-      });
-      const prepareProjectSession = vi.fn(async () => {
-        if (stage === "prepareProjectSession") throw setupError;
-        return {
-          projectBootstrap: {
-            projectId: "project-1",
-            userId: "user-1",
-            targetSessionId: claimedSessionId,
-            bootstrap: { status: "pending" as const },
-            queuedInputIds: [],
-          },
-        };
-      });
-      const buildLaunchOpts = vi.fn(async () => {
-        if (stage === "buildLaunchOpts") throw setupError;
-        return {};
-      });
-      const adapter = createFakeAdapter({
-        launch: vi.fn((opts) => {
-          if (stage === "adapter.launch") throw setupError;
-          return {
-            command: "fake-claude",
-            args: ["--launch"],
-            env: {},
-            cwd: opts.cwd,
-          };
-        }),
-      });
-      const onAgentMapSessionExit = vi.fn(async () => {
-        throw cleanupError;
-      });
-      const { manager, spawns } = makeManager({
-        adapter,
-        resolveAgentMapIdentity,
-        prepareProjectSession,
-        buildLaunchOpts,
-        onAgentMapSessionExit,
-      });
-
-      await expect(
-        manager.create(
-          { cwd: "/tmp/proj", harness: "claude-code" },
-          {
-            promptAppendix: () => {
-              if (stage === "promptAppendix") throw setupError;
-              return "bounded project context";
-            },
-          },
-        ),
-      ).rejects.toBe(setupError);
-
-      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-      expect(onAgentMapSessionExit).toHaveBeenCalledWith(claimedSessionId);
-      expect(manager.list()).toEqual([]);
-      expect(spawns).toEqual([]);
-    },
-  );
-
-  it("rejects a focused overlay when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-
-    await expect(manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
-    )).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.launch).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
-    expect(manager.list()).toEqual([]);
-  });
-
-  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-    await manager.setAgentSessionId(session.id, "provider-session");
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resume(session.id, {
-      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
-    })).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(manager.get(session.id)?.status).toBe("exited");
-  });
-
-  it.each(["buildLaunchOpts", "adapter.resume"] as const)(
-    "releases project launch authority when resume setup fails in $stage",
-    async (stage) => {
-      const setupError = new Error(`resume setup failed in ${stage}`);
-      const adapter = createFakeAdapter({
-        resume: vi.fn((agentSessionId, opts) => {
-          if (stage === "adapter.resume") throw setupError;
-          return {
-            command: "fake-claude",
-            args: ["--resume", agentSessionId],
-            env: {},
-            cwd: opts.cwd,
-          };
-        }),
-      });
-      const buildLaunchOpts = vi.fn(async () => {
-        if (
-          stage === "buildLaunchOpts" &&
-          buildLaunchOpts.mock.calls.length > 1
-        ) {
-          throw setupError;
-        }
-        return {};
-      });
-      const onAgentMapSessionExit = vi.fn(async () => {
-        throw new Error("cleanup also failed");
-      });
-      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }));
-      const { manager, spawns } = makeManager({
-        adapter,
-        buildLaunchOpts,
-        onAgentMapSessionExit,
-        resolveAgentMapIdentity,
-      });
-      const session = await manager.create({
-        cwd: "/tmp/proj",
-        harness: "claude-code",
-      });
-      await manager.setAgentSessionId(session.id, "provider-session");
-      spawns[0]!.emitExit(0);
-      await vi.waitFor(() => {
-        expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
-      });
-      onAgentMapSessionExit.mockClear();
-      const beforeResume = structuredClone(manager.get(session.id));
-
-      await expect(manager.resume(session.id)).rejects.toBe(setupError);
-
-      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-      expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
-      expect(manager.get(session.id)).toEqual(beforeResume);
-      expect(spawns).toHaveLength(1);
-    },
-  );
-
-  it("derives one neutral project identity for create/resume and revokes it on exit", async () => {
-    const buildLaunchOpts = vi.fn(async () => ({}));
-    const onAgentMapSessionExit = vi.fn();
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId,
-    }));
-    const { manager, spawns } = makeManager({
-      buildLaunchOpts,
-      resolveAgentMapIdentity,
-      onAgentMapSessionExit,
-    });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    expect(session.agentMapIdentity).toEqual({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId: session.id,
-    });
-    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
-      session.id,
-      expect.anything(),
-      expect.objectContaining({ agentMapIdentity: session.agentMapIdentity }),
-    );
-    await manager.setAgentSessionId(session.id, "agent-uuid-map");
-    spawns[0]?.emitExit(0);
-    await manager.flush();
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
-    await manager.resume(session.id);
-    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
-      session.id,
-      expect.anything(),
-      expect.objectContaining({
-        resume: true,
-        agentMapIdentity: session.agentMapIdentity,
-      }),
-    );
-  });
-
-  it("publishes a claimed first project session before a concurrent ordinary session", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async (identity) =>
-      prepareProjectSession.mock.calls.length === 1
-        ? {
-            initialTitle: "Plan Agents",
-            projectBootstrap: {
-              projectId: identity.projectId,
-              userId: identity.userId,
-              targetSessionId: identity.sessionId,
-              bootstrap: { status: "pending" as const },
-              queuedInputIds: [],
-            },
-          }
-        : {},
-    );
-    const { manager, adapter } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const automatic = manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { requireProjectBootstrapClaim: true },
-    );
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const explicit = manager.create({
-      cwd: "/tmp/proj/packages/worker",
-      harness: "claude-code",
-      initialUserInputPending: true,
-    });
-    await Promise.resolve();
-    expect(prepareProjectSession).toHaveBeenCalledOnce();
-    expect(adapter.launch).not.toHaveBeenCalled();
-
-    firstLaunch.resolve();
-    const [first, second] = await Promise.all([automatic, explicit]);
-
-    expect(first.title).toBe("Plan Agents");
-    expect(first.projectBootstrap?.targetSessionId).toBe(first.id);
-    expect(second.title).toBe("worker");
-    expect(second.projectBootstrap).toBeUndefined();
-    expect(manager.list().map((session) => session.id)).toEqual([
-      first.id,
-      second.id,
-    ]);
-    expect(adapter.launch).toHaveBeenCalledTimes(2);
-  });
-
-  it("cancels only an automatic create that loses its bootstrap claim", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async (identity) =>
-      prepareProjectSession.mock.calls.length === 1
-        ? {
-            initialTitle: "Plan Agents",
-            projectBootstrap: {
-              projectId: identity.projectId,
-              userId: identity.userId,
-              targetSessionId: identity.sessionId,
-              bootstrap: {
-                status: "skipped" as const,
-                reason: "user-proceeded" as const,
-              },
-              queuedInputIds: [],
-            },
-          }
-        : {},
-    );
-    const onAgentMapSessionExit = vi.fn();
-    const { manager, adapter, spawns } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      onAgentMapSessionExit,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const explicit = manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-      initialUserInputPending: true,
-    });
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const automatic = manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { requireProjectBootstrapClaim: true },
-    );
-    firstLaunch.resolve();
-
-    const first = await explicit;
-    await expect(automatic).rejects.toBeInstanceOf(
-      ProjectBootstrapClaimUnavailableError,
-    );
-    expect(first).toMatchObject({
-      title: "Plan Agents",
-      projectBootstrap: {
-        targetSessionId: first.id,
-        bootstrap: { status: "skipped", reason: "user-proceeded" },
-      },
-    });
-    expect(manager.list()).toEqual([first]);
-    expect(adapter.launch).toHaveBeenCalledOnce();
-    expect(spawns).toHaveLength(1);
-    expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
-  });
-
-  it("drains project create queues without preparing a waiter after shutdown", async () => {
-    const firstLaunch = deferred<void>();
-    let buildCount = 0;
-    const prepareProjectSession = vi.fn(async () => ({}));
-    const { manager, adapter } = makeManager({
-      resolveAgentMapIdentity: async (sessionId) => ({
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId,
-      }),
-      prepareProjectSession,
-      buildLaunchOpts: async () => {
-        buildCount += 1;
-        if (buildCount === 1) await firstLaunch.promise;
-        return {};
-      },
-    });
-
-    const first = manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    await vi.waitFor(() => expect(buildCount).toBe(1));
-    const queued = manager.create({
-      cwd: "/tmp/proj/packages/worker",
-      harness: "claude-code",
-    });
-    manager.beginShutdown();
-    const flushed = manager.flush();
-    let flushSettled = false;
-    void flushed.then(() => {
-      flushSettled = true;
-    });
-    await Promise.resolve();
-    expect(flushSettled).toBe(false);
-
-    firstLaunch.resolve();
-    await expect(first).rejects.toBeInstanceOf(SessionManagerClosingError);
-    await expect(queued).rejects.toBeInstanceOf(SessionManagerClosingError);
-    await flushed;
-
-    expect(prepareProjectSession).toHaveBeenCalledOnce();
-    expect(buildCount).toBe(1);
-    expect(adapter.launch).toHaveBeenCalledOnce();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited" }),
-    ]);
-  });
-
   it("revalidates project scope after launch preparation and before spawning a new pty", async () => {
     const resolveAgentMapIdentity = vi
       .fn()
@@ -3849,182 +2981,6 @@ describe("SessionManager", () => {
       },
     });
     expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
-  });
-
-  it("revalidates resumed project scope after launch preparation and before spawning another pty", async () => {
-    const identity = (sessionId: string) => ({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId,
-    });
-    const resolveAgentMapIdentity = vi
-      .fn()
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
-    const { manager, adapter, spawns } = makeManager({
-      resolveAgentMapIdentity,
-    });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    await manager.setAgentSessionId(session.id, "provider-project-session");
-    spawns[0]?.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-
-    expect(adapter.resume).toHaveBeenCalledOnce();
-    expect(spawns).toHaveLength(1);
-    expect(manager.get(session.id)).toMatchObject({
-      id: session.id,
-      agentSessionId: "provider-project-session",
-      status: "exited",
-      agentMapIdentity: identity(session.id),
-    });
-  });
-
-  it("revalidates create scope after the lazy PTY loader settles and before admission", async () => {
-    const loader = deferred<PtySpawnFn>();
-    const loadSpawnPty = vi.fn(() => loader.promise);
-    const spawnPty = vi.fn<PtySpawnFn>(
-      () => createFakePty().pty as unknown as ReturnType<PtySpawnFn>,
-    );
-    let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
-    const onAgentMapSessionExit = vi.fn();
-    const { manager, adapter } = makeManager({
-      loadSpawnPty,
-      resolveAgentMapIdentity,
-      onAgentMapSessionExit,
-    });
-
-    const creating = manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    await vi.waitFor(() => expect(loadSpawnPty).toHaveBeenCalledOnce());
-    expect(resolveAgentMapIdentity).toHaveBeenCalledOnce();
-    inScope = false;
-    loader.resolve(spawnPty);
-
-    await expect(creating).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(2);
-    expect(adapter.launch).toHaveBeenCalledOnce();
-    expect(spawnPty).not.toHaveBeenCalled();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited" }),
-    ]);
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
-  });
-
-  it("revalidates resume scope after the lazy PTY loader settles and before admission", async () => {
-    const resumeLoader = deferred<PtySpawnFn>();
-    const fakePty = createFakePty();
-    const spawnPty = vi.fn<PtySpawnFn>(
-      () => fakePty.pty as unknown as ReturnType<PtySpawnFn>,
-    );
-    let loadCount = 0;
-    const loadSpawnPty = vi.fn(async () => {
-      loadCount += 1;
-      return loadCount === 1 ? spawnPty : resumeLoader.promise;
-    });
-    let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
-    const onAgentMapSessionExit = vi.fn();
-    const { manager, adapter } = makeManager({
-      loadSpawnPty,
-      resolveAgentMapIdentity,
-      onAgentMapSessionExit,
-    });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    await manager.setAgentSessionId(session.id, "provider-project-session");
-    fakePty.emitExit(0);
-    await manager.flush();
-
-    const resuming = manager.resume(session.id);
-    await vi.waitFor(() => expect(loadSpawnPty).toHaveBeenCalledTimes(2));
-    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
-    inScope = false;
-    resumeLoader.resolve(spawnPty);
-
-    await expect(resuming).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(5);
-    expect(adapter.resume).toHaveBeenCalledOnce();
-    expect(spawnPty).toHaveBeenCalledOnce();
-    expect(manager.get(session.id)).toMatchObject({
-      id: session.id,
-      status: "exited",
-      agentMapIdentity: {
-        projectId: "project-1",
-        userId: "user-1",
-        sessionId: session.id,
-      },
-    });
-    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
-  });
-
-  it("fails resume closed when neutral project scope cannot be revalidated and preserves the session identity", async () => {
-    const identity = (sessionId: string) => ({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId,
-    });
-    const resolveAgentMapIdentity = vi
-      .fn()
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
-    const { manager, adapter, spawns } = makeManager({
-      resolveAgentMapIdentity,
-    });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    await manager.setAgentSessionId(session.id, "provider-project-session");
-    spawns[0]?.emitExit(0);
-    await manager.flush();
-    const beforeResume = structuredClone(manager.get(session.id));
-
-    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-
-    expect(resolveAgentMapIdentity).toHaveBeenLastCalledWith(
-      session.id,
-      session.cwd,
-      session.agentMapIdentity,
-    );
-    expect(manager.get(session.id)).toEqual(beforeResume);
-    expect(manager.get(session.id)?.agentMapIdentity).toEqual({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId: session.id,
-    });
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(spawns).toHaveLength(1);
   });
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {
@@ -4697,121 +3653,6 @@ describe("SessionManager", () => {
     expect(revoke).toHaveBeenCalledWith(session.id);
   });
 
-  it("rotates the authoritative runtime epoch and rejects stale lifecycle signals after resume", async () => {
-    const tokens = ["token-a", "token-b"];
-    const epochs = ["epoch-a", "epoch-b"];
-    const { manager, spawns } = makeManager({
-      ingestCredentials: new IngestCredentialRegistry(
-        () => tokens.shift()!,
-        () => epochs.shift()!,
-      ),
-    });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-    const firstEpoch = manager.getRuntimeEpoch(session.id);
-    expect(firstEpoch).toBe("epoch-a");
-    expect(
-      await manager.setAgentSessionId(
-        session.id,
-        "provider-shared",
-        "startup",
-        firstEpoch!,
-      ),
-    ).toBe(true);
-
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-    expect(manager.isCurrentRuntimeEpoch(session.id, firstEpoch!)).toBe(false);
-    expect(manager.acceptsIngestRuntimeEpoch(session.id, firstEpoch!)).toBe(
-      true,
-    );
-    manager.setReady(session.id, firstEpoch!);
-    expect(manager.get(session.id)?.ready).toBe(false);
-
-    await manager.resume(session.id);
-    const secondEpoch = manager.getRuntimeEpoch(session.id);
-    expect(secondEpoch).toBe("epoch-b");
-    expect(secondEpoch).not.toBe(firstEpoch);
-    expect(manager.isCurrentRuntimeEpoch(session.id, firstEpoch!)).toBe(false);
-    expect(manager.acceptsIngestRuntimeEpoch(session.id, firstEpoch!)).toBe(
-      false,
-    );
-    expect(manager.isCurrentRuntimeEpoch(session.id, secondEpoch!)).toBe(true);
-    expect(manager.acceptsIngestRuntimeEpoch(session.id, secondEpoch!)).toBe(
-      true,
-    );
-
-    manager.setReady(session.id, firstEpoch!);
-    expect(manager.get(session.id)?.ready).toBe(false);
-    expect(
-      await manager.setAgentSessionId(
-        session.id,
-        "provider-shared",
-        "resume",
-        firstEpoch!,
-      ),
-    ).toBe(false);
-
-    manager.setReady(session.id, secondEpoch!);
-    expect(manager.get(session.id)?.ready).toBe(true);
-    expect(
-      await manager.setAgentSessionId(
-        session.id,
-        "provider-shared",
-        "resume",
-        secondEpoch!,
-      ),
-    ).toBe(true);
-  });
-
-  it("fences transcript identity state to the exact live runtime epoch", async () => {
-    const { manager } = makeManager({
-      adapter: createFakeAdapter({ eventSource: "transcript-tail" }),
-      ingestCredentials: new IngestCredentialRegistry(
-        () => "token-a",
-        () => "epoch-a",
-      ),
-    });
-    const session = await manager.create({
-      cwd: "/tmp/proj",
-      harness: "claude-code",
-    });
-
-    expect(manager.getAdapterIdentityState(session.id, "epoch-a")).toBe("pending");
-    expect(manager.setAdapterIdentityState(session.id, "stale-epoch", "ready")).toBe(false);
-    expect(manager.setAdapterIdentityState(session.id, "epoch-a", "ready")).toBe(true);
-    expect(manager.getAdapterIdentityState(session.id, "epoch-a")).toBe("ready");
-  });
-
-  it("does not publish a PTY when the runtime epoch transition fails", async () => {
-    const spawnPty = vi.fn<PtySpawnFn>(() => {
-      return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
-    });
-    const transition = vi.fn(
-      async (_session: HarnessSession, _runtimeEpoch: string | null) => {
-        throw new Error("durable epoch retirement failed");
-      },
-    );
-    const { manager } = makeManager({
-      spawnPty,
-      onRuntimeEpochTransition: transition,
-    });
-
-    await expect(
-      manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
-    ).rejects.toThrow("durable epoch retirement failed");
-
-    expect(transition).toHaveBeenCalledOnce();
-    expect(transition.mock.calls[0]?.[1]).toEqual(expect.any(String));
-    expect(spawnPty).not.toHaveBeenCalled();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited", ready: false }),
-    ]);
-    expect(manager.isLive(manager.list()[0]!.id)).toBe(false);
-  });
-
   it("owns a colour-capable PTY environment instead of inheriting launcher suppression", async () => {
     const previous = {
       NO_COLOR: process.env.NO_COLOR,
@@ -4881,8 +3722,7 @@ describe("SessionManager", () => {
    * "0.28.1"` on a project that builds fine outside the app.
    */
   it("never leaks the host's ESBUILD_BINARY_PATH pin into the agent's environment", async () => {
-    process.env["ESBUILD_BINARY_PATH"] =
-      "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
     const capturedEnvs: Record<string, string | undefined>[] = [];
     const spawnPty: PtySpawnFn = (_file, _args, options) => {
       capturedEnvs.push(options.env ?? {});
@@ -5181,5 +4021,1258 @@ describe("SessionManager", () => {
       expect(caught).toBeInstanceOf(ExternalHarnessError);
       expect((caught as ExternalHarnessError).code).toBe("HARNESS_EXTERNAL");
     });
+  });
+
+
+  it("reports exact input write phases and kills only an exact runtime", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const runtime = manager.getRuntimeEpoch(session.id)!;
+    manager.setReady(session.id, runtime);
+
+    const submitted = await manager.submitInputTracked(
+      session.id,
+      "Implement the scoped task",
+    );
+    expect(submitted).toEqual({ accepted: true, phase: "enter-written" });
+    expect(await manager.killIfRuntime(session.id, "foreign-runtime")).toBe(
+      false,
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    spawns[0]!.pty.write.mockImplementationOnce(() => {
+      throw new Error("ambiguous write");
+    });
+    const ambiguous = await manager.submitInputTracked(
+      session.id,
+      "Retry-sensitive task",
+    );
+    expect(ambiguous).toMatchObject({
+      accepted: false,
+      phase: "text-staged",
+      error: expect.any(Error),
+    });
+  });
+
+
+  it("closes PTY admission before shutdown and rejects creates and resumes", async () => {
+    let releaseLaunchOptions!: () => void;
+    const launchOptionsReady = new Promise<void>((resolve) => {
+      releaseLaunchOptions = resolve;
+    });
+    const spawnPty = vi.fn<PtySpawnFn>(() => {
+      return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+    });
+    const { manager } = makeManager({
+      spawnPty,
+      buildLaunchOpts: async () => {
+        await launchOptionsReady;
+        return { prompt: "not-used-by-interactive-launch" };
+      },
+    });
+
+    const creating = manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    manager.beginShutdown();
+    releaseLaunchOptions();
+
+    await expect(creating).rejects.toBeInstanceOf(SessionManagerClosingError);
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(manager.list()).toEqual([
+      expect.objectContaining({ status: "exited" }),
+    ]);
+    await expect(
+      manager.create({ cwd: "/tmp/second", harness: "claude-code" }),
+    ).rejects.toBeInstanceOf(SessionManagerClosingError);
+    await expect(manager.resume(manager.list()[0]!.id)).rejects.toBeInstanceOf(
+      SessionManagerClosingError,
+    );
+  });
+
+
+    it("classifies raw input on a recognized trust screen without blocking the user's bytes", async () => {
+      const onTerminalInput = vi.fn();
+      const { manager, spawns } = makeManager({
+        onTerminalInput,
+        adapter: createFakeAdapter({
+          detectBlockingPrompt: (output) => output.includes("Do you trust"),
+        }),
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      spawns[0]?.emitData("Do you trust the files in this folder?\r\n");
+
+      expect(manager.write(session.id, "y\r")).toBe(true);
+      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
+        blockingPrompt: true,
+        runtimeEpoch: manager.getRuntimeEpoch(session.id),
+      });
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith("y\r");
+    });
+
+
+  it("claims the starting lifecycle before asynchronous resume config is regenerated", async () => {
+    const resumeConfig = deferred<void>();
+    let buildCount = 0;
+    const buildLaunchOpts = vi.fn(async () => {
+      buildCount += 1;
+      if (buildCount === 2) await resumeConfig.promise;
+      return {};
+    });
+    const { manager, adapter, spawns } = makeManager({ buildLaunchOpts });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "agent-uuid-1");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+
+    const statuses: HarnessSession["status"][] = [];
+    const unsubscribe = manager.onStatusChange((updated) => {
+      if (updated.id === session.id) statuses.push(updated.status);
+    });
+    const resumed = manager.resume(session.id);
+    await vi.waitFor(() => expect(buildCount).toBe(2));
+    expect(manager.get(session.id)?.status).toBe("starting");
+
+    // Bootstrap exit bookkeeping can finish after kill() resolves. Its metadata
+    // update must observe the claimed resume lifecycle, so server cleanup does
+    // not remove the config currently being regenerated.
+    await manager.setProjectBootstrapMetadata(session.id, {
+      projectId: "project-1",
+      userId: "user-1",
+      targetSessionId: session.id,
+      bootstrap: { status: "skipped", reason: "user-proceeded" },
+      queuedInputIds: [],
+    });
+    expect(statuses.at(-1)).toBe("starting");
+    expect(adapter.resume).not.toHaveBeenCalled();
+
+    resumeConfig.resolve();
+    await resumed;
+    unsubscribe();
+    expect(manager.get(session.id)?.status).toBe("running");
+  });
+
+
+  it("revalidates create scope after the lazy PTY loader settles and before admission", async () => {
+    const loader = deferred<PtySpawnFn>();
+    const loadSpawnPty = vi.fn(() => loader.promise);
+    const spawnPty = vi.fn<PtySpawnFn>(
+      () => createFakePty().pty as unknown as ReturnType<PtySpawnFn>,
+    );
+    let inScope = true;
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
+      inScope
+        ? { projectId: "project-1", userId: "user-1", sessionId }
+        : undefined,
+    );
+    const onAgentMapSessionExit = vi.fn();
+    const { manager, adapter } = makeManager({
+      loadSpawnPty,
+      resolveAgentMapIdentity,
+      onAgentMapSessionExit,
+    });
+
+    const creating = manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await vi.waitFor(() => expect(loadSpawnPty).toHaveBeenCalledOnce());
+    expect(resolveAgentMapIdentity).toHaveBeenCalledOnce();
+    inScope = false;
+    loader.resolve(spawnPty);
+
+    await expect(creating).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(2);
+    expect(adapter.launch).toHaveBeenCalledOnce();
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(manager.list()).toEqual([
+      expect.objectContaining({ status: "exited" }),
+    ]);
+    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
+  });
+
+
+  it("revalidates resume scope after the lazy PTY loader settles and before admission", async () => {
+    const resumeLoader = deferred<PtySpawnFn>();
+    const fakePty = createFakePty();
+    const spawnPty = vi.fn<PtySpawnFn>(
+      () => fakePty.pty as unknown as ReturnType<PtySpawnFn>,
+    );
+    let loadCount = 0;
+    const loadSpawnPty = vi.fn(async () => {
+      loadCount += 1;
+      return loadCount === 1 ? spawnPty : resumeLoader.promise;
+    });
+    let inScope = true;
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
+      inScope
+        ? { projectId: "project-1", userId: "user-1", sessionId }
+        : undefined,
+    );
+    const onAgentMapSessionExit = vi.fn();
+    const { manager, adapter } = makeManager({
+      loadSpawnPty,
+      resolveAgentMapIdentity,
+      onAgentMapSessionExit,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-project-session");
+    fakePty.emitExit(0);
+    await manager.flush();
+
+    const resuming = manager.resume(session.id);
+    await vi.waitFor(() => expect(loadSpawnPty).toHaveBeenCalledTimes(2));
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
+    inScope = false;
+    resumeLoader.resolve(spawnPty);
+
+    await expect(resuming).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(5);
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(spawnPty).toHaveBeenCalledOnce();
+    expect(manager.get(session.id)).toMatchObject({
+      id: session.id,
+      status: "exited",
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: session.id,
+      },
+    });
+    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+  });
+
+
+  it("rotates the authoritative runtime epoch and rejects stale lifecycle signals after resume", async () => {
+    const tokens = ["token-a", "token-b"];
+    const epochs = ["epoch-a", "epoch-b"];
+    const { manager, spawns } = makeManager({
+      ingestCredentials: new IngestCredentialRegistry(
+        () => tokens.shift()!,
+        () => epochs.shift()!,
+      ),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const firstEpoch = manager.getRuntimeEpoch(session.id);
+    expect(firstEpoch).toBe("epoch-a");
+    expect(
+      await manager.setAgentSessionId(
+        session.id,
+        "provider-shared",
+        "startup",
+        firstEpoch!,
+      ),
+    ).toBe(true);
+
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(manager.isCurrentRuntimeEpoch(session.id, firstEpoch!)).toBe(false);
+    expect(manager.acceptsIngestRuntimeEpoch(session.id, firstEpoch!)).toBe(
+      true,
+    );
+    manager.setReady(session.id, firstEpoch!);
+    expect(manager.get(session.id)?.ready).toBe(false);
+
+    await manager.resume(session.id);
+    const secondEpoch = manager.getRuntimeEpoch(session.id);
+    expect(secondEpoch).toBe("epoch-b");
+    expect(secondEpoch).not.toBe(firstEpoch);
+    expect(manager.isCurrentRuntimeEpoch(session.id, firstEpoch!)).toBe(false);
+    expect(manager.acceptsIngestRuntimeEpoch(session.id, firstEpoch!)).toBe(
+      false,
+    );
+    expect(manager.isCurrentRuntimeEpoch(session.id, secondEpoch!)).toBe(true);
+    expect(manager.acceptsIngestRuntimeEpoch(session.id, secondEpoch!)).toBe(
+      true,
+    );
+
+    manager.setReady(session.id, firstEpoch!);
+    expect(manager.get(session.id)?.ready).toBe(false);
+    expect(
+      await manager.setAgentSessionId(
+        session.id,
+        "provider-shared",
+        "resume",
+        firstEpoch!,
+      ),
+    ).toBe(false);
+
+    manager.setReady(session.id, secondEpoch!);
+    expect(manager.get(session.id)?.ready).toBe(true);
+    expect(
+      await manager.setAgentSessionId(
+        session.id,
+        "provider-shared",
+        "resume",
+        secondEpoch!,
+      ),
+    ).toBe(true);
+  });
+
+
+  it("fences transcript identity state to the exact live runtime epoch", async () => {
+    const { manager } = makeManager({
+      adapter: createFakeAdapter({ eventSource: "transcript-tail" }),
+      ingestCredentials: new IngestCredentialRegistry(
+        () => "token-a",
+        () => "epoch-a",
+      ),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(manager.getAdapterIdentityState(session.id, "epoch-a")).toBe("pending");
+    expect(manager.setAdapterIdentityState(session.id, "stale-epoch", "ready")).toBe(false);
+    expect(manager.setAdapterIdentityState(session.id, "epoch-a", "ready")).toBe(true);
+    expect(manager.getAdapterIdentityState(session.id, "epoch-a")).toBe("ready");
+  });
+
+
+  it("does not publish a PTY when the runtime epoch transition fails", async () => {
+    const spawnPty = vi.fn<PtySpawnFn>(() => {
+      return createFakePty().pty as unknown as ReturnType<PtySpawnFn>;
+    });
+    const transition = vi.fn(
+      async (_session: HarnessSession, _runtimeEpoch: string | null) => {
+        throw new Error("durable epoch retirement failed");
+      },
+    );
+    const { manager } = makeManager({
+      spawnPty,
+      onRuntimeEpochTransition: transition,
+    });
+
+    await expect(
+      manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+    ).rejects.toThrow("durable epoch retirement failed");
+
+    expect(transition).toHaveBeenCalledOnce();
+    expect(transition.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(manager.list()).toEqual([
+      expect.objectContaining({ status: "exited", ready: false }),
+    ]);
+    expect(manager.isLive(manager.list()[0]!.id)).toBe(false);
+  });
+
+  describe("tracked runtime input", () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+
+
+    it("lets durable API input cancel only a staged background turn", async () => {
+      const onTerminalInput = vi.fn();
+      const { manager, spawns } = makeManager({ onTerminalInput });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+
+      const background = manager.submitInput(
+        session.id,
+        "automatic map bootstrap",
+        true,
+        undefined,
+        true,
+      );
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
+        "automatic map bootstrap",
+      );
+
+      expect(manager.preemptBackgroundInput(session.id)).toBe(true);
+      expect(manager.preemptBackgroundInput(session.id)).toBe(false);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(onTerminalInput).not.toHaveBeenCalled();
+
+      const assertion = expect(background).rejects.toMatchObject({
+        code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
+        staged: true,
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      await assertion;
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+    });
+
+
+
+    it("waits for the durable pre-write hook before crossing the PTY boundary", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const phase = deferred<void>();
+      const beforeFirstWrite = vi.fn(() => phase.promise);
+
+      const submitting = manager.submitInput(
+        session.id,
+        "durable turn",
+        true,
+        undefined,
+        false,
+        { beforeFirstWrite, canWriteNow: () => true },
+      );
+      await Promise.resolve();
+      expect(beforeFirstWrite).toHaveBeenCalledOnce();
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalled();
+
+      phase.resolve();
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(submitting).resolves.toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+    });
+
+
+
+    it("records positive not-submitted evidence when the PTY rejects text before Enter", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const beforeFirstWrite = vi.fn(async () => {});
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("PTY rejected text");
+      });
+
+      await expect(
+        manager.submitInput(session.id, "durable turn", true, undefined, true, {
+          beforeFirstWrite,
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("PTY rejected text");
+
+      expect(beforeFirstWrite).toHaveBeenCalledOnce();
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+    });
+
+
+
+    it("withholds not-submitted evidence when a partial text line cannot be cleared", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {
+          throw new Error("PTY rejected text after a possible prefix");
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("PTY also rejected line cleanup");
+        });
+
+      await expect(
+        manager.submitInput(session.id, "durable turn", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("PTY rejected text after a possible prefix");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+
+
+    it("closes a partial bracketed paste before proving the composer line was cleared", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("partial bracketed paste");
+      });
+
+      await expect(
+        manager.submitInput(session.id, "line one\nline two", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("partial bracketed paste");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
+        1,
+        "\x1b[200~line one\nline two\x1b[201~",
+      );
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+    });
+
+
+
+    it("withholds retry proof when a partial bracketed paste cannot be closed", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {
+          throw new Error("partial bracketed paste");
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("paste closer rejected");
+        });
+
+      await expect(
+        manager.submitInput(session.id, "unsafe paste", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("partial bracketed paste");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+
+
+    it("withholds retry proof when line cleanup fails after closing a partial paste", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {
+          throw new Error("partial bracketed paste");
+        })
+        .mockImplementationOnce(() => {})
+        .mockImplementationOnce(() => {
+          throw new Error("line cleanup rejected");
+        });
+
+      await expect(
+        manager.submitInput(session.id, "unsafe paste", true, undefined, true, {
+          onNotSubmitted,
+        }),
+      ).rejects.toThrow("partial bracketed paste");
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x1b[201~");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x15");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+
+
+    it("blocks later raw input on a poisoned composer until a reset succeeds", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      let call = 0;
+      spawns[0]?.pty.write.mockImplementation(() => {
+        call += 1;
+        if (call <= 3) throw new Error(`injected write failure ${call}`);
+      });
+
+      await expect(
+        manager.submitInput(session.id, "partial A", true, undefined, true),
+      ).rejects.toThrow("injected write failure 1");
+      expect(() => manager.write(session.id, "must not append to A")).toThrow(
+        SessionInputIsolationError,
+      );
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith(
+        "must not append to A",
+      );
+
+      expect(manager.write(session.id, "safe after reset")).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(4, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
+        5,
+        "safe after reset",
+      );
+    });
+
+
+
+    it("uses Ctrl-C only as a fallback after a complete staged paste", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.emitData("\x1b[?2004h");
+      const onNotSubmitted = vi.fn(async () => {});
+      const background = manager.submitInput(
+        session.id,
+        "complete staged paste",
+        true,
+        undefined,
+        true,
+        { onNotSubmitted },
+      );
+      const rejected = expect(background).rejects.toBeInstanceOf(
+        SessionBackgroundInputPreemptedError,
+      );
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("Ctrl-U rejected");
+      });
+
+      expect(manager.preemptBackgroundInput(session.id)).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "\x03");
+      await vi.advanceTimersByTimeAsync(300);
+      await rejected;
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+    });
+
+
+
+    it("poisons arbitrary submit:false text after a partial write", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      spawns[0]?.pty.write.mockImplementationOnce(() => {
+        throw new Error("partial draft");
+      });
+
+      await expect(
+        manager.submitInput(session.id, "multi-byte draft", false),
+      ).rejects.toThrow("partial draft");
+      expect(manager.write(session.id, "new raw input")).toBe(true);
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(3, "new raw input");
+    });
+
+
+
+    it("does not claim not-submitted proof when the Enter write is ambiguous", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const onNotSubmitted = vi.fn(async () => {});
+      spawns[0]?.pty.write
+        .mockImplementationOnce(() => {})
+        .mockImplementationOnce(() => {
+          throw new Error("PTY Enter outcome unknown");
+        });
+
+      const submission = manager.submitInput(
+        session.id,
+        "durable turn",
+        true,
+        undefined,
+        true,
+        { onNotSubmitted },
+      );
+      const rejected = expect(submission).rejects.toThrow(
+        "PTY Enter outcome unknown",
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      await rejected;
+
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(1, "durable turn");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\r");
+      expect(onNotSubmitted).not.toHaveBeenCalled();
+    });
+
+
+
+    it("clears staged text and never writes Enter when shutdown wins the final admission boundary", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const finalAuthorization = deferred<boolean>();
+      const canWrite = vi
+        .fn<() => boolean | Promise<boolean>>()
+        .mockReturnValueOnce(true)
+        .mockImplementationOnce(() => finalAuthorization.promise);
+
+      const submitting = manager.submitInput(
+        session.id,
+        "must not submit after shutdown",
+        true,
+        canWrite,
+        false,
+        { canWriteNow: () => true },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
+        "must not submit after shutdown",
+      );
+      await vi.advanceTimersByTimeAsync(300);
+      manager.beginShutdown();
+      finalAuthorization.resolve(true);
+
+      await expect(submitting).rejects.toMatchObject({ staged: true });
+      expect(spawns[0]?.pty.write).toHaveBeenLastCalledWith("\x15");
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+    });
+
+
+
+    it("lets raw user input preempt a staged background turn without combining either prompt", async () => {
+      const onTerminalInput = vi.fn();
+      const { manager, spawns } = makeManager({ onTerminalInput });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+
+      const background = manager.submitInput(
+        session.id,
+        "automatic map bootstrap",
+        true,
+        undefined,
+        true,
+      );
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(1);
+      expect(spawns[0]?.pty.write).toHaveBeenCalledWith(
+        "automatic map bootstrap",
+      );
+
+      expect(manager.write(session.id, "implement the API now\r")).toBe(true);
+      expect(onTerminalInput).toHaveBeenCalledWith(session.id, {
+        blockingPrompt: false,
+        runtimeEpoch: manager.getRuntimeEpoch(session.id),
+      });
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(2, "\x15");
+      expect(spawns[0]?.pty.write).toHaveBeenNthCalledWith(
+        3,
+        "implement the API now\r",
+      );
+
+      const assertion = expect(background).rejects.toMatchObject({
+        code: "SESSION_BACKGROUND_INPUT_PREEMPTED",
+        staged: true,
+      });
+      await vi.advanceTimersByTimeAsync(300);
+      await assertion;
+
+      expect(spawns[0]?.pty.write).toHaveBeenCalledTimes(3);
+      expect(spawns[0]?.pty.write).not.toHaveBeenCalledWith("\r");
+      await expect(background).rejects.toBeInstanceOf(
+        SessionBackgroundInputPreemptedError,
+      );
+    });
+});
+
+
+  it.each([
+    "prepareProjectSession",
+    "promptAppendix",
+    "buildLaunchOpts",
+    "adapter.launch",
+  ] as const)(
+    "releases project launch authority when create setup fails in $stage",
+    async (stage) => {
+      const setupError = new Error(`setup failed in ${stage}`);
+      const cleanupError = new Error("cleanup also failed");
+      let claimedSessionId = "";
+      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+        claimedSessionId = sessionId;
+        return {
+          projectId: "project-1",
+          userId: "user-1",
+          sessionId,
+        };
+      });
+      const prepareProjectSession = vi.fn(async () => {
+        if (stage === "prepareProjectSession") throw setupError;
+        return {
+          projectBootstrap: {
+            projectId: "project-1",
+            userId: "user-1",
+            targetSessionId: claimedSessionId,
+            bootstrap: { status: "pending" as const },
+            queuedInputIds: [],
+          },
+        };
+      });
+      const buildLaunchOpts = vi.fn(async () => {
+        if (stage === "buildLaunchOpts") throw setupError;
+        return {};
+      });
+      const adapter = createFakeAdapter({
+        launch: vi.fn((opts) => {
+          if (stage === "adapter.launch") throw setupError;
+          return {
+            command: "fake-claude",
+            args: ["--launch"],
+            env: {},
+            cwd: opts.cwd,
+          };
+        }),
+      });
+      const onAgentMapSessionExit = vi.fn(async () => {
+        throw cleanupError;
+      });
+      const { manager, spawns } = makeManager({
+        adapter,
+        resolveAgentMapIdentity,
+        prepareProjectSession,
+        buildLaunchOpts,
+        onAgentMapSessionExit,
+      });
+
+      await expect(
+        manager.create(
+          { cwd: "/tmp/proj", harness: "claude-code" },
+          {
+            promptAppendix: () => {
+              if (stage === "promptAppendix") throw setupError;
+              return "bounded project context";
+            },
+          },
+        ),
+      ).rejects.toBe(setupError);
+
+      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
+      expect(onAgentMapSessionExit).toHaveBeenCalledWith(claimedSessionId);
+      expect(manager.list()).toEqual([]);
+      expect(spawns).toEqual([]);
+    },
+  );
+
+
+  it("rejects a focused overlay when no project-agent identity resolves", async () => {
+    const adapter = createFakeAdapter();
+    const { manager, spawns } = makeManager({ adapter });
+
+    await expect(manager.create(
+      { cwd: "/tmp/proj", harness: "claude-code" },
+      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
+    )).rejects.toThrow("Focused project context requires a project-agent identity");
+    expect(adapter.launch).not.toHaveBeenCalled();
+    expect(spawns).toEqual([]);
+    expect(manager.list()).toEqual([]);
+  });
+
+  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
+    const adapter = createFakeAdapter();
+    const { manager, spawns } = makeManager({ adapter });
+    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    await manager.setAgentSessionId(session.id, "provider-session");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resume(session.id, {
+      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
+    })).rejects.toThrow("Focused project context requires a project-agent identity");
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(manager.get(session.id)?.status).toBe("exited");
+  });
+
+  it.each(["buildLaunchOpts", "adapter.resume"] as const)(
+    "releases project launch authority when resume setup fails in $stage",
+    async (stage) => {
+      const setupError = new Error(`resume setup failed in ${stage}`);
+      const adapter = createFakeAdapter({
+        resume: vi.fn((agentSessionId, opts) => {
+          if (stage === "adapter.resume") throw setupError;
+          return {
+            command: "fake-claude",
+            args: ["--resume", agentSessionId],
+            env: {},
+            cwd: opts.cwd,
+          };
+        }),
+      });
+      const buildLaunchOpts = vi.fn(async () => {
+        if (
+          stage === "buildLaunchOpts" &&
+          buildLaunchOpts.mock.calls.length > 1
+        ) {
+          throw setupError;
+        }
+        return {};
+      });
+      const onAgentMapSessionExit = vi.fn(async () => {
+        throw new Error("cleanup also failed");
+      });
+      const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }));
+      const { manager, spawns } = makeManager({
+        adapter,
+        buildLaunchOpts,
+        onAgentMapSessionExit,
+        resolveAgentMapIdentity,
+      });
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      await manager.setAgentSessionId(session.id, "provider-session");
+      spawns[0]!.emitExit(0);
+      await vi.waitFor(() => {
+        expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+      });
+      onAgentMapSessionExit.mockClear();
+      const beforeResume = structuredClone(manager.get(session.id));
+
+      await expect(manager.resume(session.id)).rejects.toBe(setupError);
+
+      expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
+      expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+      expect(manager.get(session.id)).toEqual(beforeResume);
+      expect(spawns).toHaveLength(1);
+    },
+  );
+
+
+  it("derives one neutral project identity for create/resume and revokes it on exit", async () => {
+    const buildLaunchOpts = vi.fn(async () => ({}));
+    const onAgentMapSessionExit = vi.fn();
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => ({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId,
+    }));
+    const { manager, spawns } = makeManager({
+      buildLaunchOpts,
+      resolveAgentMapIdentity,
+      onAgentMapSessionExit,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    expect(session.agentMapIdentity).toEqual({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId: session.id,
+    });
+    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
+      session.id,
+      expect.anything(),
+      expect.objectContaining({ agentMapIdentity: session.agentMapIdentity }),
+    );
+    await manager.setAgentSessionId(session.id, "agent-uuid-map");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+    expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
+    await manager.resume(session.id);
+    expect(buildLaunchOpts).toHaveBeenLastCalledWith(
+      session.id,
+      expect.anything(),
+      expect.objectContaining({
+        resume: true,
+        agentMapIdentity: session.agentMapIdentity,
+      }),
+    );
+  });
+
+
+  it("publishes a claimed first project session before a concurrent ordinary session", async () => {
+    const firstLaunch = deferred<void>();
+    let buildCount = 0;
+    const prepareProjectSession = vi.fn(async (identity) =>
+      prepareProjectSession.mock.calls.length === 1
+        ? {
+            initialTitle: "Plan Agents",
+            projectBootstrap: {
+              projectId: identity.projectId,
+              userId: identity.userId,
+              targetSessionId: identity.sessionId,
+              bootstrap: { status: "pending" as const },
+              queuedInputIds: [],
+            },
+          }
+        : {},
+    );
+    const { manager, adapter } = makeManager({
+      resolveAgentMapIdentity: async (sessionId) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }),
+      prepareProjectSession,
+      buildLaunchOpts: async () => {
+        buildCount += 1;
+        if (buildCount === 1) await firstLaunch.promise;
+        return {};
+      },
+    });
+
+    const automatic = manager.create(
+      { cwd: "/tmp/proj", harness: "claude-code" },
+      { requireProjectBootstrapClaim: true },
+    );
+    await vi.waitFor(() => expect(buildCount).toBe(1));
+    const explicit = manager.create({
+      cwd: "/tmp/proj/packages/worker",
+      harness: "claude-code",
+      initialUserInputPending: true,
+    });
+    await Promise.resolve();
+    expect(prepareProjectSession).toHaveBeenCalledOnce();
+    expect(adapter.launch).not.toHaveBeenCalled();
+
+    firstLaunch.resolve();
+    const [first, second] = await Promise.all([automatic, explicit]);
+
+    expect(first.title).toBe("Plan Agents");
+    expect(first.projectBootstrap?.targetSessionId).toBe(first.id);
+    expect(second.title).toBe("worker");
+    expect(second.projectBootstrap).toBeUndefined();
+    expect(manager.list().map((session) => session.id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(adapter.launch).toHaveBeenCalledTimes(2);
+  });
+
+
+  it("cancels only an automatic create that loses its bootstrap claim", async () => {
+    const firstLaunch = deferred<void>();
+    let buildCount = 0;
+    const prepareProjectSession = vi.fn(async (identity) =>
+      prepareProjectSession.mock.calls.length === 1
+        ? {
+            initialTitle: "Plan Agents",
+            projectBootstrap: {
+              projectId: identity.projectId,
+              userId: identity.userId,
+              targetSessionId: identity.sessionId,
+              bootstrap: {
+                status: "skipped" as const,
+                reason: "user-proceeded" as const,
+              },
+              queuedInputIds: [],
+            },
+          }
+        : {},
+    );
+    const onAgentMapSessionExit = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity: async (sessionId) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }),
+      prepareProjectSession,
+      onAgentMapSessionExit,
+      buildLaunchOpts: async () => {
+        buildCount += 1;
+        if (buildCount === 1) await firstLaunch.promise;
+        return {};
+      },
+    });
+
+    const explicit = manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+      initialUserInputPending: true,
+    });
+    await vi.waitFor(() => expect(buildCount).toBe(1));
+    const automatic = manager.create(
+      { cwd: "/tmp/proj", harness: "claude-code" },
+      { requireProjectBootstrapClaim: true },
+    );
+    firstLaunch.resolve();
+
+    const first = await explicit;
+    await expect(automatic).rejects.toBeInstanceOf(
+      ProjectBootstrapClaimUnavailableError,
+    );
+    expect(first).toMatchObject({
+      title: "Plan Agents",
+      projectBootstrap: {
+        targetSessionId: first.id,
+        bootstrap: { status: "skipped", reason: "user-proceeded" },
+      },
+    });
+    expect(manager.list()).toEqual([first]);
+    expect(adapter.launch).toHaveBeenCalledOnce();
+    expect(spawns).toHaveLength(1);
+    expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
+  });
+
+
+  it("drains project create queues without preparing a waiter after shutdown", async () => {
+    const firstLaunch = deferred<void>();
+    let buildCount = 0;
+    const prepareProjectSession = vi.fn(async () => ({}));
+    const { manager, adapter } = makeManager({
+      resolveAgentMapIdentity: async (sessionId) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }),
+      prepareProjectSession,
+      buildLaunchOpts: async () => {
+        buildCount += 1;
+        if (buildCount === 1) await firstLaunch.promise;
+        return {};
+      },
+    });
+
+    const first = manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await vi.waitFor(() => expect(buildCount).toBe(1));
+    const queued = manager.create({
+      cwd: "/tmp/proj/packages/worker",
+      harness: "claude-code",
+    });
+    manager.beginShutdown();
+    const flushed = manager.flush();
+    let flushSettled = false;
+    void flushed.then(() => {
+      flushSettled = true;
+    });
+    await Promise.resolve();
+    expect(flushSettled).toBe(false);
+
+    firstLaunch.resolve();
+    await expect(first).rejects.toBeInstanceOf(SessionManagerClosingError);
+    await expect(queued).rejects.toBeInstanceOf(SessionManagerClosingError);
+    await flushed;
+
+    expect(prepareProjectSession).toHaveBeenCalledOnce();
+    expect(buildCount).toBe(1);
+    expect(adapter.launch).toHaveBeenCalledOnce();
+    expect(manager.list()).toEqual([
+      expect.objectContaining({ status: "exited" }),
+    ]);
+  });
+
+
+  it("revalidates resumed project scope after launch preparation and before spawning another pty", async () => {
+    const identity = (sessionId: string) => ({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId,
+    });
+    const resolveAgentMapIdentity = vi
+      .fn()
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockResolvedValueOnce(undefined);
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-project-session");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(spawns).toHaveLength(1);
+    expect(manager.get(session.id)).toMatchObject({
+      id: session.id,
+      agentSessionId: "provider-project-session",
+      status: "exited",
+      agentMapIdentity: identity(session.id),
+    });
+  });
+
+
+  it("fails resume closed when neutral project scope cannot be revalidated and preserves the session identity", async () => {
+    const identity = (sessionId: string) => ({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId,
+    });
+    const resolveAgentMapIdentity = vi
+      .fn()
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockResolvedValueOnce(undefined);
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-project-session");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+    const beforeResume = structuredClone(manager.get(session.id));
+
+    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+
+    expect(resolveAgentMapIdentity).toHaveBeenLastCalledWith(
+      session.id,
+      session.cwd,
+      session.agentMapIdentity,
+    );
+    expect(manager.get(session.id)).toEqual(beforeResume);
+    expect(manager.get(session.id)?.agentMapIdentity).toEqual({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId: session.id,
+    });
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(1);
   });
 });

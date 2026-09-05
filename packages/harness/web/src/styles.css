@@ -7995,21 +7995,32 @@ button.system-graph-node.is-navigable:focus-visible {
 
 /* Full-bleed dialog anatomy: the dialog owns no padding; header / body /
    footer blocks own theirs and are separated by hairlines — mirrors the
-   design system's .sapiom-dialog. */
-.modal-start,
-.modal-confirm {
+   design system's .sapiom-dialog.
+
+   Worn by every dialog that goes through components/Dialog.tsx, so the
+   geometry is decided once here rather than re-derived per variant. The
+   three-row grid is what makes the BODY the part that scrolls: the header
+   and the footer are `auto`, so the primary action can never scroll out of
+   reach no matter how tall the body gets. */
+.modal-shell {
   /* Every block (header, body, full-bleed rows, actions) shares the app's
      standard pane inset, so dialog content aligns with panel content. */
   --modal-pad-x: var(--pane-pad-x);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: 440px;
+  max-height: min(86vh, 48rem);
   padding: 0;
+  overflow: hidden;
 }
 
 .modal-confirm {
   width: 400px;
 }
 
-/* Dialog close: right-anchored in the card header. */
+/* Dialog close: right-anchored in the card header. Redundant under
+   .modal-shell's space-between header, and load-bearing for the secrets
+   dialogs, which still wear the older .modal-header recipe. */
 .modal-close {
   margin-left: auto;
 }
@@ -8020,12 +8031,52 @@ button.system-graph-node.is-navigable:focus-visible {
   min-width: 128px;
 }
 
-.modal-confirm .modal-header {
+/* DialogHeader: the title group and the close control on one bar-height row,
+   over the hairline. `justify-content` rather than the close button's old
+   `margin-left: auto`, so a header stays correct if it ever grows a third
+   element. */
+.modal-shell .modal-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--sp4);
   min-height: var(--pane-header-h);
   padding: 0 var(--modal-pad-x);
   margin-bottom: 0;
+}
+
+/* Title stack. One row today; a grid rather than a bare element so the header
+   geometry does not have to change the day a dialog needs a subtitle under its
+   title, which is the shape the design system's dialog header already has. */
+.modal-title-group {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+/* One title recipe across every dialog. The confirms used to inherit
+   .modal-header's --type-ui (14px) while the start dialog set --type-h2 (16px)
+   on its own span; the design system's dialog title is one size, and this is
+   it. */
+.modal-title {
+  margin: 0;
+  font-size: var(--type-h2);
+  font-weight: 590;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+/* The body is the only scrolling row of the grid. */
+.modal-shell .modal-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* DialogFooter: flush to the shell's inset, no free margin — the grid row
+   already separates it. */
+.modal-shell .modal-actions {
+  margin-top: 0;
+  padding: var(--sp3) var(--modal-pad-x);
 }
 
 /* Confirm dialogs have no full-bleed picker rows — their body is prose and
@@ -8039,11 +8090,6 @@ button.system-graph-node.is-navigable:focus-visible {
   color: var(--text-dim);
   font-size: var(--type-ui);
   line-height: 1.55;
-}
-
-.modal-confirm .modal-actions {
-  margin-top: 0;
-  padding: var(--sp3) var(--modal-pad-x);
 }
 
 /* Destructive action: the one place a filled state hue is correct. */
@@ -8071,14 +8117,6 @@ button.system-graph-node.is-navigable:focus-visible {
 .btn-danger:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-.modal-start .modal-header {
-  display: flex;
-  align-items: center;
-  min-height: var(--pane-header-h);
-  padding: 0 var(--modal-pad-x);
-  margin-bottom: 0;
 }
 
 .modal-body {
@@ -8116,11 +8154,6 @@ button.system-graph-node.is-navigable:focus-visible {
   min-width: 0;
 }
 
-.modal-start .modal-actions {
-  margin-top: 0;
-  padding: var(--sp3) var(--modal-pad-x);
-}
-
 /* Keep each action button's label on one line and let the row wrap to stack
    whole buttons when the dialog is narrow — otherwise flexbox shrinks them
    below their content width and labels like "Start bare session" and
@@ -8136,32 +8169,10 @@ button.system-graph-node.is-navigable:focus-visible {
 
 /* --- StartDialog: the unified, detection-driven Add dialog --------------- */
 
-/* A flex column so the BODY scrolls (picker listing + detection status + the
-   "Start from" tray can be tall) while the header and the morphing footer stay
-   put — the primary action never scrolls out of reach. */
-.modal-start {
-  display: flex;
-  flex-direction: column;
-  max-height: min(88vh, 760px);
-}
-
-.modal-start .modal-header,
-.modal-start .modal-actions {
-  flex: none;
-}
-
 .modal-start .modal-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
   /* The first body row is prose (the subtitle), not the full-bleed picker, so
      restore the top inset the picker variant deliberately drops. */
   padding-top: var(--sp3);
-}
-
-.modal-start-title {
-  font-weight: var(--fw-strong, 600);
-  font-size: var(--type-h2, 1rem);
 }
 
 

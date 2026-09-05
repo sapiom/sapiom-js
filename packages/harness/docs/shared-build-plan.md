@@ -188,8 +188,10 @@ capacity errors expose the explicit `release_dormant` recovery code; an
 all-active live cap continues to require session inspection instead of suggesting
 an inapplicable dormant cleanup. A bounded private-marker cleanup error may
 accompany an already-`released` result because eviction is durable first. Exact
-cleanup proof remains available so the same sweep can finish after the indicated
-recovery or inspection without changing the release outcome.
+cleanup proof remains available until the private close completes. After the
+original sweep receipt expires, a fresh bounded `release-dormant` request also
+retries unfinished cleanup without changing the release outcome or emitting a
+second release event.
 
 The coordinator waits for canonical adapter readiness and exact transcript
 identity, then uses fenced spawn and delivery epochs to submit one kickoff.

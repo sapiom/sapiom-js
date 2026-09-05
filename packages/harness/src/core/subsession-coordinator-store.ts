@@ -93,6 +93,8 @@ export type SubsessionCoordinatorBindingTombstone = Readonly<{
   bindingDigest: string;
   sessionId: string;
   disposition: "terminal" | "dormant-evicted";
+  /** Absent on older records: retain dormant eviction proof until verified. */
+  cleanupComplete?: true;
   closedAt: string;
 }>;
 
@@ -560,6 +562,7 @@ function parseBindingTombstone(
       "sessionId",
       "disposition",
       "closedAt",
+      ...("cleanupComplete" in value ? ["cleanupComplete"] : []),
     ]) ||
     !identifier(value.bindingId, "binding") ||
     !identifier(value.parentSessionId) ||
@@ -572,6 +575,8 @@ function parseBindingTombstone(
     !digest(value.bindingDigest) ||
     !identifier(value.sessionId) ||
     !["terminal", "dormant-evicted"].includes(String(value.disposition)) ||
+    ("cleanupComplete" in value &&
+      (value.cleanupComplete !== true || value.disposition !== "dormant-evicted")) ||
     !timestamp(value.closedAt)
   ) {
     throw new SubsessionCoordinatorStoreError("malformed_state");
@@ -814,13 +819,16 @@ export class SubsessionCoordinatorStore {
     if (aggregate.bindingTombstones.length > historyLimit) {
       let remaining = aggregate.bindingTombstones.length - historyLimit;
       aggregate.bindingTombstones = aggregate.bindingTombstones.filter(
-        ({ bindingId }) => {
-          if (remaining === 0 || referenced.has(bindingId)) return true;
+        ({ bindingId, disposition, cleanupComplete }) => {
+          if (remaining === 0 || referenced.has(bindingId) ||
+            (disposition === "dormant-evicted" && !cleanupComplete)) return true;
           remaining -= 1;
           return false;
         },
       );
     }
+    if (aggregate.bindingTombstones.length > SUBSESSION_COORDINATOR_BINDING_LIMIT)
+      throw new SubsessionCoordinatorStoreError("history_quota_exceeded");
     if (reclaimable.length > 0) {
       const reclaimed = new Set(reclaimable.map(({ bindingId }) => bindingId));
       aggregate.bindings = aggregate.bindings.filter(
@@ -1338,6 +1346,29 @@ export class SubsessionCoordinatorStore {
         value: { replayed: false, requestDigest, bindings },
         next: aggregate,
       };
+    });
+  }
+
+  /** Release eviction proof only after the exact private session close succeeds. */
+  completeDormantReleaseCleanup(
+    identity: ProjectAgentSession,
+    bindingId: SubsessionBindingId,
+    expectedSessionId: string,
+  ): Promise<void> {
+    return this.transact(identity.projectId, async (aggregate) => {
+      const index = aggregate.bindingTombstones.findIndex(
+        (entry) => entry.bindingId === bindingId,
+      );
+      const binding = aggregate.bindingTombstones[index];
+      if (!binding) return { value: undefined };
+      if (binding.sessionId !== expectedSessionId || binding.disposition !== "dormant-evicted")
+        throw new SubsessionCoordinatorStoreError("binding_scope_mismatch");
+      if (binding.cleanupComplete) return { value: undefined };
+      aggregate.bindingTombstones[index] = { ...binding, cleanupComplete: true };
+      this.compactTerminalHistory(aggregate);
+      aggregate.recordVersion += 1;
+      aggregate.updatedAt = this.now();
+      return { value: undefined, next: aggregate };
     });
   }
 

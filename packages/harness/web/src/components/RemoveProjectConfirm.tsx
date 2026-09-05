@@ -1,10 +1,8 @@
 import { useRef } from "react";
 import type { JSX, RefObject } from "react";
 
-import { useDismissable } from "../lib/use-dismissable";
 import { describeProjectRemoval } from "../lib/project-membership";
-import { trackingAttrs } from "../lib/analytics/tracking-attrs";
-import { Icon } from "./Icon";
+import { Dialog } from "./Dialog";
 
 /**
  * The confirm before a project leaves the rail (SAP-2932).
@@ -25,8 +23,11 @@ import { Icon } from "./Icon";
  * every file in them stay exactly where they are, and reopening the folder
  * brings the project back with its agents.
  *
- * Dismisses like every other layer: Escape and a backdrop click both mean
- * "Keep project", and Escape hands focus back to the row's control.
+ * Dismissal, focus containment and the inert background behind it are the
+ * shared `Dialog`'s, not this file's: Escape and a backdrop click both mean
+ * "Keep project" here for the same reason and by the same code that they do in
+ * every other dialog. What is local is the only thing that is local — the
+ * count, the copy, and the fact that the SAFE action opens focused.
  */
 export function RemoveProjectConfirm({
   label,
@@ -48,51 +49,27 @@ export function RemoveProjectConfirm({
   /** Focus returns here on Escape. */
   triggerRef?: RefObject<HTMLElement | null>;
 }): JSX.Element {
-  const confirmRef = useRef<HTMLDivElement>(null);
-  useDismissable(true, { onDismiss: onCancel, containerRef: confirmRef, triggerRef });
+  // The safe action opens focused: Enter keeps the project. `Dialog` takes no
+  // `onSubmit` here for the same reason — a removal is never one Return away.
+  const keepRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div
-        ref={confirmRef}
-        className="modal modal-confirm"
-        role="alertdialog"
-        aria-label={`Remove ${label}`}
-        data-testid="remove-project-confirm"
-        /* The dialog's own label carries a PROJECT NAME — a folder the user
-           named. Tagged `workspace` so before-send strips it from $el_text
-           instead of shipping one analytics row per private project name
-           (lib/analytics/before-send.ts, USER_NAMED_OBJECTS). */
-        {...trackingAttrs({ object: "workspace" })}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          Remove {label}?
-          <button
-            className="theme-toggle modal-close"
-            aria-label="Close"
-            title="Close"
-            onClick={onCancel}
-          >
-            <Icon name="X" size={14} />
-          </button>
-        </div>
-        <div className="modal-body">
-          {/* The count leads, on its own line, because it is the only
-              destructive thing here and the only reason to stop and read. */}
-          <p className="modal-copy" data-testid="remove-project-confirm-count">
-            {describeProjectRemoval(runningCount)}
-          </p>
-          <p className="modal-copy">
-            {label} and the agents inside it leave the rail. <strong>Nothing on disk is
-            touched</strong> — no file is created, moved or deleted, and{" "}
-            <code>{root}</code> stays exactly where it is. Open the folder again to bring
-            the project back.
-          </p>
-        </div>
-        <div className="modal-actions">
-          {/* Initial focus lands on the SAFE action: Enter keeps the project. */}
-          <button className="btn-ghost" autoFocus onClick={onCancel}>
+    <Dialog
+      role="alertdialog"
+      className="modal-confirm"
+      testId="remove-project-confirm"
+      title={`Remove ${label}?`}
+      onClose={onCancel}
+      triggerRef={triggerRef}
+      initialFocusRef={keepRef}
+      /* The dialog's own label carries a PROJECT NAME — a folder the user
+         named. Tagged `workspace` so before-send strips it from $el_text
+         instead of shipping one analytics row per private project name
+         (lib/analytics/before-send.ts, USER_NAMED_OBJECTS). */
+      tracking={{ object: "workspace" }}
+      actions={
+        <>
+          <button className="btn-ghost" ref={keepRef} onClick={onCancel}>
             Keep project
           </button>
           <button
@@ -102,8 +79,20 @@ export function RemoveProjectConfirm({
           >
             Remove project
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {/* The count leads, on its own line, because it is the only destructive
+          thing here and the only reason to stop and read. */}
+      <p className="modal-copy" data-testid="remove-project-confirm-count">
+        {describeProjectRemoval(runningCount)}
+      </p>
+      <p className="modal-copy">
+        {label} and the agents inside it leave the rail. <strong>Nothing on disk is
+        touched</strong> — no file is created, moved or deleted, and{" "}
+        <code>{root}</code> stays exactly where it is. Open the folder again to bring
+        the project back.
+      </p>
+    </Dialog>
   );
 }

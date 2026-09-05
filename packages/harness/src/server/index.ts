@@ -7,6 +7,12 @@
  * src/shared/types.ts for the full protocol contract.
  */
 
+import { SubsessionCoordinatorStore, type SubsessionCoordinatorStoreEvent } from "../core/subsession-coordinator-store.js";
+import { SubsessionCoordinator, type SubsessionCoordinatorEvent } from "../core/subsession-coordinator.js";
+import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
+import { AgentBriefService } from "../core/agent-brief-service.js";
+import { BuildPlanStore } from "../core/build-plan-store.js";
+import { BuildPlanService } from "../core/build-plan-service.js";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -96,7 +102,6 @@ import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
-import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
@@ -172,17 +177,6 @@ import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
-import { BuildPlanService } from "../core/build-plan-service.js";
-import { AgentBriefService } from "../core/agent-brief-service.js";
-import { BuildPlanStore } from "../core/build-plan-store.js";
-import {
-  SubsessionCoordinator,
-  type SubsessionCoordinatorEvent,
-} from "../core/subsession-coordinator.js";
-import {
-  SubsessionCoordinatorStore,
-  type SubsessionCoordinatorStoreEvent,
-} from "../core/subsession-coordinator-store.js";
 import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
@@ -2797,15 +2791,7 @@ export const startServer = async (
   );
 
   const listWorkspaceScopesAndRetain = async () => {
-    const scopes = await workspaceScopeCatalog.list();
-    const retained = new Set(scopes.map((scope) => scope.workspaceKey));
-    systemGraphWatcher.retain(retained);
-    systemGraphStore.retain(retained);
-    for (const workspaceKey of activeSystemGraphScopes.keys()) {
-      if (!retained.has(workspaceKey)) {
-        activeSystemGraphScopes.delete(workspaceKey);
-      }
-    }
+    let scopes = await workspaceScopeCatalog.list();
     try {
       const studioScopes = await studioWorkspaceScopeCatalog.list();
       const reconciliation = await studioProjectCatalog.reconcile(studioScopes);
@@ -2819,15 +2805,23 @@ export const startServer = async (
           byRoot.set(resolve(scope.cwd), scope);
         }
       }
-      return [...byRoot.values()].sort((left, right) =>
+      scopes = [...byRoot.values()].sort((left, right) =>
         left.cwd.localeCompare(right.cwd),
       );
     } catch {
       // Agent Map is additive in E1. A bad/unavailable new catalog cannot
       // strand the legacy rail or System Graph during coexistence.
       console.error("[harness] Studio project catalog is unavailable");
-      return scopes;
     }
+    const retained = new Set(scopes.map((scope) => scope.workspaceKey));
+    systemGraphWatcher.retain(retained);
+    systemGraphStore.retain(retained);
+    for (const workspaceKey of activeSystemGraphScopes.keys()) {
+      if (!retained.has(workspaceKey)) {
+        activeSystemGraphScopes.delete(workspaceKey);
+      }
+    }
+    return scopes;
   };
 
   /** Enrich only the bound workflow before a Canvas render. Canvas extraction
@@ -3844,7 +3838,14 @@ export const startServer = async (
   app.use(
     "/api",
     createSystemGraphRouter({
-      scopeResolver: workspaceScopeCatalog,
+      scopeResolver: {
+        resolve: async (workspaceKey) => {
+          const scope = (await listWorkspaceScopesAndRetain()).find(
+            (candidate) => candidate.workspaceKey === workspaceKey,
+          );
+          return scope ? { workspaceKey, root: canonicalGraphPath(scope.cwd) } : null;
+        },
+      },
       store: systemGraphStore,
       onScopeAccess: (scope) => {
         const firstAccess = !activeSystemGraphScopes.has(scope.workspaceKey);

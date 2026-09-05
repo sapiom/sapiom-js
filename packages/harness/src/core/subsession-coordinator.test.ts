@@ -698,6 +698,61 @@ describe("SubsessionCoordinator", () => {
     ).toHaveLength(1);
   });
 
+  it("recovers unfinished dormant cleanup under a new key after its receipt expires", async () => {
+    const { coordinator, newCoordinator, caller, manager, store, spawned, telemetry, unsubscribe } =
+      await fixture(false, undefined, {}, {
+        receiptRetentionLimit: 1,
+        historyTombstoneLimit: 1,
+      });
+    const created = await coordinator.execute(caller, request);
+    const childId = created.results[0]!.sessionId!;
+    const binding = (await store.read(projectId)).bindings[0]!;
+    // A failed coordinator binding can still have a live process whose exact
+    // private close must finish after the durable eviction has committed.
+    await store.transitionSession(caller, binding.bindingId, {
+      expectedLifecycleEpoch: binding.lifecycleEpoch,
+      expectedSpawnEpoch: binding.spawnEpoch,
+      expectedRuntimeToken: binding.runtime?.runtimeToken ?? null,
+      state: "failed",
+    });
+    vi.spyOn(manager, "closeBound")
+      .mockRejectedValueOnce(new SubsessionBindingMismatchError());
+    const partial = await coordinator.execute(caller, dormantReleaseRequest);
+    expect(partial.results[0]).toMatchObject({
+      sessionId: childId,
+      outcome: "released",
+      error: { code: "binding_session_mismatch" },
+    });
+
+    await store.reserveDormantReleases(caller, {
+      ...dormantReleaseRequest,
+      requestKey: "advance-cleanup-receipts",
+    }, []);
+    await expect(coordinator.execute(caller, dormantReleaseRequest))
+      .rejects.toMatchObject({ detail: { code: "request_key_expired" } });
+    expect(manager.get(childId)?.status).toBe("running");
+    expect(manager.getSubsessionBinding(childId)).not.toBeNull();
+
+    const recovering = newCoordinator("restarted-cleanup-owner").execute(caller, {
+      ...dormantReleaseRequest,
+      requestKey: "retry-unfinished-cleanup",
+    });
+    await vi.waitFor(() => expect(spawned[1]!.pty.kill).toHaveBeenCalledTimes(1));
+    spawned[1]!.emitExit(0);
+    const recovered = await recovering;
+    unsubscribe();
+
+    expect(recovered).toMatchObject({
+      replayed: false,
+      results: [{ sessionId: childId, outcome: "released" }],
+    });
+    expect(recovered.results[0]?.error).toBeUndefined();
+    expect(manager.getSubsessionBinding(childId)).toBeNull();
+    expect(telemetry.filter((event) =>
+      event.name === "subsession.released" && event.sessionId === childId,
+    )).toHaveLength(1);
+  });
+
   it.each(["exited", "failed"] as const)(
     "releases an already-%s child without spawning or resuming it",
     async (terminalState) => {

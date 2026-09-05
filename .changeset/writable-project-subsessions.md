@@ -44,4 +44,6 @@ atomically create one new binding and real session for the same delegation key.
 Dormant eviction emits content-free release telemetry when it commits. If later
 private-marker cleanup fails, the result remains truthfully `released`, includes
 the bounded cleanup error, and retains exact proof for idempotent cleanup after
-the indicated recovery.
+the indicated recovery. Unfinished private cleanup remains discoverable by a
+fresh bounded dormant sweep even after the original request receipt expires;
+its proof becomes eligible for compaction only after the exact close succeeds.

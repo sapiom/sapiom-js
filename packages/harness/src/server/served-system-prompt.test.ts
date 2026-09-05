@@ -14,10 +14,10 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startServer, type HarnessServer } from "./index.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
-import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
 import type { FocusedSessionContextProjection } from "../core/focused-session-context.js";
+import { startServer, type HarnessServer } from "./index.js";
+import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
+import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import type {
   HarnessAdapter,
   HarnessKind,
@@ -68,17 +68,10 @@ describe("served system prompt reaches the launched session", () => {
     server = undefined;
     // Retried like the other server specs: a session's exit-time generated-dir
     // removal is fire-and-forget and can still be running here (ENOTEMPTY).
-    await rm(dir, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 50,
-    });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
-  async function boot(
-    loadSystemPrompt: () => Promise<string>,
-  ): Promise<HarnessServer> {
+  async function boot(loadSystemPrompt: () => Promise<string>): Promise<HarnessServer> {
     return startServer({
       port: 0,
       bootToken: "test-token",
@@ -91,19 +84,13 @@ describe("served system prompt reaches the launched session", () => {
   }
 
   async function systemPromptFile(harnessSessionId: string): Promise<string> {
-    return readFile(
-      join(generatedRoot, harnessSessionId, "system-prompt.txt"),
-      "utf8",
-    );
+    return readFile(join(generatedRoot, harnessSessionId, "system-prompt.txt"), "utf8");
   }
 
   it("writes the served prompt, not the bundled one, on create", async () => {
     server = await boot(async () => SERVED_PROMPT);
 
-    const session = await server.sessionManager.create({
-      cwd,
-      harness: "claude-code",
-    });
+    const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
 
     const prompt = await systemPromptFile(session.id);
     expect(prompt).toContain(SERVED_PROMPT);
@@ -147,25 +134,16 @@ describe("served system prompt reaches the launched session", () => {
     let served = SERVED_PROMPT;
     server = await boot(async () => served);
 
-    const session = await server.sessionManager.create({
-      cwd,
-      harness: "claude-code",
-    });
+    const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
     // A resume needs an agent session id; the fake adapter reports none, so record one
     // the way the hook ingest would.
-    await server.sessionManager.setAgentSessionId(
-      session.id,
-      "agent-session-1",
-    );
+    await server.sessionManager.setAgentSessionId(session.id, "agent-session-1");
     await server.sessionManager.kill(session.id);
 
     served = "# Redeployed prompt";
     await server.sessionManager.resume(session.id);
 
-    const prompt = await systemPromptFile(session.id);
-    expect(prompt).toContain("# Redeployed prompt");
-    expect(prompt).not.toContain(SERVED_PROMPT);
-    expect(prompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
+    expect(await systemPromptFile(session.id)).toBe(`# Redeployed prompt\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 
   it("falls back to the bundled profile when the load fails", async () => {
@@ -175,13 +153,8 @@ describe("served system prompt reaches the launched session", () => {
       throw new Error("backend unreachable");
     });
 
-    const session = await server.sessionManager.create({
-      cwd,
-      harness: "claude-code",
-    });
+    const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
 
-    const prompt = await systemPromptFile(session.id);
-    expect(prompt).toContain(DEFAULT_SYSTEM_PROMPT);
-    expect(prompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
+    expect(await systemPromptFile(session.id)).toBe(`${DEFAULT_SYSTEM_PROMPT}\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 });

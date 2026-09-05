@@ -51,7 +51,7 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
 
     await page.getByTestId("rail-add-project").click();
-    await expect(page.locator(".modal-start-title")).toHaveText(
+    await expect(page.locator(".modal-title")).toHaveText(
       "Add a project",
     );
     await page.getByTestId("folder-field-input").fill(BLANK);
@@ -210,7 +210,7 @@ test.describe("the two questions stay two controls", () => {
     page,
   }) => {
     await page.getByTestId("add-existing-agents").click();
-    await expect(page.locator(".modal-start-title")).toHaveText(
+    await expect(page.locator(".modal-title")).toHaveText(
       "Add existing agents",
     );
     await page.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");

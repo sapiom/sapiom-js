@@ -92,6 +92,7 @@ function parseBootstrapState(
           "model_turn_failed",
           "delivery_timeout",
           "persistence_failed",
+          "scope_unavailable",
         ].includes(value.errorCode)
         ? {
             status: "failed",
