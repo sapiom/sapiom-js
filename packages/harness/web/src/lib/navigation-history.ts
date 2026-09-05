@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 
-import type { SessionSummary } from "@shared/types";
+import type { HarnessKind, SessionSummary } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
 import type { StudioProjectId } from "@shared/agent-map";
 
@@ -23,7 +23,7 @@ export type NavigationVisit =
     }
   | { kind: "review"; summary: SessionSummary }
   | { kind: "composer" }
-  | { kind: "templates" };
+  | { kind: "templates"; harness?: HarnessKind };
 
 export interface NavigationHistoryState {
   entries: NavigationVisit[];

@@ -215,3 +215,80 @@ test("a direct gallery visit uses the saved preference after leaving a composer 
   await confirmTemplate(page, "hello-agent");
   await expectTemplateSession(page, "claude-code");
 });
+
+for (const entry of ["rail", "palette", "deep-link"] as const) {
+  test(`only Codex installed launches Codex through ${entry}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      (
+        window as unknown as { __MOCK_UNINSTALLED_HARNESSES__: string[] }
+      ).__MOCK_UNINSTALLED_HARNESSES__ = ["claude-code"];
+    });
+    await page.goto(
+      entry === "deep-link"
+        ? "/?mockState=fresh&template=hello-agent"
+        : "/?mockState=fresh",
+    );
+    if (entry === "deep-link") {
+      await page.getByTestId("template-use-btn").click();
+      await page.getByTestId("template-use-confirm").click();
+    } else {
+      await expect(page.getByTestId("composer-harness-select")).toContainText(
+        "Codex",
+      );
+      if (entry === "rail") {
+        await page.getByTestId("rail-templates").click();
+      } else {
+        await page.getByTestId("palette-trigger").click();
+        await page.getByTestId("command-palette-input").fill("templates");
+        await page
+          .getByTestId("command-palette-list")
+          .getByText("Browse templates")
+          .click();
+      }
+      await confirmTemplate(page, "hello-agent");
+    }
+    await expectTemplateSession(page, "codex");
+  });
+}
+
+for (const navigation of ["exit-back", "back-forward"] as const) {
+  test(`gallery selection survives ${navigation} when preference writes fail`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value): void {
+        if (key === "sapiom-harness-ui-prefs") {
+          throw new DOMException(
+            "Storage quota exceeded",
+            "QuotaExceededError",
+          );
+        }
+        original.call(this, key, value);
+      };
+    });
+    await page.goto("/?mockState=fresh");
+    // The create button records a composer visit for Back/Forward replay.
+    await page.getByTestId("rail-create-new").click();
+    await chooseCodex(page);
+    await page.getByTestId("composer-browse-templates").click();
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    if (navigation === "exit-back") {
+      await page.getByTestId("templates-exit").click();
+      // A later choice must not change the original gallery visit.
+      await page.getByTestId("composer-harness-select").click();
+      await page.getByTestId("composer-harness-option-claude-code").click();
+      await page.getByRole("button", { name: "Go back", exact: true }).click();
+    } else {
+      await page.getByRole("button", { name: "Go back", exact: true }).click();
+      await page
+        .getByRole("button", { name: "Go forward", exact: true })
+        .click();
+    }
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    await confirmTemplate(page, "hello-agent");
+    await expectTemplateSession(page, "codex");
+  });
+}
