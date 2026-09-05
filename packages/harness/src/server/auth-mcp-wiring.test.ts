@@ -286,7 +286,8 @@ describe("Agent Studio MCP authentication wiring", () => {
       expect(remote.url).toBe("https://api.staging.example.test/v1/mcp");
       expect(spec!.args.join(" ")).toContain('"url" = "https://api.staging.example.test/v1/mcp"');
       expect(spec!.args.join(" ")).toMatch(/mcp_servers\.sapiom-dev-[a-f0-9]{12}=/);
-      expect(spec!.env.SAPIOM_ENVIRONMENT).toBe("staging");
+      expect(spec!.env.SAPIOM_ENVIRONMENT).toBeUndefined();
+      expect(spec!.args.join(" ")).toContain('"env" = { "SAPIOM_ENVIRONMENT" = "staging"');
       expect(spec!.env.SAPIOM_CODEX_MCP_0_HEADER_0).toBe(key);
       expect(spec!.args.join(" ")).not.toMatch(/browser-key|rotated-key/);
     };

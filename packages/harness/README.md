@@ -39,8 +39,9 @@ Agent Map MCP configuration on every session launch and resume. Studio uses sess
 server names such as `sapiom-dev-<session suffix>` and identifies them in the
 agent's instructions. This keeps existing Codex MCP registrations intact and
 avoids inheriting old credentials or conflicting transports from a server with
-the same name. Credentials are passed through the child environment, not command
-arguments; Studio does not write to your Codex `config.toml`. If a generated MCP
+the same name. Credentials are passed through Codex's environment and cleared from
+shell-tool environments; they never appear in command arguments. Authoring-process
+settings stay on the MCP server. Studio does not write to your Codex `config.toml`. If a generated MCP
 file cannot be read or parsed, the session reports an error so you can start a
 new session to regenerate it. Codex background tasks remain unsupported.
 
@@ -107,6 +108,8 @@ RUN_CODEX_MCP_INTEGRATION=1 pnpm --filter @sapiom/harness exec vitest run src/co
 This test uses a temporary Codex home, the built `sapiom-dev` server, and local
 HTTP fixtures. It requires no Codex login or model request and checks both a
 fresh home and an existing configuration with conflicting server registrations.
+It also checks that command environments exclude MCP credentials and the Electron
+launch flag while preserving unrelated user shell settings.
 
 ### Agent Map planner sessions
 
