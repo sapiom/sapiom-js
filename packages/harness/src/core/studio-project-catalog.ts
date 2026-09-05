@@ -201,8 +201,7 @@ function parseProject(value: unknown): StudioProjectIdentity | null {
   const keys = value.legacyWorkspaceKeys as string[];
   if (
     new Set(bindings.map((binding) => binding.id)).size !== bindings.length ||
-    new Set(bindings.map((binding) => pathComparisonKey(binding.localRootRef)))
-      .size !== bindings.length ||
+    new Set(bindings.map((binding) => binding.localRootRef)).size !== bindings.length ||
     new Set(keys).size !== keys.length
   ) {
     return null;
@@ -218,7 +217,7 @@ function parseProject(value: unknown): StudioProjectIdentity | null {
   };
 }
 
-function parseCatalog(value: unknown): PersistedStudioProjectCatalog {
+function parseCatalog(value: unknown): PersistedStudioProjectCatalog & { migrated: boolean } {
   if (
     isRecord(value) &&
     Number.isSafeInteger(value.schemaVersion) &&
@@ -250,9 +249,7 @@ function parseCatalog(value: unknown): PersistedStudioProjectCatalog {
     project.rootBindings.map((binding) => binding.id),
   );
   const roots = parsed.flatMap((project) =>
-    project.rootBindings.map((binding) =>
-      pathComparisonKey(binding.localRootRef),
-    ),
+    project.rootBindings.map((binding) => binding.localRootRef),
   );
   const legacyKeys = parsed.flatMap((project) => project.legacyWorkspaceKeys);
   if (
@@ -264,9 +261,29 @@ function parseCatalog(value: unknown): PersistedStudioProjectCatalog {
   ) {
     throw new StudioProjectCatalogError("malformed_state");
   }
+  // Older catalogs allowed differently cased Windows spellings of one root.
+  // Validate that persisted format first, then collapse aliases within their
+  // existing project. Keep separate project IDs: their map state cannot be
+  // merged implicitly, and ambiguous roots remain unassigned by reconcile.
+  let migrated = false;
+  for (const project of parsed) {
+    const bindings = new Map<string, ProjectRootBinding>();
+    for (const binding of project.rootBindings) {
+      const key = pathComparisonKey(binding.localRootRef);
+      const previous = bindings.get(key);
+      if (previous) {
+        if (binding.status === "active") previous.status = "active";
+        migrated = true;
+      } else {
+        bindings.set(key, binding);
+      }
+    }
+    project.rootBindings = [...bindings.values()];
+  }
   return {
     schemaVersion: STUDIO_PROJECT_CATALOG_SCHEMA_VERSION,
     projects: parsed,
+    migrated,
   };
 }
 
@@ -319,6 +336,7 @@ export class StudioProjectCatalog {
   private projects: StudioProjectIdentity[] | null = null;
   private loadPromise: Promise<void> | null = null;
   private mutationQueue: Promise<void> = Promise.resolve();
+  private migrationPending = false;
 
   constructor(
     private readonly catalogPath: string,
@@ -334,6 +352,12 @@ export class StudioProjectCatalog {
         // the cross-instance lock so a whole-catalog atomic rewrite includes
         // identities committed by another live host.
         await this.load(true);
+        if (this.migrationPending) {
+          // Read-only callers can use repaired identities immediately. Commit
+          // the repair only under the same cross-host lock as other writes.
+          await this.persist(this.projects!);
+          this.migrationPending = false;
+        }
         return await operation();
       } finally {
         await release();
@@ -370,6 +394,7 @@ export class StudioProjectCatalog {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           this.projects = [];
+          this.migrationPending = false;
           return;
         }
         throw storageError();
@@ -380,7 +405,9 @@ export class StudioProjectCatalog {
       } catch {
         throw new StudioProjectCatalogError("malformed_state");
       }
-      this.projects = parseCatalog(decoded).projects;
+      const parsed = parseCatalog(decoded);
+      this.projects = parsed.projects;
+      this.migrationPending = parsed.migrated;
     })().finally(() => {
       this.loadPromise = null;
     });
@@ -594,7 +621,8 @@ export class StudioProjectCatalog {
             ),
         );
         if (matchingProjects.length > 1) {
-          throw new StudioProjectCatalogError("malformed_state");
+          unassignedScopes.push({ workspaceKey: scope.workspaceKey, cwd: scope.cwd });
+          continue;
         }
         let project = matchingProjects[0];
         if (!project) {

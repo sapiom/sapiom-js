@@ -2493,7 +2493,20 @@ export const startServer = async (
   );
 
   const listWorkspaceScopesAndRetain = async () => {
-    const scopes = await workspaceScopeCatalog.list();
+    let scopes = await workspaceScopeCatalog.list();
+    try {
+      const studioScopes = await studioWorkspaceScopeCatalog.list();
+      const reconciled = (await studioProjectCatalog.reconcile(studioScopes)).workspaceScopes;
+      const byRoot = new Map(reconciled.map((scope) => [resolve(scope.cwd), scope]));
+      for (const scope of scopes) {
+        if (!byRoot.has(resolve(scope.cwd))) byRoot.set(resolve(scope.cwd), scope);
+      }
+      scopes = [...byRoot.values()].sort((left, right) => left.cwd.localeCompare(right.cwd));
+    } catch {
+      // Agent Map is additive in E1. A bad/unavailable new catalog cannot
+      // strand the legacy rail or System Graph during coexistence.
+      console.error("[harness] Studio project catalog is unavailable");
+    }
     const retained = new Set(scopes.map((scope) => scope.workspaceKey));
     systemGraphWatcher.retain(retained);
     systemGraphStore.retain(retained);
@@ -2502,20 +2515,7 @@ export const startServer = async (
         activeSystemGraphScopes.delete(workspaceKey);
       }
     }
-    try {
-      const studioScopes = await studioWorkspaceScopeCatalog.list();
-      const reconciled = (await studioProjectCatalog.reconcile(studioScopes)).workspaceScopes;
-      const byRoot = new Map(reconciled.map((scope) => [resolve(scope.cwd), scope]));
-      for (const scope of scopes) {
-        if (!byRoot.has(resolve(scope.cwd))) byRoot.set(resolve(scope.cwd), scope);
-      }
-      return [...byRoot.values()].sort((left, right) => left.cwd.localeCompare(right.cwd));
-    } catch {
-      // Agent Map is additive in E1. A bad/unavailable new catalog cannot
-      // strand the legacy rail or System Graph during coexistence.
-      console.error("[harness] Studio project catalog is unavailable");
-      return scopes;
-    }
+    return scopes;
   };
 
   /** Enrich only the bound workflow before a Canvas render. Canvas extraction
@@ -3113,7 +3113,14 @@ export const startServer = async (
   app.use(
     "/api",
     createSystemGraphRouter({
-      scopeResolver: workspaceScopeCatalog,
+      scopeResolver: {
+        resolve: async (workspaceKey) => {
+          const scope = (await listWorkspaceScopesAndRetain()).find(
+            (candidate) => candidate.workspaceKey === workspaceKey,
+          );
+          return scope ? { workspaceKey, root: canonicalGraphPath(scope.cwd) } : null;
+        },
+      },
       store: systemGraphStore,
       onScopeAccess: (scope) => {
         const firstAccess = !activeSystemGraphScopes.has(scope.workspaceKey);

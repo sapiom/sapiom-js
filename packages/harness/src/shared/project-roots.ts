@@ -239,10 +239,8 @@ export function holdingProjectFor(
  *
  *     A PROJECT IS A DIRECTORY YOU CHOSE THAT HOLDS AGENTS.
  *
- * Two clauses, and dropping either one is what filled a real rail. Measured
- * against a captured `~/.sapiom/harness` (`org-dogfood.json` in the design
- * prototype: 75 agents, 8 recentDirs, 41 distinct session cwds), the sources
- * below offer 41 candidate roots and this function returns 8.
+ * Both clauses keep session working directories from accumulating as
+ * duplicate project rows.
  *
  * RULE 1, "you chose": an agent's OWN directory is not a project. The project
  * is the directory that HOLDS agents; the agent is the thing inside it. A root
@@ -251,9 +249,8 @@ export function holdingProjectFor(
  * one node, because nothing else is inside it. And it renders the agent TWICE
  * whenever some other open project also contains it, once correctly nested and
  * once again at top level under a different label, because `buildProjectTree`
- * deliberately files an agent under EVERY root that contains it. Three agents
- * were on screen twice this way on one real machine. So an agent-rooted entry
- * whose agent another project already shows is dropped, and one nothing shows
+ * deliberately files an agent under EVERY root that contains it. An agent-rooted
+ * entry whose agent another project already shows is dropped, and one nothing shows
  * is replaced by its nearest non-agent ancestor.
  *
  * This is not a new rule. `project-membership.agentNeedsOwnProject` has
