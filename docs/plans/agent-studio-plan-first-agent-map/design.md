@@ -1,8 +1,5 @@
 # Agent Studio unified Agent Map
 
-Status: implemented by SAP-3148 through SAP-3151; SAP-3152 verifies and
-reconciles the cutover.
-
 ## Product authority
 
 Every Studio project session is one ordinary writable project agent. Its

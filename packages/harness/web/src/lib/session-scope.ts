@@ -337,7 +337,8 @@ export interface FocusSessionInput<S extends ScopedSession> {
 }
 
 export type FocusSessionDecision<S extends ScopedSession> =
-  /** The active session already reaches this agent. Do not touch it. */
+  /** Keep the current live session or an explicitly selected same-project
+   * archived conversation. This decision does not resume a runtime. */
   | { kind: "keep" }
   /** Hand over to another project's session, or to none (the honest
    *  "start a session" state). */
@@ -379,6 +380,17 @@ export function sessionForFocus<S extends ScopedSession>({
   targetProjectId = null,
   targetProjectRoot = null,
 }: FocusSessionInput<S>): FocusSessionDecision<S> {
+  // History selection owns an exact recorded conversation after restart.
+  // Selecting one of that project's agents must not discard it or replace it
+  // with a live tab. Require durable identity; an exited session's cwd alone
+  // cannot establish the creating project of a scaffolded sibling.
+  if (
+    active?.status === "exited" &&
+    targetProjectId &&
+    active.agentMapIdentity?.projectId === targetProjectId
+  )
+    return { kind: "keep" };
+
   const live = sessions.filter((session) => session.status !== "exited");
 
   if (

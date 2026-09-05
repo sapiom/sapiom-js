@@ -2018,10 +2018,21 @@ export class MockApi implements HarnessApi {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("mockNoLiveSessions") ===
       "1";
+  // A Studio restart retains registry history while every native runtime has
+  // exited. Keep both providers' exact saved IDs for restoration journeys.
+  private readonly restoredSessions =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("mockRestoredSessions") ===
+      "1";
   private sessionsStore: HarnessSession[] =
     this.fresh || this.noLiveSessions
       ? []
-      : MOCK_SESSIONS.map((session) => ({ ...session }));
+      : MOCK_SESSIONS.map((session) => ({
+          ...session,
+          ...(this.restoredSessions
+            ? { status: "exited" as const, ready: false }
+            : {}),
+        }));
   private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
@@ -2922,6 +2933,17 @@ export class MockApi implements HarnessApi {
   }
 
   async resumeSession(id: string): Promise<HarnessSession> {
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.resumeSessionCalls as string[] | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        resumeSessionCalls: [...previous, id],
+      };
+    }
     await delay(300);
     const existing = this.sessions.find(
       (session) => session.agentSessionId === id || session.id === id,
