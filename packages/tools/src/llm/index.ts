@@ -675,6 +675,12 @@ export type LlmSessionReadyPayload =
     })
   | (LlmSession & { state: "failed"; error: string });
 
+/**
+ * The wire-shape keys of `LlmSession.baseUrls` — the same vocabulary as
+ * `callSession`'s `shape` option; a ready session carries one URL per shape.
+ */
+const SESSION_BASE_URL_SHAPES = ["anthropic", "openai"] as const;
+
 /** Thrown by {@link llmSessionReadySchema}.parse on a malformed resume payload. */
 export class LlmSessionReadySchemaError extends Error {}
 
@@ -699,10 +705,10 @@ export const llmSessionReadySchema = {
       const b = v.baseUrls as Record<string, unknown> | null | undefined;
       if (!b || typeof b !== "object") fail("baseUrls is required when ready");
       const urls = b as Record<string, unknown>;
-      if (typeof urls.anthropic !== "string")
-        fail("baseUrls.anthropic must be a string");
-      if (typeof urls.openai !== "string")
-        fail("baseUrls.openai must be a string");
+      for (const shape of SESSION_BASE_URL_SHAPES) {
+        if (typeof urls[shape] !== "string")
+          fail(`baseUrls.${shape} must be a string`);
+      }
     } else if (typeof v.error !== "string" || !v.error) {
       fail("error must be a non-empty string when failed");
     }
