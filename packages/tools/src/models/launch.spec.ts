@@ -227,6 +227,98 @@ describe("agent.coding — the deadline widens wait()'s poll budget", () => {
   });
 });
 
+describe("agent.coding — polling backs off while a run is deferred", () => {
+  /**
+   * Records the delay each poll sleep ASKS for while firing it immediately, so
+   * the backoff schedule is observable without the test taking that long.
+   */
+  function recordPollDelays(): number[] {
+    const delays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    jest.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      delays.push(ms ?? 0);
+      return realSetTimeout(fn, 0);
+    }) as unknown as typeof globalThis.setTimeout);
+    return delays;
+  }
+
+  function fetchStatuses(statuses: string[]): typeof globalThis.fetch {
+    let polls = 0;
+    return (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const status = isPost
+        ? "pending"
+        : (statuses[polls++] ?? "completed");
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({
+          data: {
+            id: "run-parked",
+            attributes: { status, summary: null, result: null, error: null },
+            relationships: { execution_environment: { data: { id: "env-1" } } },
+          },
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("doubles the interval while deferred and snaps back once the run moves", async () => {
+    // A parked run has nothing new to report, so polling it at full cadence for
+    // the whole widened budget would burn the caller's rate limit. A run that is
+    // actually `running` goes straight back to the caller's interval.
+    const delays = recordPollDelays();
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fetchStatuses([
+        "awaiting_capacity",
+        "awaiting_capacity",
+        "awaiting_capacity",
+        "running",
+        "running",
+        "completed",
+      ]),
+    });
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 60,
+    });
+
+    await handle.wait({ pollMs: 1 });
+
+    expect(delays).toEqual([2, 4, 8, 1, 1]);
+  });
+
+  it("caps the backoff so a long deadline still polls periodically", async () => {
+    const delays = recordPollDelays();
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fetchStatuses([
+        "awaiting_capacity",
+        "awaiting_capacity",
+        "completed",
+      ]),
+    });
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 480,
+    });
+
+    await handle.wait({ pollMs: 40_000 });
+
+    // 40s doubles to 80s, clamped to the 60s ceiling and held there.
+    expect(delays).toEqual([60_000, 60_000]);
+  });
+});
+
 describe("agent.coding — typed HTTP failures", () => {
   const repositoryMessage =
     "The requested git_repository is not an active Sapiom repository available to this tenant. " +

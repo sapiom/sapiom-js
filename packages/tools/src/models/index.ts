@@ -340,6 +340,31 @@ function defaultWaitMs(
   return deadlineMinutes * 60_000 + surfaceDefaultMs;
 }
 
+/** Ceiling for the deferred-run backoff below. */
+const DEFERRED_POLL_CAP_MS = 60_000;
+
+/**
+ * Poll interval for the next tick of a `wait()` loop.
+ *
+ * A run parked in `awaiting_capacity` has nothing new to report until the
+ * platform dispatches it, and a long deadline widens the poll budget to match —
+ * so at a flat interval an 8-hour deadline would spend ~14,000 GETs of the
+ * caller's rate limit doing nothing. While deferred, the interval doubles up to
+ * {@link DEFERRED_POLL_CAP_MS}, which brings that back to a few hundred.
+ *
+ * Every other status — including `running` — snaps straight back to the
+ * caller's `pollMs`, so a run that is actually moving is still observed at full
+ * cadence and a terminal transition is caught promptly.
+ */
+function nextPollMs(
+  status: string,
+  currentMs: number,
+  callerPollMs: number,
+): number {
+  if (status !== "awaiting_capacity") return callerPollMs;
+  return Math.min(currentMs * 2, DEFERRED_POLL_CAP_MS);
+}
+
 // --- wire shapes (snake_case, as served by the gateway serializer) ---
 
 interface WireResult {
@@ -474,16 +499,19 @@ export async function codingLaunch(
       pollMs = 3_000,
     } = {}) {
       const deadline = Date.now() + timeoutMs;
+      let intervalMs = pollMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const d = await fetchDoc();
-        if (TERMINAL.has(d.data.attributes.status)) return toResult(d);
+        const status = d.data.attributes.status;
+        if (TERMINAL.has(status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
-            `coding run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`,
+            `coding run ${runId} timed out after ${timeoutMs}ms (last status: ${status})`,
           );
         }
-        await new Promise((r) => setTimeout(r, pollMs));
+        intervalMs = nextPollMs(status, intervalMs, pollMs);
+        await new Promise((r) => setTimeout(r, intervalMs));
       }
     },
   };
@@ -520,14 +548,18 @@ export const coding = { run: codingRun, launch: codingLaunch };
 export const MODEL_RUN_RESULT_SIGNAL = "models.run.result";
 
 /**
- * Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`).
+ * Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`),
+ * plus `awaiting_capacity`.
  *
- * `awaiting_capacity` carries the same meaning as on {@link RunStatus} and is
- * likewise NOT terminal. This surface accepts a
- * {@link ModelRunSpec.deadlineMinutes}, so a deferred model run is a state the
- * types have to be able to represent — a union too narrow to hold a value the
- * server can send would mis-type `handle.status()` and make
- * `modelRunResultSchema.parse` reject a real payload.
+ * `awaiting_capacity` is RESERVED rather than mirrored: the gateway does not
+ * emit it on this surface today. It is declared because this surface accepts a
+ * {@link ModelRunSpec.deadlineMinutes}, and the only reason to send a deadline
+ * is for the platform to defer — so the day it does, a union too narrow to hold
+ * the value would mis-type `handle.status()` and make
+ * `modelRunResultSchema.parse` reject a real payload. Reserving it costs a
+ * consumer one branch that is currently unreachable; omitting it would cost a
+ * silent type lie. It carries the same meaning as on {@link RunStatus} and is
+ * likewise NOT terminal.
  */
 export type ModelRunStatus =
   | "pending"
@@ -812,16 +844,19 @@ export async function launch(
       pollMs = 2_000,
     } = {}) {
       const deadline = Date.now() + timeoutMs;
+      let intervalMs = pollMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const d = await fetchDoc();
-        if (MODEL_TERMINAL.has(d.data.attributes.status)) return toResult(d);
+        const status = d.data.attributes.status;
+        if (MODEL_TERMINAL.has(status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
-            `agent run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`,
+            `agent run ${runId} timed out after ${timeoutMs}ms (last status: ${status})`,
           );
         }
-        await new Promise((r) => setTimeout(r, pollMs));
+        intervalMs = nextPollMs(status, intervalMs, pollMs);
+        await new Promise((r) => setTimeout(r, intervalMs));
       }
     },
   };
