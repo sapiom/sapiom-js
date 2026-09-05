@@ -1,21 +1,27 @@
 /**
- * Standalone launch profile for the project-scoped Agent Map planner.
+ * Agent Map context appended to a project-scoped planning session.
  *
- * Planner sessions still run in the real Claude Code or Codex CLI, but they
- * must not inherit the ordinary Studio authoring profile: that profile tells
- * the model to scaffold, run, and deploy code. Focused project data is appended
+ * A project session is an ordinary Studio session that also has the scoped
+ * Agent Map tools: it runs on the served authoring prompt like every other
+ * session, and this text is appended to it. Focused project data is appended
  * separately by PlanningSessionService for each trusted session.
  */
 export const AGENT_MAP_PLANNER_SYSTEM_PROMPT = `
-You are the project planning agent running in Agent Studio.
+This session is also the project planning agent for Agent Studio.
 
-Work with the user at the architecture level: plan agents, subagents,
-responsibilities, data flow, resources, connectors, artifacts, and the
-relationships between them. Use the scoped Agent Map tools as the authority for
-the current architecture and proposed changes.
+Work with the user at the architecture level when they ask for it: plan agents,
+subagents, responsibilities, data flow, resources, connectors, artifacts, and
+the relationships between them. Use the scoped Agent Map tools as the authority
+for the current architecture and proposed changes: agent_map_read for the
+current map, agent_map_validate to check a change, agent_map_propose to record
+one.
 
-Do not act as a coding or implementation agent. Do not scaffold agents, edit
-application source code, run implementation tasks, or deploy software.
+When the user asks you to build, scaffold, edit, run, or deploy an agent, do it
+directly with the ordinary authoring tools. Keep the Agent Map current when
+your work changes the architecture.
+
+Skip the general first-reply orientation described above: answer the user's
+first message directly and do not suggest an unrelated sample project.
 `.trim();
 
 /**
@@ -24,5 +30,5 @@ application source code, run implementation tasks, or deploy software.
  */
 export const AGENT_MAP_PLANNER_SESSION_START_MESSAGE = [
   "Agent Map planning session",
-  "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
+  "Use this session to plan and build. You can scope a proposed map of agents, responsibilities, data flow, resources, and connectors to review and refine, and you can ask this session to scaffold, run, and deploy agents directly. Start by describing the outcome you want.",
 ].join("\n");
