@@ -1697,6 +1697,90 @@ describe("SessionManager", () => {
     ).toBe(true);
   });
 
+  it("loads a 0.14.0 planner session as an ordinary, resumable session (SAP-3143)", async () => {
+    // Exactly the shape 0.14.0 persisted: trusted planner metadata plus a
+    // map-planner Agent Map identity. This is the one path in the planner
+    // removal that runs against a user's real state on first boot.
+    const persisted = {
+      id: "planner-from-0-14",
+      agentSessionId: "vendor-planner-1",
+      harness: "claude-code" as const,
+      cwd: "/tmp/project",
+      title: "project",
+      status: "running",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: null,
+      boundWorkflowPath: null,
+      ready: true,
+      planning: {
+        identity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          sessionId: "planner-from-0-14",
+          userId: "user-1",
+          role: "map-planner",
+        },
+        greeting: { status: "delivered", messageId: "message-1" },
+        queuedInputIds: [],
+      },
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        sessionId: "planner-from-0-14",
+        userId: "user-1",
+        role: "map-planner",
+      },
+    };
+    await writeFile(sessionsPath, JSON.stringify([persisted], null, 2));
+
+    // The server's resolver, narrowed by this change: a persisted map-planner
+    // identity is not honored, and an ordinary builder identity is issued.
+    const resolveAgentMapIdentity = vi.fn(
+      async (
+        sessionId: string,
+        _cwd: string,
+        prior?: { role: string },
+      ) =>
+        prior?.role === "agent-builder"
+          ? undefined
+          : ({
+              projectId: "project_00000000-0000-4000-8000-000000000001",
+              sessionId,
+              userId: "user-1",
+              role: "agent-builder",
+              assignment: { kind: "unplanned" },
+            } as const),
+    );
+    const { manager, adapter } = makeManager({ resolveAgentMapIdentity });
+    await manager.init();
+
+    // Nothing is lost: the session, its folder and its vendor conversation id
+    // survive. Only the planner metadata is gone.
+    const loaded = manager.get(persisted.id);
+    expect(loaded).toBeDefined();
+    expect(loaded?.cwd).toBe("/tmp/project");
+    expect(loaded?.agentSessionId).toBe("vendor-planner-1");
+    expect(loaded).not.toHaveProperty("planning");
+    // The rewrite is durable: a second boot never sees the key again.
+    const rewritten = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as unknown[];
+    expect(JSON.stringify(rewritten)).not.toContain("planning");
+    expect(JSON.stringify(rewritten)).not.toContain("greeting");
+
+    // And it resumes through the ordinary route, as an agent-builder.
+    const resumed = await manager.resume(persisted.id);
+    expect(adapter.resume).toHaveBeenCalledWith(
+      "vendor-planner-1",
+      expect.objectContaining({ cwd: "/tmp/project" }),
+    );
+    expect(resumed.status).toBe("running");
+    expect(resumed).not.toHaveProperty("planning");
+    expect(resumed.agentMapIdentity).toMatchObject({
+      role: "agent-builder",
+      assignment: { kind: "unplanned" },
+    });
+  });
+
   it("migrates legacy duplicate vendor pointers with first persisted owner winning", async () => {
     const duplicate = "legacy-shared-vendor";
     const first = {

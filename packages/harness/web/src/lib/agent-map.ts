@@ -324,6 +324,29 @@ export function resolveStudioWorkspaceSelection(
  * The durable Studio project owning a path. Nested opened projects use the
  * nearest containing root, matching session scope rather than recent-dir order.
  */
+/**
+ * A Studio project's ROOT: the outermost of its bound scopes.
+ *
+ * The counterpart to {@link mostSpecificStudioScope}, which answers "which
+ * scope contains this path". Sessions and the Start action belong to the
+ * project, so they key to its root; with nested bound scopes the two answers
+ * differ, and deriving the root separately at a call site is how the tab strip
+ * and the conversation subject end up pointing at different folders.
+ */
+export function studioProjectRoot(
+  scopes: readonly WorkspaceScopeSummary[],
+): string | null {
+  return (
+    scopes
+      .map((scope) => scope.cwd)
+      .sort(
+        (left, right) =>
+          stripTrailingSep(left).length - stripTrailingSep(right).length ||
+          left.localeCompare(right),
+      )[0] ?? null
+  );
+}
+
 export function mostSpecificStudioScope(
   targetPath: string,
   scopes: readonly WorkspaceScopeSummary[],

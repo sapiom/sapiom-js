@@ -7,6 +7,7 @@ import {
   parseAgentMapWorkspaceResponse,
   resolveStudioWorkspaceSelection,
   routeAcceptedProposalDelta,
+  studioProjectRoot,
 } from "./agent-map";
 import { MockApi } from "./api";
 
@@ -276,3 +277,31 @@ function validResponseProject(id: string): StudioProjectSummary {
     updatedAt: timestamp,
   };
 }
+
+describe("studioProjectRoot", () => {
+  const scope = (cwd: string) => ({ workspaceKey: cwd, cwd });
+
+  it("is the OUTERMOST bound scope, where mostSpecificStudioScope is the innermost", () => {
+    const scopes = [scope("/w/project/nested"), scope("/w/project")];
+    expect(studioProjectRoot(scopes)).toBe("/w/project");
+  });
+
+  it("is null when the project has no bound scope", () => {
+    expect(studioProjectRoot([])).toBeNull();
+  });
+
+  it("breaks a same-depth tie deterministically, so two renders agree", () => {
+    expect(studioProjectRoot([scope("/w/beta"), scope("/w/alfa")])).toBe(
+      "/w/alfa",
+    );
+    expect(studioProjectRoot([scope("/w/alfa"), scope("/w/beta")])).toBe(
+      "/w/alfa",
+    );
+  });
+
+  it("ignores a trailing separator when comparing depth", () => {
+    expect(studioProjectRoot([scope("/w/project/nested"), scope("/w/proj/")])).toBe(
+      "/w/proj/",
+    );
+  });
+});

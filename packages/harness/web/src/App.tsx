@@ -120,7 +120,7 @@ import {
   secretsDisabledReason,
   type ProjectRef,
 } from "./lib/canvas-altitude";
-import { mostSpecificStudioScope } from "./lib/agent-map";
+import { mostSpecificStudioScope, studioProjectRoot } from "./lib/agent-map";
 import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
 import {
@@ -1342,14 +1342,10 @@ export const App = (): JSX.Element => {
   const planningWorkspace = studioView?.altitude === "map";
   const agentMapUnavailable =
     planningWorkspace && agentMapEntry.state.unavailable !== null;
-  // The selected Studio project's root: the shortest of its bound scopes. The
-  // centre at map altitude shows THIS project's ordinary sessions (SAP-3143);
-  // there is no planner session type any more.
-  const selectedStudioRoot = selectedStudioScopes.reduce<string | null>(
-    (root, scope) =>
-      root === null || scope.cwd.length < root.length ? scope.cwd : root,
-    null,
-  );
+  // The selected Studio project's root, from the one shared rule so the tab
+  // strip, the Start target and `conversation` cannot key to different folders
+  // when a project has nested bound scopes.
+  const selectedStudioRoot = studioProjectRoot(selectedStudioScopes);
   const projectSessions =
     planningWorkspace && selectedStudioRoot
       ? liveSessionsForProject(state.sessions, selectedStudioRoot)
@@ -3005,7 +3001,7 @@ export const App = (): JSX.Element => {
               }
               newSessionPending={
                 planningWorkspace
-                  ? startingProject != null
+                  ? startingProject?.root === selectedStudioRoot
                   : siblingSessionPending
               }
               onNewSession={
@@ -3141,7 +3137,7 @@ export const App = (): JSX.Element => {
                           type="button"
                           className="btn-primary"
                           data-testid="project-session-start"
-                          disabled={startingProject != null}
+                          disabled={startingProject?.root === selectedStudioRoot}
                           onClick={startProjectSessionFromMap}
                         >
                           Start a session

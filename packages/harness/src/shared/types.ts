@@ -826,7 +826,28 @@ export type AnalyticsEventType =
   | "agent_map.workspace_initialized"
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
-  | "agent_map.capability";
+  | "agent_map.capability"
+  /**
+   * Planner lifecycle types. SAP-3143 removed planner sessions, so nothing
+   * emits these any more; they stay in the union for one release so a
+   * consumer switching over AnalyticsEventType still compiles.
+   * @deprecated No longer emitted. Removed in the next minor.
+   */
+  | "planner_session.created"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_session.resumed"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_session.input_delivery_uncertain"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_greeting.attempted"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_greeting.delivered"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_greeting.failed"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_greeting.skipped"
+  /** @deprecated No longer emitted. Removed in the next minor. */
+  | "planner_greeting.retried";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
