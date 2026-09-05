@@ -474,3 +474,84 @@ export interface ProjectBootstrapMetadata {
   bootstrap: ProjectBootstrapState;
   queuedInputIds: string[];
 }
+
+
+
+export interface ProjectBootstrapQueuedInput {
+  id: string;
+  sessionId: string;
+  text: string;
+  acceptedAt: string;
+}
+
+
+
+/**
+ * Content-free receipt for input accepted by the durable bootstrap FIFO.
+ * `uncertain` is terminal: Studio cannot prove whether that logical turn ran,
+ * so it will never replay it automatically.
+ */
+export interface ProjectBootstrapInputReceipt {
+  requestId: string | null;
+  inputId: string;
+  status: "queued" | "submitted" | "uncertain" | "completed";
+  acceptedAt: string;
+}
+
+
+
+export type ProjectBootstrapRegistrationMode =
+  | "boot"
+  | "created"
+  | "live"
+  | "resumed";
+
+
+
+/** Content-free lifecycle telemetry for project bootstrap reliability. */
+export type ProjectBootstrapLifecycleEvent =
+  | {
+      name: "project_bootstrap.scheduled" | "project_bootstrap.recovered";
+      projectId: StudioProjectId;
+      sessionId: string;
+    }
+  | {
+      name: "project_bootstrap.attempted" | "project_bootstrap.retried";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      retryOrdinal: number;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.delivered";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.failed";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId?: string;
+      errorCode: ProjectBootstrapErrorCode;
+      retryable: boolean;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.preempted" | "project_bootstrap.skipped";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId?: string;
+      reason: "user-proceeded" | "map-not-empty";
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.input_delivery_uncertain";
+      projectId: StudioProjectId;
+      sessionId: string;
+      inputId: string;
+      errorCode: "delivery_uncertain";
+      queueDepth: number;
+    };
