@@ -200,8 +200,7 @@ test.describe("the plan-first project children", () => {
     ]);
 
     // Prove the shortcut also works from map altitude: the new generic session
-    // becomes the visible workbench, while the planner remains resumable from
-    // Plan Agents and no scaffold request is made.
+    // becomes the visible workbench and no scaffold request is made.
     await group.getByTestId("agent-map-select").click();
     await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
       "aria-pressed",
@@ -259,7 +258,8 @@ test.describe("the plan-first project children", () => {
     const map = group.getByTestId("agent-map-select");
     await map.click();
     await expect(map).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    // Opening the map starts nothing (SAP-3143); the centre offers the Start.
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
     await page.evaluate(() => {
       (
         window as unknown as { __MOCK_CREATE_SESSION_FAIL_ONCE__?: boolean }

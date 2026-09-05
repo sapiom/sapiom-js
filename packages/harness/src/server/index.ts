@@ -31,7 +31,6 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
-import type { PlannerLifecycleEvent } from "../shared/agent-map.js";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -98,7 +97,6 @@ import {
   sweepGeneratedDirs,
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
-import { AGENT_MAP_PLANNER_SYSTEM_PROMPT } from "../profiles/agent-map-planner.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -169,12 +167,6 @@ import {
 } from "./agent-map-mcp.js";
 import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
-import {
-  isPlannerDispatchAuthorized,
-  localPlanningPrincipal,
-  PlanningSessionService,
-} from "../core/planning-session.js";
-import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -571,13 +563,10 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
-    const promptPromise =
-      context?.agentMapIdentity?.role === "map-planner"
-        ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
-        : loadSystemPrompt().catch((err: unknown) => {
-            console.error("[harness] system-prompt load failed:", err);
-            return DEFAULT_SYSTEM_PROMPT;
-          });
+    const promptPromise = loadSystemPrompt().catch((err: unknown) => {
+      console.error("[harness] system-prompt load failed:", err);
+      return DEFAULT_SYSTEM_PROMPT;
+    });
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -625,6 +614,13 @@ function createDefaultBuildLaunchOpts(
     };
   };
 }
+
+/** The Agent Map principal: the signed-in user, or a stable machine-local id
+ *  when Studio runs signed out, so capability issuance never depends on auth. */
+const localPlanningPrincipal = (
+  userId: string | null,
+  machineId: string,
+): string => userId ?? `local:${machineId}`;
 
 export const startServer = async (
   options: HarnessServerOptions,
@@ -1169,20 +1165,21 @@ export const startServer = async (
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
-      // Planner ownership already uses a stable machine-local principal when
-      // Studio runs with --no-auth. Capability issuance must use that same
-      // identity; requiring an authenticated user here silently removed the
-      // Agent Map server from every signed-out planner's MCP config.
+      // Signed-out Studio uses a stable machine-local principal. Capability
+      // issuance must use that same identity; requiring an authenticated user
+      // here silently removed the Agent Map server from every signed-out
+      // session's MCP config.
       const userId = localPlanningPrincipal(planningUserId, machineId);
       const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
       if (!project) return undefined;
+      // A persisted `map-planner` identity (from before SAP-3143) is not
+      // honored: every project session is an ordinary agent-builder now.
       if (
         persisted?.sessionId === sessionId &&
         persisted.projectId === project.projectId &&
         persisted.userId === userId &&
-        (persisted.role === "map-planner" ||
-          (persisted.role === "agent-builder" &&
-            persisted.assignment.kind === "planned"))
+        persisted.role === "agent-builder" &&
+        persisted.assignment.kind === "planned"
       ) {
         return structuredClone(persisted);
       }
@@ -2621,52 +2618,6 @@ export const startServer = async (
   // and createIngestRouter) so the uiTrack closure can reference it lazily.
   const seqCounter = createSeqCounter();
 
-  const emitPlannerLifecycle = (event: PlannerLifecycleEvent): void => {
-    const session = sessionManager.get(event.sessionId);
-    const analyticsEvent: AnalyticsEvent = {
-      eventId: randomUUID(),
-      seq: seqCounter.next(event.sessionId),
-      ts: new Date().toISOString(),
-      userId: identity?.userId ?? null,
-      tenantId: identity?.tenantId ?? null,
-      machineId,
-      harnessSessionId: event.sessionId,
-      // Planner lifecycle correlation uses the server-owned harness session.
-      // Provider session identity is unnecessary and may originate in a hook.
-      agentSessionId: null,
-      harness: session?.harness ?? "claude-code",
-      type: event.name,
-      payload: {
-        project_id: event.projectId,
-        ...("resolution" in event
-          ? { resolution: event.resolution }
-          : {
-              queue_depth: Math.max(0, Math.min(10_000, event.queueDepth)),
-              ...("attemptId" in event && event.attemptId
-                ? { attempt_id: event.attemptId }
-                : {}),
-              ...(event.name === "planner_greeting.failed"
-                ? {
-                    error_code: event.errorCode,
-                    retryable: event.retryable,
-                  }
-                : {}),
-              ...(event.name === "planner_greeting.skipped"
-                ? { reason: event.reason }
-                : {}),
-              ...(event.name === "planner_session.input_delivery_uncertain"
-                ? {
-                    input_id: event.inputId,
-                    error_code: event.errorCode,
-                  }
-                : {}),
-            }),
-      },
-    };
-    void eventStore.append(analyticsEvent).catch(() => {});
-    batcher.enqueue(analyticsEvent);
-  };
-
   const agentMapWorkspaceStore = new AgentMapWorkspaceStore(
     statePaths.agentMap,
     {
@@ -2817,85 +2768,6 @@ export const startServer = async (
     });
   };
 
-  const plannerGreeting = new PlannerGreetingCoordinator({
-    root: statePaths.plannerSessions,
-    sessionManager,
-    canDispatch: (session) =>
-      isPlannerDispatchAuthorized({
-        session,
-        currentPrincipal: () =>
-          localPlanningPrincipal(planningUserId, machineId),
-        resolveProject: (projectId) =>
-          studioProjectCatalog.resolveIdentity(projectId),
-      }),
-    onEvent: emitPlannerLifecycle,
-  });
-  for (const session of sessionManager.list()) {
-    if (!session.planning) continue;
-    let emptyProject = true;
-    try {
-      const workspace = await agentMapWorkspaceStore.readOrCreate(
-        session.planning.identity.projectId,
-      );
-      emptyProject =
-        workspace.confirmedRevisionId === null &&
-        workspace.activeProposalId === null &&
-        workspace.projectBuildPlanId === null;
-    } catch {
-      // Registration still recovers generating state and preserves its FIFO;
-      // the project route will surface any unavailable workspace later.
-    }
-    await plannerGreeting
-      .register(session, { emptyProject, mode: "boot" })
-      .catch((error: unknown) => {
-        console.error(
-          `[harness] planner registration failed for ${session.id}:`,
-          error instanceof Error ? error.message : "unknown error",
-        );
-      });
-  }
-  const planningSessions = new PlanningSessionService({
-    catalog: studioProjectCatalog,
-    workspaceStore: agentMapWorkspaceStore,
-    sessionManager,
-    readRecord: (id) => sessionRecordReader.read(id),
-    userId: identity?.userId ?? null,
-    currentUserId: () => planningUserId,
-    machineId,
-    defaultHarness: options.defaultHarnessKind ?? "claude-code",
-    // E1 owns the durable workspace pointers, but not the later revision,
-    // proposal, or build-plan detail records. Wire that shipped source
-    // explicitly so the focused-context contract emits honest null/empty
-    // detail slots today and has one allowlisted adapter boundary when those
-    // stores land; it must never fall back to scanning project files.
-    readFocusedContext: async (_projectId, workspace) => ({
-      confirmedRevision:
-        workspace.confirmedRevisionId === null
-          ? null
-          : { digest: null, summaries: [] },
-      activeProposal:
-        workspace.activeProposalId === null
-          ? null
-          : { status: null, summary: null },
-      projectBuildPlan:
-        workspace.projectBuildPlanId === null
-          ? null
-          : { status: null, summary: null },
-      warnings: [],
-    }),
-    onPlannerSession: (session, context) =>
-      plannerGreeting.register(session, context),
-    onEvent: emitPlannerLifecycle,
-  });
-  sessionManager.onStatusChange((session) => {
-    void plannerGreeting.onSessionStatus(session).catch((error: unknown) => {
-      console.error(
-        "[harness] planner greeting status transition failed:",
-        error,
-      );
-    });
-  });
-
   const app: Express = express();
   app.disable("x-powered-by");
 
@@ -2991,8 +2863,6 @@ export const startServer = async (
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => workspaceScopeCatalog.list(),
-      planningSessions,
-      plannerGreeting,
     }),
   );
   app.use(
@@ -3411,8 +3281,6 @@ export const startServer = async (
     store: eventStore,
     batcher,
     enrichFromTranscript: enrichTurnCompleted,
-    decorateEvent: (event) => plannerGreeting.decorateLocalEvent(event),
-    projectTelemetryEvent: (event) => plannerGreeting.redactForTelemetry(event),
     onNormalizedEvent: (event: AnalyticsEvent) => {
       // Synchronous and total — it counts turns and detaches any fold it
       // decides to start, so the ingest path never waits on a summary.
@@ -3440,9 +3308,6 @@ export const startServer = async (
       }
     },
     onEventPersisted: (event: AnalyticsEvent) => {
-      void plannerGreeting.onEventPersisted(event).catch((error: unknown) => {
-        console.error("[harness] planner greeting completion failed:", error);
-      });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);
       // The normal end of a session: the SessionEnd hook's event is in the

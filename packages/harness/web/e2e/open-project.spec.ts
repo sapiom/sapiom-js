@@ -88,7 +88,7 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
   });
 
-  test("a planning project keeps sessions direct while hiding standalone agent creation", async ({
+  test("a Studio project starts nothing on open and hides standalone agent creation", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
@@ -97,15 +97,9 @@ test.describe("the header + opens a project", () => {
 
     const group = page.getByTestId("workspace-group-blank-slate");
     await expect(group.getByTestId("agent-map-row")).toBeVisible();
-    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
-
-    // Once the initial planner is no longer a live bare session, the old rail
-    // exposed its standalone-agent shortcut again. Ending it reproduces the
-    // stable empty-project state from the reported sidebar.
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-end-btn").click();
-    await page.getByTestId("end-session-confirm-btn").click();
-    await expect(page.getByTestId("planner-session-ended")).toBeVisible();
+    // SAP-3143: opening a project shows its map and creates no session.
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toHaveCount(0);
 
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
     await expect(
@@ -113,7 +107,7 @@ test.describe("the header + opens a project", () => {
     ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
     // The visible empty row and the project menu used to be two doors into the
-    // same direct-create flow. A planning project exposes neither: generated
+    // same direct-create flow. A Studio project exposes neither: generated
     // agents enter through an approved map, while project removal remains an
     // ordinary project-level action.
     await openProjectMenu(page, "blank-slate");
@@ -123,8 +117,6 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-remove-blank-slate")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    // The same ownership rule covers a bare project with an existing session:
-    // its former in-session scaffold action cannot bypass planning either.
     await openProjectMenu(page, "scratch");
     await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveCount(0);
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();

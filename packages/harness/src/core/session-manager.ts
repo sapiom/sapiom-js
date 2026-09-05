@@ -22,7 +22,6 @@ import {
   type SpawnSpec,
 } from "../shared/types.js";
 import type {
-  PlannerSessionMetadata,
   PlanningSessionIdentity,
 } from "../shared/agent-map.js";
 import { expandHome } from "./paths.js";
@@ -393,8 +392,6 @@ export interface SessionManagerOptions {
 }
 
 export interface TrustedSessionCreateOptions {
-  /** Server-authored only. Never populated from CreateSessionRequest. */
-  planning?: (sessionId: string) => PlannerSessionMetadata;
   /** Future E5 seam for a server-authored planned builder assignment. */
   agentMapIdentity?: (sessionId: string) => PlanningSessionIdentity;
   /** Focused trusted context composed into the existing system prompt. */
@@ -407,8 +404,6 @@ export interface TrustedSessionCreateOptions {
 }
 
 export interface TrustedSessionResumeOptions {
-  /** Server-authored only. Used to suppress fresh-only lifecycle work. */
-  planning?: PlannerSessionMetadata;
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
 }
@@ -592,6 +587,13 @@ export class SessionManager {
         session.exitCode = session.exitCode ?? null;
         dirty = true;
       }
+      // Sessions persisted before SAP-3143 carried planner metadata. They
+      // resume as ordinary sessions; the stale key is dropped so no client
+      // ever sees a planner again.
+      if ("planning" in session) {
+        delete (session as { planning?: unknown }).planning;
+        dirty = true;
+      }
       // Drop a persisted binding that points outside this session's own
       // workspace. A stale carryover from an earlier session in a different
       // directory would otherwise render a FOREIGN workflow onto the canvas
@@ -647,8 +649,7 @@ export class SessionManager {
   ): Promise<HarnessSession> {
     const id = this.generateId();
     const adapter = this.getAdapter(req.harness);
-    const planning = trusted.planning?.(id);
-    const trustedIdentity = trusted.agentMapIdentity?.(id) ?? planning?.identity;
+    const trustedIdentity = trusted.agentMapIdentity?.(id);
     const agentMapIdentity = this.resolveAgentMapIdentity
       ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
       : trustedIdentity;
@@ -688,8 +689,8 @@ export class SessionManager {
       exitCode: null,
       boundWorkflowPath: null,
       // Ordinary callers record only what the builder actually rehydrated.
-      // A trusted planner replacement records its exact FIFO predecessor even
-      // when the brief came from an older recorded ancestor in that chain.
+      // A trusted replacement records its exact FIFO predecessor even when
+      // the brief came from an older recorded ancestor in that chain.
       rehydratedFrom:
         trusted.handoffFromSessionId ?? opts.rehydratedFrom ?? null,
       // Persisted so resume() regenerates the same ANSI base — otherwise a
@@ -697,7 +698,6 @@ export class SessionManager {
       // could lose contrast against a differently-themed terminal.
       ...(req.theme ? { theme: req.theme } : {}),
       ready: false,
-      ...(planning ? { planning } : {}),
       ...(agentMapIdentity
         ? { agentMapIdentity: structuredClone(agentMapIdentity) }
         : {}),
@@ -812,17 +812,9 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
-    if (trusted.planning) {
-      session.planning = structuredClone(trusted.planning);
-    }
-    const trustedIdentity = trusted.planning?.identity;
     const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(
-          id,
-          session.cwd,
-          trustedIdentity ?? session.agentMapIdentity,
-        )
-      : trustedIdentity ?? session.agentMapIdentity;
+      ? await this.resolveAgentMapIdentity(id, session.cwd, session.agentMapIdentity)
+      : session.agentMapIdentity;
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else delete session.agentMapIdentity;
@@ -1561,18 +1553,6 @@ export class SessionManager {
     if (!session || session.ready) return;
     session.ready = true;
     void this.persist();
-    this.emitStatus(session);
-  }
-
-  /** Persist a coordinator-owned metadata projection before exposing it. */
-  async setPlanningMetadata(
-    id: string,
-    metadata: PlannerSessionMetadata,
-  ): Promise<void> {
-    const session = this.sessions.get(id);
-    if (!session) throw new UnknownSessionError(id);
-    session.planning = structuredClone(metadata);
-    await this.persist();
     this.emitStatus(session);
   }
 

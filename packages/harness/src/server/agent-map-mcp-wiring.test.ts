@@ -12,7 +12,6 @@ import type {
   LaunchOpts,
   SpawnSpec,
 } from "../shared/types.js";
-import { AGENT_MAP_PLANNER_SESSION_START_MESSAGE } from "../profiles/agent-map-planner.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { startServer, type HarnessServer } from "./index.js";
 
@@ -138,7 +137,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
   expect(rejected.status).toBe(401);
 });
 
-it("gives a signed-out local planner its scoped Agent Map tools", async () => {
+it("gives a signed-out ordinary project session its scoped Agent Map tools", async () => {
   const codingPrompt =
     "You are the coding agent running in Agent Studio. Follow the scaffold, run, and deploy authoring loop.";
   const loadSystemPrompt = vi.fn(async () => codingPrompt);
@@ -173,7 +172,9 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     loadSystemPrompt,
   });
 
-  const response = await fetch(
+  // SAP-3143: the planner route is gone. A project session is the ordinary
+  // POST /api/sessions with the project root as cwd, and it gets the map tools.
+  const removed = await fetch(
     `http://127.0.0.1:${server.port}/api/projects/${projectId}/planner-sessions`,
     {
       method: "POST",
@@ -184,28 +185,31 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
       body: JSON.stringify({ mode: "fresh", harness: "claude-code" }),
     },
   );
+  expect(removed.status).toBe(410);
+  expect(await removed.json()).toMatchObject({
+    code: "planner_sessions_removed",
+  });
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-harness-token": "boot-token",
+    },
+    body: JSON.stringify({ cwd: projectRoot, harness: "claude-code" }),
+  });
   expect(response.status).toBe(201);
   const created = (await response.json()) as {
-    session: {
-      id: string;
-      planning: {
-        identity: { role: string; userId: string };
-        greeting: { status: string; reason?: string };
-      };
-      agentMapIdentity?: { role: string; userId: string };
-    };
+    id: string;
+    agentMapIdentity?: { role: string; userId: string; assignment?: unknown };
+    planning?: unknown;
   };
-  expect(created.session.planning.identity).toMatchObject({
-    role: "map-planner",
+  expect(created.agentMapIdentity).toMatchObject({
+    role: "agent-builder",
     userId: "local:machine-1",
+    assignment: { kind: "unplanned" },
   });
-  expect(created.session.agentMapIdentity).toEqual(
-    created.session.planning.identity,
-  );
-  expect(created.session.planning.greeting).toEqual({
-    status: "skipped",
-    reason: "user-proceeded",
-  });
+  expect(created.planning).toBeUndefined();
 
   const launchOpts = launches[0]!;
   const metadata = launchOpts.agentMapMcp;
@@ -217,34 +221,18 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
   expect(config.mcpServers["agent-map"].headers.Authorization).toBe(
     `Bearer ${metadata!.bearerToken}`,
   );
+  // The ordinary served prompt, untouched: no planner profile, no planner
+  // context, no prohibition, no SessionStart planner orientation.
   const systemPrompt = await fs.readFile(launchOpts!.systemPromptFile!, "utf8");
-  expect(systemPrompt).toContain("<agent-map-planner-context>");
-  expect(systemPrompt).toContain(
-    "Do not act as a coding or implementation agent",
-  );
-  expect(systemPrompt).toContain(
-    "Let the user's first real message be the first visible conversation turn",
-  );
-  expect(systemPrompt).not.toContain("In your first response, briefly explain");
-  expect(systemPrompt).not.toContain(codingPrompt);
-  expect(systemPrompt).not.toContain("You are the coding agent");
-  expect(systemPrompt).not.toContain(
-    "This is a private Agent Studio control turn",
-  );
-  expect(loadSystemPrompt).not.toHaveBeenCalled();
-  expect(AGENT_MAP_PLANNER_SESSION_START_MESSAGE).toBe(
-    [
-      "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet. Your planner will turn your goals into a proposed map of agents, responsibilities, data flow, resources, and connectors for you to review and refine. Once approved, Studio will create focused execution sessions from the plan. Start by describing the outcome you want.",
-    ].join("\n"),
-  );
-  const plannerEmitter = await fs.readFile(
+  expect(systemPrompt).toBe(codingPrompt);
+  expect(systemPrompt).not.toContain("planner");
+  expect(systemPrompt).not.toContain("Do not act as a coding");
+  const emitter = await fs.readFile(
     path.join(path.dirname(launchOpts.settingsFile!), "emit.cjs"),
     "utf8",
   );
-  expect(plannerEmitter).toContain(
-    `const sessionStartSystemMessage = ${JSON.stringify(AGENT_MAP_PLANNER_SESSION_START_MESSAGE)};`,
-  );
+  expect(emitter).toContain("const sessionStartSystemMessage = null;");
+  expect(loadSystemPrompt).toHaveBeenCalledOnce();
 
   const client = new Client({ name: "signed-out-planner-test", version: "1" });
   const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
@@ -334,10 +322,7 @@ it("gives a signed-out local planner its scoped Agent Map tools", async () => {
     "utf8",
   );
   expect(ordinaryEmitter).toContain("const sessionStartSystemMessage = null;");
-  expect(ordinaryEmitter).not.toContain(
-    JSON.stringify(AGENT_MAP_PLANNER_SESSION_START_MESSAGE),
-  );
-  expect(loadSystemPrompt).toHaveBeenCalledOnce();
+  expect(loadSystemPrompt).toHaveBeenCalledTimes(2);
   const ordinaryConfig = JSON.parse(
     await fs.readFile(ordinaryLaunch.mcpConfigFile!, "utf8"),
   );

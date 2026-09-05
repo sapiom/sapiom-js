@@ -39,7 +39,6 @@ const sessionEvidence = (
   injectInputCalls: number;
   injectedSessionId: string | null;
   injectedText: string;
-  openPlannerSessionCalls: number;
 }> =>
   page.evaluate(() => {
     const testState = (
@@ -48,7 +47,6 @@ const sessionEvidence = (
           createSessionCalls?: unknown[];
           injectInputCalls?: unknown[];
           lastInjectInput?: { id?: string; req?: { text?: string } };
-          openPlannerSessionCalls?: unknown[];
         };
       }
     ).__HARNESS_TEST__;
@@ -61,7 +59,6 @@ const sessionEvidence = (
       injectInputCalls: testState?.injectInputCalls?.length ?? 0,
       injectedSessionId: testState?.lastInjectInput?.id ?? null,
       injectedText: testState?.lastInjectInput?.req?.text ?? "",
-      openPlannerSessionCalls: testState?.openPlannerSessionCalls?.length ?? 0,
     };
   });
 
@@ -119,7 +116,6 @@ test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents
   const before = await sessionEvidence(page);
   expect(before.activeSessionId).toBeNull();
   expect(before.createSessionCalls).toBe(0);
-  expect(before.openPlannerSessionCalls).toBe(0);
 
   await page.getByTestId("rail-create-new").click();
   const idea = "Build a sales outreach agent.";
@@ -132,8 +128,9 @@ test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents
     .toContain(idea);
 
   const evidence = await sessionEvidence(page);
+  // Exactly one session: the standalone builder. Selecting Plan Agents below
+  // must not add a second one (SAP-3143 removed the planner launch).
   expect(evidence.createSessionCalls).toBe(before.createSessionCalls + 1);
-  expect(evidence.openPlannerSessionCalls).toBe(before.openPlannerSessionCalls);
   expect(evidence.injectedSessionId).not.toBeNull();
   expect(evidence.activeSessionId).toBe(evidence.injectedSessionId);
   expect(evidence.activeSessionId).not.toBe(before.activeSessionId);
@@ -146,26 +143,18 @@ test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents
   await expect(planAgents).toHaveAttribute("aria-pressed", "false");
 
   await planAgents.click();
-  await expect
-    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
-    .toBe(before.openPlannerSessionCalls + 1);
   await expect(planAgents).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(500);
+  expect((await sessionEvidence(page)).createSessionCalls).toBe(
+    evidence.createSessionCalls,
+  );
 });
 
-test("returning to an in-progress standalone builder does not restore Plan Agents", async ({
+test("returning to an in-progress standalone builder starts no new session", async ({
   page,
 }) => {
   await page.goto("/?seed=0&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect
-    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
-    .toBeGreaterThan(0);
-  await expect
-    .poll(async () => {
-      const evidence = await sessionEvidence(page);
-      return evidence.createSessionCalls - evidence.openPlannerSessionCalls;
-    })
-    .toBe(0);
   const before = await sessionEvidence(page);
 
   await page.getByTestId("rail-create-new").click();
@@ -192,7 +181,7 @@ test("returning to an in-progress standalone builder does not restore Plan Agent
     .poll(async () => (await sessionEvidence(page)).injectedText)
     .toContain(idea);
   // Let the session we deliberately visited finish its own normal restore;
-  // only planner work caused by returning to the builder is under test.
+  // only session work caused by returning to the builder is under test.
   await page.waitForTimeout(500);
   const beforeReturn = await sessionEvidence(page);
 
@@ -204,9 +193,7 @@ test("returning to an in-progress standalone builder does not restore Plan Agent
   expect((await sessionEvidence(page)).activeSessionId).not.toBe(awaySessionId);
   await page.waitForTimeout(500);
   const afterReturn = await sessionEvidence(page);
-  expect(afterReturn.openPlannerSessionCalls).toBe(
-    beforeReturn.openPlannerSessionCalls,
-  );
+  expect(afterReturn.createSessionCalls).toBe(beforeReturn.createSessionCalls);
   await expect(
     page
       .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")

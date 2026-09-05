@@ -359,7 +359,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   }) => {
     // This assertion preserves the scaffold affordance for older state
     // payloads without a durable Studio project catalog. Current Studio
-    // projects intentionally expose only Agent Map planning.
+    // projects intentionally expose only the Agent Map row.
     await page.goto("/?seed=0&mockStudioProjects=absent");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 

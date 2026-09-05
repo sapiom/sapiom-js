@@ -24,12 +24,6 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
-import type {
-  PlannerSessionRequest,
-  PlannerSessionResponse,
-  StudioProjectId,
-} from "@shared/agent-map";
-
 import {
   ApiError,
   boundWorkflowPathOf,
@@ -184,12 +178,6 @@ export interface HarnessStateHook {
   /** A past session's reconstructed transcript (null when nothing was
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
-  /** Opens the trusted map-planner for a project and publishes the returned
-   * session into the same store that backs the normal session strip. */
-  openPlannerSession: (
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ) => Promise<PlannerSessionResponse>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
@@ -552,10 +540,6 @@ export function useHarnessState(): HarnessStateHook {
     },
     [],
   );
-  // An HTTP planner mutation and its session.status projection can cross on
-  // the network. The bus owns the newer full-session snapshot, so an older
-  // response must not roll its planning metadata back after that snapshot.
-  const sessionStatusRevisions = useRef<Map<string, number>>(new Map());
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -1204,45 +1188,6 @@ export function useHarnessState(): HarnessStateHook {
     return [...(workflowProjectionOrder.current() ?? workflowsRef.current)];
   }, [workflowProjectionOrder]);
 
-  /** One session projection for REST mutations and bus updates alike. */
-  const upsertSession = useCallback((next: HarnessSession): void => {
-    setState((prev) => {
-      if (!prev) return prev;
-      const sessions = prev.sessions.some((session) => session.id === next.id)
-        ? prev.sessions.map((session) =>
-            session.id === next.id ? next : session,
-          )
-        : [...prev.sessions, next];
-      return { ...prev, sessions };
-    });
-  }, []);
-
-  const openPlannerSession = useCallback(
-    async (
-      projectId: StudioProjectId,
-      request: PlannerSessionRequest,
-    ): Promise<PlannerSessionResponse> => {
-      const response = await api.openPlannerSession(projectId, request);
-      // A launch can emit session.status before its HTTP response crosses the
-      // wire. Preserve that newer full-session projection when it is already
-      // present; still insert the response if no bus-backed row exists.
-      if (!sessionStatusRevisions.current.has(response.session.id)) {
-        upsertSession(response.session);
-      } else {
-        setState((prev) => {
-          if (!prev) return prev;
-          return prev.sessions.some(
-            (session) => session.id === response.session.id,
-          )
-            ? prev
-            : { ...prev, sessions: [...prev.sessions, response.session] };
-        });
-      }
-      return response;
-    },
-    [upsertSession],
-  );
-
   useEffect(() => {
     return subscribeEvents((message) => {
       // SessionRecord invalidations have a targeted listener below. Keeping
@@ -1253,10 +1198,6 @@ export function useHarnessState(): HarnessStateHook {
         systemGraphAnnouncementsAfterMessage(current, message),
       );
       if (message.type === "session.status") {
-        sessionStatusRevisions.current.set(
-          message.session.id,
-          (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
-        );
         setState((prev) => {
           if (!prev) return prev;
           const exists = prev.sessions.some(
@@ -1731,20 +1672,17 @@ export function useHarnessState(): HarnessStateHook {
       );
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
+        // Prefer another live session in the SAME folder. Closing a tab must
+        // not jump the conversation to an unrelated project: at map altitude
+        // the centre would then show that project's empty state beside this
+        // project's map. (This is the project-scoped rule the planner-specific
+        // fallback used to express for planner sessions only.)
         const closed = state?.sessions.find((session) => session.id === id);
-        const nextPlanner =
-          closed?.planning?.identity.role === "map-planner"
-            ? remaining.find(
-                (session) =>
-                  session.status !== "exited" &&
-                  session.planning?.identity.role === "map-planner" &&
-                  session.planning.identity.projectId ===
-                    closed.planning?.identity.projectId,
-              )
-            : undefined;
+        const live = remaining.filter((session) => session.status !== "exited");
         const nextRunning =
-          nextPlanner ??
-          remaining.find((session) => session.status !== "exited");
+          (closed
+            ? live.find((session) => session.cwd === closed.cwd)
+            : undefined) ?? live[0];
         selectSession(nextRunning ? nextRunning.id : null);
       }
     },
@@ -2382,7 +2320,6 @@ export function useHarnessState(): HarnessStateHook {
     getTemplate,
     getWorkflowInputContract,
     sessionRecord,
-    openPlannerSession,
     resumeSession,
     rehydrateSession,
     resumeFromHistory,

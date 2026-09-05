@@ -767,35 +767,6 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(400);
     });
 
-    it("requires planner input to use the project-scoped FIFO", async () => {
-      const planner = exitedSession({
-        id: "planner-1",
-        planning: {
-          identity: {
-            projectId: "project-1",
-            sessionId: "planner-1",
-            userId: "user-1",
-            role: "map-planner",
-          },
-          greeting: { status: "pending" },
-          queuedInputIds: [],
-        },
-      });
-      const sessionManager = fakeSessionManager([planner]);
-      start({ sessionManager });
-
-      const res = await fetch(`${baseUrl}/sessions/planner-1/input`, {
-        method: "POST",
-        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
-        body: JSON.stringify({ text: "bypass" }),
-      });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
-      });
-      expect(sessionManager.submitInput).not.toHaveBeenCalled();
-    });
-
     it("404s when submitInput reports no live pty for the session", async () => {
       const sessionManager = fakeSessionManager();
       (
@@ -965,34 +936,6 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
-    it("requires planner resume to use the trusted project resolver", async () => {
-      const planner = exitedSession({
-        id: "planner-1",
-        planning: {
-          identity: {
-            projectId: "project-1",
-            sessionId: "planner-1",
-            userId: "user-1",
-            role: "map-planner",
-          },
-          greeting: { status: "delivered", messageId: "message-1" },
-          queuedInputIds: [],
-        },
-      });
-      const sessionManager = fakeSessionManager([planner]);
-      start({ sessionManager });
-
-      const res = await fetch(`${baseUrl}/sessions/planner-1/resume`, {
-        method: "POST",
-        headers: TOKEN_HEADER,
-      });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
-      });
-      expect(sessionManager.resume).not.toHaveBeenCalled();
-    });
-
     it("404s when resume() throws UnknownSessionError (class-based dispatch, not string match)", async () => {
       const sessionManager = fakeSessionManager();
       (sessionManager.resume as ReturnType<typeof vi.fn>).mockRejectedValue(
@@ -1398,81 +1341,6 @@ describe("createRestRouter", () => {
       expect((await adopt(body)).status).toBe(200);
       expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
       expect(sessionManager.resume).toHaveBeenCalledWith("sess-existing");
-    });
-
-    it("requires an existing foreign-owned planner to use its scoped route without mutation", async () => {
-      const planner = exitedSession({
-        id: "planner-existing",
-        agentSessionId: body.agentSessionId,
-        planning: {
-          identity: {
-            projectId: "foreign-project",
-            sessionId: "planner-existing",
-            userId: "foreign-user",
-            role: "map-planner",
-          },
-          greeting: { status: "delivered", messageId: "message-1" },
-          queuedInputIds: [],
-        },
-      });
-      const original = structuredClone(planner.planning);
-      const sessionManager = fakeSessionManager([planner]);
-      const canResume = vi.fn(async () => true);
-      start({
-        sessionManager,
-        adapters: {
-          "claude-code": historyAdapter({ canResume }),
-        },
-      });
-
-      const res = await adopt({ ...body, cwd: "/tmp/client-supplied-alias" });
-
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
-      });
-      expect(canResume).not.toHaveBeenCalled();
-      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
-      expect(sessionManager.resume).not.toHaveBeenCalled();
-      expect(sessionManager.get("planner-existing")?.planning).toEqual(original);
-    });
-
-    it("rejects a rotated planner's durable old alias even though its current pointer changed", async () => {
-      const planner = exitedSession({
-        id: "planner-rotated",
-        agentSessionId: "vendor-new",
-        planning: {
-          identity: {
-            projectId: "project-1",
-            sessionId: "planner-rotated",
-            userId: "user-1",
-            role: "map-planner",
-          },
-          greeting: { status: "delivered", messageId: "message-1" },
-          queuedInputIds: [],
-        },
-      });
-      const sessionManager = fakeSessionManager([planner]);
-      (
-        sessionManager.getAgentSessionOwner as unknown as ReturnType<typeof vi.fn>
-      ).mockImplementation((agentSessionId: string) =>
-        agentSessionId === body.agentSessionId ? planner : undefined,
-      );
-      const canResume = vi.fn(async () => true);
-      start({
-        sessionManager,
-        adapters: { "claude-code": historyAdapter({ canResume }) },
-      });
-
-      const response = await adopt(body);
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({
-        code: "planner_session_requires_scoped_route",
-      });
-      expect(canResume).not.toHaveBeenCalled();
-      expect(sessionManager.registerHistorical).not.toHaveBeenCalled();
-      expect(sessionManager.resume).not.toHaveBeenCalled();
     });
 
     it("409s a generic session's historical alias before any adapter probe or mutation", async () => {

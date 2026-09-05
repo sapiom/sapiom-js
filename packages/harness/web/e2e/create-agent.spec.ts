@@ -2,7 +2,7 @@
  * SAP-2981 — the legacy-server create-agent compatibility flow.
  *
  * Current Studio servers return durable project summaries and route creation
- * through Agent Map planning. These specs deliberately use
+ * through the Agent Map. These specs deliberately use
  * `mockStudioProjects=absent` to protect clients connected to older servers
  * whose state payloads have no Studio project catalog.
  *

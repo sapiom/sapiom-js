@@ -11,44 +11,57 @@ async function activeSessionId(page: Page): Promise<string | null> {
   return page.getByTestId("session-context").getAttribute("data-session-id");
 }
 
-async function openPlannerSessionCallCount(page: Page): Promise<number> {
+async function createSessionCallCount(page: Page): Promise<number> {
   return page.evaluate(
     () =>
       (
         window as unknown as {
-          __HARNESS_TEST__?: { openPlannerSessionCalls?: unknown[] };
+          __HARNESS_TEST__?: { createSessionCalls?: unknown[] };
         }
-      ).__HARNESS_TEST__?.openPlannerSessionCalls?.length ?? 0,
+      ).__HARNESS_TEST__?.createSessionCalls?.length ?? 0,
   );
 }
 
-test.describe("SAP-3058 Agent Map planning workspace", () => {
+/** Opening a project starts nothing (SAP-3143); its first session is explicit. */
+async function startProjectSession(page: Page): Promise<void> {
+  await page.getByTestId("project-session-start").click();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+}
+
+test.describe("SAP-3058 Agent Map workspace", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("first open starts the raw planner CLI beside the honest empty map", async ({
+  test("first open shows the map and starts NO session (SAP-3143)", async ({
     page,
   }) => {
+    const before = await createSessionCallCount(page);
     await openDashboardMap(page);
 
-    const terminal = page.locator(".harness-terminal");
-    await expect(terminal).toBeVisible();
-    await expect(terminal.locator(".xterm")).toBeVisible();
+    // The map renders from durable state, and the centre says honestly that
+    // nothing is running. No session was created by looking at a project.
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
     await expect(page.getByTestId("agent-map-empty")).toHaveText(
       "Nothing generated yet",
     );
+    await expect(page.locator(".harness-terminal")).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(await createSessionCallCount(page)).toBe(before);
 
+    // The explicit Start is what creates it, through the ordinary path.
+    await startProjectSession(page);
+    expect(await createSessionCallCount(page)).toBe(before + 1);
     const [cli, map] = await Promise.all([
-      terminal.boundingBox(),
+      page.locator(".harness-terminal").boundingBox(),
       page.getByTestId("agent-map-empty").boundingBox(),
     ]);
     expect(cli?.width ?? 0).toBeGreaterThan(200);
     expect(map?.width ?? 0).toBeGreaterThan(200);
     expect(map?.x ?? 0).toBeGreaterThan((cli?.x ?? 0) + (cli?.width ?? 0) - 2);
     await page.screenshot({
-      path: "web/e2e/screenshots/agent-map-planning.png",
+      path: "web/e2e/screenshots/agent-map.png",
       fullPage: true,
     });
 
@@ -75,7 +88,6 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("agent-map-live")).toBeVisible({
       timeout: 1_000,
     });
@@ -289,25 +301,28 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(frame).not.toHaveClass(/is-expanded/);
   });
 
-  test("a generating greeting still renders the raw planner CLI", async ({
+  test("the removed greeting fixtures no longer create a session on open", async ({
     page,
   }) => {
+    // ?mockGreeting was planner-only. Whatever a stale link carries, opening a
+    // project shows the map and starts nothing.
     await page.goto(
       "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockGreeting=generating",
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
 
-    const terminal = page.locator(".harness-terminal");
-    await expect(terminal).toBeVisible();
-    await expect(terminal.locator(".xterm")).toBeVisible();
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await expect(page.locator(".harness-terminal")).toHaveCount(0);
+    await startProjectSession(page);
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
   });
 
-  test("return resumes the same planner and plus creates a fresh planner tab", async ({
+  test("return keeps the project's own session and plus creates a second tab", async ({
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await startProjectSession(page);
     const first = await activeSessionId(page);
     expect(first).toBeTruthy();
 
@@ -349,24 +364,23 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".harness-terminal")).toBeVisible();
   });
 
-  test("an explicitly selected planner tab wins over project resume ordering", async ({
+  test("an explicitly selected session tab is not replaced by a new one", async ({
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await startProjectSession(page);
     const first = await activeSessionId(page);
     expect(first).toBeTruthy();
 
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-rename").click();
     const rename = page.getByTestId("session-rename-input");
-    await rename.fill("Planner A");
+    await rename.fill("Session A");
     await rename.press("Enter");
 
     await page.getByTestId("session-tab-new").click();
     await expect.poll(() => activeSessionId(page)).not.toBe(first);
-    const callsBeforeExplicitSelection =
-      await openPlannerSessionCallCount(page);
+    const callsBeforeExplicitSelection = await createSessionCallCount(page);
 
     await page
       .getByTestId("workflow-dashboard-keeper")
@@ -377,67 +391,57 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
 
     await page.getByTestId("palette-trigger").click();
-    await page.getByTestId("command-palette-input").fill("Planner A");
+    await page.getByTestId("command-palette-input").fill("Session A");
     await page
       .getByTestId("command-palette-list")
-      .getByText("Planner A", { exact: true })
+      .getByText("Session A", { exact: true })
       .click();
 
     await expect(page.locator(".harness-terminal")).toBeVisible();
     expect(await activeSessionId(page)).toBe(first);
-    await expect(page.getByTestId("planner-loading")).toHaveCount(0);
-    expect(await openPlannerSessionCallCount(page)).toBe(
+    expect(await createSessionCallCount(page)).toBe(
       callsBeforeExplicitSelection,
     );
   });
 
-  test("planner session chrome retains rename/end and omits path/editor actions", async ({
+  test("a project session has the ordinary chrome, including path and editor", async ({
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await startProjectSession(page);
 
     await page.getByTestId("session-menu").click();
     const menu = page.getByTestId("session-menu-popover");
     await expect(menu.getByTestId("session-rename")).toBeVisible();
     await expect(menu.getByTestId("session-end-btn")).toBeVisible();
-    await expect(menu.getByText("Copy path", { exact: true })).toHaveCount(0);
-    await expect(menu.getByTestId("session-open-editor")).toHaveCount(0);
+    // SAP-3143: it is an ordinary session, so it keeps the ordinary actions
+    // that the planner deliberately hid.
+    await expect(menu.getByText("Copy path", { exact: true })).toBeVisible();
+    await expect(menu.getByTestId("session-open-editor")).toBeVisible();
   });
 
-  test("ending the planner exposes an immediate fresh-session path", async ({
+  test("ending the last session returns to the honest empty state", async ({
     page,
   }) => {
     await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await startProjectSession(page);
     const ended = await activeSessionId(page);
 
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-end-btn").click();
-    await expect(page.getByTestId("end-session-confirm")).toContainText(
-      "stops the planning conversation",
-    );
-    await expect(page.getByTestId("end-session-confirm")).toContainText(
-      "fresh planning session from Plan Agents",
-    );
+    // The planner-only copy is gone with the planner.
     await expect(page.getByTestId("end-session-confirm")).not.toContainText(
-      "live terminal",
+      "planning conversation",
     );
     await page.getByTestId("end-session-confirm-btn").click();
 
-    await expect(page.getByTestId("planner-session-ended")).toBeVisible();
-    const startFresh = page.getByTestId("session-tab-new");
-    await expect(startFresh).toHaveAttribute(
-      "aria-label",
-      "New planning session",
-    );
-    await startFresh.click();
-
-    await expect(page.locator(".harness-terminal")).toBeVisible();
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+    await startProjectSession(page);
     await expect.poll(() => activeSessionId(page)).not.toBe(ended);
   });
 
-  test("a failed greeting still leaves the raw planner CLI visible", async ({
+  test("a project with no session shows the map, not an error", async ({
     page,
   }) => {
     await page.goto(
@@ -446,12 +450,12 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
 
-    const terminal = page.locator(".harness-terminal");
-    await expect(terminal).toBeVisible();
-    await expect(terminal.locator(".xterm")).toBeVisible();
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
+    await expect(page.getByTestId("agent-map-load-error")).toHaveCount(0);
   });
 
-  test("workspace and planner failures stay local, while unauthorized is whole-workspace", async ({
+  test("a map read failure is local, while unauthorized is whole-workspace", async ({
     page,
   }) => {
     await page.goto(
@@ -459,8 +463,9 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openDashboardMap(page);
-    await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("agent-map-load-error")).toBeVisible();
+    // The centre is unaffected: the project can still start a session.
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -479,36 +484,6 @@ test.describe("SAP-3058 Agent Map planning workspace", () => {
             (event) =>
               event.event === "agent_map.workspace_load_failed" &&
               event.data?.pane === "map",
-          ),
-        ),
-      )
-      .toBe(true);
-
-    await page.goto(
-      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockPlanner=error",
-    );
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await openDashboardMap(page);
-    await expect(page.getByTestId("planner-load-error")).toBeVisible();
-    await expect(page.getByTestId("agent-map-empty")).toBeVisible();
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          (
-            (
-              window as unknown as {
-                __HARNESS_TEST__?: {
-                  trackEvents?: Array<{
-                    event: string;
-                    data?: Record<string, unknown>;
-                  }>;
-                };
-              }
-            ).__HARNESS_TEST__?.trackEvents ?? []
-          ).some(
-            (event) =>
-              event.event === "agent_map.workspace_load_failed" &&
-              event.data?.pane === "planner",
           ),
         ),
       )
@@ -535,6 +510,7 @@ test.describe("SAP-3058 mobile Agent Map", () => {
     await expect(page.getByTestId("rail-expand")).toBeVisible();
     await page.getByTestId("rail-expand").click();
     await openDashboardMap(page);
+    await startProjectSession(page);
 
     await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.locator(".right-pane")).toBeHidden();
@@ -557,7 +533,7 @@ test.describe("SAP-3058 mobile Agent Map", () => {
     await expect(page.locator(".right-pane")).toBeHidden();
     await expect(page.getByTestId("right-expand")).toBeFocused();
     await page.screenshot({
-      path: "web/e2e/screenshots/agent-map-planning-mobile.png",
+      path: "web/e2e/screenshots/agent-map-mobile.png",
       fullPage: true,
     });
   });
@@ -581,13 +557,15 @@ test.describe("SAP-3058 mobile Agent Map", () => {
     await newSession.click();
     await expect.poll(() => activeSessionId(page)).not.toBe(first);
 
-    // Open the sheet while the new planner is still launching. Its automatic
+    // Open the sheet while the new session is still launching. Its automatic
     // ready/status event arrives later and must not replay the failed preference
     // restore or collapse the user-opened Agent Map.
     await page.getByTestId("right-expand").click();
     await expect(page.locator(".right-pane")).toBeVisible();
+    // The strip now shows the project's ordinary sessions, so more than one
+    // may be running; one live dot is enough to prove a session update landed.
     await expect(
-      page.locator(".session-dot[data-status='running']"),
+      page.locator(".session-dot[data-status='running']").first(),
     ).toBeVisible();
     await expect(page.locator(".right-pane")).toBeVisible();
   });

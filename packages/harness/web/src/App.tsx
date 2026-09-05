@@ -58,7 +58,6 @@ import type {
 } from "@shared/types";
 import type { WorkspaceKey } from "@shared/system-graph";
 import type {
-  PlannerSessionRequest,
   StudioProjectId,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
@@ -152,7 +151,7 @@ import { directActionKind } from "./lib/macro-actions";
 import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
 import type { PaletteAction } from "./lib/palette";
-import { getTheme, toggleTheme } from "./lib/theme";
+import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import {
   useNavigationHistory,
@@ -305,59 +304,18 @@ export const App = (): JSX.Element => {
   );
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
-  const plannerProjectId =
+  const agentMapProjectId =
     studioSelection?.kind === "agent-map" ? studioSelection.projectId : null;
-  const handlePlannerReady = useCallback(
-    (
-      response: { session: HarnessSession },
-      mode: PlannerSessionRequest["mode"],
-    ): void => {
-      const selected = harness.state?.sessions.find(
-        (session) => session.id === harness.activeSessionId,
-      );
-      // An explicit palette/history selection is more specific than the
-      // project-level resume ordering. Keep that chosen live tab; fresh mode
-      // remains an explicit request to select the newly-created planner.
-      if (
-        mode === "resume-or-create" &&
-        selected?.status !== "exited" &&
-        selected?.planning?.identity.role === "map-planner" &&
-        selected.planning.identity.projectId ===
-          response.session.planning?.identity.projectId
-      ) {
-        return;
-      }
-      harness.setActiveSessionId(response.session.id);
-    },
-    [
-      harness.activeSessionId,
-      harness.setActiveSessionId,
-      harness.state?.sessions,
-    ],
-  );
-  const activePlannerForProject = harness.state?.sessions.find(
-    (session) =>
-      session.id === harness.activeSessionId &&
-      session.status !== "exited" &&
-      session.planning?.identity.role === "map-planner" &&
-      session.planning.identity.projectId === plannerProjectId,
-  );
   const agentMapEntry = useAgentMapEntry({
-    projectId: plannerProjectId,
-    selectedPlanner: activePlannerForProject ?? null,
+    projectId: agentMapProjectId,
     api: harness.api,
-    harness: () =>
-      loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code",
-    theme: getTheme,
-    openPlannerSession: harness.openPlannerSession,
-    onPlannerReady: handlePlannerReady,
     subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
 
   // A project visit restores its server-owned preference before choosing an
-  // altitude. Once map is chosen, `useAgentMapEntry` owns the independent map
-  // and planner requests; preference restoration must not couple their fate.
+  // altitude. Once map is chosen, `useAgentMapEntry` reads the map from
+  // durable state; it starts no session (SAP-3143).
   useEffect(() => {
     const state = harness.state;
     const active = state?.sessions.find(
@@ -875,17 +833,9 @@ export const App = (): JSX.Element => {
           knownRootsOf(harness.settings?.recentDirs, harness.state?.launchDir),
         );
         const tabs =
-          studioSelection?.kind === "agent-map"
-            ? sessions.filter(
-                (session) =>
-                  session.status !== "exited" &&
-                  session.planning?.identity.role === "map-planner" &&
-                  session.planning.identity.projectId ===
-                    studioSelection.projectId,
-              )
-            : subject.kind === "project"
-              ? liveSessionsForProject(sessions, subject.root)
-              : liveSessionsForFocus(sessions, subject.path);
+          subject.kind === "project"
+            ? liveSessionsForProject(sessions, subject.root)
+            : liveSessionsForFocus(sessions, subject.path);
         const target = tabs[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
@@ -1392,20 +1342,33 @@ export const App = (): JSX.Element => {
   const planningWorkspace = studioView?.altitude === "map";
   const agentMapUnavailable =
     planningWorkspace && agentMapEntry.state.unavailable !== null;
-  const plannerSessions = planningWorkspace
-    ? state.sessions.filter(
-        (session) =>
-          session.status !== "exited" &&
-          session.planning?.identity.role === "map-planner" &&
-          session.planning.identity.projectId === studioView.projectId,
-      )
-    : [];
-  const activePlannerSession =
+  // The selected Studio project's root: the shortest of its bound scopes. The
+  // centre at map altitude shows THIS project's ordinary sessions (SAP-3143);
+  // there is no planner session type any more.
+  const selectedStudioRoot = selectedStudioScopes.reduce<string | null>(
+    (root, scope) =>
+      root === null || scope.cwd.length < root.length ? scope.cwd : root,
+    null,
+  );
+  const projectSessions =
+    planningWorkspace && selectedStudioRoot
+      ? liveSessionsForProject(state.sessions, selectedStudioRoot)
+      : [];
+  const activeProjectSession =
     planningWorkspace &&
-    activeSession?.status !== "exited" &&
-    activeSession?.planning?.identity.role === "map-planner" &&
-    activeSession.planning.identity.projectId === studioView.projectId
+    activeSession &&
+    activeSession.status !== "exited" &&
+    projectSessions.some((session) => session.id === activeSession.id)
       ? activeSession
+      : null;
+  const startProjectSessionFromMap =
+    planningWorkspace && selectedStudioRoot
+      ? () =>
+          void startProjectSession(
+            selectedStudioRoot,
+            selectedStudioProject?.displayName ?? basenameOf(selectedStudioRoot),
+            preferredHarness(),
+          )
       : null;
 
   /**
@@ -1428,7 +1391,7 @@ export const App = (): JSX.Element => {
     knownProjectRoots(),
   );
   const focusTabs = planningWorkspace
-    ? plannerSessions
+    ? projectSessions
     : conversation.kind === "project"
       ? liveSessionsForProject(state.sessions, conversation.root)
       : liveSessionsForFocus(state.sessions, conversation.path);
@@ -1512,7 +1475,7 @@ export const App = (): JSX.Element => {
   const rightPaneSuppressedByComposer =
     (showComposer && !atMapAltitude) || agentMapUnavailable;
   const sessionBarSession = planningWorkspace
-    ? activePlannerSession
+    ? activeProjectSession
     : showWorkbench || showDead
       ? activeSession
       : null;
@@ -1677,13 +1640,6 @@ export const App = (): JSX.Element => {
     setTemplatesOpen(false);
     setOverviewOpen(false);
     closeMobileDrawer();
-    // Stable Studio projects talk through their trusted map-planner. The
-    // selection effect starts resume-or-create; an ordinary project-root PTY
-    // here would race it and briefly make the wrong conversation authoritative.
-    if (selectedAgentMap) {
-      if (isMobile) setRightCollapsed(true);
-      return;
-    }
     const decision = sessionForFocus({
       focusPath: root,
       active: activeSession,
@@ -1694,6 +1650,13 @@ export const App = (): JSX.Element => {
     if (decision.to) {
       if (decision.to.id !== harness.activeSessionId)
         harness.setActiveSessionId(decision.to.id);
+      return;
+    }
+    // A Studio project shows its map from durable state and starts nothing
+    // (SAP-3143). Its first session is the user's explicit Start, which goes
+    // through the same createSession path as the + tab.
+    if (selectedAgentMap) {
+      if (isMobile) setRightCollapsed(true);
       return;
     }
     void startProjectSession(root, label, preferredHarness());
@@ -2245,24 +2208,6 @@ export const App = (): JSX.Element => {
     setTemplatesOpen(false);
     setOverviewOpen(false);
     const session = state.sessions.find((s) => s.id === id);
-    if (session?.planning?.identity.role === "map-planner") {
-      const selection: StudioWorkspaceSelection = {
-        kind: "agent-map",
-        projectId: session.planning.identity.projectId,
-      };
-      restoredStudioProjectsRef.current.add(selection.projectId);
-      setStudioSelection(selection);
-      setSelectedProject(null);
-      setFocusedAgentPath(session.cwd);
-      closeMobileDrawer();
-      if (isMobile) setRightCollapsed(true);
-      harness.setActiveSessionId(id);
-      void harness.api.putStudioCurrentWorkspace(
-        selection.projectId,
-        selection,
-      );
-      return;
-    }
     // Opening one of the selected project's own sessions is not a navigation
     // away from it — only a session somewhere else is.
     leaveProjectUnlessInside(session?.cwd ?? null);
@@ -2854,7 +2799,7 @@ export const App = (): JSX.Element => {
               // A project-row `+` explicitly asks to see a fresh coding
               // session, even when Plan Agents or a legacy project map is the
               // current altitude. Change views only after creation succeeds so
-              // a failed launch leaves the planner in place and resumable.
+              // a failed launch leaves the current view in place.
               const started = await startProjectSession(
                 root,
                 label,
@@ -3001,7 +2946,6 @@ export const App = (): JSX.Element => {
 
           <div className="center-pane">
             <SessionBar
-              planning={planningWorkspace}
               openedAgentName={
                 showAgentEmpty ? (focusedWorkflow?.name ?? null) : null
               }
@@ -3024,7 +2968,7 @@ export const App = (): JSX.Element => {
               }
               sessions={
                 planningWorkspace
-                  ? plannerSessions
+                  ? projectSessions
                   : showWorkbench
                     ? focusTabs
                     : []
@@ -3061,12 +3005,12 @@ export const App = (): JSX.Element => {
               }
               newSessionPending={
                 planningWorkspace
-                  ? agentMapEntry.state.planner.status === "loading"
+                  ? startingProject != null
                   : siblingSessionPending
               }
               onNewSession={
                 planningWorkspace
-                  ? agentMapEntry.openFreshPlanner
+                  ? startProjectSessionFromMap
                   : activeSession
                     ? () => handleStartSiblingSession(activeSession)
                     : null
@@ -3163,64 +3107,46 @@ export const App = (): JSX.Element => {
                   }
                 />
               ) : planningWorkspace ? (
-                agentMapEntry.state.planner.status === "error" ? (
-                  <EmptyState
-                    className="terminal-empty"
-                    testId="planner-load-error"
-                    icon="TriangleAlert"
-                    title="Planning session couldn't open"
-                    body={agentMapEntry.state.planner.message}
-                    cta={
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        data-testid="planner-retry"
-                        onClick={agentMapEntry.retryPlanner}
-                      >
-                        Retry session
-                      </button>
-                    }
-                  />
-                ) : agentMapEntry.state.planner.status === "loading" ? (
-                  <EmptyState
-                    className="terminal-empty"
-                    testId="planner-loading"
-                    icon="Radio"
-                    title="Opening planning session…"
-                  />
-                ) : activePlannerSession?.planning ? (
-                  /* Agent Map planning is still an ordinary coding-agent
-                     session. Keep the exact same raw CLI surface used for
-                     every agent: trust/auth prompts, slash commands, tool
-                     output, and provider chrome must remain visible rather
-                     than being replaced by a transcript/composer facsimile. */
+                activeProjectSession ? (
+                  /* A project session is an ordinary coding-agent session with
+                     the Agent Map tools. Keep the exact same raw CLI surface
+                     used for every agent. */
                   <div className="agent-view" data-testid="agent-view">
                     <div
                       className="agent-view-panel"
                       id="agent-panel-terminal"
                     >
                       <Terminal
-                        sessionId={activePlannerSession.id}
+                        sessionId={activeProjectSession.id}
                         token={harness.bootToken}
-                        cwd={activePlannerSession.cwd}
+                        cwd={activeProjectSession.cwd}
                       />
                     </div>
                   </div>
                 ) : (
+                  /* Honest absence: the map renders from durable state on the
+                     right and nothing was started (SAP-3143). Start goes
+                     through the same createSession path as the + tab. */
                   <EmptyState
                     className="terminal-empty"
-                    testId="planner-session-ended"
+                    testId="project-session-empty"
                     icon="Radio"
-                    title="Planning session ended"
-                    body="Start a new planning session to continue working on this Agent Map."
+                    title={`No running session for ${
+                      selectedStudioProject?.displayName ?? "this project"
+                    }`}
+                    body="Start a session to plan and build agents in this project. It has the Agent Map tools."
                     cta={
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={agentMapEntry.openFreshPlanner}
-                      >
-                        New planning session
-                      </button>
+                      startProjectSessionFromMap ? (
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          data-testid="project-session-start"
+                          disabled={startingProject != null}
+                          onClick={startProjectSessionFromMap}
+                        >
+                          Start a session
+                        </button>
+                      ) : undefined
                     }
                   />
                 )

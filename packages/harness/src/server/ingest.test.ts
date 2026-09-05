@@ -9,10 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { createEventStore } from "../core/collector/store.js";
-import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
 import { createSessionRecordReader } from "../core/session-record.js";
-import type { SessionManager } from "../core/session-manager.js";
-import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
+import type { AnalyticsEvent } from "../shared/types.js";
 import {
   createIngestRouter,
   processIngest,
@@ -644,91 +642,6 @@ describe("createIngestRouter", () => {
       origin: "infrastructure",
     });
     expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");
-  });
-
-  it("bounds hostile planner source, model, and usage before batching", async () => {
-    const planningSession = {
-      agentSessionId: "agent-1",
-      planning: {
-        identity: {
-          projectId: "project-1",
-          sessionId: "session-1",
-          userId: "user-1",
-          role: "map-planner",
-        },
-      },
-    } as unknown as HarnessSession;
-    const privacy = new PlannerGreetingCoordinator({
-      root: "/unused",
-      sessionManager: {
-        get: () => planningSession,
-      } as unknown as SessionManager,
-    });
-    start({
-      enrichFromTranscript: async (event) => ({
-        ...event,
-        payload: {
-          ...event.payload,
-          model: "secret/customer_key_123",
-          usage: {
-            inputTokens: 10 ** 30,
-            outputTokens: -7,
-            secret: "/private/customer-token",
-          },
-        },
-      }),
-      projectTelemetryEvent: (event) => privacy.redactForTelemetry(event),
-    });
-
-    await postIngest(baseUrl, {
-      hookEvent: "SessionStart",
-      harnessSessionId: "session-1",
-      payload: {
-        session_id: "agent-1",
-        source: "/private/customer-token",
-      },
-    });
-    await postIngest(baseUrl, {
-      hookEvent: "UserPromptSubmit",
-      harnessSessionId: "session-1",
-      payload: {
-        session_id: "/private/envelope-secret",
-        prompt: "private prompt text",
-      },
-    });
-    await postIngest(baseUrl, {
-      hookEvent: "Stop",
-      harnessSessionId: "session-1",
-      payload: {
-        session_id: "/private/envelope-secret",
-        transcript_path: "/private/transcript.jsonl",
-        last_assistant_message: "private assistant text",
-      },
-    });
-
-    await vi.waitFor(() => expect(enqueued).toHaveLength(3));
-    expect(enqueued.map((event) => event.payload)).toEqual([
-      { planner: true, source: "unknown" },
-      { planner: true, origin: "user" },
-      {
-        planner: true,
-        hasAssistantText: true,
-        modelReported: true,
-        usage: { inputTokens: 1_000_000_000_000, outputTokens: null },
-      },
-    ]);
-    expect(enqueued.map((event) => event.agentSessionId)).toEqual([
-      null,
-      null,
-      null,
-    ]);
-    expect(stored.map((event) => event.agentSessionId)).toEqual([
-      "agent-1",
-      "agent-1",
-      "agent-1",
-    ]);
-    expect(JSON.stringify(enqueued)).not.toContain("private");
-    expect(JSON.stringify(enqueued)).not.toContain("secret");
   });
 
   it("does not call onNormalizedEvent for a hook with no analytics mapping", async () => {

@@ -728,28 +728,14 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const cwd = normalizeCwd(parsed.data.cwd);
     try {
       // Resolve an already-owned registry row before probing or mutating any
-      // adapter state. Generic adoption must never bypass the project/user
-      // authority and focused-context checks on the scoped planner route.
+      // adapter state.
       const durableOwner = sessionManager.getAgentSessionOwner(agentSessionId);
       const identityReserved =
         sessionManager.isAgentSessionIdentityReserved(agentSessionId);
       const identityOwners = sessionManager
         .list()
         .filter((session) => session.agentSessionId === agentSessionId);
-      if (
-        durableOwner?.planning !== undefined ||
-        identityOwners.some((session) => session.planning !== undefined)
-      ) {
-        res.status(409).json({
-          code: "planner_session_requires_scoped_route",
-          error: "Planner sessions must be resumed through their project route",
-        });
-        return;
-      }
-      // For ordinary sessions, cwd remains part of the historical-record
-      // identity. It is deliberately checked only after the vendor id has
-      // been fenced from every planner owner above: client-supplied cwd must
-      // not alias around the scoped planner route.
+      // cwd remains part of the historical-record identity.
       const existing = identityOwners.find(
         (session) => normalizeCwd(session.cwd) === cwd,
       );
@@ -824,13 +810,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   router.post("/sessions/:id/resume", async (req, res, next) => {
-    if (sessionManager.get(req.params.id)?.planning) {
-      res.status(409).json({
-        code: "planner_session_requires_scoped_route",
-        error: "Planner sessions must be resumed through their project route",
-      });
-      return;
-    }
     try {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
@@ -854,13 +833,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
     const parsed = injectInputSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
-      return;
-    }
-    if (sessionManager.get(req.params.id)?.planning) {
-      res.status(409).json({
-        code: "planner_session_requires_scoped_route",
-        error: "Planner input must use the project-scoped message route",
-      });
       return;
     }
     try {
