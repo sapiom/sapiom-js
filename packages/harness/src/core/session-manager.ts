@@ -5,6 +5,7 @@
  * server restarts, even though the ptys themselves do not.
  */
 
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
@@ -352,6 +353,7 @@ export type LaunchOptsBuilder = (
   >,
   context?: {
     promptAppendix?: string;
+    focusedContext?: FocusedSessionContextProjection;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
     agentMapIdentity?: ProjectAgentSession;
@@ -479,6 +481,8 @@ export interface TrustedSessionCreateOptions {
   initialTitle?: string;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
+  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
+  focusedContext?: (sessionId: string) => FocusedSessionContextProjection;
   /** Server-authored native CLI orientation for a newly created session. */
   sessionStartSystemMessage?: (sessionId: string) => string;
   /** Server-owned coordinator predecessor. This may differ from the older
@@ -493,6 +497,8 @@ export interface TrustedSessionCreateOptions {
 export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
+  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
+  focusedContext?: FocusedSessionContextProjection;
 }
 
 interface PtyHandle {
@@ -1206,6 +1212,8 @@ export class SessionManager {
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else if (trustedIdentity) throw new ProjectSessionScopeUnavailableError(id);
+    if (trusted.focusedContext && !agentMapIdentity)
+      throw new TypeError("Focused project context requires a project-agent identity");
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against
@@ -1220,10 +1228,13 @@ export class SessionManager {
     let spec: SpawnSpec;
     try {
       const launchContext =
-        trusted.promptAppendix || agentMapIdentity
+        trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
           ? {
               ...(trusted.promptAppendix
                 ? { promptAppendix: trusted.promptAppendix }
+                : {}),
+              ...(trusted.focusedContext
+                ? { focusedContext: trusted.focusedContext }
                 : {}),
               ...(agentMapIdentity ? { agentMapIdentity } : {}),
               resume: true as const,
@@ -3024,12 +3035,16 @@ export class SessionManager {
         // root earlier could start an automatic session ahead of this request.
         this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
         const promptAppendix = trusted.promptAppendix?.(id);
+        const focusedContext = trusted.focusedContext?.(id);
+        if (focusedContext && !agentMapIdentity)
+          throw new TypeError("Focused project context requires a project-agent identity");
         const sessionStartSystemMessage =
           trusted.sessionStartSystemMessage?.(id);
         const launchContext =
-          promptAppendix || sessionStartSystemMessage || agentMapIdentity
+          promptAppendix || focusedContext || sessionStartSystemMessage || agentMapIdentity
             ? {
                 ...(promptAppendix ? { promptAppendix } : {}),
+                ...(focusedContext ? { focusedContext } : {}),
                 ...(sessionStartSystemMessage
                   ? { sessionStartSystemMessage }
                   : {}),

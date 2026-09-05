@@ -7,6 +7,7 @@
  * src/shared/types.ts for the full protocol contract.
  */
 
+import { AgentBriefService } from "../core/agent-brief-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import {
@@ -624,7 +625,15 @@ function createDefaultBuildLaunchOpts(
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
-    const appendices = [viaSystemPrompt ? brief : null, context?.agentMapIdentity ? projectAgentPromptAppendix() : null, context?.promptAppendix]
+    if (context?.focusedContext && !context.agentMapIdentity)
+      throw new Error("Focused project context requires a project-agent identity");
+    const appendices = [
+      viaSystemPrompt ? brief : null,
+      context?.agentMapIdentity
+        ? projectAgentPromptAppendix(context.focusedContext)
+        : null,
+      context?.promptAppendix,
+    ]
       .filter(
         (value): value is string =>
           typeof value === "string" && value.trim() !== "",
@@ -3099,6 +3108,40 @@ export const startServer = async (
       },
     },
   );
+  const agentBriefService = new AgentBriefService(
+    buildPlanStore,
+    {
+      onOutcome: (event) => {
+        const analyticsEvent: AnalyticsEvent = {
+          eventId: randomUUID(),
+          seq: seqCounter.next(event.sessionId),
+          ts: new Date().toISOString(),
+          userId: identity?.userId ?? null,
+          tenantId: identity?.tenantId ?? null,
+          machineId,
+          harnessSessionId: event.sessionId,
+          agentSessionId: null,
+          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
+          type: "agent_brief.refresh",
+          payload: {
+            project_id: event.projectId,
+            outcome: event.outcome,
+            created_count: Math.min(128, event.createdCount),
+            new_version_count: Math.min(128, event.newVersionCount),
+            unchanged_count: Math.min(128, event.unchangedCount),
+            retired_count: Math.min(128, event.retiredCount),
+            impacted_workstream_count: Math.min(256, event.impactedWorkstreamCount),
+            diagnostic_category: event.diagnosticCategory,
+            projection_exact_count: Math.min(128, event.projectionExactCount),
+            projection_truncated_count: Math.min(128, event.projectionTruncatedCount),
+            projection_rejected_count: Math.min(128, event.projectionRejectedCount),
+          },
+        };
+        void eventStore.append(analyticsEvent).catch(() => {});
+        batcher.enqueue(analyticsEvent);
+      },
+    },
+  );
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -3123,6 +3166,7 @@ export const startServer = async (
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
     buildPlanService,
+    agentBriefService,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
