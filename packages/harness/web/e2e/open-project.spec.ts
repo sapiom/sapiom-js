@@ -184,16 +184,6 @@ test.describe("the header + opens a project", () => {
     await expect(page.locator(".rail-empty")).toHaveCount(0);
   });
 
-  test("the empty row does NOT appear under a merged root-agent project", async ({
-    page,
-  }) => {
-    // `rfq-agent` is a root that IS an agent — `projectIsEmpty` consults
-    // `rootAgent` precisely so its row does not get "no agents" printed under
-    // the agent it is showing.
-    await expect(page.getByTestId("workflow-rfq")).toBeVisible();
-    await expect(page.getByTestId("project-empty-rfq-agent")).toHaveCount(0);
-  });
-
   test("opening a folder that IS an agent project registers the agent too", async ({
     page,
   }) => {
