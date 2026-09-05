@@ -18,9 +18,9 @@
  */
 export const AUTHORING_INSTRUCTIONS = `# Sapiom local authoring MCP
 
-\`sapiom-dev\` is this package's MCP server identity. In Claude Code, register it under the
-supported local alias \`sapiom\` with \`claude mcp add sapiom -- npx -y @sapiom/mcp\`.
-It is the terminal surface for building and managing your Sapiom projects. Today it drives
+This package (\`@sapiom/mcp\`) is **the local authoring server**: the terminal surface for
+building and managing your Sapiom projects. Agent Studio pre-wires it; in Claude Code,
+register it with \`claude mcp add sapiom -- npx -y @sapiom/mcp\`. Today it drives
 **agent authoring, sandbox app previews, and durable app publishing** (more
 dev/management tools will land here over time). Agent authoring: build, test, and deploy a
 Sapiom agent — a \`defineAgent({ name, entry, steps })\` (from \`@sapiom/agent\`) where each
@@ -28,16 +28,17 @@ step's \`run(input, ctx)\` does work and returns a directive. All from the termi
 dashboard required.
 
 ## Two ways to use Sapiom
-Use the local \`sapiom\` alias to **author agents** — the \`sapiom_dev_agents_*\` tools
-scaffold, typecheck, run with stubs, and deploy from a local checkout. For a **one-off
-capability call** without an agent (a search, a scrape, one image), use the hosted capability
-MCP under the distinct \`sapiom-direct\` alias:
+Use **the local authoring server** (this one) to **author agents** — the \`sapiom_dev_agents_*\`
+tools scaffold, typecheck, run with stubs, and deploy from a local checkout. For a **one-off
+capability call** without an agent (a search, a scrape, one image), use **the hosted capability
+server** at \`https://api.sapiom.ai/v1/mcp\`. Agent Studio pre-wires it too; in Claude Code,
+register it with
 \`claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp --header "x-api-key: $SAPIOM_API_KEY"\`.
 Its runtime \`tools/list\` response is authoritative; use \`tool_discover\` to find a direct
 \`sapiom_*\` capability tool. The endpoint may also advertise implemented cloud workflow and
 governance tools, but the supported public authoring route is this local MCP or Agent Studio.
 Rule of thumb: author an agent for anything multi-step, scheduled, or deployable; use the
-hosted capability MCP or the TypeScript SDK for a single action.
+hosted capability server or the TypeScript SDK for a single action.
 
 ## Lifecycle (in order)
 1. Start a project — \`sapiom_dev_agents_scaffold\` (a fresh starter) or \`sapiom_dev_agents_clone\`
@@ -68,7 +69,7 @@ sharing, not always-on hosting. From this project that is \`sapiom_dev_app_publi
 name only — it reads the same \`sapiom.json\` sandbox resource \`_preview\` uses, so source,
 start, port, build and env are already set); it needs \`@sapiom/mcp\` >= 0.13, so if your
 \`tools/list\` does not offer it, upgrade or use the next line. Without a project on disk:
-\`sapiom_app_publish\` on the \`sapiom-direct\` alias above, or
+\`sapiom_app_publish\` on the hosted capability server above, or
 \`POST /v1/app-links\` → \`PUT …/bundle\` → \`POST …/publish\`. Bundles are text-only UTF-8
 and self-contained; republishing the same slug replaces the app in place at the same URL.
 Org-scoped by default; \`public\` needs an explicit confirmation and a daily spend cap because
