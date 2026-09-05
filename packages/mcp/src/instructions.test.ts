@@ -149,8 +149,10 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "sapiom_dev_agents_schedule_secret",
     );
-    expect(AUTHORING_INSTRUCTIONS).toContain(
-      "HMAC-SHA256 over `timestamp.eventId.rawBody`",
+    const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
+    expect(flat).toContain("HMAC-SHA256 hex over `timestamp.eventId.rawBody`");
+    expect(flat).toContain(
+      "epoch-ms timestamp, dot-free event id, ±5 min skew",
     );
     for (const h of [
       "X-Sapiom-Timestamp",
@@ -197,7 +199,7 @@ describe("server instructions", () => {
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "7501423911e2f923cab8d35c2ad231283f6043d5224719a1fb8fda8c1a16f620",
+      "cb328b0b7d4892d874f12cc122e6212cc43c396853b1c613729628a4cc3659eb",
     );
   });
 });

@@ -80,8 +80,9 @@ your org pays for every wake. See https://docs.sapiom.ai/capabilities/app-links.
 tenant emits its \`eventType\` through the tenant events API), and \`webhook\` (fires whenever an
 external system POSTs to a public hook URL minted for the trigger). "Run this agent when X POSTs
 to us" is a \`webhook\` trigger, not a hand-built HTTP server: the create result carries the hook
-URL, a shown-once secret, and the signing scheme — HMAC-SHA256 over \`timestamp.eventId.rawBody\`,
-sent as \`X-Sapiom-Timestamp\` / \`X-Sapiom-Event-Id\` / \`X-Sapiom-Signature\`. Only a sender you
+URL, a shown-once secret, and the exact signing recipe — HMAC-SHA256 hex over
+\`timestamp.eventId.rawBody\` (epoch-ms timestamp, dot-free event id, ±5 min skew), sent as
+\`X-Sapiom-Timestamp\` / \`X-Sapiom-Event-Id\` / \`X-Sapiom-Signature\`. Only a sender you
 control can sign that way; Slack, Meta, Stripe and GitHub sign with their own schemes and cannot
 produce our HMAC, so route those to an App Link \`/hook/*\` receiver (\`webhooksEnabled\`) that
 verifies their signature, or through a small translator that re-signs into a webhook trigger.
