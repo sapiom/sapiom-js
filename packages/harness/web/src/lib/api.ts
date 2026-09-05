@@ -5,6 +5,7 @@
  * touches the network — this is what lets the SPA build ahead of a running
  * server.
  */
+import { buildIdeaWithAttachments } from "@shared/initial-prompt";
 import type {
   AccountPlanView,
   AgentSecret,
@@ -2017,10 +2018,21 @@ export class MockApi implements HarnessApi {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("mockNoLiveSessions") ===
       "1";
+  // A Studio restart retains registry history while every native runtime has
+  // exited. Keep both providers' exact saved IDs for restoration journeys.
+  private readonly restoredSessions =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("mockRestoredSessions") ===
+      "1";
   private sessionsStore: HarnessSession[] =
     this.fresh || this.noLiveSessions
       ? []
-      : MOCK_SESSIONS.map((session) => ({ ...session }));
+      : MOCK_SESSIONS.map((session) => ({
+          ...session,
+          ...(this.restoredSessions
+            ? { status: "exited" as const, ready: false }
+            : {}),
+        }));
   private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
@@ -2261,7 +2273,8 @@ export class MockApi implements HarnessApi {
 
   private studioWorkflows(): WorkflowInfo[] {
     const scopes = this.workspaceScopes();
-    return this.workflows.map((workflow, index) => {
+    const workflows = this.workflows.map((workflow, index) => {
+      if (workflow.studioBindings?.length) return workflow;
       const bindings = scopes
         .filter(
           (candidate) =>
@@ -2278,6 +2291,28 @@ export class MockApi implements HarnessApi {
           }
         : workflow;
     });
+    // Regression fixture: successful scaffold in the original conversation,
+    // but on disk beside its root. Never turn this path into a root candidate.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockCreatedSibling") === "1"
+    ) {
+      const projectId = scopes.find(
+        (scope) => scope.cwd === "/Users/demo/acme-app",
+      )?.projectId;
+      if (projectId) workflows.push({
+        name: "report-reviewer",
+        path: "/Users/demo/report-reviewer",
+        definitionId: null,
+        definitionSlug: "report-reviewer",
+        source: "scan",
+        studioBindings: [{
+          projectId,
+          agentId: "agent_00000000-0000-4000-8000-000000000999",
+        }],
+      });
+    }
+    return workflows;
   }
 
   async getState(): Promise<AppState> {
@@ -2737,14 +2772,28 @@ export class MockApi implements HarnessApi {
         lastCreateSession: { req },
         createSessionCalls: [...previous, { req }],
       };
-      recordCreateStep("session", req.cwd);
       if (win.__MOCK_CREATE_SESSION_FAIL_ONCE__) {
         win.__MOCK_CREATE_SESSION_FAIL_ONCE__ = false;
         throw new Error("mock: couldn't create session");
       }
     }
+    if (req.scaffold) {
+      const separator = req.cwd.lastIndexOf("/");
+      await this.scaffoldAgent(req.cwd.slice(0, separator), req.cwd.slice(separator + 1), req.scaffold.template);
+    }
+    const id = `sess-mock-${this.sessions.length + 1}`;
+    const attachments: { path: string }[] = [];
+    for (const attachment of req.initialAttachments ?? []) {
+      attachments.push(attachment.kind === "path" ? attachment : await this.materializeMockFile(id, req.cwd, attachment));
+    }
+    const initialPrompt = buildIdeaWithAttachments(req.initialPrompt ?? "", attachments);
+    recordCreateStep("session", req.cwd);
+    if (typeof window !== "undefined" && initialPrompt) {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastInitialInput: { id, text: initialPrompt } };
+    }
     let session: HarnessSession = {
-      id: `sess-mock-${this.sessions.length + 1}`,
+      id,
       agentSessionId: null,
       boundWorkflowPath: null,
       harness: req.harness,
@@ -2819,6 +2868,11 @@ export class MockApi implements HarnessApi {
     if (!session)
       throw new ApiError(404, "session not found", "session not found");
 
+    return this.materializeMockFile(id, session.cwd, req);
+  }
+
+  private async materializeMockFile(id: string, cwd: string, req: AttachFileRequest): Promise<AttachFileResponse> {
+    await delay();
     const testWindow =
       typeof window === "undefined"
         ? undefined
@@ -2830,7 +2884,7 @@ export class MockApi implements HarnessApi {
       throw new ApiError(
         500,
         "attachment materialization failed",
-        "attachment materialization failed",
+        `Couldn't attach ${req.filename}: attachment materialization failed`,
       );
     }
 
@@ -2839,7 +2893,7 @@ export class MockApi implements HarnessApi {
       throw new ApiError(400, "invalid attachment", "invalid attachment");
     const filename = req.filename.split(/[\\/]/).pop() || "pasted-file";
     const response: AttachFileResponse = {
-      path: `${session.cwd}/.sapiom/uploads/mock-${filename}`,
+      path: `${cwd}/.sapiom/uploads/mock-${filename}`,
       mediaType: match[1]!,
       bytes: atob(match[2]!).length,
     };
@@ -2879,6 +2933,17 @@ export class MockApi implements HarnessApi {
   }
 
   async resumeSession(id: string): Promise<HarnessSession> {
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.resumeSessionCalls as string[] | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        resumeSessionCalls: [...previous, id],
+      };
+    }
     await delay(300);
     const existing = this.sessions.find(
       (session) => session.agentSessionId === id || session.id === id,

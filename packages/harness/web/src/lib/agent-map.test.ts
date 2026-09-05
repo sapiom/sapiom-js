@@ -3,6 +3,7 @@ import type { StudioProjectSummary } from "@shared/agent-map";
 
 import {
   mostSpecificStudioScope,
+  studioScopeForAgent,
   parseAcceptedProposalDelta,
   parseAgentMapWorkspaceResponse,
   resolveStudioWorkspaceSelection,
@@ -240,6 +241,33 @@ describe("resolveStudioWorkspaceSelection", () => {
 });
 
 describe("mostSpecificStudioScope", () => {
+  it("resolves an explicitly bound sibling through its project without broadening the root", () => {
+    const scopes = [
+      { workspaceKey: "original", cwd: "/projects/original", projectId },
+    ];
+    const workflow = {
+      path: "/projects/reviewer",
+      studioBindings: [{ projectId, agentId: "agent-a" }],
+    };
+    expect(
+      studioScopeForAgent(workflow, scopes, [validResponseProject(projectId)]),
+    ).toEqual(scopes[0]);
+    expect(studioScopeForAgent(workflow, scopes, [])).toBeNull();
+    expect(
+      studioScopeForAgent(
+        workflow,
+        scopes,
+        [validResponseProject(projectId)],
+        "foreign-project",
+      ),
+    ).toBeNull();
+    expect(
+      studioScopeForAgent({ path: workflow.path }, scopes, [
+        validResponseProject(projectId),
+      ]),
+    ).toBeNull();
+  });
+
   it("chooses the nearest containing durable project, not the first parent", () => {
     const nestedProjectId = "project_00000000-0000-4000-8000-000000000002";
     expect(

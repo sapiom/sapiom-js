@@ -9,7 +9,7 @@ import * as path from "node:path";
 
 import { HARNESS_PATHS } from "../../shared/types.js";
 import { expandHome } from "../paths.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../../profiles/default.js";
+import { DEFAULT_SYSTEM_PROMPT, resolveKnownSystemPrompt } from "../../profiles/default.js";
 
 export interface GenerateSystemPromptFileOptions {
   /** Root directory generated configs live under. Defaults to
@@ -37,7 +37,7 @@ export async function generateSystemPromptFile(
   const dir = path.join(root, harnessSessionId);
   await fs.mkdir(dir, { recursive: true });
 
-  const base = options.prompt ?? DEFAULT_SYSTEM_PROMPT;
+  const base = resolveKnownSystemPrompt(options.prompt ?? DEFAULT_SYSTEM_PROMPT);
   const appendix = options.appendix?.trim();
   const filePath = path.join(dir, "system-prompt.txt");
   await fs.writeFile(filePath, appendix ? `${base}\n\n${appendix}\n` : base, "utf8");

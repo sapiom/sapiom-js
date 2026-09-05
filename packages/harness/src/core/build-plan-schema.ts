@@ -31,12 +31,12 @@ const identityKey = (value: string | { clientRef: string }) =>
 export const toolMapVersionRefSchema = z.object({
   versionId: generatedId("mapv"),
   contentDigest: digest,
-}).strict();
+}).strict().describe("Exact map version from build_plan_read: copy versionId and contentDigest only, omitting projectId. Never derive a digest from the numeric proposal version.");
 export const toolPlanVersionRefSchema = z.object({
   planId: generatedId("plan"),
   versionId: generatedId("planv"),
   semanticDigest: digest,
-}).strict();
+}).strict().describe("Exact plan reference from build_plan_read: copy planId, versionId, and semanticDigest only, omitting projectId.");
 
 const focusedBriefSelectionSchema = z.object({
   focusScope: z.object({
@@ -53,7 +53,7 @@ const focusedBriefSelectionSchema = z.object({
 
 export const agentBriefRefreshRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace"),
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace").describe("Caller-chosen identity: identical retries reuse this ID; changed request content needs a fresh ID."),
   expectedMap: toolMapVersionRefSchema,
   expectedPlan: toolPlanVersionRefSchema,
   focus: z.discriminatedUnion("mode", [
@@ -62,7 +62,7 @@ export const agentBriefRefreshRequestSchema = z.object({
       selections: unique(focusedBriefSelectionSchema,
         (selection) => `${selection.focusScope.delegationKey}\0${selection.focusScope.parentScopeKey ?? ""}`),
     }).strict(),
-  ]),
+  ]).describe("canonical compiles workstream briefs; focused compiles explicit ad-hoc selections. Does not inject a new prompt into a running child."),
 }).strict();
 
 const milestone = z.object({
@@ -130,14 +130,14 @@ export const buildPlanContentInputSchema = z.object({
 
 const replaceContentOperation = z.object({
   op: z.literal("replace-content"),
-  content: buildPlanContentInputSchema,
+  content: buildPlanContentInputSchema.describe("Complete replacement, not a patch: supply every collection, preserve unrelated intent, reuse existing IDs, and use {clientRef:'local-name'} for new plan-owned IDs."),
 }).strict();
 
 export const buildPlanApplyRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace"),
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace").describe("Reuse for the same validate/apply request and identical retries; changed content needs a new ID."),
   expectedMap: toolMapVersionRefSchema,
-  expectedPlan: toolPlanVersionRefSchema.nullable(),
+  expectedPlan: toolPlanVersionRefSchema.nullable().describe("Current buildPlan reference from build_plan_read, omitting projectId; null only if creating the first plan."),
   operations: z.tuple([replaceContentOperation]),
 }).strict();
 
@@ -150,11 +150,12 @@ const rebaseResolution = z.discriminatedUnion("kind", [
 
 export const buildPlanRebaseRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace"),
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace").describe("Stable ID for identical rebase retries; changed resolutions or source expectations need a new ID."),
   expectedPlan: toolPlanVersionRefSchema,
-  fromMap: toolMapVersionRefSchema,
-  toMap: toolMapVersionRefSchema,
-  resolutions: unique(rebaseResolution, (resolution) => JSON.stringify(resolution)),
+  fromMap: toolMapVersionRefSchema.describe("The current plan's bound map: read plan.map and omit projectId."),
+  toMap: toolMapVersionRefSchema.describe("The latest map: read current.map and omit projectId, even when its content digest is unchanged."),
+  resolutions: unique(rebaseResolution, (resolution) => JSON.stringify(resolution))
+    .describe("Use [] when references remain valid; explicitly resolve invalidated node/assignment/dependency/repository references, preserving unrelated intent."),
 }).strict();
 
 export const buildPlanReadRequestSchema = z.discriminatedUnion("kind", [
@@ -169,7 +170,7 @@ export const buildPlanReadRequestSchema = z.discriminatedUnion("kind", [
  * the request through `buildPlanReadRequestSchema` again.
  */
 export const buildPlanReadToolInputSchema = z.object({
-  kind: z.enum(["current", "exact"]),
+  kind: z.enum(["current", "exact"]).describe("current: send only kind. exact: also supply planId, versionId, and semanticDigest for one immutable historical version."),
   planId: generatedId("plan").optional(),
   versionId: generatedId("planv").optional(),
   semanticDigest: digest.optional(),
