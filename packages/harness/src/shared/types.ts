@@ -214,8 +214,6 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
-  /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
-  planning?: import("./agent-map.js").PlannerSessionMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
   agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
   /** Context for the existing project startup; separate from authority. */
@@ -831,19 +829,17 @@ export type AnalyticsEventType =
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
   | "agent_map.capability"
-  | "planner_session.created"
-  | "planner_session.resumed"
-  | "planner_session.input_delivery_uncertain"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.attempted"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.delivered"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.failed"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.skipped"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.retried";
+  | "project_agent.identity_migrated"
+  | "project_agent.identity_rejected"
+  | "project_bootstrap.scheduled"
+  | "project_bootstrap.recovered"
+  | "project_bootstrap.attempted"
+  | "project_bootstrap.retried"
+  | "project_bootstrap.delivered"
+  | "project_bootstrap.failed"
+  | "project_bootstrap.preempted"
+  | "project_bootstrap.skipped"
+  | "project_bootstrap.input_delivery_uncertain";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -1042,7 +1038,7 @@ export interface SessionRecord {
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
-// POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
 // PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // POST   /api/agents/scaffold           { root, name, template? } → AgentScaffoldResponse (the harness creates the agent)
@@ -1161,6 +1157,12 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
+  /**
+   * Optional idempotency key used only when the new-project bootstrap FIFO
+   * owns this submitted turn. Ordinary post-bootstrap input remains one
+   * intentional message per request.
+   */
+  requestId?: string;
 }
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
@@ -1820,3 +1822,16 @@ export interface StudioRailLaunchEdge {
 export interface StudioRailLaunchEdgesResponse {
   edges: StudioRailLaunchEdge[];
 }
+
+export interface InjectInputResponse {
+  ok: true;
+  /** Present only when the durable bootstrap FIFO handled this request. */
+  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+}
+
+export type SessionInputSubmissionResult =
+  | { ok: false }
+  | {
+      ok: true;
+      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+    };

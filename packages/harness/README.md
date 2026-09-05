@@ -41,11 +41,11 @@ session lifecycle) to improve Sapiom. Opt out any time; `--no-telemetry`
 disables collection entirely. Events are also written locally to
 `~/.sapiom/harness/events.ndjson` for your own inspection.
 
-Project planner sessions add content-free `planner_session.*` and
-`planner_greeting.*` lifecycle events. Those events contain bounded project,
-session, attempt, resolution, queue-depth, and error-code fields only. They never
-contain planner prompts, assistant text, local paths, or provider error text;
-the same telemetry opt-in controls whether they leave the machine. Planner hook
+Project bootstrap adds content-free `project_bootstrap.*` and
+`project_agent.identity_*` lifecycle events. They contain bounded project,
+session, attempt, retry, queue-depth, and error-code fields. Prompts, assistant
+text, local paths, and provider error text remain local. The same telemetry
+opt-in controls whether lifecycle events leave the machine. Project hook
 projections reduce session-start source to a fixed enum, model identity to a
 presence boolean, and usage to allowlisted, clamped token counters; arbitrary
 provider strings and usage fields remain local.
@@ -57,10 +57,9 @@ Agent Studio makes one Sapiom request of its own, separate from telemetry
 from what its other components do on their own (the app's product analytics, and
 `npx @sapiom/mcp@latest` fetching and running the local MCP server each session):
 
-Planner-session bootstrap makes no additional network request. Its focused
-context, greeting coordination, FIFO, and lifecycle persistence stay inside the
-local server. Existing outbound surfaces remain the system-prompt fetch below,
-the coding agent's ordinary provider traffic, and opt-in telemetry.
+Project bootstrap adds no separate network endpoint. Its state, durable input
+FIFO, and recovery stay inside the local server. The initial map seed uses the
+coding agent's ordinary provider traffic and existing project tools.
 
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
@@ -108,10 +107,16 @@ only project, user, and session IDs. Stop branching on its former `role` or
 `assignment` fields. Valid persisted legacy metadata is normalized while
 preserving the session/provider IDs, cwd, title, transcript, and Canvas;
 conflicting or malformed authority fails closed. Optional `projectBootstrap`
-is lifecycle metadata, not an authority or session type. The legacy startup
-projection and project-scoped aliases remain temporarily for existing durable
-startup queues. Migrated sessions use ordinary HTTP input, with the server
-retaining FIFO ownership until those queues finish.
+is lifecycle metadata, not an authority or session type. On upgrade, the server migrates legacy startup queues into the durable bootstrap
+FIFO. The old planner-session create, message, and retry routes are removed.
+Use the ordinary `/api/sessions` create, resume, and input routes.
+
+When Studio opens a new project, it schedules one automatic first conversation,
+named **Plan Agents**, to seed an evidence-supported Agent Map. The catalog
+outbox and first-session claim keep this lifecycle recoverable across restart.
+The complete coordinator handles readiness, interrupted delivery, retries,
+user-input preemption, and shutdown before another turn may be sent. Existing
+projects are not enrolled merely by reading their map.
 
 `POST /api/sessions` accepts the content-free
 `initialUserInputPending: true` hint when the caller owns the first prompt.

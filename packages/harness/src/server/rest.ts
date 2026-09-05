@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { resolveWithinRoot } from "../core/path-safety.js";
 /**
  * REST surface under /api — see src/shared/types.ts for the full contract
  * table. This router covers the session-lifecycle endpoints (W1); workflows,
@@ -7,10 +10,8 @@
 import express, { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-
 import { randomUUID } from "node:crypto";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
+
 import type {
   AdoptSessionRequest,
   AnalyticsEvent,
@@ -31,13 +32,14 @@ import type {
   UiEventName,
   UiTrackRequest,
   WorkflowInfo,
+  SessionInputSubmissionResult,
 } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
 import type { StudioProjectSummary } from "../shared/agent-map.js";
 import {
   HARNESS_UPLOADS_DIR,
-  JSON_BODY_LIMIT_BYTES,
   MAX_INLINE_ATTACHMENT_BYTES,
+  JSON_BODY_LIMIT_BYTES,
   SPAWNABLE_HARNESS_KINDS,
   EDITOR_KINDS,
 } from "../shared/types.js";
@@ -49,14 +51,27 @@ import {
   SessionNotResumeableError,
   SpawnTargetError,
 } from "../core/errors.js";
-import { ProjectSessionScopeUnavailableError, SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import {
+  ProjectSessionScopeUnavailableError,
+  SessionBackgroundInputPreemptedError,
+  SessionInputIsolationError,
+  SessionManagerClosingError,
+  SessionNotReadyError,
+  UnknownSessionError,
+  type SessionManager,
+} from "../core/session-manager.js";
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
-import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
-import { resolveWithinRoot } from "../core/path-safety.js";
+import {
+  getHarnessAdapter,
+  listHarnessAdapters,
+} from "../core/adapters/registry.js";
 import { loadSettings, saveSettings } from "../cli/settings.js";
 
+
+
 const DATA_URL_RE = /^data:([a-z0-9.+/-]+);base64,([\s\S]+)$/i;
+
 
 /** Validate standard padded base64 in one pass and return decoded size. */
 function decodedBase64Size(encoded: string): number | null {
@@ -92,6 +107,7 @@ const createSessionSchema = z.object({
 const injectInputSchema = z.object({
   text: z.string(),
   submit: z.boolean().optional(),
+  requestId: z.string().min(1).max(200).optional(),
 }) satisfies z.ZodType<InjectInputRequest>;
 
 const attachFileSchema = z.object({
@@ -196,7 +212,11 @@ export interface RestRouterOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
   /** Sapiom identity from CLI auth; null when unauthenticated / --no-auth. */
-  identity: { userId: string; tenantId: string; organizationName: string } | null;
+  identity: {
+    userId: string;
+    tenantId: string;
+    organizationName: string;
+  } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
   /** Workspace identities backing the folder projection and system-graph route. */
   listWorkspaceScopes?: () =>
@@ -228,18 +248,24 @@ export interface RestRouterOptions {
   /** Called after a settings PATCH persists a changed telemetryOptIn, so the
    * live collector batcher can be gated without a server restart. */
   onTelemetryOptInChange?: (optIn: boolean) => void;
+  /** Called only for roots newly added to the user's durable project list. */
+  onRecentDirAdded?: (root: string) => Promise<void> | void;
   /** Called (fire-and-forget) after a session is created, with its cwd and id
    * — lets the integrator scan that directory for workflows (so opening a
    * session in a new project discovers them without a manual "+ Connect")
    * and, when the scan discovers one, render the new session's canvas. */
   onSessionCreated?: (cwd: string, harnessSessionId: string) => void;
-  /** Keeps migrated sessions on their durable startup FIFO while the
-   * project bootstrap coordinator replaces the legacy implementation. */
+  /**
+   * Optional lifecycle-aware input boundary. It lets a pending project
+   * bootstrap yield durably to real user input; ordinary sessions fall back
+   * to SessionManager.submitInput.
+   */
   submitSessionInput?: (
     sessionId: string,
     text: string,
     submit: boolean,
-  ) => Promise<boolean>;
+    requestId?: string,
+  ) => Promise<boolean | SessionInputSubmissionResult>;
   /** The directory the CLI was launched against — surfaced in AppState so the
    * SPA can prefill the new-session modal with it. */
   launchDir: string;
@@ -394,13 +420,34 @@ export function createRestRouter(options: RestRouterOptions): Router {
       const current = await loadSettings(options.settingsPath);
       const updated: HarnessSettings = { ...current, ...parsed.data };
       await saveSettings(updated, options.settingsPath);
+      // saveSettings owns path validation, de-duplication, and the eight-entry
+      // cap. Re-read the committed shape so lifecycle work and the response
+      // describe what actually reached disk, never raw submitted paths.
+      const committed = await loadSettings(options.settingsPath);
       if (
         parsed.data.telemetryOptIn !== undefined &&
         parsed.data.telemetryOptIn !== current.telemetryOptIn
       ) {
         options.onTelemetryOptInChange?.(parsed.data.telemetryOptIn);
       }
-      res.json(updated);
+      if (parsed.data.recentDirs) {
+        const existing = new Set(current.recentDirs);
+        for (const root of committed.recentDirs) {
+          if (existing.has(root)) continue;
+          // Initialization may fetch configuration or start a provider. Each
+          // root proceeds independently after the durable settings commit;
+          // neither it nor the HTTP response waits for another root's start.
+          void Promise.resolve()
+            .then(() => options.onRecentDirAdded?.(root))
+            .catch(() => {
+              // Normal state reconciliation recovers the committed root.
+              console.error(
+                "[harness] project initialization deferred after settings commit",
+              );
+            });
+        }
+      }
+      res.json(committed);
     } catch (err) {
       next(err);
     }
@@ -455,14 +502,21 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(201).json(session);
       options.onSessionCreated?.(request.cwd, session.id);
     } catch (err) {
-      if (err instanceof AdapterNotFoundError || err instanceof SpawnTargetError) {
+      if (
+        err instanceof AdapterNotFoundError ||
+        err instanceof SpawnTargetError
+      ) {
         // Both are user-actionable ("install claude", "restart to repair") —
         // the dialog renders this message verbatim, so a 500 here buried the
         // one string that tells the user what to do.
         res.status(400).json({ error: err.message, code: err.code });
         return;
       }
-      if (err instanceof ExternalHarnessError) {
+      if (
+        err instanceof ExternalHarnessError ||
+        err instanceof ProjectSessionScopeUnavailableError ||
+        err instanceof SessionManagerClosingError
+      ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;
       }
@@ -627,7 +681,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // agent session — they carry live status the transcript can't know.
       const registryRows = sessionManager
         .list()
-        .filter((session) => session.cwd === cwd && session.agentSessionId != null);
+        .filter(
+          (session) => session.cwd === cwd && session.agentSessionId != null,
+        );
       // Only rows the scan did NOT account for need a direct probe — the
       // phantoms, plus the narrow case of a transcript that exists but holds
       // no line our parser understands (see ClaudeCodeAdapter.canResume, which
@@ -636,7 +692,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
         registryRows.map(async (session) =>
           foundInStore.has(`${session.harness}\u0000${session.agentSessionId!}`)
             ? true
-            : agentHoldsConversation(adapters, session.harness, session.agentSessionId!, session.cwd),
+            : agentHoldsConversation(
+                adapters,
+                session.harness,
+                session.agentSessionId!,
+                session.cwd,
+              ),
         ),
       );
 
@@ -655,7 +716,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       });
       for (const record of transcripts) {
         if (byAgentSessionId.has(record.agentSessionId)) continue;
-        byAgentSessionId.set(record.agentSessionId, { ...record, resumeMode: "agent-resume" });
+        byAgentSessionId.set(record.agentSessionId, {
+          ...record,
+          resumeMode: "agent-resume",
+        });
       }
 
       const merged = Array.from(byAgentSessionId.values()).sort((a, b) =>
@@ -676,7 +740,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
         for (const summary of merged) {
           const turnCount =
             turnCounts.get(summary.agentSessionId) ??
-            (summary.harnessSessionId ? turnCounts.get(summary.harnessSessionId) : undefined);
+            (summary.harnessSessionId
+              ? turnCounts.get(summary.harnessSessionId)
+              : undefined);
           if (turnCount !== undefined) summary.turnCount = turnCount;
         }
       }
@@ -699,7 +765,10 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(404).json({ error: err.message });
       return true;
     }
-    if (err instanceof AdapterNotFoundError || err instanceof SpawnTargetError) {
+    if (
+      err instanceof AdapterNotFoundError ||
+      err instanceof SpawnTargetError
+    ) {
       // AdapterNotFoundError: a persisted session with an unknown harness kind
       // (e.g. from a future or removed harness type) cannot be resumed.
       // SpawnTargetError: the agent binary can't be spawned on Windows (not on
@@ -711,11 +780,13 @@ export function createRestRouter(options: RestRouterOptions): Router {
     if (
       err instanceof ExternalHarnessError ||
       err instanceof AgentSessionIdentityReservedError ||
+      err instanceof ProjectSessionScopeUnavailableError ||
       err instanceof SessionAlreadyLiveError ||
-      err instanceof SessionNotResumeableError ||
-      err instanceof ProjectSessionScopeUnavailableError
+      err instanceof SessionNotResumeableError
     ) {
-      res.status(409).json({ error: err.message, code: (err as { code: string }).code });
+      res
+        .status(409)
+        .json({ error: err.message, code: (err as { code: string }).code });
       return true;
     }
     return false;
@@ -730,35 +801,27 @@ export function createRestRouter(options: RestRouterOptions): Router {
   router.post("/sessions/adopt", async (req, res, next) => {
     const parsed = adoptSessionSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
+      res
+        .status(400)
+        .json({ error: parsed.error.issues.map((i) => i.message).join("; ") });
       return;
     }
     const { agentSessionId, harness, title, lastActiveAt } = parsed.data;
     const cwd = normalizeCwd(parsed.data.cwd);
     try {
-      // Resolve ownership before probing or mutating adapter state. Valid
-      // migrated records use ordinary resume, whose manager revalidates their
-      // neutral project identity. Unmigrated legacy authority stays fenced.
+      // Resolve an already-owned registry row before probing or mutating any
+      // adapter state. Project scope is re-derived by SessionManager on the
+      // ordinary resume path; a legacy planner origin is metadata, never a
+      // separate authority or lifecycle route.
       const durableOwner = sessionManager.getAgentSessionOwner(agentSessionId);
       const identityReserved =
         sessionManager.isAgentSessionIdentityReserved(agentSessionId);
       const identityOwners = sessionManager
         .list()
         .filter((session) => session.agentSessionId === agentSessionId);
-      if (
-        (durableOwner?.planning !== undefined && !durableOwner.agentMapIdentity) ||
-        identityOwners.some(
-          (session) => session.planning !== undefined && !session.agentMapIdentity,
-        )
-      ) {
-        res.status(409).json({
-          code: "planner_session_requires_scoped_route",
-          error: "Planner sessions must be resumed through their project route",
-        });
-        return;
-      }
-      // Cwd remains part of the historical-record identity. Client-supplied
-      // paths cannot alias around current ownership or a durable reservation.
+      // Cwd remains part of the historical-record identity. The client cannot
+      // use it to choose Agent Map authority: the server resolves the current
+      // canonical project again before the resumed process is spawned.
       const existing = identityOwners.find(
         (session) => normalizeCwd(session.cwd) === cwd,
       );
@@ -774,7 +837,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
       // Never take the client's word for resumability — it's re-derived from
       // the agent's own store here, so a stale history row (transcript deleted
       // between the list and the click) can't leave a phantom record behind.
-      if (!(await agentHoldsConversation(adapters, harness, agentSessionId, cwd))) {
+      if (
+        !(await agentHoldsConversation(adapters, harness, agentSessionId, cwd))
+      ) {
         const label = getHarnessAdapter(harness).label;
         res.status(409).json({
           error: `${label} no longer has the conversation for session ${agentSessionId} in ${cwd} — there is nothing to resume. Start a new session in this directory instead.`,
@@ -817,7 +882,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
    */
   router.get("/sessions/:id/record", async (req, res, next) => {
     if (!options.sessionRecords) {
-      res.status(501).json({ error: "session records are not available on this server" });
+      res
+        .status(501)
+        .json({ error: "session records are not available on this server" });
       return;
     }
     try {
@@ -833,14 +900,6 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   router.post("/sessions/:id/resume", async (req, res, next) => {
-    const existing = sessionManager.get(req.params.id);
-    if (existing?.planning && !existing.agentMapIdentity) {
-      res.status(409).json({
-        code: "planner_session_requires_scoped_route",
-        error: "Planner sessions must be resumed through their project route",
-      });
-      return;
-    }
     try {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
@@ -866,32 +925,50 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const existing = sessionManager.get(req.params.id);
-    if (
-      existing?.planning &&
-      (!existing.agentMapIdentity || !options.submitSessionInput)
-    ) {
-      res.status(409).json({
-        code: "planner_session_requires_scoped_route",
-        error: "Planner input must use the project-scoped message route",
-      });
-      return;
-    }
     try {
       const submit = parsed.data.submit ?? true;
-      const ok = options.submitSessionInput
-        ? await options.submitSessionInput(req.params.id, parsed.data.text, submit)
-        : await sessionManager.submitInput(req.params.id, parsed.data.text, submit);
-      if (!ok) {
+      const submitted = options.submitSessionInput
+        ? await options.submitSessionInput(
+            req.params.id,
+            parsed.data.text,
+            submit,
+            parsed.data.requestId,
+          )
+        : await sessionManager.submitInput(
+            req.params.id,
+            parsed.data.text,
+            submit,
+          );
+      const result =
+        typeof submitted === "boolean" ? { ok: submitted } : submitted;
+      if (!result.ok) {
         res.status(404).json({ error: "session not found or has no live pty" });
         return;
       }
-      res.json({ ok: true });
+      res.json(result);
     } catch (err) {
       if (
         err instanceof SessionNotReadyError ||
         err instanceof ExternalHarnessError ||
-        err instanceof ProjectSessionScopeUnavailableError
+        err instanceof SessionBackgroundInputPreemptedError ||
+        err instanceof SessionInputIsolationError
+      ) {
+        res.status(409).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        err.code === "project_bootstrap_dispatch_forbidden"
+      ) {
+        res.status(403).json({ error: err.message, code: err.code });
+        return;
+      }
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err.code === "project_bootstrap_request_id_reused" ||
+          err.code === "project_bootstrap_input_capacity")
       ) {
         res.status(409).json({ error: err.message, code: err.code });
         return;
