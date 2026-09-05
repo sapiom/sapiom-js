@@ -1,0 +1,59 @@
+{
+  "name": "@sapiom/opencode",
+  "version": "0.0.1",
+  "description": "Sapiom-managed headless OpenCode runtime and standalone launcher.",
+  "license": "MIT",
+  "author": "Sapiom",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "sapiom-opencode": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "pnpm build:server && pnpm build:web",
+    "build:server": "tsc --project tsconfig.build.json",
+    "build:web": "vite build --config web/vite.config.ts",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
+    "lint": "eslint src web/src --ext .ts,.tsx",
+    "format": "prettier --write \"src/**/*.ts\" \"web/src/**/*.{ts,tsx,css}\"",
+    "dev": "pnpm build && node dist/cli.js",
+    "prepublishOnly": "pnpm build"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "^5.4.2",
+    "vite": "6.4.3",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "@assistant-ui/react": "0.15.18",
+    "@assistant-ui/react-opencode": "0.2.22",
+    "@opencode-ai/sdk": "1.18.29",
+    "opencode-ai": "1.18.29",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  }
+}

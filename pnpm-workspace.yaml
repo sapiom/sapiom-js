@@ -6,11 +6,14 @@ packages:
 # electron/esbuild need their postinstall too (electron downloads its binary;
 # without this the desktop app's `electron` runtime is missing). @electron/rebuild
 # recompiles node-pty against Electron's ABI during packaging.
+# opencode-ai likewise downloads its platform binary during postinstall; its
+# JS wrapper deliberately refuses to run when that step was skipped.
 onlyBuiltDependencies:
   - node-pty
   - electron
   - esbuild
   - "@electron/rebuild"
+  - opencode-ai
 
 # Upgrade the @electron/rebuild that electron-builder bundles (app-builder-lib
 # pins 3.6.1, which drags node-gyp@9.4.1 — its VS detection can't parse recent
