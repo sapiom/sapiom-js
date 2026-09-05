@@ -2497,11 +2497,19 @@ export const startServer = async (
     try {
       const studioScopes = await studioWorkspaceScopeCatalog.list();
       const reconciled = (await studioProjectCatalog.reconcile(studioScopes)).workspaceScopes;
-      const byRoot = new Map(reconciled.map((scope) => [resolve(scope.cwd), scope]));
+      // Both catalogs key canonical filesystem roots. Cwd retains its display
+      // spelling and can be a symlink alias; prefer reconciled project metadata.
+      const byWorkspaceKey = new Map(
+        reconciled.map((scope) => [scope.workspaceKey, scope]),
+      );
       for (const scope of scopes) {
-        if (!byRoot.has(resolve(scope.cwd))) byRoot.set(resolve(scope.cwd), scope);
+        if (!byWorkspaceKey.has(scope.workspaceKey)) {
+          byWorkspaceKey.set(scope.workspaceKey, scope);
+        }
       }
-      scopes = [...byRoot.values()].sort((left, right) => left.cwd.localeCompare(right.cwd));
+      scopes = [...byWorkspaceKey.values()].sort((left, right) =>
+        left.cwd.localeCompare(right.cwd),
+      );
     } catch {
       // Agent Map is additive in E1. A bad/unavailable new catalog cannot
       // strand the legacy rail or System Graph during coexistence.
