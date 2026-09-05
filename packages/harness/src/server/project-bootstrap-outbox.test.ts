@@ -6,6 +6,8 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
+import { SessionManagerClosingError } from "../core/session-manager.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 import { startServer, type HarnessServer } from "./index.js";
 
@@ -190,11 +192,14 @@ describe("new-project bootstrap outbox recovery", () => {
       body: JSON.stringify({ recentDirs: [newRoot, existingRoot] }),
     });
     expect(committed.status).toBe(200);
-    const catalog = new StudioProjectCatalog(
-      path.join(stateRoot, "studio-projects.json"),
-    );
-    const created = await catalog.resolveIdentityForPath(newRoot);
-    expect(created).not.toBeNull();
+    const created = await vi.waitFor(async () => {
+      const project = await new StudioProjectCatalog(
+        path.join(stateRoot, "studio-projects.json"),
+      ).resolveIdentityForPath(newRoot);
+      expect(project).not.toBeNull();
+      expect(await exists(markerFile(project!.projectId))).toBe(true);
+      return project!;
+    });
     expect(created!.projectId).not.toBe(existingProjectId);
     expect(await exists(markerFile(created!.projectId))).toBe(true);
     expect(await exists(intentFile(created!.projectId))).toBe(false);
@@ -299,15 +304,18 @@ describe("new-project bootstrap outbox recovery", () => {
       body: JSON.stringify({ recentDirs: [newRoot, existingRoot] }),
     });
     expect(response.status).toBe(200);
-    const created = await new StudioProjectCatalog(
-      path.join(stateRoot, "studio-projects.json"),
-    ).resolveIdentityForPath(newRoot);
-    expect(created).not.toBeNull();
+    const created = await vi.waitFor(async () => {
+      const project = await new StudioProjectCatalog(
+        path.join(stateRoot, "studio-projects.json"),
+      ).resolveIdentityForPath(newRoot);
+      expect(project).not.toBeNull();
+      expect(await exists(intentFile(project!.projectId))).toBe(true);
+      expect(error).toHaveBeenCalledWith(
+        "[harness] project bootstrap session start deferred: adapter_unavailable",
+      );
+      return project!;
+    });
     expect(server.sessionManager.list()).toEqual([]);
-    expect(await exists(intentFile(created!.projectId))).toBe(true);
-    expect(error).toHaveBeenCalledWith(
-      "[harness] project bootstrap session start deferred: adapter_unavailable",
-    );
 
     await server.close();
     server = undefined;
@@ -463,6 +471,61 @@ describe("new-project bootstrap outbox recovery", () => {
       fs.readFile(intentFile(existingProjectId), "utf8").then(JSON.parse),
     ).resolves.toMatchObject({ status: "scheduled", targetSessionId: null });
   });
+
+  it.each(["bootstrap", "session flush"] as const)(
+    "releases the listener with admission fenced when %s teardown never settles",
+    async (stalledResource) => {
+      server = await boot();
+      const active = server;
+      const port = active.port;
+      let releaseTeardown!: () => void;
+      const teardown = new Promise<void>((resolve) => {
+        releaseTeardown = resolve;
+      });
+      const originalBootstrapClose = ProjectBootstrapCoordinator.prototype.close;
+      const kills = vi.spyOn(active.sessionManager, "killAll");
+      const stalled = stalledResource === "bootstrap"
+        ? vi.spyOn(ProjectBootstrapCoordinator.prototype, "close")
+            .mockImplementation(async function (this: ProjectBootstrapCoordinator) {
+              await originalBootstrapClose.call(this);
+              await teardown;
+            })
+        : vi.spyOn(active.sessionManager, "flush")
+            .mockImplementation(() => teardown);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let closed = false;
+      const closing = active.close().then(() => { closed = true; });
+
+      try {
+        await vi.waitFor(() => expect(stalled).toHaveBeenCalled());
+        await expect(active.sessionManager.create({
+          harness: "claude-code", cwd: newRoot,
+        })).rejects.toBeInstanceOf(SessionManagerClosingError);
+        await vi.waitFor(() => expect(kills).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(5_001);
+        await vi.waitFor(() => expect(closed).toBe(true), {
+          timeout: 250,
+        });
+        await closing;
+        server = undefined;
+
+        const rebound = createHttpServer();
+        await new Promise<void>((resolve, reject) => {
+          rebound.once("error", reject);
+          rebound.listen(port, "127.0.0.1", () => resolve());
+        });
+        await new Promise<void>((resolve, reject) => {
+          rebound.close((error) => (error ? reject(error) : resolve()));
+        });
+        expect(launches).toEqual([]);
+      } finally {
+        releaseTeardown();
+        vi.useRealTimers();
+        await closing;
+      }
+    },
+  );
 
   it("makes concurrent server close calls share one complete teardown", async () => {
     server = await boot();

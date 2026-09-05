@@ -602,9 +602,10 @@ export class BuildPlanService {
     }
     const result: BuildPlanMutationResult = { replayed: false, created: !prepared.noOp,
       plan: refFor(prepared.plan), mappings: prepared.mappings, diagnostics: prepared.diagnostics };
+    const committedAt = prepared.noOp ? this.now().toISOString() : prepared.plan.createdAt;
     const receipt: ProjectMutationReceipt<BuildPlanMutationResult> = { projectId: identity.projectId,
       userId: identity.userId, sessionId: identity.sessionId, requestId, requestDigest: digest,
-      operation, result, createdAt: prepared.plan.createdAt };
+      operation, result, createdAt: committedAt };
     next.requestReceipts.push(receipt);
     const planReceipts = () => next.requestReceipts.filter((entry) =>
       entry.operation === "build_plan_apply" || entry.operation === "build_plan_rebase");
@@ -620,7 +621,7 @@ export class BuildPlanService {
         sessionId: expired.sessionId, requestId: expired.requestId, operation: expired.operation, createdAt: expired.createdAt });
     }
     next.recordVersion += 1;
-    next.updatedAt = prepared.plan.createdAt;
+    next.updatedAt = committedAt;
     return Promise.resolve({ value: result, next });
   }
 

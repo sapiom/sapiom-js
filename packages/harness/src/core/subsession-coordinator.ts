@@ -47,6 +47,7 @@ import {
 } from "./subsession-coordinator-store.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 30_000;
+const DEFAULT_BATCH_WAIT_TIMEOUT_MS = 30_000;
 const ADAPTER_IDENTITY_POLL_MS = 25;
 const KICKOFF_MARKER = /<sapiom-project-delegation\s+binding="([A-Za-z0-9._-]+)"\s+delivery="([A-Za-z0-9._-]+)"\s+input="([A-Za-z0-9._-]+)"\s+context="([1-9][0-9]*)"\s+spawn="([1-9][0-9]*)"\s*\/>/u;
 
@@ -75,6 +76,8 @@ export class SubsessionCoordinatorError extends Error {
   }
 }
 
+import { codexRuntimeMarker } from "./collector/codex-runtime-marker.js";
+
 export interface SubsessionCoordinatorOptions {
   store: SubsessionCoordinatorStore;
   sessionManager: SessionManager;
@@ -82,6 +85,8 @@ export interface SubsessionCoordinatorOptions {
   eventReader: EventReader;
   ownerId?: string;
   readinessTimeoutMs?: number;
+  /** Shared readiness/adapter wait budget for one delegation batch. */
+  batchWaitTimeoutMs?: number;
   onEvent?: (event: SubsessionCoordinatorEvent) => void | Promise<void>;
 }
 
@@ -170,11 +175,16 @@ const refsMatchBrief = (
 export class SubsessionCoordinator {
   private readonly ownerId: string;
   private readonly readinessTimeoutMs: number;
+  private readonly batchWaitTimeoutMs: number;
 
   constructor(private readonly options: SubsessionCoordinatorOptions) {
     this.ownerId = options.ownerId ?? `coordinator_${randomUUID()}`;
     this.readinessTimeoutMs =
       options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+    this.batchWaitTimeoutMs = options.batchWaitTimeoutMs ?? DEFAULT_BATCH_WAIT_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.batchWaitTimeoutMs) || this.batchWaitTimeoutMs < 1 ||
+      this.batchWaitTimeoutMs > DEFAULT_BATCH_WAIT_TIMEOUT_MS)
+      throw new RangeError("batchWaitTimeoutMs must be between 1 and 30000");
   }
 
   private emit(event: SubsessionCoordinatorEvent): void {
@@ -237,6 +247,7 @@ export class SubsessionCoordinator {
     identity: ProjectAgentSession,
     request: DelegateRequest,
   ): Promise<ProjectSubsessionResult> {
+    const waitDeadline = Date.now() + this.batchWaitTimeoutMs;
     const caller = this.assertCaller(identity);
     let reserved;
     try {
@@ -250,7 +261,9 @@ export class SubsessionCoordinator {
     }
     const results: DelegationItemResult[] = [];
     for (const binding of reserved.bindings) {
-      results.push(await this.reconcileBinding(identity, binding, reserved.replayed));
+      results.push(Date.now() >= waitDeadline
+        ? this.failedResult(binding, error("readiness_timeout", true, "retry"))
+        : await this.reconcileBinding(identity, binding, reserved.replayed, waitDeadline));
     }
     return {
       schemaVersion: 1,
@@ -484,6 +497,7 @@ export class SubsessionCoordinator {
     caller: ProjectAgentSession,
     initial: SubsessionBindingRecord,
     replayed: boolean,
+    waitDeadline = Date.now() + this.batchWaitTimeoutMs,
   ): Promise<DelegationItemResult> {
     const identity = bindingIdentity(caller, initial);
     let binding = initial;
@@ -512,7 +526,8 @@ export class SubsessionCoordinator {
           error("context_stale", false, "refresh_context"),
         );
       }
-      const ensured = await this.ensureSession(caller, binding, focused.projection);
+      if (Date.now() >= waitDeadline) throw new SessionNotReadyError(binding.sessionId);
+      const ensured = await this.ensureSession(caller, binding, focused.projection, waitDeadline);
       binding = ensured.binding;
       if (binding.sessionState !== "ready")
         return this.result(binding, "already-running");
@@ -689,6 +704,7 @@ export class SubsessionCoordinator {
     caller: ProjectAgentSession,
     initial: SubsessionBindingRecord,
     projection: FocusedSessionContextProjection | null,
+    waitDeadline: number,
   ): Promise<{
     binding: SubsessionBindingRecord;
     created: boolean;
@@ -747,7 +763,7 @@ export class SubsessionCoordinator {
             incarnation: expected.incarnation,
           },
         );
-        binding = await this.advanceToReady(identity, binding, runtimeToken);
+        binding = await this.advanceToReady(identity, binding, runtimeToken, waitDeadline);
         return { binding, created: false, reused: true };
       }
       if (this.options.sessionManager.wasSubsessionClosedByUser(expected)) {
@@ -762,7 +778,7 @@ export class SubsessionCoordinator {
         const runtimeToken =
           this.options.sessionManager.getRuntimeEpoch(binding.sessionId)!;
         if (binding.runtime?.runtimeToken === runtimeToken) {
-          binding = await this.advanceToReady(identity, binding, runtimeToken);
+          binding = await this.advanceToReady(identity, binding, runtimeToken, waitDeadline);
           return { binding, created: false, reused: true };
         }
         if (binding.spawnClaim) {
@@ -778,7 +794,7 @@ export class SubsessionCoordinator {
               incarnation: privateMarker.incarnation,
             },
           );
-          binding = await this.advanceToReady(identity, binding, runtimeToken);
+          binding = await this.advanceToReady(identity, binding, runtimeToken, waitDeadline);
           return { binding, created: false, reused: true };
         }
         throw error("binding_session_mismatch", false, "inspect_session");
@@ -790,6 +806,7 @@ export class SubsessionCoordinator {
           binding,
           privateMarker,
           projection,
+          waitDeadline,
         );
         return { binding, created: false, reused: true };
       }
@@ -878,7 +895,7 @@ export class SubsessionCoordinator {
         incarnation: marker.incarnation,
       },
     );
-    binding = await this.advanceToReady(identity, binding, runtimeToken);
+    binding = await this.advanceToReady(identity, binding, runtimeToken, waitDeadline);
     return { binding, created: true, reused: false };
   }
 
@@ -888,6 +905,7 @@ export class SubsessionCoordinator {
     initial: SubsessionBindingRecord,
     currentMarker: TrustedSubsessionBindingMarker,
     projection: FocusedSessionContextProjection | null,
+    waitDeadline: number,
   ): Promise<SubsessionBindingRecord> {
     let binding = initial;
     if (
@@ -989,13 +1007,14 @@ export class SubsessionCoordinator {
         incarnation: nextMarker.incarnation,
       },
     );
-    return this.advanceToReady(identity, binding, runtimeToken);
+    return this.advanceToReady(identity, binding, runtimeToken, waitDeadline);
   }
 
   private async advanceToReady(
     identity: ProjectAgentSession,
     initial: SubsessionBindingRecord,
     runtimeToken: string,
+    waitDeadline: number,
   ): Promise<SubsessionBindingRecord> {
     let binding = initial;
     if (binding.sessionState === "starting") {
@@ -1011,9 +1030,18 @@ export class SubsessionCoordinator {
       );
     }
     if (binding.sessionState === "awaiting-ready") {
-      const ready = await this.waitForReady(binding.sessionId, runtimeToken);
+      const ready = await this.waitForReady(binding.sessionId, runtimeToken, waitDeadline);
       if (!ready) throw new SessionNotReadyError(binding.sessionId);
-      await this.waitForAdapterIdentity(binding.sessionId, runtimeToken);
+      const session = this.options.sessionManager.get(binding.sessionId);
+      const identityState = this.options.sessionManager.getAdapterIdentityState(binding.sessionId, runtimeToken);
+      // Fresh Codex creates its rollout only after the first turn. The exact
+      // private binding and runtime own this PTY; its marked first prompt lets
+      // the broker prove transcript ownership after submission.
+      const firstOwnedCodexTurn = binding.harness === "codex" && session?.agentSessionId === null &&
+        binding.contextEpoch === 1 && currentDelivery(binding).state === "pending" &&
+        identityState !== "ambiguous" && binding.runtime?.runtimeToken === runtimeToken;
+      if (!firstOwnedCodexTurn)
+        await this.waitForAdapterIdentity(binding.sessionId, runtimeToken, waitDeadline);
       binding = await this.options.store.transitionSession(
         identity,
         binding.bindingId,
@@ -1037,8 +1065,9 @@ export class SubsessionCoordinator {
   private async waitForAdapterIdentity(
     sessionId: string,
     runtimeToken: string,
+    waitDeadline: number,
   ): Promise<void> {
-    const deadline = Date.now() + this.readinessTimeoutMs;
+    const deadline = Math.min(waitDeadline, Date.now() + this.readinessTimeoutMs);
     for (;;) {
       if (!this.options.sessionManager.isCurrentRuntimeEpoch(sessionId, runtimeToken))
         throw error("session_unreachable", true, "inspect_session");
@@ -1052,12 +1081,12 @@ export class SubsessionCoordinator {
       if (state === "unavailable")
         throw error("adapter_unavailable", true, "retry");
       if (Date.now() >= deadline)
-        throw error("adapter_unavailable", true, "retry");
-      await new Promise((resolve) => setTimeout(resolve, ADAPTER_IDENTITY_POLL_MS));
+        throw error(Date.now() >= waitDeadline ? "readiness_timeout" : "adapter_unavailable", true, "retry");
+      await new Promise((resolve) => setTimeout(resolve, Math.min(ADAPTER_IDENTITY_POLL_MS, deadline - Date.now())));
     }
   }
 
-  private waitForReady(sessionId: string, runtimeToken: string): Promise<boolean> {
+  private waitForReady(sessionId: string, runtimeToken: string, waitDeadline: number): Promise<boolean> {
     if (
       this.options.sessionManager.get(sessionId)?.ready &&
       this.options.sessionManager.isCurrentRuntimeEpoch(sessionId, runtimeToken)
@@ -1083,7 +1112,7 @@ export class SubsessionCoordinator {
       );
       const timer = setTimeout(
         () => finish(false),
-        this.readinessTimeoutMs,
+        Math.max(0, Math.min(this.readinessTimeoutMs, waitDeadline - Date.now())),
       );
     });
   }
@@ -1196,6 +1225,8 @@ export class SubsessionCoordinator {
       ].join("\n\n");
     }
     return [
+      ...(binding.harness === "codex" && binding.runtime
+        ? [codexRuntimeMarker(binding.runtime.runtimeToken)] : []),
       "You are an ordinary writable project session delegated by another project session.",
       `Outcome: ${binding.outcome}`,
       ...(binding.kickoffContext

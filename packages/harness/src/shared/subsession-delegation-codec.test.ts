@@ -74,6 +74,17 @@ describe("subsession delegation codec", () => {
     }
   });
 
+  it("canonicalizes release keys by code point independently of locale collation", () => {
+    const release = (delegationKeys: string[]) => parseProjectSubsessionRequest({
+      schemaVersion: 1, requestKey: "release-order", operation: { kind: "release", delegationKeys },
+    }, projectId);
+    const parsed = release(["ab", "a-c"]);
+    expect(parsed.operation).toEqual({ kind: "release", delegationKeys: ["a-c", "ab"] });
+    expect(computeCanonicalDelegationRequestDigest(parsed)).toBe(
+      computeCanonicalDelegationRequestDigest(release(["a-c", "ab"])),
+    );
+  });
+
   it("separates request identity from immutable binding content", () => {
     const first = parseProjectSubsessionRequest(
       request([{ delegationKey: "research", outcome: "Collect evidence" }]),

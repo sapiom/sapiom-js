@@ -679,7 +679,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openProjectMap(page, "acme-app");
     await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("agent-map-load-error")).toBeVisible();
+    await expect(page.getByTestId("agent-map-project-unavailable")).toBeVisible();
   });
 });
 

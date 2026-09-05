@@ -9,6 +9,7 @@
 
 import { SubsessionCoordinatorStore, type SubsessionCoordinatorStoreEvent } from "../core/subsession-coordinator-store.js";
 import { SubsessionCoordinator, type SubsessionCoordinatorEvent } from "../core/subsession-coordinator.js";
+import { codexRuntimeMarker } from "../core/collector/codex-runtime-marker.js";
 import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import { AgentBriefService } from "../core/agent-brief-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
@@ -1585,6 +1586,8 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Date.now(),
+            ...(sessionManager.getSubsessionBinding(session.id)
+              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
         } else {
           codexRolloutBroker.releaseSession(session.id);
@@ -2797,15 +2800,17 @@ export const startServer = async (
       const reconciliation = await studioProjectCatalog.reconcile(studioScopes);
       await convergeReconciledProjectLifecycle(reconciliation);
       const reconciled = reconciliation.workspaceScopes;
-      const byRoot = new Map(
-        reconciled.map((scope) => [resolve(scope.cwd), scope]),
+      // Both catalogs key canonical filesystem roots. Cwd retains its display
+      // spelling and can be a symlink alias; prefer reconciled project metadata.
+      const byWorkspaceKey = new Map(
+        reconciled.map((scope) => [scope.workspaceKey, scope]),
       );
       for (const scope of scopes) {
-        if (!byRoot.has(resolve(scope.cwd))) {
-          byRoot.set(resolve(scope.cwd), scope);
+        if (!byWorkspaceKey.has(scope.workspaceKey)) {
+          byWorkspaceKey.set(scope.workspaceKey, scope);
         }
       }
-      scopes = [...byRoot.values()].sort((left, right) =>
+      scopes = [...byWorkspaceKey.values()].sort((left, right) =>
         left.cwd.localeCompare(right.cwd),
       );
     } catch {
@@ -3283,6 +3288,14 @@ export const startServer = async (
       "sessionId" in event && event.sessionId
         ? event.sessionId
         : `subsession-${event.projectId}`;
+    if (event.name === "subsession.kickoff_submitted" &&
+      sessionManager.get(eventSessionId)?.harness === "codex") {
+      // An idle fresh Codex may have outlived the initial discovery window.
+      // Submission creates its rollout; restart collection, never the kickoff.
+      void startCodexTailerFor(eventSessionId).catch(() => {
+        console.error("[harness] codex kickoff transcript discovery failed");
+      });
+    }
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
       seq: seqCounter.next(eventSessionId),
@@ -4292,6 +4305,10 @@ export const startServer = async (
     const sinceMs = Date.parse(session.createdAt);
     let ambiguous = false;
     for (;;) {
+      // An exited or replaced runtime must not re-register itself on the next
+      // discovery poll after lifecycle cleanup released its ownership.
+      if (!sessionManager.isCurrentRuntimeEpoch(session.id, runtimeEpoch))
+        return { path: null, ambiguous };
       const claim = session.agentSessionId
         ? await codexRolloutBroker.claimExact({
             sessionId: session.id,
@@ -4305,6 +4322,8 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Number.isNaN(sinceMs) ? Date.now() : sinceMs,
+            ...(sessionManager.getSubsessionBinding(session.id)
+              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
       if (claim.outcome === "claimed")
         return { path: claim.path, ambiguous: false };
@@ -4325,6 +4344,9 @@ export const startServer = async (
     const discovery = await discoverCodexRolloutPath(session, runtimeEpoch);
     const rolloutPath = discovery.path;
     if (!rolloutPath) {
+      codexRolloutBroker.release(harnessSessionId, runtimeEpoch);
+      if (!sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch))
+        return;
       sessionManager.setAdapterIdentityState(
         harnessSessionId,
         runtimeEpoch,
@@ -4341,8 +4363,10 @@ export const startServer = async (
     if (
       sessionManager.get(harnessSessionId)?.status !== "running" ||
       !sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch)
-    )
+    ) {
+      codexRolloutBroker.release(harnessSessionId, runtimeEpoch);
       return;
+    }
 
     const tailer = tailCodexRollout({
       rolloutPath,
@@ -4382,17 +4406,18 @@ export const startServer = async (
     if (adapters[session.harness]?.eventSource !== "transcript-tail") return;
     if (session.status === "running") {
       startCodexTailerFor(session.id).catch((err: unknown) => {
-        if (context.runtimeEpoch)
+        if (context.runtimeEpoch) {
+          codexRolloutBroker.release(session.id, context.runtimeEpoch);
           sessionManager.setAdapterIdentityState(
             session.id,
             context.runtimeEpoch,
             "unavailable",
           );
+        }
         console.error("[harness] codex tailer startup failed:", err);
       });
     } else if (session.status === "exited") {
-      if (context.runtimeEpoch)
-        codexRolloutBroker.release(session.id, context.runtimeEpoch);
+      codexRolloutBroker.releaseSession(session.id);
       const tailer = codexTailers.get(session.id);
       if (tailer) {
         tailer.emitSessionEnd(
@@ -4505,17 +4530,31 @@ export const startServer = async (
       });
       await Promise.race([killsSettled, shutdownTimeout]);
       if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);
-      await bootstrapClosing;
-      await registrationClosing;
-      await settle(() => sessionManager.flush());
-      await settle(async () => {
-        await recordBackfill;
-        while (pendingRecordArchives.size > 0) {
-          await Promise.all([...pendingRecordArchives]);
-        }
+      // Admission and runtime fences are already closed. Let durability and
+      // telemetry drains finish in order, but do not hold the listening socket
+      // indefinitely if a store or transport never settles. Timing out this
+      // wait leaves the existing writes intact; it never reopens admission.
+      const drainsSettled = (async () => {
+        await bootstrapClosing;
+        await registrationClosing;
+        await settle(() => sessionManager.flush());
+        await settle(async () => {
+          await recordBackfill;
+          while (pendingRecordArchives.size > 0) {
+            await Promise.all([...pendingRecordArchives]);
+          }
+        });
+        await settle(() => agentMapMcp?.close());
+        await settle(() => batcher.close());
+      })();
+      const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+      let drainTimerHandle: ReturnType<typeof setTimeout> | undefined;
+      const drainTimeout = new Promise<void>((resolve) => {
+        drainTimerHandle = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS);
+        drainTimerHandle.unref();
       });
-      await settle(() => agentMapMcp?.close());
-      await settle(() => batcher.close());
+      await Promise.race([drainsSettled, drainTimeout]);
+      if (drainTimerHandle !== undefined) clearTimeout(drainTimerHandle);
 
       // Existing clients and keep-alive sockets otherwise make close() wait
       // forever. Terminate them before releasing the listener, and make the

@@ -74,7 +74,7 @@ describe("AgentMapProposalService", () => {
     ),
   );
 
-  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number) {
+  async function fixture(receiptRetentionLimit?: number, versionHistoryLimit?: number, operationHistoryLimit?: number) {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-proposal-"),
     );
@@ -96,6 +96,7 @@ describe("AgentMapProposalService", () => {
         ...(versionHistoryLimit === undefined
           ? {}
           : { versionHistoryLimit }),
+        ...(operationHistoryLimit === undefined ? {} : { operationHistoryLimit }),
       }),
     };
   }
@@ -193,6 +194,21 @@ describe("AgentMapProposalService", () => {
       name: "agent_map.proposal.quota_exceeded",
       operationCount: 1,
     });
+  });
+
+  it("rejects batches that exceed the operation history quota without losing existing replays", async () => {
+    const { root, service, accepted } = await fixture(undefined, undefined, 2);
+    const firstRequest = addNode("request-1", 0, null);
+    const first = await service.propose(identity("session-1"), firstRequest);
+    const before = await new AgentMapWorkspaceStore(root).readAggregate(projectId);
+    const next = addNode("request-2", 1, first.proposalId);
+    next.operations.push(...addNode("request-3", 1, first.proposalId).operations);
+    await expect(service.propose(identity("session-1"), next)).rejects.toMatchObject({
+      code: "quota_exceeded", resource: "map_operations",
+    });
+    expect(await new AgentMapWorkspaceStore(root).readAggregate(projectId)).toEqual(before);
+    await expect(service.propose(identity("session-1"), firstRequest)).resolves.toEqual(first);
+    expect(accepted).toHaveBeenCalledOnce();
   });
 
   it("bounds compact receipts and fails closed after exact replay retention", async () => {

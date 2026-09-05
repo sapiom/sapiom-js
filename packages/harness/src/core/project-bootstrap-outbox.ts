@@ -143,9 +143,12 @@ export class ProjectBootstrapOutbox {
           // before its atomic rename. The corresponding catalog transaction
           // cannot have committed yet. Ignore this exact writer-owned shape;
           // deleting it could race another process that still owns the active
-          // catalog transaction. Unknown files still fail closed below.
+          // catalog transaction.
           continue;
         }
+        // Desktop metadata and unrelated files do not describe project work.
+        // Only the reserved committed-marker namespace can block recovery.
+        if (!name.startsWith("project_") || !name.endsWith(".json")) continue;
         const match = /^(project_[0-9a-f-]+)\.json$/.exec(name);
         if (!match || !isStudioProjectId(match[1])) {
           throw new ProjectBootstrapOutboxError();

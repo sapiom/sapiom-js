@@ -8,7 +8,8 @@ Unify Agent Studio project sessions around one ordinary coding-agent identity, m
 **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
 `HarnessSession.agentMapIdentity` is now the role-neutral
 `ProjectAgentSession { projectId, userId, sessionId }`; `role` and `assignment`
-are no longer present. Valid persisted pre-upgrade session metadata is migrated
+are no longer present. `AgentMapToolEvent.role` is also removed; telemetry
+consumers use neutral project/session/tool/outcome fields. Valid persisted pre-upgrade session metadata is migrated
 into the optional `projectBootstrap` lifecycle field and then removed. Retired
 project-session HTTP aliases and public API names are removed; live clients use
 the generic session routes.

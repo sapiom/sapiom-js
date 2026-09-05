@@ -1729,6 +1729,14 @@ export const App = (): JSX.Element => {
     }
   };
 
+  const handleStartProjectSession = async (root: string, label: string): Promise<void> => {
+    const started = await startProjectSession(root, label, preferredHarness());
+    if (!started) return;
+    studioRestoreGenerationRef.current += 1;
+    setStudioSelection(null);
+    setSelectedProject(null);
+  };
+
   /**
    * The provider a create-initiated session boots with — the same stored
    * preference the rail used to read before it dispatched. It moved here with
@@ -2914,21 +2922,7 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onStartProjectSession={async (root, label) => {
-              // A project-row `+` explicitly asks to see a fresh coding
-              // session, even when Plan Agents or a legacy project map is the
-              // current altitude. Change views only after creation succeeds so
-              // a failed launch leaves the map and current conversation intact.
-              const started = await startProjectSession(
-                root,
-                label,
-                preferredHarness(),
-              );
-              if (!started) return;
-              studioRestoreGenerationRef.current += 1;
-              setStudioSelection(null);
-              setSelectedProject(null);
-            }}
+            onStartProjectSession={handleStartProjectSession}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}
@@ -3255,7 +3249,23 @@ export const App = (): JSX.Element => {
                   testId="project-session-empty"
                   icon="MessageSquare"
                   title="No active session in this project"
-                  body="Select a session tab to open its conversation. The Agent Map remains available without activating another project's session."
+                  body="Start a session or select a tab to open its conversation."
+                  cta={
+                    selectedStudioScope && agentMapEntry.state.workspace.status === "ready" ? (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        data-testid="project-start-session"
+                        disabled={startingProject?.root === selectedStudioScope.cwd}
+                        onClick={() => void handleStartProjectSession(
+                          selectedStudioScope.cwd,
+                          selectedStudioProject?.displayName ?? basenameOf(selectedStudioScope.cwd),
+                        )}
+                      >
+                        <Icon name="Plus" size={14} /> Start session
+                      </button>
+                    ) : null
+                  }
                 />
               ) : showProjectStarting && startingProject ? (
                 /* E3.2: a project you can select but not talk to is the
@@ -3540,6 +3550,7 @@ export const App = (): JSX.Element => {
                 <AgentMapPane
                   key={studioView.projectId}
                   state={agentMapEntry.state.workspace}
+                  unavailable={agentMapEntry.state.unavailable}
                   onRetry={agentMapEntry.retryWorkspace}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}

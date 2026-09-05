@@ -1966,6 +1966,7 @@ export class SubsessionCoordinatorStore {
       }
       const now = this.now();
       binding.sessionState = request.state;
+      if (request.state !== "spawn-claimed") binding.spawnClaim = null;
       binding.lifecycleEpoch += 1;
       if (["exited", "failed", "closed"].includes(request.state))
         binding.runtime = null;

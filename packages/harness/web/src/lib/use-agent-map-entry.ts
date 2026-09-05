@@ -124,6 +124,7 @@ export function useAgentMapEntry({
             unavailable: null,
           }),
       projectId: target,
+      unavailable: null,
       workspace: { status: "loading" },
     }));
     void agentMapLoader.load(apiRef.current, target).then(
@@ -142,7 +143,7 @@ export function useAgentMapEntry({
         }
         setState((current) =>
           current.projectId === target
-            ? { ...current, workspace: { status: "ready", value } }
+            ? { ...current, unavailable: null, workspace: { status: "ready", value } }
             : current,
         );
       },
@@ -167,7 +168,7 @@ export function useAgentMapEntry({
                 workspace: { status: "error", message },
                 unavailable: isWholeWorkspaceUnavailable(error)
                   ? message
-                  : current.unavailable,
+                  : null,
               }
             : current,
         );

@@ -763,11 +763,15 @@ export class ProjectBootstrapStore {
     }
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
-    await fs.writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await fs.rename(tmp, file);
+    try {
+      await fs.writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await fs.rename(tmp, file);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+    }
   }
 
   protected async writeIntent(

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProjectAgentSession,
   ProjectBootstrapMetadata,
@@ -14,9 +14,22 @@ import {
   type ProjectBootstrapStoreOptions,
 } from "./project-bootstrap-store.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: vi.fn(actual.writeFile),
+    rename: vi.fn(actual.rename),
+  };
+});
+
 class TestBootstrapStore extends ProjectBootstrapStore {
   read(session: HarnessSession, emptyProject = true) {
     return this.load(session, emptyProject);
+  }
+
+  save(session: HarnessSession) {
+    return this.writeState(this.file(session.id), this.newState(session, true));
   }
 }
 
@@ -142,6 +155,31 @@ describe("ProjectBootstrapStore", () => {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(legacyRoot, { recursive: true, force: true });
   });
+
+  it.each(["write", "rename"] as const)(
+    "removes private temporary state after a failed %s without replacing durable state",
+    async (phase) => {
+      const file = stateFile(root, session.id);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "last durable state");
+      const failure = new Error(`injected ${phase} failure`);
+      if (phase === "write") {
+        const actual = await vi.importActual<typeof fs>("node:fs/promises");
+        vi.mocked(fs.writeFile).mockImplementationOnce(async (...args) => {
+          await actual.writeFile(...args);
+          throw failure;
+        });
+      } else {
+        vi.mocked(fs.rename).mockRejectedValueOnce(failure);
+      }
+      const store = new TestBootstrapStore({ root, sessionManager: manager });
+
+      await expect(store.save(session)).rejects.toBe(failure);
+
+      expect(await fs.readdir(path.dirname(file))).toEqual(["input-queue.json"]);
+      expect(await fs.readFile(file, "utf8")).toBe("last durable state");
+    },
+  );
 
   it("durably schedules one project lifecycle and atomically claims its first ordinary session", async () => {
     const first = new TestBootstrapStore({

@@ -9,12 +9,13 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { ProjectAgentSession } from "../shared/agent-map.js";
+import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService, AgentMapProposalQuotaError } from "../core/agent-map-proposal-service.js";
+import { AgentMapWorkspaceStore, AgentMapWorkspaceStoreError, AgentBriefAppendQuotaError } from "../core/agent-map-workspace-store.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
-import { AgentBriefService } from "../core/agent-brief-service.js";
+import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
 import type { SubsessionCoordinator } from "../core/subsession-coordinator.js";
 import {
   createAgentMapMcpRouter,
@@ -86,7 +87,7 @@ async function fixture(
     await new Promise<void>((resolve) => http.close(() => resolve()));
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { capabilities, url, workspaceStore };
+  return { capabilities, url, workspaceStore, service, buildPlanService, agentBriefService };
 }
 
 async function connect(url: URL, token: string) {
@@ -550,6 +551,82 @@ describe("Agent Map Streamable HTTP MCP", () => {
     expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions).toHaveLength(1);
   });
 
+  it("isolates automatic canonical refresh from caller receipt IDs", async () => {
+    const { capabilities, url, workspaceStore, service, buildPlanService, agentBriefService } = await fixture();
+    const identity: ProjectAgentSession = { projectId, userId: "user", sessionId: "brief-namespace" };
+    const added = await service.propose(identity, { schemaVersion: 1, proposalId: null, expectedVersion: 0,
+      requestId: "namespace-map", operations: [{ kind: "add-node", draftRef: "research", node: {
+        kind: "agent", name: "Research", purpose: "Research", ownerAgent: null, contractRefs: [],
+      } }] });
+    const nodeId = Object.values(added.allocatedNodeIds)[0]!;
+    const map = (await workspaceStore.readAggregate(projectId)).current.map!;
+    const expectedMap = { versionId: map.versionId, contentDigest: map.contentDigest };
+    const created = await buildPlanService.apply(identity, { schemaVersion: 1, requestId: "namespace-plan",
+      expectedMap, expectedPlan: null, operations: [{ op: "replace-content", content: {
+        outcome: "Research", nonGoals: [], milestones: [], sequenceGates: [], sharedConstraints: [],
+        repositoryIntents: [], integrationCriteria: [], acceptanceCriteria: [], decisions: [],
+        assignments: [{ id: { clientRef: "research-work" }, plannedAgentId: nodeId, briefId: null,
+          mission: "Research", scope: [], nonGoals: [], dependencies: [] }], unresolvedDecisions: [], risks: [],
+      } }] });
+    const expectedPlan = { planId: created.plan.planId, versionId: created.plan.versionId, semanticDigest: created.plan.semanticDigest };
+    const client = await connect(url, capabilities.issue(identity).token);
+    const focused = await client.callTool({ name: "build_plan_brief_refresh", arguments: {
+      schemaVersion: 1, requestId: `brief-${created.plan.versionId}`, expectedMap, expectedPlan,
+      focus: { mode: "focused", selections: [{ focusScope: {
+        family: "ad-hoc-delegation", delegationKey: "research-detail", parentScopeKey: null,
+      }, nodeIds: [nodeId], mission: "Inspect research" }] },
+    } });
+    expect(focused).toMatchObject({ structuredContent: { persisted: true } });
+    const persisted = (await buildPlanService.read(identity, { kind: "current" })).plan!.content;
+    const applied = await client.callTool({ name: "build_plan_apply", arguments: {
+      schemaVersion: 1, requestId: "namespace-no-op", expectedMap, expectedPlan,
+      operations: [{ op: "replace-content", content: persisted }],
+    } });
+    expect(applied).toMatchObject({ structuredContent: { created: false, briefRefresh: { persisted: true } } });
+    const pointers = Object.values((await workspaceStore.readAggregate(projectId)).current.briefsByScope);
+    expect(pointers.map(({ focusScope }) => focusScope.family).sort()).toEqual(["ad-hoc-delegation", "canonical-workstream"]);
+    const reservedId = `harness-internal:brief:${created.plan.versionId}`;
+    const noOpInput = { schemaVersion: 1, requestId: reservedId, expectedMap, expectedPlan,
+      operations: [{ op: "replace-content", content: persisted }] };
+    await expect(buildPlanService.apply(identity, noOpInput)).rejects.toMatchObject({ code: "malformed_input" });
+    await expect(agentBriefService.refresh(identity, { schemaVersion: 1, requestId: reservedId,
+      expectedMap, expectedPlan, focus: { mode: "canonical" } })).rejects.toMatchObject({ code: "malformed_input" });
+    await expect(service.validate(identity, { schemaVersion: 1, proposalId: added.proposalId, expectedVersion: 1,
+      requestId: reservedId, operations: [{ kind: "update-node", nodeId, changes: { purpose: "Updated" } }] }))
+      .rejects.toMatchObject({ code: "validation_failed" });
+  });
+
+  it.each([
+    ["request_id_reused", "new_request"],
+    ["request_id_expired", "new_request"],
+    ["source_mismatch", "reread"],
+    ["malformed_input", "correct"],
+    ["storage_unavailable", "retryable"],
+  ] as const)("reports honest automatic brief recovery for %s", async (code, outcome) => {
+    const { capabilities, url, workspaceStore, service } = await fixture({
+      createAgentBriefService: (store) => {
+        const fail = async () => { throw new AgentBriefServiceError(code); };
+        return Object.assign(new AgentBriefService(store), { refresh: fail, refreshAfterPlanMutation: fail });
+      },
+    });
+    const identity: ProjectAgentSession = { projectId, userId: "user", sessionId: "brief-recovery" };
+    await service.propose(identity, { schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "recovery-map",
+      operations: [{ kind: "add-node", draftRef: "research", node: {
+        kind: "agent", name: "Research", purpose: "Research", ownerAgent: null, contractRefs: [],
+      } }] });
+    const map = (await workspaceStore.readAggregate(projectId)).current.map!;
+    const client = await connect(url, capabilities.issue(identity).token);
+    await expect(client.callTool({ name: "build_plan_apply", arguments: {
+      schemaVersion: 1, requestId: "recovery-plan", expectedMap: { versionId: map.versionId, contentDigest: map.contentDigest },
+      expectedPlan: null, operations: [{ op: "replace-content", content: {
+        outcome: "Keep the plan", nonGoals: [], milestones: [], sequenceGates: [], sharedConstraints: [],
+        repositoryIntents: [], integrationCriteria: [], acceptanceCriteria: [], decisions: [], assignments: [],
+        unresolvedDecisions: [], risks: [],
+      } }],
+    } })).resolves.toMatchObject({ structuredContent: { created: true, briefRefresh: { outcome, errorCode: code } } });
+    expect((await workspaceStore.readAggregate(projectId)).buildPlanVersions).toHaveLength(1);
+  });
+
   it("keeps a committed plan and reports manual intervention when brief history is exhausted", async () => {
     const { capabilities, url, workspaceStore } = await fixture({ briefVersionHistoryLimit: 1 });
     const identity: ProjectAgentSession = { projectId, sessionId: "brief-quota", userId: "user" };
@@ -673,6 +750,21 @@ describe("Agent Map Streamable HTTP MCP", () => {
       structuredContent: { code: "quota_exceeded", recovery: "manual_intervention" },
     });
     expect(await workspaceStore.readAggregate(projectId)).toEqual(aggregate);
+  });
+
+  it.each([
+    new AgentMapProposalQuotaError("map_versions"),
+    new AgentBriefAppendQuotaError("brief_versions"),
+    new AgentMapAggregateError("malformed_state"),
+    new AgentMapAggregateError("unsupported_schema", 3),
+    new AgentMapWorkspaceStoreError("malformed_state"),
+    new AgentMapWorkspaceStoreError("unsupported_schema", 3),
+  ])("returns manual intervention for permanent storage failure $name $code", async (error) => {
+    const { capabilities, url } = await fixture({ readSnapshotFor: async () => { throw error; } });
+    const client = await connect(url, capabilities.issue({ projectId, userId: "user", sessionId: "permanent-storage" }).token);
+    await expect(client.callTool({ name: "agent_map_read", arguments: {} })).resolves.toMatchObject({
+      isError: true, structuredContent: { code: error.code, recovery: "manual_intervention" },
+    });
   });
 
   it("returns a bounded terminal recovery when the capability project is unavailable", async () => {

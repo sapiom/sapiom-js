@@ -10,7 +10,8 @@ import {
   AgentMapProposalValidationError,
 } from "../core/agent-map-proposal-service.js";
 import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
-import { AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
+import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
+import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
 import { BuildPlanService, BuildPlanServiceError } from "../core/build-plan-service.js";
 import {
@@ -154,7 +155,7 @@ function errorResult(error: unknown) {
         ? { ...error.conflict }
         : error instanceof AgentMapProposalProjectError
           ? { code: "forbidden", recovery: "reread" }
-          : error instanceof AgentMapProposalQuotaError
+          : error instanceof AgentMapProposalQuotaError || error instanceof AgentBriefAppendQuotaError
             ? { code: error.code, recovery: "manual_intervention" }
             : error instanceof AgentMapMcpProjectUnavailableError
               ? { code: "project_unavailable", recovery: "reread" }
@@ -175,8 +176,8 @@ function errorResult(error: unknown) {
                           : error.code === "quota_exceeded" ? "manual_intervention" : "retry" }
               : error instanceof SubsessionCoordinatorError
                 ? error.detail
-              : error instanceof AgentMapWorkspaceStoreError
-                ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "reread" }
+              : error instanceof AgentMapWorkspaceStoreError || error instanceof AgentMapAggregateError
+                ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "manual_intervention" }
               : { code: "internal_error", recovery: "retry" };
   return {
     isError: true,
@@ -193,10 +194,10 @@ function toolResult(value: object, message: string) {
 }
 
 function briefRefreshFailure(error: unknown) {
-  const errorCode = error instanceof AgentBriefServiceError ? error.code : "storage_unavailable";
+  const details = errorResult(error).structuredContent;
   return {
-    outcome: errorCode === "quota_exceeded" ? "manual_intervention" as const : "retryable" as const,
-    errorCode,
+    outcome: details.recovery === "retry" ? "retryable" : details.recovery,
+    errorCode: details.code,
   };
 }
 
@@ -344,13 +345,10 @@ export function createAgentMapToolServer(
     },
     async (request) => instrument("build_plan_apply", async () => {
       const result = await buildPlanService.apply(identity, request);
-      const briefRefresh = await agentBriefService.refresh(identity, {
-        schemaVersion: 1,
-        requestId: `brief-${result.plan.versionId}`,
+      const briefRefresh = await agentBriefService.refreshAfterPlanMutation(identity, {
         expectedMap: request.expectedMap,
         expectedPlan: { planId: result.plan.planId, versionId: result.plan.versionId,
           semanticDigest: result.plan.semanticDigest },
-        focus: { mode: "canonical" },
       }).catch(briefRefreshFailure);
       return toolResult({ ...result, briefRefresh }, result.created ? "Build plan version created." : "Build plan is unchanged.");
     }),
@@ -365,13 +363,10 @@ export function createAgentMapToolServer(
     },
     async (request) => instrument("build_plan_rebase", async () => {
       const result = await buildPlanService.rebase(identity, request);
-      const briefRefresh = await agentBriefService.refresh(identity, {
-        schemaVersion: 1,
-        requestId: `brief-${result.plan.versionId}`,
+      const briefRefresh = await agentBriefService.refreshAfterPlanMutation(identity, {
         expectedMap: request.toMap,
         expectedPlan: { planId: result.plan.planId, versionId: result.plan.versionId,
           semanticDigest: result.plan.semanticDigest },
-        focus: { mode: "canonical" },
       }).catch(briefRefreshFailure);
       return toolResult({ ...result, briefRefresh }, result.created ? "Build plan rebased." : "Build plan rebase is unchanged.");
     }),

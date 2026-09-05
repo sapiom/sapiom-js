@@ -425,6 +425,25 @@ describe("SubsessionCoordinatorStore", () => {
     });
   });
 
+  it("persists a failed spawn and clears the departed spawn claim", async () => {
+    const root = await fixture();
+    const store = new SubsessionCoordinatorStore(root);
+    const binding = (await store.reserveDelegations(identity, delegate(), target)).bindings[0]!;
+    const claimed = await store.claimSpawn(identity, binding.bindingId, {
+      ownerId: "coordinator-1", expectedLifecycleEpoch: binding.lifecycleEpoch, expectedSpawnEpoch: binding.spawnEpoch,
+    });
+    expect(claimed.claimed).toBe(true);
+    const failed = await store.transitionSession(identity, binding.bindingId, {
+      expectedLifecycleEpoch: claimed.binding.lifecycleEpoch, expectedSpawnEpoch: claimed.binding.spawnEpoch,
+      expectedRuntimeToken: null, state: "failed",
+      error: { code: "session_create_failed", retryable: true, recovery: "retry" },
+    });
+    expect(failed).toMatchObject({ sessionState: "failed", spawnClaim: null, runtime: null,
+      lastError: { code: "session_create_failed", retryable: true, recovery: "retry" } });
+    const restarted = await new SubsessionCoordinatorStore(root).read(projectId);
+    expect(restarted.bindings[0]).toEqual(failed);
+  });
+
   it("persists one kickoff sender and never blindly retries uncertain delivery", async () => {
     const root = await fixture();
     const store = new SubsessionCoordinatorStore(root);

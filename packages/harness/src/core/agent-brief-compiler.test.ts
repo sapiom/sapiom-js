@@ -320,6 +320,19 @@ describe("deterministic focused brief compiler", () => {
     expect(dependencies).toContain(publishing);
   });
 
+  it("keeps diagnostic selection paths in the original caller order", () => {
+    const map = mapVersion(graph());
+    const plan = planVersion(map, content(assignments()));
+    const scopes = [research, publishing].map((plannedAgentId) => ({ family: "canonical-workstream" as const, plannedAgentId }));
+    // Find the reversed canonical order without relying on a digest fixture.
+    const first = projectFocusedBriefs({ projectId, map, plan, mapHistory: [map], planHistory: [plan], previousBriefs: [],
+      selections: scopes.map((focusScope) => ({ focusScope })) });
+    const selections = [...first.briefs].reverse().map(({ focusScope }, index) => ({ focusScope, mission: index === 0 ? "" : "Valid mission" }));
+    const result = projectFocusedBriefs({ projectId, map, plan, mapHistory: [map], planHistory: [plan], previousBriefs: [], selections });
+    expect(result.diagnostics.filter(({ code }) => code === "missing-brief").map(({ path }) => path))
+      .toEqual(["selections[0].mission"]);
+  });
+
   it("compiles a nested delegation without sweeping canonical pointers", () => {
     const map = mapVersion(graph());
     const plan = planVersion(map, content(assignments()));

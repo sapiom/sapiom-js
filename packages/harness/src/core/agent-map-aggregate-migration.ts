@@ -46,6 +46,7 @@ import { derivePersistedMapOperationTouchSet } from "./agent-map-proposal-valida
 import { isStudioProjectId } from "./studio-project-catalog.js";
 
 export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = PROJECT_PLANNING_STORAGE_SCHEMA_VERSION;
+export const AGENT_MAP_OPERATION_HISTORY_LIMIT = 65_536;
 
 export interface ProjectPlanningAggregateV2 {
   storageSchemaVersion: typeof PROJECT_PLANNING_STORAGE_SCHEMA_VERSION;
@@ -207,7 +208,7 @@ function validateBriefHistories(aggregate: ProjectPlanningAggregateV2): void {
 }
 
 function parseMapOperationHistory(value: unknown): RoleNeutralMapOperationRecord[] {
-  if (!Array.isArray(value) || value.length > 65_536) malformed();
+  if (!Array.isArray(value) || value.length > AGENT_MAP_OPERATION_HISTORY_LIMIT) malformed();
   return value.map((entry) => {
     if (!isRecord(entry) || !exact(entry, ["id", "requestId", "acceptedVersion", "operation", "actor", "acceptedAt"]) ||
       !bounded(entry.id) || !bounded(entry.requestId, 128) || !Number.isSafeInteger(entry.acceptedVersion) ||

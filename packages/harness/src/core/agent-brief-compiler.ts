@@ -569,8 +569,9 @@ function compile(
     const scopeKey = computeAgentBriefScopeKey(request.projectId, focusScope);
     selectionCounts.set(scopeKey, (selectionCounts.get(scopeKey) ?? 0) + 1);
   });
-  for (const [selectionIndex, selection] of sorted(request.selections, (entry) =>
-    computeAgentBriefScopeKey(request.projectId, entry.focusScope)).entries()) {
+  const indexedSelections = request.selections.map((selection, selectionIndex) => ({ selection, selectionIndex }));
+  for (const { selectionIndex, selection } of sorted(indexedSelections, ({ selection: entry }) =>
+    computeAgentBriefScopeKey(request.projectId, entry.focusScope))) {
     const scopeKey = computeAgentBriefScopeKey(request.projectId, selection.focusScope);
     if ((selectionCounts.get(scopeKey) ?? 0) > 1) {
       diagnostics.push(diagnostic("invalid-dependency", `selections[${selectionIndex}].focusScope`, [scopeKey]));

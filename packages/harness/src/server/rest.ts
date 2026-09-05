@@ -329,6 +329,12 @@ export function createRestRouter(options: RestRouterOptions): Router {
     listMacros,
   } = options;
   const router = Router();
+  const sessionCreationRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
   const attachmentUploadRateLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 30,
@@ -418,16 +424,17 @@ export function createRestRouter(options: RestRouterOptions): Router {
         const existing = new Set(current.recentDirs);
         for (const root of committed.recentDirs) {
           if (existing.has(root)) continue;
-          try {
-            await options.onRecentDirAdded?.(root);
-          } catch {
-            // Settings are already durable. Report a bounded classification,
-            // continue other additions, and let normal state reconciliation
-            // recover this root without returning a false rollback to callers.
-            console.error(
-              "[harness] project initialization deferred after settings commit",
-            );
-          }
+          // Initialization may fetch configuration or start a provider. Each
+          // root proceeds independently after the durable settings commit;
+          // neither it nor the HTTP response waits for another root's start.
+          void Promise.resolve()
+            .then(() => options.onRecentDirAdded?.(root))
+            .catch(() => {
+              // Normal state reconciliation recovers the committed root.
+              console.error(
+                "[harness] project initialization deferred after settings commit",
+              );
+            });
         }
       }
       res.json(committed);
@@ -468,7 +475,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
-  router.post("/sessions", attachmentUploadRateLimiter, async (req, res, next) => {
+  router.post("/sessions", sessionCreationRateLimiter, async (req, res, next) => {
     const parsed = createSessionSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });

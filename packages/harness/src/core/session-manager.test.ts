@@ -367,6 +367,65 @@ describe("SessionManager", () => {
     expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
   });
 
+  it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
+    const initial = createFakePty();
+    const resumedPty = createFakePty();
+    const spawnPty = vi.fn<PtySpawnFn>()
+      .mockReturnValueOnce(initial.pty as unknown as ReturnType<PtySpawnFn>)
+      .mockImplementationOnce(() => { throw new Error("resume spawn failed"); })
+      .mockReturnValue(resumedPty.pty as unknown as ReturnType<PtySpawnFn>);
+    const { manager, adapter } = makeManager({ spawnPty });
+    const sessionId = "00000000-0000-4000-8000-000000000116";
+    const input = delegatedCreate(sessionId);
+    const expected = marker(sessionId);
+    const next = marker(sessionId, 2, 2);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      expected,
+      input.trusted,
+    );
+    await manager.setAgentSessionId(
+      sessionId,
+      "agent-resume-retry",
+      "startup",
+      manager.getRuntimeEpoch(sessionId)!,
+    );
+    initial.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toThrow(
+      "resume spawn failed",
+    );
+    expect(manager.get(sessionId)?.status).toBe("exited");
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
+    expect(JSON.parse(await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8")))
+      .toMatchObject({ markers: { [sessionId]: next } });
+
+    // Already-next recovery still requires this exact project, parent, binding,
+    // and next incarnation; it cannot adopt a foreign coordinator's marker.
+    await expect(manager.resumeBound(
+      sessionId,
+      { ...expected, bindingId: "foreign-binding" },
+      next,
+    )).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    await expect(manager.resumeBound(sessionId, expected, marker(sessionId, 3, 3)))
+      .rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(spawnPty).toHaveBeenCalledTimes(2);
+
+    await expect(manager.resumeBound(sessionId, expected, next)).resolves.toMatchObject({
+      id: sessionId,
+      status: "running",
+      agentSessionId: "agent-resume-retry",
+    });
+    expect(adapter.resume).toHaveBeenCalledTimes(2);
+    expect(spawnPty).toHaveBeenCalledTimes(3);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
+    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
+    resumedPty.emitExit(0);
+    await manager.flush();
+  });
+
   it("refuses a fresh bound restart when any recorded turn exists", async () => {
     const { manager, spawns } = makeManager();
     const sessionId = "00000000-0000-4000-8000-000000000113";
@@ -4449,6 +4508,61 @@ describe("SessionManager", () => {
     });
 
 
+
+    it("preserves user keystrokes received during a deferred pre-write hook", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const phase = deferred<void>();
+      const beforeFirstWrite = vi.fn(() => phase.promise);
+      const onNotSubmitted = vi.fn(async () => {});
+      const background = manager.submitInputTracked(session.id, "background turn", {
+        lifecycle: { beforeFirstWrite, onNotSubmitted },
+      });
+      expect(beforeFirstWrite).toHaveBeenCalledOnce();
+
+      manager.write(session.id, "user draft");
+      phase.resolve();
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(await background).toMatchObject({
+        accepted: false,
+        phase: "not-written",
+        error: { code: "SESSION_BACKGROUND_INPUT_PREEMPTED", staged: false },
+      });
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+      expect(spawns[0]?.pty.write.mock.calls).toEqual([["user draft"]]);
+    });
+
+    it("compensates a durable claim when racing staged input wins during its pre-write hook", async () => {
+      const { manager, spawns } = makeManager();
+      const session = await manager.create({
+        cwd: "/tmp/proj",
+        harness: "claude-code",
+      });
+      manager.setReady(session.id);
+      const phase = deferred<void>();
+      const onNotSubmitted = vi.fn(async () => {});
+      const background = manager.submitInputTracked(session.id, "background turn", {
+        lifecycle: { beforeFirstWrite: () => phase.promise, onNotSubmitted },
+      });
+      const foreground = manager.submitInput(session.id, "foreground turn");
+      phase.resolve();
+      const result = await background;
+      await vi.advanceTimersByTimeAsync(300);
+      await foreground;
+
+      expect(result).toMatchObject({
+        accepted: false,
+        phase: "not-written",
+        error: { code: "SESSION_BACKGROUND_INPUT_PREEMPTED", staged: false },
+      });
+      expect(onNotSubmitted).toHaveBeenCalledOnce();
+      expect(spawns[0]?.pty.write.mock.calls).toEqual([["foreground turn"], ["\r"]]);
+    });
 
     it("records positive not-submitted evidence when the PTY rejects text before Enter", async () => {
       const { manager, spawns } = makeManager();

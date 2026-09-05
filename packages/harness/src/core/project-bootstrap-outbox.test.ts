@@ -91,18 +91,39 @@ describe("ProjectBootstrapOutbox", () => {
     await expect(fs.stat(staleTemporary)).resolves.toBeDefined();
   });
 
-  it("fails closed without deleting a file outside the writer temp format", async () => {
-    const { root, outbox } = await fixture();
+  it("ignores unrelated directory entries without blocking a valid marker or deleting them", async () => {
+    const { root, outbox, catalogPath, lifecycle } = await fixture();
+    const catalog = new StudioProjectCatalog(catalogPath, undefined, undefined, lifecycle);
+    const project = await catalog.create("Pending bootstrap");
     const outboxRoot = path.join(root, "outbox");
-    await fs.mkdir(outboxRoot, { recursive: true });
-    const unknown = path.join(outboxRoot, "project-marker.tmp-unknown");
-    await fs.writeFile(unknown, "unrecognized", { mode: 0o600 });
+    const unrelated = [".DS_Store", "notes.txt", "project-marker.tmp-unknown"];
+    for (const name of unrelated) {
+      await fs.writeFile(path.join(outboxRoot, name), "unrelated", { mode: 0o600 });
+    }
+    await fs.mkdir(path.join(outboxRoot, "backups"));
 
-    await expect(outbox.pending()).rejects.toBeInstanceOf(
-      ProjectBootstrapOutboxError,
-    );
-    await expect(fs.stat(unknown)).resolves.toBeDefined();
+    await expect(outbox.pending()).resolves.toEqual([{
+      projectId: project.projectId,
+      projectCreatedAt: project.createdAt,
+    }]);
+    for (const name of [...unrelated, "backups"]) {
+      await expect(fs.stat(path.join(outboxRoot, name))).resolves.toBeDefined();
+    }
   });
+
+  it.each(["project_invalid.json", `project_${randomUUID()}.json`])(
+    "fails closed on malformed reserved project marker %s",
+    async (name) => {
+      const { root, outbox } = await fixture();
+      const outboxRoot = path.join(root, "outbox");
+      await fs.mkdir(outboxRoot, { recursive: true });
+      const file = path.join(outboxRoot, name);
+      await fs.writeFile(file, "malformed reserved state", { mode: 0o600 });
+
+      await expect(outbox.pending()).rejects.toBeInstanceOf(ProjectBootstrapOutboxError);
+      await expect(fs.stat(file)).resolves.toBeDefined();
+    },
+  );
 
   it("stages only reconcile-created projects and never enrolls a legacy catalog project", async () => {
     const { root, catalogPath, lifecycle, outbox } = await fixture();

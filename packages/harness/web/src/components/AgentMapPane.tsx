@@ -10,6 +10,7 @@ import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
   state: AgentMapWorkspacePaneState;
+  unavailable: string | null;
   onRetry: () => void;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -18,6 +19,7 @@ interface AgentMapPaneProps {
 /** The honest E1 map: durable state around the existing neutral canvas empty. */
 export function AgentMapPane({
   state,
+  unavailable,
   onRetry,
   expanded,
   onToggleExpanded,
@@ -60,7 +62,17 @@ export function AgentMapPane({
   }, [closeInspector, expanded, onToggleExpanded, selected]);
 
   let content: JSX.Element;
-  if (state.status === "error") {
+  if (state.status === "error" && unavailable) {
+    content = (
+      <EmptyState
+        className="canvas-empty"
+        testId="agent-map-project-unavailable"
+        icon="Folder"
+        title="Project unavailable"
+        body="This project was removed or is unavailable to your current account. Select another project to continue."
+      />
+    );
+  } else if (state.status === "error") {
     content = (
       <EmptyState
         className="canvas-empty"

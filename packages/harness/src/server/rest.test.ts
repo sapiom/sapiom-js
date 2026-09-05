@@ -397,6 +397,43 @@ describe("createRestRouter", () => {
       expect(onRecentDirAdded.mock.calls).toEqual([[first], [second]]);
     });
 
+    it("returns committed settings while new-root initialization is still pending", async () => {
+      const first = path.join(tmpHome, "first");
+      const second = path.join(tmpHome, "second");
+      await Promise.all([first, second].map((dir) => fs.mkdir(dir)));
+      let releaseInitialization!: () => void;
+      const initialization = new Promise<void>((resolve) => {
+        releaseInitialization = resolve;
+      });
+      const onRecentDirAdded = vi.fn(async (root: string) => {
+        if (root === first) await initialization;
+      });
+      start({ onRecentDirAdded });
+      let responded = false;
+      const pendingResponse = fetch(`${baseUrl}/settings`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ recentDirs: [first, second] }),
+      }).then((response) => {
+        responded = true;
+        return response;
+      });
+
+      try {
+        await vi.waitFor(() => expect(onRecentDirAdded).toHaveBeenCalledWith(first));
+        const reread = await fetch(`${baseUrl}/settings`);
+        expect(await reread.json()).toMatchObject({ recentDirs: [first, second] });
+        await vi.waitFor(() => expect(responded).toBe(true), { timeout: 250 });
+        const response = await pendingResponse;
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ recentDirs: [first, second] });
+        expect(onRecentDirAdded.mock.calls).toEqual([[first], [second]]);
+      } finally {
+        releaseInitialization();
+        await pendingResponse;
+      }
+    });
+
     it("keeps a committed settings PATCH successful when project initialization is deferred", async () => {
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
       const first = path.join(tmpHome, "first");
@@ -880,6 +917,29 @@ describe("createRestRouter", () => {
         dataUrl: "data:text/plain;base64,YQ==",
       });
       expect(limited.status).toBe(429);
+    });
+
+    it("keeps session creation and successful attachment uploads in independent rate limits", async () => {
+      const attachment = { filename: "quota-proof.txt", dataUrl: "data:text/plain;base64,YQ==" };
+      for (let index = 0; index < 30; index += 1) {
+        const uploaded = await postAttachment(attachment);
+        expect(uploaded.status).toBe(200);
+      }
+      expect((await postAttachment(attachment)).status).toBe(429);
+      expect(await fs.readdir(path.join(projectRoot, ".sapiom", "uploads"))).toHaveLength(30);
+
+      vi.mocked(sessionManager.create).mockResolvedValue(exitedSession({ cwd: projectRoot }));
+      const createSession = () => fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "content-type": "application/json" },
+        body: JSON.stringify({ cwd: projectRoot, harness: "claude-code", initialPrompt: "Start my next task." }),
+      });
+      for (let index = 0; index < 30; index += 1) {
+        expect((await createSession()).status).toBe(201);
+      }
+      expect((await createSession()).status).toBe(429);
+      expect(sessionManager.create).toHaveBeenCalledTimes(30);
+      expect((await postAttachment(attachment)).status).toBe(429);
     });
   });
 

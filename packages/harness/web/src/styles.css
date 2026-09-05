@@ -4701,6 +4701,13 @@ button.system-graph-node.is-navigable:focus-visible {
   transition: none;
 }
 
+/* A release over the canvas can be routed into its child frame despite
+   pointer capture. Keep the whole resize gesture in the parent document so
+   releasing the handle ends the drag and persists its height. */
+.canvas-frame-wrap:has(.canvas-overview.is-resizing) .canvas-iframe {
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .canvas-overview {
     transition: none;

@@ -125,13 +125,25 @@ values are redacted, and oversized collections are truncated with a diagnostic.
 A project session without an overlay receives the common project-agent prompt
 byte-for-byte unchanged and keeps the same tool surface.
 
-Trusted hosts attach an overlay by calling `serializeFocusedSessionContext`
-with the exact map, plan, and brief versions, checking its discriminated result,
-and passing the branded `projection` through `TrustedSessionCreateOptions` or
-`TrustedSessionResumeOptions`. Focused context is rejected outside a trusted
-project-agent identity. Ordinary callers cannot construct the branded value,
-and authored data must never be appended to a prompt by another serialization
-path.
+The package exports `compileCanonicalWorkstreamBriefs`, `projectFocusedBriefs`
+(and its supported `compileAgentBriefs` alias), `DeterministicAgentBriefCompiler`,
+`evaluateAgentBriefImpact`, and `serializeFocusedSessionContext` for exact-version
+compilation, impact inspection, and safe context composition. Check the serializer's
+discriminated result before using its branded `projection`. The exported
+`AgentBriefService` runs the same refresh and projection pipeline when supplied a
+compatible planning store.
+
+Studio attaches this projection through its internal `SessionManager` and trusted
+create/resume options. Those session controls are not package exports; external
+hosts use `startServer` to run Studio's complete session and MCP surface. Focused
+context is rejected outside a trusted project-agent identity.
+
+Automatic post-write refresh uses a trusted `harness-internal:brief:` receipt
+namespace. Caller-supplied map, plan and explicit brief request IDs cannot use that
+prefix; existing `brief-planv_*` caller IDs remain valid. Automatic failure results
+use the same recovery advice as explicit refresh: correct input, reread sources,
+use a new explicit refresh request, retry transient storage, or request manual
+intervention for permanent limits.
 
 ## Writable project subsessions
 
@@ -193,8 +205,25 @@ original sweep receipt expires, a fresh bounded `release-dormant` request also
 retries unfinished cleanup without changing the release outcome or emitting a
 second release event.
 
-The coordinator waits for canonical adapter readiness and exact transcript
-identity, then uses fenced spawn and delivery epochs to submit one kickoff.
+The coordinator shares a 30-second readiness wait budget across a whole delegation
+batch and both readiness and adapter-identity phases. On exhaustion it returns
+partial `readiness_timeout` / `retry` results, retaining completed children and
+reserved IDs for the rest. It stops processing later items and starts no background
+continuation; an explicit retry of the same request reconciles the same bindings.
+The budget bounds readiness waiting; in-flight durable writes and process creation
+finish before their result is reported. Trusted tests or hosts can lower the budget
+with `batchWaitTimeoutMs`, but cannot increase it beyond 30 seconds.
+
+The coordinator waits for canonical adapter readiness and uses fenced spawn and
+delivery epochs to submit one kickoff. Fresh Codex produces its rollout only after
+that first turn, so an exact privately owned Codex runtime with a pending first
+kickoff can submit before transcript discovery. The host prefixes that prompt
+with a non-secret runtime digest marker; its rollout broker requires the same
+marker before attributing the transcript. Ordinary pending runtimes cannot claim
+marked child rollouts, and metadata-only files remain unassigned until the real
+first user turn is available. Existing or ambiguous identities retain the usual
+gates. A submitted kickoff restarts collection if an idle runtime outlived the
+initial discovery window; it never starts another kickoff.
 Delivery states distinguish pending, claimed, submitted without acknowledgement,
 acknowledged, and uncertain. An uncertain delivery is never resent blindly.
 Exact focused references are checked before delivery, and stale context returns

@@ -604,7 +604,7 @@ it("creates one ordinary Plan Agents session for a newly opened project and neve
     body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
   });
   expect(firstOpen.status).toBe(200);
-  expect(server.sessionManager.list()).toHaveLength(1);
+  await vi.waitFor(() => expect(server!.sessionManager.list()).toHaveLength(1));
   expect(launches).toHaveLength(1);
   const [firstSession] = server.sessionManager.list();
   const freshProjectId = firstSession!.agentMapIdentity!.projectId;
@@ -898,6 +898,7 @@ it("automatically seeds one durable map through the real E2 tools without replay
     body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
   });
   expect(opened.status).toBe(200);
+  await vi.waitFor(() => expect(server!.sessionManager.list()).toHaveLength(1));
   const [session] = server.sessionManager.list();
   expect(session).toMatchObject({
     cwd: freshRoot,
@@ -1134,6 +1135,7 @@ it("initializes every newly opened root once when one settings update creates mu
   });
 
   expect(response.status).toBe(200);
+  await vi.waitFor(() => expect(server!.sessionManager.list()).toHaveLength(2));
   const sessions = server.sessionManager.list();
   expect(sessions).toHaveLength(2);
   expect(

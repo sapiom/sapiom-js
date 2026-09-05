@@ -18,6 +18,7 @@ vi.mock("../core/collector/codex-tailer.js", () => ({
 
 import { tailCodexRollout, findRolloutCandidates, type CodexEventListener } from "../core/collector/codex-tailer.js";
 import { startServer, type HarnessServer } from "./index.js";
+import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 
 type FakeTailerHandle = { stop: ReturnType<typeof vi.fn>; emitSessionEnd: ReturnType<typeof vi.fn> };
@@ -93,6 +94,7 @@ describe("codex tailer lifecycle wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -146,6 +148,89 @@ describe("codex tailer lifecycle wiring", () => {
     // vitest's default per-test timeout (5000ms) leaves no margin over
     // PTY_EXIT_WAIT_OPTIONS' own 5s allowance above — without bumping this
     // too, the outer test timeout could fire first and mask it entirely.
+  }, 15_000);
+
+  it("releases a timed-out discovery so the next same-root runtime owns its rollout", async () => {
+    const cwd = join(dir, "project");
+    const register = vi.spyOn(CodexRolloutBroker.prototype, "register");
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      autoCreateSession: false,
+      adapters: { codex: fakeCodexAdapter() },
+      stateRoot: dir,
+    });
+    // Advance only the discovery deadline; keep real timer scheduling and PTY
+    // cleanup so this proves timeout handling without waiting fifteen seconds.
+    const realNow = Date.now.bind(Date);
+    let discoveryAdvance = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + discoveryAdvance);
+    vi.mocked(findRolloutCandidates).mockImplementation(async () => {
+      discoveryAdvance += 16_000;
+      return [];
+    });
+    const session = await server.sessionManager.create({ cwd, harness: "codex" });
+    const runtimeEpoch = server.sessionManager.getRuntimeEpoch(session.id)!;
+    await vi.waitFor(() => expect(server!.sessionManager.getAdapterIdentityState(
+      session.id,
+      runtimeEpoch,
+    )).toBe("unavailable"));
+    vi.mocked(Date.now).mockRestore();
+    expect(tailCodexRollout).not.toHaveBeenCalled();
+    vi.mocked(findRolloutCandidates).mockResolvedValue([{
+      path: "/fake/rollout/path.jsonl",
+      agentSessionId: "agent-next",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    }]);
+
+    const broker = register.mock.contexts[0] as CodexRolloutBroker;
+    // UUIDs sort before this later id. A leaked pending registration would
+    // receive the singleton candidate and strand this new runtime.
+    await expect(broker.claimFresh({
+      sessionId: "zz-next-session",
+      runtimeEpoch: "next-runtime",
+      cwd,
+      sinceMs: Date.now(),
+    })).resolves.toEqual({ outcome: "claimed", path: "/fake/rollout/path.jsonl" });
+    await server.sessionManager.kill(session.id);
+  }, 15_000);
+
+  it("releases every pending epoch on an epochless final exit", async () => {
+    const cwd = join(dir, "project");
+    const register = vi.spyOn(CodexRolloutBroker.prototype, "register");
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      autoCreateSession: false,
+      adapters: { codex: fakeCodexAdapter() },
+      stateRoot: dir,
+    });
+    const session = await server.sessionManager.create({ cwd, harness: "codex" });
+    await vi.waitFor(() => expect(tailCodexRollout).toHaveBeenCalled());
+    await server.sessionManager.kill(session.id);
+    const broker = register.mock.contexts[0] as CodexRolloutBroker;
+    broker.register({ sessionId: session.id, runtimeEpoch: "orphaned-epoch", cwd, sinceMs: 0 });
+    // A stale non-exited registry row has no live PTY. Its close path emits an
+    // exited status with runtimeEpoch=null and must retire all prior epochs.
+    session.status = "running";
+    expect(server.sessionManager.getRuntimeEpoch(session.id)).toBeNull();
+    await server.sessionManager.kill(session.id);
+    expect(session.status).toBe("exited");
+    vi.mocked(findRolloutCandidates).mockResolvedValue([{
+      path: "/fake/rollout/next.jsonl",
+      agentSessionId: "agent-next",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    }]);
+    await expect(broker.claimFresh({
+      sessionId: "zz-next-session",
+      runtimeEpoch: "next-runtime",
+      cwd,
+      sinceMs: Date.now(),
+    })).resolves.toEqual({ outcome: "claimed", path: "/fake/rollout/next.jsonl" });
   }, 15_000);
 
   it("resumes by exact agentSessionId rather than cwd+sinceMs when one is already known", async () => {

@@ -48,6 +48,8 @@ import {
   type AgentMapProjectAggregate,
 } from "./agent-map-workspace-store.js";
 
+import { AGENT_MAP_OPERATION_HISTORY_LIMIT } from "./agent-map-aggregate-migration.js";
+
 export const AGENT_MAP_PROPOSAL_RECEIPT_RETENTION_LIMIT = 256;
 
 export class AgentMapProposalValidationError extends Error {
@@ -73,7 +75,7 @@ export class AgentMapProposalProjectError extends Error {
 
 export class AgentMapProposalQuotaError extends Error {
   readonly code = "quota_exceeded" as const;
-  constructor(readonly resource: "map_versions" | "request_receipts" | "request_tombstones") {
+  constructor(readonly resource: "map_versions" | "map_operations" | "request_receipts" | "request_tombstones") {
     super(`${resource.replace(/_/gu, " ")} quota exceeded`);
     this.name = "AgentMapProposalQuotaError";
   }
@@ -96,7 +98,7 @@ export class UuidV7AgentMapIdAllocator implements AgentMapPermanentIdAllocator {
 export interface AgentMapProposalServiceOptions {
   allocator?: AgentMapPermanentIdAllocator;
   now?: () => Date;
-  /** Deprecated final-schema compatibility option; map versions are self-contained. */
+  /** @deprecated Map versions now embed their graph; use read() or the version resolver to read it. */
   readBaseRevision?: (projectId: StudioProjectId, revisionId: string) => Promise<AgentMapGraph | null>;
   onAccepted?: (delta: AcceptedProposalDelta) => void | Promise<void>;
   onOutcome?: (event: {
@@ -110,6 +112,7 @@ export interface AgentMapProposalServiceOptions {
   }) => void | Promise<void>;
   receiptRetentionLimit?: number;
   versionHistoryLimit?: number;
+  operationHistoryLimit?: number;
 }
 
 const actorFor = (identity: ProjectAgentSession): ProjectAgentActorRef => {
@@ -196,6 +199,7 @@ export class AgentMapProposalService {
   private readonly now: () => Date;
   private readonly receiptRetentionLimit: number;
   private readonly versionHistoryLimit: number;
+  private readonly operationHistoryLimit: number;
 
   constructor(private readonly store: AgentMapWorkspaceStore, private readonly options: AgentMapProposalServiceOptions = {}) {
     this.allocator = options.allocator ?? new UuidV7AgentMapIdAllocator();
@@ -207,6 +211,10 @@ export class AgentMapProposalService {
     if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > BUILD_PLAN_VERSION_HISTORY_LIMIT)
       throw new RangeError(`versionHistoryLimit must be between 1 and ${BUILD_PLAN_VERSION_HISTORY_LIMIT}`);
     this.versionHistoryLimit = historyLimit;
+    const operationLimit = options.operationHistoryLimit ?? AGENT_MAP_OPERATION_HISTORY_LIMIT;
+    if (!Number.isSafeInteger(operationLimit) || operationLimit < 1 || operationLimit > AGENT_MAP_OPERATION_HISTORY_LIMIT)
+      throw new RangeError(`operationHistoryLimit must be between 1 and ${AGENT_MAP_OPERATION_HISTORY_LIMIT}`);
+    this.operationHistoryLimit = operationLimit;
   }
 
   read(projectId: StudioProjectId) { return this.store.readSnapshot(projectId); }
@@ -263,6 +271,8 @@ export class AgentMapProposalService {
           candidate.userId === identity.userId && candidate.sessionId === identity.sessionId && candidate.requestId === request.requestId))
           throw new AgentMapProposalConflictError({ code: "request_id_expired", currentVersion: version,
             affectedNodeIds: [], affectedRelationshipIds: [], recovery: "new_request" });
+        if (aggregate.mapOperationHistory.length + request.operations.length > this.operationHistoryLimit)
+          throw new AgentMapProposalQuotaError("map_operations");
         this.assertProposalPointer(aggregate, request, version);
         if (request.expectedVersion > version) throw this.stale(version);
         const atRead = validateMapOperationBatch(graphAt(aggregate, request.expectedVersion), request);

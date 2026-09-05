@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  AgentMapVersion,
   AgentMapVersionId,
   PlanNode,
   PlanNodeId,
@@ -13,6 +14,7 @@ import {
   createAgentMapVersion,
   validateAgentMapVersionHistory,
 } from "./agent-map-version.js";
+import { computeAgentMapVersionRecordDigest } from "../shared/agent-map-canonical.js";
 import { AgentMapVersionResolver } from "./agent-map-version-resolver.js";
 
 const projectId = "project_018f0000-0000-4000-8000-000000000001" as StudioProjectId;
@@ -120,7 +122,27 @@ describe("immutable Agent Map versions", () => {
     expect(() => validateAgentMapVersionHistory([first, second, restored], projectId)).not.toThrow();
   });
 
-  it("rejects ancestry corruption and invalid graph topology", () => {
+  it.each(["skipped version", "repointed parent", "duplicate version id", "forged record digest", "unknown restore source"])(
+    "rejects history with %s", (corruption) => {
+      const first = createAgentMapVersion({ projectId, versionId: versionId("20"), version: 1,
+        parentVersionId: null, graph: { nodes: [node("Research")], relationships: [] }, changeKind: "created",
+        restoredFromVersionId: null, authoredBy: actor, createdAt: at, origin: origin("1") });
+      const second = createAgentMapVersion({ projectId, versionId: versionId("21"), version: 2,
+        parentVersionId: first.versionId, graph: { nodes: [node("Updated")], relationships: [] }, changeKind: "edited",
+        restoredFromVersionId: null, authoredBy: actor, createdAt: at, origin: origin("2") });
+      const changes = corruption === "skipped version" ? { version: 3 }
+        : corruption === "repointed parent" ? { parentVersionId: versionId("99") }
+          : corruption === "duplicate version id" ? { versionId: first.versionId }
+            : corruption === "unknown restore source" ? { changeKind: "restored" as const, restoredFromVersionId: versionId("99") }
+              : {};
+      const changed = { ...second, ...changes } as AgentMapVersion;
+      const corrupted = { ...changed, recordDigest: corruption === "forged record digest"
+        ? `sha256:${"0".repeat(64)}` as AgentMapVersion["recordDigest"] : computeAgentMapVersionRecordDigest(changed) };
+      expect(() => validateAgentMapVersionHistory([first, corrupted], projectId)).toThrow();
+    },
+  );
+
+  it("rejects invalid graph topology", () => {
     expect(() => createAgentMapVersion({
       projectId,
       versionId: versionId("20"),

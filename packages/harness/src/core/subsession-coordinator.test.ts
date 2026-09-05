@@ -185,6 +185,7 @@ describe("SubsessionCoordinator", () => {
     storeOptions: NonNullable<
       ConstructorParameters<typeof SubsessionCoordinatorStore>[1]
     > = {},
+    harness: "claude-code" | "codex" = "claude-code",
   ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
@@ -198,10 +199,10 @@ describe("SubsessionCoordinator", () => {
     const closeStore: { current?: SubsessionCoordinatorStore } = {};
     const manager = new SessionManager({
       adapters: {
-        "claude-code": adapter(
+        [harness]: { ...adapter(
           resumable,
           childIdentityState ? "transcript-tail" : "hooks",
-        ),
+        ), id: harness },
       },
       ingestUrl: "http://127.0.0.1:4100/ingest",
       ingestCredentials: new IngestCredentialRegistry(),
@@ -220,7 +221,7 @@ describe("SubsessionCoordinator", () => {
     managers.push(manager);
     await manager.init();
     await manager.create(
-      { cwd: root, harness: "claude-code" },
+      { cwd: root, harness },
       {
         agentMapIdentity: (sessionId) => ({ ...identity, sessionId }),
       },
@@ -292,9 +293,12 @@ describe("SubsessionCoordinator", () => {
         throw new Error("no focused context expected");
       }),
     } as unknown as BuildPlanStore;
-    const newCoordinator = (ownerId?: string) => new SubsessionCoordinator({
+    const newCoordinator = (ownerId?: string, waitOptions: {
+      readinessTimeoutMs?: number; batchWaitTimeoutMs?: number;
+    } = {}) => new SubsessionCoordinator({
       store, sessionManager: manager, planningStore, eventReader,
       readinessTimeoutMs: 500,
+      ...waitOptions,
       onEvent: (event) => {
         telemetry.push(event);
       },
@@ -462,6 +466,79 @@ describe("SubsessionCoordinator", () => {
     });
     expect(manager.getSubsessionBinding(childId)).toBeNull();
     expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(5);
+  });
+
+  it("submits a fresh owned Codex kickoff before its first rollout exists", async () => {
+    const { manager, caller, coordinator, spawned, unsubscribe } = await fixture(false, "ready", {}, {}, "codex");
+    unsubscribe();
+    const stop = manager.onStatusChange((session, context) => {
+      if (session.id !== caller.sessionId && session.status === "running" && !session.ready && context.runtimeEpoch)
+        manager.setReady(session.id, context.runtimeEpoch);
+    });
+    try {
+      const first = await coordinator.execute(caller, request);
+      expect(first.results[0]).toMatchObject({ outcome: "created", sessionState: "ready", kickoffState: "submitted-unacknowledged" });
+      const childId = first.results[0]!.sessionId!;
+      expect(manager.get(childId)?.agentSessionId).toBeNull();
+      const writes = spawned[1]!.writes.join("");
+      expect(writes).toMatch(/<sapiom-codex-runtime ref="sha256:[a-f0-9]{64}" \/>/u);
+      expect(writes).toContain("sapiom-project-delegation");
+      await coordinator.execute(caller, request);
+      expect(spawned).toHaveLength(2);
+      expect(spawned[1]!.writes.join("")).toBe(writes);
+    } finally { stop(); }
+  });
+
+  it("bounds a not-ready batch and resumes the same durable children only on an explicit retry", async () => {
+    const { manager, caller, store, newCoordinator, spawnPty, spawned, unsubscribe } = await fixture();
+    unsubscribe();
+    const batch = { ...request, operation: { kind: "delegate", delegations: ["alpha", "beta", "gamma"].map((delegationKey) => ({
+      delegationKey, outcome: `Implement ${delegationKey}`,
+    })) } };
+    const limited = newCoordinator("limited-wait", { readinessTimeoutMs: 250, batchWaitTimeoutMs: 100 });
+    const first = await limited.execute(caller, batch);
+    expect(first.results).toHaveLength(3);
+    expect(first.results.map(({ error }) => error?.code)).toEqual(["readiness_timeout", "readiness_timeout", "readiness_timeout"]);
+    expect(first.results.map(({ sessionState }) => sessionState)).toEqual(["awaiting-ready", "reserved", "reserved"]);
+    expect(spawnPty).toHaveBeenCalledTimes(2);
+    const beforeRetry = await store.read(projectId);
+    expect(beforeRetry.bindings.map(({ sessionId }) => sessionId).sort()).toEqual(first.results.map(({ sessionId }) => sessionId).sort());
+    expect(beforeRetry.bindings.every(({ spawnClaim }) => spawnClaim === null)).toBe(true);
+    const child = first.results[0]!;
+    if (!child.sessionId) throw new Error("missing reserved child session ID");
+    manager.setReady(child.sessionId, manager.getRuntimeEpoch(child.sessionId)!);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(spawnPty).toHaveBeenCalledTimes(2);
+    expect(spawned[1]!.writes).toEqual([]);
+
+    const stop = manager.onStatusChange((session, context) => {
+      if (session.id !== caller.sessionId && session.status === "running" && !session.ready && context.runtimeEpoch)
+        manager.setReady(session.id, context.runtimeEpoch);
+    });
+    try {
+      const retried = await newCoordinator("explicit-retry", { batchWaitTimeoutMs: 5_000 }).execute(caller, batch);
+      expect(retried.replayed).toBe(true);
+      expect(retried.results.every(({ error }) => error === undefined)).toBe(true);
+      expect(retried.results.map(({ sessionId }) => sessionId)).toEqual(first.results.map(({ sessionId }) => sessionId));
+      expect(spawnPty).toHaveBeenCalledTimes(4);
+    } finally { stop(); }
+  });
+
+  it("shares one batch wait deadline across readiness and adapter identity", async () => {
+    const { manager, caller, newCoordinator, spawnPty, unsubscribe } = await fixture(false, "ready");
+    unsubscribe();
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const stop = manager.onStatusChange((session, context) => {
+      if (session.id !== caller.sessionId && session.status === "running" && !session.ready && context.runtimeEpoch)
+        timers.push(setTimeout(() => manager.setReady(session.id, context.runtimeEpoch!), 50));
+    });
+    try {
+      const coordinator = newCoordinator("identity-wait", { readinessTimeoutMs: 250, batchWaitTimeoutMs: 100 });
+      const result = await coordinator.execute(caller, request);
+      expect(result.results[0]).toMatchObject({ sessionState: "awaiting-ready",
+        error: { code: "readiness_timeout", retryable: true, recovery: "retry" } });
+      expect(spawnPty).toHaveBeenCalledTimes(2);
+    } finally { stop(); timers.forEach(clearTimeout); }
   });
 
   it("releases known children in a mixed batch and treats unknown keys as already released", async () => {

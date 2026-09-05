@@ -12,6 +12,7 @@ type PendingRuntime = Readonly<{
   runtimeEpoch: string;
   cwd: string;
   sinceMs: number;
+  requiredRuntimeMarker?: string;
 }>;
 
 const runtimeKey = (sessionId: string, runtimeEpoch: string) =>
@@ -97,8 +98,17 @@ export class CodexRolloutBroker {
             sinceMs: pending.sinceMs,
             homeDir: this.homeDir,
             excludePaths: new Set(this.claimedPaths.keys()),
+            ...(pending.requiredRuntimeMarker
+              ? { requiredRuntimeMarker: pending.requiredRuntimeMarker }
+              : { excludeRuntimeMarkers: true }),
           }),
         );
+      }
+
+      // Discovery awaits filesystem I/O. A runtime released during that wait
+      // must not receive a path or leave a tombstone for a later live session.
+      for (const candidateKey of possibilities.keys()) {
+        if (!this.pending.has(candidateKey)) possibilities.delete(candidateKey);
       }
 
       let changed = true;

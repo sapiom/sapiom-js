@@ -44,6 +44,20 @@ function completion(
   };
 }
 
+function codexCompletion(dir: string): AnalyticsEvent {
+  return {
+    ...completion(dir),
+    harness: "codex",
+    payload: {
+      toolName: "sapiom_dev_agents_scaffold",
+      toolInput: JSON.stringify({ dir, template: "default" }),
+      // Native Codex records MCP output in this timed text envelope;
+      // scaffold may return the same relative directory supplied by the caller.
+      toolResponseSummary: `Wall time: 5.6901 seconds\nOutput:\n${completion(dir).payload.toolResponseSummary}`,
+    },
+  };
+}
+
 describe("scaffold completion evidence", () => {
   it("reads Claude content and Codex MCP envelopes", () => {
     const event = completion("/tmp/reviewer");
@@ -62,6 +76,29 @@ describe("scaffold completion evidence", () => {
         }),
       ),
     ).not.toBeNull();
+  });
+  it("reads a native Codex timed MCP result with a relative target directory", () => {
+    expect(scaffoldCompletion(codexCompletion("../reviewer"))).toEqual({
+      dir: "../reviewer",
+      targetDir: "../reviewer",
+    });
+  });
+  it.each([
+    "Wall time: unknown seconds\nOutput:\n",
+    "Scaffold succeeded\nOutput:\n",
+    "Error: scaffold failed\nOutput:\n",
+  ])("rejects unrecognized output prefixes: %s", (prefix) => {
+    const event = codexCompletion("../reviewer");
+    event.payload.toolResponseSummary = prefix + completion("../reviewer").payload.toolResponseSummary;
+    expect(scaffoldCompletion(event)).toBeNull();
+  });
+  it("does not interpret a timed scaffold error as a successful creation", () => {
+    const event = codexCompletion("../reviewer");
+    event.payload.toolResponseSummary = `Wall time: 1 seconds\nOutput:\n${JSON.stringify({
+      isError: true,
+      content: JSON.parse(completion("../reviewer").payload.toolResponseSummary as string),
+    })}`;
+    expect(scaffoldCompletion(event)).toBeNull();
   });
   it.each([
     { toolName: "Bash" },
@@ -160,6 +197,31 @@ describe("created agent registration", () => {
     expect(await f.preferences.createdAgents()).toMatchObject([
       { projectId: f.projectId, path: f.target },
     ]);
+  });
+
+  it("registers and recovers native Codex relative scaffold completions exactly once", async () => {
+    const f = await fixture();
+    const event = codexCompletion("../reviewer");
+    await f.events.append(event);
+    await f.registrar.onEventPersisted(event, "runtime-codex");
+    expect(await f.preferences.createdAgents()).toMatchObject([
+      { projectId: f.projectId, createdBySessionId: "session-a", path: f.target },
+    ]);
+    expect(f.scan).toHaveBeenCalledWith(f.target);
+    expect(f.watch).toHaveBeenCalledWith(f.target);
+    const before = await f.preferences.createdAgents();
+    await f.registrar.close();
+    const restarted = new CreatedAgentRegistration(f.options);
+    await restarted.recover(["session-a"]);
+    expect(await f.preferences.createdAgents()).toEqual(before);
+  });
+  it("rejects a relative Codex target that does not match its exact requested directory", async () => {
+    const f = await fixture();
+    const event = codexCompletion("../reviewer");
+    event.payload.toolInput = JSON.stringify({ dir: "." });
+    await f.registrar.onEventPersisted(event, "runtime-codex");
+    expect(await f.preferences.createdAgents()).toEqual([]);
+    expect(f.scan).not.toHaveBeenCalled();
   });
 
   it("does not persist malformed marker metadata into the membership store", async () => {

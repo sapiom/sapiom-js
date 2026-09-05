@@ -2446,7 +2446,7 @@ export class MockApi implements HarnessApi {
         "Studio project is not available",
       );
     }
-    if (!project) {
+    if (failure === "missing" || !project) {
       throw new ApiError(
         404,
         "Studio project not found",

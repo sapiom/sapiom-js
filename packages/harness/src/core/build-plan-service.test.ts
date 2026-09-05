@@ -221,6 +221,43 @@ describe("BuildPlanService", () => {
     expect((await aggregateStore.readAggregate(projectId)).buildPlanVersions).toHaveLength(1);
   });
 
+  it.each(["validate", "apply"] as const)("%s rejects invalid plans after more than 64 warnings", async (operation) => {
+    const { aggregateStore, service, refs } = await fixture();
+    const base = content(refs);
+    const invalid = { ...base,
+      milestones: [...base.milestones, { ...base.milestones[0]!, id: { clientRef: "duplicate-ordinal" } }],
+      decisions: Array.from({ length: 65 }, (_, index) => ({ id: { clientRef: `open-${index}` },
+        question: `Question ${index}`, resolution: "", status: "open" as const })),
+    };
+    const before = await aggregateStore.readAggregate(projectId);
+    await expect(service[operation](identity(), { schemaVersion: 1, requestId: "warning-overflow",
+      expectedMap: toolMapRef(refs.map), expectedPlan: null,
+      operations: [{ op: "replace-content", content: invalid }] })).rejects.toMatchObject({
+        code: "validation_failed", details: { diagnostics: expect.arrayContaining([
+          expect.objectContaining({ code: "duplicate-ordinal", severity: "error" }),
+        ]) },
+      });
+    expect(await aggregateStore.readAggregate(projectId)).toEqual(before);
+  });
+
+  it("timestamps a semantic no-op at receipt creation instead of the old plan version", async () => {
+    const { aggregateStore, service, refs } = await fixture();
+    const first = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
+      expectedMap: toolMapRef(refs.map), expectedPlan: null,
+      operations: [{ op: "replace-content", content: content(refs) }] });
+    const current = (await service.read(identity(), { kind: "current" })).plan!.content;
+    const now = "2026-01-02T03:06:05.000Z";
+    const laterService = new BuildPlanService(new BuildPlanStore(aggregateStore), { now: () => new Date(now) });
+    await laterService.apply(identity(), { schemaVersion: 1, requestId: "plan-later-no-op",
+      expectedMap: toolMapRef(refs.map), expectedPlan: toolPlanRef(first.plan),
+      operations: [{ op: "replace-content", content: current }] });
+    const aggregate = await aggregateStore.readAggregate(projectId);
+    expect(aggregate.updatedAt).toBe(now);
+    expect(aggregate.requestReceipts.at(-1)?.createdAt).toBe(now);
+    expect(aggregate.buildPlanVersions).toHaveLength(1);
+    expect(aggregate.buildPlanVersions[0]?.createdAt).toBe("2026-01-02T03:05:05.000Z");
+  });
+
   it("merges same-source stale disjoint changes and reports stable overlapping conflicts", async () => {
     const { service, refs } = await fixture();
     const created = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",

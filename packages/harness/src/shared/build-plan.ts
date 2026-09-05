@@ -244,8 +244,8 @@ export type AgentBriefImpact = Readonly<{
 }>;
 
 /**
- * Reserved exact-source history seam for SAP-3150. SAP-3149 persists and
- * validates these records but has no compiler/runtime producer.
+ * Exact-source immutable history contract for canonical and focused briefs.
+ * Producers and storage can validate these records independently.
  */
 export type AgentBriefVersion = Readonly<{
   schemaVersion: typeof BUILD_PLAN_SCHEMA_VERSION;

@@ -1296,7 +1296,8 @@ export class SessionManager {
         !expected ||
         !next ||
         !current ||
-        !sameSubsessionBinding(current, expected) ||
+        (!sameSubsessionBinding(current, expected) &&
+          !sameSubsessionBinding(current, next)) ||
         next.projectId !== expected.projectId ||
         next.parentSessionId !== expected.parentSessionId ||
         next.bindingId !== expected.bindingId ||
@@ -1328,12 +1329,16 @@ export class SessionManager {
     }
     if (bindingTransition) {
       const current = this.subsessionBindings.get(id)!;
-      this.subsessionBindings.set(id, bindingTransition.next);
-      try {
-        await this.persistSubsessionBindings();
-      } catch (error) {
-        this.subsessionBindings.set(id, current);
-        throw error;
+      // A failed spawn may leave the exact next marker durably committed.
+      // Retrying that same transition must not require the old marker again.
+      if (!sameSubsessionBinding(current, bindingTransition.next)) {
+        this.subsessionBindings.set(id, bindingTransition.next);
+        try {
+          await this.persistSubsessionBindings();
+        } catch (error) {
+          this.subsessionBindings.set(id, current);
+          throw error;
+        }
       }
     }
     const trustedIdentity = session.agentMapIdentity;
@@ -1454,28 +1459,15 @@ export class SessionManager {
   }
 
   /**
-   * Signals the session's pty to exit and returns a Promise that resolves
-   * once the process is **actually gone** — not fire-and-forget.
+   * Close the session and durably record a user-closed delegated binding.
+   * Termination starts before storage writes, so a persistence failure cannot
+   * leave its PTY running. Failed closure bookkeeping retains a tombstone that
+   * prevents automatic recovery and can be retried by a later close.
    *
-   * Resolution source (either one unblocks the promise):
-   *   1. node-pty's own `onExit` event → markExited() → `handle.exited` resolves.
-   *   2. Synthesized exit: kill()'s escalation fallback (SIGTERM → SIGKILL →
-   *      pid liveness check) → markExited() → `handle.exited` resolves.
-   *   3. Synthesized exit from an external `sweepDeadSessions()` call that
-   *      happens to run during the escalation window → same path.
-   *
-   * The promise is bounded: after `KILL_ESCALATION_MS` the escalation sends
-   * SIGKILL; after a further `KILL_ESCALATION_CONFIRM_MS` it synthesizes the
-   * exit from an OS-level pid check regardless of node-pty's event. So the
-   * worst-case resolution time is `KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS`
-   * (2500 ms at current constants), never infinite.
-   *
-   * Existing fire-and-forget callers keep working: an unawaited Promise is
-   * fine and produces no floating-promise lint warnings when suppressed with
-   * `void`.
-   *
-   * Returns false (resolved immediately) when the session has no live pty.
-   * Returns true (resolved on actual death) when a pty was signalled.
+   * Await this operation and handle rejection: binding persistence and the
+   * coordinator callback can fail, and their completion has no time bound.
+   * On success, returns kill()'s result: whether a live or stale session was
+   * transitioned to exited.
    */
   async close(id: string): Promise<boolean> {
     const binding = this.subsessionBindings.get(id);
@@ -1665,6 +1657,10 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Forward terminal bytes without submitting a separate prompt.
+   * @throws SessionInputIsolationError when prior partial input cannot be cleared.
+   */
   write(id: string, data: string): boolean {
     const handle = this.ptys.get(id);
     if (!handle) return false;
@@ -1802,6 +1798,15 @@ export class SessionManager {
         throw error;
       }
     }
+    if (
+      background &&
+      (this.terminalInputEpochs.get(id) ?? 0) !== initialTerminalInputEpoch
+    ) {
+      // The durable claim may yield while a person types into this composer.
+      // Retire that claim without appending background text or pressing Enter.
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionBackgroundInputPreemptedError(false);
+    }
     if (this.closing || (lifecycle?.canWriteNow && !lifecycle.canWriteNow())) {
       await lifecycle?.onNotSubmitted?.().catch(() => {});
       throw new SessionInputGuardRejectedError(false);
@@ -1860,6 +1865,7 @@ export class SessionManager {
         lineCleared: false,
       };
       if (this.stagedInputs.has(id)) {
+        await lifecycle?.onNotSubmitted?.().catch(() => {});
         throw new SessionBackgroundInputPreemptedError(false);
       }
       this.stagedInputs.set(id, staged);

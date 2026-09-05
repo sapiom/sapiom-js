@@ -119,7 +119,9 @@ export function validateProjectBuildPlanContent(
   const unique = new Map<string, BuildPlanDiagnostic>();
   for (const diagnostic of diagnostics)
     unique.set(JSON.stringify([diagnostic.path, diagnostic.code, diagnostic.relatedIds]), diagnostic);
+  // Keep a blocking error visible even when warnings exceed the display budget.
   return [...unique.values()].sort((left, right) =>
+    Number(left.severity !== "error") - Number(right.severity !== "error") ||
     compare(left.path, right.path) || compare(left.code, right.code) ||
     compare(left.relatedIds.join("\0"), right.relatedIds.join("\0"))).slice(0, BUILD_PLAN_DIAGNOSTIC_LIMIT);
 }

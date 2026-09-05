@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isCallerProjectRequestId } from "./project-request-namespace.js";
 
 export const BUILD_PLAN_MAX_ITEMS = 128;
 export const BUILD_PLAN_MAX_TEXT = 8_192;
@@ -52,7 +53,7 @@ const focusedBriefSelectionSchema = z.object({
 
 export const agentBriefRefreshRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque.describe("Caller-chosen identity: identical retries reuse this ID; changed request content needs a fresh ID."),
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace").describe("Caller-chosen identity: identical retries reuse this ID; changed request content needs a fresh ID."),
   expectedMap: toolMapVersionRefSchema,
   expectedPlan: toolPlanVersionRefSchema,
   focus: z.discriminatedUnion("mode", [
@@ -134,7 +135,7 @@ const replaceContentOperation = z.object({
 
 export const buildPlanApplyRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque.describe("Reuse for the same validate/apply request and identical retries; changed content needs a new ID."),
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace").describe("Reuse for the same validate/apply request and identical retries; changed content needs a new ID."),
   expectedMap: toolMapVersionRefSchema,
   expectedPlan: toolPlanVersionRefSchema.nullable().describe("Current buildPlan reference from build_plan_read, omitting projectId; null only if creating the first plan."),
   operations: z.tuple([replaceContentOperation]),
@@ -149,7 +150,7 @@ const rebaseResolution = z.discriminatedUnion("kind", [
 
 export const buildPlanRebaseRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque.describe("Stable ID for identical rebase retries; changed resolutions or source expectations need a new ID."),
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace").describe("Stable ID for identical rebase retries; changed resolutions or source expectations need a new ID."),
   expectedPlan: toolPlanVersionRefSchema,
   fromMap: toolMapVersionRefSchema.describe("The current plan's bound map: read plan.map and omit projectId."),
   toMap: toolMapVersionRefSchema.describe("The latest map: read current.map and omit projectId, even when its content digest is unchanged."),

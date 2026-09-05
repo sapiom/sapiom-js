@@ -17,7 +17,8 @@ import { compileCanonicalWorkstreamBriefs, projectFocusedBriefs } from "./agent-
 import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration.js";
 import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "./agent-map-workspace-store.js";
 import { BuildPlanStore } from "./build-plan-store.js";
-import { parseAgentBriefRefreshRequest } from "./build-plan-schema.js";
+import { agentBriefRefreshRequestSchema, parseAgentBriefRefreshRequest } from "./build-plan-schema.js";
+import { INTERNAL_BRIEF_REFRESH_REQUEST_PREFIX } from "./project-request-namespace.js";
 import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
 import { evaluateAgentBriefImpact } from "./build-plan-impact-evaluator.js";
 import {
@@ -129,6 +130,30 @@ export class AgentBriefService {
     } catch {
       throw new AgentBriefServiceError("malformed_input");
     }
+    return this.refreshRequest(identity, request);
+  }
+
+  /** Trusted host hook. Public mutation schemas cannot occupy this receipt namespace. */
+  async refreshAfterPlanMutation(
+    identity: ProjectAgentSession,
+    sources: Pick<ReturnType<typeof parseAgentBriefRefreshRequest>, "expectedMap" | "expectedPlan">,
+  ): Promise<AgentBriefRefreshResult> {
+    let request: AgentBriefRefreshRequest;
+    try {
+      const parsed = agentBriefRefreshRequestSchema.omit({ requestId: true }).parse({
+        schemaVersion: 1, ...sources, focus: { mode: "canonical" },
+      });
+      request = { ...parsed, requestId: `${INTERNAL_BRIEF_REFRESH_REQUEST_PREFIX}${parsed.expectedPlan.versionId}` } as AgentBriefRefreshRequest;
+    } catch {
+      throw new AgentBriefServiceError("malformed_input");
+    }
+    return this.refreshRequest(identity, request);
+  }
+
+  private async refreshRequest(
+    identity: ProjectAgentSession,
+    request: AgentBriefRefreshRequest,
+  ): Promise<AgentBriefRefreshResult> {
     const requestDigest = canonicalDigest("sapiom.agent-brief.refresh-request.v1", request);
     const aggregate = await this.store.read(identity.projectId);
     const replay = this.replay(aggregate, identity, request, requestDigest);

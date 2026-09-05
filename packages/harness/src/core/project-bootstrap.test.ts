@@ -633,6 +633,130 @@ describe("ProjectBootstrapCoordinator", () => {
     );
   });
 
+  it.each(["claimed", "not-submitted"] as const)(
+    "publishes the committed retryable recovery for a %s attempt restored without a ready runtime",
+    async (phase) => {
+      session.ready = false;
+      session.status = "exited";
+      session.projectBootstrap!.bootstrap = {
+        status: "generating",
+        attemptId: "attempt-unsubmitted-before-crash",
+      };
+      await writeState(root, session.id, {
+        schemaVersion: 3,
+        metadata: structuredClone(session.projectBootstrap!),
+        inputs: [],
+        dispatchingInputId: null,
+        retryCount: 0,
+        emptyProject: true,
+        attempts: [
+          {
+            attemptId: "attempt-unsubmitted-before-crash",
+            retryOrdinal: 0,
+            status: "active",
+            phase,
+          },
+        ],
+        receipts: [],
+      });
+      const lifecycle: ProjectBootstrapLifecycleEvent[] = [];
+      const eventsBeforeCommit: ProjectBootstrapLifecycleEvent[][] = [];
+      const coordinator = new ProjectBootstrapCoordinator({
+        root,
+        sessionManager: manager,
+        onEvent: (event) => { lifecycle.push(event); },
+        writeState: async (file, state) => {
+          eventsBeforeCommit.push([...lifecycle]);
+          await fs.writeFile(file, JSON.stringify(state));
+        },
+      });
+
+      await coordinator.register(
+        session, { emptyProject: true, mode: "boot" }, null,
+      );
+
+      expect(session.projectBootstrap!.bootstrap).toEqual({
+        status: "failed",
+        retryable: true,
+        errorCode: "injection_failed",
+      });
+      expect((await readState(root, session.id)).metadata.bootstrap).toEqual(
+        session.projectBootstrap!.bootstrap,
+      );
+      expect(
+        lifecycle.filter((event) => event.name === "project_bootstrap.failed"),
+      ).toEqual([
+        {
+          name: "project_bootstrap.failed",
+          projectId: PROJECT_ID,
+          sessionId: session.id,
+          attemptId: "attempt-unsubmitted-before-crash",
+          errorCode: "injection_failed",
+          retryable: true,
+          queueDepth: 0,
+        },
+      ]);
+      expect(eventsBeforeCommit).toEqual([[]]);
+      expect(submitted).toEqual([]);
+    },
+  );
+
+  it("publishes only the committed persistence failure when boot recovery cannot persist its classification", async () => {
+    session.ready = false;
+    session.status = "exited";
+    session.projectBootstrap!.bootstrap = {
+      status: "generating",
+      attemptId: "attempt-before-storage-failure",
+    };
+    await writeState(root, session.id, {
+      schemaVersion: 3,
+      metadata: structuredClone(session.projectBootstrap!),
+      inputs: [],
+      dispatchingInputId: null,
+      retryCount: 0,
+      emptyProject: true,
+      attempts: [
+        {
+          attemptId: "attempt-before-storage-failure",
+          retryOrdinal: 0,
+          status: "active",
+          phase: "claimed",
+        },
+      ],
+      receipts: [],
+    });
+    const lifecycle: ProjectBootstrapLifecycleEvent[] = [];
+    const coordinator = new ProjectBootstrapCoordinator({
+      root,
+      sessionManager: manager,
+      onEvent: (event) => { lifecycle.push(event); },
+      writeState: vi.fn(async (file, state) => {
+        await fs.writeFile(file, JSON.stringify(state));
+      }).mockRejectedValueOnce(new Error("storage unavailable")),
+    });
+
+    await expect(coordinator.register(
+      session, { emptyProject: true, mode: "boot" }, null,
+    )).rejects.toThrow("project bootstrap state persistence failed");
+
+    expect((await readState(root, session.id)).metadata.bootstrap).toEqual({
+      status: "failed",
+      retryable: true,
+      errorCode: "persistence_failed",
+    });
+    expect(lifecycle).toEqual([
+      {
+        name: "project_bootstrap.failed",
+        projectId: PROJECT_ID,
+        sessionId: session.id,
+        errorCode: "persistence_failed",
+        retryable: true,
+        queueDepth: 0,
+      },
+    ]);
+    expect(submitted).toEqual([]);
+  });
+
   it("retries exactly once after restart when the durable attempt never reached its pre-write marker", async () => {
     session.projectBootstrap!.bootstrap = {
       status: "generating",

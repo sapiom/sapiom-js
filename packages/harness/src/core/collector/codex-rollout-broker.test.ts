@@ -1,17 +1,20 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CodexRolloutBroker } from "./codex-rollout-broker.js";
+import * as codexTailer from "./codex-tailer.js";
 
-const meta = (id: string, cwd: string, timestamp: string) =>
-  `${JSON.stringify({ type: "session_meta", payload: { id, cwd, timestamp } })}\n`;
+const meta = (id: string, cwd: string, timestamp: string, ordinaryTurn = true) =>
+  `${JSON.stringify({ type: "session_meta", payload: { id, cwd, timestamp } })}\n` +
+  (ordinaryTurn ? `${JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Ordinary initial request" } })}\n` : "");
 
 describe("CodexRolloutBroker", () => {
   const roots: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(
       roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
     );
@@ -72,6 +75,42 @@ describe("CodexRolloutBroker", () => {
     ).resolves.toEqual({ outcome: "claimed", path: secondPath });
   });
 
+  it("correlates simultaneous child rollouts by their exact initial runtime markers", async () => {
+    const { home, cwd, sessions } = await fixture();
+    const marker = (digit: string) => `<sapiom-codex-runtime ref="sha256:${digit.repeat(64)}" />`;
+    const input = (sessionId: string, digit: string) => ({ sessionId, runtimeEpoch: `runtime-${digit}`, cwd,
+      sinceMs: Date.parse("2026-09-04T10:00:00.000Z"), requiredRuntimeMarker: marker(digit) });
+    const broker = new CodexRolloutBroker(home);
+    const first = input("child-a", "1"); const second = input("child-b", "2");
+    broker.register(first); broker.register(second);
+    for (const [name, digit] of [["child-a", "1"], ["child-b", "2"]]) {
+      await writeFile(join(sessions, `${name}.jsonl`), meta(name!, cwd, "2026-09-04T10:00:01.000Z", false) +
+        JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [
+          { type: "input_text", text: `${marker(digit!)}\n\nImplement the task.` },
+        ] } }) + "\n");
+    }
+    await expect(broker.claimFresh(first)).resolves.toEqual({ outcome: "claimed", path: join(sessions, "child-a.jsonl") });
+    await expect(broker.claimFresh(second)).resolves.toEqual({ outcome: "claimed", path: join(sessions, "child-b.jsonl") });
+  });
+
+  it("does not let an ordinary pending runtime claim a delegated child's marked rollout", async () => {
+    const { home, cwd, sessions } = await fixture();
+    const requiredRuntimeMarker = `<sapiom-codex-runtime ref="sha256:${"3".repeat(64)}" />`;
+    const ordinary = { sessionId: "aaa-ordinary", runtimeEpoch: "ordinary-runtime", cwd, sinceMs: 0 };
+    const child = { sessionId: "child", runtimeEpoch: "child-runtime", cwd, sinceMs: 0, requiredRuntimeMarker };
+    const broker = new CodexRolloutBroker(home);
+    broker.register(ordinary); broker.register(child);
+    const rollout = join(sessions, "marked-child.jsonl");
+    await writeFile(rollout, meta("child-native", cwd, "2026-09-04T10:00:01.000Z", false));
+    await expect(broker.claimFresh(ordinary)).resolves.toEqual({ outcome: "pending", path: null });
+    await writeFile(rollout, meta("child-native", cwd, "2026-09-04T10:00:01.000Z", false) +
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [
+        { type: "input_text", text: `${requiredRuntimeMarker}\n\nImplement the task.` },
+      ] } }) + "\n");
+    await expect(broker.claimFresh(ordinary)).resolves.toEqual({ outcome: "pending", path: null });
+    await expect(broker.claimFresh(child)).resolves.toEqual({ outcome: "claimed", path: rollout });
+  });
+
   it("fails closed when same-root process epochs cannot distinguish candidates", async () => {
     const { home, cwd, sessions } = await fixture();
     const sinceMs = Date.parse("2026-09-04T10:00:00.000Z");
@@ -113,6 +152,37 @@ describe("CodexRolloutBroker", () => {
         sinceMs,
       }),
     ).resolves.toEqual({ outcome: "ambiguous", path: null });
+  });
+
+  it("does not assign a fresh rollout after its runtime was released during discovery", async () => {
+    const { home, cwd } = await fixture();
+    const candidate = {
+      path: "/fake/next-rollout.jsonl",
+      agentSessionId: "agent-next",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    };
+    let finishDiscovery!: (candidates: typeof candidate[]) => void;
+    const finder = vi.spyOn(codexTailer, "findRolloutCandidates")
+      .mockImplementationOnce(() => new Promise((resolve) => { finishDiscovery = resolve; }))
+      .mockResolvedValue([candidate]);
+    const broker = new CodexRolloutBroker(home);
+    const pending = broker.claimFresh({
+      sessionId: "retired-session",
+      runtimeEpoch: "retired-runtime",
+      cwd,
+      sinceMs: 0,
+    });
+    await vi.waitFor(() => expect(finder).toHaveBeenCalledOnce());
+    broker.releaseSession("retired-session");
+    finishDiscovery([candidate]);
+    await expect(pending).resolves.toEqual({ outcome: "pending", path: null });
+    await expect(broker.claimFresh({
+      sessionId: "next-session",
+      runtimeEpoch: "next-runtime",
+      cwd,
+      sinceMs: 0,
+    })).resolves.toEqual({ outcome: "claimed", path: candidate.path });
   });
 
   it("allows only the same Harness session to reclaim an exact rollout on resume", async () => {

@@ -298,7 +298,7 @@ export function parseProjectSubsessionRequest(
       return invalid("operation.delegationKeys", "invalid_delegation_key");
     const delegationKeys = value.operation.delegationKeys
       .map(normalizeText)
-      .sort((left, right) => left.localeCompare(right));
+      .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
     if (new Set(delegationKeys).size !== delegationKeys.length)
       return invalid("operation.delegationKeys", "duplicate_delegation_key");
     operation = { kind: "release", delegationKeys };

@@ -1442,6 +1442,7 @@ export class ProjectBootstrapCoordinator extends ProjectBootstrapStore {
     await this.serialize(session.id, async () => {
       const firstRegistration = !this.registeredSessions.has(session.id);
       let terminalTransitionEmitted = false;
+      let recoveredAttemptId: string | undefined;
       let state = await this.load(session, context.emptyProject);
       this.mergeRegistration(state, session);
 
@@ -1484,6 +1485,7 @@ export class ProjectBootstrapCoordinator extends ProjectBootstrapStore {
         state.metadata.bootstrap.status === "generating"
       ) {
         const attemptId = state.metadata.bootstrap.attemptId;
+        recoveredAttemptId = attemptId;
         const attempt = state.attempts.find(
           (candidate) => candidate.attemptId === attemptId,
         );
@@ -1509,28 +1511,6 @@ export class ProjectBootstrapCoordinator extends ProjectBootstrapStore {
           state.retryCount < MAX_RETRIES &&
           session.ready &&
           session.status === "running";
-        if (state.inputs.length) {
-          terminalTransitionEmitted = true;
-          this.emit({
-            name: "project_bootstrap.skipped",
-            projectId: state.metadata.projectId,
-            sessionId: session.id,
-            attemptId,
-            reason: "user-proceeded",
-            queueDepth: state.inputs.length,
-          });
-        } else if (!shouldRetry) {
-          terminalTransitionEmitted = true;
-          this.emit({
-            name: "project_bootstrap.failed",
-            projectId: state.metadata.projectId,
-            sessionId: session.id,
-            attemptId,
-            errorCode: "delivery_timeout",
-            retryable: false,
-            queueDepth: 0,
-          });
-        }
       }
       if (
         context.mode === "resumed" &&
@@ -1547,6 +1527,33 @@ export class ProjectBootstrapCoordinator extends ProjectBootstrapStore {
         shouldRetry = true;
       }
       await this.persist(session.id, state);
+      // Recovery is observable only after its classification is durable. A
+      // failed commit publishes its own persistence failure instead.
+      if (recoveredAttemptId) {
+        const bootstrap = state.metadata.bootstrap;
+        if (bootstrap.status === "skipped") {
+          terminalTransitionEmitted = true;
+          this.emit({
+            name: "project_bootstrap.skipped",
+            projectId: state.metadata.projectId,
+            sessionId: session.id,
+            attemptId: recoveredAttemptId,
+            reason: bootstrap.reason,
+            queueDepth: state.inputs.length,
+          });
+        } else if (bootstrap.status === "failed" && !shouldRetry) {
+          terminalTransitionEmitted = true;
+          this.emit({
+            name: "project_bootstrap.failed",
+            projectId: state.metadata.projectId,
+            sessionId: session.id,
+            attemptId: recoveredAttemptId,
+            errorCode: bootstrap.errorCode,
+            retryable: bootstrap.retryable,
+            queueDepth: state.inputs.length,
+          });
+        }
+      }
       if (firstRegistration && context.mode === "created") {
         this.emit({
           name: "project_bootstrap.scheduled",

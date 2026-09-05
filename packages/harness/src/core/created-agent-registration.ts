@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import type { AnalyticsEvent } from "../shared/types.js";
 import { inspectAgentProjectMarker } from "./agent-project-discovery.js";
@@ -33,7 +33,12 @@ export function scaffoldCompletion(
   const input = json(toolInput);
   if (!record(input) || typeof input.dir !== "string" || !input.dir.trim())
     return null;
-  let output = json(toolResponseSummary);
+  // Codex stores native MCP results behind a timing header. Only unwrap that
+  // exact transport shape; arbitrary success prose is not completion evidence.
+  const codexOutput = event.harness === "codex" && typeof toolResponseSummary === "string"
+    ? /^Wall time: [0-9]+(?:\.[0-9]+)? seconds\r?\nOutput:\r?\n([\s\S]+)$/.exec(toolResponseSummary)?.[1]
+    : undefined;
+  let output = json(codexOutput ?? toolResponseSummary);
   // Claude's hook carries the MCP content array. Codex can retain the envelope
   // (including isError) or the structured JSON result.
   if (record(output) && (output.isError === true || output.error != null))
@@ -49,7 +54,7 @@ export function scaffoldCompletion(
     output.isError === true ||
     output.error != null ||
     typeof output.targetDir !== "string" ||
-    !isAbsolute(output.targetDir) ||
+    !output.targetDir.trim() ||
     typeof output.projectName !== "string" ||
     !output.projectName ||
     typeof output.dependenciesInstalled !== "boolean" ||
@@ -100,7 +105,9 @@ export class CreatedAgentRegistration {
       try {
         // Fresh realpath (not the graph cache): aliases must match, and a
         // historical completion is not proof that a folder still exists.
-        target = await realpath(completion.targetDir);
+        // The native scaffold can echo a relative targetDir. Resolve both
+        // claimed paths against the same authenticated creator working directory.
+        target = await realpath(resolve(creator.cwd, completion.targetDir));
         if (target !== (await realpath(resolve(creator.cwd, completion.dir))))
           return;
       } catch {
