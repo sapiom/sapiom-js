@@ -1343,8 +1343,14 @@ export const App = (): JSX.Element => {
   const agentMapUnavailable =
     planningWorkspace && agentMapEntry.state.unavailable !== null;
   // The selected Studio project's root, from the one shared rule so the tab
-  // strip, the Start target and `conversation` cannot key to different folders
-  // when a project has nested bound scopes.
+  // strip and the Start target cannot key to different folders when a project
+  // has nested bound scopes.
+  //
+  // `conversation` below deliberately keys to `selectedStudioScope` (the
+  // INNERMOST scope containing the focused agent) instead: the tabs belong to
+  // the project, while the conversation subject follows what the user is
+  // looking at. The two answers differ only under nested scopes, and that
+  // difference is the point.
   const selectedStudioRoot = studioProjectRoot(selectedStudioScopes);
   const projectSessions =
     planningWorkspace && selectedStudioRoot

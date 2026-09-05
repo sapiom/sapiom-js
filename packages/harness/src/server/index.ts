@@ -161,6 +161,7 @@ import {
   type AgentMapCapabilityEvent,
 } from "../core/agent-map-capability-registry.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { resolveProjectSessionIdentity } from "../core/project-session-identity.js";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouter,
@@ -1173,23 +1174,14 @@ export const startServer = async (
       const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
       if (!project) return undefined;
       // A persisted `map-planner` identity (from before SAP-3143) is not
-      // honored: every project session is an ordinary agent-builder now.
-      if (
-        persisted?.sessionId === sessionId &&
-        persisted.projectId === project.projectId &&
-        persisted.userId === userId &&
-        persisted.role === "agent-builder" &&
-        persisted.assignment.kind === "planned"
-      ) {
-        return structuredClone(persisted);
-      }
-      return {
-        projectId: project.projectId,
+      // honored: every project session is an ordinary agent-builder now. The
+      // predicate lives in core so it is testable on its own.
+      return resolveProjectSessionIdentity({
         sessionId,
+        projectId: project.projectId,
         userId,
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
-      };
+        ...(persisted ? { persisted } : {}),
+      });
     },
     onAgentMapSessionExit: async (sessionId) => {
       agentMapCapabilities.revokeSession(sessionId);

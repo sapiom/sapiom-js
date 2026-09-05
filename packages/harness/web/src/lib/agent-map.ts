@@ -321,10 +321,6 @@ export function resolveStudioWorkspaceSelection(
 }
 
 /**
- * The durable Studio project owning a path. Nested opened projects use the
- * nearest containing root, matching session scope rather than recent-dir order.
- */
-/**
  * A Studio project's ROOT: the outermost of its bound scopes.
  *
  * The counterpart to {@link mostSpecificStudioScope}, which answers "which
@@ -347,6 +343,10 @@ export function studioProjectRoot(
   );
 }
 
+/**
+ * The durable Studio project owning a path. Nested opened projects use the
+ * nearest containing root, matching session scope rather than recent-dir order.
+ */
 export function mostSpecificStudioScope(
   targetPath: string,
   scopes: readonly WorkspaceScopeSummary[],
