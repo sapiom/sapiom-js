@@ -18,6 +18,16 @@ tool rotates, completes a rotation of, or revokes a webhook secret.
 event fields on `ScheduleSummary`, `CreateScheduleResult`, and
 `rotateScheduleSecret` / `completeScheduleSecretRotation` / `revokeScheduleSecret`.
 
+**Breaking (types only, `@sapiom/agent-core`):** `ScheduleFireRecord.scheduledFor`
+is now `string | null` — an event or webhook fire has no occurrence time, so code
+that did `new Date(fire.scheduledFor)` must guard for `null` (or read
+`fire.receiptId` for those kinds). `ScheduleSummary` gains five required fields
+(`eventType`, `publicId`, `secretVersion`, `graceUntil`, `revokedAt`, all
+nullable) that the server always returns; hand-built `ScheduleSummary` values
+(test fakes, adapters) must add them. `ScheduleKind` widens to include `"event"`
+and `"webhook"`, so an exhaustive `switch` over it needs the two new arms. No
+runtime behaviour changes for existing cron / one-off callers.
+
 The offline `AUTHORING_INSTRUCTIONS` fallback and the `sapiom-agent-authoring`
 skill gain a triggers paragraph teaching the same thing; the served-text change
 is version-gated on `@sapiom/mcp` >= 0.15 because older clients are never
