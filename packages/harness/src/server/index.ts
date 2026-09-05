@@ -7,6 +7,8 @@
  * src/shared/types.ts for the full protocol contract.
  */
 
+import { SubsessionCoordinatorStore, type SubsessionCoordinatorStoreEvent } from "../core/subsession-coordinator-store.js";
+import { SubsessionCoordinator, type SubsessionCoordinatorEvent } from "../core/subsession-coordinator.js";
 import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import { AgentBriefService } from "../core/agent-brief-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
@@ -1378,6 +1380,14 @@ export const startServer = async (
   // any not-yet-scheduled project IDs in memory so a retry can converge on the
   // same project instead of creating another one after a transient failure.
   const projectsAwaitingBootstrapSchedule = new Set<string>();
+  const closeCoordinatorOwnedSubsession: {
+    current?: (marker: {
+      projectId: string;
+      parentSessionId: string;
+      bindingId: string;
+      sessionId: string;
+    }) => Promise<void>;
+  } = {};
   const scheduleBootstrapProjects = async (
     projectIds: Iterable<string>,
     userId: string,
@@ -1410,6 +1420,9 @@ export const startServer = async (
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
+    onSubsessionUserClosed: async (marker) => {
+      await closeCoordinatorOwnedSubsession.current?.(marker);
+    },
     buildLaunchOpts,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
       const userId = localProjectPrincipal(projectUserId, machineId);
@@ -3156,6 +3169,49 @@ export const startServer = async (
       },
     },
   );
+  const emitSubsessionEvent = (
+    event: SubsessionCoordinatorEvent | SubsessionCoordinatorStoreEvent,
+  ): void => {
+    const eventSessionId =
+      "sessionId" in event && event.sessionId
+        ? event.sessionId
+        : `subsession-${event.projectId}`;
+    const analyticsEvent: AnalyticsEvent = {
+      eventId: randomUUID(),
+      seq: seqCounter.next(eventSessionId),
+      ts: new Date().toISOString(),
+      userId: identity?.userId ?? null,
+      tenantId: identity?.tenantId ?? null,
+      machineId,
+      harnessSessionId: eventSessionId,
+      agentSessionId: null,
+      harness: sessionManager.get(eventSessionId)?.harness ?? "claude-code",
+      type: event.name,
+      payload: {
+        project_id: event.projectId,
+        ...("count" in event && event.count !== undefined
+          ? { count: Math.max(0, Math.min(16, event.count)) }
+          : {}),
+        ...("code" in event && event.code ? { error_code: event.code } : {}),
+      },
+    };
+    void eventStore.append(analyticsEvent).catch(() => {});
+    batcher.enqueue(analyticsEvent);
+  };
+  const subsessionCoordinatorStore = new SubsessionCoordinatorStore(
+    statePaths.agentMap,
+    { onEvent: emitSubsessionEvent },
+  );
+  closeCoordinatorOwnedSubsession.current = async (marker) => {
+    await subsessionCoordinatorStore.closeOwnedBinding(marker);
+  };
+  const subsessionCoordinator = new SubsessionCoordinator({
+    store: subsessionCoordinatorStore,
+    sessionManager,
+    planningStore: buildPlanStore,
+    eventReader: eventStore,
+    onEvent: emitSubsessionEvent,
+  });
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -3181,6 +3237,7 @@ export const startServer = async (
     service: agentMapProposalService,
     buildPlanService,
     agentBriefService,
+    subsessionCoordinator,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
@@ -4122,6 +4179,9 @@ export const startServer = async (
     onEventPersisted: (event: AnalyticsEvent, runtimeEpoch) => {
       void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
         console.error("[harness] project bootstrap completion failed");
+      });
+      void subsessionCoordinator.onEventPersisted(event, runtimeEpoch).catch(() => {
+        console.error("[harness] subsession acknowledgement failed");
       });
       const recordChanged = sessionRecordChangedMessage(event);
       if (recordChanged) bus.publish(recordChanged);
