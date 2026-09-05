@@ -10,7 +10,6 @@ import {
   MAX_INLINE_ATTACHMENTS_TOTAL_BYTES,
 } from "@shared/types";
 
-import { quotePathForTerminal } from "./terminal-drop";
 
 export type NewSessionAttachment =
   | {
@@ -192,21 +191,4 @@ export async function materializeAttachments(
   return resolved;
 }
 
-/**
- * Preserve the user's words verbatim and add one terminal-safe path per file.
- * The caller deliberately derives the project slug before calling this, so a
- * filename can never rename the project being created.
- */
-export function buildIdeaWithAttachments(
-  idea: string,
-  attachments: readonly ResolvedNewSessionAttachment[],
-): string | undefined {
-  const trimmedIdea = idea.trim();
-  if (attachments.length === 0) return trimmedIdea || undefined;
-
-  const paths = attachments
-    .map((attachment) => quotePathForTerminal(attachment.path))
-    .join("\n");
-  const context = `Attached files (read each as context):\n${paths}`;
-  return trimmedIdea ? `${trimmedIdea}\n\n${context}` : context;
-}
+export { buildIdeaWithAttachments } from "@shared/initial-prompt";

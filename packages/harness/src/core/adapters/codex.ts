@@ -300,9 +300,11 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   launch(opts: LaunchOpts): SpawnSpec {
+    const args = buildConfigArgs(opts);
+    if (opts.initialPrompt) args.push("--", opts.initialPrompt);
     return {
       command: this.binary,
-      args: buildConfigArgs(opts),
+      args,
       // Codex has no analog to Claude's CLAUDECODE nested-agent guard; no env
       // overrides are needed for a fresh launch.
       env: opts.agentMapMcp

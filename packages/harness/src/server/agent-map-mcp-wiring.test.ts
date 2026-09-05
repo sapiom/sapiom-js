@@ -653,6 +653,51 @@ it("creates one ordinary Plan Agents session for a newly opened project and neve
   expect(launches).toHaveLength(1);
 });
 
+it.each([false, true])("retains a first project's scope during preparation and refresh (fresh catalog: %s)", async (fresh) => {
+  await fs.writeFile(path.join(root, "settings.json"), JSON.stringify({ recentDirs: [] }));
+  if (fresh) {
+    await fs.writeFile(path.join(root, "studio-projects.json"), JSON.stringify({ schemaVersion: 1, projects: [] }));
+  }
+  const preparing = deferred();
+  const release = deferred();
+  const launch = vi.fn((opts: LaunchOpts): SpawnSpec => ({ command: "bash", args: [], env: {}, cwd: opts.cwd }));
+  const adapter: HarnessAdapter = {
+    id: "claude-code", eventSource: "hooks", doctor: async () => [], launch,
+    resume: (_id, opts) => launch(opts), listPastSessions: async () => [], canResume: async () => true,
+  };
+  const cwd = path.join(projectRoot, "new-project");
+  server = await startServer({
+    port: 0, bootToken: "boot-token", telemetryOptIn: false, authMode: "disabled",
+    adapters: { "claude-code": adapter }, stateRoot: root, launchDir: projectRoot,
+    autoCreateSession: false,
+    buildLaunchOpts: async (_id, req) => {
+      await fs.mkdir(req.cwd, { recursive: true });
+      preparing.resolve();
+      await release.promise;
+      return {};
+    },
+  });
+  const headers = { "content-type": "application/json", "x-harness-token": "boot-token" };
+  const creating = fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
+    method: "POST", headers, body: JSON.stringify({ cwd, harness: "claude-code", initialPrompt: "Build ticket triage." }),
+  });
+  await preparing.promise;
+  try {
+    const state = await (await fetch(`http://127.0.0.1:${server.port}/api/state`, {
+      headers, signal: AbortSignal.timeout(2000),
+    })).json();
+    expect(launch).not.toHaveBeenCalled();
+    expect(state.sessions).toHaveLength(0);
+  } finally {
+    release.resolve();
+  }
+  const response = await creating;
+  expect(response.status).toBe(201);
+  expect(launch).toHaveBeenCalledOnce();
+  expect(server.sessionManager.list()).toHaveLength(1);
+  expect(server.sessionManager.listPendingCreates()).toEqual([]);
+});
+
 it("does not spawn an automatic duplicate when an explicit first session wins the bootstrap claim", async () => {
   const launches: LaunchOpts[] = [];
   const adapter: HarnessAdapter = {
@@ -717,7 +762,7 @@ it("does not spawn an automatic duplicate when an explicit first session wins th
     body: JSON.stringify({
       cwd: freshRoot,
       harness: "claude-code",
-      initialUserInputPending: true,
+      initialPrompt: "Build a ticket triage agent.",
     }),
   });
   expect(explicitResponse.status).toBe(201);
@@ -739,6 +784,7 @@ it("does not spawn an automatic duplicate when an explicit first session wins th
   });
   expect(explicit.title).toBe("Plan Agents");
   expect(launches).toHaveLength(1);
+  expect(launches[0]?.initialPrompt).toBe("Build a ticket triage agent.");
 });
 
 it("automatically seeds one durable map through the real E2 tools without replaying after duplicate readiness or restart", async () => {

@@ -707,6 +707,51 @@ describe("sessionForFocus: selection moves the session across projects, never wi
     ).toEqual({ kind: "switch", to: nestedSession });
   });
 
+  it("keeps the creating project's chat for an off-root agent, without absorbing foreign sessions", () => {
+    const original = at({
+      id: "original",
+      cwd: "/projects/original",
+      agentMapIdentity: { projectId: "project_original" },
+    });
+    const foreign = at({
+      id: "foreign",
+      cwd: "/projects",
+      agentMapIdentity: { projectId: "project_foreign" },
+    });
+    const scope = {
+      focusPath: "/projects/reviewer",
+      roots: ["/projects/original", "/projects"],
+      targetProjectId: "project_original",
+      targetProjectRoot: "/projects/original",
+    };
+    expect(
+      sessionForFocus({
+        ...scope,
+        active: original,
+        sessions: [original, foreign],
+      }),
+    ).toEqual({ kind: "keep" });
+    expect(
+      sessionReachesFocus(
+        original,
+        scope.focusPath,
+        scope.roots,
+        scope.targetProjectId,
+        scope.targetProjectRoot,
+      ),
+    ).toBe(true);
+    expect(
+      sessionForFocus({
+        ...scope,
+        active: foreign,
+        sessions: [original, foreign],
+      }),
+    ).toEqual({ kind: "switch", to: original });
+    expect(
+      sessionForFocus({ ...scope, active: foreign, sessions: [foreign] }),
+    ).toEqual({ kind: "switch", to: null });
+  });
+
   it("falls back safely for identity-less legacy sessions without admitting an outer root", () => {
     const nested = `${POLSIA}/services/workers`;
     const worker = `${nested}/ads`;

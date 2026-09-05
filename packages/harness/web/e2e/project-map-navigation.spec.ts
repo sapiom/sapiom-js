@@ -41,9 +41,89 @@ async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
 }
 
 test.describe("SAP-3148 project Agent Map navigation", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
+  test.beforeEach(async ({ page }, testInfo) => {
+    const sibling = testInfo.title.startsWith("a scaffolded sibling")
+      ? "&mockCreatedSibling=1"
+      : "";
+    const empty = testInfo.title.includes("without a live conversation")
+      ? "&mockNoLiveSessions=1"
+      : "";
+    await page.goto(
+      `/?seed=0&mockFixtures=deep&mockStudioProjects=present${sibling}${empty}`,
+    );
     await expect(page.locator(".rail-workflows")).toBeVisible();
+  });
+
+  test("a scaffolded sibling stays under its creating project and keeps the same conversation", async ({
+    page,
+  }) => {
+    const project = page.getByTestId("workspace-group-acme-app");
+    const sibling = project.getByTestId("workflow-report-reviewer");
+    await expect(sibling).toBeVisible();
+    await expect(page.getByTestId("workflow-report-reviewer")).toHaveCount(1);
+    await expect(
+      page.getByTestId("workspace-group-report-reviewer"),
+    ).toHaveCount(0);
+    const before = await navigationEvidence(page);
+    await sibling.click();
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    expect(await navigationEvidence(page)).toEqual(before);
+    await openProjectMap(page, "acme-app");
+    await sibling.click();
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    expect(await navigationEvidence(page)).toEqual(before);
+    await page.reload();
+    await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
+    await sibling.click();
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    expect(await navigationEvidence(page)).toEqual(before);
+    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("filing-group-by").selectOption("group");
+    await page.keyboard.press("Escape");
+    await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
+    await project.getByTestId("workflow-report-reviewer").click();
+    expect(await navigationEvidence(page)).toEqual(before);
+  });
+
+  test("a scaffolded sibling without a live conversation starts at its original project root", async ({
+    page,
+  }) => {
+    await page
+      .getByTestId("workspace-group-acme-app")
+      .getByTestId("workflow-report-reviewer")
+      .click();
+    await page.getByTestId("open-agent-start-session").click();
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    const calls = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __HARNESS_TEST__?: {
+              createSessionCalls?: Array<{ req: { cwd: string } }>;
+            };
+          }
+        ).__HARNESS_TEST__?.createSessionCalls ?? [],
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.req.cwd).toBe("/Users/demo/acme-app");
+    await expect(
+      page.getByTestId("workspace-group-report-reviewer"),
+    ).toHaveCount(0);
+  });
+
+  test("a scaffolded sibling is hidden with its closed project", async ({
+    page,
+  }) => {
+    const project = page.getByTestId("workspace-group-acme-app");
+    await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
+    await project.getByTestId("project-menu-acme-app").click();
+    await page.getByTestId("project-remove-acme-app").click();
+    await page.getByTestId("remove-project-confirm-btn").click();
+    await expect(project).toHaveCount(0);
+    await expect(page.getByTestId("workflow-report-reviewer")).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await expect(page.getByTestId("workflow-report-reviewer")).toHaveCount(0);
   });
 
   test("the project name opens the durable map without touching its active conversation", async ({

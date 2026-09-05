@@ -9,6 +9,7 @@
 
 import { SubsessionCoordinatorStore, type SubsessionCoordinatorStoreEvent } from "../core/subsession-coordinator-store.js";
 import { SubsessionCoordinator, type SubsessionCoordinatorEvent } from "../core/subsession-coordinator.js";
+import { codexRuntimeMarker } from "../core/collector/codex-runtime-marker.js";
 import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import { AgentBriefService } from "../core/agent-brief-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
@@ -37,7 +38,7 @@ import type {
   SystemPromptDelivery,
   WorkflowInfo,
 } from "../shared/types.js";
-import { JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
+import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
 import type {
   ProjectBootstrapLifecycleEvent,
   ProjectAgentSession,
@@ -78,6 +79,7 @@ import {
 import { AgentSourceScanBudget } from "../core/agent-source-discovery.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
+import { CreatedAgentRegistration } from "../core/created-agent-registration.js";
 import {
   createClaudeTranscriptEnricher,
   createSessionRecordReader,
@@ -221,7 +223,8 @@ import {
   moveTargetDirs,
   remapSessions,
 } from "./agent-move.js";
-import { createAgentScaffoldRouter } from "./scaffold.js";
+import { createAgentScaffoldRouter, type AgentScaffoldDeps } from "./scaffold.js";
+import { prepareFirstRequest } from "./first-request.js";
 import { createMacrosRouter } from "./macros.js";
 import { createFsRouter } from "./fs.js";
 import { createRunsRouter } from "./runs.js";
@@ -1317,6 +1320,56 @@ export const startServer = async (
       },
     });
 
+  const scaffoldDeps: AgentScaffoldDeps = {
+      listProjectDirs: async () => {
+        const stored = await loadSettings(statePaths.settings);
+        return moveTargetDirs(
+          [
+            ...stored.recentDirs,
+            ...(stored.projectRoot ? [stored.projectRoot] : []),
+            // THE HOST'S DEFAULT, which the move route does not need and this
+            // one does. `AppState.defaultProjectRoot` is where the SPA puts a
+            // NEW project when the user has saved no `projectRoot` of their own
+            // — `<launchDir>/projects` under Electron — and the host does not
+            // persist it into settings. Without it, the first template a user
+            // ever starts from is refused at its own suggested destination
+            // ("Studio doesn't show that folder as a project"), and the flow
+            // cannot bootstrap: `recentDirs` only learns a root once a session
+            // has been created there, and creation now happens FIRST.
+            defaultProjectRoot ?? launchDir,
+            ...sessionManager.list().map((session) => session.cwd),
+          ],
+          workflowsCache.map((w) => w.path),
+        );
+      },
+      resolveAgent: (agentPath) =>
+        workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
+      scaffoldAgent: async ({ targetDir, template }) => {
+        // `installDependencies: true` for the same reason the MCP tool passes
+        // it: the Canvas bundles the project on its first, unprompted render
+        // and resolves `@sapiom/agent`/`zod` from the project's own
+        // node_modules, so a never-installed agent opens on a "Could not
+        // resolve …" error. Best-effort inside agent-core — a failed install
+        // still returns a created project.
+        const result = await scaffold({
+          targetDir,
+          template,
+          templatesDir: agentCoreTemplatesDir(),
+          installDependencies: true,
+        });
+        return { dependenciesInstalled: result.dependenciesInstalled };
+      },
+      // Rescan the PROJECT root, not the agent directory: the registry has to
+      // learn the new agent under the project the rail draws it in, and the
+      // scan broadcasts `workflows.changed` so the row is there before the
+      // dialog's caller opens a session on it.
+      onScaffolded: async (agentDir) => {
+        await scanWorkflowsAndBroadcast(dirname(agentDir), "agent-created", {
+          dirty: true,
+        });
+      },
+    };
+
   const innerBuildLaunchOpts =
     options.buildLaunchOpts ??
     createDefaultBuildLaunchOpts(
@@ -1335,8 +1388,13 @@ export const startServer = async (
     context,
   ) => {
     await pendingGeneratedRemovals.get(harnessSessionId);
+    // Scope/bootstrap ownership is already resolved; prepare the user's new
+    // project before config generation and PTY spawn, never during resume.
+    const initialPrompt = context?.resume
+      ? undefined
+      : await prepareFirstRequest(req, scaffoldDeps);
     if (!context?.agentMapIdentity) {
-      return innerBuildLaunchOpts(harnessSessionId, req, context);
+      return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
     }
     if (!agentMapMcpUrl) {
       throw new Error("Agent Map MCP endpoint is not bound");
@@ -1354,7 +1412,7 @@ export const startServer = async (
         ...context,
         agentMapMcp: agentMapMcpMetadata,
       });
-      return { ...generated, agentMapMcp: agentMapMcpMetadata };
+      return { ...generated, agentMapMcp: agentMapMcpMetadata, ...(initialPrompt ? { initialPrompt } : {}) };
     } catch (error) {
       agentMapCapabilities.revokeSession(harnessSessionId);
       throw error;
@@ -1507,6 +1565,7 @@ export const startServer = async (
       }
       const metadata = await projectBootstrap?.claimProject(
         identity,
+        Boolean(request.initialPrompt || request.initialAttachments?.length) ||
         request.initialUserInputPending === true ||
           Boolean(request.rehydrateFrom),
       );
@@ -1527,6 +1586,8 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Date.now(),
+            ...(sessionManager.getSubsessionBinding(session.id)
+              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
         } else {
           codexRolloutBroker.releaseSession(session.id);
@@ -3095,6 +3156,57 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
+  // These leases observe exact, explicitly associated agent directories. They
+  // do not open those directories as new Studio projects or broaden cwd.
+  const createdAgentWatcher = new WorkspaceWatcherManager({
+    sharedWatchBroker: sharedWorkspaceWatchBroker,
+    listSourceRoots: (_key, cwd) => [cwd],
+    listSourceObservations: (_key, cwd) => discoveryObservationsForRoot(cwd),
+    onPotentialChange: (agentPath) => {
+      if (coordinatorActive) prepareDirtyWorkflowRoot(agentPath);
+    },
+    onChange: async (agentPath) => {
+      if (!coordinatorActive) return;
+      await scanWorkflowsAndBroadcast(agentPath, "workspace-change", {
+        dirty: true,
+      });
+    },
+  });
+  const createdAgentRegistration = new CreatedAgentRegistration({
+    preferences: studioWorkspacePreferences,
+    events: eventStore,
+    authorize: async (event, runtimeEpoch) => {
+      const session = sessionManager.get(event.harnessSessionId);
+      if (
+        !session ||
+        !session.agentMapIdentity ||
+        localProjectPrincipal(event.userId, event.machineId) !==
+          session.agentMapIdentity.userId ||
+        (runtimeEpoch !== undefined &&
+          !sessionManager.acceptsIngestRuntimeEpoch(session.id, runtimeEpoch))
+      ) return null;
+      const authorized = await isProjectSessionDispatchAuthorized({
+        session,
+        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
+        resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+      });
+      if (
+        !authorized ||
+        (runtimeEpoch !== undefined &&
+          !sessionManager.acceptsIngestRuntimeEpoch(session.id, runtimeEpoch))
+      ) return null;
+      return { projectId: session.agentMapIdentity.projectId, cwd: session.cwd };
+    },
+    projectForPath: async (agentPath) =>
+      (await studioProjectCatalog.resolveIdentityForPath(agentPath))?.projectId ??
+      null,
+    watch: (agentPath) => createdAgentWatcher.start(agentPath, agentPath),
+    scan: async (agentPath) => {
+      await scanWorkflowsAndBroadcast(agentPath, "agent-created", { dirty: true });
+      // Backfill can change membership without changing any filesystem row.
+      bus.publish({ type: "workflows.changed" });
+    },
+  });
   const agentMapProposalService = new AgentMapProposalService(
     agentMapWorkspaceStore,
     {
@@ -3176,6 +3288,14 @@ export const startServer = async (
       "sessionId" in event && event.sessionId
         ? event.sessionId
         : `subsession-${event.projectId}`;
+    if (event.name === "subsession.kickoff_submitted" &&
+      sessionManager.get(eventSessionId)?.harness === "codex") {
+      // An idle fresh Codex may have outlived the initial discovery window.
+      // Submission creates its rollout; restart collection, never the kickoff.
+      void startCodexTailerFor(eventSessionId).catch(() => {
+        console.error("[harness] codex kickoff transcript discovery failed");
+      });
+    }
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
       seq: seqCounter.next(eventSessionId),
@@ -3594,6 +3714,19 @@ export const startServer = async (
 
   const app: Express = express();
   app.disable("x-powered-by");
+
+  // Everything under /api requires the boot token; mounted as middleware
+  // (not a router) so it also gates the workflows/macros routers below,
+  // which declare their own absolute /api/* paths.
+  // JSON limit raised above express's 100 KiB default so the image-attach route
+  // (base64 data URLs, up to ~13 MiB encoded) can be parsed — see
+  // JSON_BODY_LIMIT_BYTES. This is the parser that actually gates every /api
+  // route; the rest router mounts its own with the same limit for standalone use.
+  app.post(
+    "/api/sessions",
+    createBootTokenMiddleware(options.bootToken),
+    express.json({ limit: CREATE_SESSION_JSON_LIMIT_BYTES }),
+  );
   app.use(
     "/api",
     createBootTokenMiddleware(options.bootToken),
@@ -3988,57 +4121,7 @@ export const startServer = async (
   // against the SAME directory list the move route drops into — so "a folder
   // the rail can show" and "a folder the studio will create a project in" stay
   // one answer.
-  app.use(
-    createAgentScaffoldRouter({
-      listProjectDirs: async () => {
-        const stored = await loadSettings(statePaths.settings);
-        return moveTargetDirs(
-          [
-            ...stored.recentDirs,
-            ...(stored.projectRoot ? [stored.projectRoot] : []),
-            // THE HOST'S DEFAULT, which the move route does not need and this
-            // one does. `AppState.defaultProjectRoot` is where the SPA puts a
-            // NEW project when the user has saved no `projectRoot` of their own
-            // — `<launchDir>/projects` under Electron — and the host does not
-            // persist it into settings. Without it, the first template a user
-            // ever starts from is refused at its own suggested destination
-            // ("Studio doesn't show that folder as a project"), and the flow
-            // cannot bootstrap: `recentDirs` only learns a root once a session
-            // has been created there, and creation now happens FIRST.
-            ...(defaultProjectRoot ? [defaultProjectRoot] : []),
-            ...sessionManager.list().map((session) => session.cwd),
-          ],
-          workflowsCache.map((w) => w.path),
-        );
-      },
-      resolveAgent: (agentPath) =>
-        workflowsCache.find((w) => resolve(w.path) === agentPath) ?? null,
-      scaffoldAgent: async ({ targetDir, template }) => {
-        // `installDependencies: true` for the same reason the MCP tool passes
-        // it: the Canvas bundles the project on its first, unprompted render
-        // and resolves `@sapiom/agent`/`zod` from the project's own
-        // node_modules, so a never-installed agent opens on a "Could not
-        // resolve …" error. Best-effort inside agent-core — a failed install
-        // still returns a created project.
-        const result = await scaffold({
-          targetDir,
-          template,
-          templatesDir: agentCoreTemplatesDir(),
-          installDependencies: true,
-        });
-        return { dependenciesInstalled: result.dependenciesInstalled };
-      },
-      // Rescan the PROJECT root, not the agent directory: the registry has to
-      // learn the new agent under the project the rail draws it in, and the
-      // scan broadcasts `workflows.changed` so the row is there before the
-      // dialog's caller opens a session on it.
-      onScaffolded: async (agentDir) => {
-        await scanWorkflowsAndBroadcast(dirname(agentDir), "agent-created", {
-          dirty: true,
-        });
-      },
-    }),
-  );
+  app.use(createAgentScaffoldRouter(scaffoldDeps));
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
     createFsRouter(),
@@ -4177,6 +4260,11 @@ export const startServer = async (
       }
     },
     onEventPersisted: (event: AnalyticsEvent, runtimeEpoch) => {
+      void createdAgentRegistration
+        .onEventPersisted(event, runtimeEpoch)
+        .catch(() => {
+          console.error("[harness] created agent registration failed");
+        });
       void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
         console.error("[harness] project bootstrap completion failed");
       });
@@ -4234,6 +4322,8 @@ export const startServer = async (
             runtimeEpoch,
             cwd: session.cwd,
             sinceMs: Number.isNaN(sinceMs) ? Date.now() : sinceMs,
+            ...(sessionManager.getSubsessionBinding(session.id)
+              ? { requiredRuntimeMarker: codexRuntimeMarker(runtimeEpoch) } : {}),
           });
       if (claim.outcome === "claimed")
         return { path: claim.path, ambiguous: false };
@@ -4402,6 +4492,7 @@ export const startServer = async (
 
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
+      const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
       coordinatorEpoch += 1;
       clearInterval(sessionSweepTimer);
@@ -4412,6 +4503,7 @@ export const startServer = async (
       );
       await settle(() => canvasWatcher.stopAll());
       await settle(() => workspaceWatcher.stopAll());
+      await settle(() => createdAgentWatcher.stopAll());
       await settle(() => systemGraphWatcher.stopAll());
       activeSystemGraphScopes.clear();
       await settle(() => systemGraphInvocations.clear());
@@ -4444,6 +4536,7 @@ export const startServer = async (
       // wait leaves the existing writes intact; it never reopens admission.
       const drainsSettled = (async () => {
         await bootstrapClosing;
+        await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
           await recordBackfill;
@@ -4496,6 +4589,13 @@ export const startServer = async (
 
   let actualPort = options.port;
   try {
+    // Before the first browser state read: restore creator ownership from the
+    // durable local completion stream, including pre-fix scaffolded siblings.
+    await createdAgentRegistration
+      .recover(sessionManager.list().map((session) => session.id))
+      .catch(() => {
+        console.error("[harness] created agent recovery failed");
+      });
     await new Promise<void>((resolve, reject) => {
       httpServer.once("error", reject);
       httpServer.listen(options.port, host, () => {

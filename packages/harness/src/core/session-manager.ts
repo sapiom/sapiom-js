@@ -3459,6 +3459,7 @@ export class SessionManager {
         opts = {
           harnessSessionId: id,
           cwd: req.cwd,
+          ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
           ...(await (launchContext
             ? this.buildLaunchOpts(id, req, launchContext)
             : this.buildLaunchOpts(id, req))),

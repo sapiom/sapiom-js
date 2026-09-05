@@ -13,6 +13,9 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@shared/initial-prompt": fileURLToPath(
+        new URL("src/shared/initial-prompt.ts", import.meta.url),
+      ),
       // Resolve "@shared/types" to the package's canonical contract so web
       // unit tests and server tests always build against the same source of
       // truth. Mirrors the alias in web/vite.config.ts.
