@@ -16,6 +16,10 @@ title, transcript, and Canvas are preserved. Malformed or conflicting
 authority fails closed; unavailable project scope prevents resume until the
 current owner and root binding are valid again.
 
+`AgentMapToolEvent.role` is also removed. Telemetry consumers should use the
+neutral project/session identifiers and the tool name and outcome instead of
+branching on a session role.
+
 Persisted bootstrap failures with `scope_unavailable` are recognized on
 restart, so valid conversation metadata is retained and can resume after
 scope is restored.
