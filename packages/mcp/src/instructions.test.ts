@@ -152,7 +152,7 @@ describe("server instructions", () => {
     const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
     expect(flat).toContain("HMAC-SHA256 hex over `timestamp.eventId.rawBody`");
     expect(flat).toContain(
-      "epoch-ms timestamp, dot-free event id, ±5 min skew",
+      "epoch-ms timestamp, url-safe event id `[A-Za-z0-9_-]{1,128}`, ±5 min skew",
     );
     for (const h of [
       "X-Sapiom-Timestamp",
@@ -199,7 +199,7 @@ describe("server instructions", () => {
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "cb328b0b7d4892d874f12cc122e6212cc43c396853b1c613729628a4cc3659eb",
+      "47a4e3a355584f40345e4a6dc9d695663aa24fc613e93eaf4559465b02b8b457",
     );
   });
 });
