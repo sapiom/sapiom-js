@@ -251,12 +251,17 @@ describe("llmSessionReadySchema", () => {
     };
     const parsed = llmSessionReadySchema.parse(payload);
     expect(parsed).toBe(payload);
-    // The union narrows on `state`: a ready payload exposes baseUrls as required.
+    // The union narrows on `state`; a ready payload is what `callSession` takes.
     if (parsed.state === "ready") {
-      expect(parsed.baseUrls.anthropic).toMatch(/\/anthropic$/);
+      expect(parsed.baseUrls?.anthropic).toMatch(/\/anthropic$/);
     } else {
       throw new Error("expected a ready payload");
     }
+  });
+
+  it("accepts a ready payload without baseUrls (callSession needs only the id)", () => {
+    const payload = { sessionId: "sess-1", state: "ready" };
+    expect(llmSessionReadySchema.parse(payload)).toBe(payload);
   });
 
   it("accepts a failed payload carrying each gateway async terminal reason", () => {
@@ -286,10 +291,7 @@ describe("llmSessionReadySchema", () => {
     expect(() =>
       llmSessionReadySchema.parse({ sessionId: "s", state: "pending" }),
     ).toThrow(/state must be "ready" or "failed"/);
-    // Ready without the session-scoped base URLs is uncallable.
-    expect(() =>
-      llmSessionReadySchema.parse({ sessionId: "s", state: "ready" }),
-    ).toThrow(/baseUrls is required/);
+    // baseUrls is optional, but when present it must be the complete pair.
     expect(() =>
       llmSessionReadySchema.parse({
         sessionId: "s",
@@ -297,6 +299,13 @@ describe("llmSessionReadySchema", () => {
         baseUrls: { anthropic: "https://a" },
       }),
     ).toThrow(/baseUrls\.openai/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        baseUrls: null,
+      }),
+    ).toThrow(/baseUrls must be an object/);
     // Failed without a reason is not the contract the forwarder delivers.
     expect(() =>
       llmSessionReadySchema.parse({ sessionId: "s", state: "failed" }),

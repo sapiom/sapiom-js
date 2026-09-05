@@ -656,10 +656,15 @@ export interface LlmSessionHandle extends DispatchHandle {
  * The session's settled result as it arrives at a step **resumed** from
  * `pauseUntilSignal(sessionHandle, { resumeStep })` — the
  * {@link LLM_SESSION_READY_SIGNAL} payload delivered as that step's `input`.
- * An {@link LlmSession} narrowed to the two terminal shapes the engine's
- * resume forwarder delivers; branch on `state`:
+ * An {@link LlmSession} narrowed to the two shapes the engine's resume
+ * forwarder delivers — the signal fires once, when the session leaves
+ * `pending`, and the forwarder folds any non-ready outcome into `"failed"`
+ * with the outcome as the reason, so no other `state` arrives here. Branch on
+ * `state`:
  *
- * - `"ready"` — `baseUrls` is present (hand the payload to `callSession`).
+ * - `"ready"` — hand the payload to `callSession` (it needs only
+ *   `sessionId`). `baseUrls` carries the session-scoped drop-in URLs when the
+ *   gateway reported them.
  * - `"failed"` — `error` carries the gateway's structured reason
  *   (`deadline_exhausted`, `grant_mint_failed`, `session_ready_failed`,
  *   `session_unsupported`; `session_ready_incomplete` when the forwarder
@@ -669,15 +674,13 @@ export interface LlmSessionHandle extends DispatchHandle {
  * {@link LlmRouteResultPayload}.
  */
 export type LlmSessionReadyPayload =
-  | (LlmSession & {
-      state: "ready";
-      baseUrls: { anthropic: string; openai: string };
-    })
+  | (LlmSession & { state: "ready" })
   | (LlmSession & { state: "failed"; error: string });
 
 /**
  * The wire-shape keys of `LlmSession.baseUrls` — the same vocabulary as
- * `callSession`'s `shape` option; a ready session carries one URL per shape.
+ * `callSession`'s `shape` option; when present, `baseUrls` carries one URL per
+ * shape.
  */
 const SESSION_BASE_URL_SHAPES = ["anthropic", "openai"] as const;
 
@@ -701,16 +704,18 @@ export const llmSessionReadySchema = {
       fail("model must be a string when present");
     if (v.expiresAtMs !== undefined && typeof v.expiresAtMs !== "number")
       fail("expiresAtMs must be a number when present");
-    if (v.state === "ready") {
-      const b = v.baseUrls as Record<string, unknown> | null | undefined;
-      if (!b || typeof b !== "object") fail("baseUrls is required when ready");
-      const urls = b as Record<string, unknown>;
+    if (v.state === "failed" && (typeof v.error !== "string" || !v.error)) {
+      fail("error must be a non-empty string when failed");
+    }
+    // Optional on the payload (as on `LlmSession`) — `callSession` needs only
+    // `sessionId` — but when present it must be the complete, well-typed pair.
+    if (v.baseUrls !== undefined) {
+      const urls = v.baseUrls as Record<string, unknown> | null;
+      if (!urls || typeof urls !== "object") fail("baseUrls must be an object");
       for (const shape of SESSION_BASE_URL_SHAPES) {
-        if (typeof urls[shape] !== "string")
+        if (typeof urls![shape] !== "string")
           fail(`baseUrls.${shape} must be a string`);
       }
-    } else if (typeof v.error !== "string" || !v.error) {
-      fail("error must be a non-empty string when failed");
     }
     return value as LlmSessionReadyPayload;
   },

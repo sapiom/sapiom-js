@@ -108,13 +108,10 @@ export {
   LlmSessionReadySchemaError,
 } from "./llm/index.js";
 // The routing-label vocabulary `llm.run` / `llm.submit` / `llm.createSession`
-// accept for `model` / `label`, and the serving disclosure a routed response
-// carries (`served_class` + `lane`) with its camelCase reader.
-export type {
-  RoutingLabel,
-  LlmDisclosure,
-  LlmDisclosureResult,
-} from "./llm/index.js";
+// accept for `model` / `label`, and the reader for the serving disclosure a
+// routed response carries (`servedClass` + `lane`), with its result type. The
+// raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
+export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
