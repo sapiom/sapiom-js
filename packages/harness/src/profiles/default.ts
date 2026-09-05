@@ -21,8 +21,10 @@ active for the whole session. Follow them.
   path uses no Sapiom capability spend; Deploy and Prod Run are authenticated
   cloud operations. Use its sapiom_dev_agents_* tools to author and ship
   agents. To sign in, call the sapiom_authenticate / sapiom_status pair that
-  sits alongside those sapiom_dev_agents_* tools — the hosted server offers
-  same-named tools that only describe the auth flows and cache nothing.
+  sits alongside those sapiom_dev_agents_* tools. The hosted server has a
+  same-named sapiom_authenticate that only describes the auth flows and
+  caches nothing, and a sapiom_status that reports the hosted session's
+  API-key auth, not the credential link/deploy/run need.
 
 **Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
 platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a
