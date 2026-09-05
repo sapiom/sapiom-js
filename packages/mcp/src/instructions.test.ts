@@ -138,6 +138,36 @@ describe("server instructions", () => {
     );
   });
 
+  it("teaches the four trigger kinds and the webhook signing scheme (SAP-3174)", () => {
+    // Before 2.10 the primer named only the two schedule kinds, and the schedule tool's enum
+    // matched — an agent asked to run on an inbound POST concluded nothing listens and
+    // proposed hand-building a server. The kinds, the scheme, and the App Link boundary
+    // (third-party senders cannot produce our HMAC) all have to be here, version-gated.
+    for (const kind of ["schedule_cron", "schedule_once", "event", "webhook"]) {
+      expect(AUTHORING_INSTRUCTIONS).toContain(`\`${kind}\``);
+    }
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "sapiom_dev_agents_schedule_secret",
+    );
+    const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
+    expect(flat).toContain("HMAC-SHA256 hex over `timestamp.eventId.rawBody`");
+    expect(flat).toContain(
+      "epoch-ms timestamp, url-safe event id `[A-Za-z0-9_-]{1,128}`, ±5 min skew",
+    );
+    for (const h of [
+      "X-Sapiom-Timestamp",
+      "X-Sapiom-Event-Id",
+      "X-Sapiom-Signature",
+    ]) {
+      expect(AUTHORING_INSTRUCTIONS).toContain(h);
+    }
+    expect(AUTHORING_INSTRUCTIONS).toContain("App Link `/hook/*` receiver");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://docs.sapiom.ai/guides/triggers",
+    );
+  });
+
   it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
     // THE SYNC RULE, which lives here rather than in instructions.ts because that
     // file's JSDoc is emitted into dist/instructions.d.ts and published to npm, where
@@ -164,12 +194,12 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.8 (App Links + `sapiom_dev_app_publish`).
+    // Current release: 2.10 (trigger kinds: `event` + `webhook`, webhook signing, `sapiom_dev_agents_schedule_secret`).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "7f518d9c4a80122e51d45e9e28dc5f6cacfd3b05f4101aa1a5b8ae5d4494c0df",
+      "47a4e3a355584f40345e4a6dc9d695663aa24fc613e93eaf4559465b02b8b457",
     );
   });
 });
