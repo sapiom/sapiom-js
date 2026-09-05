@@ -1,53 +1,37 @@
 /**
- * Whether a project (or a group) is LIVE: one of its agents has a running
- * session (SAP-3200, design-eng DECISIONS D37).
+ * Whether a GROUP is live: one of its member agents has a running session
+ * (SAP-3200, design-eng DECISIONS D37).
  *
- * The rail lists no sessions, and this does not change that. It is a DERIVED
- * fact about a project, the same kind of fact the deploy glyph is about an
- * agent, so that "is anything running in here" can be answered at a glance
- * without the rail growing session rows it deliberately does not have.
+ * The rail lists no sessions, and this does not change that. A header's mark is
+ * a DERIVED fact about the agents under it, the same kind of fact the deploy
+ * glyph is about one agent, so that "is anything running in here" can be
+ * answered at a glance without the rail growing session rows it deliberately
+ * does not have.
+ *
+ * THE PROJECT SIDE OF THE MARK IS NOT HERE. A project's live sessions are
+ * `liveSessionsForProject` (session-scope.ts), the same function the session tab
+ * strip renders from, and the mark calls it rather than defining membership a
+ * second time. An earlier draft of this module added a binding clause on top of
+ * that containment, which would have let one session mark two projects at once
+ * after `POST /api/agents/move` moved an agent out from under a running session,
+ * while the strip on the second project stayed empty. That is precisely the
+ * disagreement `session-scope.ts` says it exists to prevent, and one function
+ * answering the question is the only way to keep it prevented.
+ *
+ * What remains here is the part session-scope has no answer for: a group is a
+ * label over agents with no directory behind it, so it cannot be asked the
+ * containment question a project is asked.
  *
  * Pure, and free of React and of fixtures, for the reason `session-scope.ts`
- * gives: a rule you can call with two arguments is a rule a test can pin, and
- * the mark and its specs then read ONE definition rather than two that drift.
- *
- * Containment is `rootContains`, the app's one containment answer, applied to
- * the two fields a session can be attached by. Nothing here re-implements it.
+ * gives: a rule you can call with two arguments is a rule a test can pin.
  */
 import { samePath } from "./paths";
-import { rootContains, type ScopedSession } from "./session-scope";
+import type { ScopedSession } from "./session-scope";
 
 /** Live is anything that has not exited: a session still starting is about to
  *  be running, and a mark that waits for the transition would blink off during
- *  exactly the moment the user just asked for. */
+ *  exactly the moment the user just asked about. */
 const isLive = (session: ScopedSession): boolean => session.status !== "exited";
-
-/**
- * The live sessions a PROJECT holds: rooted inside it, or bound to an agent
- * inside it.
- *
- * `liveSessionsForProject` (session-scope.ts) answers the tab strip's question
- * with the containment clause alone, and since SAP-2927 every session boots at
- * its project root, so in practice the two agree on every session the app
- * creates. The binding clause is here because the mark answers a slightly
- * different question ("does this project have anything running"), and a
- * session bound to an agent in the project is running in the project whatever
- * its cwd says. It can only ever ADD a session that genuinely belongs here, so
- * the mark cannot claim a project is live on the strength of someone else's
- * session.
- */
-export function liveSessionsInProject<S extends ScopedSession>(
-  sessions: readonly S[],
-  root: string,
-): S[] {
-  return sessions.filter(
-    (session) =>
-      isLive(session) &&
-      (rootContains(root, session.cwd) ||
-        (session.boundWorkflowPath != null &&
-          rootContains(root, session.boundWorkflowPath))),
-  );
-}
 
 /**
  * The live sessions on any of a set of agents: a GROUP's members.
@@ -56,6 +40,14 @@ export function liveSessionsInProject<S extends ScopedSession>(
  * be asked the containment question a project is asked. Membership is the same
  * rule `liveSessionsForFocus` applies to one agent, over several: bound to a
  * member, or unbound and sitting in a member's own folder.
+ *
+ * A CONSEQUENCE WORTH STATING, because it looks like a bug and is not: a
+ * session created at a project root is unbound until the agent it works on is
+ * known (`session-manager.ts` binds later), and a project root is nobody's
+ * member folder. So a fresh session marks the PROJECT row and no group header
+ * under it, and the group headers light as binding arrives. That is the honest
+ * reading: until a session is bound, no group can claim it, and picking one
+ * would be a guess printed as a fact.
  *
  * `samePath`, not `===`, for the reason that function gives: the server
  * `path.resolve()`s what it stores while the rail holds whatever the registry

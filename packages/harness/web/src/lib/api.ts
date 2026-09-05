@@ -76,7 +76,9 @@ import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
 import type { CanvasGraph, CanvasGraphNode } from "./canvas-graph";
 import {
+  isBoundSessionFixture,
   MOCK_ACCOUNT_PLAN,
+  MOCK_BOUND_SESSION,
   MOCK_FS_TREE,
   MOCK_HARNESSES,
   MOCK_HISTORY,
@@ -2074,7 +2076,10 @@ export class MockApi implements HarnessApi {
   private sessionsStore: HarnessSession[] =
     this.fresh || this.noLiveSessions
       ? []
-      : MOCK_SESSIONS.map((session) => ({ ...session }));
+      : [
+          ...MOCK_SESSIONS,
+          ...(isBoundSessionFixture() ? [MOCK_BOUND_SESSION] : []),
+        ].map((session) => ({ ...session }));
   /** Live planner records are mutable mock state, unlike the fixed history
    * fixtures. They exercise the same record-refetch path as the real server. */
   private plannerSessionRecords = new Map<string, SessionRecord>();

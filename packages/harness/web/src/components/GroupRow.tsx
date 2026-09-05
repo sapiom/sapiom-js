@@ -41,7 +41,13 @@ export interface GroupRowProps {
    *  mark (SAP-3200). A group header is a header like the project row is, and it
    *  answers the same at-a-glance question about the agents under it. Counted by
    *  the SECTION rather than here: the row has no sessions of its own, and the
-   *  membership rule belongs with the model. */
+   *  membership rule belongs with the model.
+   *
+   *  INTENDED, and it reads like a bug at first: a session started at a project
+   *  root is unbound until its agent is known, so for that window the PROJECT
+   *  row carries the mark and no group under it does. A group is a label over
+   *  agents, and an unbound session at the root is working on none of them yet;
+   *  crediting one would print a guess as a fact. See `liveSessionsOnAgents`. */
   liveCount?: number;
   /** True while this row is the drop target. Owned by the section, not the row:
    *  rows that each track their own hover disagree mid-drag. */
