@@ -37,4 +37,24 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Local Run, Prod Run, and Deploy");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_send_feedback");
   });
+
+  it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // The digest above only proves the two copies match; it cannot tell a sync that keeps
+    // this paragraph from one that drops it. These are the load-bearing facts, so a future
+    // "re-pin the digest" sync that loses them fails here by name.
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("ctx.sapiom.vault.get");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "agent code cannot write the Vault",
+    );
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("ctx.sapiom.agents.launch");
+    // Routes are named without their REST prefix: this prompt is Agent Studio visible
+    // text and subject to scripts/agent-studio-terminology-check.mjs.
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("GET …/receipts");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("/replay");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/workflows?/i);
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("webhooksEnabled");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("/hook/<path>");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("byte-exact");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("60 s");
+  });
 });

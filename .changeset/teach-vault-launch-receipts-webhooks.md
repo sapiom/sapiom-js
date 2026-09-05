@@ -21,3 +21,10 @@ session whose startup fetch fails learns the same four things an online session 
 `DEFAULT_SYSTEM_PROMPT` (1.1) move with their digest pins; the 2.9 primer also drops the
 `deadlineMinutes` clause that offered a knob `llm.run` does not have. The
 `sapiom-agent-authoring` skill gains a pointer to where these are taught, not a restatement.
+
+Naming note: the 2.9 primer spells the receipts and replay routes with their real
+`/v1/workflows/` REST prefix, because no tool or docs page covers them yet and the routes
+are the only surface that exists. The primer's guard is therefore scoped to the per-step
+executions path it was written about. The Studio system prompt, which is Agent Studio
+visible text and subject to the terminology gate, names the same routes without the prefix
+and defers to the primer for the full paths.

@@ -108,8 +108,10 @@ describe("server instructions", () => {
     // docs.sapiom.ai publishes), so the guard is scoped to the executions path.
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
     expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/executions/");
-    // `LlmRunSpec` has no `deadlineMinutes`; 2.9 dropped the clause that offered it.
-    expect(AUTHORING_INSTRUCTIONS).not.toContain("deadlineMinutes");
+    // `LlmRunSpec` has no `deadlineMinutes`; 2.9 dropped the clause that offered it to a
+    // one-shot caller. Scoped to that clause, not the identifier: `LlmSubmitSpec` has a
+    // real `deadlineMinutes`, and a later primer may document the deferred lane's knob.
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("Say how long you can wait");
     // Structured/forced-tool output has no `text` block — the reply lives in the
     // `tool_use` block's `input`. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
@@ -179,8 +181,8 @@ describe("server instructions", () => {
   });
 
   it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
-    // Each shipped and was then misused or unknown in a customer session, because no
-    // served text mentioned it. Byte-identical to the backend copy, so asserted here too.
+    // Each of these shipped without any served text teaching it, so an agent could only
+    // guess at it. Byte-identical to the backend copy, so asserted here too.
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
     expect(AUTHORING_INSTRUCTIONS).toContain("agent code cannot write");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.launch");
