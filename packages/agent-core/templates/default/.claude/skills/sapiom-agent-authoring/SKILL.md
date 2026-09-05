@@ -598,12 +598,12 @@ type the resumed step's input with optional fields accordingly.
 A trigger is a persisted cloud object attached to a **deployed** agent by slug; each fire starts an
 independent production run. Create one with `sapiom_dev_agents_schedule` — `kind` picks the shape:
 
-| `kind`          | Fires when                                                                                     | Required field                                          |
-| --------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `schedule_cron` | on a recurring cron (validate it first with `sapiom_dev_agents_cron_preview`)                  | `cron` (+ `timezone`)                                   |
-| `schedule_once` | once, at a future time                                                                         | `at` (ISO 8601)                                         |
-| `event`         | every time this tenant emits that event type via `POST /v1/workflows/events { type, payload }` | `eventType` (`lead.created`; `sapiom.*` is reserved)    |
-| `webhook`       | every time an external system POSTs to a public hook URL minted for the trigger                | none — the result returns the URL + a shown-once secret |
+| `kind`          | Fires when                                                                                                                    | Required field                                          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `schedule_cron` | on a recurring cron (validate it first with `sapiom_dev_agents_cron_preview`)                                                 | `cron` (+ `timezone`)                                   |
+| `schedule_once` | once, at a future time                                                                                                        | `at` (ISO 8601)                                         |
+| `event`         | every time this tenant emits that event type through the tenant events API (`{ type, payload }`; route in the Triggers guide) | `eventType` (`lead.created`; `sapiom.*` is reserved)    |
+| `webhook`       | every time an external system POSTs to a public hook URL minted for the trigger                                               | none — the result returns the URL + a shown-once secret |
 
 "Run this agent when an external system POSTs to us" is a **`webhook` trigger**, not a hand-built
 HTTP server. The create result carries the hook URL, the secret (shown once — it is derived,
