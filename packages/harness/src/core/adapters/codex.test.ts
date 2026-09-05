@@ -120,12 +120,11 @@ describe("CodexAdapter", () => {
       expect(spec.env).toEqual({});
     });
 
-    it("ignores mcpConfigFile/settingsFile — Codex has no per-session injection point for either", () => {
+    it("ignores the Claude-only settingsFile", () => {
       const adapter = new CodexAdapter({ binary: "fake-codex" });
       const spec = adapter.launch({
         harnessSessionId: "h1",
         cwd: "/tmp/proj",
-        mcpConfigFile: "/tmp/proj/.sapiom/mcp.json",
         settingsFile: "/tmp/proj/.sapiom/settings.json",
       });
       expect(spec.args).toEqual([
@@ -148,11 +147,8 @@ describe("CodexAdapter", () => {
         adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj", agentMapMcp }),
         adapter.resume("rollout", { harnessSessionId: "h1", cwd: "/tmp/proj", agentMapMcp }),
       ]) {
-        expect(spec.args).toContain(
-          `mcp_servers.agent-map.url=${JSON.stringify(agentMapMcp.url)}`,
-        );
-        expect(spec.args).toContain(
-          'mcp_servers.agent-map.bearer_token_env_var="SAPIOM_AGENT_MAP_CAPABILITY"',
+        expect(spec.args.find((arg) => arg.startsWith("mcp_servers.agent-map-"))).toContain(
+          `{ "url" = ${JSON.stringify(agentMapMcp.url)}, "bearer_token_env_var" = "SAPIOM_AGENT_MAP_CAPABILITY" }`,
         );
         expect(spec.args.join(" ")).not.toContain(agentMapMcp.bearerToken);
         expect(spec.env).toEqual({
