@@ -315,6 +315,60 @@ describe("SessionManager", () => {
     expect(persisted[1]?.agentSessionId).toBe(manual.agentSessionId);
   });
 
+  it("restores a scope-unavailable bootstrap failure and resumes once authority is valid", async () => {
+    const identity = {
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId: "bootstrap-scope-failure",
+    };
+    const session: HarnessSession = {
+      id: identity.sessionId,
+      agentSessionId: "provider-scope-failure",
+      harness: "claude-code",
+      cwd: "/tmp/project",
+      title: "Keep my conversation",
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-02T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+      agentMapIdentity: identity,
+      projectBootstrap: {
+        projectId: identity.projectId,
+        userId: identity.userId,
+        targetSessionId: identity.sessionId,
+        bootstrap: {
+          status: "failed",
+          errorCode: "scope_unavailable",
+          retryable: false,
+        },
+        queuedInputIds: ["retained-input"],
+      },
+    };
+    await writeFile(sessionsPath, JSON.stringify([session]), "utf8");
+    const migrations = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity: async () => identity,
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.get(session.id)?.projectBootstrap).toEqual(session.projectBootstrap);
+    expect(migrations).not.toHaveBeenCalled();
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      agentSessionId: session.agentSessionId,
+      title: session.title,
+      agentMapIdentity: identity,
+      projectBootstrap: session.projectBootstrap,
+      status: "running",
+    });
+    expect(adapter.resume).toHaveBeenCalledTimes(1);
+    expect(spawns).toHaveLength(1);
+  });
+
   it("preserves malformed or conflicting legacy identity records without deleting or duplicating them", async () => {
     const malformed = {
       id: "malformed-session",
