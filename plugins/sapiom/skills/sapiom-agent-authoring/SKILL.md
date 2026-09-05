@@ -285,6 +285,17 @@ types are the source of truth.** The full surface is the `Sapiom` interface in `
 `ctx.sapiom.` autocompletes what exists, `npm run typecheck` rejects what doesn't, and the full
 catalog with pricing lives at [docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
 
+### Secrets, `agents.launch`, receipts, App Link webhooks
+
+Taught once, in the served `sapiom-dev` primer (in your context from the moment the MCP
+connects) and on docs.sapiom.ai — not restated here. Per-agent secrets and the read-only
+Vault: [Credentials and
+configuration](https://docs.sapiom.ai/reference/credentials-and-configuration). Fire-and-forget
+dispatch with `ctx.sapiom.agents.launch`: "Composing Deployed Agents" below and
+[Authoring](https://docs.sapiom.ai/agents/authoring). Receipts and manual replay of inbound
+events: the primer's REST pointers. App Link `/hook/*` webhooks:
+[App Links](https://docs.sapiom.ai/capabilities/app-links#webhooks).
+
 ### Coding Repository Errors
 
 Use a repository returned by `repositories.create()`, `repositories.get()`, or
