@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { createSeqCounter } from "../core/collector/seq.js";
 import { createEventStore } from "../core/collector/store.js";
-import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { createSessionRecordReader } from "../core/session-record.js";
 import type { SessionManager } from "../core/session-manager.js";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
@@ -833,22 +833,21 @@ describe("createIngestRouter", () => {
     expect(JSON.stringify(enqueued[0])).not.toContain("private control prompt");
   });
 
-  it("bounds hostile planner source, model, and usage before batching", async () => {
-    const planningSession = {
+  it("bounds hostile bootstrap source, model, and usage before batching", async () => {
+    const bootstrapSession = {
       agentSessionId: "agent-1",
-      planning: {
-        identity: {
-          projectId: "project-1",
-          sessionId: "session-1",
-          userId: "user-1",
-          role: "map-planner",
-        },
+      projectBootstrap: {
+        projectId: "project-1",
+        userId: "user-1",
+        targetSessionId: "session-1",
+        bootstrap: { status: "generating", attemptId: "attempt-1" },
+        queuedInputIds: [],
       },
     } as unknown as HarnessSession;
-    const privacy = new PlannerGreetingCoordinator({
+    const privacy = new ProjectBootstrapCoordinator({
       root: "/unused",
       sessionManager: {
-        get: () => planningSession,
+        get: () => bootstrapSession,
       } as unknown as SessionManager,
     });
     start({
@@ -895,10 +894,10 @@ describe("createIngestRouter", () => {
 
     await vi.waitFor(() => expect(enqueued).toHaveLength(3));
     expect(enqueued.map((event) => event.payload)).toEqual([
-      { planner: true, source: "unknown" },
-      { planner: true, origin: "user" },
+      { projectBootstrap: true, source: "unknown" },
+      { projectBootstrap: true, origin: "user" },
       {
-        planner: true,
+        projectBootstrap: true,
         hasAssistantText: true,
         modelReported: true,
         usage: { inputTokens: 1_000_000_000_000, outputTokens: null },

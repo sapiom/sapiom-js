@@ -43,7 +43,14 @@
  * so a CI log shows exactly which layer broke.
  */
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -72,16 +79,27 @@ function unpacked(p: string): string {
   return p.replace(/([\\/])app\.asar([\\/])/, "$1app.asar.unpacked$2");
 }
 
-async function check(name: string, fn: () => Promise<string>): Promise<SmokeCheck> {
+async function check(
+  name: string,
+  fn: () => Promise<string>,
+): Promise<SmokeCheck> {
   try {
     return { name, ok: true, detail: await fn() };
   } catch (err) {
-    return { name, ok: false, detail: err instanceof Error ? err.message : String(err) };
+    return {
+      name,
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
 /** GET with the boot token, asserting status and (optionally) a body substring. */
-async function fetchOk(url: string, token: string | null, expectStatus: number): Promise<string> {
+async function fetchOk(
+  url: string,
+  token: string | null,
+  expectStatus: number,
+): Promise<string> {
   const res = await fetch(url, {
     headers: token ? { "X-Harness-Token": token } : {},
   });
@@ -103,7 +121,10 @@ async function checkPreloadBridge(): Promise<string> {
   const win = createSetupWindow();
   try {
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("setup window did not finish loading in 15s")), 15_000);
+      const timer = setTimeout(
+        () => reject(new Error("setup window did not finish loading in 15s")),
+        15_000,
+      );
       win.webContents.once("did-finish-load", () => {
         clearTimeout(timer);
         resolve();
@@ -117,7 +138,8 @@ async function checkPreloadBridge(): Promise<string> {
       "({ bridge: typeof window.sapiomSetup, onProgress: typeof window.sapiomSetup?.onProgress," +
         " submitConsent: typeof window.sapiomSetup?.submitConsent })",
     )) as { bridge: string; onProgress: string; submitConsent: string };
-    if (shape.bridge !== "object") throw new Error("window.sapiomSetup is missing (preload did not run)");
+    if (shape.bridge !== "object")
+      throw new Error("window.sapiomSetup is missing (preload did not run)");
     if (shape.onProgress !== "function" || shape.submitConsent !== "function") {
       throw new Error(`bridge incomplete: ${JSON.stringify(shape)}`);
     }
@@ -220,10 +242,16 @@ async function checkNodePty(): Promise<string> {
   // must see through; elsewhere a shebang script. Spawning `cmd.exe`/`/bin/sh`
   // directly — as this check used to — passed on Windows while every real
   // session failed, because those are executable images and an agent is not.
-  const script = path.join(dir, isWindows ? "agent-probe.cmd" : "agent-probe.sh");
+  const script = path.join(
+    dir,
+    isWindows ? "agent-probe.cmd" : "agent-probe.sh",
+  );
   if (isWindows) {
     writeFileSync(path.join(dir, "agent-probe.js"), "process.exit(0);\n");
-    writeFileSync(script, '@echo off\r\n"%dp0%\\node.exe" "%dp0%\\agent-probe.js" %*\r\n');
+    writeFileSync(
+      script,
+      '@echo off\r\n"%dp0%\\node.exe" "%dp0%\\agent-probe.js" %*\r\n',
+    );
   } else {
     writeFileSync(script, "#!/bin/sh\nexit 0\n");
     chmodSync(script, 0o755);
@@ -236,7 +264,10 @@ async function checkNodePty(): Promise<string> {
       env: process.env as Record<string, string>,
     });
     const code = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("pty process did not exit in 10s")), 10_000);
+      const timer = setTimeout(
+        () => reject(new Error("pty process did not exit in 10s")),
+        10_000,
+      );
       proc.onExit(({ exitCode }) => {
         clearTimeout(timer);
         resolve(exitCode);
@@ -305,10 +336,14 @@ async function checkAgentShim(): Promise<string> {
  * path — HTTP, session record, pty spawn — is exercised for real on every OS.
  * Skipped, loudly, if the stub wasn't provided rather than silently passing.
  */
-async function checkSessionCreate(base: string, token: string | null): Promise<string> {
+async function checkSessionCreate(
+  base: string,
+  token: string | null,
+): Promise<string> {
   if (!token) throw new Error("boot url carried no token");
   const stub = process.env.SAPIOM_SMOKE_STUB_AGENT;
-  if (!stub) return "SKIPPED — no SAPIOM_SMOKE_STUB_AGENT (run via scripts/smoke.sh)";
+  if (!stub)
+    return "SKIPPED — no SAPIOM_SMOKE_STUB_AGENT (run via scripts/smoke.sh)";
 
   const cwd = mkdtempSync(path.join(tmpdir(), "sapiom-smoke-ws-"));
   try {
@@ -319,19 +354,31 @@ async function checkSessionCreate(base: string, token: string | null): Promise<s
     });
     const body = await res.text();
     if (res.status !== 201) {
-      throw new Error(`POST /api/sessions → ${res.status}: ${body.slice(0, 200)}`);
+      throw new Error(
+        `POST /api/sessions → ${res.status}: ${body.slice(0, 200)}`,
+      );
     }
-    const session = JSON.parse(body) as { id?: string; status?: string; cwd?: string };
-    if (!session.id) throw new Error(`no session id in response: ${body.slice(0, 120)}`);
+    const session = JSON.parse(body) as {
+      id?: string;
+      status?: string;
+      cwd?: string;
+    };
+    if (!session.id)
+      throw new Error(`no session id in response: ${body.slice(0, 120)}`);
 
     // The record must be visible in state too — a session that spawned but never
     // registered would leave the UI with nothing to attach to.
     const readState = async () =>
       (await (
-        await fetch(`${base}/api/state`, { headers: { "X-Harness-Token": token } })
-      ).json()) as { sessions?: Array<{ id: string; status?: string; ready?: boolean }> };
+        await fetch(`${base}/api/state`, {
+          headers: { "X-Harness-Token": token },
+        })
+      ).json()) as {
+        sessions?: Array<{ id: string; status?: string; ready?: boolean }>;
+      };
     let found = (await readState()).sessions?.find((s) => s.id === session.id);
-    if (!found) throw new Error(`session ${session.id} missing from /api/state`);
+    if (!found)
+      throw new Error(`session ${session.id} missing from /api/state`);
 
     // Hook delivery — the readiness chain end-to-end. The stub agent executes
     // its --settings file's SessionStart hook command the way Claude Code
@@ -387,36 +434,61 @@ async function checkSessionCreate(base: string, token: string | null): Promise<s
  * stale file from an earlier run can never be mistaken for this one's.
  */
 async function checkAgentEnvironment(sessionId: string): Promise<string> {
-  const file = process.env.SAPIOM_SMOKE_AGENT_ENV;
-  if (!file) return "agent env NOT CHECKED (no SAPIOM_SMOKE_AGENT_ENV — run via scripts/smoke.sh)";
+  const base = process.env.SAPIOM_SMOKE_AGENT_ENV;
+  if (!base)
+    return "agent env NOT CHECKED (no SAPIOM_SMOKE_AGENT_ENV — run via scripts/smoke.sh)";
+  const file = `${base}.${encodeURIComponent(sessionId)}.json`;
 
   // The pty spawns asynchronously; give the stub a moment to write.
   const deadline = Date.now() + 5_000;
-  let lines: string[] = [];
+  let snapshot:
+    | {
+        schemaVersion: number;
+        sessionId: string;
+        variableCount: number;
+        hasEsbuildBinaryPath: boolean;
+        hasPath: boolean;
+      }
+    | undefined;
   for (;;) {
     if (existsSync(file)) {
-      lines = readFileSync(file, "utf8").split("\n");
-      if (lines.some((l) => l === `SAPIOM_HARNESS_SESSION_ID=${sessionId}`)) break;
+      try {
+        const decoded = JSON.parse(
+          readFileSync(file, "utf8"),
+        ) as typeof snapshot;
+        if (
+          decoded?.schemaVersion === 1 &&
+          decoded.sessionId === sessionId &&
+          Number.isInteger(decoded.variableCount) &&
+          decoded.variableCount >= 0 &&
+          typeof decoded.hasEsbuildBinaryPath === "boolean" &&
+          typeof decoded.hasPath === "boolean"
+        ) {
+          snapshot = decoded;
+          break;
+        }
+      } catch {
+        // A partially observed write is retried until the same bounded deadline.
+      }
     }
     if (Date.now() > deadline) {
       throw new Error(
         existsSync(file)
-          ? `agent env dump is not this session's (no SAPIOM_HARNESS_SESSION_ID=${sessionId})`
+          ? `agent env snapshot is invalid for session ${sessionId}`
           : `agent never wrote ${file} — the stub did not run`,
       );
     }
     await new Promise((r) => setTimeout(r, 100));
   }
 
-  const leaked = lines.filter((l) => /^ESBUILD_BINARY_PATH=/.test(l));
-  if (leaked.length) {
-    throw new Error(`agent inherited the host's esbuild pin: ${leaked[0]!.slice(0, 160)}`);
+  if (snapshot.hasEsbuildBinaryPath) {
+    throw new Error("agent inherited the host's esbuild pin");
   }
   // PATH must still be there — this is a targeted strip, not a clean env.
-  if (!lines.some((l) => /^PATH=/.test(l))) {
+  if (!snapshot.hasPath) {
     throw new Error("agent inherited no PATH — the env strip took too much");
   }
-  return `agent env clean (${lines.length} vars, no esbuild pin)`;
+  return `agent env clean (${snapshot.variableCount} vars, no esbuild pin)`;
 }
 
 /**
@@ -442,9 +514,14 @@ async function checkUnpackedDeps(): Promise<string> {
     ["@sapiom/agent-core entry", agentCoreEntry],
     // The seed's template tree: cpSync can't opendir inside the archive, which
     // is what made POST /api/sample-project 500 with ENOTDIR in the packaged app.
-    ["agent-core templates", path.resolve(path.dirname(agentCoreEntry), "..", "..", "templates")],
+    [
+      "agent-core templates",
+      path.resolve(path.dirname(agentCoreEntry), "..", "..", "templates"),
+    ],
   ];
-  const missing = targets.filter(([, p]) => !existsSync(p)).map(([name, p]) => `${name} (${p})`);
+  const missing = targets
+    .filter(([, p]) => !existsSync(p))
+    .map(([name, p]) => `${name} (${p})`);
   if (missing.length) throw new Error(`not on disk: ${missing.join(", ")}`);
   return `${targets.length} entry points present on disk (asar-translated)`;
 }
@@ -466,7 +543,9 @@ type BundleForDeploy = (sourceDir: string) => Promise<{
  * the ESM entry out of the exports map and import that.
  */
 async function loadBundleForDeploy(): Promise<BundleForDeploy> {
-  const fromHarness = createRequire(require.resolve("@sapiom/harness/package.json"));
+  const fromHarness = createRequire(
+    require.resolve("@sapiom/harness/package.json"),
+  );
   const pkgPath = fromHarness.resolve("@sapiom/agent-core/package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
     exports?: { ".": { import?: string } };
@@ -474,15 +553,21 @@ async function loadBundleForDeploy(): Promise<BundleForDeploy> {
     main?: string;
   };
   const rel = pkg.exports?.["."]?.import ?? pkg.module ?? pkg.main;
-  if (!rel) throw new Error(`@sapiom/agent-core (${pkgPath}) declares no entry point`);
+  if (!rel)
+    throw new Error(`@sapiom/agent-core (${pkgPath}) declares no entry point`);
   const entry = path.resolve(path.dirname(pkgPath), rel);
 
-  const mod = (await import(pathToFileURL(entry).href)) as Record<string, unknown> & {
+  const mod = (await import(pathToFileURL(entry).href)) as Record<
+    string,
+    unknown
+  > & {
     default?: Record<string, unknown>;
   };
   const fn = mod.bundleForDeploy ?? mod.default?.bundleForDeploy;
   if (typeof fn !== "function") {
-    throw new Error(`${entry} exports no bundleForDeploy (got ${Object.keys(mod).join(", ") || "nothing"})`);
+    throw new Error(
+      `${entry} exports no bundleForDeploy (got ${Object.keys(mod).join(", ") || "nothing"})`,
+    );
   }
   return fn as BundleForDeploy;
 }
@@ -511,12 +596,17 @@ async function checkRuntimeShims(): Promise<string> {
     if (!existsSync(shim)) throw new Error(`no ${name} shim at ${shim}`);
     try {
       // shell on Windows: a .cmd cannot be spawned directly (CVE-2024-27980).
-      const { stdout } = await exec(shim, ["--version"], { shell: process.platform === "win32", windowsHide: true });
+      const { stdout } = await exec(shim, ["--version"], {
+        shell: process.platform === "win32",
+        windowsHide: true,
+      });
       const version = stdout.trim().split("\n")[0] ?? "";
       if (!version) throw new Error("no version output");
       reports.push(`${name} ${version}`);
     } catch (err) {
-      throw new Error(`${name} shim did not run: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        `${name} shim did not run: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     // Windows also needs the EXTENSIONLESS sh flavor beside the .cmd: Claude
@@ -528,17 +618,27 @@ async function checkRuntimeShims(): Promise<string> {
     // execution — the hook-delivery poll in session-create covers execution.
     if (process.platform === "win32") {
       const shShim = path.join(dir, name);
-      if (!existsSync(shShim)) throw new Error(`no extensionless (Git Bash) ${name} shim at ${shShim}`);
+      if (!existsSync(shShim))
+        throw new Error(
+          `no extensionless (Git Bash) ${name} shim at ${shShim}`,
+        );
       const body = readFileSync(shShim, "utf8");
       if (!body.startsWith("#!/bin/sh")) {
-        throw new Error(`${shShim} is not a #!/bin/sh script (starts: ${JSON.stringify(body.slice(0, 20))})`);
+        throw new Error(
+          `${shShim} is not a #!/bin/sh script (starts: ${JSON.stringify(body.slice(0, 20))})`,
+        );
       }
       if (body.includes("\\")) {
-        throw new Error(`${shShim} embeds backslash paths — sh-unsafe, must be forward-slashed`);
+        throw new Error(
+          `${shShim} embeds backslash paths — sh-unsafe, must be forward-slashed`,
+        );
       }
     }
   }
-  return reports.join(", ") + (process.platform === "win32" ? " (+ extensionless Git Bash shims)" : "");
+  return (
+    reports.join(", ") +
+    (process.platform === "win32" ? " (+ extensionless Git Bash shims)" : "")
+  );
 }
 
 /**
@@ -558,7 +658,10 @@ async function checkRuntimeShims(): Promise<string> {
  * dependencies, no network, and deterministic. A packaging regression cannot
  * produce that error; it produces ENOTDIR, ERR_MODULE_NOT_FOUND, or silence.
  */
-async function checkRunLocal(base: string, token: string | null): Promise<string> {
+async function checkRunLocal(
+  base: string,
+  token: string | null,
+): Promise<string> {
   if (!token) throw new Error("boot url carried no token");
 
   const dir = mkdtempSync(path.join(tmpdir(), "sapiom-smoke-runlocal-"));
@@ -569,18 +672,32 @@ async function checkRunLocal(base: string, token: string | null): Promise<string
       body: JSON.stringify({ sourceDir: dir }),
     });
     const body = await res.text();
-    if (res.status !== 200) throw new Error(`POST /api/runs/local → ${res.status}: ${body.slice(0, 200)}`);
+    if (res.status !== 200)
+      throw new Error(
+        `POST /api/runs/local → ${res.status}: ${body.slice(0, 200)}`,
+      );
 
     const lines = body.trim().split("\n").filter(Boolean);
     if (lines.length === 0) {
       // No NDJSON at all is the signature of the child never running — e.g. the
       // app relaunching itself instead of executing the bootstrap.
-      throw new Error("no NDJSON from the run-local child (did it spawn at all?)");
+      throw new Error(
+        "no NDJSON from the run-local child (did it spawn at all?)",
+      );
     }
-    const terminal = JSON.parse(lines[lines.length - 1]) as { kind?: string; error?: string };
+    const terminal = JSON.parse(lines[lines.length - 1]) as {
+      kind?: string;
+      error?: string;
+    };
     const message = terminal.error ?? "";
-    if (/ENOTDIR|ENOENT|ERR_MODULE_NOT_FOUND|Cannot find (module|package)/i.test(message)) {
-      throw new Error(`packaging failure reached the child: ${message.slice(0, 300)}`);
+    if (
+      /ENOTDIR|ENOENT|ERR_MODULE_NOT_FOUND|Cannot find (module|package)/i.test(
+        message,
+      )
+    ) {
+      throw new Error(
+        `packaging failure reached the child: ${message.slice(0, 300)}`,
+      );
     }
     if (!/index\.ts/i.test(message)) {
       throw new Error(
@@ -615,7 +732,10 @@ async function checkDeployBundle(): Promise<string> {
 
   const dir = mkdtempSync(path.join(tmpdir(), "sapiom-smoke-bundle-"));
   try {
-    writeFileSync(path.join(dir, "shared.ts"), "export const answer: number = 42;\n");
+    writeFileSync(
+      path.join(dir, "shared.ts"),
+      "export const answer: number = 42;\n",
+    );
     writeFileSync(
       path.join(dir, "index.ts"),
       'import { answer } from "./shared.js";\nexport default { answer };\n',
@@ -635,7 +755,9 @@ async function checkDeployBundle(): Promise<string> {
     });
     // The relative import must have been INLINED — that's the whole job.
     if (!code.includes("42")) {
-      throw new Error(`bundle did not inline ./shared.ts: ${code.slice(0, 200)}`);
+      throw new Error(
+        `bundle did not inline ./shared.ts: ${code.slice(0, 200)}`,
+      );
     }
     const binPath = process.env.ESBUILD_BINARY_PATH;
     return `bundled a 2-file project (${code.length} bytes) via ${binPath ? path.basename(path.dirname(binPath)) + "/" + path.basename(binPath) : "esbuild's own resolution"}`;
@@ -684,7 +806,10 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   // ahead of this one happen to take long enough, which is not a guarantee.
   if (win.webContents.isLoading()) {
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("main window did not finish loading in 15s")), 15_000);
+      const timer = setTimeout(
+        () => reject(new Error("main window did not finish loading in 15s")),
+        15_000,
+      );
       const done = (): void => {
         clearTimeout(timer);
         resolve();
@@ -716,34 +841,46 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
   };
 
   if (shape.bridge !== "object") {
-    throw new Error("window.sapiomDesktop is missing — the main window's preload did not run");
+    throw new Error(
+      "window.sapiomDesktop is missing — the main window's preload did not run",
+    );
   }
   if (shape.check !== "function") {
-    throw new Error(`bridge incomplete — checkForUpdates missing: ${JSON.stringify(shape)}`);
+    throw new Error(
+      `bridge incomplete — checkForUpdates missing: ${JSON.stringify(shape)}`,
+    );
   }
   // Shape-only for chooseDirectory: unlike checkForUpdates, we must NOT invoke it —
   // it opens a real OS folder sheet that would block a headless CI run forever. Its
   // ipcMain handler is registered on every boot path (dialogs.ts, alongside the
   // updater's), so presence of the wrapped method is the honest thing to assert here.
   if (shape.choose !== "function") {
-    throw new Error(`bridge incomplete — chooseDirectory missing: ${JSON.stringify(shape)}`);
+    throw new Error(
+      `bridge incomplete — chooseDirectory missing: ${JSON.stringify(shape)}`,
+    );
   }
   // Shape-only, like chooseDirectory: onDeepLink is a receive-only subscription
   // (main → renderer push), so there is nothing to invoke here — asserting the
   // wrapped method is present is the honest check.
   if (shape.deep !== "function") {
-    throw new Error(`bridge incomplete — onDeepLink missing: ${JSON.stringify(shape)}`);
+    throw new Error(
+      `bridge incomplete — onDeepLink missing: ${JSON.stringify(shape)}`,
+    );
   }
   // Shape-only again: onUpdateState is the other receive-only subscription
   // (drives the rail's "Update now" card; the apply path stays native).
   if (shape.updateState !== "function") {
-    throw new Error(`bridge incomplete — onUpdateState missing: ${JSON.stringify(shape)}`);
+    throw new Error(
+      `bridge incomplete — onUpdateState missing: ${JSON.stringify(shape)}`,
+    );
   }
   // Shape-only: pathForFile needs a real dropped File to return anything, and it
   // is read-only + local (webUtils.getPathForFile, no IPC) — what a drop on the
   // terminal uses to type the file's path into the pty.
   if (shape.pathForFile !== "function") {
-    throw new Error(`bridge incomplete — pathForFile missing: ${JSON.stringify(shape)}`);
+    throw new Error(
+      `bridge incomplete — pathForFile missing: ${JSON.stringify(shape)}`,
+    );
   }
   // The bridge must stay MINIMAL as well as present. Beyond appVersion the only
   // members allowed are checkForUpdates (no destructive counterpart — applying
@@ -758,7 +895,9 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
     "Object.keys(window.sapiomDesktop).filter((k) => k !== 'appVersion' && k !== 'checkForUpdates' && k !== 'chooseDirectory' && k !== 'onDeepLink' && k !== 'onUpdateState' && k !== 'pathForFile')",
   )) as string[];
   if (extra.length > 0) {
-    throw new Error(`bridge exposes unexpected members to page code: ${extra.join(", ")}`);
+    throw new Error(
+      `bridge exposes unexpected members to page code: ${extra.join(", ")}`,
+    );
   }
   // Not cosmetic-only: the version arrives via `additionalArguments`, which is the
   // documented way to pass a value to a preload precisely because reading a
@@ -786,12 +925,16 @@ async function checkDesktopBridge(boot: BootResult): Promise<string> {
       "(e) => ({ ok: false, kind: String((e && e.message) || e) }))",
   )) as { ok: boolean; kind?: string; reason?: string };
   if (!outcome.ok) {
-    throw new Error(`checkForUpdates() rejected: ${outcome.kind} (is the ipcMain handler registered?)`);
+    throw new Error(
+      `checkForUpdates() rejected: ${outcome.kind} (is the ipcMain handler registered?)`,
+    );
   }
   if (outcome.kind !== "disabled") {
     // A smoke run must never reach the network; any other outcome means the gate
     // leaked and CI would start depending on GitHub.
-    throw new Error(`expected a "disabled" outcome under --smoke, got "${outcome.kind}"`);
+    throw new Error(
+      `expected a "disabled" outcome under --smoke, got "${outcome.kind}"`,
+    );
   }
   // The REASON is what makes this check meaningful now that senders are validated.
   // A rejected sender also answers `disabled`, so matching on the kind alone could
@@ -833,10 +976,14 @@ async function checkUpdateConfig(): Promise<string> {
   const owner = field("owner");
   const repo = field("repo");
   if (provider !== "github") {
-    throw new Error(`app-update.yml provider is "${provider ?? "(none)"}", expected "github"`);
+    throw new Error(
+      `app-update.yml provider is "${provider ?? "(none)"}", expected "github"`,
+    );
   }
   if (!owner || !repo) {
-    throw new Error(`app-update.yml names no owner/repo (owner="${owner}", repo="${repo}")`);
+    throw new Error(
+      `app-update.yml names no owner/repo (owner="${owner}", repo="${repo}")`,
+    );
   }
 
   // Reading the getter is the test: it constructs the updater for THIS packaging
@@ -886,7 +1033,8 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
   return [
     await check("http-spa", async () => {
       const html = await fetchOk(`${base}/`, null, 200);
-      if (!html.includes('id="root"')) throw new Error("served HTML has no #root — wrong webDir?");
+      if (!html.includes('id="root"'))
+        throw new Error("served HTML has no #root — wrong webDir?");
       return `index.html served from ${resolveWebDir()}`;
     }),
     await check("host-terminology", async () => {
@@ -902,12 +1050,16 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     }),
     await check("http-state", async () => {
       if (!token) throw new Error("boot url carried no token");
-      const body = JSON.parse(await fetchOk(`${base}/api/state`, token, 200)) as {
+      const body = JSON.parse(
+        await fetchOk(`${base}/api/state`, token, 200),
+      ) as {
         version?: string;
         sessions?: unknown[];
       };
       if (typeof body.version !== "string" || !Array.isArray(body.sessions)) {
-        throw new Error(`unexpected /api/state shape: ${JSON.stringify(body).slice(0, 120)}`);
+        throw new Error(
+          `unexpected /api/state shape: ${JSON.stringify(body).slice(0, 120)}`,
+        );
       }
       return `version ${body.version}, ${body.sessions.length} session(s)`;
     }),
@@ -942,15 +1094,21 @@ export function reportSmoke(checks: SmokeCheck[]): number {
   // most in: the Windows agent install failing, `agent-shim` skipping, and the
   // log claiming full coverage it didn't have. Skips don't fail the run, but they
   // are visibly distinct.
-  const isSkip = (c: SmokeCheck): boolean => c.ok && c.detail.startsWith("SKIPPED");
+  const isSkip = (c: SmokeCheck): boolean =>
+    c.ok && c.detail.startsWith("SKIPPED");
   const skipped = checks.filter(isSkip);
   const passed = checks.filter((c) => c.ok && !isSkip(c));
 
   const lines = [
-    ...checks.map((c) => `[smoke] ${!c.ok ? "FAIL" : isSkip(c) ? "SKIP" : "PASS"} ${c.name} — ${c.detail}`),
+    ...checks.map(
+      (c) =>
+        `[smoke] ${!c.ok ? "FAIL" : isSkip(c) ? "SKIP" : "PASS"} ${c.name} — ${c.detail}`,
+    ),
     failed.length === 0
       ? `[smoke] OK — ${passed.length} passed` +
-        (skipped.length ? `, ${skipped.length} skipped (${skipped.map((c) => c.name).join(", ")})` : "")
+        (skipped.length
+          ? `, ${skipped.length} skipped (${skipped.map((c) => c.name).join(", ")})`
+          : "")
       : `[smoke] FAILED — ${failed.length}/${checks.length}: ${failed.map((c) => c.name).join(", ")}`,
   ];
   for (const line of lines) console.log(line);
@@ -960,7 +1118,9 @@ export function reportSmoke(checks: SmokeCheck[]): number {
     try {
       writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
     } catch (err) {
-      console.error(`[smoke] could not write ${outFile}: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `[smoke] could not write ${outFile}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   return failed.length === 0 ? 0 : 1;
