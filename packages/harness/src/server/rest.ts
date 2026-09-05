@@ -49,7 +49,7 @@ import {
   SessionNotResumeableError,
   SpawnTargetError,
 } from "../core/errors.js";
-import { SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
+import { ProjectSessionScopeUnavailableError, SessionNotReadyError, UnknownSessionError, type SessionManager } from "../core/session-manager.js";
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
 import { getHarnessAdapter, listHarnessAdapters } from "../core/adapters/registry.js";
@@ -704,7 +704,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
       err instanceof ExternalHarnessError ||
       err instanceof AgentSessionIdentityReservedError ||
       err instanceof SessionAlreadyLiveError ||
-      err instanceof SessionNotResumeableError
+      err instanceof SessionNotResumeableError ||
+      err instanceof ProjectSessionScopeUnavailableError
     ) {
       res.status(409).json({ error: err.message, code: (err as { code: string }).code });
       return true;

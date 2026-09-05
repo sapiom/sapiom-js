@@ -217,7 +217,9 @@ export interface HarnessSession {
   /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
   planning?: import("./agent-map.js").PlannerSessionMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("./agent-map.js").PlanningSessionIdentity;
+  agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
+  /** Context for the existing project startup; separate from authority. */
+  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
 }
 
 /**

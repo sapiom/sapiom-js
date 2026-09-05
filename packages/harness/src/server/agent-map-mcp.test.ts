@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession, PlanningSessionIdentity } from "../shared/agent-map.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
@@ -129,11 +129,10 @@ describe("Agent Map Streamable HTTP MCP", () => {
 
   it("reads, validates without mutation, proposes once, and rejects a rotated token", async () => {
     const { capabilities, url } = await fixture();
-    const identity: PlanningSessionIdentity = {
+    const identity: ProjectAgentSession = {
       projectId,
       sessionId: "planner",
       userId: "user",
-      role: "map-planner",
     };
     const first = capabilities.issue(identity);
     const client = await connect(url, first.token);
@@ -204,7 +203,6 @@ describe("Agent Map Streamable HTTP MCP", () => {
       projectId,
       sessionId: "missing-project",
       userId: "user",
-      role: "map-planner",
     });
     const client = await connect(url, issued.token);
 
@@ -251,7 +249,6 @@ describe("Agent Map Streamable HTTP MCP", () => {
       projectId,
       sessionId: "failed-initialize",
       userId: "user",
-      role: "map-planner",
     });
 
     const response = await fetch(url, {
