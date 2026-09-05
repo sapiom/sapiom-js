@@ -316,6 +316,17 @@ describe("App Link management tools", () => {
       }
     });
 
+    it("an id lookup that answers 2xx with a non-link body is UNEXPECTED_RESPONSE, not NOT_FOUND", async () => {
+      // A proxy answering 200 with HTML must not tell the user their link is gone.
+      mockBackend(jsonRes("<html>proxy</html>"));
+      const res = await tool("sapiom_dev_app_settings").handler({
+        appLinkId: DASH.id,
+        webhooksEnabled: true,
+      });
+      expect(res.isError).toBe(true);
+      expect(parse(res).error.code).toBe("UNEXPECTED_RESPONSE");
+    });
+
     it("forwards confirmPublic alongside a public flip, and reports the audience change", async () => {
       const fetchMock = mockBackend(
         jsonRes({ items: [DASH] }),

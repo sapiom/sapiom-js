@@ -359,14 +359,16 @@ async function resolveLink(
       "GET",
       `/v1/app-links/${encodeURIComponent(target.appLinkId)}`,
     );
-    const link = asAppLink(
+    // A 404 is mapped to APP_LINK_NOT_FOUND by `unwrap`; a 2xx that is not a link
+    // is NOT "not found" — it is an answer we cannot read, same as on the PATCH.
+    return requireAppLink(
       unwrap(res, {
         action: `Looking up app link ${target.appLinkId}`,
         permission: PERMISSION.list,
+        slug: target.appLinkId,
       }),
+      `The App Links API answered the lookup of ${target.appLinkId} with a success status but not an app link. Nothing was changed.`,
     );
-    if (link) return link;
-    throw notFound(target.appLinkId);
   }
   const links = await listLinks(apiURL, apiKey);
   const link = links.find((l) => l.slug === target.slug);
