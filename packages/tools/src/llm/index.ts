@@ -632,7 +632,11 @@ export interface LlmSession {
   state: LlmSessionState;
   /** USER-FACING label (e.g. `"smart"`) — the serving provider is never disclosed. */
   model?: string;
-  /** Present from READY on: the drop-in base URLs scoped under the session. */
+  /**
+   * The drop-in base URLs scoped under the session, once it is READY and the
+   * gateway reports them. `callSession` does not need them (it builds the URL
+   * from `sessionId`).
+   */
   baseUrls?: { anthropic: string; openai: string };
   expiresAtMs?: number;
   budget?: { maxTokens: number | null; usedTokens?: number; ttlMinutes?: number | null };
