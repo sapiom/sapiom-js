@@ -48,6 +48,7 @@ export {
 // for a step resumed from `pauseUntilSignal(modelHandle, …)`.
 export { MODEL_RUN_RESULT_SIGNAL } from "./models/index.js";
 export type {
+  ModelLabel,
   ModelRunSpec,
   ModelRunResult,
   ModelRunOutcome,
@@ -92,6 +93,29 @@ export {
   llmRouteResultSchema,
   LlmRouteResultSchemaError,
 } from "./llm/index.js";
+// The shape a step resumed from `pauseUntilSignal(sessionHandle, …)` receives
+// as input — an `LlmSession` narrowed to its two terminal states (`ready` with
+// base URLs, or `failed` with the gateway's structured reason). Annotate the
+// resumed step with it instead of hand-rolling the shape.
+export type {
+  LlmSessionReadyPayload,
+  LlmSession,
+  LlmSessionState,
+} from "./llm/index.js";
+// Validate an LlmSessionReadyPayload at the resume boundary.
+export {
+  llmSessionReadySchema,
+  LlmSessionReadySchemaError,
+} from "./llm/index.js";
+// The routing-label vocabulary `llm.run` / `llm.submit` / `llm.createSession`
+// accept for `model` / `label`, and the serving disclosure a routed response
+// carries (`served_class` + `lane`) with its camelCase reader.
+export type {
+  RoutingLabel,
+  LlmDisclosure,
+  LlmDisclosureResult,
+} from "./llm/index.js";
+export { readDisclosure } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";

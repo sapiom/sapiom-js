@@ -652,6 +652,64 @@ export interface LlmSessionHandle extends DispatchHandle {
   wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<LlmSession>;
 }
 
+/**
+ * The session's settled result as it arrives at a step **resumed** from
+ * `pauseUntilSignal(sessionHandle, { resumeStep })` — the
+ * {@link LLM_SESSION_READY_SIGNAL} payload delivered as that step's `input`.
+ * An {@link LlmSession} narrowed to the two terminal shapes the engine's
+ * resume forwarder delivers; branch on `state`:
+ *
+ * - `"ready"` — `baseUrls` is present (hand the payload to `callSession`).
+ * - `"failed"` — `error` carries the gateway's structured reason
+ *   (`deadline_exhausted`, `grant_mint_failed`, `session_ready_failed`,
+ *   `session_unsupported`; `session_ready_incomplete` when the forwarder
+ *   received a ready body it could not use).
+ *
+ * Annotate the resumed step's input with this. The async-lane counterpart is
+ * {@link LlmRouteResultPayload}.
+ */
+export type LlmSessionReadyPayload =
+  | (LlmSession & {
+      state: "ready";
+      baseUrls: { anthropic: string; openai: string };
+    })
+  | (LlmSession & { state: "failed"; error: string });
+
+/** Thrown by {@link llmSessionReadySchema}.parse on a malformed resume payload. */
+export class LlmSessionReadySchemaError extends Error {}
+
+/** Runtime validator for {@link LlmSessionReadyPayload}. */
+export const llmSessionReadySchema = {
+  parse(value: unknown): LlmSessionReadyPayload {
+    const fail = (msg: string): never => {
+      throw new LlmSessionReadySchemaError(
+        `invalid llm session ready payload: ${msg}`,
+      );
+    };
+    if (!value || typeof value !== "object") fail("not an object");
+    const v = value as Record<string, unknown>;
+    if (typeof v.sessionId !== "string") fail("sessionId must be a string");
+    if (v.state !== "ready" && v.state !== "failed")
+      fail('state must be "ready" or "failed"');
+    if (v.model !== undefined && typeof v.model !== "string")
+      fail("model must be a string when present");
+    if (v.expiresAtMs !== undefined && typeof v.expiresAtMs !== "number")
+      fail("expiresAtMs must be a number when present");
+    if (v.state === "ready") {
+      const b = v.baseUrls as Record<string, unknown> | null | undefined;
+      if (!b || typeof b !== "object") fail("baseUrls is required when ready");
+      const urls = b as Record<string, unknown>;
+      if (typeof urls.anthropic !== "string")
+        fail("baseUrls.anthropic must be a string");
+      if (typeof urls.openai !== "string")
+        fail("baseUrls.openai must be a string");
+    } else if (typeof v.error !== "string" || !v.error) {
+      fail("error must be a non-empty string when failed");
+    }
+    return value as LlmSessionReadyPayload;
+  },
+};
+
 // --- wire shapes (snake_case, as served by the gateway) ---
 
 interface SessionDoc {

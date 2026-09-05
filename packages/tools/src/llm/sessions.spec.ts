@@ -9,7 +9,12 @@
  * Injects a fake fetch (no real network), mirroring submit.spec.ts.
  */
 import { createClient } from "../index.js";
-import { LLM_SESSION_READY_SIGNAL } from "./index.js";
+import {
+  LLM_SESSION_READY_SIGNAL,
+  llmSessionReadySchema,
+  LlmSessionReadySchemaError,
+} from "./index.js";
+import type { LlmSessionReadyPayload } from "./index.js";
 
 interface Captured {
   url?: string;
@@ -227,5 +232,90 @@ describe("llm.callSession / releaseSession — the repeatable surface", () => {
     expect(cap.method).toBe("DELETE");
     expect(cap.url).toMatch(/\/v2\/sessions\/sess-1$/);
     expect(out.state).toBe("expired");
+  });
+});
+
+describe("llmSessionReadySchema", () => {
+  it("accepts a ready payload (the forwarder's camelCase shape)", () => {
+    const payload = {
+      sessionId: "sess-1",
+      state: "ready",
+      model: "smart",
+      baseUrls: {
+        anthropic:
+          "https://llm.services.sapiom.ai/v2/sessions/sess-1/anthropic",
+        openai: "https://llm.services.sapiom.ai/v2/sessions/sess-1/openai/v1",
+      },
+      expiresAtMs: 1_726_574_400_000,
+      budget: { maxTokens: null },
+    };
+    const parsed = llmSessionReadySchema.parse(payload);
+    expect(parsed).toBe(payload);
+    // The union narrows on `state`: a ready payload exposes baseUrls as required.
+    if (parsed.state === "ready") {
+      expect(parsed.baseUrls.anthropic).toMatch(/\/anthropic$/);
+    } else {
+      throw new Error("expected a ready payload");
+    }
+  });
+
+  it("accepts a failed payload carrying each gateway async terminal reason", () => {
+    for (const error of [
+      "deadline_exhausted",
+      "grant_mint_failed",
+      "session_ready_failed",
+      "session_unsupported",
+    ]) {
+      const payload: LlmSessionReadyPayload = {
+        sessionId: "sess-1",
+        state: "failed",
+        error,
+      };
+      expect(llmSessionReadySchema.parse(payload)).toBe(payload);
+    }
+  });
+
+  it("rejects a malformed payload with the typed error", () => {
+    expect(() => llmSessionReadySchema.parse(null)).toThrow(
+      LlmSessionReadySchemaError,
+    );
+    expect(() => llmSessionReadySchema.parse({ state: "ready" })).toThrow(
+      LlmSessionReadySchemaError,
+    );
+    // Non-terminal states are not resume payloads.
+    expect(() =>
+      llmSessionReadySchema.parse({ sessionId: "s", state: "pending" }),
+    ).toThrow(/state must be "ready" or "failed"/);
+    // Ready without the session-scoped base URLs is uncallable.
+    expect(() =>
+      llmSessionReadySchema.parse({ sessionId: "s", state: "ready" }),
+    ).toThrow(/baseUrls is required/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        baseUrls: { anthropic: "https://a" },
+      }),
+    ).toThrow(/baseUrls\.openai/);
+    // Failed without a reason is not the contract the forwarder delivers.
+    expect(() =>
+      llmSessionReadySchema.parse({ sessionId: "s", state: "failed" }),
+    ).toThrow(/error must be a non-empty string/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "failed",
+        error: "",
+      }),
+    ).toThrow(LlmSessionReadySchemaError);
+    // Optional fields must be well-typed when present.
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "failed",
+        error: "deadline_exhausted",
+        expiresAtMs: "soon",
+      }),
+    ).toThrow(/expiresAtMs/);
   });
 });
