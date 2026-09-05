@@ -231,6 +231,43 @@ test("an embedded failed render shows one error message, not two drawn through e
   expect(errors).toEqual([]);
 });
 
+/**
+ * The other side of the flag, and the one with no message of its own to lose.
+ * `EMBED_SCRIPT` ships in every canvas document, not just the failed one, and a
+ * healthy board never posts an error, so it never marks `data-canvas-error-posted`
+ * and the head script withdraws `data-canvas-embedded` at load. This asserts what
+ * that withdrawal may not disturb: the title, badges and legend are app chrome the
+ * SPA draws in its overview panel, and the board must stay ONLY the graph
+ * (canvas-template.ts, the rule above `.canvas-header`).
+ */
+test("an embedded successful render still hides its header and legend", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(String(err)));
+
+  const { url, file } = await renderToFileUrl(ORDER_TRIAGE, "order-triage");
+  const frame = await embedInParentShell(page, url, file);
+
+  // The graph is the board, and it is drawn.
+  await expect(frame.locator("rect.canvas-node-rect").first()).toBeVisible();
+
+  // The chrome is not. These are clipped by an ungated rule, so the flag being
+  // withdrawn here (nothing posted, nothing to lose) cannot bring them back.
+  for (const chrome of [".canvas-header", ".canvas-legend"]) {
+    const el = frame.locator(chrome).first();
+    await expect(el).toBeAttached();
+    const box = await el.boundingBox();
+    expect(box?.width ?? 0).toBeLessThanOrEqual(1);
+    expect(box?.height ?? 0).toBeLessThanOrEqual(1);
+  }
+  // The title text is in the markup and paints nothing.
+  await expect(frame.locator(".canvas-title")).not.toBeInViewport();
+
+  // And the withdrawal did happen, so this is not passing because the flag stuck.
+  const flag = await frame.locator(":root").getAttribute("data-canvas-embedded");
+  expect(flag).toBeNull();
+  expect(errors).toEqual([]);
+});
+
 test("an embedded failed render whose payload will not parse keeps its own prose", async ({
   page,
 }) => {
