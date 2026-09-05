@@ -40,6 +40,35 @@ const agent = (
 const ROOT = "/Users/dev/polsia";
 
 describe("buildProjectTree", () => {
+  it("files a creator-bound sibling under its project, not outside or in a foreign project", () => {
+    const root = "/projects/build-local-support";
+    const reviewer = {
+      ...agent("/projects/report-reviewer"),
+      studioBindings: [{ projectId: "project-a", agentId: "agent-a" }],
+    };
+    const workflows = [agent(root), reviewer, agent("/projects/unrelated")];
+    const scopes = [
+      { cwd: root, projectId: "project-a" },
+      { cwd: "/projects", projectId: "project-b" },
+    ];
+    const [project, foreign] = buildProjectTree(
+      workflows,
+      [root, "/projects"],
+      "name",
+      scopes,
+    );
+    expect(project.rootAgent?.workflow.path).toBe(root);
+    expect(project.agents.map((row) => row.workflow.path)).toEqual([
+      reviewer.path,
+    ]);
+    expect(JSON.stringify(foreign)).not.toContain("report-reviewer");
+    expect(
+      unrootedAgents(workflows, [root], "name", scopes).map(
+        (row) => row.workflow.path,
+      ),
+    ).toEqual(["/projects/unrelated"]);
+  });
+
   it("compacts unbranched runs and keeps the branch point", () => {
     const workflows = [
       agent(`${ROOT}/backend/src/agents/ads`),

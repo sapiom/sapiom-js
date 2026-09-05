@@ -72,6 +72,7 @@ import {
 import { AgentSourceScanBudget } from "../core/agent-source-discovery.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
 import { createEventStore } from "../core/collector/store.js";
+import { CreatedAgentRegistration } from "../core/created-agent-registration.js";
 import {
   createClaudeTranscriptEnricher,
   createSessionRecordReader,
@@ -3156,6 +3157,57 @@ export const startServer = async (
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
+  // These leases observe exact, explicitly associated agent directories. They
+  // do not open those directories as new Studio projects or broaden cwd.
+  const createdAgentWatcher = new WorkspaceWatcherManager({
+    sharedWatchBroker: sharedWorkspaceWatchBroker,
+    listSourceRoots: (_key, cwd) => [cwd],
+    listSourceObservations: (_key, cwd) => discoveryObservationsForRoot(cwd),
+    onPotentialChange: (agentPath) => {
+      if (coordinatorActive) prepareDirtyWorkflowRoot(agentPath);
+    },
+    onChange: async (agentPath) => {
+      if (!coordinatorActive) return;
+      await scanWorkflowsAndBroadcast(agentPath, "workspace-change", {
+        dirty: true,
+      });
+    },
+  });
+  const createdAgentRegistration = new CreatedAgentRegistration({
+    preferences: studioWorkspacePreferences,
+    events: eventStore,
+    authorize: async (event, runtimeEpoch) => {
+      const session = sessionManager.get(event.harnessSessionId);
+      if (
+        !session ||
+        !session.agentMapIdentity ||
+        localProjectPrincipal(event.userId, event.machineId) !==
+          session.agentMapIdentity.userId ||
+        (runtimeEpoch !== undefined &&
+          !sessionManager.acceptsIngestRuntimeEpoch(session.id, runtimeEpoch))
+      ) return null;
+      const authorized = await isProjectSessionDispatchAuthorized({
+        session,
+        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
+        resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+      });
+      if (
+        !authorized ||
+        (runtimeEpoch !== undefined &&
+          !sessionManager.acceptsIngestRuntimeEpoch(session.id, runtimeEpoch))
+      ) return null;
+      return { projectId: session.agentMapIdentity.projectId, cwd: session.cwd };
+    },
+    projectForPath: async (agentPath) =>
+      (await studioProjectCatalog.resolveIdentityForPath(agentPath))?.projectId ??
+      null,
+    watch: (agentPath) => createdAgentWatcher.start(agentPath, agentPath),
+    scan: async (agentPath) => {
+      await scanWorkflowsAndBroadcast(agentPath, "agent-created", { dirty: true });
+      // Backfill can change membership without changing any filesystem row.
+      bus.publish({ type: "workflows.changed" });
+    },
+  });
   const agentMapProposalService = new AgentMapProposalService(
     agentMapWorkspaceStore,
     {
@@ -4194,6 +4246,11 @@ export const startServer = async (
       }
     },
     onEventPersisted: (event: AnalyticsEvent, runtimeEpoch) => {
+      void createdAgentRegistration
+        .onEventPersisted(event, runtimeEpoch)
+        .catch(() => {
+          console.error("[harness] created agent registration failed");
+        });
       void projectBootstrap!.onEventPersisted(event, runtimeEpoch).catch(() => {
         console.error("[harness] project bootstrap completion failed");
       });
@@ -4409,6 +4466,7 @@ export const startServer = async (
 
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
+      const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
       coordinatorEpoch += 1;
       clearInterval(sessionSweepTimer);
@@ -4419,6 +4477,7 @@ export const startServer = async (
       );
       await settle(() => canvasWatcher.stopAll());
       await settle(() => workspaceWatcher.stopAll());
+      await settle(() => createdAgentWatcher.stopAll());
       await settle(() => systemGraphWatcher.stopAll());
       activeSystemGraphScopes.clear();
       await settle(() => systemGraphInvocations.clear());
@@ -4446,6 +4505,7 @@ export const startServer = async (
       await Promise.race([killsSettled, shutdownTimeout]);
       if (shutdownTimerHandle !== undefined) clearTimeout(shutdownTimerHandle);
       await bootstrapClosing;
+      await registrationClosing;
       await settle(() => sessionManager.flush());
       await settle(async () => {
         await recordBackfill;
@@ -4489,6 +4549,13 @@ export const startServer = async (
 
   let actualPort = options.port;
   try {
+    // Before the first browser state read: restore creator ownership from the
+    // durable local completion stream, including pre-fix scaffolded siblings.
+    await createdAgentRegistration
+      .recover(sessionManager.list().map((session) => session.id))
+      .catch(() => {
+        console.error("[harness] created agent recovery failed");
+      });
     await new Promise<void>((resolve, reject) => {
       httpServer.once("error", reject);
       httpServer.listen(options.port, host, () => {

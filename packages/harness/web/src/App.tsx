@@ -122,7 +122,7 @@ import {
   secretsDisabledReason,
   type ProjectRef,
 } from "./lib/canvas-altitude";
-import { mostSpecificStudioScope } from "./lib/agent-map";
+import { mostSpecificStudioScope, studioScopeForAgent } from "./lib/agent-map";
 import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
 import {
@@ -1197,8 +1197,8 @@ export const App = (): JSX.Element => {
         );
         const scope =
           workflow && state?.studioProjects
-            ? mostSpecificStudioScope(
-                workflow.path,
+            ? studioScopeForAgent(
+                workflow,
                 state.workspaceScopes ?? [],
                 state.studioProjects,
               )
@@ -1342,11 +1342,12 @@ export const App = (): JSX.Element => {
       (candidate) => candidate.projectId === projectId,
     );
     if (!project) return null;
-    return mostSpecificStudioScope(
-      path,
-      workspaceScopes.filter((scope) => scope.projectId === projectId),
-      [project],
+    const workflow = state.workflows.find((candidate) =>
+      samePath(candidate.path, path),
     );
+    return workflow
+      ? studioScopeForAgent(workflow, workspaceScopes, [project], projectId)
+      : null;
   };
   const selectedStudioProject = effectiveStudioSelection
     ? (state.studioProjects?.find(
@@ -1370,15 +1371,21 @@ export const App = (): JSX.Element => {
     : [];
   const selectedStudioScope =
     effectiveStudioSelection && selectedStudioProject
-      ? mostSpecificStudioScope(
-          selectedStudioWorkflow?.path ??
+      ? selectedStudioWorkflow
+        ? studioScopeForAgent(
+            selectedStudioWorkflow,
+            selectedStudioScopes,
+            [selectedStudioProject],
+            selectedStudioProject.projectId,
+          )
+        : mostSpecificStudioScope(
             focusedAgentPath ??
-            activeSession?.cwd ??
-            selectedStudioScopes[0]?.cwd ??
-            "",
-          selectedStudioScopes,
-          [selectedStudioProject],
-        )
+              activeSession?.cwd ??
+              selectedStudioScopes[0]?.cwd ??
+              "",
+            selectedStudioScopes,
+            [selectedStudioProject],
+          )
       : null;
   const planFirstSelection = selectedStudioScope
     ? effectiveStudioSelection
@@ -1741,8 +1748,22 @@ export const App = (): JSX.Element => {
    * do not: that folder is the new project's root by construction, and
    * resolving it upward would drop the new agent into its parent project.
    */
-  const sessionCwdForAgent = (agentPath: string): string =>
-    projectRootForAgent(agentPath, knownProjectRoots());
+  const sessionCwdForAgent = (agentPath: string): string => {
+    const workflow = state.workflows.find((candidate) =>
+      samePath(candidate.path, agentPath),
+    );
+    const scope = workflow
+      ? studioScopeForAgent(
+          workflow,
+          workspaceScopes,
+          state.studioProjects ?? [],
+          effectiveStudioSelection?.kind === "agent"
+            ? effectiveStudioSelection.projectId
+            : undefined,
+        )
+      : null;
+    return scope?.cwd ?? projectRootForAgent(agentPath, knownProjectRoots());
+  };
 
   // The ONE choke point for session creation: sets the focus to the new
   // session's folder (so the main panel shows it) and fires telemetry once.
@@ -2342,8 +2363,8 @@ export const App = (): JSX.Element => {
     preferred?: { projectId: string; agentId: string },
   ): { projectId: string; agentId: string } | null => {
     const bindings = workflow.studioBindings ?? [];
-    const owningScope = mostSpecificStudioScope(
-      workflow.path,
+    const owningScope = studioScopeForAgent(
+      workflow,
       workspaceScopes,
       state.studioProjects ?? [],
     );
@@ -2527,7 +2548,9 @@ export const App = (): JSX.Element => {
     const inferredScope =
       selectedBinding || !state.studioProjects
         ? null
-        : mostSpecificStudioScope(path, workspaceScopes, state.studioProjects);
+        : workflow
+          ? studioScopeForAgent(workflow, workspaceScopes, state.studioProjects)
+          : null;
     const targetBinding =
       selectedBinding ??
       workflow?.studioBindings?.find(
@@ -2537,7 +2560,9 @@ export const App = (): JSX.Element => {
     const targetScope = studioScopeForAgentProject(path, targetProjectId);
     const live = state.sessions.filter((s) => s.status !== "exited");
     const ownsPath = (s: HarnessSession): boolean =>
-      (samePath(s.boundWorkflowPath ?? "", path) || isWithinDir(s.cwd, path)) &&
+      (Boolean(targetProjectId) ||
+        samePath(s.boundWorkflowPath ?? "", path) ||
+        isWithinDir(s.cwd, path)) &&
       sessionReachesFocus(
         s,
         path,

@@ -2262,7 +2262,8 @@ export class MockApi implements HarnessApi {
 
   private studioWorkflows(): WorkflowInfo[] {
     const scopes = this.workspaceScopes();
-    return this.workflows.map((workflow, index) => {
+    const workflows = this.workflows.map((workflow, index) => {
+      if (workflow.studioBindings?.length) return workflow;
       const bindings = scopes
         .filter(
           (candidate) =>
@@ -2279,6 +2280,28 @@ export class MockApi implements HarnessApi {
           }
         : workflow;
     });
+    // Regression fixture: successful scaffold in the original conversation,
+    // but on disk beside its root. Never turn this path into a root candidate.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockCreatedSibling") === "1"
+    ) {
+      const projectId = scopes.find(
+        (scope) => scope.cwd === "/Users/demo/acme-app",
+      )?.projectId;
+      if (projectId) workflows.push({
+        name: "report-reviewer",
+        path: "/Users/demo/report-reviewer",
+        definitionId: null,
+        definitionSlug: "report-reviewer",
+        source: "scan",
+        studioBindings: [{
+          projectId,
+          agentId: "agent_00000000-0000-4000-8000-000000000999",
+        }],
+      });
+    }
+    return workflows;
   }
 
   async getState(): Promise<AppState> {
