@@ -19,6 +19,7 @@ interface NavigationEvidence {
   activeSessionId: string | null;
   createSessionCalls: number;
   injectInputCalls: number;
+  resumeSessionCalls: number;
 }
 
 async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
@@ -29,6 +30,7 @@ async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
         __HARNESS_TEST__?: {
           createSessionCalls?: unknown[];
           injectInputCalls?: unknown[];
+          resumeSessionCalls?: unknown[];
         };
       }
     ).__HARNESS_TEST__;
@@ -36,6 +38,7 @@ async function navigationEvidence(page: Page): Promise<NavigationEvidence> {
       activeSessionId: activeSession,
       createSessionCalls: state?.createSessionCalls?.length ?? 0,
       injectInputCalls: state?.injectInputCalls?.length ?? 0,
+      resumeSessionCalls: state?.resumeSessionCalls?.length ?? 0,
     };
   }, active);
 }
@@ -48,8 +51,11 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     const empty = testInfo.title.includes("without a live conversation")
       ? "&mockNoLiveSessions=1"
       : "";
+    const restored = testInfo.title.includes("after restart")
+      ? "&mockRestoredSessions=1"
+      : "";
     await page.goto(
-      `/?seed=0&mockFixtures=deep&mockStudioProjects=present${sibling}${empty}`,
+      `/?seed=0&mockFixtures=deep&mockStudioProjects=present${sibling}${empty}${restored}`,
     );
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
@@ -83,6 +89,79 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
     await project.getByTestId("workflow-report-reviewer").click();
     expect(await navigationEvidence(page)).toEqual(before);
+  });
+
+  for (const [harness, sessionId] of [
+    ["Claude Code", "sess-leasing"],
+    ["Codex", "sess-leasing-2"],
+  ]) {
+    test(`a scaffolded sibling keeps its restored ${harness} conversation after restart`, async ({
+      page,
+    }) => {
+      await page.getByTestId("history-trigger").click();
+      await page.getByTestId("past-sessions-trigger").hover();
+      await page.getByTestId(`exited-session-${sessionId}`).click();
+      await expect(page.getByTestId("session-context")).toHaveAttribute(
+        "data-session-id",
+        sessionId,
+      );
+      await expect(page.getByTestId("dead-session-detail")).toContainText(harness);
+      const before = await navigationEvidence(page);
+      expect(before).toEqual({
+        activeSessionId: sessionId,
+        createSessionCalls: 0,
+        injectInputCalls: 0,
+        resumeSessionCalls: 0,
+      });
+
+      const sibling = page
+        .getByTestId("workspace-group-acme-app")
+        .getByTestId("workflow-report-reviewer");
+      await sibling.click();
+      await expect(page.getByTestId("session-context")).toHaveAttribute(
+        "data-session-id",
+        sessionId,
+      );
+      await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+      expect(await navigationEvidence(page)).toEqual(before);
+
+      await page.reload();
+      await expect(sibling).toBeVisible();
+      await expect(page.getByTestId("session-context")).toHaveAttribute(
+        "data-session-id",
+        sessionId,
+      );
+      await expect(page.getByTestId("dead-session-detail")).toContainText(harness);
+      await sibling.click();
+      await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+      await expect(page.locator(".harness-terminal .xterm")).toHaveCount(0);
+      expect(await navigationEvidence(page)).toEqual(before);
+    });
+  }
+
+  test("a stale saved conversation falls back to the existing live session", async ({
+    page,
+  }) => {
+    await page.evaluate(() => {
+      const key = "sapiom-harness-ui-prefs";
+      const prefs = JSON.parse(localStorage.getItem(key) ?? "{}");
+      localStorage.setItem(
+        key,
+        JSON.stringify({ ...prefs, activeSessionId: "removed-session" }),
+      );
+    });
+    await page.reload();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      "sess-boot",
+    );
+    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    expect(await navigationEvidence(page)).toEqual({
+      activeSessionId: "sess-boot",
+      createSessionCalls: 0,
+      injectInputCalls: 0,
+      resumeSessionCalls: 0,
+    });
   });
 
   test("a scaffolded sibling without a live conversation starts at its original project root", async ({
