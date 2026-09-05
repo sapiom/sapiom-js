@@ -252,7 +252,7 @@ describe("WorkflowRegistry", () => {
     const reloaded = (await new WorkflowRegistry(registryPath).list())[0]!;
 
     expect(scanned).toMatchObject({
-      definitionId: null,
+      definitionId: 99,
       definitionSlug: null,
       templateId: null,
       forkId: null,

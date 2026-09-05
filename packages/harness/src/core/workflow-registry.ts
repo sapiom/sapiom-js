@@ -126,8 +126,16 @@ function safeOpaqueString(value: unknown): string | null {
 }
 
 function safeDefinitionId(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
-    ? value
+  // agent-core persists definition IDs as JSON strings. Accept only their
+  // canonical positive-integer representation; other marker input stays null.
+  const parsed =
+    typeof value === "string" && /^[1-9]\d*$/.test(value)
+      ? Number(value)
+      : value;
+  return typeof parsed === "number" &&
+    Number.isSafeInteger(parsed) &&
+    parsed > 0
+    ? parsed
     : null;
 }
 
