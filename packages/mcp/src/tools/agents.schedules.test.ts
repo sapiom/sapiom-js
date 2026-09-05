@@ -292,6 +292,11 @@ describe("agent schedule MCP tools", () => {
   });
 
   it("schedule_secret rotate returns the new secret once, with the URL and the grace window", async () => {
+    vi.mocked(getSchedule).mockResolvedValue({
+      id: "trig-3",
+      kind: "webhook",
+      secretVersion: 1,
+    } as never);
     vi.mocked(rotateScheduleSecret).mockResolvedValue({
       id: "trig-3",
       kind: "webhook",
@@ -333,6 +338,41 @@ describe("agent schedule MCP tools", () => {
     expect(out.webhook.signing.algorithm).toContain("HMAC-SHA256");
     expect(out.hint).toContain("2026-09-05T12:00:00.000Z");
     expect(out.hint).toContain("complete_rotation");
+    expect(out.replayed).toBe(false);
+    expect(out.hint).toContain("Rotated to secret v2");
+  });
+
+  it("schedule_secret rotate says so when the engine replayed an in-progress rotation", async () => {
+    // Grace still open → the engine returns the same version and the same secret rather than
+    // minting another. The hint must not claim a new secret was minted.
+    vi.mocked(getSchedule).mockResolvedValue({
+      id: "trig-3",
+      kind: "webhook",
+      secretVersion: 2,
+    } as never);
+    vi.mocked(rotateScheduleSecret).mockResolvedValue({
+      id: "trig-3",
+      kind: "webhook",
+      status: "active",
+      secretVersion: 2,
+      graceUntil: "2026-09-05T12:00:00.000Z",
+      secret: "shh-v2",
+      url: "https://api.sapiom.ai/v1/workflows/hooks/whk_abc",
+    } as never);
+    const { server, handlers } = createMockServer();
+    register(server, env);
+
+    const res = await handlers.get("sapiom_dev_agents_schedule_secret")!({
+      scheduleId: "trig-3",
+      action: "rotate",
+    });
+
+    const out = parse(res);
+    expect(out.replayed).toBe(true);
+    expect(out.hint).toContain("No new secret");
+    expect(out.hint).toContain("complete_rotation");
+    expect(out.hint).not.toContain("Rotated to");
+    expect(out.webhook.secret).toBe("shh-v2");
   });
 
   it("schedule_secret complete_rotation and revoke delegate to their core fns", async () => {

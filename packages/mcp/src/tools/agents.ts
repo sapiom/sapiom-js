@@ -639,7 +639,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_schedule",
-    "Create a trigger for a deployed agent — one of four kinds. 'schedule_cron' (+ cron + timezone) runs it on a recurring schedule; 'schedule_once' (+ at) runs it once at a future time; 'event' (+ eventType) runs it every time this tenant emits that event type via POST /v1/workflows/events; 'webhook' runs it every time an external system POSTs to a public hook URL — the result returns that URL plus a shown-once signing secret and the HMAC-SHA256 scheme the sender must use. Use 'webhook' when an external system should start the agent (\"run when X POSTs to us\") instead of hand-building an HTTP server; third-party senders with their own signature scheme (Slack, Meta, Stripe, GitHub) cannot produce our HMAC, so route those through an App Link /hook/* receiver or a translator. Returns the trigger with its next fire time where it has one. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
+    "Create a trigger for a deployed agent — one of four kinds. 'schedule_cron' (+ cron, optional timezone) runs it on a recurring schedule; 'schedule_once' (+ at) runs it once at a future time; 'event' (+ eventType) runs it every time this tenant emits that event type via POST /v1/workflows/events; 'webhook' runs it every time an external system POSTs to a public hook URL — the result returns that URL plus a shown-once signing secret and the HMAC-SHA256 scheme the sender must use. Use 'webhook' when an external system should start the agent (\"run when X POSTs to us\") instead of hand-building an HTTP server; third-party senders with their own signature scheme (Slack, Meta, Stripe, GitHub) cannot produce our HMAC, so route those through an App Link /hook/* receiver or a translator. Returns the trigger with its next fire time where it has one. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
     {
       definition: z
         .string()
@@ -815,10 +815,19 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       if (!client) return NOT_AUTHED;
       try {
         if (action === "rotate") {
+          // While a rotation grace is open the engine REPLAYS the live rotation instead of
+          // minting another secret (idempotent by design) — the response carries the same
+          // version and the same secret. Read the version first so the hint can say which
+          // happened; otherwise an agent reconfigures the sender for nothing.
+          const before = await getSchedule(scheduleId, client);
           const { secret, url, ...schedule } = await rotateScheduleSecret(
             scheduleId,
             client,
           );
+          const replayed =
+            before.secretVersion !== null &&
+            schedule.secretVersion === before.secretVersion;
+          const grace = schedule.graceUntil ?? "the grace ends";
           return ok({
             schedule,
             webhook: {
@@ -827,7 +836,10 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
               secretVersion: schedule.secretVersion,
               signing: WEBHOOK_SIGNING_SCHEME,
             },
-            hint: `Rotated to secret v${schedule.secretVersion}; shown ONCE. The previous secret still verifies until ${schedule.graceUntil ?? "the grace ends"} — reconfigure the sender, then call this tool with action 'complete_rotation' to close the window early.`,
+            replayed,
+            hint: replayed
+              ? `No new secret: a rotation to v${schedule.secretVersion} is already in progress (grace until ${grace}), so this replayed it and returned the SAME current secret. If the sender already has v${schedule.secretVersion}, nothing to reconfigure; to rotate again, call this tool with action 'complete_rotation' first.`
+              : `Rotated to secret v${schedule.secretVersion}; shown ONCE. The previous secret still verifies until ${grace} — reconfigure the sender, then call this tool with action 'complete_rotation' to close the window early.`,
           });
         }
         if (action === "complete_rotation") {

@@ -600,7 +600,7 @@ independent production run. Create one with `sapiom_dev_agents_schedule` — `ki
 
 | `kind`          | Fires when                                                                                                                    | Required field                                          |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `schedule_cron` | on a recurring cron (validate it first with `sapiom_dev_agents_cron_preview`)                                                 | `cron` (+ `timezone`)                                   |
+| `schedule_cron` | on a recurring cron (validate it first with `sapiom_dev_agents_cron_preview`)                                                 | `cron` (optional `timezone`)                            |
 | `schedule_once` | once, at a future time                                                                                                        | `at` (ISO 8601)                                         |
 | `event`         | every time this tenant emits that event type through the tenant events API (`{ type, payload }`; route in the Triggers guide) | `eventType` (`lead.created`; `sapiom.*` is reserved)    |
 | `webhook`       | every time an external system POSTs to a public hook URL minted for the trigger                                               | none — the result returns the URL + a shown-once secret |
