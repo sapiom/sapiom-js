@@ -29,6 +29,8 @@ if (run.result?.success) await repo.pushFromSandbox(run.sandbox, { message: "fea
 
 - **Each run is billed.** Runs that fail or are aborted still cost. Check `run.result?.success` and `run.error` before relying on a run's output.
 
+- **`deadlineMinutes` buys a cheaper run if you can wait.** Available on both `agent.coding.run`/`launch` and `agent.run`/`launch`. You say the kind of call (`model`) and how long you're willing to wait (`deadlineMinutes`); the platform derives the billing lane (`run_now` / `priority` / `standard` / `flex`) from that — you never name a lane. Leave it unset and the run dispatches immediately at `run_now`, exactly as before. Set it and the run may sit in the non-terminal `awaiting_capacity` status until a cheaper lane frees up; `run` keeps polling through it and a `launch` handle keeps waiting, so a deferred run is never resolved with a null result.
+
 - **Coding HTTP failures are structured.** `run`, `launch`, `handle.status()`, and `handle.wait()` throw `CodingRunHttpError`. Inspect `status`, `code`, `requestId`, and `body`; workflow steps can return `fail(error.message)` for `repository_not_found` and rethrow other errors.
 
 ## Reference

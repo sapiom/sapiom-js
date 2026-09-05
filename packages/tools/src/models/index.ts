@@ -42,13 +42,26 @@ const DEFAULT_BASE_URL =
  */
 export const CODING_RESULT_SIGNAL = "models.coding.result";
 
-/** Run lifecycle, mirrored from the gateway's `ModelsRunStatus`. */
+/**
+ * Run lifecycle, mirrored from the gateway's `ModelsRunStatus`.
+ *
+ * `awaiting_capacity` is the deferred state a run sits in when it carried a
+ * {@link CodingRunSpec.deadlineMinutes} and the platform parked it for a
+ * cheaper lane instead of dispatching immediately. It is NOT terminal: `run()`
+ * and a `launch()` handle keep polling through it.
+ */
 export type RunStatus =
   | "pending"
   | "queued"
+  | "awaiting_capacity"
   | "running"
   | "completed"
   | "failed";
+/**
+ * The states `run()`'s poll loop and `handle.wait()` stop on. Deliberately just
+ * the two end states: every other status — `awaiting_capacity` included — keeps
+ * the loop polling, so a deferred run is never resolved with a null result.
+ */
 const TERMINAL = new Set<RunStatus>(["completed", "failed"]);
 
 export interface CodingRunSpec {
@@ -70,6 +83,19 @@ export interface CodingRunSpec {
    * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
+  /**
+   * How long you're willing to wait for this run, in minutes — the deadline
+   * half of the label + deadline vocabulary. You say the kind of call
+   * (`model`) and how long you can wait; the platform derives the billing lane
+   * (`run_now` / `priority` / `standard` / `flex`) from it — you never name a
+   * lane yourself.
+   *
+   * Omit it (the default) for `run_now`: the request is byte-identical to one
+   * sent before this field existed, and the run dispatches immediately. Give it
+   * a value and the platform may park the run in `awaiting_capacity` until a
+   * cheaper lane is free, dispatching in time to finish within the deadline.
+   */
+  deadlineMinutes?: number;
 }
 
 /**
@@ -193,6 +219,7 @@ export class CodingResultSchemaError extends Error {}
 const RUN_STATUSES: readonly RunStatus[] = [
   "pending",
   "queued",
+  "awaiting_capacity",
   "running",
   "completed",
   "failed",
@@ -352,6 +379,9 @@ function buildBody(spec: CodingRunSpec): Record<string, unknown> {
     working_directory: spec.workingDirectory,
     keep_sandbox: spec.keepSandbox ?? true,
     model: spec.model,
+    // Left `undefined` when unset, so `JSON.stringify` drops the key entirely —
+    // the server must be able to tell "no deadline" from a `0` or a `null`.
+    deadline_minutes: spec.deadlineMinutes,
   };
 }
 
@@ -489,6 +519,19 @@ export interface ModelRunSpec {
    * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
+  /**
+   * How long you're willing to wait for this run, in minutes — the deadline
+   * half of the label + deadline vocabulary. You say the kind of call
+   * (`model`) and how long you can wait; the platform derives the billing lane
+   * (`run_now` / `priority` / `standard` / `flex`) from it — you never name a
+   * lane yourself.
+   *
+   * Omit it (the default) for `run_now`: the request is byte-identical to one
+   * sent before this field existed, and the run dispatches immediately. Give it
+   * a value and the platform may defer the run until a cheaper lane is free,
+   * dispatching in time to finish within the deadline.
+   */
+  deadlineMinutes?: number;
   /** Max output tokens per turn. */
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
@@ -686,6 +729,9 @@ function buildModelBody(spec: ModelRunSpec): Record<string, unknown> {
     prompt: spec.prompt,
     system: spec.system,
     model: spec.model,
+    // Same encoding as the coding body: unset ⇒ `undefined` ⇒ the key is
+    // absent on the wire, never `0` or `null`.
+    deadline_minutes: spec.deadlineMinutes,
     max_tokens: spec.maxTokens,
     mcps: spec.mcps,
   };

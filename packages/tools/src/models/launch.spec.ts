@@ -79,6 +79,77 @@ describe("agent.coding.launch — dispatch handle", () => {
   });
 });
 
+describe("agent.coding.launch — deadlineMinutes", () => {
+  it("sends the deadline as snake_case deadline_minutes", async () => {
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing", deadlineMinutes: 30 });
+
+    expect(capture.body).toMatchObject({ deadline_minutes: 30 });
+    expect(capture.body).not.toHaveProperty("deadlineMinutes");
+  });
+
+  it("omits the key entirely when no deadline is given — not null, not 0", async () => {
+    // The server has to tell "no deadline" (dispatch now) from "zero minutes",
+    // so an unset deadline must not reach the wire at all.
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing" });
+
+    expect(capture.body).not.toHaveProperty("deadline_minutes");
+  });
+});
+
+describe("agent.coding — awaiting_capacity is not terminal", () => {
+  it("keeps polling a deferred run instead of resolving it", async () => {
+    // A run parked on a deadline reports awaiting_capacity for as long as it
+    // waits for a lane. Resolving there would hand the caller a null result.
+    const statuses = ["awaiting_capacity", "awaiting_capacity", "completed"];
+    let polls = 0;
+    const fetch = (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const status = isPost ? "pending" : (statuses[polls++] ?? "completed");
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({
+          data: {
+            id: "run-deferred",
+            attributes: {
+              status,
+              summary: status === "completed" ? "done" : null,
+              result: null,
+              error: null,
+            },
+            relationships: { execution_environment: { data: { id: "env-1" } } },
+          },
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch });
+
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 30,
+    });
+    expect(await handle.status()).toBe("awaiting_capacity");
+
+    const result = await handle.wait({ pollMs: 1 });
+
+    expect(result.status).toBe("completed");
+    expect(polls).toBe(statuses.length);
+  });
+});
+
 describe("agent.coding — typed HTTP failures", () => {
   const repositoryMessage =
     "The requested git_repository is not an active Sapiom repository available to this tenant. " +

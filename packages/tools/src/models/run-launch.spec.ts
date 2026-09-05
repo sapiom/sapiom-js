@@ -7,7 +7,11 @@ import { createClient } from "../index.js";
 import { MODEL_RUN_RESULT_SIGNAL, modelRunResultSchema } from "./index.js";
 
 function fakeFetch(opts: {
-  capture?: { headers?: Record<string, string>; url?: string };
+  capture?: {
+    headers?: Record<string, string>;
+    url?: string;
+    body?: Record<string, unknown>;
+  };
   terminal?: boolean;
   wireResult?: Record<string, unknown>;
 }): typeof globalThis.fetch {
@@ -15,6 +19,11 @@ function fakeFetch(opts: {
     if (opts.capture) {
       opts.capture.headers = init.headers as Record<string, string>;
       opts.capture.url = url;
+      if (init.body)
+        opts.capture.body = JSON.parse(init.body as string) as Record<
+          string,
+          unknown
+        >;
     }
     const isPost = (init.method ?? "GET") === "POST";
     const attributes = isPost
@@ -62,6 +71,29 @@ describe("agent.launch — dispatch handle", () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
     await sapiom.models.launch({ prompt: "say OK" });
     expect(capture.url).toContain("/models/v1/runs");
+  });
+});
+
+describe("agent.launch — deadlineMinutes", () => {
+  it("sends the deadline as snake_case deadline_minutes", async () => {
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK", deadlineMinutes: 30 });
+
+    expect(capture.body).toMatchObject({ deadline_minutes: 30 });
+    expect(capture.body).not.toHaveProperty("deadlineMinutes");
+  });
+
+  it("omits the key entirely when no deadline is given — not null, not 0", async () => {
+    // Same contract as the coding surface: the server has to tell "no
+    // deadline" from "zero minutes", so an unset deadline never hits the wire.
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK" });
+
+    expect(capture.body).not.toHaveProperty("deadline_minutes");
   });
 });
 
