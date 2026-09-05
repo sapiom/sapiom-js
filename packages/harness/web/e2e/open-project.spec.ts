@@ -79,6 +79,7 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("agent-map-empty")).toHaveText(
       "Nothing generated yet",
     );
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
     // The server-owned project-open lifecycle contributes one real ordinary
     // session. Plan Agents is only that tab's initial title—never a pinned row
     // or a second synthetic navigation element.
@@ -126,6 +127,21 @@ test.describe("the header + opens a project", () => {
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
+
+    // Ending the automatic conversation must not bring back the retired
+    // first-agent action beneath the still-empty project.
+    await page.getByTestId(`session-tab-main-${firstSessionId}`).click();
+    await page.getByTestId("session-menu").click();
+    await page.getByTestId("session-end-btn").click();
+    await page.getByTestId("end-session-confirm-btn").click();
+    await expect(page.getByTestId("session-context")).not.toHaveAttribute(
+      "data-session-id",
+      firstSessionId!,
+    );
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    await expect(
+      group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
+    ).toHaveCount(0);
   });
 
   test("a Studio project keeps ordinary session and agent creation available", async ({
@@ -140,7 +156,10 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
     await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
 
-    await expect(group.getByTestId("project-empty-blank-slate")).toBeVisible();
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    await expect(
+      group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
+    ).toHaveCount(0);
     await expect(
       group.getByTestId("project-start-session-blank-slate"),
     ).toHaveAttribute("aria-label", "Start a session in blank-slate");
@@ -163,16 +182,6 @@ test.describe("the header + opens a project", () => {
     // NOT the rail-wide empty state leaking down: that one says "No agents yet"
     // and only exists when the rail has nothing at all.
     await expect(page.locator(".rail-empty")).toHaveCount(0);
-  });
-
-  test("the empty row does NOT appear under a merged root-agent project", async ({
-    page,
-  }) => {
-    // `rfq-agent` is a root that IS an agent — `projectIsEmpty` consults
-    // `rootAgent` precisely so its row does not get "no agents" printed under
-    // the agent it is showing.
-    await expect(page.getByTestId("workflow-rfq")).toBeVisible();
-    await expect(page.getByTestId("project-empty-rfq-agent")).toHaveCount(0);
   });
 
   test("opening a folder that IS an agent project registers the agent too", async ({

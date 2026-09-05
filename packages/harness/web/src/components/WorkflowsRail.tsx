@@ -159,7 +159,7 @@ interface WorkflowsRailProps {
    *  itself, its agents, and the session cwds under it — minus any project
    *  opened separately inside it. See `lib/project-membership.ts`. */
   closedProjects: string[];
-  /** Checkouts a scan of each root declined to enter — see the empty-project row. */
+  /** Checkouts a scan of each root declined to enter — shown in a note row. */
   unsearchedCheckouts: Record<string, string[]>;
   /** Removes a project: out of `recentDirs`, out of the rail, and the live
    *  sessions rooted in it end. Nothing on disk is touched. */
@@ -1500,74 +1500,35 @@ export function WorkflowsRail({
                       depth={0}
                     />
                   )}
-                {/* AN EMPTY PROJECT SAYS SO, on its own row.
-                    `projectIsEmpty` is the one emptiness answer and it consults
-                    `rootAgent` — a merged root-agent project has nothing in
-                    `dirs` or `agents` and a naive check would print this line
-                    under an agent row. `creating` already has its own spinner,
-                    and a bare project with a live session already has its
-                    Scaffold affordance, so neither reaches this. */}
-                {!collapsed && empty && !creating && bare == null && (
-                  <>
-                    <div className="workspace-row is-nested workspace-row-empty">
+                {/* Preserve the scan boundary explanation for an empty project.
+                    First-agent creation belongs to the project menu; an empty
+                    project never gets a separate inline creation action. */}
+                {!collapsed &&
+                  empty &&
+                  !creating &&
+                  bare == null &&
+                  (unsearchedCheckouts[project.root]?.length ?? 0) > 0 && (
+                    <div className="workspace-row is-nested">
                       <span
                         className="row-disclosure row-disclosure-static"
                         aria-hidden="true"
                       />
-                      <button
-                        type="button"
-                        className="tree-row tree-row-empty-action"
-                        data-testid={`project-empty-${project.label}`}
-                        data-tooltip={`Start an agent in ${project.root}`}
-                        onClick={() =>
-                          onCreateAgent(project.root, project.label)
-                        }
+                      <div
+                        className="tree-row tree-row-note"
+                        data-testid={`project-unsearched-${project.label}`}
+                        title={`Open one as its own project to see its agents:\n${unsearchedCheckouts[
+                          project.root
+                        ]!.join("\n")}`}
                       >
-                        <Icon name="Sparkles" size={13} />
+                        <Icon name="GitBranch" size={13} />
                         <span className="tree-row-label">
-                          {(unsearchedCheckouts[project.root]?.length ?? 0) > 0
-                            ? "Create an agent here"
-                            : "Create the first agent here"}
+                          {unsearchedCheckouts[project.root]!.length === 1
+                            ? "1 checkout not searched"
+                            : `${unsearchedCheckouts[project.root]!.length} checkouts not searched`}
                         </span>
-                      </button>
-                    </div>
-                    {/* THE BOUNDARY'S OWN ANSWER, when there is one.
-                        A scan stops at every separate checkout, so a folder that
-                        is not itself a repo but holds several clones finds
-                        NOTHING while the agents are right there. Rendering only
-                        "Create the FIRST agent here" over that folder states
-                        something false, and falsely in the worst direction: it
-                        tells the user the agents they can see on disk do not
-                        exist. The count is the difference between "there is
-                        nothing here" and "I did not look in there". */}
-                    {(unsearchedCheckouts[project.root]?.length ?? 0) > 0 && (
-                      <div className="workspace-row is-nested">
-                        <span
-                          className="row-disclosure row-disclosure-static"
-                          aria-hidden="true"
-                        />
-                        <div
-                          className="tree-row tree-row-note"
-                          data-testid={`project-unsearched-${project.label}`}
-                          /* The ROW states the fact; the tooltip carries the
-                             remedy and the paths. A 320px rail cannot hold both
-                             in one line, and truncating the remedy would leave
-                             the fact looking like a dead end. */
-                          title={`Open one as its own project to see its agents:\n${unsearchedCheckouts[
-                            project.root
-                          ]!.join("\n")}`}
-                        >
-                          <Icon name="GitBranch" size={13} />
-                          <span className="tree-row-label">
-                            {unsearchedCheckouts[project.root]!.length === 1
-                              ? "1 checkout not searched"
-                              : `${unsearchedCheckouts[project.root]!.length} checkouts not searched`}
-                          </span>
-                        </div>
                       </div>
-                    )}
-                  </>
-                )}
+                    </div>
+                  )}
                 {!collapsed && axis === "project" && (
                   <ProjectTreeRows
                     dirs={project.dirs}
