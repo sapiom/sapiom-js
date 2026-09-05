@@ -144,12 +144,16 @@ export function asAppLink(data: unknown): AppLinkWire | null {
 }
 
 /**
- * Where a third party POSTs once webhooks are on. The `/hook` prefix is stripped
- * by the host before the app sees the request, so an app receives
- * `/slack/interactivity` for a POST to `…/hook/slack/interactivity`.
+ * The receiver prefix a third party POSTs under once webhooks are on — a real
+ * URL, pasteable into a Slack/Stripe/GitHub endpoint field with the app's own
+ * route appended. The `/hook` prefix is stripped by the host before the app sees
+ * the request, so an app receives `/slack/interactivity` for a POST to
+ * `…/hook/slack/interactivity`. Never a `<path>` placeholder: this value is
+ * emitted as a machine-readable field, and a placeholder there gets configured
+ * verbatim as `/hook/%3Cpath%3E`.
  */
 export function webhookUrlOf(link: Pick<AppLinkWire, "url">): string {
-  return `${link.url.replace(/\/+$/, "")}/hook/<path>`;
+  return `${link.url.replace(/\/+$/, "")}/hook/`;
 }
 
 // ─── Result envelope ─────────────────────────────────────────────────────────

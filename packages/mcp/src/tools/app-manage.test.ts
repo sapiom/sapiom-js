@@ -204,7 +204,7 @@ describe("App Link management tools", () => {
       expect(out.links[1]).toMatchObject({
         slug: "hooks",
         webhooksEnabled: true,
-        webhookUrl: "https://apps.sapiom.ai/acme/hooks/hook/<path>",
+        webhookUrl: "https://apps.sapiom.ai/acme/hooks/hook/",
         dailySpendCapUsd: "5.00",
         published: false,
       });
@@ -270,9 +270,7 @@ describe("App Link management tools", () => {
 
       const out = parse(res);
       expect(out.changed).toEqual(["webhooksEnabled"]);
-      expect(out.webhookUrl).toBe(
-        "https://apps.sapiom.ai/acme/dash/hook/<path>",
-      );
+      expect(out.webhookUrl).toBe("https://apps.sapiom.ai/acme/dash/hook/");
       expect(out.settings.webhooksEnabled).toBe(true);
       // The acceptance path: the agent can hand this straight to the user and
       // they know where the third party POSTs.
@@ -280,7 +278,7 @@ describe("App Link management tools", () => {
       expect(out.summary).toContain("/hook/<path>");
     });
 
-    it("skips the list when addressed by appLinkId (a publish-only credential lacks org.read)", async () => {
+    it("skips the list when addressed by appLinkId (one direct GET; both paths need org.read)", async () => {
       const fetchMock = mockBackend(
         jsonRes(DASH),
         jsonRes({ ...DASH, webhooksEnabled: true }),
@@ -295,6 +293,27 @@ describe("App Link management tools", () => {
         url: `https://api.sapiom.ai/v1/app-links/${DASH.id}`,
       });
       expect(call(fetchMock, 1).method).toBe("PATCH");
+    });
+
+    it("a 2xx PATCH body that is not a link is UNEXPECTED_RESPONSE, never a report of the old state", async () => {
+      // Falling back to the pre-change link would answer "Webhooks are OFF" to a
+      // request that asked to turn them on — a self-contradicting success.
+      for (const body of [
+        jsonRes(undefined, 204),
+        jsonRes("<html>proxy</html>"),
+      ]) {
+        mockBackend(jsonRes({ items: [DASH] }), body);
+        const res = await tool("sapiom_dev_app_settings").handler({
+          slug: "dash",
+          webhooksEnabled: true,
+        });
+        expect(res.isError).toBe(true);
+        const { error } = parse(res);
+        expect(error.code).toBe("UNEXPECTED_RESPONSE");
+        expect(error.message).toContain("webhooksEnabled");
+        expect(error.message).toContain("unknown");
+        expect(error.hint).toContain("sapiom_dev_app_list");
+      }
     });
 
     it("forwards confirmPublic alongside a public flip, and reports the audience change", async () => {

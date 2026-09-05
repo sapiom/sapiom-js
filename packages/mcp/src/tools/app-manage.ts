@@ -21,7 +21,8 @@
  *
  * A link is addressed by `slug` (its stable identity — what `_publish` took) or
  * by `appLinkId` (what `_publish` returned). The slug resolves through the list
- * route, so it needs `org.read`; a caller holding only the id can skip that.
+ * route; the id is one direct GET. Both reads are gated on `org.read` — the id
+ * path saves a round trip, not a permission.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PreviewOperationError } from "@sapiom/sandbox-preview";
@@ -80,14 +81,15 @@ const TARGET_SHAPE = {
     .optional()
     .describe(
       "The app link's slug — the URL path segment you published it under. Resolved " +
-        "through the list route (needs org.read). Give this OR appLinkId.",
+        "through the list route. Give this OR appLinkId.",
     ),
   appLinkId: z
     .string()
     .uuid()
     .optional()
     .describe(
-      "The app link's id, as returned by sapiom_dev_app_publish. Give this OR slug.",
+      "The app link's id, as returned by sapiom_dev_app_publish — one direct lookup " +
+        "instead of the list. Give this OR slug.",
     ),
 };
 
@@ -218,15 +220,20 @@ function registerSettings(server: McpServer, env: ResolvedEnvironment): void {
           `/v1/app-links/${encodeURIComponent(target.id)}`,
           patch,
         );
-        const updated =
-          asAppLink(
-            unwrap(res, {
-              action: `Changing ${changed.join(", ")} on the "${target.slug}" app link`,
-              permission: PERMISSION.manage,
-              fields: changed,
-              slug: target.slug,
-            }),
-          ) ?? target;
+        // The PATCH echoes the link; the report below describes THAT body, not
+        // the pre-change `target`. A 2xx that is not a link (a proxy's HTML page
+        // answering 200, an unexpected 204) cannot be reported as a change that
+        // took effect — falling back to `target` would say "Webhooks are OFF"
+        // for a request that asked to turn them on.
+        const updated = requireAppLink(
+          unwrap(res, {
+            action: `Changing ${changed.join(", ")} on the "${target.slug}" app link`,
+            permission: PERMISSION.manage,
+            fields: changed,
+            slug: target.slug,
+          }),
+          `The App Links API answered the settings change with a success status but not an app link, so whether ${changed.join(", ")} changed on "${target.slug}" is unknown.`,
+        );
 
         return ok({
           summary: summarizeSettings(updated, changed),
@@ -365,6 +372,22 @@ async function resolveLink(
   const link = links.find((l) => l.slug === target.slug);
   if (link) return link;
   throw notFound(target.slug!);
+}
+
+/**
+ * A body that MUST be a link, or `UNEXPECTED_RESPONSE`. `listLinks` guards the
+ * list shape the same way; this is the single-link twin.
+ */
+function requireAppLink(data: unknown, message: string): AppLinkWire {
+  const link = asAppLink(data);
+  if (link) return link;
+  throw new PreviewOperationError({
+    code: "UNEXPECTED_RESPONSE",
+    message,
+    hint:
+      "Check the SAPIOM_ENVIRONMENT / api URL this MCP is pointed at, then run " +
+      "sapiom_dev_app_list to see the link's actual settings before retrying.",
+  });
 }
 
 function notFound(what: string): PreviewOperationError {
@@ -516,7 +539,7 @@ function summarizeSettings(
   if (changed.includes("webhooksEnabled")) {
     parts.push(
       link.webhooksEnabled
-        ? `Webhooks are ON: third parties can POST to ${webhookUrlOf(link)} (the /hook prefix is ` +
+        ? `Webhooks are ON: third parties POST to ${webhookUrlOf(link)}<path> (the /hook prefix is ` +
             "stripped before the app sees the path, and the body arrives byte-exact for signature checks)."
         : "Webhooks are OFF: the /hook path no longer accepts requests.",
     );

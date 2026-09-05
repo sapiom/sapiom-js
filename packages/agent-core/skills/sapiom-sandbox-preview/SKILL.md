@@ -97,9 +97,9 @@ sandbox address the browser lands on after a wake.
 ## Manage a published link
 
 Publishing is the only thing `sapiom_dev_app_publish` does. Everything else about a link is
-`sapiom_dev_app_list` / `sapiom_dev_app_settings` / `sapiom_dev_app_delete` (`@sapiom/mcp`
-
-> = 0.15; older clients use `PATCH` / `DELETE /v1/app-links/{id}` with an `org.write` key).
+`sapiom_dev_app_list` / `sapiom_dev_app_settings` / `sapiom_dev_app_delete`, which need
+`@sapiom/mcp` 0.15 or newer; older clients use `PATCH` / `DELETE /v1/app-links/{id}` with an
+`org.write` key.
 
 - **Webhooks are OFF by default.** To receive Slack, Stripe, GitHub or any third-party
   webhook: `sapiom_dev_app_settings { slug, webhooksEnabled: true }`, then hand the sender

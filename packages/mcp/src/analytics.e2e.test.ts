@@ -206,9 +206,7 @@ describe("analytics e2e (real stdio server)", () => {
           0,
         );
         // Sapiom-bound tools capture arguments in full.
-        expect((checkEvent!.data.args as { dir?: string }).dir).toBe(
-          missingDir,
-        );
+        expect((checkEvent!.data.args as { dir?: string }).dir).toBe(missingDir);
 
         // Both events share the server process's session.
         expect(checkEvent!.session_id).toBe(statusEvent!.session_id);
