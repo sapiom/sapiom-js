@@ -13,7 +13,6 @@ import type { Page } from "@playwright/test";
 
 import {
   focusRfqAgent,
-  openProjectMenu,
   selectMockSessionFromPalette,
 } from "./mock-navigation";
 
@@ -404,7 +403,6 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // The scaffold action moved into the row's ⋮ with every other project
     // action (SAP-2982): a Sparkles glyph acting on an AGENT sat adjacent to
     // an `×` acting on the PROJECT, same size, same reveal.
-    await openProjectMenu(page, "scratch");
     await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("workspace-focus-scratch")).toHaveCount(0);

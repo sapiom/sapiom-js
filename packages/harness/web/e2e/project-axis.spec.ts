@@ -196,7 +196,7 @@ test.describe("the plan-first project children", () => {
         ),
     ).toEqual([
       "project-start-session-dashboard-keeper",
-      "project-menu-dashboard-keeper",
+      "project-remove-dashboard-keeper",
     ]);
 
     // Prove the shortcut also works from map altitude: the new generic session
