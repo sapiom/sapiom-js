@@ -94,6 +94,26 @@ It reads the **same** `sapiom.json` sandbox resource (source dir, `start`, `port
 The canonical link is the identity — share `https://apps.sapiom.ai/{org}/{slug}`, never the
 sandbox address the browser lands on after a wake.
 
+## Manage a published link
+
+Publishing is the only thing `sapiom_dev_app_publish` does. Everything else about a link is
+`sapiom_dev_app_list` / `sapiom_dev_app_settings` / `sapiom_dev_app_delete` (`@sapiom/mcp`
+
+> = 0.15; older clients use `PATCH` / `DELETE /v1/app-links/{id}` with an `org.write` key).
+
+- **Webhooks are OFF by default.** To receive Slack, Stripe, GitHub or any third-party
+  webhook: `sapiom_dev_app_settings { slug, webhooksEnabled: true }`, then hand the sender
+  `https://apps.sapiom.ai/{org}/{slug}/hook/<path>`. The `/hook` prefix is stripped before the
+  app sees the request and the body arrives byte-exact, so signature verification runs inside
+  the app exactly as it would on any host. A request that lands while the app sleeps is held
+  for the wake (up to 60 s).
+- `visibility`, `dailySpendCapUsd` and `wakeRateLimitPerHour` are set the same way; going
+  `public` needs `confirmPublic: true` and a cap — ask the user first.
+- `sapiom_dev_app_delete { slug, confirm: true }` takes the URL down and frees the slug. Ask
+  the user before calling it.
+- **These settings need `org.write`.** A credential holding only publish authority gets an
+  error that names the permission and the fields. Tell the user; do not retry.
+
 ## The `sapiom.json` resource
 
 ```json

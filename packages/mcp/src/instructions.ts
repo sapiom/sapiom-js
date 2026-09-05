@@ -74,6 +74,16 @@ and self-contained; republishing the same slug replaces the app in place at the 
 Org-scoped by default; \`public\` needs an explicit confirmation and a daily spend cap because
 your org pays for every wake. See https://docs.sapiom.ai/capabilities/app-links.
 
+Once published, manage the link from this project: \`sapiom_dev_app_list\`,
+\`sapiom_dev_app_settings\` (webhooksEnabled, visibility, dailySpendCapUsd, wakeRateLimitPerHour)
+and \`sapiom_dev_app_delete\` — \`@sapiom/mcp\` >= 0.15; on an older client use
+\`PATCH\` / \`DELETE /v1/app-links/{id}\` with an \`org.write\` key. Webhooks are OFF by default on
+a link: set \`webhooksEnabled: true\`, then point the third party at
+\`https://apps.sapiom.ai/{org}/{slug}/hook/<path>\` — the \`/hook\` prefix is stripped and the body
+is forwarded byte-exact, so Slack/Stripe/GitHub signature checks run inside the app. These
+settings need \`org.write\`; a credential without it gets the permission named in the tool's
+error — tell the user, do not retry.
+
 ## Canonical rules (types are the source of truth — run \`npm run typecheck\`)
 - Import \`defineAgent\`, \`defineStep\`, and the directives
   (\`goto\` / \`terminate\` / \`fail\` / \`retry\` / \`pauseUntilSignal\`) from \`@sapiom/agent\`.
