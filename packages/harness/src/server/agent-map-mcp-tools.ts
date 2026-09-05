@@ -12,8 +12,10 @@ import {
 import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
 import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
 import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
+import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
 import { BuildPlanService, BuildPlanServiceError } from "../core/build-plan-service.js";
 import {
+  agentBriefRefreshRequestSchema,
   buildPlanApplyRequestSchema,
   buildPlanReadToolInputSchema,
   buildPlanRebaseRequestSchema,
@@ -56,7 +58,8 @@ const batchSchema = z
 
 export interface AgentMapToolEvent {
   tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose" |
-    "build_plan_read" | "build_plan_validate" | "build_plan_apply" | "build_plan_rebase";
+    "build_plan_read" | "build_plan_validate" | "build_plan_apply" | "build_plan_rebase" |
+    "build_plan_brief_refresh";
   outcome: "ok" | "error";
   errorCode?: string;
   latencyMs: number;
@@ -100,6 +103,12 @@ function errorResult(error: unknown) {
                           || error.code === "malformed_input" || error.code === "request_too_large"
                         ? "correct" : error.code === "quota_exceeded"
                           ? "manual_intervention" : "retry" }
+              : error instanceof AgentBriefServiceError
+                ? { code: error.code,
+                    recovery: error.code === "request_id_reused" || error.code === "request_id_expired"
+                      ? "new_request" : error.code === "source_mismatch" ? "reread"
+                        : error.code === "malformed_input" ? "correct"
+                          : error.code === "quota_exceeded" ? "manual_intervention" : "retry" }
               : error instanceof AgentMapWorkspaceStoreError || error instanceof AgentMapAggregateError
                 ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "manual_intervention" }
               : { code: "internal_error", recovery: "retry" };
@@ -117,11 +126,20 @@ function toolResult(value: object, message: string) {
   };
 }
 
+function briefRefreshFailure(error: unknown) {
+  const details = errorResult(error).structuredContent;
+  return {
+    outcome: details.recovery === "retry" ? "retryable" : details.recovery,
+    errorCode: details.code,
+  };
+}
+
 /** Registers the identical project-wide surface for every trusted session. */
 export function createAgentMapToolServer(
   identity: ProjectAgentSession,
   service: AgentMapProposalService,
   buildPlanService: BuildPlanService,
+  agentBriefService: AgentBriefService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
   const server = new McpServer({
@@ -259,7 +277,12 @@ export function createAgentMapToolServer(
     },
     async (request) => instrument("build_plan_apply", async () => {
       const result = await buildPlanService.apply(identity, request);
-      return toolResult(result, result.created ? "Build plan version created." : "Build plan is unchanged.");
+      const briefRefresh = await agentBriefService.refreshAfterPlanMutation(identity, {
+        expectedMap: request.expectedMap,
+        expectedPlan: { planId: result.plan.planId, versionId: result.plan.versionId,
+          semanticDigest: result.plan.semanticDigest },
+      }).catch(briefRefreshFailure);
+      return toolResult({ ...result, briefRefresh }, result.created ? "Build plan version created." : "Build plan is unchanged.");
     }),
   );
 
@@ -272,7 +295,25 @@ export function createAgentMapToolServer(
     },
     async (request) => instrument("build_plan_rebase", async () => {
       const result = await buildPlanService.rebase(identity, request);
-      return toolResult(result, result.created ? "Build plan rebased." : "Build plan rebase is unchanged.");
+      const briefRefresh = await agentBriefService.refreshAfterPlanMutation(identity, {
+        expectedMap: request.toMap,
+        expectedPlan: { planId: result.plan.planId, versionId: result.plan.versionId,
+          semanticDigest: result.plan.semanticDigest },
+      }).catch(briefRefreshFailure);
+      return toolResult({ ...result, briefRefresh }, result.created ? "Build plan rebased." : "Build plan rebase is unchanged.");
+    }),
+  );
+
+  server.registerTool(
+    "build_plan_brief_refresh",
+    {
+      description: "Compile or refresh exact-source canonical or focused briefs without changing plan-authoring results.",
+      inputSchema: agentBriefRefreshRequestSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (request) => instrument("build_plan_brief_refresh", async () => {
+      const result = await agentBriefService.refresh(identity, request);
+      return toolResult(result, result.persisted ? "Focused brief history refreshed." : "Focused briefs are unchanged.");
     }),
   );
 

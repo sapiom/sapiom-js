@@ -203,3 +203,39 @@ export {
   computeBuildPlanRequestDigest,
   computeBuildPlanSemanticDigest,
 } from "./core/build-plan-canonicalization.js";
+
+export {
+  AGENT_BRIEF_COMPILER_DIAGNOSTIC_LIMIT,
+  DeterministicAgentBriefCompiler,
+  compileAgentBriefs,
+  compileCanonicalWorkstreamBriefs,
+  projectFocusedBriefs,
+} from "./core/agent-brief-compiler.js";
+export {
+  AGENT_BRIEF_IMPACT_ENTRY_LIMIT,
+  AGENT_BRIEF_IMPACT_EVIDENCE_LIMIT,
+  evaluateAgentBriefImpact,
+} from "./core/build-plan-impact-evaluator.js";
+export {
+  AgentBriefService,
+  AgentBriefServiceError,
+} from "./core/agent-brief-service.js";
+export type {
+  AgentBriefServiceErrorCode,
+  AgentBriefServiceOptions,
+} from "./core/agent-brief-service.js";
+export {
+  FOCUSED_SESSION_CONTEXT_MAX_BYTES,
+  FOCUSED_SESSION_CONTEXT_MAX_LIST_LENGTH,
+  FOCUSED_SESSION_CONTEXT_MAX_STRING_LENGTH,
+  serializeFocusedSessionContext,
+} from "./core/focused-session-context.js";
+export type {
+  FocusedSessionContextProjection,
+  FocusedSessionContextResult,
+} from "./core/focused-session-context.js";
+
+export {
+  PROJECT_AGENT_PROMPT_APPENDIX,
+  projectAgentPromptAppendix,
+} from "./profiles/project-agent.js";
