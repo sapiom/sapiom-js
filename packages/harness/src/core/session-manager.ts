@@ -23,8 +23,9 @@ import {
 } from "../shared/types.js";
 import type {
   PlannerSessionMetadata,
-  PlanningSessionIdentity,
+  ProjectAgentSession,
 } from "../shared/agent-map.js";
+import { migratePersistedProjectIdentity } from "./project-session-legacy-migration.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -65,6 +66,23 @@ export class SessionInputGuardRejectedError extends Error {
     this.name = "SessionInputGuardRejectedError";
   }
 }
+
+export class ProjectSessionScopeUnavailableError extends Error {
+  readonly code = "PROJECT_SESSION_SCOPE_UNAVAILABLE";
+
+  constructor(readonly sessionId: string) {
+    super("the session's Studio project scope could not be revalidated");
+    this.name = "ProjectSessionScopeUnavailableError";
+  }
+}
+
+function sameProjectAgent(left: ProjectAgentSession, right: ProjectAgentSession): boolean {
+  return left.projectId === right.projectId && left.userId === right.userId && left.sessionId === right.sessionId;
+}
+
+const neutralPrincipal = (identity: ProjectAgentSession): ProjectAgentSession => ({
+  projectId: identity.projectId, userId: identity.userId, sessionId: identity.sessionId,
+});
 
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
 // an unsupported platform surfaces as a spawn-time error instead of crashing
@@ -309,7 +327,7 @@ export type LaunchOptsBuilder = (
     promptAppendix?: string;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
-    agentMapIdentity?: PlanningSessionIdentity;
+    agentMapIdentity?: ProjectAgentSession;
     /** Server-composed secret launch metadata, never accepted from REST. */
     agentMapMcp?: { url: string; bearerToken: string };
     resume?: boolean;
@@ -335,8 +353,12 @@ export interface SessionManagerOptions {
   resolveAgentMapIdentity?: (
     sessionId: string,
     cwd: string,
-    persisted?: PlanningSessionIdentity,
-  ) => Promise<PlanningSessionIdentity | undefined>;
+    persisted?: ProjectAgentSession,
+  ) => Promise<ProjectAgentSession | undefined>;
+  onProjectAgentIdentityMigration?: (event: {
+    sessionId: string;
+    outcome: "migrated" | "rejected";
+  }) => void;
   /** Revokes launch capabilities/transports after every exit path. */
   onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
   now?: () => string;
@@ -396,7 +418,7 @@ export interface TrustedSessionCreateOptions {
   /** Server-authored only. Never populated from CreateSessionRequest. */
   planning?: (sessionId: string) => PlannerSessionMetadata;
   /** Future E5 seam for a server-authored planned builder assignment. */
-  agentMapIdentity?: (sessionId: string) => PlanningSessionIdentity;
+  agentMapIdentity?: (sessionId: string) => ProjectAgentSession;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
   /** Server-authored native CLI orientation for a newly created session. */
@@ -506,6 +528,8 @@ export class SessionManager {
   private readonly buildLaunchOpts: LaunchOptsBuilder;
   private readonly resolveAgentMapIdentity:
     | SessionManagerOptions["resolveAgentMapIdentity"];
+  private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
+  private readonly rejectedProjectSessionMetadata = new Set<string>();
   private readonly onAgentMapSessionExit:
     | SessionManagerOptions["onAgentMapSessionExit"];
   private readonly now: () => string;
@@ -556,6 +580,7 @@ export class SessionManager {
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
+    this.onProjectAgentIdentityMigration = options.onProjectAgentIdentityMigration;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
@@ -587,6 +612,37 @@ export class SessionManager {
     }
     let dirty = false;
     for (const session of persisted) {
+      const migration = migratePersistedProjectIdentity(session);
+      if (migration.outcome === "rejected") {
+        this.rejectedProjectSessionMetadata.add(session.id);
+      }
+      if (migration.outcome === "migrated") {
+        if (migration.identity) {
+          session.agentMapIdentity = structuredClone(migration.identity);
+        } else {
+          delete session.agentMapIdentity;
+        }
+        if (migration.bootstrap) {
+          session.projectBootstrap = structuredClone(migration.bootstrap);
+        } else {
+          delete session.projectBootstrap;
+        }
+        // Planner-era metadata is never live authority after normalization.
+        // Its on-disk input queue is migrated by ProjectBootstrapCoordinator.
+        // The retired startup still reads its private lifecycle projection until
+        // bootstrap activation. Its role fields never enter session authority.
+        dirty = true;
+      }
+      if (migration.outcome !== "unchanged") {
+        try {
+          this.onProjectAgentIdentityMigration?.({
+            sessionId: session.id,
+            outcome: migration.outcome,
+          });
+        } catch {
+          // Observability is best effort and cannot affect session recovery.
+        }
+      }
       if (session.status !== "exited") {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;
@@ -641,6 +697,23 @@ export class SessionManager {
     return adapter;
   }
 
+  /** Recheck the immutable project principal immediately before spawning. */
+  private async revalidateAgentMapIdentity(
+    sessionId: string,
+    cwd: string,
+    expected: ProjectAgentSession | undefined,
+  ): Promise<void> {
+    if (!expected || !this.resolveAgentMapIdentity) return;
+    const current = await this.resolveAgentMapIdentity(
+      sessionId,
+      cwd,
+      expected,
+    );
+    if (!current || !sameProjectAgent(current, expected)) {
+      throw new ProjectSessionScopeUnavailableError(sessionId);
+    }
+  }
+
   async create(
     req: CreateSessionRequest,
     trusted: TrustedSessionCreateOptions = {},
@@ -649,9 +722,10 @@ export class SessionManager {
     const adapter = this.getAdapter(req.harness);
     const planning = trusted.planning?.(id);
     const trustedIdentity = trusted.agentMapIdentity?.(id) ?? planning?.identity;
-    const agentMapIdentity = this.resolveAgentMapIdentity
+    const resolvedIdentity = this.resolveAgentMapIdentity
       ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
       : trustedIdentity;
+    const agentMapIdentity = resolvedIdentity ? neutralPrincipal(resolvedIdentity) : undefined;
     const promptAppendix = trusted.promptAppendix?.(id);
     const sessionStartSystemMessage = trusted.sessionStartSystemMessage?.(id);
     const launchContext =
@@ -713,6 +787,7 @@ export class SessionManager {
       // "running" — it must never show a bare empty iframe because nothing's
       // been written to .sapiom/canvas/index.html yet.
       await this.ensureCanvasTemplate(session.cwd);
+      await this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity);
       await this.spawn(session, spec);
     } catch (err) {
       // The first persist may itself be the failure, so reconciliation is
@@ -790,6 +865,7 @@ export class SessionManager {
   ): Promise<HarnessSession> {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
+    if (this.rejectedProjectSessionMetadata.has(id)) throw new ProjectSessionScopeUnavailableError(id);
     if (!session.agentSessionId) {
       throw new SessionNotResumeableError(id);
     }
@@ -816,13 +892,14 @@ export class SessionManager {
       session.planning = structuredClone(trusted.planning);
     }
     const trustedIdentity = trusted.planning?.identity;
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(
-          id,
-          session.cwd,
-          trustedIdentity ?? session.agentMapIdentity,
-        )
-      : trustedIdentity ?? session.agentMapIdentity;
+    const priorIdentity = session.agentMapIdentity ?? trustedIdentity;
+    const resolvedIdentity = this.resolveAgentMapIdentity
+      ? await this.resolveAgentMapIdentity(id, session.cwd, priorIdentity)
+      : priorIdentity;
+    if (priorIdentity && (!resolvedIdentity || !sameProjectAgent(priorIdentity, resolvedIdentity))) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
+    const agentMapIdentity = resolvedIdentity ? neutralPrincipal(resolvedIdentity) : undefined;
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else delete session.agentMapIdentity;
@@ -874,6 +951,7 @@ export class SessionManager {
       // — a session from before the canvas kit existed, or one whose canvas
       // file was somehow deleted, still gets a live pane on resume.
       await this.ensureCanvasTemplate(session.cwd);
+      await this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity);
       await this.spawn(session, spec);
     } catch (err) {
       // Same best-effort reconciliation as create(): the first persist can be
@@ -1572,6 +1650,13 @@ export class SessionManager {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     session.planning = structuredClone(metadata);
+    session.projectBootstrap = {
+      projectId: metadata.identity.projectId,
+      userId: metadata.identity.userId,
+      targetSessionId: metadata.identity.sessionId,
+      bootstrap: metadata.greeting,
+      queuedInputIds: [...metadata.queuedInputIds],
+    };
     await this.persist();
     this.emitStatus(session);
   }

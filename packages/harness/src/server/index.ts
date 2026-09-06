@@ -100,7 +100,9 @@ import {
   sweepGeneratedDirs,
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
-import { AGENT_MAP_PLANNER_SYSTEM_PROMPT } from "../profiles/agent-map-planner.js";
+import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
+import { ProjectSessionScopeUnavailableError } from "../core/session-manager.js";
+import { localProjectPrincipal } from "../core/project-session.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
@@ -573,13 +575,10 @@ function createDefaultBuildLaunchOpts(
     // resolves to the bundled DEFAULT_SYSTEM_PROMPT on any failure rather than
     // throwing; the `.catch` covers an injected loader that does not, because a
     // session must never fail to start over the text of its prompt.
-    const promptPromise =
-      context?.agentMapIdentity?.role === "map-planner"
-        ? Promise.resolve(AGENT_MAP_PLANNER_SYSTEM_PROMPT)
-        : loadSystemPrompt().catch((err: unknown) => {
-            console.error("[harness] system-prompt load failed:", err);
-            return DEFAULT_SYSTEM_PROMPT;
-          });
+    const promptPromise = loadSystemPrompt().catch((err: unknown) => {
+      console.error("[harness] system-prompt load failed:", err);
+      return DEFAULT_SYSTEM_PROMPT;
+    });
     const [settings, mcpConfigFile, prompt, pluginDir] = await Promise.all([
       generateClaudeSettings({
         harnessSessionId,
@@ -602,7 +601,7 @@ function createDefaultBuildLaunchOpts(
       promptPromise,
       generateSkillsPlugin(harnessSessionId, { generatedRoot }),
     ]);
-    const appendices = [viaSystemPrompt ? brief : null, context?.promptAppendix]
+    const appendices = [viaSystemPrompt ? brief : null, context?.agentMapIdentity ? projectAgentPromptAppendix() : null, context?.promptAppendix]
       .filter(
         (value): value is string =>
           typeof value === "string" && value.trim() !== "",
@@ -822,6 +821,121 @@ export const startServer = async (
     console.error("[harness] recent-dirs prune failed:", err);
   }
   let workflowsCache: RegistryWorkflowInfo[] = await workflowRegistry.list();
+  // Assigned after constructing callbacks which need the live manager.
+  // eslint-disable-next-line prefer-const
+  let sessionManager!: SessionManager;
+  const pendingProjectCwds = new Set<string>();
+  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () => [
+    ...(await loadSettings(statePaths.settings)).recentDirs,
+    ...(sessionManager ? sessionManager.list().map((session) => session.cwd) : []),
+  ]);
+  const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
+    async () => {
+      const settings = await loadSettings(statePaths.settings);
+      const durableProjects = await studioProjectCatalog.list();
+      const durableIdentities = (
+        await Promise.all(
+          durableProjects.map((project) =>
+            studioProjectCatalog.resolveIdentity(project.projectId),
+          ),
+        )
+      ).filter((project) => project !== null);
+      const durableRoots = durableIdentities.flatMap((project) =>
+        project.rootBindings.map((binding) => binding.localRootRef),
+      );
+      const durableRootCandidates = durableIdentities.flatMap((project) =>
+        project.rootBindings
+          .filter((binding) => binding.status === "active")
+          .map((binding) => ({
+            projectId: project.projectId,
+            cwd: binding.localRootRef,
+          })),
+      );
+      const retainedProjectSessionRoots = new Set<string>();
+      // Pending launches contribute their trusted PROJECT root just like live
+      // sessions, not a descendant cwd that would mint a competing project.
+      const pendingCwds = [...pendingProjectCwds];
+      const sessions = sessionManager
+        ? sessionManager.list().flatMap((session) => {
+            if (!session.agentMapIdentity) {
+              return [
+                {
+                  cwd: session.cwd,
+                  createdAt: session.lastActiveAt,
+                  status: session.status,
+                },
+              ];
+            }
+            const root = projectSessionRoot(
+              {
+                cwd: session.cwd,
+                projectId: session.agentMapIdentity.projectId,
+              },
+              durableRootCandidates,
+            );
+            // A neutral project session contributes its trusted project root,
+            // never its descendant cwd. If its binding is stale, omit it from
+            // discovery rather than minting a replacement authority from the
+            // untrusted path.
+            if (root) {
+              retainedProjectSessionRoots.add(root);
+              return [
+                {
+                  cwd: root,
+                  createdAt: session.lastActiveAt,
+                  status: session.status,
+                },
+              ];
+            }
+            return [];
+          })
+        : [];
+      const candidates = [
+        ...pendingCwds,
+        ...settings.recentDirs,
+        ...sessions.map((session) => session.cwd),
+      ];
+      // Root identity must be final before launch, even when the asynchronous
+      // workflow scan has not populated its cache yet. Probe only the candidate
+      // roots themselves; deeper discovery remains the registry's job.
+      const directlyMarked = (
+        await Promise.all(
+          candidates.map(async (candidate) => ({
+            candidate,
+            marker: await inspectAgentProjectMarker(candidate),
+          })),
+        )
+      )
+        .filter(({ marker }) => marker.status === "valid")
+        .map(({ candidate }) => candidate);
+      const visibleRoots = projectRoots({
+        recentDirs: settings.recentDirs,
+        sessions,
+        pendingCwds,
+        pinnedRoots: durableRoots,
+        agentPaths: [
+          ...workflowsCache.map((workflow) => workflow.path),
+          ...directlyMarked,
+        ],
+        sort: "recent",
+      });
+      // MRU/rail visibility is not an authority revocation mechanism. An
+      // existing project session must remain resumable after its recent-dir
+      // entry is evicted, including an otherwise empty project whose session
+      // cwd is below the durable root. The browser may still hide an explicitly
+      // removed project through its local closed-project projection.
+      return [
+        ...visibleRoots,
+        ...[...retainedProjectSessionRoots].filter(
+          (root) =>
+            !visibleRoots.some((visible) =>
+              samePath(canonicalGraphPath(visible), canonicalGraphPath(root)),
+            ),
+        ),
+      ];
+    },
+  );
+
   const initialInventorySnapshot =
     await workflowRegistry.inventorySnapshot(launchDir);
   type AcceptedCanonicalWorkflowRoot = {
@@ -1163,7 +1277,7 @@ export const startServer = async (
     }
   };
 
-  const sessionManager = new SessionManager({
+  sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
     ingestCredentials,
@@ -1171,30 +1285,34 @@ export const startServer = async (
     sessionsPath: options.sessionsPath ?? statePaths.sessions,
     buildLaunchOpts,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
-      // Planner ownership already uses a stable machine-local principal when
-      // Studio runs with --no-auth. Capability issuance must use that same
-      // identity; requiring an authenticated user here silently removed the
-      // Agent Map server from every signed-out planner's MCP config.
-      const userId = localPlanningPrincipal(planningUserId, machineId);
-      const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-      if (!project) return undefined;
-      if (
-        persisted?.sessionId === sessionId &&
-        persisted.projectId === project.projectId &&
-        persisted.userId === userId &&
-        (persisted.role === "map-planner" ||
-          (persisted.role === "agent-builder" &&
-            persisted.assignment.kind === "planned"))
-      ) {
-        return structuredClone(persisted);
-      }
-      return {
-        projectId: project.projectId,
-        sessionId,
-        userId,
-        role: "agent-builder",
-        assignment: { kind: "unplanned" },
+      const userId = localProjectPrincipal(planningUserId, machineId);
+      const assertPrincipal = (): void => {
+        if (localProjectPrincipal(planningUserId, machineId) !== userId) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
       };
+      if (persisted && (persisted.sessionId !== sessionId || persisted.userId !== userId)) {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      }
+      let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+      assertPrincipal();
+      if (persisted) {
+        if (!project || project.projectId !== persisted.projectId) throw new ProjectSessionScopeUnavailableError(sessionId);
+      } else if (!project) {
+        await studioProjectCatalog.reconcile(await studioWorkspaceScopeCatalog.list());
+        assertPrincipal();
+        project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+        if (!project) {
+          pendingProjectCwds.add(cwd);
+          try {
+            await studioProjectCatalog.reconcile(await studioWorkspaceScopeCatalog.list());
+            assertPrincipal();
+            project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+          } finally { pendingProjectCwds.delete(cwd); }
+        }
+      }
+      assertPrincipal();
+      return project ? { projectId: project.projectId, sessionId, userId } : undefined;
     },
     onAgentMapSessionExit: async (sessionId) => {
       agentMapCapabilities.revokeSession(sessionId);
@@ -1207,118 +1325,6 @@ export const startServer = async (
     ensureCanvasTemplate,
   });
   await sessionManager.init();
-
-  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(async () => [
-    ...(await loadSettings(statePaths.settings)).recentDirs,
-    ...sessionManager.list().map((session) => session.cwd),
-  ]);
-  const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
-    async () => {
-      const settings = await loadSettings(statePaths.settings);
-      const durableProjects = await studioProjectCatalog.list();
-      const durableIdentities = (
-        await Promise.all(
-          durableProjects.map((project) =>
-            studioProjectCatalog.resolveIdentity(project.projectId),
-          ),
-        )
-      ).filter((project) => project !== null);
-      const durableRoots = durableIdentities.flatMap((project) =>
-        project.rootBindings.map((binding) => binding.localRootRef),
-      );
-      const durableRootCandidates = durableIdentities.flatMap((project) =>
-        project.rootBindings
-          .filter((binding) => binding.status === "active")
-          .map((binding) => ({
-            projectId: project.projectId,
-            cwd: binding.localRootRef,
-          })),
-      );
-      const retainedProjectSessionRoots = new Set<string>();
-      // Pending launches contribute their trusted PROJECT root just like live
-      // sessions, not a descendant cwd that would mint a competing project.
-      const pendingCwds: string[] = [];
-      const sessions = sessionManager
-        ? sessionManager.list().flatMap((session) => {
-            if (!session.agentMapIdentity) {
-              return [
-                {
-                  cwd: session.cwd,
-                  createdAt: session.lastActiveAt,
-                  status: session.status,
-                },
-              ];
-            }
-            const root = projectSessionRoot(
-              {
-                cwd: session.cwd,
-                projectId: session.agentMapIdentity.projectId,
-              },
-              durableRootCandidates,
-            );
-            // A neutral project session contributes its trusted project root,
-            // never its descendant cwd. If its binding is stale, omit it from
-            // discovery rather than minting a replacement authority from the
-            // untrusted path.
-            if (root) {
-              retainedProjectSessionRoots.add(root);
-              return [
-                {
-                  cwd: root,
-                  createdAt: session.lastActiveAt,
-                  status: session.status,
-                },
-              ];
-            }
-            return [];
-          })
-        : [];
-      const candidates = [
-        ...pendingCwds,
-        ...settings.recentDirs,
-        ...sessions.map((session) => session.cwd),
-      ];
-      // Root identity must be final before launch, even when the asynchronous
-      // workflow scan has not populated its cache yet. Probe only the candidate
-      // roots themselves; deeper discovery remains the registry's job.
-      const directlyMarked = (
-        await Promise.all(
-          candidates.map(async (candidate) => ({
-            candidate,
-            marker: await inspectAgentProjectMarker(candidate),
-          })),
-        )
-      )
-        .filter(({ marker }) => marker.status === "valid")
-        .map(({ candidate }) => candidate);
-      const visibleRoots = projectRoots({
-        recentDirs: settings.recentDirs,
-        sessions,
-        pendingCwds,
-        pinnedRoots: durableRoots,
-        agentPaths: [
-          ...workflowsCache.map((workflow) => workflow.path),
-          ...directlyMarked,
-        ],
-        sort: "recent",
-      });
-      // MRU/rail visibility is not an authority revocation mechanism. An
-      // existing project session must remain resumable after its recent-dir
-      // entry is evicted, including an otherwise empty project whose session
-      // cwd is below the durable root. The browser may still hide an explicitly
-      // removed project through its local closed-project projection.
-      return [
-        ...visibleRoots,
-        ...[...retainedProjectSessionRoots].filter(
-          (root) =>
-            !visibleRoots.some((visible) =>
-              samePath(canonicalGraphPath(visible), canonicalGraphPath(root)),
-            ),
-        ),
-      ];
-    },
-  );
-
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
@@ -2850,7 +2856,6 @@ export const startServer = async (
       type: "agent_map.capability",
       payload: {
         name: event.name,
-        ...(event.role ? { role: event.role } : {}),
         ...(event.reason ? { reason: event.reason } : {}),
       },
     };
@@ -2881,7 +2886,6 @@ export const startServer = async (
         payload: {
           tool: event.tool,
           outcome: event.outcome,
-          role: event.role,
           latency_ms: Math.max(0, Math.min(60_000, event.latencyMs)),
           ...(event.errorCode ? { error_code: event.errorCode } : {}),
         },

@@ -14,6 +14,7 @@ import { CodexAdapter } from "./adapters/codex.js";
 import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
 import {
   SessionInputGuardRejectedError,
+  ProjectSessionScopeUnavailableError,
   SessionManager,
   sanitizeExitTail,
   type PtySpawnFn,
@@ -105,6 +106,7 @@ describe("SessionManager", () => {
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
       resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
       onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
+      onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -140,6 +142,7 @@ describe("SessionManager", () => {
       buildLaunchOpts: opts.buildLaunchOpts,
       resolveAgentMapIdentity: opts.resolveAgentMapIdentity,
       onAgentMapSessionExit: opts.onAgentMapSessionExit,
+      onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -181,6 +184,330 @@ describe("SessionManager", () => {
     const { manager: reloaded } = makeManager();
     await reloaded.init();
     expect(reloaded.get(session.id)?.status).toBe("exited");
+  });
+
+  it("normalizes legacy planner and manual identities without changing durable session state", async () => {
+    const planner = {
+      id: "planner-session",
+      agentSessionId: "provider-planner",
+      harness: "claude-code",
+      cwd: "/tmp/project/packages/planner",
+      title: "Planner renamed by user",
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-02T00:00:00.000Z",
+      theme: "dark",
+      exitCode: 0,
+      exitTail: null,
+      boundWorkflowPath: "/tmp/project/packages/planner/src/workflow.ts",
+      rehydratedFrom: "planner-ancestor",
+      ready: false,
+      planning: {
+        identity: {
+          projectId: "project-1",
+          userId: "user-1",
+          sessionId: "planner-session",
+          role: "map-planner",
+        },
+        greeting: { status: "generating", attemptId: "attempt-7" },
+        queuedInputIds: ["input-1"],
+      },
+    } as const;
+    const manual = {
+      id: "manual-session",
+      agentSessionId: "provider-manual",
+      harness: "claude-code",
+      cwd: "/tmp/project/packages/manual",
+      title: "Manual coding session",
+      status: "exited",
+      createdAt: "2026-01-03T00:00:00.000Z",
+      lastActiveAt: "2026-01-04T00:00:00.000Z",
+      theme: "light",
+      exitCode: 23,
+      exitTail: "provider-visible transcript failure",
+      boundWorkflowPath: "/tmp/project/packages/manual/src/workflow.ts",
+      rehydratedFrom: "manual-ancestor",
+      ready: false,
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "manual-session",
+        role: "agent-builder",
+        assignment: { kind: "unplanned" },
+        contextThatMustNotBecomeAuthority: "ignored",
+      },
+    } as const;
+    await writeFile(sessionsPath, JSON.stringify([planner, manual]), "utf8");
+    const migrations = vi.fn();
+    const { manager } = makeManager({
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.list()).toHaveLength(2);
+    expect(manager.get(planner.id)).toMatchObject({
+      id: planner.id,
+      agentSessionId: planner.agentSessionId,
+      cwd: planner.cwd,
+      title: planner.title,
+      status: planner.status,
+      createdAt: planner.createdAt,
+      lastActiveAt: planner.lastActiveAt,
+      theme: planner.theme,
+      exitCode: planner.exitCode,
+      exitTail: planner.exitTail,
+      boundWorkflowPath: planner.boundWorkflowPath,
+      rehydratedFrom: planner.rehydratedFrom,
+      ready: planner.ready,
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: planner.id,
+      },
+      projectBootstrap: {
+        projectId: "project-1",
+        userId: "user-1",
+        targetSessionId: planner.id,
+        bootstrap: { status: "generating", attemptId: "attempt-7" },
+        queuedInputIds: ["input-1"],
+      },
+    });
+    expect(manager.get(planner.id)?.agentMapIdentity).not.toHaveProperty("role");
+    expect(manager.get(manual.id)).toMatchObject({
+      id: manual.id,
+      agentSessionId: manual.agentSessionId,
+      cwd: manual.cwd,
+      title: manual.title,
+      status: manual.status,
+      createdAt: manual.createdAt,
+      lastActiveAt: manual.lastActiveAt,
+      theme: manual.theme,
+      exitCode: manual.exitCode,
+      exitTail: manual.exitTail,
+      boundWorkflowPath: manual.boundWorkflowPath,
+      rehydratedFrom: manual.rehydratedFrom,
+      ready: manual.ready,
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: manual.id,
+      },
+    });
+    expect(manager.get(manual.id)?.agentMapIdentity).toEqual({
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId: manual.id,
+    });
+    expect(migrations.mock.calls).toEqual([
+      [{ sessionId: planner.id, outcome: "migrated" }],
+      [{ sessionId: manual.id, outcome: "migrated" }],
+    ]);
+
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map((session) => session.id)).toEqual([
+      planner.id,
+      manual.id,
+    ]);
+    expect(persisted[0]?.agentSessionId).toBe(planner.agentSessionId);
+    expect(persisted[1]?.agentSessionId).toBe(manual.agentSessionId);
+  });
+
+  it("restores a scope-unavailable bootstrap failure and resumes once authority is valid", async () => {
+    const identity = {
+      projectId: "project-1",
+      userId: "user-1",
+      sessionId: "bootstrap-scope-failure",
+    };
+    const session: HarnessSession = {
+      id: identity.sessionId,
+      agentSessionId: "provider-scope-failure",
+      harness: "claude-code",
+      cwd: "/tmp/project",
+      title: "Keep my conversation",
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-02T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+      agentMapIdentity: identity,
+      projectBootstrap: {
+        projectId: identity.projectId,
+        userId: identity.userId,
+        targetSessionId: identity.sessionId,
+        bootstrap: {
+          status: "failed",
+          errorCode: "scope_unavailable",
+          retryable: false,
+        },
+        queuedInputIds: ["retained-input"],
+      },
+    };
+    await writeFile(sessionsPath, JSON.stringify([session]), "utf8");
+    const migrations = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity: async () => identity,
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.get(session.id)?.projectBootstrap).toEqual(session.projectBootstrap);
+    expect(migrations).not.toHaveBeenCalled();
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      agentSessionId: session.agentSessionId,
+      title: session.title,
+      agentMapIdentity: identity,
+      projectBootstrap: session.projectBootstrap,
+      status: "running",
+    });
+    expect(adapter.resume).toHaveBeenCalledTimes(1);
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("preserves malformed or conflicting legacy identity records without deleting or duplicating them", async () => {
+    const malformed = {
+      id: "malformed-session",
+      agentSessionId: "provider-malformed",
+      harness: "claude-code",
+      cwd: "/tmp/project/malformed",
+      title: "Malformed identity",
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "wrong-session",
+      },
+    } as const;
+    const conflicting = {
+      id: "conflicting-session",
+      agentSessionId: "provider-conflicting",
+      harness: "claude-code",
+      cwd: "/tmp/project/conflicting",
+      title: "Conflicting identity",
+      status: "exited",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      lastActiveAt: "2026-01-02T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "conflicting-session",
+      },
+      planning: {
+        identity: {
+          projectId: "project-2",
+          userId: "user-2",
+          sessionId: "conflicting-session",
+          role: "map-planner",
+        },
+        greeting: { status: "pending" },
+        queuedInputIds: [],
+      },
+    } as const;
+    await writeFile(
+      sessionsPath,
+      JSON.stringify([malformed, conflicting]),
+      "utf8",
+    );
+    const migrations = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.list()).toHaveLength(2);
+    expect(manager.get(malformed.id)).toEqual(malformed);
+    expect(manager.get(conflicting.id)).toEqual(conflicting);
+    expect(migrations.mock.calls).toEqual([
+      [{ sessionId: malformed.id, outcome: "rejected" }],
+      [{ sessionId: conflicting.id, outcome: "rejected" }],
+    ]);
+    await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    await expect(manager.resume(conflicting.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(spawns).toEqual([]);
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as unknown[];
+    expect(persisted).toEqual([malformed, conflicting]);
+  });
+
+  it("preserves present-but-malformed legacy planner and bootstrap records", async () => {
+    const base = {
+      agentSessionId: "provider-session",
+      harness: "claude-code",
+      cwd: "/tmp/project",
+      title: "Preserve me",
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    } as const;
+    const malformedPlanning = {
+      ...base,
+      id: "malformed-planning",
+      planning: { greeting: { status: "pending" }, queuedInputIds: [] },
+    };
+    const malformedBootstrap = {
+      ...base,
+      id: "malformed-bootstrap",
+      agentSessionId: "provider-bootstrap",
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "malformed-bootstrap",
+      },
+      projectBootstrap: "not-an-object",
+    };
+    await writeFile(
+      sessionsPath,
+      JSON.stringify([malformedPlanning, malformedBootstrap]),
+      "utf8",
+    );
+    const migrations = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.list()).toHaveLength(2);
+    expect(manager.get(malformedPlanning.id)).toEqual(malformedPlanning);
+    expect(manager.get(malformedBootstrap.id)).toEqual(malformedBootstrap);
+    expect(migrations.mock.calls).toEqual([
+      [{ sessionId: malformedPlanning.id, outcome: "rejected" }],
+      [{ sessionId: malformedBootstrap.id, outcome: "rejected" }],
+    ]);
+    await expect(manager.resume(malformedPlanning.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    await expect(manager.resume(malformedBootstrap.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(spawns).toEqual([]);
+    expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
+      [malformedPlanning, malformedBootstrap],
+    );
   });
 
   it("routes write() and resize() to the underlying pty", async () => {
@@ -1876,8 +2203,6 @@ describe("SessionManager", () => {
       projectId: "project-1",
       userId: "user-1",
       sessionId,
-      role: "agent-builder" as const,
-      assignment: { kind: "unplanned" as const },
     }));
     const { manager, spawns } = makeManager({
       buildLaunchOpts,
@@ -1887,8 +2212,6 @@ describe("SessionManager", () => {
     const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
     expect(session.agentMapIdentity).toMatchObject({
       sessionId: session.id,
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
     });
     expect(buildLaunchOpts).toHaveBeenLastCalledWith(
       session.id,
@@ -1905,6 +2228,56 @@ describe("SessionManager", () => {
       expect.anything(),
       expect.objectContaining({ resume: true, agentMapIdentity: session.agentMapIdentity }),
     );
+  });
+
+  it("revalidates project scope after launch preparation and before spawning a new pty", async () => {
+    const resolveAgentMapIdentity = vi
+      .fn()
+      .mockImplementationOnce(async (sessionId: string) => ({
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      }))
+      .mockResolvedValueOnce(undefined);
+    const onAgentMapSessionExit = vi.fn();
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity,
+      onAgentMapSessionExit,
+    });
+
+    await expect(
+      manager.create({ cwd: "/tmp/proj", harness: "claude-code" }),
+    ).rejects.toBeInstanceOf(ProjectSessionScopeUnavailableError);
+
+    expect(adapter.launch).toHaveBeenCalledOnce();
+    expect(spawns).toHaveLength(0);
+    expect(manager.list()).toHaveLength(1);
+    expect(manager.list()[0]).toMatchObject({
+      status: "exited",
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+      },
+    });
+    expect(onAgentMapSessionExit).toHaveBeenCalledWith(manager.list()[0]!.id);
+  });
+
+  it("rejects a resumed session when its project authority disappears", async () => {
+    let available = true;
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => available
+      ? { projectId: "project-1", userId: "user-1", sessionId }
+      : undefined);
+    const { manager, adapter, spawns } = makeManager({ resolveAgentMapIdentity });
+    const session = await manager.create({ cwd: "/tmp/project", harness: "claude-code" });
+    await manager.setAgentSessionId(session.id, "provider-session");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+    const before = structuredClone(session);
+    available = false;
+    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(ProjectSessionScopeUnavailableError);
+    expect(manager.get(session.id)).toEqual(before);
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(1);
   });
 
   it("registerHistorical() creates an exited placeholder session resumable later", async () => {

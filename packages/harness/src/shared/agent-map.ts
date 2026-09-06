@@ -261,6 +261,10 @@ export interface SessionPrincipal {
   userId: string;
 }
 
+/** Server-derived authority shared by every ordinary project session. */
+export type ProjectAgentSession = Readonly<SessionPrincipal>;
+
+/** Private compatibility contract retained while the old startup is retired. */
 export type PlanningSessionIdentity =
   | (SessionPrincipal & { role: "map-planner" })
   | (SessionPrincipal & {
@@ -435,3 +439,38 @@ export type PlannerLifecycleEvent =
       errorCode: "delivery_uncertain";
       queueDepth: number;
     };
+
+export type ProjectBootstrapErrorCode =
+  | "session_not_ready"
+  | "session_exited"
+  | "injection_failed"
+  | "model_turn_failed"
+  | "delivery_timeout"
+  | "persistence_failed"
+  | "scope_unavailable";
+
+export type ProjectBootstrapState =
+  | { status: "pending" }
+  | { status: "generating"; attemptId: string }
+  | { status: "delivered"; messageId: string }
+  | {
+      status: "failed";
+      retryable: boolean;
+      errorCode: ProjectBootstrapErrorCode;
+    }
+  | {
+      status: "skipped";
+      reason: "user-proceeded" | "map-not-empty";
+    };
+
+/**
+ * Lifecycle context for the one automatic map seed owned by a newly created
+ * project. It is deliberately separate from ProjectAgentSession authority.
+ */
+export interface ProjectBootstrapMetadata {
+  projectId: StudioProjectId;
+  userId: string;
+  targetSessionId: string;
+  bootstrap: ProjectBootstrapState;
+  queuedInputIds: string[];
+}

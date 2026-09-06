@@ -183,13 +183,13 @@ describe("planner session context and identity", () => {
     });
     expect(context).toContain(projectId);
     expect(context).toContain(project.rootBindings[0]!.id);
-    expect(context).toContain('"role":"map-planner"');
+    expect(context).not.toContain('"role"');
     expect(context).toContain('"empty":true');
-    expect(context).toContain("In your first response, briefly explain");
+    expect(context).not.toContain("In your first response, briefly explain");
     expect(context).not.toContain("/Users/private");
     expect(context).not.toContain("private-workspace-key");
     expect(context).not.toContain("localRootRef");
-    expect(context).not.toContain("prompt");
+
     expect(context.length).toBeLessThan(16_384);
   });
 
@@ -279,10 +279,10 @@ describe("PlanningSessionService", () => {
     expect(contexts.every((value) => !value.includes(project.rootBindings[0]!.localRootRef))).toBe(true);
     expect(contexts).toEqual([
       expect.stringContaining(
-        "Let the user's first real message be the first visible conversation turn",
+        "This is bounded, server-derived Studio project context.",
       ),
       expect.stringContaining(
-        "Let the user's first real message be the first visible conversation turn",
+        "This is bounded, server-derived Studio project context.",
       ),
     ]);
     expect(contexts.join("\n")).not.toContain(

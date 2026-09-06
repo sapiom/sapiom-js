@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession, PlanningSessionIdentity } from "../shared/agent-map.js";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalProjectError,
@@ -50,7 +50,6 @@ export interface AgentMapToolEvent {
   tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose";
   outcome: "ok" | "error";
   errorCode?: string;
-  role: PlanningSessionIdentity["role"];
   latencyMs: number;
 }
 
@@ -100,10 +99,16 @@ function toolResult(value: object, message: string) {
 
 /** Registers the identical project-wide surface for every trusted role. */
 export function createAgentMapToolServer(
-  identity: PlanningSessionIdentity,
+  identity: ProjectAgentSession,
   service: AgentMapProposalService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
+  // The deployed proposal codec still requires its historical actor shape.
+  // Keep that storage-only adapter here until the aggregate/writer cutover;
+  // neither the capability nor tool authorization consumes these fields.
+  const legacyStoragePrincipal: PlanningSessionIdentity = {
+    ...identity, role: "agent-builder", assignment: { kind: "unplanned" },
+  };
   const server = new McpServer({ name: "sapiom-studio-agent-map", version: "1" });
   const emit = (event: AgentMapToolEvent): void => {
     try {
@@ -123,7 +128,6 @@ export function createAgentMapToolServer(
       emit({
         tool,
         outcome: "ok",
-        role: identity.role,
         latencyMs: Math.max(0, Date.now() - startedAt),
       });
       return value;
@@ -133,7 +137,6 @@ export function createAgentMapToolServer(
         tool,
         outcome: "error",
         errorCode: String(result.structuredContent.code),
-        role: identity.role,
         latencyMs: Math.max(0, Date.now() - startedAt),
       });
       return result;
@@ -166,7 +169,7 @@ export function createAgentMapToolServer(
     },
     async (request) =>
       instrument("agent_map_validate", async () => {
-        const result = await service.validate(identity, request);
+        const result = await service.validate(legacyStoragePrincipal, request);
         return toolResult(result, `Proposal batch is valid at version ${result.currentVersion}.`);
       }),
   );
@@ -180,7 +183,7 @@ export function createAgentMapToolServer(
     },
     async (request) =>
       instrument("agent_map_propose", async () => {
-        const result = await service.propose(identity, request);
+        const result = await service.propose(legacyStoragePrincipal, request);
         return toolResult(result, `Accepted Agent Map proposal version ${result.version}.`);
       }),
   );
