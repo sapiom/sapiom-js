@@ -31,6 +31,39 @@ afterEach(async () => {
   );
 });
 
+describe("source symlink boundaries", () => {
+  it.each(["node_modules", ".git", "dist", "build", ".sapiom"])(
+    "ignores linked %s directories without degrading owned sources",
+    async (name) => {
+      const dir = await tmpProject({ "index.ts": "export const own = true;" });
+      const outside = await tmpProject({
+        "external.ts": "export const external = true;",
+      });
+      await fs.symlink(outside, path.join(dir, name), "junction");
+      const found = await listSourceFilesWithObservations(dir);
+      expect(found.complete).toBe(true);
+      expect(found.files).toEqual([path.join(dir, "index.ts")]);
+      expect(found.observedPaths).not.toContain(outside);
+    },
+  );
+
+  it("keeps unknown directory and source-file links incomplete without following them", async () => {
+    const dir = await tmpProject({ "index.ts": "export const own = true;" });
+    const outside = await tmpProject({
+      "external.ts": "export const external = true;",
+    });
+    await fs.symlink(outside, path.join(dir, "shared"), "junction");
+    await fs.symlink(
+      path.join(outside, "external.ts"),
+      path.join(dir, "linked.ts"),
+    );
+    const found = await listSourceFilesWithObservations(dir);
+    expect(found.complete).toBe(false);
+    expect(found.files).toEqual([path.join(dir, "index.ts")]);
+    expect(found.observedPaths).not.toContain(outside);
+  });
+});
+
 describe("detectWorkflowLaunches", () => {
   it("keeps the launch-only compatibility result used by the per-agent Canvas", async () => {
     const dir = await tmpProject({

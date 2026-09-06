@@ -12,3 +12,5 @@ components into compact layouts.
 Back up and convert exact, unused historical format-2 containers before map
 discovery, allowing their existing agents to receive an initial map. Preserve
 current format-2 files and historical records containing authored state or history.
+Exclude linked dependency/build/metadata directories from static source inspection
+just like ordinary ignored directories, without following links into external sources.
