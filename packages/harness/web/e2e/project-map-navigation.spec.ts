@@ -195,7 +195,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
   }) => {
     const project = page.getByTestId("workspace-group-acme-app");
     await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
-    await project.getByTestId("project-menu-acme-app").click();
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(project).toHaveCount(0);
