@@ -183,8 +183,16 @@ not introduce a second data model.
 Desktop and CLI startup reset only files with outer `storageSchemaVersion: 1`.
 The reset deletes that project's `workspace.json` under its normal write lock and
 journals completion; agent source, project identity, sessions, and history remain.
-Format 2 is never reset, including incompatible older wrapped-format-2 files.
-Those files retain their separate storage error rather than being treated as missing.
+Format 2 is never reset. A separate compatibility pass recognizes four exact
+historical wrapped-format-2 container shapes, only at their initial revision with
+identical creation/update timestamps, null map/plan pointers, and every proposal,
+receipt, brief, assignment, approval, consent, and history collection empty.
+Under the project lock it durably saves the original bytes to
+`workspace.empty-wrapped-v2.<sha256>.backup.json`, then atomically converts that
+unused container into current format 2. Shared startup and late reads use the same
+conversion, including initialization eligibility reads. A current-format-2 file
+is never rewritten by this pass. Authored or uncertain older wrappers retain
+their storage error and require separate data-preserving compatibility handling.
 
 Once discovery completes, projects with agents and no authored map receive one
 background structured inference pass. Valid unused format-2 containers qualify;

@@ -21,6 +21,7 @@ import {
   initialMapRequest,
 } from "./agent-map-initialization-evidence.js";
 import { DurableFileLock } from "./durable-file-lock.js";
+import { emptyLegacyContainer } from "./test-fixtures/empty-legacy-container.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 const otherId = "project_00000000-0000-4000-8000-000000000002";
@@ -276,11 +277,12 @@ describe("format-1 reset", () => {
 });
 
 describe("initialization eligibility and ownership", () => {
-  it.each([false, true])(
-    "publishes a complete initial map for missing/empty format 2, only once (empty=%s)",
-    async (empty) => {
+  it.each(["missing", "current", "legacy"])(
+    "publishes a complete initial map only once (%s container)",
+    async (kind) => {
       const f = await fixture();
-      if (empty) await f.store.readAggregate(projectId);
+      if (kind === "current") await f.store.readAggregate(projectId);
+      if (kind === "legacy") await f.write(emptyLegacyContainer(projectId));
       const c = f.create();
       await c.schedule(projectId);
       await finished(c);
@@ -339,6 +341,7 @@ describe("initialization eligibility and ownership", () => {
       ],
     });
     const before = await fs.readFile(f.file);
+    await f.store.migrateEmptyLegacyContainers();
     await f.create().schedule(projectId);
     expect(f.infer).not.toHaveBeenCalled();
     expect(await fs.readFile(f.file)).toEqual(before);
@@ -424,62 +427,74 @@ describe("initialization eligibility and ownership", () => {
     for (const release of releases.values()) release();
     await Promise.all(ids.map((id) => finished(c, "completed", id)));
   });
-  it("a map created before dispatch prevents provider execution", async () => {
-    const f = await fixture();
-    const c = f.create({ concurrency: 0 });
-    await c.schedule(projectId);
-    await f.proposals.propose(actor, {
-      schemaVersion: 1,
-      proposalId: null,
-      expectedVersion: 0,
-      requestId: "user",
-      operations: [node],
-    });
-    await c.close();
-    const next = f.create();
-    await next.schedule(projectId);
-    expect(f.infer).not.toHaveBeenCalled();
-  });
-  it("discards inference if an ordinary coding session writes first", async () => {
-    const f = await fixture();
-    let release!: (value: unknown) => void;
-    const infer = vi.fn(
-      () =>
-        new Promise<unknown>((resolve) => {
-          release = resolve;
-        }),
-    );
-    const c = f.create({ infer });
-    await c.schedule(projectId);
-    await vi.waitFor(() => expect(infer).toHaveBeenCalledOnce());
-    await f.proposals.propose(actor, {
-      schemaVersion: 1,
-      proposalId: null,
-      expectedVersion: 0,
-      requestId: "user",
-      operations: [node],
-    });
-    const before = await fs.readFile(f.file);
-    release(output());
-    await vi.waitFor(async () => {
-      const raw = JSON.parse(
-        await fs.readFile(
-          path.join(path.dirname(f.file), "initialization.json"),
-          "utf8",
-        ),
+  it.each([false, true])(
+    "a map created before dispatch prevents provider execution (legacy=%s)",
+    async (legacy) => {
+      const f = await fixture();
+      if (legacy) await f.write(emptyLegacyContainer(projectId));
+      const c = f.create({ concurrency: 0 });
+      await c.schedule(projectId);
+      await f.proposals.propose(actor, {
+        schemaVersion: 1,
+        proposalId: null,
+        expectedVersion: 0,
+        requestId: "user",
+        operations: [node],
+      });
+      await c.close();
+      const next = f.create();
+      await next.schedule(projectId);
+      expect(f.infer).not.toHaveBeenCalled();
+    },
+  );
+  it.each([false, true])(
+    "discards inference if an ordinary coding session writes first (legacy=%s)",
+    async (legacy) => {
+      const f = await fixture();
+      if (legacy) await f.write(emptyLegacyContainer(projectId));
+      let release!: (value: unknown) => void;
+      const infer = vi.fn(
+        () =>
+          new Promise<unknown>((resolve) => {
+            release = resolve;
+          }),
       );
-      expect(raw.status).toBe("skipped");
-    });
-    expect(await fs.readFile(f.file)).toEqual(before);
-  });
-  it("independent hosts cannot own the same running attempt", async () => {
-    const f = await fixture();
-    const a = f.create();
-    const b = f.create({ store: new AgentMapWorkspaceStore(f.root) });
-    await Promise.all([a.schedule(projectId), b.schedule(projectId)]);
-    await finished(a);
-    expect(f.infer).toHaveBeenCalledOnce();
-  });
+      const c = f.create({ infer });
+      await c.schedule(projectId);
+      await vi.waitFor(() => expect(infer).toHaveBeenCalledOnce());
+      await f.proposals.propose(actor, {
+        schemaVersion: 1,
+        proposalId: null,
+        expectedVersion: 0,
+        requestId: "user",
+        operations: [node],
+      });
+      const before = await fs.readFile(f.file);
+      release(output());
+      await vi.waitFor(async () => {
+        const raw = JSON.parse(
+          await fs.readFile(
+            path.join(path.dirname(f.file), "initialization.json"),
+            "utf8",
+          ),
+        );
+        expect(raw.status).toBe("skipped");
+      });
+      expect(await fs.readFile(f.file)).toEqual(before);
+    },
+  );
+  it.each([false, true])(
+    "independent hosts cannot own the same running attempt (legacy=%s)",
+    async (legacy) => {
+      const f = await fixture();
+      if (legacy) await f.write(emptyLegacyContainer(projectId));
+      const a = f.create();
+      const b = f.create({ store: new AgentMapWorkspaceStore(f.root) });
+      await Promise.all([a.schedule(projectId), b.schedule(projectId)]);
+      await finished(a);
+      expect(f.infer).toHaveBeenCalledOnce();
+    },
+  );
   it("interrupted attempts require explicit retry", async () => {
     const f = await fixture();
     await f.create({ concurrency: 0 }).schedule(projectId);

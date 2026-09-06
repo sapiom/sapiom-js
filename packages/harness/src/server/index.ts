@@ -3166,6 +3166,8 @@ export const startServer = async (
   );
   // Shared startup reset precedes every bootstrap/map-state recovery. Late reads apply the same policy.
   await agentMapWorkspaceStore.resetLegacyMaps();
+  // Pristine historical format-2 wrappers require a separate backed-up conversion.
+  await agentMapWorkspaceStore.migrateEmptyLegacyContainers();
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );

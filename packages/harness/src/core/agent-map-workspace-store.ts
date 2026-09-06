@@ -1,5 +1,5 @@
 import { initializationRecordSchema, type AgentMapInitializationTransaction } from "./agent-map-initialization-record.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -41,6 +41,7 @@ import {
 import { deterministicVersionId } from "./agent-map-version.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
+import { convertEmptyLegacyContainer } from "./agent-map-empty-legacy-container.js";
 
 export {
   AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION,
@@ -54,6 +55,7 @@ export interface AgentMapStoreSnapshot {
 
 export type AgentMapWorkspaceStoreEvent =
   | { name: "agent_map.legacy_reset"; projectId: StudioProjectId }
+  | { name: "agent_map.empty_legacy_container_migrated"; projectId: StudioProjectId }
   | { name: "agent_map.workspace_initialized"; projectId: StudioProjectId }
   | { name: "agent_map.workspace_migrated"; projectId: StudioProjectId; fromSchemaVersion: 0 | 1 }
   | {
@@ -262,6 +264,64 @@ export class AgentMapWorkspaceStore {
     }
   }
 
+  /** Separate, narrowly scoped compatibility pass before bootstrap/discovery.
+   * Existing current-format-2 and non-pristine records are never rewritten. */
+  async migrateEmptyLegacyContainers(): Promise<void> {
+    let entries: string[];
+    try { entries = await fs.readdir(path.join(this.agentMapRoot, "projects")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw storageError(); }
+    for (const projectId of entries.filter(isStudioProjectId)) {
+      try {
+        await this.enqueue(projectId, async () => {
+          const release = await new DurableFileLock(this.workspacePath(projectId), { storageError }).acquire();
+          try {
+            const raw = await fs.readFile(this.workspacePath(projectId));
+            let decoded: unknown;
+            try { decoded = JSON.parse(raw.toString("utf8")) as unknown; }
+            catch { return; } // A malformed primary file remains a storage error, never absence.
+            await this.migrateEmptyLegacyContainerLocked(projectId, raw, decoded);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          } finally { await release(); }
+        });
+      } catch {
+        this.emit({ name: "agent_map.workspace_read_failed", projectId, errorCode: "storage_unavailable" });
+      }
+    }
+  }
+
+  /** Under the project lock, preserve exact source bytes durably before conversion.
+   * Linking a synced temporary file publishes the backup without replacing an
+   * existing one. A crash leaves either the old container or the complete new
+   * aggregate; repeated access verifies/reuses the same content-addressed backup. */
+  private async migrateEmptyLegacyContainerLocked(
+    projectId: StudioProjectId,
+    raw: Buffer,
+    decoded: unknown,
+  ): Promise<AgentMapProjectAggregate | null> {
+    const converted = convertEmptyLegacyContainer(decoded, projectId);
+    if (!converted) return null;
+    const aggregate = parseProjectPlanningAggregate(converted, projectId);
+    const file = this.workspacePath(projectId);
+    const digest = createHash("sha256").update(raw).digest("hex");
+    const backup = path.join(path.dirname(file), `workspace.empty-wrapped-v2.${digest}.backup.json`);
+    const temporary = `${backup}.tmp-${randomUUID()}`;
+    try {
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try { await handle.writeFile(raw); await handle.sync(); }
+      finally { await handle.close(); }
+      try { await fs.link(temporary, backup); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      if (!(await fs.readFile(backup)).equals(raw)) throw storageError();
+      const directory = await fs.open(path.dirname(file), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } catch { throw storageError(); }
+    finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+    await this.persist(projectId, aggregate);
+    this.emit({ name: "agent_map.empty_legacy_container_migrated", projectId });
+    return aggregate;
+  }
+
   private initializationTransaction(projectId: StudioProjectId): AgentMapInitializationTransaction {
     const file = path.join(path.dirname(this.workspacePath(projectId)), "initialization.json");
     return {
@@ -302,7 +362,11 @@ export class AgentMapWorkspaceStore {
     await this.resetLegacyLocked(projectId);
     const file = this.workspacePath(projectId);
     let decoded: unknown;
-    try { decoded = JSON.parse(await fs.readFile(file, "utf8")) as unknown; }
+    let raw: Buffer;
+    try {
+      raw = await fs.readFile(file);
+      decoded = JSON.parse(raw.toString("utf8")) as unknown;
+    }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT")
         return { aggregate: this.initial(projectId), needsWrite: true, created: true };
@@ -310,6 +374,9 @@ export class AgentMapWorkspaceStore {
       throw storageError();
     }
     try {
+      // Eligibility reads need this too: conversion must complete before the
+      // coordinator can classify an old empty wrapper as safe to initialize.
+      decoded = await this.migrateEmptyLegacyContainerLocked(projectId, raw, decoded) ?? decoded;
       if (!allowMigration && (typeof decoded !== "object" || decoded === null || !("storageSchemaVersion" in decoded) || decoded.storageSchemaVersion !== 2))
         throw new AgentMapWorkspaceStoreError("unsupported_schema");
       const migrated = migrateProjectPlanningAggregate(decoded, projectId);

@@ -847,6 +847,7 @@ export type AnalyticsEventType =
   | "agent_map.proposal_visible"
   | "agent_map.validation_failed"
   | "agent_map.legacy_reset"
+  | "agent_map.empty_legacy_container_migrated"
   | "agent_map.initialization"
   | "agent_map.workspace_initialized"
   | "agent_map.workspace_migrated"
