@@ -25,7 +25,6 @@ it("publishes exactly one accepted proposal delta after durable commit", async (
     projectId: "project_00000000-0000-4000-8000-000000000001",
     userId: "user-1",
     sessionId: "session-1",
-    role: "map-planner" as const,
   };
   const request = {
     schemaVersion: 1 as const,

@@ -116,13 +116,10 @@ test("a Polsia-style Project opens its complete graph without a session and reus
   await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
   await expect(page.locator(".harness-terminal")).toBeVisible();
   await expect(page.getByTestId("open-agent-empty")).toHaveCount(0);
-  // The way back UP is derived from containment, so it exists on an agent
-  // reached from the map exactly as it does on one reached from the rail.
-  await expect(page.getByTestId("canvas-altitude-up")).toHaveAttribute(
-    "aria-label",
-    "Back to the polsia map",
-  );
-  await page.getByTestId("canvas-altitude-up").click();
+  // Returning to the map uses the project name; there is no second right-pane
+  // navigation route competing with that contract.
+  await expect(page.getByTestId("canvas-altitude-up")).toHaveCount(0);
+  await page.getByTestId("project-select-polsia").click();
   await expect(page.getByTestId("system-graph-canvas")).toBeVisible();
   await expect.poll(() => graphRequestCount(page)).toBe(1);
 });

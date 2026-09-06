@@ -14,7 +14,9 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { FocusedSessionContextProjection } from "../core/focused-session-context.js";
 import { startServer, type HarnessServer } from "./index.js";
+import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import type {
   HarnessAdapter,
@@ -75,7 +77,7 @@ describe("served system prompt reaches the launched session", () => {
       bootToken: "test-token",
       telemetryOptIn: false,
       autoCreateSession: false,
-      adapters: { "claude-code": fakeAdapter("claude-code") },
+      adapters: { "claude-code": fakeAdapter("claude-code"), codex: fakeAdapter("codex") },
       stateRoot: dir,
       loadSystemPrompt,
     });
@@ -90,7 +92,42 @@ describe("served system prompt reaches the launched session", () => {
 
     const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
 
-    expect(await systemPromptFile(session.id)).toBe(SERVED_PROMPT);
+    const prompt = await systemPromptFile(session.id);
+    expect(prompt).toContain(SERVED_PROMPT);
+    expect(prompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
+  });
+
+  it.each<HarnessKind>(["claude-code", "codex"])(
+    "upgrades the known stale served orientation at the %s launch boundary",
+    async (harness) => {
+      const legacy = (await readFile(new URL("../profiles/fixtures/legacy-system-prompt.md", import.meta.url), "utf8")).trim();
+      server = await boot(async () => legacy);
+      const session = await server.sessionManager.create({ cwd, harness });
+      const prompt = await systemPromptFile(session.id);
+      expect(prompt).toContain(DEFAULT_SYSTEM_PROMPT);
+      expect(prompt).toContain(PROJECT_AGENT_PROMPT_APPENDIX);
+      expect(prompt).not.toContain("two Sapiom MCP servers");
+      expect(prompt).not.toContain("then stop");
+      expect(prompt).toContain("ctx.sapiom.llm.run");
+      expect(prompt).toContain("sapiom_dev_agents_*");
+      expect(prompt).toContain("build_plan_rebase");
+    },
+  );
+
+  it("adds an optional focused overlay after the unchanged common project prompt", async () => {
+    server = await boot(async () => SERVED_PROMPT);
+    const focused = (
+      `<focused-project-context trust="untrusted">\n{}\n</focused-project-context>`
+    ) as FocusedSessionContextProjection;
+    const session = await server.sessionManager.create(
+      { cwd, harness: "claude-code" },
+      { focusedContext: () => focused },
+    );
+
+    const prompt = await systemPromptFile(session.id);
+    expect(prompt.match(/<studio-project-agent>/gu)).toHaveLength(1);
+    expect(prompt.indexOf(PROJECT_AGENT_PROMPT_APPENDIX)).toBeLessThan(prompt.indexOf(focused));
+    expect(prompt).toContain(focused);
   });
 
   it("re-reads it on resume, so a redeployed prompt reaches a continued session", async () => {
@@ -106,7 +143,7 @@ describe("served system prompt reaches the launched session", () => {
     served = "# Redeployed prompt";
     await server.sessionManager.resume(session.id);
 
-    expect(await systemPromptFile(session.id)).toBe("# Redeployed prompt");
+    expect(await systemPromptFile(session.id)).toBe(`# Redeployed prompt\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 
   it("falls back to the bundled profile when the load fails", async () => {
@@ -118,6 +155,6 @@ describe("served system prompt reaches the launched session", () => {
 
     const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
 
-    expect(await systemPromptFile(session.id)).toBe(DEFAULT_SYSTEM_PROMPT);
+    expect(await systemPromptFile(session.id)).toBe(`${DEFAULT_SYSTEM_PROMPT}\n\n${PROJECT_AGENT_PROMPT_APPENDIX}\n`);
   });
 });

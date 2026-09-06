@@ -10,6 +10,8 @@ import {
   type StudioProjectSummary,
 } from "../shared/agent-map.js";
 import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
+import { resolveProjectRootForPath } from "../shared/project-roots.js";
+import { pathComparisonKey } from "../shared/paths.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";
 import {
   DurableFileLock,
@@ -199,8 +201,7 @@ function parseProject(value: unknown): StudioProjectIdentity | null {
   const keys = value.legacyWorkspaceKeys as string[];
   if (
     new Set(bindings.map((binding) => binding.id)).size !== bindings.length ||
-    new Set(bindings.map((binding) => binding.localRootRef)).size !==
-      bindings.length ||
+    new Set(bindings.map((binding) => binding.localRootRef)).size !== bindings.length ||
     new Set(keys).size !== keys.length
   ) {
     return null;
@@ -216,7 +217,7 @@ function parseProject(value: unknown): StudioProjectIdentity | null {
   };
 }
 
-function parseCatalog(value: unknown): PersistedStudioProjectCatalog {
+function parseCatalog(value: unknown): PersistedStudioProjectCatalog & { migrated: boolean } {
   if (
     isRecord(value) &&
     Number.isSafeInteger(value.schemaVersion) &&
@@ -260,9 +261,29 @@ function parseCatalog(value: unknown): PersistedStudioProjectCatalog {
   ) {
     throw new StudioProjectCatalogError("malformed_state");
   }
+  // Older catalogs allowed differently cased Windows spellings of one root.
+  // Validate that persisted format first, then collapse aliases within their
+  // existing project. Keep separate project IDs: their map state cannot be
+  // merged implicitly, and ambiguous roots remain unassigned by reconcile.
+  let migrated = false;
+  for (const project of parsed) {
+    const bindings = new Map<string, ProjectRootBinding>();
+    for (const binding of project.rootBindings) {
+      const key = pathComparisonKey(binding.localRootRef);
+      const previous = bindings.get(key);
+      if (previous) {
+        if (binding.status === "active") previous.status = "active";
+        migrated = true;
+      } else {
+        bindings.set(key, binding);
+      }
+    }
+    project.rootBindings = [...bindings.values()];
+  }
   return {
     schemaVersion: STUDIO_PROJECT_CATALOG_SCHEMA_VERSION,
     projects: parsed,
+    migrated,
   };
 }
 
@@ -306,6 +327,25 @@ function storageError(): StudioProjectCatalogError {
 /** Internal deterministic seams used only by file-lock race regressions. */
 export type StudioProjectCatalogLockTestHooks = DurableFileLockTestHooks;
 
+export interface StudioProjectCatalogLifecycleHooks {
+  /**
+   * Runs under the catalog lock before newly allocated project identities are
+   * committed. A durable write-ahead consumer can make the subsequent catalog
+   * commit recoverable without changing the public project schema.
+   */
+  beforeProjectsCreatedCommit?: (
+    projects: readonly StudioProjectSummary[],
+  ) => void | Promise<void>;
+  /**
+   * Runs after both the catalog file and this instance reflect the committed
+   * identities. Delivery may be retried, so consumers must be project-keyed
+   * and idempotent.
+   */
+  afterProjectsCreatedCommit?: (
+    projects: readonly StudioProjectSummary[],
+  ) => void | Promise<void>;
+}
+
 /**
  * Durable, serialized owner of Studio project identity. Catalog reads never
  * run package inventory or source discovery; callers provide the already
@@ -315,11 +355,13 @@ export class StudioProjectCatalog {
   private projects: StudioProjectIdentity[] | null = null;
   private loadPromise: Promise<void> | null = null;
   private mutationQueue: Promise<void> = Promise.resolve();
+  private migrationPending = false;
 
   constructor(
     private readonly catalogPath: string,
     private readonly now: () => Date = () => new Date(),
     private readonly lockTestHooks: StudioProjectCatalogLockTestHooks = {},
+    private readonly lifecycleHooks: StudioProjectCatalogLifecycleHooks = {},
   ) {}
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -330,6 +372,12 @@ export class StudioProjectCatalog {
         // the cross-instance lock so a whole-catalog atomic rewrite includes
         // identities committed by another live host.
         await this.load(true);
+        if (this.migrationPending) {
+          // Read-only callers can use repaired identities immediately. Commit
+          // the repair only under the same cross-host lock as other writes.
+          await this.persist(this.projects!);
+          this.migrationPending = false;
+        }
         return await operation();
       } finally {
         await release();
@@ -366,6 +414,7 @@ export class StudioProjectCatalog {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           this.projects = [];
+          this.migrationPending = false;
           return;
         }
         throw storageError();
@@ -376,7 +425,9 @@ export class StudioProjectCatalog {
       } catch {
         throw new StudioProjectCatalogError("malformed_state");
       }
-      this.projects = parseCatalog(decoded).projects;
+      const parsed = parseCatalog(decoded);
+      this.projects = parsed.projects;
+      this.migrationPending = parsed.migrated;
     })().finally(() => {
       this.loadPromise = null;
     });
@@ -434,30 +485,23 @@ export class StudioProjectCatalog {
     } catch {
       return null;
     }
-    const matches = this.projects!.flatMap((project) =>
-      project.rootBindings
-        .filter(({ status }) => status === "active")
-        .flatMap((binding) => {
-          try {
-            const root = canonicalGraphPath(binding.localRootRef);
-            const relative = path.relative(root, canonical);
-            return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
-              ? [{ project, specificity: root.length }]
-              : [];
-          } catch {
-            return [];
-          }
-        }),
+    const match = resolveProjectRootForPath(
+      canonical,
+      this.projects!.flatMap((project) =>
+        project.rootBindings
+          .filter(({ status }) => status === "active")
+          .flatMap((binding) => {
+            try {
+              const root = canonicalGraphPath(binding.localRootRef);
+              return [{ projectId: project.projectId, cwd: root, project }];
+            } catch {
+              return [];
+            }
+          }),
+      ),
     );
-    if (matches.length === 0) return null;
-    const specificity = Math.max(...matches.map((match) => match.specificity));
-    const winners = new Map(
-      matches
-        .filter((match) => match.specificity === specificity)
-        .map(({ project }) => [project.projectId, project]),
-    );
-    if (winners.size !== 1) return null;
-    const project = [...winners.values()][0]!;
+    if (!match) return null;
+    const project = match.project;
     return {
       projectId: project.projectId,
       identityVersion: project.identityVersion,
@@ -482,9 +526,14 @@ export class StudioProjectCatalog {
         updatedAt: timestamp,
       };
       const next = [...cloneProjects(this.projects!), project];
+      await this.lifecycleHooks.beforeProjectsCreatedCommit?.([
+        publicSummary(project),
+      ]);
       await this.persist(next);
       this.projects = next;
-      return publicSummary(project);
+      const summary = publicSummary(project);
+      await this.lifecycleHooks.afterProjectsCreatedCommit?.([summary]);
+      return summary;
     });
   }
 
@@ -498,7 +547,10 @@ export class StudioProjectCatalog {
     return this.enqueue(async () => {
       await this.load();
       const next = cloneProjects(this.projects!);
-      const dedupedScopes = new Map<string, WorkspaceScopeSummary>();
+      const dedupedScopes = new Map<
+        string,
+        { scope: WorkspaceScopeSummary; canonical: string }
+      >();
       const unassignedScopes: WorkspaceScopeSummary[] = [];
       const canonicalScopes: Array<{
         scope: WorkspaceScopeSummary;
@@ -528,7 +580,7 @@ export class StudioProjectCatalog {
         }
         canonicalScopes.push({ scope, canonical });
         const roots = rootsByLegacyKey.get(scope.workspaceKey) ?? new Set();
-        roots.add(canonical);
+        roots.add(pathComparisonKey(canonical));
         rootsByLegacyKey.set(scope.workspaceKey, roots);
       }
 
@@ -548,11 +600,15 @@ export class StudioProjectCatalog {
           });
           continue;
         }
-        if (!dedupedScopes.has(canonical)) {
+        const comparisonKey = pathComparisonKey(canonical);
+        if (!dedupedScopes.has(comparisonKey)) {
           // Canonical form is private matching evidence only. Preserve the
           // existing lexical cwd in AppState so this additive join cannot
           // perturb legacy rail/session path equality.
-          dedupedScopes.set(canonical, { ...scope });
+          dedupedScopes.set(comparisonKey, {
+            scope: { ...scope },
+            canonical,
+          });
         }
       }
 
@@ -561,7 +617,9 @@ export class StudioProjectCatalog {
       for (const project of next) {
         let projectChanged = false;
         for (const binding of project.rootBindings) {
-          const status = activeRoots.has(binding.localRootRef)
+          const status = activeRoots.has(
+            pathComparisonKey(binding.localRootRef),
+          )
             ? "active"
             : "missing";
           if (binding.status !== status) {
@@ -577,16 +635,20 @@ export class StudioProjectCatalog {
       }
 
       const reconciledScopes: WorkspaceScopeSummary[] = [];
-      for (const [canonical, scope] of dedupedScopes) {
+      const createdProjects: StudioProjectIdentity[] = [];
+      for (const { canonical, scope } of dedupedScopes.values()) {
         const matchingProjects = next.filter(
           (candidate) =>
             candidate.legacyWorkspaceKeys.includes(scope.workspaceKey) ||
             candidate.rootBindings.some(
-              (binding) => binding.localRootRef === canonical,
+              (binding) =>
+                pathComparisonKey(binding.localRootRef) ===
+                pathComparisonKey(canonical),
             ),
         );
         if (matchingProjects.length > 1) {
-          throw new StudioProjectCatalogError("malformed_state");
+          unassignedScopes.push({ workspaceKey: scope.workspaceKey, cwd: scope.cwd });
+          continue;
         }
         let project = matchingProjects[0];
         if (!project) {
@@ -608,6 +670,7 @@ export class StudioProjectCatalog {
             updatedAt: timestamp,
           };
           next.push(project);
+          createdProjects.push(project);
           changed = true;
         } else {
           let projectChanged = false;
@@ -616,7 +679,9 @@ export class StudioProjectCatalog {
             projectChanged = true;
           }
           let binding = project.rootBindings.find(
-            (candidate) => candidate.localRootRef === canonical,
+            (candidate) =>
+              pathComparisonKey(candidate.localRootRef) ===
+              pathComparisonKey(canonical),
           );
           if (!binding) {
             binding = {
@@ -641,8 +706,18 @@ export class StudioProjectCatalog {
       }
 
       if (changed) {
+        if (createdProjects.length > 0) {
+          await this.lifecycleHooks.beforeProjectsCreatedCommit?.(
+            createdProjects.map(publicSummary),
+          );
+        }
         await this.persist(next);
         this.projects = next;
+        if (createdProjects.length > 0) {
+          await this.lifecycleHooks.afterProjectsCreatedCommit?.(
+            createdProjects.map(publicSummary),
+          );
+        }
       }
       return {
         projects: (changed ? next : this.projects!).map(publicSummary),
@@ -705,7 +780,9 @@ export class StudioProjectCatalog {
       if (
         project.rootBindings.some(
           (candidate) =>
-            candidate.id !== binding.id && candidate.localRootRef === canonical,
+            candidate.id !== binding.id &&
+            pathComparisonKey(candidate.localRootRef) ===
+              pathComparisonKey(canonical),
         )
       ) {
         // Reject instead of persisting two private bindings for the same root;
@@ -717,7 +794,9 @@ export class StudioProjectCatalog {
           (candidate) =>
             candidate.projectId !== projectId &&
             (candidate.rootBindings.some(
-              (candidateBinding) => candidateBinding.localRootRef === canonical,
+              (candidateBinding) =>
+                pathComparisonKey(candidateBinding.localRootRef) ===
+                pathComparisonKey(canonical),
             ) ||
               (legacyWorkspaceKey !== undefined &&
                 candidate.legacyWorkspaceKeys.includes(legacyWorkspaceKey))),
@@ -769,7 +848,9 @@ export class StudioProjectCatalog {
           (candidate) =>
             candidate.projectId !== projectId &&
             (candidate.rootBindings.some(
-              (binding) => binding.localRootRef === canonical,
+              (binding) =>
+                pathComparisonKey(binding.localRootRef) ===
+                pathComparisonKey(canonical),
             ) ||
               (options.legacyWorkspaceKey !== undefined &&
                 candidate.legacyWorkspaceKeys.includes(
@@ -780,7 +861,9 @@ export class StudioProjectCatalog {
         throw new StudioProjectCatalogError("malformed_state");
       }
       const existing = project.rootBindings.find(
-        (binding) => binding.localRootRef === canonical,
+        (binding) =>
+          pathComparisonKey(binding.localRootRef) ===
+          pathComparisonKey(canonical),
       );
       if (existing) {
         existing.status = "active";

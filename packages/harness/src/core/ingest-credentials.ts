@@ -1,10 +1,17 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 export interface IngestCredentialProvider {
-  /** Issues a new opaque capability and invalidates any prior one for this id. */
-  issue(sessionId: string): string;
-  authenticate(sessionId: string, token: string): boolean;
+  /** Issues a new opaque capability/runtime epoch and invalidates any prior one. */
+  issue(sessionId: string): IssuedIngestCredential;
+  /** Returns the server-owned runtime epoch for this exact capability. */
+  authenticate(sessionId: string, token: string): string | null;
   revoke(sessionId: string): void;
+}
+
+export interface IssuedIngestCredential {
+  token: string;
+  /** Opaque process-local identity for the PTY generation receiving `token`. */
+  runtimeEpoch: string;
 }
 
 const EMPTY_DIGEST = Buffer.alloc(32);
@@ -20,31 +27,43 @@ function digest(token: string): Buffer {
  * the registry intentionally does not persist.
  */
 export class IngestCredentialRegistry implements IngestCredentialProvider {
-  private readonly digests = new Map<string, Buffer>();
+  private readonly credentials = new Map<
+    string,
+    { digest: Buffer; runtimeEpoch: string }
+  >();
 
   constructor(
     private readonly generateToken: () => string = () =>
       randomBytes(32).toString("base64url"),
+    private readonly generateRuntimeEpoch: () => string = () =>
+      randomBytes(16).toString("base64url"),
   ) {}
 
-  issue(sessionId: string): string {
+  issue(sessionId: string): IssuedIngestCredential {
     if (!sessionId) throw new Error("ingest credential requires a session id");
     const token = this.generateToken();
     if (!token || token.length > 512) {
       throw new Error("invalid generated ingest credential");
     }
-    this.digests.set(sessionId, digest(token));
-    return token;
+    const runtimeEpoch = this.generateRuntimeEpoch();
+    if (!runtimeEpoch || runtimeEpoch.length > 128) {
+      throw new Error("invalid generated ingest runtime epoch");
+    }
+    this.credentials.set(sessionId, { digest: digest(token), runtimeEpoch });
+    return { token, runtimeEpoch };
   }
 
-  authenticate(sessionId: string, token: string): boolean {
-    if (!sessionId || !token || token.length > 512) return false;
-    const expected = this.digests.get(sessionId);
-    const matches = timingSafeEqual(expected ?? EMPTY_DIGEST, digest(token));
-    return expected !== undefined && matches;
+  authenticate(sessionId: string, token: string): string | null {
+    if (!sessionId || !token || token.length > 512) return null;
+    const expected = this.credentials.get(sessionId);
+    const matches = timingSafeEqual(
+      expected?.digest ?? EMPTY_DIGEST,
+      digest(token),
+    );
+    return expected !== undefined && matches ? expected.runtimeEpoch : null;
   }
 
   revoke(sessionId: string): void {
-    this.digests.delete(sessionId);
+    this.credentials.delete(sessionId);
   }
 }

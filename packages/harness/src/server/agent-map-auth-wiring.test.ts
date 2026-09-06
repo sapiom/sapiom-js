@@ -133,20 +133,7 @@ describe("coding-agent authorization boundary", () => {
     });
     expect(mutation.status).toBe(401);
 
-    const forgedPlanner = await fetch(
-      `${baseUrl}/api/projects/forged-project/planner-sessions`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Harness-Token": ingestToken,
-        },
-        body: JSON.stringify({ mode: "fresh" }),
-      },
-    );
-    expect(forgedPlanner.status).toBe(401);
-
-    const forgedGenericRole = await fetch(`${baseUrl}/api/sessions`, {
+    const forgedGenericAuthority = await fetch(`${baseUrl}/api/sessions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -155,17 +142,14 @@ describe("coding-agent authorization boundary", () => {
       body: JSON.stringify({
         cwd: projectRoot,
         harness: "claude-code",
-        planning: {
-          identity: {
-            projectId: "forged-project",
-            sessionId: "forged-session",
-            userId: "forged-user",
-            role: "map-planner",
-          },
+        projectAuthority: {
+          projectId: "forged-project",
+          sessionId: "forged-session",
+          userId: "forged-user",
         },
       }),
     });
-    expect(forgedGenericRole.status).toBe(401);
+    expect(forgedGenericAuthority.status).toBe(401);
 
     const legitimateLaunch = await fetch(
       `${baseUrl}/?uiToken=${encodeURIComponent(server.uiToken)}`,

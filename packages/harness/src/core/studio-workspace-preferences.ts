@@ -17,6 +17,8 @@ interface PrivateAgentBinding extends StudioWorkspaceAgentSummary {
   projectId: StudioProjectId;
   /** Private reconciliation evidence. Never returned by this store. */
   path: string;
+  /** Successful scaffold ownership, independent of physical root containment. */
+  createdBySessionId?: string;
   updatedAt: string;
 }
 
@@ -124,6 +126,9 @@ function parseState(value: unknown): PersistedPreferences {
       !candidate.name ||
       typeof candidate.path !== "string" ||
       !candidate.path ||
+      (candidate.createdBySessionId !== undefined &&
+        (typeof candidate.createdBySessionId !== "string" ||
+          !candidate.createdBySessionId)) ||
       (candidate.definitionId !== null &&
         !Number.isSafeInteger(candidate.definitionId)) ||
       !validTimestamp(candidate.updatedAt)
@@ -207,11 +212,18 @@ export class StudioWorkspacePreferenceStore {
       agentBindings: state.agentBindings.map((binding) => ({ ...binding })),
     };
     let changed = false;
-    const eligible = workflows.filter((workflow) =>
-      roots.some(
-        (root) => workspaceRelativeLocalKey(root, workflow.path) !== null,
-      ),
-    );
+    const eligible = workflows.filter((workflow) => {
+      const created = state.agentBindings.find(
+        (binding) =>
+          binding.path === workflow.path && binding.createdBySessionId,
+      );
+      // Explicit creation ownership wins over a broader physical parent root.
+      return created
+        ? created.projectId === projectId
+        : roots.some(
+            (root) => workspaceRelativeLocalKey(root, workflow.path) !== null,
+          );
+    });
     const agents = eligible.map((workflow) => {
       let binding = next.agentBindings.find(
         (candidate) =>
@@ -257,6 +269,8 @@ export class StudioWorkspacePreferenceStore {
       const retained = next.agentBindings.filter(
         (binding) =>
           binding.projectId !== projectId ||
+          // A scan of the project root cannot disprove a sibling's existence.
+          Boolean(binding.createdBySessionId) ||
           activeAgentIds.has(binding.agentId),
       );
       if (retained.length !== next.agentBindings.length) {
@@ -291,7 +305,17 @@ export class StudioWorkspacePreferenceStore {
         !requested ||
         requested.kind !== "agent" ||
         reconciled.agents.some((agent) => agent.agentId === requested.agentId);
-      const repaired = Boolean(preference && !valid && scanComplete);
+      const createdSelection =
+        requested?.kind === "agent" &&
+        reconciled.state.agentBindings.some(
+          (binding) =>
+            binding.projectId === projectId &&
+            binding.agentId === requested.agentId &&
+            binding.createdBySessionId,
+        );
+      const repaired = Boolean(
+        preference && !valid && scanComplete && !createdSelection,
+      );
       const selection: StudioWorkspaceSelection =
         preference && valid
           ? preference.selection
@@ -310,6 +334,49 @@ export class StudioWorkspacePreferenceStore {
       if (changed) await this.persist(reconciled.state);
       return { projectId, selection, agents: reconciled.agents, repaired };
     });
+  }
+
+  /** Server-only: called after authenticated, successful scaffold evidence. */
+  async registerCreatedAgent(
+    projectId: StudioProjectId,
+    sessionId: string,
+    workflow: SelectableWorkflow,
+  ): Promise<boolean> {
+    return this.enqueue(async () => {
+      const state = await this.load();
+      const existing = state.agentBindings.filter(
+        (binding) => binding.path === workflow.path,
+      );
+      if (existing.some((binding) => binding.projectId !== projectId))
+        return false;
+      if (existing.some((binding) => binding.createdBySessionId)) return true;
+      const binding: PrivateAgentBinding = {
+        ...workflow,
+        projectId,
+        agentId: existing[0]?.agentId ?? `agent_${randomUUID()}`,
+        createdBySessionId: sessionId,
+        updatedAt: this.now().toISOString(),
+      };
+      await this.persist({
+        ...state,
+        agentBindings: [
+          ...state.agentBindings.filter(
+            (candidate) => candidate.path !== workflow.path,
+          ),
+          binding,
+        ],
+      });
+      return true;
+    });
+  }
+
+  /** Private exact paths to observe on restart; never added as project roots. */
+  async createdAgents(): Promise<ReadonlyArray<PrivateAgentBinding>> {
+    return this.enqueue(async () =>
+      (await this.load()).agentBindings
+        .filter((binding) => binding.createdBySessionId)
+        .map((binding) => ({ ...binding })),
+    );
   }
 
   async put(
@@ -351,6 +418,14 @@ export class StudioWorkspacePreferenceStore {
             binding.projectId === projectId &&
             binding.agentId === normalized.agentId,
         );
+      const createdAgent =
+        normalized.kind === "agent" &&
+        reconciled.state.agentBindings.some(
+          (binding) =>
+            binding.projectId === projectId &&
+            binding.agentId === normalized.agentId &&
+            binding.createdBySessionId,
+        );
       // A degraded scan cannot disprove a server-issued opaque id. Accept a
       // binding the private store still knows, and leave an unknown request's
       // previous durable preference untouched until a complete scan can judge
@@ -359,9 +434,11 @@ export class StudioWorkspacePreferenceStore {
         sameProject &&
         (normalized.kind === "agent-map" ||
           visibleAgent ||
-          (!scanComplete && privatelyKnownAgent));
+          ((!scanComplete || createdAgent) && privatelyKnownAgent));
       const absenceUnproven =
-        sameProject && normalized.kind === "agent" && !scanComplete;
+        sameProject &&
+        normalized.kind === "agent" &&
+        (!scanComplete || createdAgent);
       const selection: StudioWorkspaceSelection = accepted
         ? normalized
         : absenceUnproven
@@ -445,6 +522,9 @@ export class StudioWorkspacePreferenceStore {
         changed = true;
         return {
           ...binding,
+          // An explicit disk move is a new ownership decision. Reconcile at
+          // the destination; do not replay the old creation path into it.
+          createdBySessionId: undefined,
           path: relative === "" ? target : path.join(target, relative),
           updatedAt: this.now().toISOString(),
         };

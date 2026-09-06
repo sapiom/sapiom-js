@@ -1,3 +1,4 @@
+import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
 
@@ -10,6 +11,9 @@ import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
   state: AgentMapWorkspacePaneState;
+  initialization?: AgentMapInitializationStatus | null;
+  onRetryGeneration?: () => void;
+  unavailable: string | null;
   onRetry: () => void;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -18,6 +22,9 @@ interface AgentMapPaneProps {
 /** The honest E1 map: durable state around the existing neutral canvas empty. */
 export function AgentMapPane({
   state,
+  initialization,
+  onRetryGeneration,
+  unavailable,
   onRetry,
   expanded,
   onToggleExpanded,
@@ -60,7 +67,17 @@ export function AgentMapPane({
   }, [closeInspector, expanded, onToggleExpanded, selected]);
 
   let content: JSX.Element;
-  if (state.status === "error") {
+  if (state.status === "error" && unavailable) {
+    content = (
+      <EmptyState
+        className="canvas-empty"
+        testId="agent-map-project-unavailable"
+        icon="Folder"
+        title="Project unavailable"
+        body="This project was removed or is unavailable to your current account. Select another project to continue."
+      />
+    );
+  } else if (state.status === "error") {
     content = (
       <EmptyState
         className="canvas-empty"
@@ -69,14 +86,16 @@ export function AgentMapPane({
         title="Agent Map couldn't load"
         body={state.message}
         cta={
-          <button
-            type="button"
-            className="btn-secondary"
-            data-testid="agent-map-retry"
-            onClick={onRetry}
-          >
-            Retry map
-          </button>
+          state.canRetry !== false ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              data-testid="agent-map-retry"
+              onClick={onRetry}
+            >
+              Reload map
+            </button>
+          ) : undefined
         }
       />
     );
@@ -96,6 +115,40 @@ export function AgentMapPane({
         selected={selected}
         onSelectNode={setSelected}
         onCloseInspector={closeInspector}
+      />
+    );
+  } else if (
+    !proposal &&
+    (initialization?.status === "queued" ||
+      initialization?.status === "running")
+  ) {
+    content = (
+      <EmptyState
+        className="canvas-empty"
+        testId="agent-map-generating"
+        icon="Workflow"
+        title="Generating Agent Map…"
+      />
+    );
+  } else if (!proposal && initialization?.status === "failed") {
+    content = (
+      <EmptyState
+        className="canvas-empty"
+        testId="agent-map-generation-error"
+        icon="TriangleAlert"
+        title="Agent Map couldn't be generated"
+        cta={
+          initialization.retryable ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              data-testid="agent-map-generation-retry"
+              onClick={onRetryGeneration}
+            >
+              Retry generation
+            </button>
+          ) : undefined
+        }
       />
     );
   } else {

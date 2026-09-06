@@ -1,3 +1,4 @@
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
@@ -24,11 +25,7 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
-import type {
-  PlannerSessionRequest,
-  PlannerSessionResponse,
-  StudioProjectId,
-} from "@shared/agent-map";
+import type { StudioProjectId } from "@shared/agent-map";
 
 import {
   ApiError,
@@ -167,7 +164,13 @@ export interface HarnessStateHook {
   /** Loads past sessions across a set of directories (one global
    *  resume view, not one directory at a time). */
   loadHistory: (cwds: string[]) => Promise<void>;
-  createSession: (req: CreateSessionRequest) => Promise<HarnessSession>;
+  createSession: (
+    req: CreateSessionRequest,
+    /** Runs as soon as the POST identifies the exact session, before selecting
+     * it or refreshing the project catalog. This lets an explicit create own
+     * its pending UI intent without guessing from same-cwd status events. */
+    onCreated?: (session: HarnessSession) => void,
+  ) => Promise<HarnessSession>;
   attachFile: (
     sessionId: string,
     request: AttachFileRequest,
@@ -184,12 +187,6 @@ export interface HarnessStateHook {
   /** A past session's reconstructed transcript (null when nothing was
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
-  /** Opens the trusted map-planner for a project and publishes the returned
-   * session into the same store that backs the normal session strip. */
-  openPlannerSession: (
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ) => Promise<PlannerSessionResponse>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
@@ -360,6 +357,7 @@ export interface HarnessStateHook {
     listener: (sessionId: string) => void,
   ) => () => void;
   /** Targeted Agent Map deltas over the existing event-bus connection. */
+  subscribeAgentMapInitializationChanges: (listener: (status: AgentMapInitializationStatus) => void) => () => void;
   subscribeAgentMapProposalChanges: (
     listener: (
       delta: import("@shared/agent-map").AcceptedProposalDelta,
@@ -528,6 +526,11 @@ export function useHarnessState(): HarnessStateHook {
     },
     [],
   );
+  const initializationListeners = useRef(new Set<(status: AgentMapInitializationStatus) => void>());
+  const subscribeAgentMapInitializationChanges = useCallback((listener: (status: AgentMapInitializationStatus) => void) => {
+    initializationListeners.current.add(listener);
+    return () => { initializationListeners.current.delete(listener); };
+  }, []);
   const agentMapProposalChangeListeners = useRef(
     new Set<
       (delta: import("@shared/agent-map").AcceptedProposalDelta) => void
@@ -711,6 +714,9 @@ export function useHarnessState(): HarnessStateHook {
   const switchSeqRef = useRef(0);
   const selectSession = useCallback((id: string | null): void => {
     switchSeqRef.current += 1;
+    // Persist at explicit selection, not from an effect: initial hydration's
+    // null must never overwrite the conversation being restored.
+    saveUiPrefs({ activeSessionId: id });
     setActiveSessionId(id);
   }, []);
 
@@ -1152,10 +1158,13 @@ export function useHarnessState(): HarnessStateHook {
         setSettings(harnessSettings);
         setErrorKind(null);
         if (appState.tasks) setTasks(appState.tasks);
-        const running = appState.sessions.find(
-          (session) => session.status !== "exited",
-        );
-        if (running) setActiveSessionId(running.id);
+        const savedSessionId = loadUiPrefs().activeSessionId;
+        const selected =
+          appState.sessions.find((session) => session.id === savedSessionId) ??
+          appState.sessions.find((session) => session.status !== "exited");
+        // This is display hydration only. An exited record stays exited and
+        // a stale preference keeps the existing live-session fallback.
+        if (selected) setActiveSessionId(selected.id);
         if (workflows[0]) setSelectedWorkflowPath(workflows[0].path);
       })
       .catch((err: unknown) => {
@@ -1204,193 +1213,162 @@ export function useHarnessState(): HarnessStateHook {
     return [...(workflowProjectionOrder.current() ?? workflowsRef.current)];
   }, [workflowProjectionOrder]);
 
-  /** One session projection for REST mutations and bus updates alike. */
-  const upsertSession = useCallback((next: HarnessSession): void => {
-    setState((prev) => {
-      if (!prev) return prev;
-      const sessions = prev.sessions.some((session) => session.id === next.id)
-        ? prev.sessions.map((session) =>
-            session.id === next.id ? next : session,
-          )
-        : [...prev.sessions, next];
-      return { ...prev, sessions };
-    });
-  }, []);
-
-  const openPlannerSession = useCallback(
-    async (
-      projectId: StudioProjectId,
-      request: PlannerSessionRequest,
-    ): Promise<PlannerSessionResponse> => {
-      const response = await api.openPlannerSession(projectId, request);
-      // A launch can emit session.status before its HTTP response crosses the
-      // wire. Preserve that newer full-session projection when it is already
-      // present; still insert the response if no bus-backed row exists.
-      if (!sessionStatusRevisions.current.has(response.session.id)) {
-        upsertSession(response.session);
-      } else {
-        setState((prev) => {
-          if (!prev) return prev;
-          return prev.sessions.some(
-            (session) => session.id === response.session.id,
-          )
-            ? prev
-            : { ...prev, sessions: [...prev.sessions, response.session] };
-        });
-      }
-      return response;
-    },
-    [upsertSession],
-  );
-
   useEffect(() => {
-    return subscribeEvents((message) => {
-      // SessionRecord invalidations have a targeted listener below. Keeping
-      // them out of the legacy last-message slot avoids repainting the entire
-      // Studio for records no mounted transcript is watching.
-      if (message.type !== "session.record.changed") setLastMessage(message);
-      setSystemGraphAnnouncements((current) =>
-        systemGraphAnnouncementsAfterMessage(current, message),
-      );
-      if (message.type === "session.status") {
-        sessionStatusRevisions.current.set(
-          message.session.id,
-          (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
+    return subscribeEvents(
+      (message) => {
+        // SessionRecord invalidations have a targeted listener below. Keeping
+        // them out of the legacy last-message slot avoids repainting the entire
+        // Studio for records no mounted transcript is watching.
+        if (message.type !== "session.record.changed") setLastMessage(message);
+        setSystemGraphAnnouncements((current) =>
+          systemGraphAnnouncementsAfterMessage(current, message),
         );
-        setState((prev) => {
-          if (!prev) return prev;
-          const exists = prev.sessions.some(
-            (session) => session.id === message.session.id,
+        if (message.type === "session.status") {
+          sessionStatusRevisions.current.set(
+            message.session.id,
+            (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
           );
-          const sessions = exists
-            ? prev.sessions.map((session) =>
-                session.id === message.session.id ? message.session : session,
-              )
-            : [...prev.sessions, message.session];
-          return { ...prev, sessions };
-        });
-        // An exited session can never produce more output — drop any pending
-        // busy state/timer for it rather than leaving a stale pulse on a tab
-        // that's about to move to the history menu.
-        if (message.session.status === "exited") {
-          const id = message.session.id;
-          const timer = busyTimers.current.get(id);
-          if (timer) {
-            clearTimeout(timer);
-            busyTimers.current.delete(id);
-          }
-          setBusySessionIds((prev) => {
-            if (!prev.has(id)) return prev;
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
+          setState((prev) => {
+            if (!prev) return prev;
+            const exists = prev.sessions.some(
+              (session) => session.id === message.session.id,
+            );
+            const sessions = exists
+              ? prev.sessions.map((session) =>
+                  session.id === message.session.id ? message.session : session,
+                )
+              : [...prev.sessions, message.session];
+            return { ...prev, sessions };
           });
-        }
-      } else if (message.type === "session.record.changed") {
-        sessionRecordChangeListeners.current.forEach((listener) =>
-          listener(message.harnessSessionId),
-        );
-      } else if (message.type === "workflows.changed") {
-        // The workspace watcher saw a sapiom.json appear/change — the one
-        // client signal for an agent built in-app. Emit agent.created for any
-        // path we haven't already baselined (load) or imported (scan/connect).
-        // Capture this at message receipt, not response settlement: boot can
-        // resolve while this list is in flight. Anything announced before boot
-        // established its baseline belongs to that baseline regardless of HTTP
-        // completion order.
-        const baselineOnly = seenAgentPathsRef.current === null;
-        void refreshWorkflows()
-          .then((workflows) => {
-            const seen = seenAgentPathsRef.current;
-            if (baselineOnly || seen === null) {
-              // Lost the race with the initial load — baseline, don't emit.
-              const baseline = (seenAgentPathsRef.current ??= new Set());
-              for (const workflow of workflows) baseline.add(workflow.path);
-              return;
+          // An exited session can never produce more output — drop any pending
+          // busy state/timer for it rather than leaving a stale pulse on a tab
+          // that's about to move to the history menu.
+          if (message.session.status === "exited") {
+            const id = message.session.id;
+            const timer = busyTimers.current.get(id);
+            if (timer) {
+              clearTimeout(timer);
+              busyTimers.current.delete(id);
             }
-            for (const path of newAgentPaths(seen, workflows)) {
-              seen.add(path);
-              trackProduct("agent.created", {
-                workflow_slug: slugFromPath(path),
-                ...agentProvenance(workflows.find((w) => w.path === path)),
-              });
-            }
-          })
-          // A bus refresh is best-effort. Keep the last successful projection
-          // and let the next event/auth/manual refresh retry; never create an
-          // unhandled rejection from the event callback.
-          .catch(() => undefined);
-      } else if (message.type === "system-graph.changed") {
-        // Invalidate even while its workspace destination is closed. The next
-        // open must never resurrect a pre-edit process-lifetime promise.
-        systemGraphLoader.invalidate(message.workspaceKey, message.revision);
-      } else if (message.type === "agent-map.proposal.changed") {
-        agentMapProposalChangeListeners.current.forEach((listener) =>
-          listener(message.delta),
-        );
-      } else if (message.type === "execution.started") {
-        startRunPolling(
-          message.harnessSessionId,
-          message.executionId,
-          message.target,
-        );
-      } else if (message.type === "port.detected") {
-        setPreviewBySession((prev) =>
-          new Map(prev).set(message.harnessSessionId, {
-            port: message.port,
-            url: message.url,
-          }),
-        );
-      } else if (message.type === "task.status") {
-        // Each frame is a full snapshot of one task — upsert by id.
-        setTasks((prev) => {
-          const exists = prev.some((task) => task.id === message.task.id);
-          return exists
-            ? prev.map((task) =>
-                task.id === message.task.id ? message.task : task,
-              )
-            : [...prev, message.task];
-        });
-      } else if (message.type === "session.activity") {
-        const id = message.harnessSessionId;
-        setBusySessionIds((prev) =>
-          prev.has(id) ? prev : new Set(prev).add(id),
-        );
-        const existingTimer = busyTimers.current.get(id);
-        if (existingTimer) clearTimeout(existingTimer);
-        busyTimers.current.set(
-          id,
-          setTimeout(() => {
-            busyTimers.current.delete(id);
             setBusySessionIds((prev) => {
               if (!prev.has(id)) return prev;
               const next = new Set(prev);
               next.delete(id);
               return next;
             });
-          }, BUSY_WINDOW_MS),
-        );
-      } else if (message.type === "auth.changed") {
-        // Real-time auth state update from the server — update AppState in
-        // place so SettingsPopover, WorkflowsRail, and deploy gating all
-        // react without a full reload or polling.
-        setState((prev) =>
-          prev
-            ? {
-                ...prev,
-                authenticated: message.authenticated,
-                organizationName: message.organizationName,
+          }
+        } else if (message.type === "session.record.changed") {
+          sessionRecordChangeListeners.current.forEach((listener) =>
+            listener(message.harnessSessionId),
+          );
+        } else if (message.type === "workflows.changed") {
+          // The workspace watcher saw a sapiom.json appear/change — the one
+          // client signal for an agent built in-app. Emit agent.created for any
+          // path we haven't already baselined (load) or imported (scan/connect).
+          // Capture this at message receipt, not response settlement: boot can
+          // resolve while this list is in flight. Anything announced before boot
+          // established its baseline belongs to that baseline regardless of HTTP
+          // completion order.
+          const baselineOnly = seenAgentPathsRef.current === null;
+          void refreshWorkflows()
+            .then((workflows) => {
+              const seen = seenAgentPathsRef.current;
+              if (baselineOnly || seen === null) {
+                // Lost the race with the initial load — baseline, don't emit.
+                const baseline = (seenAgentPathsRef.current ??= new Set());
+                for (const workflow of workflows) baseline.add(workflow.path);
+                return;
               }
-            : prev,
-        );
-        // Definition build evidence is authenticated enrichment. Re-list on
-        // both sign-in and sign-out so a post-boot login can enable a ready
-        // agent and a logout cannot leave tenant metadata pinned in memory.
-        void refreshWorkflows().catch(() => undefined);
-      }
-    }, () => {
-      eventReconnectListeners.current.forEach((listener) => listener());
-    });
+              for (const path of newAgentPaths(seen, workflows)) {
+                seen.add(path);
+                trackProduct("agent.created", {
+                  workflow_slug: slugFromPath(path),
+                  ...agentProvenance(workflows.find((w) => w.path === path)),
+                });
+              }
+            })
+            // A bus refresh is best-effort. Keep the last successful projection
+            // and let the next event/auth/manual refresh retry; never create an
+            // unhandled rejection from the event callback.
+            .catch(() => undefined);
+        } else if (message.type === "system-graph.changed") {
+          // Invalidate even while its workspace destination is closed. The next
+          // open must never resurrect a pre-edit process-lifetime promise.
+          systemGraphLoader.invalidate(message.workspaceKey, message.revision);
+        } else if (message.type === "agent-map.initialization.changed") {
+          try {
+            const status = parseAgentMapInitializationStatus(message.status);
+            for (const listener of initializationListeners.current) listener(status);
+          } catch { /* malformed announcements cannot alter map state */ }
+        } else if (message.type === "agent-map.proposal.changed") {
+          agentMapProposalChangeListeners.current.forEach((listener) =>
+            listener(message.delta),
+          );
+        } else if (message.type === "execution.started") {
+          startRunPolling(
+            message.harnessSessionId,
+            message.executionId,
+            message.target,
+          );
+        } else if (message.type === "port.detected") {
+          setPreviewBySession((prev) =>
+            new Map(prev).set(message.harnessSessionId, {
+              port: message.port,
+              url: message.url,
+            }),
+          );
+        } else if (message.type === "task.status") {
+          // Each frame is a full snapshot of one task — upsert by id.
+          setTasks((prev) => {
+            const exists = prev.some((task) => task.id === message.task.id);
+            return exists
+              ? prev.map((task) =>
+                  task.id === message.task.id ? message.task : task,
+                )
+              : [...prev, message.task];
+          });
+        } else if (message.type === "session.activity") {
+          const id = message.harnessSessionId;
+          setBusySessionIds((prev) =>
+            prev.has(id) ? prev : new Set(prev).add(id),
+          );
+          const existingTimer = busyTimers.current.get(id);
+          if (existingTimer) clearTimeout(existingTimer);
+          busyTimers.current.set(
+            id,
+            setTimeout(() => {
+              busyTimers.current.delete(id);
+              setBusySessionIds((prev) => {
+                if (!prev.has(id)) return prev;
+                const next = new Set(prev);
+                next.delete(id);
+                return next;
+              });
+            }, BUSY_WINDOW_MS),
+          );
+        } else if (message.type === "auth.changed") {
+          // Real-time auth state update from the server — update AppState in
+          // place so SettingsPopover, WorkflowsRail, and deploy gating all
+          // react without a full reload or polling.
+          setState((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  authenticated: message.authenticated,
+                  organizationName: message.organizationName,
+                }
+              : prev,
+          );
+          // Definition build evidence is authenticated enrichment. Re-list on
+          // both sign-in and sign-out so a post-boot login can enable a ready
+          // agent and a logout cannot leave tenant metadata pinned in memory.
+          void refreshWorkflows().catch(() => undefined);
+        }
+      },
+      () => {
+        eventReconnectListeners.current.forEach((listener) => listener());
+      },
+    );
   }, [refreshWorkflows, startRunPolling]);
 
   /**
@@ -1516,8 +1494,16 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   const createSession = useCallback(
-    async (req: CreateSessionRequest): Promise<HarnessSession> => {
+    async (
+      req: CreateSessionRequest,
+      onCreated?: (session: HarnessSession) => void,
+    ): Promise<HarnessSession> => {
       const session = await api.createSession(req);
+      // The response is the first unambiguous client-side correlation between
+      // this explicit request and its session. Notify its owner before
+      // selection can trigger project-preference restoration; a status frame
+      // at the same cwd may belong to the automatic first project session.
+      onCreated?.(session);
       // The event bus can deliver this session's first `session.status` before
       // the POST response resolves (the server broadcasts starting/running
       // during create) — appending unconditionally then renders a duplicate
@@ -1732,19 +1718,14 @@ export function useHarnessState(): HarnessStateHook {
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
         const closed = state?.sessions.find((session) => session.id === id);
-        const nextPlanner =
-          closed?.planning?.identity.role === "map-planner"
-            ? remaining.find(
-                (session) =>
-                  session.status !== "exited" &&
-                  session.planning?.identity.role === "map-planner" &&
-                  session.planning.identity.projectId ===
-                    closed.planning?.identity.projectId,
-              )
-            : undefined;
+        const projectId = closed?.agentMapIdentity?.projectId;
         const nextRunning =
-          nextPlanner ??
-          remaining.find((session) => session.status !== "exited");
+          remaining.find(
+            (session) =>
+              session.status !== "exited" &&
+              projectId != null &&
+              session.agentMapIdentity?.projectId === projectId,
+          ) ?? remaining.find((session) => session.status !== "exited");
         selectSession(nextRunning ? nextRunning.id : null);
       }
     },
@@ -1978,6 +1959,10 @@ export function useHarnessState(): HarnessStateHook {
       const ending = new Set(plan.endSessionIds);
       if (ending.size > 0) {
         switchSeqRef.current += 1;
+        const savedSessionId = loadUiPrefs().activeSessionId;
+        if (savedSessionId && ending.has(savedSessionId)) {
+          saveUiPrefs({ activeSessionId: null });
+        }
         setActiveSessionId((prev) =>
           prev != null && ending.has(prev) ? null : prev,
         );
@@ -2382,7 +2367,6 @@ export function useHarnessState(): HarnessStateHook {
     getTemplate,
     getWorkflowInputContract,
     sessionRecord,
-    openPlannerSession,
     resumeSession,
     rehydrateSession,
     resumeFromHistory,
@@ -2415,6 +2399,7 @@ export function useHarnessState(): HarnessStateHook {
     lastMessage,
     subscribeSessionRecordChanges,
     subscribeAgentMapProposalChanges,
+    subscribeAgentMapInitializationChanges,
     subscribeEventReconnects,
     systemGraphAnnouncements,
     runsBySession,

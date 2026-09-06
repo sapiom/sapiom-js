@@ -63,13 +63,13 @@ describe("generateClaudeSettings", () => {
     }
   });
 
-  it("shows planner onboarding only for a fresh SessionStart hook", async () => {
+  it("shows a configured startup message only for a fresh SessionStart hook", async () => {
     const message = [
-      "Agent Map planning session",
-      "Use this session to scope what you want to build—not to implement it yet.",
+      "Agent Studio session",
+      "Review the current project context before beginning.",
     ].join("\n");
     const { emitScriptPath } = await generateClaudeSettings({
-      harnessSessionId: "planner-session",
+      harnessSessionId: "project-session",
       generatedRoot: tmpDir,
       sessionStartSystemMessage: message,
     });

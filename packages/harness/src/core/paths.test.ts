@@ -31,9 +31,6 @@ describe("resolveStatePaths", () => {
     expect(paths.settings).toBe(path.join(root, "settings.json"));
     expect(paths.studioProjects).toBe(path.join(root, "studio-projects.json"));
     expect(paths.agentMap).toBe(path.join(root, "agent-map"));
-    expect(paths.plannerSessions).toBe(
-      path.join(root, "agent-map", "planner-sessions"),
-    );
     expect(paths.generated).toBe(path.join(root, "generated"));
     expect(paths.sampleProject).toBe(path.join(root, "sample-project"));
   });
@@ -48,9 +45,6 @@ describe("resolveStatePaths", () => {
     expect(paths.settings).toBe("/scratch/state/settings.json");
     expect(paths.studioProjects).toBe("/scratch/state/studio-projects.json");
     expect(paths.agentMap).toBe("/scratch/state/agent-map");
-    expect(paths.plannerSessions).toBe(
-      "/scratch/state/agent-map/planner-sessions",
-    );
     expect(paths.generated).toBe("/scratch/state/generated");
     expect(paths.sampleProject).toBe("/scratch/state/sample-project");
   });

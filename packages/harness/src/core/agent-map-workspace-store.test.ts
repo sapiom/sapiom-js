@@ -129,11 +129,20 @@ describe("AgentMapWorkspaceStore", () => {
     await expect(
       new AgentMapWorkspaceStore(root).readOrCreate(projectId),
     ).resolves.toEqual(workspace);
-    expect(JSON.parse(await fs.readFile(workspacePath, "utf8"))).toEqual({
-      storageSchemaVersion: 1,
-      workspace,
-      proposal: null,
-      receipts: [],
+    expect(JSON.parse(await fs.readFile(workspacePath, "utf8"))).toMatchObject({
+      storageSchemaVersion: 2,
+      projectId,
+      recordVersion: 1,
+      current: { map: null, buildPlan: null, briefsByScope: {} },
+      mapVersions: [],
+      buildPlanVersions: [],
+      briefVersionsById: {},
+      mapOperationHistory: [],
+      requestReceipts: [],
+      requestTombstones: [],
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+      aggregateDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
     });
   });
 
@@ -174,7 +183,7 @@ describe("AgentMapWorkspaceStore", () => {
           value: undefined,
           next: {
             ...aggregate,
-            workspace: { ...aggregate.workspace, recordVersion: 2 },
+            recordVersion: 2,
           },
         })),
       ).rejects.toMatchObject({ code: "storage_unavailable" });
