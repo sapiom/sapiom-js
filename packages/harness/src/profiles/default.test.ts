@@ -11,7 +11,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "f9128ff6afed47242b7bc7946b2e1dab20627171371191cdd2c45537198ce8ed";
+  "4408de184d313867c61c3a87985e7b27481b1ed7574ff5478248b22899da1113";
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("stays byte-identical to the copy the backend serves (cross-repo pin, SAP-2810)", () => {
@@ -32,7 +32,15 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
 
   it("keeps the Studio orientation the prompt exists to deliver", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Agent Studio");
-    expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom-dev");
+    // The two servers are named by ROLE, never by alias (SAP-3179). Studio registers
+    // them as `sapiom` / `sapiom-dev` (mcp-config.ts); the MCP primer the local server
+    // hands the same session tells a plain Claude Code user to register `sapiom-direct`
+    // / `sapiom`. A Studio session reads both, so an alias in either text is wrong for
+    // the reader of the other. The backend's cross-surface guard holds both texts to
+    // the same two role phrases.
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/the local authoring server/i);
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/the hosted capability server/i);
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_dev_agents_");
     expect(DEFAULT_SYSTEM_PROMPT).toContain(".sapiom/harness-context.json");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Local Run, Prod Run, and Deploy");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_send_feedback");
