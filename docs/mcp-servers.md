@@ -16,9 +16,9 @@ to use when.
 
 ## Remote `sapiom` — the production capability surface
 
-The remote MCP is the product's capability surface. Connect it (it is the
-[claude.ai](https://claude.ai) "Sapiom" connector, also reachable through the
-`use-sapiom` flow) and an agent gets direct tools for the things Sapiom runs:
+The remote MCP is the product's capability surface. Connect it through the
+[claude.ai](https://claude.ai) "Sapiom" connector and an agent gets direct
+tools for the things Sapiom runs:
 sandboxes, web scrape and search, content generation, storage, and the rest.
 Each tool call is a real, metered capability call routed through the gateway and
 paid for via x402.
