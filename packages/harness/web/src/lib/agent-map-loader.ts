@@ -111,10 +111,10 @@ export function createAgentMapLoader(): AgentMapLoader {
       return next;
     });
     requests.set(projectId, { generation, promise });
-    void promise.finally(() => {
-      if (requests.get(projectId)?.promise === promise)
-        requests.delete(projectId);
-    });
+    const cleanup = () => {
+      if (requests.get(projectId)?.promise === promise) requests.delete(projectId);
+    };
+    void promise.then(cleanup, cleanup);
     return promise;
   };
 

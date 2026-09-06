@@ -32,17 +32,46 @@ describe("sessionDisplayName", () => {
   });
 
   it("a sibling with a transcript title never pushes the default to 'folder 2'", () => {
-    const titled = session({ id: "s1", title: "Build the leasing pipeline", createdAt: "2026-07-20T09:00:00.000Z" });
-    const untitled = session({ id: "s2", createdAt: "2026-07-20T10:00:00.000Z" });
+    const titled = session({
+      id: "s1",
+      title: "Build the leasing pipeline",
+      createdAt: "2026-07-20T09:00:00.000Z",
+    });
+    const untitled = session({
+      id: "s2",
+      createdAt: "2026-07-20T10:00:00.000Z",
+    });
     const all = [titled, untitled];
-    expect(sessionDisplayName(titled, all, {})).toBe("Build the leasing pipeline");
+    expect(sessionDisplayName(titled, all, {})).toBe(
+      "Build the leasing pipeline",
+    );
     expect(sessionDisplayName(untitled, all, {})).toBe("acme-app");
   });
 
   it("a user rename beats everything and empties back to the default", () => {
     const s = session({ title: "Build the leasing pipeline" });
-    expect(sessionDisplayName(s, [s], { s1: "Leasing revamp" })).toBe("Leasing revamp");
-    expect(sessionDisplayName(s, [s], { s1: "  " })).toBe("Build the leasing pipeline");
+    expect(sessionDisplayName(s, [s], { s1: "Leasing revamp" })).toBe(
+      "Leasing revamp",
+    );
+    expect(sessionDisplayName(s, [s], { s1: "  " })).toBe(
+      "Build the leasing pipeline",
+    );
+  });
+
+  it("treats Plan Agents as an ordinary initial title that can be renamed", () => {
+    const initial = session({ id: "plan", title: "Plan Agents" });
+    const sibling = session({ id: "build", title: "Implement checkout" });
+    expect(sessionDisplayName(initial, [initial, sibling], {})).toBe(
+      "Plan Agents",
+    );
+    expect(
+      sessionDisplayName(initial, [initial, sibling], {
+        plan: "Architecture notes",
+      }),
+    ).toBe("Architecture notes");
+    expect(sessionDisplayName(sibling, [initial, sibling], {})).toBe(
+      "Implement checkout",
+    );
   });
 
   it("defaults from a Windows cwd's basename too", () => {
@@ -51,8 +80,16 @@ describe("sessionDisplayName", () => {
   });
 
   it("sessions in different folders never collide", () => {
-    const a = session({ id: "s1", cwd: "/Users/demo/acme-app", title: "acme-app" });
-    const b = session({ id: "s2", cwd: "/Users/demo/scratch", title: "scratch" });
+    const a = session({
+      id: "s1",
+      cwd: "/Users/demo/acme-app",
+      title: "acme-app",
+    });
+    const b = session({
+      id: "s2",
+      cwd: "/Users/demo/scratch",
+      title: "scratch",
+    });
     const all = [a, b];
     expect(sessionDisplayName(a, all, {})).toBe("acme-app");
     expect(sessionDisplayName(b, all, {})).toBe("scratch");

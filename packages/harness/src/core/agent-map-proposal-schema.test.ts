@@ -91,7 +91,7 @@ describe("Agent Map proposal caller schema", () => {
 
   it.each([
     ["project authority", { projectId: "project_1" }, "immutable_field"],
-    ["actor authority", { actor: { role: "map-planner" } }, "immutable_field"],
+    ["actor authority", { actor: { authority: "forged" } }, "immutable_field"],
     ["unknown root field", { unexpected: true }, "malformed_input"],
   ])("rejects %s rather than stripping it", (_name, extra, code) => {
     const parsed = parseProposalBatchRequest({ ...allOperations, ...extra });
@@ -248,8 +248,6 @@ describe("Agent Map proposal caller schema", () => {
       actor: {
         userId: "user_1",
         sessionId: "session_1",
-        role: "map-planner",
-        assignment: null,
       },
       acceptedAt: "2026-09-02T00:00:00.000Z",
     } satisfies AcceptedProposalDelta;

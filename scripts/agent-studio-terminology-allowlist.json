@@ -192,8 +192,8 @@
     "id": "server-workflow-change-event",
     "path": "packages/harness/src/server/index.ts",
     "pattern": "^workflows\\.changed$",
-    "occurrences": 1,
-    "reason": "The internal WebSocket event name remains stable for existing clients; accepted agent discovery publishes it from the coordinator."
+    "occurrences": 2,
+    "reason": "The internal WebSocket event name remains stable for existing clients; accepted discovery and created-agent registration publish it."
   },
   {
     "id": "rest-session-binding-route",
@@ -227,8 +227,8 @@
     "id": "agent-map-pane-icon-identifier",
     "path": "packages/harness/web/src/components/AgentMapPane.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 2,
-    "reason": "The design-system Workflow icon identifier remains private in the neutral Agent Map loading and empty states."
+    "occurrences": 3,
+    "reason": "The design-system Workflow icon identifier remains private in the Agent Map loading, generating, and empty states."
   },
   {
     "id": "agent-map-canvas-icon-identifier",
@@ -544,5 +544,69 @@
     "pattern": "^/api/workflows/:id/secrets(?:/(?:import|flush|:key))?$",
     "occurrences": 5,
     "reason": "Studio localhost API routes remain stable for existing clients, and these sit beside the existing /api/workflows/:id/deploy family."
+  },
+  {
+    "id": "legacy-proposal-actor-decoder",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/shared/agent-map-legacy-migration.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 2,
+    "reason": "Read-only E2 proposal-history decoder; live writes use ProjectAgentActorRef and the migration module is reachability-tested."
+  },
+  {
+    "id": "legacy-proposal-actor-decoder-tests",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/shared/agent-map-legacy-migration.test.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 2,
+    "reason": "Exact fixtures prove both retired E2 actor shapes migrate and cannot reach live proposal services."
+  },
+  {
+    "id": "legacy-agent-map-aggregate-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/agent-map-aggregate-migration.test.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 2,
+    "reason": "Migration fixture proves deployed E2 history becomes role-neutral without data loss."
+  },
+  {
+    "id": "legacy-project-bootstrap-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/project-bootstrap.test.ts",
+    "pattern": "map-planner",
+    "occurrences": 1,
+    "reason": "Migration fixture proves a durable pre-upgrade input FIFO is normalized without losing input or replaying bootstrap."
+  },
+  {
+    "id": "legacy-project-bootstrap-store-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/project-bootstrap-store.test.ts",
+    "pattern": "map-planner",
+    "occurrences": 1,
+    "reason": "Migration fixture proves the stored bootstrap queue normalizes its pre-upgrade principal without losing accepted input."
+  },
+  {
+    "id": "legacy-session-migration-fixtures",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/session-manager.test.ts",
+    "pattern": "map-planner|agent-builder",
+    "occurrences": 3,
+    "reason": "Persisted-session fixtures prove valid metadata migrates and malformed or conflicting authority remains safely preserved."
+  },
+  {
+    "id": "legacy-bootstrap-event-decoder",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/project-session-legacy-migration.ts",
+    "pattern": "plannerOrigin",
+    "occurrences": 1,
+    "reason": "Read-only decoder for the infrastructure bootstrap marker written into durable prompt events by released pre-unification builds."
+  },
+  {
+    "id": "legacy-bootstrap-event-folding-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/session-record.test.ts",
+    "pattern": "plannerOrigin",
+    "occurrences": 1,
+    "reason": "Released-event fixture proves the private infrastructure bootstrap prompt never becomes a human transcript turn after upgrade."
   }
 ]
