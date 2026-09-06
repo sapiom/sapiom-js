@@ -124,13 +124,12 @@ const electronBuilder = join(
   ".bin",
   isWindows ? "electron-builder.cmd" : "electron-builder",
 );
-// `--publish never`, explicitly. electron-builder.yml declares a github publish
+// `--publish never`, explicitly. electron-builder.yml declares a publish
 // provider — it has to, or no auto-update metadata is generated at all — and
 // electron-builder's DEFAULT policy publishes when it detects CI plus a tag. That
-// is precisely our release condition, so left alone it would try to create the
-// GitHub release itself, in parallel with the workflow's own release job: two
-// writers on one release, and a build job that would need a write-scoped token it
-// currently does not have.
+// is precisely our release condition, so left alone it would try to upload the
+// artifacts itself (to the generic feed URL, which it cannot write to), in
+// parallel with the workflow's own release job.
 //
 // Generating the metadata and uploading it are separate concerns; we want the
 // first and not the second. It comes BEFORE the passthrough args so a caller who

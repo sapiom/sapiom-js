@@ -246,6 +246,20 @@ Things that will bite you:
   publish provider, no `latest*.yml` is generated and no `resources/app-update.yml` is baked in — the
   app then runs perfectly and never updates. The `update-config` smoke check exists for that, and it
   also cross-checks the *baked* channel against the one the app resolves at runtime.
+- **The provider is `generic`, fed from GitHub Pages — do not switch it back to `github`.** The
+  github provider makes ~3 unauthenticated requests to github.com's *web* frontend per check
+  (`releases.atom`, `/releases/latest`, the manifest), and GitHub throttles those per IP. One office
+  NAT with a few Studios checking at launch was a 429 for everyone behind it, and no client-side
+  coalescing fixes a shared-IP limit. Now the app fetches one `latest*.yml`/`beta*.yml` from
+  `https://sapiom.github.io/sapiom-js/desktop/` (no such limit), and the release job's "Publish
+  update manifests" step writes those files to the `gh-pages` branch with every `url:` rewritten to
+  an absolute `/releases/download/<tag>/…` link — the installers themselves stay on the GitHub
+  Release, and github.com is touched only when there is something to download. The branch is
+  updated incrementally, so a beta release (which publishes only `beta*.yml`) leaves the stable
+  manifests alone. **Pages must be enabled in repo settings** (Source: deploy from branch,
+  `gh-pages`, `/`) — the step pushes regardless, but until then the URL 404s and every install
+  reports "no release has been published on this channel yet". Installs built before this change
+  still read GitHub directly until they update once.
 - **Don't derive the channel in a workflow.** `pack.mjs` imports `resolveUpdateChannel` from the built
   `dist/` and passes the flag itself, so the release workflow, the PR smoke job and a local
   `pnpm dist` cannot disagree.
