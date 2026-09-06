@@ -2758,6 +2758,14 @@ button.rail-footer-card:hover {
   background: var(--text-faint);
 }
 
+/* A project or group header's live mark (SAP-3200): the dot recipe above in
+   its running state, standing at the trailing edge of the row ahead of the
+   actions that fade in on hover, so a hovered row never shifts it. Geometry
+   only; the colour is the running state's and is not restated here. */
+.project-live-dot {
+  margin-right: var(--sp1);
+}
+
 .session-dot[data-status="running"] {
   background: var(--green);
 }

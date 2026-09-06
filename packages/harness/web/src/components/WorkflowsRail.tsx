@@ -37,6 +37,7 @@ import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import {
+  LiveMark,
   ProjectRow,
   ProjectTreeRows,
   AgentMapRow,
@@ -81,6 +82,7 @@ import {
 } from "../lib/project-membership";
 import type { RailAxis, RailSort } from "../lib/project-tree";
 import { samePath } from "../lib/paths";
+import { liveSessionsForProject } from "../lib/session-scope";
 import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
@@ -1342,6 +1344,17 @@ export function WorkflowsRail({
                   }
                   trailing={
                     <>
+                      {/* LIVE, at a glance (SAP-3200, D37): something is
+                          running inside this project. Derived, never a row, and
+                          derived by the SAME function the session tab strip
+                          renders from, so the dot and the tabs cannot disagree
+                          about which project a session is in. */}
+                      <LiveMark
+                        count={
+                          liveSessionsForProject(sessions, project.root).length
+                        }
+                        testId={`project-live-${project.label}`}
+                      />
                       {creating && (
                         <span
                           className="workspace-row-spinner"
@@ -1579,6 +1592,7 @@ export function WorkflowsRail({
                     onToggleCollapsed={toggleCollapsed}
                     focusedAgentPath={focusedAgentPath}
                     onFocusAgent={onFocusAgent}
+                    sessions={sessions}
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>
