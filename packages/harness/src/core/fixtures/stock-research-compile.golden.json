@@ -1,0 +1,44 @@
+{
+  "compilerVersion": "1.0.0",
+  "mapDigest": "sha256:0c6da362a11acdfd6e55f4e1cd65e4147cab87382c854ad360854a972ba30b80",
+  "planDigest": "sha256:ee146c6935d429218d0d9e6f1aa916a86a0db8adaf9aeedad872c070f55bfecf",
+  "impactDigest": "sha256:e9eadf1b17312a735b929dcf7a76b4edf09fe6c9911a23fa11a6d94142b2a5c7",
+  "briefs": [
+    {
+      "scopeKey": "sha256:0341688eefaa4db47f56f70b3ce72f10adc6093e512e6ed3e096f37c262fa350",
+      "briefId": "brief_75116273-9d03-7aa9-8d8a-4f74fa8ca5e8",
+      "versionId": "briefv_3d1cafbb-e583-72aa-87a1-a41e5fe7b8f3",
+      "semanticDigest": "sha256:9a5fe911661ac8d106546642fe8927bc17b9c794a0cd962d63e430d5e6c1ca35",
+      "recordDigest": "sha256:53a7ce16c12c195c6b20a77e32bd3b35a0aa9660fb7b1a73bee397ee1cc7588d",
+      "fingerprints": [
+        { "kind": "owned-nodes", "digest": "sha256:e7f9d299612d7c2f27e08d0a05d55d0088fe13a9bafd7f8b56a83435c5bdd5cf" },
+        { "kind": "relevant-nodes", "digest": "sha256:001d8d1fb652f26f4ce29e4f6d821b0ce31d453c24bcb2138aeac85e5ddae65e" },
+        { "kind": "input-contracts", "digest": "sha256:75236c2ab57b13621d7918a0861efc194a04dfd880a61fa3d78f0e359a7942d8" },
+        { "kind": "output-contracts", "digest": "sha256:9c4be12983b5d6679ca74c1a794bcba8943ca28a4f5d9968d4fb82ac6ee0afa6" },
+        { "kind": "relationships", "digest": "sha256:231f95ca63126234e8ab919937f6fc8a699cdbd50a502af69d267fe34ec7fae1" },
+        { "kind": "resources", "digest": "sha256:ee09f4ffd064a697e8b4960a508d1db3b7b74aceec91f794bf7f21a908622ec6" },
+        { "kind": "milestones", "digest": "sha256:f113ec3402266d50e47977a57c550fd8bfa051a39e188e50396493a719b3b4de" },
+        { "kind": "shared-plan-content", "digest": "sha256:0a68d937dbef5b0d693775b35bceccbaee0060d08ebca709a6b12d91477ff355" },
+        { "kind": "assignment-content", "digest": "sha256:33eb15ba43304ff9c3d6656268928a02e48069608e0e6249452d758e06b187bd" }
+      ]
+    },
+    {
+      "scopeKey": "sha256:390315d5cb184e38a72e2eb38bbc3f5bb1fef1b7956bbd5302cfa116d25213bc",
+      "briefId": "brief_8ebe76d1-b9f3-715d-8038-456735999ac0",
+      "versionId": "briefv_fb154aa1-770c-733f-8db8-8e7ffaee456f",
+      "semanticDigest": "sha256:a480fe9f24776215517fcf7ea1e4a9f0bffa15f99825ca2463e289c4569590b3",
+      "recordDigest": "sha256:6ba76117c794cd97fe8ccbd26ef38c57c285a98dc54393188b5848e0a8c1a91b",
+      "fingerprints": [
+        { "kind": "owned-nodes", "digest": "sha256:6da83e3ebd1f65bbc07ee3208f52f99f56ee8839ae04a1172cc7ca3fb60badfe" },
+        { "kind": "relevant-nodes", "digest": "sha256:cfb1f673bcdaa944876fdf979486044bed1f52851469706986d03b1fb707b41e" },
+        { "kind": "input-contracts", "digest": "sha256:b1da92696122cd3b07e924860b9e707541870e525243e0d8ad5c315eafd5ae0e" },
+        { "kind": "output-contracts", "digest": "sha256:9b59f54b040ad027bfb2742b9253bcaf0d7e5f42b7c26a11179ad5773d83cacb" },
+        { "kind": "relationships", "digest": "sha256:231f95ca63126234e8ab919937f6fc8a699cdbd50a502af69d267fe34ec7fae1" },
+        { "kind": "resources", "digest": "sha256:ee09f4ffd064a697e8b4960a508d1db3b7b74aceec91f794bf7f21a908622ec6" },
+        { "kind": "milestones", "digest": "sha256:f113ec3402266d50e47977a57c550fd8bfa051a39e188e50396493a719b3b4de" },
+        { "kind": "shared-plan-content", "digest": "sha256:0a68d937dbef5b0d693775b35bceccbaee0060d08ebca709a6b12d91477ff355" },
+        { "kind": "assignment-content", "digest": "sha256:2d722dbcd348f4866c6f039222464a36e2307d70af2f344b16b3fb57e091367e" }
+      ]
+    }
+  ]
+}

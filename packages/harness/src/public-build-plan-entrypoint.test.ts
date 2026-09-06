@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUILD_PLAN_SCHEMA_VERSION,
   PROJECT_PLANNING_STORAGE_SCHEMA_VERSION,
+  FOCUSED_SESSION_CONTEXT_MAX_BYTES,
   agentMapVersionRefsEqual,
   computeAgentBriefId,
   computeAgentBriefScopeKey,
@@ -65,6 +66,7 @@ describe("@sapiom/harness neutral planning entrypoint", () => {
 
     expect(BUILD_PLAN_SCHEMA_VERSION).toBe(1);
     expect(PROJECT_PLANNING_STORAGE_SCHEMA_VERSION).toBe(2);
+    expect(FOCUSED_SESSION_CONTEXT_MAX_BYTES).toBe(128_000);
     expect(computeAgentBriefId(projectId, focusScope)).toMatch(/^brief_/u);
     expect(computeAgentBriefScopeKey(projectId, focusScope)).toMatch(/^sha256:/u);
     expect(agentMapVersionRefsEqual(map, { ...map })).toBe(true);

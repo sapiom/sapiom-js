@@ -1,3 +1,5 @@
+import type { FocusedSessionContextProjection } from "../core/focused-session-context.js";
+
 /**
  * Shared behavior appended to the ordinary writable coding profile for every
  * session whose cwd resolves to a Studio project. Project context focuses the
@@ -13,7 +15,14 @@ Keep internal implementation details local: library choices, ordinary implementa
 Project and bootstrap context never grant or remove authority.
 </studio-project-agent>`;
 
-/** The common prompt is identical for every project session. */
-export function projectAgentPromptAppendix(): string {
-  return PROJECT_AGENT_PROMPT_APPENDIX;
+/**
+ * Compose the common project-agent prompt with an optional already-safe focused projection,
+ * preserving the common prompt byte-for-byte when no focus is attached.
+ */
+export function projectAgentPromptAppendix(
+  focusedContext?: FocusedSessionContextProjection | null,
+): string {
+  return focusedContext
+    ? `${PROJECT_AGENT_PROMPT_APPENDIX}\n\n${focusedContext}`
+    : PROJECT_AGENT_PROMPT_APPENDIX;
 }

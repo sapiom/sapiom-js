@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isCallerProjectRequestId } from "./project-request-namespace.js";
 
 export const BUILD_PLAN_MAX_ITEMS = 128;
 export const BUILD_PLAN_MAX_TEXT = 8_192;
@@ -52,7 +53,7 @@ const focusedBriefSelectionSchema = z.object({
 
 export const agentBriefRefreshRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque,
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace"),
   expectedMap: toolMapVersionRefSchema,
   expectedPlan: toolPlanVersionRefSchema,
   focus: z.discriminatedUnion("mode", [
@@ -134,7 +135,7 @@ const replaceContentOperation = z.object({
 
 export const buildPlanApplyRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque,
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace"),
   expectedMap: toolMapVersionRefSchema,
   expectedPlan: toolPlanVersionRefSchema.nullable(),
   operations: z.tuple([replaceContentOperation]),
@@ -149,7 +150,7 @@ const rebaseResolution = z.discriminatedUnion("kind", [
 
 export const buildPlanRebaseRequestSchema = z.object({
   schemaVersion: z.literal(1),
-  requestId: opaque,
+  requestId: opaque.refine(isCallerProjectRequestId, "reserved request namespace"),
   expectedPlan: toolPlanVersionRefSchema,
   fromMap: toolMapVersionRefSchema,
   toMap: toolMapVersionRefSchema,

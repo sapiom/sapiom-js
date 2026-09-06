@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isCallerProjectRequestId } from "./project-request-namespace.js";
 
 import {
   AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
@@ -150,7 +151,7 @@ export const proposalBatchRequestSchema = z
     schemaVersion: z.literal(AGENT_MAP_PROPOSAL_SCHEMA_VERSION),
     proposalId: mapProposalIdSchema.nullable(),
     expectedVersion: z.number().int().nonnegative(),
-    requestId: boundedText(128),
+    requestId: boundedText(128).refine(isCallerProjectRequestId, "reserved request namespace"),
     operations: z.array(mapOperationInputSchema).min(1).max(256),
   })
   .strict();
