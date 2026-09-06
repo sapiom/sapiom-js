@@ -150,6 +150,12 @@ The Sapiom SDK handles all authorization and payment automatically - your code j
 **Connection refused / timeout**
 - Check that `DUMMY_SERVER_URL` is correct and the test server is running
 
+**403 from demo server / "Demo server unreachable"**
+- The examples check `GET /api/public/time` before running (plain `fetch`, no SDK)
+- Verify with: `curl -v https://x402-demo.sapiom.ai/api/public/time`
+- A Cloudflare block page (`server: cloudflare`) is an infrastructure issue — check [open issues](https://github.com/sapiom/sapiom-js/issues)
+- `http://localhost:3101` is not bundled in this repo; use the hosted demo URL unless you run your own server
+
 **AuthorizationDeniedError on first request**
 - Check your Rules in the dashboard - you may have a restrictive policy
 
