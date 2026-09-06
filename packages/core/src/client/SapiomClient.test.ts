@@ -279,6 +279,40 @@ describe("SapiomClient", () => {
       );
     });
 
+    it("should preserve structured HTTP error details", async () => {
+      const errorData = { error: "Payment Required", transactionId: "tx-123" };
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 402,
+        statusText: "Payment Required",
+        headers: new Headers({
+          "content-type": "application/json",
+          "x-sapiom-transaction-id": "tx-123",
+        }),
+        json: jest.fn().mockResolvedValue(errorData),
+        text: jest.fn().mockResolvedValue(JSON.stringify(errorData)),
+      });
+
+      await expect(client.request({ url: "/paid" })).rejects.toMatchObject({
+        name: "HttpRequestError",
+        message: expect.stringMatching(/Request failed with status 402/),
+        status: 402,
+        statusText: "Payment Required",
+        data: errorData,
+        headers: expect.objectContaining({
+          "x-sapiom-transaction-id": "tx-123",
+        }),
+        response: expect.objectContaining({
+          status: 402,
+          statusText: "Payment Required",
+          data: errorData,
+          headers: expect.objectContaining({
+            "x-sapiom-transaction-id": "tx-123",
+          }),
+        }),
+      });
+    });
+
     it("should handle error responses with text content", async () => {
       const errorText = "Internal Server Error";
       mockFetch.mockResolvedValueOnce({
