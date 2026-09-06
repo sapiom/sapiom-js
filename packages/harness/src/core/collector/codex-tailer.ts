@@ -19,6 +19,8 @@ import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { parseCodexRuntimeMarker } from "./codex-runtime-marker.js";
+
 import type { ClaudeHookEvent, RawHookPayload } from "./normalizer.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 300;
@@ -269,6 +271,19 @@ export interface FindRolloutFileOptions {
   agentSessionId?: string;
   /** Overridable for tests. */
   homeDir?: string;
+  /** Exact paths already owned by another live Harness runtime. */
+  excludePaths?: ReadonlySet<string>;
+  /** Exact first-turn marker required for a coordinator-owned fresh runtime. */
+  requiredRuntimeMarker?: string;
+  /** Ordinary runtimes must wait for an unmarked user turn before claiming. */
+  excludeRuntimeMarkers?: boolean;
+}
+
+export interface CodexRolloutCandidate {
+  path: string;
+  agentSessionId: string | null;
+  timestampMs: number | null;
+  mtimeMs: number;
 }
 
 interface RolloutSessionMeta {
@@ -313,6 +328,36 @@ async function readSessionMetaHead(filePath: string, maxBytes = 65_536): Promise
   return null;
 }
 
+async function readUserTurnMarker(filePath: string): Promise<{ available: boolean; marker: string | null }> {
+  let content: string;
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const length = Math.min((await handle.stat()).size, 1_048_576);
+      const buffer = Buffer.allocUnsafe(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, 0);
+      content = buffer.subarray(0, bytesRead).toString("utf8");
+    } finally { await handle.close(); }
+  } catch { return { available: false, marker: null }; }
+  for (const line of content.split("\n")) {
+    let value: RolloutLine;
+    try { value = JSON.parse(line) as RolloutLine; } catch { continue; }
+    const payload = value.payload;
+    if (value.type === "response_item" && payload?.role === "user" && Array.isArray(payload.content)) {
+      for (const part of payload.content) {
+        if (part?.type !== "input_text" || typeof part.text !== "string") continue;
+        const marker = parseCodexRuntimeMarker(part.text);
+        if (marker) return { available: true, marker };
+      }
+    }
+    // A metadata-only file or initial environment-context user message is not
+    // enough: its real first prompt may still carry a delegated runtime marker.
+    if (value.type === "event_msg" && payload?.type === "user_message" && typeof payload.message === "string")
+      return { available: true, marker: parseCodexRuntimeMarker(payload.message) };
+  }
+  return { available: false, marker: null };
+}
+
 async function collectRolloutFiles(dir: string, depth = 0): Promise<string[]> {
   if (depth > MAX_SCAN_DEPTH) return [];
   let entries: import("node:fs").Dirent[];
@@ -342,6 +387,14 @@ async function collectRolloutFiles(dir: string, depth = 0): Promise<string[]> {
  * exact rollout path in advance (it's a timestamp+UUID Codex generates itself).
  */
 export async function findRolloutFile(options: FindRolloutFileOptions): Promise<string | null> {
+  const candidates = await findRolloutCandidates(options);
+  return candidates.at(-1)?.path ?? null;
+}
+
+/** Returns every compatible rollout in deterministic chronological order. */
+export async function findRolloutCandidates(
+  options: FindRolloutFileOptions,
+): Promise<CodexRolloutCandidate[]> {
   const homeDir = options.homeDir ?? homedir();
   const root = join(homeDir, ".codex", "sessions");
   const files = await collectRolloutFiles(root);
@@ -356,21 +409,34 @@ export async function findRolloutFile(options: FindRolloutFileOptions): Promise<
   // exited, or a test double that never touches the real filesystem).
   const resolvedCwd = await realpath(options.cwd).catch(() => options.cwd);
 
-  let best: { path: string; mtimeMs: number } | null = null;
+  const candidates: CodexRolloutCandidate[] = [];
   for (const filePath of files) {
+    if (options.excludePaths?.has(filePath)) continue;
     const meta = await readSessionMetaHead(filePath);
     if (!meta || meta.cwd !== resolvedCwd) continue;
 
     if (options.agentSessionId !== undefined) {
       if (meta.id !== options.agentSessionId) continue;
-      return filePath;
+      const fileStat = await stat(filePath).catch(() => null);
+      if (fileStat)
+        candidates.push({ path: filePath, agentSessionId: meta.id,
+          timestampMs: meta.timestampMs, mtimeMs: fileStat.mtimeMs });
+      continue;
     }
 
     if (options.sinceMs !== undefined && meta.timestampMs !== null && meta.timestampMs < options.sinceMs) continue;
+    if (options.requiredRuntimeMarker !== undefined || options.excludeRuntimeMarkers) {
+      const evidence = await readUserTurnMarker(filePath);
+      if (!evidence.available || (options.requiredRuntimeMarker !== undefined
+        ? evidence.marker !== options.requiredRuntimeMarker
+        : evidence.marker !== null)) continue;
+    }
 
     const fileStat = await stat(filePath).catch(() => null);
     if (!fileStat) continue;
-    if (!best || fileStat.mtimeMs > best.mtimeMs) best = { path: filePath, mtimeMs: fileStat.mtimeMs };
+    candidates.push({ path: filePath, agentSessionId: meta.id,
+      timestampMs: meta.timestampMs, mtimeMs: fileStat.mtimeMs });
   }
-  return best?.path ?? null;
+  return candidates.sort((left, right) =>
+    left.mtimeMs - right.mtimeMs || left.path.localeCompare(right.path));
 }

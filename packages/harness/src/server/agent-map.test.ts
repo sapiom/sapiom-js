@@ -6,29 +6,27 @@ import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
+import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
-import {
-  PlannerGreetingRetryUnavailableError,
-  type PlannerGreetingCoordinator,
-} from "../core/planner-greeting.js";
-import {
-  PlanningSessionError,
-  type PlanningSessionService,
-} from "../core/planning-session.js";
-import type { AgentMapWorkspaceResponse } from "../shared/agent-map.js";
-import type { HarnessSession } from "../shared/types.js";
+import type {
+  AgentMapWorkspaceResponse,
+  StudioProjectSummary,
+} from "../shared/agent-map.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
 
 describe("createAgentMapRouter", () => {
   const roots: string[] = [];
+  const initializers: AgentMapInitializationCoordinator[] = [];
   let server: ReturnType<express.Express["listen"]> | undefined;
 
   afterEach(async () => {
     if (server)
       await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
+    await Promise.all(initializers.splice(0).map((coordinator) => coordinator.close()));
     await Promise.all(
       roots
         .splice(0)
@@ -36,9 +34,12 @@ describe("createAgentMapRouter", () => {
     );
   });
 
-  async function start(planner?: {
-    planningSessions: PlanningSessionService;
-    plannerGreeting: PlannerGreetingCoordinator;
+  async function start(projectLifecycle?: {
+    onProjectCreated?: (project: StudioProjectSummary) => Promise<void> | void;
+    onRootBound?: (
+      project: StudioProjectSummary,
+      root: string,
+    ) => Promise<void> | void;
   }) {
     const stateRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "agent-map-router-"),
@@ -59,6 +60,12 @@ describe("createAgentMapRouter", () => {
       path.join(stateRoot, "agent-map"),
       { onEvent },
     );
+    const proposals = new AgentMapProposalService(store);
+    const infer = vi.fn(async () => { throw new Error("Must not run in endpoint tests"); });
+    const initialization = new AgentMapInitializationCoordinator({ store, proposals, infer, concurrency: 0,
+      project: async (id) => id === project.projectId ? { userId: currentUserId, available: true, discoveryComplete: true,
+        agents: [{ agentId: "agent_00000000-0000-4000-8000-000000000001", name: "Planner", path: privateRoot }], provider: "codex" } : null });
+    initializers.push(initialization);
     const app = express();
     app.use(express.json());
     app.use("/api", createBootTokenMiddleware("test-token"));
@@ -68,6 +75,7 @@ describe("createAgentMapRouter", () => {
       createAgentMapRouter({
         catalog,
         store,
+        initialization,
         preferences: new StudioWorkspacePreferenceStore(
           path.join(stateRoot, "studio-workspace-preferences.json"),
         ),
@@ -83,7 +91,7 @@ describe("createAgentMapRouter", () => {
         ],
         isWorkflowScanComplete: () => true,
         listWorkspaceScopes,
-        ...planner,
+        ...projectLifecycle,
       }),
     );
     server = app.listen(0);
@@ -97,11 +105,40 @@ describe("createAgentMapRouter", () => {
       scopes,
       listWorkspaceScopes,
       onEvent,
+      store,
+      proposals,
+      infer,
       setCurrentUserId: (userId: string) => {
         currentUserId = userId;
       },
     };
   }
+
+  it("authenticates initialization reads and retries, and rechecks authored history on retry", async () => {
+    const f = await start();
+    const route = `${f.baseUrl}/api/projects/${f.project.projectId}/agent-map/initialization`;
+    const headers = { "X-Harness-Token": "test-token", "Content-Type": "application/json" };
+    expect((await fetch(route)).status).toBe(401);
+    expect((await fetch(`${route}/retry`, { method: "POST" })).status).toBe(401);
+    const idle = await fetch(route, { headers });
+    expect(await idle.json()).toEqual({ projectId: f.project.projectId, status: "idle", errorCode: null, retryable: false });
+    await expect(fs.stat(path.join(f.stateRoot, "agent-map", "projects", f.project.projectId, "workspace.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    const retry = await fetch(`${route}/retry`, { method: "POST", headers, body: JSON.stringify({ projectId: "forged-project", attemptId: "forged-attempt" }) });
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toEqual({ projectId: f.project.projectId, status: "queued", errorCode: null, retryable: false });
+    expect(f.infer).not.toHaveBeenCalled();
+    await f.proposals.propose({ projectId: f.project.projectId, userId: "user-test", sessionId: "ordinary-session" }, {
+      schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "user-first-map",
+      operations: [{ kind: "add-node", draftRef: "planner", node: { kind: "agent", name: "Planner", purpose: "Plan", ownerAgent: null, contractRefs: [] } }],
+    });
+    const before = await fs.readFile(path.join(f.stateRoot, "agent-map", "projects", f.project.projectId, "workspace.json"));
+    const ignored = await fetch(`${route}/retry`, { method: "POST", headers });
+    expect(ignored.status).toBe(200); expect((await ignored.json()).status).toBe("skipped");
+    expect((await (await fetch(route, { headers })).json()).status).toBe("completed");
+    expect(await fs.readFile(path.join(f.stateRoot, "agent-map", "projects", f.project.projectId, "workspace.json"))).toEqual(before);
+    const unknown = await fetch(`${f.baseUrl}/api/projects/project_00000000-0000-4000-8000-000000000099/agent-map/initialization/retry`, { method: "POST", headers });
+    expect(unknown.status).toBe(404); expect(f.infer).not.toHaveBeenCalled();
+  });
 
   it("is boot-token protected, lazy, idempotent, and path-free", async () => {
     const fixture = await start();
@@ -142,7 +179,9 @@ describe("createAgentMapRouter", () => {
     expect(publicJson).not.toContain(fixture.privateRoot);
     expect(publicJson).not.toContain("workspace-private-alias");
     expect(fixture.onEvent).toHaveBeenCalledTimes(1);
-    expect(fixture.listWorkspaceScopes).toHaveBeenCalledTimes(2);
+    // Rendering durable map state is not a project-discovery boundary and
+    // therefore cannot create/schedule another project lifecycle.
+    expect(fixture.listWorkspaceScopes).not.toHaveBeenCalled();
   });
 
   it("creates a zero-binding project without eagerly creating map state", async () => {
@@ -172,6 +211,35 @@ describe("createAgentMapRouter", () => {
         ),
       ),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("acknowledges a committed project identity when lifecycle scheduling must retry", async () => {
+    const onProjectCreated = vi.fn(async () => {
+      throw new Error("transient coordinator failure");
+    });
+    const fixture = await start({ onProjectCreated });
+
+    const response = await fetch(`${fixture.baseUrl}/api/projects`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Harness-Token": "test-token",
+      },
+      body: JSON.stringify({ displayName: "Durably created" }),
+    });
+    const created = (await response.json()) as StudioProjectSummary;
+
+    expect(response.status).toBe(202);
+    expect(response.headers.get("X-Sapiom-Project-Initialization")).toBe(
+      "pending",
+    );
+    expect(created.displayName).toBe("Durably created");
+    expect(onProjectCreated).toHaveBeenCalledOnce();
+    expect(
+      (await fixture.catalog.list()).filter(
+        (project) => project.projectId === created.projectId,
+      ),
+    ).toHaveLength(1);
   });
 
   it("preserves identity when the authenticated boundary moves and adds root bindings", async () => {
@@ -235,6 +303,86 @@ describe("createAgentMapRouter", () => {
     expect(restarted.projects).toHaveLength(1);
     expect(restarted.projects[0]?.projectId).toBe(fixture.project.projectId);
     expect(restarted.projects[0]?.bindings).toHaveLength(2);
+  });
+
+  it("matches a Windows allowlisted root across drive, case, and separator variants", async () => {
+    const fixture = await start();
+    fixture.scopes.splice(0, fixture.scopes.length, {
+      workspaceKey: "workspace-windows-project",
+      cwd: "C:\\Users\\Alice\\Project",
+    });
+
+    const response = await fetch(
+      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Harness-Token": "test-token",
+        },
+        body: JSON.stringify({ root: "c:/users/alice/project/" }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect((await response.json()).projectId).toBe(fixture.project.projectId);
+  });
+
+  it("acknowledges durable root mutations and converges lifecycle retries without duplicate bindings", async () => {
+    const onRootBound = vi
+      .fn<(project: StudioProjectSummary, root: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("transient add failure"))
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error("transient move failure"))
+      .mockResolvedValueOnce();
+    const fixture = await start({ onRootBound });
+    const addedRoot = path.join(fixture.stateRoot, "publisher-repository");
+    const movedRoot = path.join(fixture.stateRoot, "moved-market-research");
+    await Promise.all([fs.mkdir(addedRoot), fs.mkdir(movedRoot)]);
+    fixture.scopes.splice(
+      0,
+      fixture.scopes.length,
+      { workspaceKey: "workspace-publisher", cwd: addedRoot },
+      { workspaceKey: "workspace-moved", cwd: movedRoot },
+    );
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Harness-Token": "test-token",
+    };
+    const addRoute = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/root-bindings`;
+    const add = () =>
+      fetch(addRoute, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ root: addedRoot }),
+      });
+
+    const pendingAdd = await add();
+    expect(pendingAdd.status).toBe(202);
+    expect(pendingAdd.headers.get("X-Sapiom-Project-Initialization")).toBe(
+      "pending",
+    );
+    expect((await add()).status).toBe(201);
+
+    const moveRoute = `${addRoute}/${fixture.project.bindings[0]!.id}`;
+    const move = () =>
+      fetch(moveRoute, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ root: movedRoot }),
+      });
+    const pendingMove = await move();
+    expect(pendingMove.status).toBe(202);
+    expect(pendingMove.headers.get("X-Sapiom-Project-Initialization")).toBe(
+      "pending",
+    );
+    expect((await move()).status).toBe(200);
+
+    expect(onRootBound).toHaveBeenCalledTimes(4);
+    const persisted = await fixture.catalog.resolve(fixture.project.projectId);
+    expect(persisted?.bindings).toHaveLength(2);
+    expect(JSON.stringify(persisted)).not.toContain(addedRoot);
+    expect(JSON.stringify(persisted)).not.toContain(movedRoot);
   });
 
   it("does not expose root association without the boot token or allow list", async () => {
@@ -442,206 +590,4 @@ describe("createAgentMapRouter", () => {
     expect(await fs.readFile(workspacePath, "utf8")).toBe("{bad-json");
   });
 
-  it("protects planner routes and accepts only project-scoped intent", async () => {
-    let fixtureProjectId = "";
-    const plannerSession = {
-      id: "planner-session-1",
-      agentSessionId: null,
-      harness: "codex",
-      cwd: "/server/private/project",
-      title: "project",
-      status: "running",
-      createdAt: "2026-09-01T00:00:00.000Z",
-      lastActiveAt: "2026-09-01T00:00:00.000Z",
-      exitCode: null,
-      boundWorkflowPath: null,
-      ready: false,
-    } as HarnessSession;
-    const open = vi.fn(async () => ({
-      session: plannerSession,
-      resolution: "created" as const,
-    }));
-    const requireOwned = vi.fn(() => plannerSession);
-    const enqueue = vi.fn(async () => ({
-      identity: {
-        projectId: fixtureProjectId,
-        sessionId: plannerSession.id,
-        userId: "user-1",
-        role: "map-planner" as const,
-      },
-      greeting: { status: "pending" as const },
-      queuedInputIds: ["input-1"],
-    }));
-    const retry = vi.fn(async () => {
-      if (!plannerSession.planning) throw new Error("missing planner metadata");
-      plannerSession.planning = {
-        ...plannerSession.planning,
-        greeting: { status: "generating", attemptId: "attempt-2" },
-      };
-    });
-    const fixture = await start({
-      planningSessions: {
-        open,
-        requireOwned,
-      } as unknown as PlanningSessionService,
-      plannerGreeting: {
-        enqueue,
-        retry,
-      } as unknown as PlannerGreetingCoordinator,
-    });
-    fixtureProjectId = fixture.project.projectId;
-    plannerSession.planning = {
-      identity: {
-        projectId: fixtureProjectId,
-        sessionId: plannerSession.id,
-        userId: "user-1",
-        role: "map-planner",
-      },
-      greeting: {
-        status: "failed",
-        retryable: true,
-        errorCode: "model_turn_failed",
-      },
-      queuedInputIds: [],
-    };
-    const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions`;
-
-    expect(
-      (
-        await fetch(route, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ mode: "fresh" }),
-        })
-      ).status,
-    ).toBe(401);
-    const forged = await fetch(route, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Harness-Token": "test-token",
-      },
-      body: JSON.stringify({
-        mode: "fresh",
-        role: "map-planner",
-        projectId: fixture.project.projectId,
-      }),
-    });
-    expect(forged.status).toBe(400);
-    expect(open).not.toHaveBeenCalled();
-
-    const valid = await fetch(route, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Harness-Token": "test-token",
-      },
-      body: JSON.stringify({ mode: "fresh", harness: "codex" }),
-    });
-    expect(valid.status).toBe(201);
-    expect(open).toHaveBeenCalledWith(fixture.project.projectId, {
-      mode: "fresh",
-      harness: "codex",
-    });
-
-    const message = await fetch(`${route}/${plannerSession.id}/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Harness-Token": "test-token",
-      },
-      body: JSON.stringify({ text: "Build a support triage system" }),
-    });
-    expect(message.status).toBe(202);
-    expect(await message.json()).toEqual({
-      metadata: {
-        identity: {
-          projectId: fixture.project.projectId,
-          sessionId: plannerSession.id,
-          userId: "user-1",
-          role: "map-planner",
-        },
-        greeting: { status: "pending" },
-        queuedInputIds: ["input-1"],
-      },
-    });
-    expect(requireOwned).toHaveBeenCalledWith(
-      fixture.project.projectId,
-      plannerSession.id,
-    );
-    expect(enqueue).toHaveBeenCalledWith(
-      plannerSession.id,
-      "Build a support triage system",
-    );
-
-    const retryResponse = await fetch(
-      `${route}/${plannerSession.id}/greeting/retry`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "X-Harness-Token": "test-token",
-        },
-        body: "{}",
-      },
-    );
-    expect(retryResponse.status).toBe(202);
-    expect(await retryResponse.json()).toEqual({
-      metadata: {
-        ...plannerSession.planning,
-        greeting: { status: "generating", attemptId: "attempt-2" },
-      },
-    });
-    expect(retry).toHaveBeenCalledWith(plannerSession.id);
-  });
-
-  it("rejects foreign planner messages and bounds unavailable retries", async () => {
-    const requireOwned = vi.fn<() => Promise<HarnessSession>>(async () => {
-      throw new PlanningSessionError("forbidden");
-    });
-    const enqueue = vi.fn(async () => ({}) as never);
-    const retry = vi.fn(async () => {
-      throw new PlannerGreetingRetryUnavailableError();
-    });
-    const fixture = await start({
-      planningSessions: {
-        open: vi.fn(),
-        requireOwned,
-      } as unknown as PlanningSessionService,
-      plannerGreeting: {
-        enqueue,
-        retry,
-      } as unknown as PlannerGreetingCoordinator,
-    });
-    const headers = {
-      "content-type": "application/json",
-      "X-Harness-Token": "test-token",
-    };
-    const message = await fetch(
-      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/foreign/messages`,
-      { method: "POST", headers, body: JSON.stringify({ text: "hello" }) },
-    );
-    expect(message.status).toBe(403);
-    expect(await message.json()).toMatchObject({ code: "forbidden" });
-    expect(enqueue).not.toHaveBeenCalled();
-
-    const forbiddenRetry = await fetch(
-      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/foreign/greeting/retry`,
-      { method: "POST", headers, body: "{}" },
-    );
-    expect(forbiddenRetry.status).toBe(403);
-    expect(await forbiddenRetry.json()).toMatchObject({ code: "forbidden" });
-    expect(retry).not.toHaveBeenCalled();
-
-    requireOwned.mockResolvedValue({ id: "owned" } as HarnessSession);
-    const retryResponse = await fetch(
-      `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/planner-sessions/owned/greeting/retry`,
-      { method: "POST", headers, body: "{}" },
-    );
-    expect(retryResponse.status).toBe(409);
-    expect(await retryResponse.json()).toEqual({
-      code: "greeting_retry_unavailable",
-      error: "greeting retry is not available",
-    });
-  });
 });

@@ -493,69 +493,6 @@ describe("RealApi.getSystemGraph", () => {
   });
 });
 
-describe("RealApi planner mutations", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("retains the authoritative metadata returned by send and greeting retry", async () => {
-    if (isMockMode()) return;
-    vi.stubGlobal("window", {
-      __HARNESS__: { token: "test-token" },
-      location: { search: "" },
-    });
-    const accepted = {
-      identity: {
-        projectId: "project-1",
-        sessionId: "planner-1",
-        userId: "user-1",
-        role: "map-planner" as const,
-      },
-      greeting: { status: "skipped" as const, reason: "user-proceeded" },
-      queuedInputIds: ["input-1"],
-    };
-    const retrying = {
-      ...accepted,
-      greeting: {
-        status: "generating" as const,
-        attemptId: "attempt-2",
-      },
-      queuedInputIds: [],
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ metadata: accepted }), { status: 202 }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ metadata: retrying }), { status: 202 }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const api = createApi();
-    await expect(
-      api.sendPlannerMessage("project-1", "planner-1", { text: "hello" }),
-    ).resolves.toEqual({ metadata: accepted });
-    await expect(
-      api.retryPlannerGreeting("project-1", "planner-1"),
-    ).resolves.toEqual({ metadata: retrying });
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/projects/project-1/planner-sessions/planner-1/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ text: "hello" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/projects/project-1/planner-sessions/planner-1/greeting/retry",
-      expect.objectContaining({ method: "POST", body: "{}" }),
-    );
-  });
-});
-
 describe("progressiveLeasingRun", () => {
   const at = (elapsed: number) =>
     progressiveLeasingRun("exec-mock-prod-1", elapsed);

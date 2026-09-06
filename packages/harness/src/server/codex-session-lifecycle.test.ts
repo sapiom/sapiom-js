@@ -106,7 +106,7 @@ describe("codex session lifecycle (real files, no mocking)", () => {
     const session = await server.sessionManager.create({ cwd, harness: "codex" });
     expect(session.status).toBe("running");
 
-    // Simulate Codex creating its rollout file shortly after being spawned —
+    // Simulate Codex creating its rollout file on the first user turn —
     // real discovery has to poll for this, since there's no way to know the
     // exact timestamp+UUID path in advance.
     const agentSessionId = "019e00000000-integration-test";
@@ -117,7 +117,9 @@ describe("codex session lifecycle (real files, no mocking)", () => {
     // this machine's tmpdir that differs from the raw path (e.g. macOS's
     // /var -> /private/var), so mirror that here rather than the raw value,
     // to actually exercise findRolloutFile's realpath-normalized matching.
-    await writeFile(rolloutPath, sessionMetaLine(agentSessionId, await realpath(cwd), new Date().toISOString()));
+    await writeFile(rolloutPath,
+      sessionMetaLine(agentSessionId, await realpath(cwd), new Date().toISOString()) +
+      userMessageLine("build me a leasing workflow"));
 
     // --- session.start, and the rollout id links into the registry ---
     await vi.waitFor(
@@ -129,8 +131,7 @@ describe("codex session lifecycle (real files, no mocking)", () => {
       { timeout: 10_000, interval: 200 },
     );
 
-    // --- live activity: a prompt, a tool call, and the turn completing ---
-    await appendFile(rolloutPath, userMessageLine("build me a leasing workflow"));
+    // --- live activity: a tool call and the first turn completing ---
     await appendFile(rolloutPath, functionCallLine("call_1", "exec_command", '{"cmd":"ls"}'));
     await appendFile(rolloutPath, functionCallOutputLine("call_1", "file1.txt\nfile2.txt"));
     await appendFile(rolloutPath, taskCompleteLine());

@@ -643,10 +643,9 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
       "true",
     );
 
-    // ...and the way back UP is there, so the map is no longer a one-way door.
-    const up = page.getByTestId("canvas-altitude-up");
-    await expect(up).toHaveAttribute("aria-label", "Back to the acme-app map");
-    await up.click();
+    // The project name is the sole map-navigation action.
+    await expect(page.getByTestId("canvas-altitude-up")).toHaveCount(0);
+    await page.getByTestId("project-select-acme-app").click();
     await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
     await expect(page.getByTestId("project-row-acme-app")).toHaveClass(
       /is-selected/,

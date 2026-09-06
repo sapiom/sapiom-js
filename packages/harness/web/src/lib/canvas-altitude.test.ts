@@ -5,7 +5,6 @@ import type { WorkspaceScopeSummary } from "@shared/system-graph";
 import {
   canvasView,
   studioCanvasView,
-  projectAbove,
   projectRefForRoot,
   stepsDisabledReason,
 } from "./canvas-altitude";
@@ -42,33 +41,43 @@ describe("studioCanvasView", () => {
 const HOME = "/Users/demo";
 const POLSIA = `${HOME}/polsia`;
 const ADS = `${POLSIA}/backend/src/agents/ads`;
-const WORKERS = `${POLSIA}/services/workers`;
 
 const scopes: WorkspaceScopeSummary[] = [
   { workspaceKey: "ws-polsia", cwd: POLSIA },
-  { workspaceKey: "ws-workers", cwd: WORKERS },
 ];
 
 const polsia = { workspaceKey: "ws-polsia", root: POLSIA, label: "polsia" };
 
 describe("canvasView: the project wins, and that is stated once", () => {
   it("is map altitude for a selected project", () => {
-    expect(canvasView(polsia, null)).toEqual({ altitude: "map", project: polsia });
+    expect(canvasView(polsia, null)).toEqual({
+      altitude: "map",
+      project: polsia,
+    });
   });
 
   it("is board altitude for a selected agent", () => {
-    expect(canvasView(null, ADS)).toEqual({ altitude: "board", agentPath: ADS });
+    expect(canvasView(null, ADS)).toEqual({
+      altitude: "board",
+      agentPath: ADS,
+    });
   });
 
   it("still resolves to ONE altitude when a door forgets to clear the other half", () => {
     // The two are mutually exclusive by construction. This is the case where
     // that construction has a hole: the answer must be a project's map, never
     // an agent's board drawn under a project's name.
-    expect(canvasView(polsia, ADS)).toEqual({ altitude: "map", project: polsia });
+    expect(canvasView(polsia, ADS)).toEqual({
+      altitude: "map",
+      project: polsia,
+    });
   });
 
   it("is board altitude with nothing selected at all", () => {
-    expect(canvasView(null, null)).toEqual({ altitude: "board", agentPath: null });
+    expect(canvasView(null, null)).toEqual({
+      altitude: "board",
+      agentPath: null,
+    });
   });
 });
 
@@ -78,7 +87,9 @@ describe("projectRefForRoot: the browser joins, it never invents a key", () => {
   });
 
   it("matches on segment boundaries, so a trailing separator still joins", () => {
-    expect(projectRefForRoot(`${POLSIA}/`, "polsia", scopes)?.workspaceKey).toBe("ws-polsia");
+    expect(
+      projectRefForRoot(`${POLSIA}/`, "polsia", scopes)?.workspaceKey,
+    ).toBe("ws-polsia");
   });
 
   it("never joins a neighbouring project by string prefix", () => {
@@ -94,35 +105,6 @@ describe("projectRefForRoot: the browser joins, it never invents a key", () => {
   it("is null with no root and null for a root the server issued no key for", () => {
     expect(projectRefForRoot(null, null, scopes)).toBeNull();
     expect(projectRefForRoot(`${HOME}/scratch`, null, scopes)).toBeNull();
-  });
-});
-
-describe("projectAbove: the way back is derived, not remembered", () => {
-  it("is the agent's project, whichever door reached the agent", () => {
-    expect(projectAbove(ADS, [POLSIA], scopes)).toEqual({
-      workspaceKey: "ws-polsia",
-      root: POLSIA,
-      label: "polsia",
-    });
-  });
-
-  it("takes the NEAREST project when roots overlap, the same one the session booted in", () => {
-    const nested = `${WORKERS}/queue`;
-    expect(projectAbove(nested, [POLSIA, WORKERS], scopes)?.workspaceKey).toBe("ws-workers");
-  });
-
-  it("offers no way up for an agent outside every project", () => {
-    // `projectRootForAgent` falls back to the agent's own folder. Cutting up to
-    // that would open a map of one agent — itself.
-    expect(projectAbove(`${HOME}/scratch/bot`, [POLSIA], scopes)).toBeNull();
-  });
-
-  it("offers no way up when the server issued no graph key for the project", () => {
-    expect(projectAbove(ADS, [POLSIA], [])).toBeNull();
-  });
-
-  it("is null with nothing selected", () => {
-    expect(projectAbove(null, [POLSIA], scopes)).toBeNull();
   });
 });
 

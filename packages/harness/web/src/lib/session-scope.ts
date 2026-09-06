@@ -51,7 +51,10 @@ export function rootContains(root: string, agentPath: string): boolean {
  * the old behaviour, returned verbatim — so an agent discovered outside every
  * opened project still starts a session rather than failing to start.
  */
-export function projectRootForAgent(agentPath: string, roots: readonly string[]): string {
+export function projectRootForAgent(
+  agentPath: string,
+  roots: readonly string[],
+): string {
   return (
     roots
       .filter((root) => rootContains(root, agentPath))
@@ -82,6 +85,9 @@ export interface ScopedSession {
   cwd: string;
   status: string;
   boundWorkflowPath?: string | null;
+  /** Server-derived project identity. Unlike cwd containment, this remains
+   * exact when one opened project is nested inside another. */
+  agentMapIdentity?: { projectId: string } | null;
   createdAt: string;
   /** Last activity, when the adapter reports it. "Most recent session" means
    *  the one most recently WORKED IN, not the one most recently made: after a
@@ -129,9 +135,13 @@ export function liveSessionsForFocus<S extends ScopedSession>(
       (s) =>
         s.status !== "exited" &&
         (samePath(s.boundWorkflowPath ?? "", focusPath) ||
-          ((s.boundWorkflowPath ?? null) == null && samePath(s.cwd, focusPath))),
+          ((s.boundWorkflowPath ?? null) == null &&
+            samePath(s.cwd, focusPath))),
     )
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    .sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    );
 }
 
 /**
@@ -167,7 +177,42 @@ export function liveSessionsForProject<S extends ScopedSession>(
   if (!projectRoot) return [];
   return sessions
     .filter((s) => s.status !== "exited" && rootContains(projectRoot, s.cwd))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    .sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    );
+}
+
+/**
+ * Live sessions belonging to one durable Studio project.
+ *
+ * A Studio project is an authority boundary, not a path prefix. Session tabs
+ * therefore use the server-derived principal and never absorb a nested
+ * project's sessions merely because their cwd happens to be contained by the
+ * selected root. The final identity guard also keeps a malformed duplicate
+ * projection from manufacturing two visible tabs for one session ID.
+ */
+export function liveSessionsForStudioProject<S extends ScopedSession>(
+  sessions: readonly S[],
+  projectId: string | null,
+): S[] {
+  if (!projectId) return [];
+  const seen = new Set<string>();
+  return sessions
+    .filter(
+      (session) =>
+        session.status !== "exited" &&
+        session.agentMapIdentity?.projectId === projectId,
+    )
+    .sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    )
+    .filter((session) => {
+      if (seen.has(session.id)) return false;
+      seen.add(session.id);
+      return true;
+    });
 }
 
 /**
@@ -230,7 +275,8 @@ export function conversationSubject(
   const live = active && active.status !== "exited" ? active : null;
   if (live) {
     const owner = roots.find((root) => rootContains(root, live.cwd));
-    if (owner) return { kind: "project", root: projectRootForAgent(live.cwd, roots) };
+    if (owner)
+      return { kind: "project", root: projectRootForAgent(live.cwd, roots) };
   }
   if (projectRoot) return { kind: "project", root: projectRoot };
   return { kind: "focus", path: sessionStripSubject(active, focusPath) };
@@ -256,8 +302,21 @@ export function sessionReachesFocus(
   active: ScopedSession | null,
   focusPath: string | null,
   roots: readonly string[],
+  targetProjectId: string | null = null,
+  targetProjectRoot: string | null = null,
 ): boolean {
   if (!active || active.status === "exited" || focusPath == null) return false;
+  if (targetProjectId) {
+    const activeProjectId = active.agentMapIdentity?.projectId;
+    if (activeProjectId) return activeProjectId === targetProjectId;
+
+    // Rolling compatibility for sessions persisted before neutral principals:
+    // match the canonical project root exactly. Plain downward containment is
+    // unsafe here because an outer project also contains every nested project.
+    const focusRoot =
+      targetProjectRoot ?? projectRootForAgent(focusPath, roots);
+    return samePath(projectRootForAgent(active.cwd, roots), focusRoot);
+  }
   return rootContains(projectRootForAgent(active.cwd, roots), focusPath);
 }
 
@@ -270,10 +329,16 @@ export interface FocusSessionInput<S extends ScopedSession> {
   sessions: readonly S[];
   /** The project roots the user has opened (`knownProjectRoots()`). */
   roots: readonly string[];
+  /** Exact server-derived Studio project selected for this agent. Omitted only
+   * for legacy sessions/projects that predate durable project identity. */
+  targetProjectId?: string | null;
+  /** The selected project's exact root/binding containing `focusPath`. */
+  targetProjectRoot?: string | null;
 }
 
 export type FocusSessionDecision<S extends ScopedSession> =
-  /** The active session already reaches this agent. Do not touch it. */
+  /** Keep the current live session or an explicitly selected same-project
+   * archived conversation. This decision does not resume a runtime. */
   | { kind: "keep" }
   /** Hand over to another project's session, or to none (the honest
    *  "start a session" state). */
@@ -302,33 +367,60 @@ function byRecency<S extends ScopedSession>(a: S, b: S): number {
  * are in different projects. So the session follows the selection into the new
  * scope, landing on that project's own session or on none.
  *
- * "Can this session reach that agent" is asked ONE way, downward: does the
- * active session's project CONTAIN the selected agent? That is what makes
- * overlapping roots behave. With `~/polsia` and `~/polsia/services/workers`
- * both open, an agent under `workers/` resolves (longest root wins) to the
- * nested project, but a session at `~/polsia` still genuinely contains it — so
- * selecting that agent KEEPS the session rather than appearing to jump
- * projects for a row the session can already work on. The reverse is not
- * symmetric and must not be: a session rooted at `~/polsia/services/workers`
- * cannot reach up to an agent at `~/polsia`, so that one does hand over.
+ * For durable Studio projects, the server-derived project ID is the boundary:
+ * overlapping roots never let an outer project session impersonate a nested
+ * project's session. Path containment remains only for rolling compatibility
+ * with sessions and projects that predate neutral project principals.
  */
 export function sessionForFocus<S extends ScopedSession>({
   focusPath,
   active,
   sessions,
   roots,
+  targetProjectId = null,
+  targetProjectRoot = null,
 }: FocusSessionInput<S>): FocusSessionDecision<S> {
+  // History selection owns an exact recorded conversation after restart.
+  // Selecting one of that project's agents must not discard it or replace it
+  // with a live tab. Require durable identity; an exited session's cwd alone
+  // cannot establish the creating project of a scaffolded sibling.
+  if (
+    active?.status === "exited" &&
+    targetProjectId &&
+    active.agentMapIdentity?.projectId === targetProjectId
+  )
+    return { kind: "keep" };
+
   const live = sessions.filter((session) => session.status !== "exited");
 
-  if (sessionReachesFocus(active, focusPath, roots)) return { kind: "keep" };
+  if (
+    sessionReachesFocus(
+      active,
+      focusPath,
+      roots,
+      targetProjectId,
+      targetProjectRoot,
+    )
+  )
+    return { kind: "keep" };
 
   // The agent's own session wins the handover: navigating to F should land on
   // F's session when it has one. Then the project's most recent session, since
   // any session in the project can work on the agent. Then none.
-  const focusRoot = projectRootForAgent(focusPath, roots);
-  const own = liveSessionsForFocus(live, focusPath).sort(byRecency)[0];
-  const inProject = live
-    .filter((session) => rootContains(focusRoot, session.cwd))
+  const focusRoot = targetProjectRoot ?? projectRootForAgent(focusPath, roots);
+  const eligible = targetProjectId
+    ? live.filter((session) => {
+        const sessionProjectId = session.agentMapIdentity?.projectId;
+        return sessionProjectId
+          ? sessionProjectId === targetProjectId
+          : samePath(projectRootForAgent(session.cwd, roots), focusRoot);
+      })
+    : live;
+  const own = liveSessionsForFocus(eligible, focusPath).sort(byRecency)[0];
+  const inProject = eligible
+    .filter((session) =>
+      targetProjectId ? true : rootContains(focusRoot, session.cwd),
+    )
     .sort(byRecency)[0];
   return { kind: "switch", to: own ?? inProject ?? null };
 }
@@ -580,7 +672,10 @@ export function mergeSubjectRuns<R extends AttributedRun>(
   const room = limit - kept.length;
   if (room <= 0) return kept;
   const seen = new Set(kept.map((entry) => entry.run.executionId));
-  return [...kept, ...extra.filter((entry) => !seen.has(entry.run.executionId)).slice(-room)];
+  return [
+    ...kept,
+    ...extra.filter((entry) => !seen.has(entry.run.executionId)).slice(-room),
+  ];
 }
 
 /**
@@ -616,7 +711,10 @@ export function shownRunForSubject<R extends AttributedRun>(
   runs: readonly R[],
   sessionRun: R | null,
 ): R | null {
-  if (sessionRun && runs.some((entry) => entry.run.executionId === sessionRun.run.executionId)) {
+  if (
+    sessionRun &&
+    runs.some((entry) => entry.run.executionId === sessionRun.run.executionId)
+  ) {
     return sessionRun;
   }
   return runs.length > 0 ? runs[runs.length - 1] : null;
