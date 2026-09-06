@@ -508,6 +508,7 @@ async function checkUnpackedDeps(): Promise<string> {
 
   const targets: Array<[string, string]> = [
     ["@sapiom/harness", harnessPkg],
+    ["Codex initialization worker", path.join(path.dirname(harnessPkg), "dist", "core", "codex-structured-inference.js")],
     ["web SPA", resolveWebDir()],
     // The ESM entry the Canvas subprocess imports (a stale/absent dist/esm here
     // is exactly the ERR_MODULE_NOT_FOUND crash we hit).
@@ -524,6 +525,18 @@ async function checkUnpackedDeps(): Promise<string> {
     .map(([name, p]) => `${name} (${p})`);
   if (missing.length) throw new Error(`not on disk: ${missing.join(", ")}`);
   return `${targets.length} entry points present on disk (asar-translated)`;
+}
+
+/** Import the inference sidecar in a real Node-mode child, without starting a provider. */
+async function checkInitializationWorker(): Promise<string> {
+  const harnessPkg = unpacked(require.resolve("@sapiom/harness/package.json"));
+  const worker = path.join(path.dirname(harnessPkg), "dist", "core", "codex-structured-inference.js");
+  const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e",
+    `await import(${JSON.stringify(pathToFileURL(worker).href)}); process.stdout.write("initialization-worker-ready");`], {
+    cwd: tmpdir(), env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, timeout: 10_000, maxBuffer: 16 * 1024,
+  });
+  if (stdout !== "initialization-worker-ready") throw new Error("Initialization worker failed to load");
+  return "unpacked initialization worker and dependencies load in a Node-mode child";
 }
 
 type BundleForDeploy = (sourceDir: string) => Promise<{
@@ -1072,6 +1085,7 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("preload-bridge", checkPreloadBridge),
     await check("node-pty", checkNodePty),
     await check("unpacked-deps", checkUnpackedDeps),
+    await check("initialization-worker", checkInitializationWorker),
     await check("runtime-shims", checkRuntimeShims),
     await check("run-local", () => checkRunLocal(base, token)),
     await check("deploy-bundle", checkDeployBundle),

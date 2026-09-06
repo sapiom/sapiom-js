@@ -115,6 +115,7 @@ export interface ProjectBootstrapCoordinatorOptions {
   canDispatch?: (session: HarnessSession) => boolean | Promise<boolean>;
   /** Rechecks E2 semantic state immediately before the bootstrap attempt. */
   isMeaningfullyEmpty?: (projectId: string) => boolean | Promise<boolean>;
+  claimMapGeneration?: (projectId: string) => Promise<boolean>;
   onEvent?: (event: ProjectBootstrapLifecycleEvent) => Promise<void> | void;
 }
 
@@ -1902,6 +1903,16 @@ export class ProjectBootstrapCoordinator extends ProjectBootstrapStore {
         }
         state.retryCount += 1;
       } else if (state.metadata.bootstrap.status !== "pending") {
+        return;
+      }
+      let ownsMapGeneration = true;
+      try { ownsMapGeneration = await this.options.claimMapGeneration?.(state.metadata.projectId) ?? true; }
+      catch { await this.setFailure(state, "pending", "persistence_failed", true); return; }
+      if (!ownsMapGeneration) {
+        state.metadata.bootstrap = { status: "skipped", reason: "map-not-empty" };
+        await this.persist(sessionId, state);
+        this.emit({ name: "project_bootstrap.skipped", projectId: state.metadata.projectId,
+          sessionId, reason: "map-not-empty", queueDepth: state.inputs.length });
         return;
       }
       const attemptId = this.generateId();

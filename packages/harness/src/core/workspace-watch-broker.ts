@@ -146,6 +146,8 @@ export type WorkspaceWatchFactory = (
 ) => WorkspaceWatchHandle;
 
 export interface WorkspaceWatchOptions {
+  /** Absolute host-owned metadata roots whose native events are not edits. */
+  ignoredEventRoots?: readonly string[];
   sourceDebounceMs?: number;
   inventoryDebounceMs?: number;
   inventoryRetryBaseMs?: number;
@@ -184,6 +186,7 @@ export interface SharedWorkspaceWatchBrokerLike {
 }
 
 export class WorkspaceRootWatcher {
+  private readonly ignoredEventRoots: readonly string[];
   private watcher: WorkspaceWatchHandle | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private sourceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -213,6 +216,9 @@ export class WorkspaceRootWatcher {
     private readonly callbacks: WorkspaceWatchCallbacks,
     private readonly options: WorkspaceWatchOptions,
   ) {
+    this.ignoredEventRoots = (options.ignoredEventRoots ?? []).map(
+      canonicalGraphPath,
+    );
     this.lastInventorySnapshot = null;
     this.arm();
   }
@@ -636,12 +642,38 @@ export class WorkspaceRootWatcher {
           }
         };
         if (rawFilename === null) {
+          if (
+            this.ignoredEventRoots.some(
+              (ignoredRoot) =>
+                ignoredRoot === this.root ||
+                isNestedSourceRoot(this.root, ignoredRoot) ||
+                isNestedSourceRoot(ignoredRoot, this.root),
+            )
+          ) {
+            // Without a filename we cannot distinguish host metadata from a
+            // source edit. Use the supported fingerprint polling fallback:
+            // real edits still invalidate discovery, while lock writes cannot
+            // start an unbounded event -> rescan -> lock-write feedback loop.
+            this.fallBackToPolling();
+            return;
+          }
           potential(null);
           this.scheduleSourceChange(null);
           return;
         }
         const relativePath = normalizeWatchPath(rawFilename);
         if (ignoredRelativePath(relativePath)) return;
+        const absolutePath = confinedSourcePath(this.root, relativePath);
+        if (
+          absolutePath &&
+          this.ignoredEventRoots.some(
+            (ignoredRoot) =>
+              absolutePath === ignoredRoot ||
+              isNestedSourceRoot(ignoredRoot, absolutePath),
+          )
+        ) {
+          return;
+        }
         if (sourceRelativePath(relativePath)) {
           const sourcePath = confinedSourcePath(this.root, relativePath);
           potential(sourcePath ? [sourcePath] : null);

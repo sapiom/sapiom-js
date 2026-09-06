@@ -467,7 +467,7 @@ describe("BuildPlanService", () => {
   });
 
   it("reserves append-only active, retired, reactivated, and nested brief histories by neutral scope", async () => {
-    const { aggregateStore, service, refs } = await fixture(undefined, undefined, 2);
+    const { root, aggregateStore, service, refs } = await fixture(undefined, undefined, 2);
     const applied = await service.apply(identity(), { schemaVersion: 1, requestId: "plan-create",
       expectedMap: toolMapRef(refs.map), expectedPlan: null,
       operations: [{ op: "replace-content", content: content(refs) }] });
@@ -561,5 +561,12 @@ describe("BuildPlanService", () => {
       requestId: "brief-retire",
       operation: "brief_append",
     }));
+    // Startup must preserve even populated format-2 plans/briefs whose nested
+    // records all use schemaVersion 1, including retired history and receipts.
+    const file = path.join(root, "projects", projectId, "workspace.json");
+    const beforeReset = await fs.readFile(file);
+    await aggregateStore.resetLegacyMaps();
+    await new AgentMapWorkspaceStore(root).resetLegacyMaps();
+    expect(await fs.readFile(file)).toEqual(beforeReset);
   });
 });
