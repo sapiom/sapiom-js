@@ -1,5 +1,162 @@
 # @sapiom/harness
 
+## 0.15.0
+
+### Minor Changes
+
+- 7d947b1: Store project maps atomically with immutable version histories and role-neutral proposal attribution, alongside shared build plans. Map and brief quotas, malformed aggregates and unsupported storage schemas now report terminal manual-intervention recovery through MCP; operation history is explicitly bounded before writes. This storage contract does not preserve format-1 maps: startup resets those maps under the legacy-reset policy.
+
+  **Breaking:** `ProposalActor` and proposal-history payloads now contain only trusted `userId` and `sessionId` attribution. Consumers must stop reading or constructing the removed `role` and `assignment` fields and use `sessionId` for attribution. Those fields never represented write or implementation authority.
+
+- aad9500: Agent Studio now defaults to light mode when no explicit light or dark preference is stored. Previously it followed the OS `prefers-color-scheme`; that fallback is removed. A stored light or dark choice still wins — in a browser, toggling once pins it.
+- 58fb5cf: Publish delegation request/result contracts, lifecycle record types, bounded limits and canonical codec/digest helpers. Add durable reservations, exact child bindings, request receipts and release history in preparation for tool activation. Retain unfinished private cleanup proof until cleanup completes, clear completed spawn claims on lifecycle transitions, and use locale-independent release-key ordering for durable replay.
+- 74884b1: Add deterministic role-neutral focused brief compilation, categorized impact,
+  immutable scope-keyed lifecycle refresh, and bounded prompt-safe context
+  projection for canonical and ad-hoc project work. Build-plan apply and rebase
+  now perform a best-effort brief-history refresh after committing the plan and
+  return separate `briefRefresh` recovery guidance; the universal
+  `build_plan_brief_refresh` tool retries the exact source independently. Brief
+  refresh receipts use bounded retention, while durable history exhaustion is
+  reported as terminal manual intervention rather than an endlessly retryable
+  storage failure.
+
+  Publish the compiler functions and `DeterministicAgentBriefCompiler`, `AgentBriefService`, impact evaluator, and `serializeFocusedSessionContext` with its discriminated result and branded projection type. These helpers support exact-version offline compilation and safe context composition; Studio attaches projections through its internal session manager. Automatic refresh uses a trusted receipt namespace that caller map, plan and brief request IDs cannot occupy.
+
+- d5c26ae: Publish immutable Agent Map, build-plan and brief contracts with strict codecs and canonical digest helpers. The public types, exact-reference helpers, codecs and digest functions support offline contract validation independently of later storage and tool activation; documented compatibility aliases remain supported.
+- 4622f40: Delete only legacy format-1 Agent Map workspace records during shared desktop and
+  CLI startup. Automatically generate missing maps for existing agents in the
+  background with one isolated, structured Claude Code or Codex inference pass.
+  Protect authored format-2 history from automatic edits, expose named initialization
+  status types and authenticated status/retry endpoints, and pack disconnected
+  components into compact layouts.
+
+  Back up and convert exact, unused historical format-2 containers before map
+  discovery, allowing their existing agents to receive an initial map. Preserve
+  current format-2 files and historical records containing authored state or history.
+  Exclude linked dependency/build/metadata directories from static source inspection
+  just like ordinary ignored directories, without following links into external sources.
+
+- 9fadbae: Add optional interpreter arguments and environment to coding-provider adapters
+  and export `createCodexAdapter`. Preserve managed launch configuration across
+  new sessions, resume, and private structured inference for both providers.
+- 143787a: Add shared build-plan read, validate, apply and rebase tools for trusted project sessions, with deterministic assignment IDs, conflict handling and idempotent write receipts. Keep validation errors visible within bounded diagnostics and timestamp semantic no-op receipts at the time they are accepted.
+- 69f2a6e: Give every Studio project session the same writable coding-agent prompt and
+  map capabilities, with durable project ownership revalidated before launch
+  and resume.
+
+  **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
+  `HarnessSession.agentMapIdentity` now exposes only
+  `ProjectAgentSession { projectId, userId, sessionId }`. Replace branches on
+  `role` and `assignment` with neutral project identity. Optional
+  `projectBootstrap` carries startup status without granting authority. Valid
+  persisted legacy metadata is normalized while session/provider IDs, cwd,
+  title, transcript, and Canvas are preserved. Malformed or conflicting
+  authority fails closed; unavailable project scope prevents resume until the
+  current owner and root binding are valid again.
+
+  `AgentMapToolEvent.role` is also removed. Telemetry consumers should use the
+  neutral project/session identifiers and the tool name and outcome instead of
+  branching on a session role.
+
+  Persisted bootstrap failures with `scope_unavailable` are recognized on
+  restart, so valid conversation metadata is retained and can resume after
+  scope is restored.
+
+- 3d105bc: Track ordinary session input delivery and runtime ownership so partial input, preemption, stale ingest events, and shutdown are handled consistently.
+
+  Background input now yields to terminal keystrokes received while its durable pre-write hook is pending. A submission displaced before writing compensates its durable claim so it can be recovered safely.
+
+  **Breaking for embedders** (minor while the package is pre-1.0): `SessionManager.write()` can throw an isolation error with code `SESSION_INPUT_ISOLATION_REQUIRED` when prior partial input cannot be cleared. Callers forwarding terminal bytes should handle this failure and keep the terminal available for a later retry instead of assuming every call returns a boolean.
+
+- 4aa4784: Add trusted child-session creation, recovery and closure with exact binding checks, plus exclusive Codex rollout attribution for simultaneous runtimes. Failed launches retain retryable ownership, and finished discovery releases pending runtime registrations.
+
+  The SessionManager returned by startServer exposes the owned-session lifecycle methods. Callers can handle the public SubsessionBindingMismatchError when an operation does not match its coordinator binding and SubsessionFreshRestartForbiddenError when a fresh restart would overwrite a recorded or explicitly closed conversation. The close() operation must be awaited because durable closure bookkeeping can reject.
+
+- 2168491: Activate one recoverable first-session map bootstrap for newly opened Studio projects. Durable project intent, input receipts, readiness, preemption, and restart recovery share the ordinary session lifecycle.
+
+  Breaking changes for embedders and HTTP clients:
+
+  - Remove `HarnessSession.planning`, `SessionManager.setPlanningMetadata()`, and the trusted create/resume `planning` options. Read the neutral `agentMapIdentity` for project identity and optional `projectBootstrap` for lifecycle state. The server migrates valid persisted legacy metadata and input queues automatically.
+  - Remove the planner contracts `PlannerGreetingErrorCode`, `PlannerGreetingState`, `PlannerSessionMetadata`, `PlannerQueuedInput`, `PlannerSessionRequest`, `PlannerSessionResponse`, `PlannerMessageRequest`, `PlannerSessionMetadataResponse`, and `PlannerLifecycleEvent`. Use ordinary session request/response types and `ProjectBootstrapMetadata`, `ProjectBootstrapState`, and `ProjectBootstrapInputReceipt` for bootstrap state and input acknowledgements.
+  - Remove `POST /api/projects/:projectId/planner-sessions`, `POST /api/projects/:projectId/planner-sessions/:sessionId/messages`, and `POST /api/projects/:projectId/planner-sessions/:sessionId/greeting/retry`. Create, resume, and send input through `POST /api/sessions`, `POST /api/sessions/:id/resume`, and `POST /api/sessions/:id/input`. Bootstrap recovery is server-owned. Clients supplying the first prompt should set `initialUserInputPending: true` when creating a session.
+  - Replace the `planner_session.*` and `planner_greeting.*` analytics event names with `project_agent.identity_*` and `project_bootstrap.*`. Their remote projections remain content-free.
+
+  Project creation and root binding can return `202` with a committed project identity when automatic initialization must retry; treat that identity as successfully created. Settings updates return their committed values while new-root initialization continues in the background. Server shutdown keeps admission fenced and bounds its wait for bootstrap, persistence, archive, and telemetry drains before releasing the listener.
+
+- 1cc232a: The project-row `+` now starts an ordinary coding-agent session at that project root. Sessions can create agents and work on the shared Agent Map; Plan Agents is an ordinary session without exclusive creation authority.
+- e0c1f47: Deliver a new-agent request directly to Claude Code or Codex at startup after
+  scaffolding and attachment preparation, without requiring a second Enter or
+  placing internal authoring instructions in the user's prompt. Preserve project
+  scope during launch and retain the composer draft when preparation fails.
+  Session creation and attachment uploads each retain an independent limit of
+  30 requests per minute, so uploading files does not block a new conversation.
+
+  Add optional `CreateSessionRequest.initialPrompt`, `initialAttachments`, and
+  `scaffold` fields, `LaunchOpts.initialPrompt` for fresh interactive launches,
+  and `CREATE_SESSION_JSON_LIMIT_BYTES` for embedders configuring HTTP parsers.
+  Export `PROJECT_AGENT_PROMPT_APPENDIX` and `projectAgentPromptAppendix` so
+  embedders can compose Studio's shared project guidance and optional focused
+  context offline without starting a server.
+
+  Strengthen shared Agent Map, build-plan, and writable subsession guidance while
+  keeping authoring and runtime capabilities primary. Document project-tool
+  contracts and replace the known stale Studio orientation at prompt delivery.
+
+- cf2369c: Unify Agent Studio project sessions around one ordinary coding-agent identity, make the project name open the shared Agent Map, and seed new projects through a durable, retry-safe bootstrap in the first `Plan Agents` session.
+
+  **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
+  `HarnessSession.agentMapIdentity` is now the role-neutral
+  `ProjectAgentSession { projectId, userId, sessionId }`; `role` and `assignment`
+  are no longer present. `AgentMapToolEvent.role` is also removed; telemetry
+  consumers use neutral project/session/tool/outcome fields. Valid persisted pre-upgrade session metadata is migrated
+  into the optional `projectBootstrap` lifecycle field and then removed. Retired
+  project-session HTTP aliases and public API names are removed; live clients use
+  the generic session routes.
+
+  **Migration:** stop branching on `agentMapIdentity.role` or `.assignment`, read
+  optional `projectBootstrap` only for bootstrap status, and use the generic
+  session routes. An
+  embedder that already owns a new session's first prompt should send
+  `initialUserInputPending: true` in the same `CreateSessionRequest`, so automatic
+  bootstrap yields before launch. New telemetry consumers should recognize the
+  neutral `project_agent.*` and `project_bootstrap.*` events. Valid legacy state
+  keeps its session/provider IDs, cwd, title, transcript, and Canvas; malformed or
+  conflicting authority is retained and fails closed. Released infrastructure
+  bootstrap event markers remain read-compatible so their private control prompt
+  never becomes a human transcript turn after upgrade. Downgrading does not
+  restore the superseded session authority model.
+
+- 4af416a: Add `project_subsession_delegate` on Studio's project MCP endpoint, with delegate, focused-context refresh, release and dormant-release operations. Delegation supports 16 children per batch, four nesting levels and 64 active or explicitly re-referenced coordinator-owned sessions per project.
+
+  Readiness waits share a 30-second batch budget and return partial retry results with durable session identities. Treat uncertain kickoff delivery as terminal until acknowledged, and use a new request key when canonical content changes. Dormant cleanup remains recoverable after an earlier request expires.
+
+  **Breaking:** `AnalyticsEventType` includes new `subsession.*` events. Update exhaustive event consumers to handle the added values.
+
+### Patch Changes
+
+- d10f605: Support automatic Agent Map bootstrap with recovery, FIFO delivery, and shutdown handling. Recovery events describe committed state.
+- 2b5ee34: Add durable project intents for automatic Agent Map bootstrap. Clean up temporary state after failed writes and ignore unrelated files when reading project intents.
+- e0c1f47: Keep canvas overview resizing responsive when the pointer is released over the embedded canvas. The drag now finishes and its height persists instead of leaving the panel stuck in resize mode.
+- fe9d7d5: Resolve and retain durable project roots consistently for Studio and System Graph, including descendant sessions after a recent directory is evicted. Compare Windows drive and UNC roots without case sensitivity and migrate legacy case aliases while preserving durable project identities.
+- 73e7f46: Keep new-agent composer submissions in their standalone coding session instead of automatically switching to Plan Agents.
+- e0c1f47: Fix fresh Codex delegation waiting for a transcript that Codex creates only after the first turn. Exact owned children now receive one marked kickoff before transcript discovery, and concurrent rollouts are correlated to that runtime without crossing session identities. Retried requests preserve the same child and do not repeat its kickoff.
+- 30dce20: Studio's dialogs now behave the same as each other. Add existing agents, Add a project, Create an agent, Use a template, Remove project, End session and Clone agent share one shell, so Tab stays inside the open dialog instead of walking into the rail behind it, the page behind the dialog stops taking clicks and screen-reader attention while it is up, and focus opens on the dialog's subject rather than its close button. Closing a dialog hands focus back to the control that opened it — through the close button, the backdrop and Cancel, not only Escape — wherever that control is still on screen to receive it. Enter submits from a single-line field and Cmd/Ctrl+Enter from a text area, one rule everywhere, and the three confirmation dialogs take neither, so a removal is never one stray Return away. Dialog titles are one size instead of the two they had drifted into.
+- 0cbdd86: Remove the inline first-agent creation button from empty projects, including
+  projects reopened without a live session and clients connected to older servers.
+  Keep ordinary project session shortcuts, menu actions, and scan boundary notes.
+- e0c1f47: Register successfully scaffolded agents immediately under their creating Studio
+  project, including folders beside its root. Preserve the project's existing
+  conversation when selecting those agents, and restore membership from recorded
+  scaffold completions on restart without moving files or creating extra sessions.
+
+  Accept native Codex timed MCP results and relative scaffold targets while preserving exact creator-path and project ownership checks. Previously recorded successful Codex completions recover membership on restart.
+
+  Keep an explicitly selected archived conversation when selecting its project's created agents after restart. Remember that conversation across browser reloads only while its exact session ID remains in the server's state, without resuming a runtime, creating a session, or replaying input. Existing browser preferences remain compatible; absent or stale conversation selections use the existing live-session fallback.
+
+- 40fe3e8: Prevent terminal mount cleanup from disposing the renderer before xterm's
+  queued viewport initialization runs. Ignore callbacks from closed terminal
+  connections and preserve workspace preferences across reloads in the Studio demo.
+
 ## 0.14.0
 
 ### Minor Changes
