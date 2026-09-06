@@ -9,7 +9,7 @@
   **Breaking:** `ProposalActor` and proposal-history payloads now contain only trusted `userId` and `sessionId` attribution. Consumers must stop reading or constructing the removed `role` and `assignment` fields and use `sessionId` for attribution. Those fields never represented write or implementation authority.
 
 - aad9500: Agent Studio now defaults to light mode when no explicit light or dark preference is stored. Previously it followed the OS `prefers-color-scheme`; that fallback is removed. A stored light or dark choice still wins — in a browser, toggling once pins it.
-- 58fb5cf: Publish delegation request/result contracts, lifecycle record types, bounded limits and canonical codec/digest helpers. Add durable reservations, exact child bindings, request receipts and release history in preparation for tool activation. Retain unfinished private cleanup proof until cleanup completes, clear completed spawn claims on lifecycle transitions, and use locale-independent release-key ordering for durable replay.
+- 58fb5cf: Publish delegation request/result contracts, lifecycle record types, bounded limits and canonical codec/digest helpers. Add durable reservations, exact child bindings, request receipts and release history for delegated sessions. Retain unfinished private cleanup proof until cleanup completes, clear completed spawn claims on lifecycle transitions, and use locale-independent release-key ordering for durable replay.
 - 74884b1: Add deterministic role-neutral focused brief compilation, categorized impact,
   immutable scope-keyed lifecycle refresh, and bounded prompt-safe context
   projection for canonical and ad-hoc project work. Build-plan apply and rebase
@@ -22,7 +22,7 @@
 
   Publish the compiler functions and `DeterministicAgentBriefCompiler`, `AgentBriefService`, impact evaluator, and `serializeFocusedSessionContext` with its discriminated result and branded projection type. These helpers support exact-version offline compilation and safe context composition; Studio attaches projections through its internal session manager. Automatic refresh uses a trusted receipt namespace that caller map, plan and brief request IDs cannot occupy.
 
-- d5c26ae: Publish immutable Agent Map, build-plan and brief contracts with strict codecs and canonical digest helpers. The public types, exact-reference helpers, codecs and digest functions support offline contract validation independently of later storage and tool activation; documented compatibility aliases remain supported.
+- d5c26ae: Publish immutable Agent Map, build-plan and brief contracts with strict codecs and canonical digest helpers. The public types, exact-reference helpers, codecs and digest functions support offline contract validation independently of running Studio; documented compatibility aliases remain supported.
 - 4622f40: Delete only legacy format-1 Agent Map workspace records during shared desktop and
   CLI startup. Automatically generate missing maps for existing agents in the
   background with one isolated, structured Claude Code or Codex inference pass.
@@ -31,8 +31,10 @@
   components into compact layouts.
 
   Back up and convert exact, unused historical format-2 containers before map
-  discovery, allowing their existing agents to receive an initial map. Preserve
-  current format-2 files and historical records containing authored state or history.
+  discovery, allowing their existing agents to receive an initial map. Do not
+  reset current format-2 storage. Protect authored maps and history from automatic
+  edits; eligible projects without authored maps can receive an initial map.
+  Preserve historical records containing authored state or history.
   Exclude linked dependency/build/metadata directories from static source inspection
   just like ordinary ignored directories, without following links into external sources.
 
@@ -102,7 +104,7 @@
   keeping authoring and runtime capabilities primary. Document project-tool
   contracts and replace the known stale Studio orientation at prompt delivery.
 
-- cf2369c: Unify Agent Studio project sessions around one ordinary coding-agent identity, make the project name open the shared Agent Map, and seed new projects through a durable, retry-safe bootstrap in the first `Plan Agents` session.
+- cf2369c: Unify Agent Studio project sessions around one ordinary coding-agent identity, make the project name open the shared Agent Map, and seed new projects through a durable, retry-safe bootstrap in the first ordinary session, titled `Plan Agents`.
 
   **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
   `HarnessSession.agentMapIdentity` is now the role-neutral
