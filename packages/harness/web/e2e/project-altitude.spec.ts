@@ -1,4 +1,17 @@
 /**
+ * RUNS ON THE COMPATIBILITY PAYLOAD (`mockStudioProjects=absent`).
+ *
+ * The subject here is the workspace System Graph a project row opens. On a
+ * current server every project carries a durable Studio project and the row
+ * opens that project's Agent Map instead, so this surface is reachable only on
+ * the legacy payload, which is what `mockStudioProjects=absent` names. These
+ * specs were already running on that payload before it had a name: mock mode
+ * returned no Studio projects by default, so the whole suite did. Pinning takes
+ * nothing away, it only stops the choice being an accident. The plan-first
+ * equivalents of these behaviours are NOT covered here; see
+ * `project-axis.spec.ts` and `agent-map-planning.spec.ts`.
+ */
+/**
  * SAP-2980 — a project is somewhere you WORK, and the canvas is one surface at
  * two altitudes.
  *
@@ -20,7 +33,7 @@ const activeSessionId = (page: Page): Promise<string | null> =>
   page.getByTestId("session-context").getAttribute("data-session-id");
 
 test.beforeEach(async ({ page }) => {
-  await page.goto("/?seed=0");
+  await page.goto("/?seed=0&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
@@ -73,7 +86,7 @@ test("E3.3 — the tab strip is the PROJECT's sessions, including the ones bound
      Measured on the real 76-agent install: the very first session a project is
      given is auto-bound to one of its agents, so the empty strip is not an
      edge case — it is the default. */
-  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=absent");
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 
   await page.evaluate(() => {
@@ -207,7 +220,7 @@ test("E3.2 — a project whose ROOT is an agent says it is starting a session, n
      PROJECT, and the session that will serve them both is already being
      created. Measured with the guard removed: `open-agent-empty` is what
      renders. */
-  await page.goto("/?seed=0&mockNoLiveSessions=1");
+  await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=absent");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
   await page.getByTestId("project-map-rfq-agent").click();
@@ -340,7 +353,7 @@ test("Cmd/Ctrl+1..9 addresses the tabs the STRIP rendered, not a second list", a
      project selected over an EXITED session gave the strip the project's tabs
      and the handler the exited session's own subject, and Cmd+1 activated a
      session that was not tab 1. */
-  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=absent");
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
   await page.evaluate(() => {
     const publish = (
@@ -452,7 +465,7 @@ test("Cmd/Ctrl+1..9 follows a TAB CLICK, the one activation that moves nothing e
      `~/polsia/services/workers` are both open, so the outer project's strip
      lists the nested project's sessions (it genuinely contains them) while the
      nested one lists only its own. */
-  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1");
+  await page.goto("/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=absent");
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
   await page.evaluate(() => {
     const publish = (

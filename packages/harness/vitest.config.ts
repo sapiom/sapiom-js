@@ -31,6 +31,12 @@ export default defineConfig({
       "@shared/agent-name": fileURLToPath(
         new URL("src/shared/agent-name.ts", import.meta.url),
       ),
+      "@shared/paths": fileURLToPath(
+        new URL("src/shared/paths.ts", import.meta.url),
+      ),
+      "@shared/project-roots": fileURLToPath(
+        new URL("src/shared/project-roots.ts", import.meta.url),
+      ),
     },
   },
   test: {
