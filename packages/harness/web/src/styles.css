@@ -10829,26 +10829,6 @@ button.system-graph-node.is-navigable:focus-visible {
   white-space: nowrap;
 }
 
-/* An empty project's own line. Nested to the depth its agents would occupy,
-   so the row reads as "this is where they would be" rather than as a second
-   header. Non-interactive: there is nothing here to click, and a hover state
-   would promise otherwise. */
-.workspace-row-empty {
-  pointer-events: none;
-}
-
-/* …EXCEPT the action inside it (SAP-2981). The inert row predates it carrying
-   a button: the empty project used to be a label that stated a fact, and the
-   rule kept it from eating hover on the rows around it. Once "Create the first
-   agent here" moved in, the same rule swallowed every click on it — measured,
-   `elementFromPoint` over the middle of that button returned the enclosing
-   `.workspace-group`, and Playwright's click retried for 30s against a control
-   that could never receive one. The spec beside it only ever asserted
-   `toBeEnabled()`, which a control nobody can click passes. */
-.workspace-row-empty .tree-row-empty-action {
-  pointer-events: auto;
-}
-
 .tree-row-empty {
   padding-left: var(--tree-pad-x);
   color: var(--text-faint);
@@ -10885,21 +10865,8 @@ button.system-graph-node.is-navigable:focus-visible {
   padding: 0 3px;
 }
 
-/* The empty project's action row. It uses the shared `.tree-row` skeleton so it
-   sits on the agent rows' rhythm — this is where the first agent will appear,
-   and the row should already read as that place. */
-.tree-row-empty-action {
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-}
-
-.tree-row-empty-action:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-/* A NOTE ROW, not an action. The empty-project row's companion when a scan
-   stopped at separate checkouts: it states a fact the user needs in order to
+/* A NOTE ROW, not an action. When a scan stopped at separate checkouts,
+   it states a fact the user needs in order to
    read the empty project correctly, and it is deliberately NOT clickable —
    which checkout to open is the user's decision, and guessing one would be the
    same overreach as the walk entering all of them. */

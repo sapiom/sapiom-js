@@ -101,6 +101,10 @@ opens that session's ordinary conversation and Canvas/Steps experience. A new
 project's first ordinary session is initially titled **Plan Agents**; the title
 does not confer a role and can be renamed like any other session.
 
+Empty projects have no inline first-agent creation button, including after a
+session ends. Use the project's session shortcut or its menu to start work;
+warnings about separate checkouts that were not searched remain visible.
+
 When a new project gains its first active root binding, Studio durably schedules
 one evidence-first map bootstrap for that first session. The model reads the
 current map and uses the same structured tools available to every project
