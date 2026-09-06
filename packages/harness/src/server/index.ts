@@ -3482,6 +3482,7 @@ export const startServer = async (
     },
   });
   let initializationSchedule: Promise<void> | null = null;
+  let initializationDiscovery: Promise<void> | null = null;
   let initializationReschedule = false;
   const scheduleExistingMaps = (): Promise<void> => {
     if (initializationSchedule) { initializationReschedule = true; return initializationSchedule; }
@@ -4601,6 +4602,7 @@ export const startServer = async (
       // indefinitely if a store or transport never settles. Timing out this
       // wait leaves the existing writes intact; it never reopens admission.
       const drainsSettled = (async () => {
+        await settle(() => initializationDiscovery ?? Promise.resolve());
         await bootstrapClosing;
         await registrationClosing;
         await settle(() => sessionManager.flush());
@@ -4682,7 +4684,22 @@ export const startServer = async (
 
     // Discovery owns scheduling; browser navigation only observes status. Resume queued work after listen.
     scheduleMapInitializations = scheduleExistingMaps;
-    void initialWorkflowScan.then(() => scheduleExistingMaps()).catch(() => {});
+    initializationDiscovery = initialWorkflowScan.then(async () => {
+      if (!coordinatorActive) return;
+      // Discovery completeness belongs to an exact root. Desktop's launchDir
+      // scan cannot certify projects elsewhere (or even its own child roots).
+      // Scan each available restored scope once through the normal bounded,
+      // static discovery coordinator before evaluating first-map eligibility.
+      for (const scope of await studioWorkspaceScopeCatalog.list()) {
+        if (!coordinatorActive) return;
+        if (await workflowRegistry.discoveryStatus(scope.cwd) !== "complete") {
+          await scanWorkflowsAndBroadcast(scope.cwd, "boot").catch(() => {
+            // Incomplete/unavailable scopes remain ineligible; never infer absence.
+          });
+        }
+      }
+      if (coordinatorActive) await scheduleExistingMaps();
+    }).catch(() => {});
 
     // A project intent is persisted before its first PTY is created. Reconcile
     // that crash window only after the MCP endpoint is bound: every ordinary
