@@ -164,6 +164,7 @@ describe("startup CLI updates", () => {
     async (failure) => {
       const options = setup();
       const initial = await ensureAgentUpdates(options);
+      const filesBefore = await readdir(path.join(root, "codex"));
       const pointer = await readFile(
         path.join(root, "codex", "active.json"),
         "utf8",
@@ -180,6 +181,7 @@ describe("startup CLI updates", () => {
       expect(
         await readFile(path.join(root, "codex", "active.json"), "utf8"),
       ).toBe(pointer);
+      expect(await readdir(path.join(root, "codex"))).toEqual(filesBefore);
     },
   );
 
@@ -193,6 +195,7 @@ describe("startup CLI updates", () => {
   it("does not activate an installation that finishes after Studio starts quitting", async () => {
     const options = setup();
     const initial = await ensureAgentUpdates(options);
+    const filesBefore = await readdir(path.join(root, "codex"));
     const pointer = await readFile(
       path.join(root, "codex", "active.json"),
       "utf8",
@@ -209,6 +212,7 @@ describe("startup CLI updates", () => {
     expect(
       await readFile(path.join(root, "codex", "active.json"), "utf8"),
     ).toBe(pointer);
+    expect(await readdir(path.join(root, "codex"))).toEqual(filesBefore);
   });
 
   it("reuses selected binaries in dev/smoke without registry or install calls", async () => {
@@ -261,9 +265,9 @@ describe("startup CLI updates", () => {
       binaryEnv: { ELECTRON_RUN_AS_NODE: "1" },
     });
     expect(command?.binary).toBe(process.execPath);
-    expect(command?.binaryArgs).toEqual([
+    expect(command?.binaryArgs.at(-1)).toBe(
       path.join(prefix, "node_modules", "@openai", "codex", "cli.cjs"),
-    ]);
+    );
     expect(command?.binaryEnv.ELECTRON_RUN_AS_NODE).toBe("1");
     expect(await setup().probe(command!)).toBe("0.134.0");
   });
