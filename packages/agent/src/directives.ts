@@ -73,6 +73,14 @@ export interface PauseUntilSignalDirective {
     readonly name: string;
     readonly correlationId?: string;
   };
+  /**
+   * Deadline for the signal, in ms from the moment the pause is recorded.
+   * Omitted, the engine applies its default pause deadline of 7 days (the
+   * capability resume-token TTL, so no dispatched result can land after it).
+   * A pause that receives no signal by its deadline is finalized as failed
+   * with `PauseTimeoutError` rather than waiting forever. Pass an explicit
+   * value for a wait that must run longer or give up sooner.
+   */
   readonly timeoutMs?: number;
   /** Step to run when the signal arrives. Defaults to the paused step. */
   readonly resumeStep?: string;
@@ -189,6 +197,7 @@ export interface Pause<Resume extends string> {
   readonly kind: typeof DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL;
   readonly signal: { readonly name: string; readonly correlationId?: string };
   readonly resumeStep?: Resume;
+  /** Deadline for the signal, in ms. Omitted, the engine applies its 7-day default (see `pauseUntilSignal`). */
   readonly timeoutMs?: number;
   /** Optional audit output recorded for the pausing step. */
   readonly output?: unknown;
@@ -237,6 +246,13 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * Both are consumed as `return pauseUntilSignal(...)` from an async `run()`, so
  * async-return flattening makes the sync/async distinction invisible at the call
  * site.
+ *
+ * **Every pause has a deadline.** `timeoutMs` sets it; omitted, the engine
+ * applies its default of 7 days (the capability resume-token TTL). If no signal
+ * arrives by then the run is finalized as failed with `PauseTimeoutError`, so a
+ * lost webhook or a dropped capability result surfaces as an error instead of a
+ * run that waits forever. Pass an explicit `timeoutMs` for a human gate that
+ * legitimately needs longer, or for a wait that should give up sooner.
  */
 export function pauseUntilSignal<const Resume extends string>(args: {
   signal: string;
