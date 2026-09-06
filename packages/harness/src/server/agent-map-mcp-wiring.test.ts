@@ -117,6 +117,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     "build_plan_read",
     "build_plan_rebase",
     "build_plan_validate",
+    "project_subsession_delegate",
   ]);
   const snapshot = await client.callTool({
     name: "agent_map_read",
@@ -128,6 +129,101 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     project: { projectId: session.agentMapIdentity!.projectId },
     proposal: null,
   });
+  const stopReadyBridge = server.sessionManager.onStatusChange(
+    (candidate, context) => {
+      if (
+        candidate.id !== session.id &&
+        candidate.status === "running" &&
+        !candidate.ready &&
+        context.runtimeEpoch
+      ) {
+        server!.sessionManager.setReady(candidate.id, context.runtimeEpoch);
+      }
+    },
+  );
+  const delegationArguments = {
+    schemaVersion: 1,
+    requestKey: "wiring-delegation",
+    operation: {
+      kind: "delegate",
+      delegations: [{
+        delegationKey: "child",
+        outcome: "Implement the focused child task",
+      }],
+    },
+  };
+  const delegated = await client.callTool({
+    name: "project_subsession_delegate",
+    arguments: delegationArguments,
+  });
+  const childMcp = launchOpts?.agentMapMcp;
+  expect(childMcp).toBeDefined();
+  const childClient = new Client({ name: "nested-delegation-test", version: "1" });
+  await childClient.connect(new StreamableHTTPClientTransport(new URL(childMcp!.url), {
+    requestInit: { headers: { Authorization: `Bearer ${childMcp!.bearerToken}` } },
+  }));
+  expect((await childClient.listTools()).tools.map(({ name }) => name)).toContain(
+    "project_subsession_delegate",
+  );
+  const nested = await childClient.callTool({
+    name: "project_subsession_delegate",
+    arguments: {
+      schemaVersion: 1,
+      requestKey: "nested-request",
+      operation: {
+        kind: "delegate",
+        delegations: [{
+          delegationKey: "grandchild",
+          outcome: "Implement the nested task",
+        }],
+      },
+    },
+  });
+  expect(nested.structuredContent).toMatchObject({
+    results: [{ outcome: "created", sessionState: "ready" }],
+  });
+  await childClient.close();
+  const retried = await client.callTool({
+    name: "project_subsession_delegate",
+    arguments: delegationArguments,
+  });
+  const released = await client.callTool({
+    name: "project_subsession_delegate",
+    arguments: {
+      schemaVersion: 1,
+      requestKey: "release-child",
+      operation: { kind: "release", delegationKeys: ["child"] },
+    },
+  });
+  stopReadyBridge();
+  expect(delegated.isError).not.toBe(true);
+  expect(delegated.structuredContent).toMatchObject({
+    requestKey: "wiring-delegation",
+    results: [{ outcome: "created", sessionState: "ready" }],
+  });
+  expect(retried.structuredContent).toMatchObject({
+    replayed: true,
+    results: [{
+      outcome: "reused",
+      sessionId: (delegated.structuredContent as { results: Array<{ sessionId: string }> }).results[0]!.sessionId,
+    }],
+  });
+  expect(released.structuredContent).toMatchObject({
+    results: [{ outcome: "released", sessionState: "closed" }],
+  });
+  expect(server.sessionManager.isLive(
+    (delegated.structuredContent as { results: Array<{ sessionId: string }> })
+      .results[0]!.sessionId,
+  )).toBe(false);
+  expect(server.sessionManager.getSubsessionBinding(
+    (delegated.structuredContent as { results: Array<{ sessionId: string }> })
+      .results[0]!.sessionId,
+  )).toBeNull();
+  expect(server.sessionManager.list().filter(({ id }) =>
+    id === (nested.structuredContent as { results: Array<{ sessionId: string }> })
+      .results[0]!.sessionId,
+  )).toHaveLength(1);
+  expect(server.sessionManager.list()).toHaveLength(3);
   await client.close();
 
   await server.sessionManager.kill(session.id);
@@ -370,6 +466,7 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
     "build_plan_read",
     "build_plan_rebase",
     "build_plan_validate",
+    "project_subsession_delegate",
   ]);
 
   const proposalEvents: BusMessage[] = [];
