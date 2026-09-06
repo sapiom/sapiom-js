@@ -72,6 +72,7 @@ export async function runCodexStructuredInference(
     systemPrompt: string;
     schema: Record<string, unknown>;
   },
+  binaryArgs: readonly string[] = [],
 ): Promise<unknown> {
   const cwd = process.cwd();
   const promptFile = join(cwd, "inference-instructions.txt");
@@ -103,8 +104,9 @@ export async function runCodexStructuredInference(
     binary,
     cwd,
     overrides,
+    binaryArgs,
   );
-  const child = spawn(binary, args, {
+  const child = spawn(binary, [...binaryArgs, ...args], {
     cwd,
     env: { ...process.env, CODEX_HOME: isolatedHome },
     stdio: ["pipe", "pipe", "pipe"],
@@ -312,6 +314,8 @@ async function main(): Promise<void> {
   const result = await runCodexStructuredInference(
     process.argv[2]!,
     JSON.parse(body),
+    // The adapter supplies the managed CLI entry separately from inference data.
+    process.argv.slice(3),
   );
   await new Promise<void>((resolve, reject) =>
     process.stdout.write(
