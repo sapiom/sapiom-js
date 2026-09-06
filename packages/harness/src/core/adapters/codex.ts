@@ -127,9 +127,17 @@ const READY_PROMPT_PATTERNS = [
  * selectors can use the same marker, but do not render that cwd footer. The
  * blocker check in SessionManager still wins when a known modal and the
  * underlying composer are present in the same diff-rendered frame.
+ *
+ * Narrow terminals may hide the cwd footer, and future Codex releases may
+ * change placeholder copy. `hasStructuralComposer` is the copy-/footer-
+ * independent proof: an input marker that is not sitting on a numbered modal
+ * choice. SessionManager still requires consecutive structural frames before
+ * clearing a previously latched blocker (see `detectStructuralReadyPrompt`).
  */
 const COMPOSER_INPUT_MARKER = /›/u;
 const COMPOSER_CWD_FOOTER = /·\s*(?:~[\\/]|\/|[A-Za-z]:[\\/])/u;
+/** Numbered selection rows reuse the same `›` glyph as the empty composer. */
+const COMPOSER_SELECTION_ROW = /›\s*\d+\./u;
 
 /**
  * A modal can repaint only its moved selection row while leaving Codex's
@@ -142,6 +150,30 @@ function hasBlockingPromptFragment(rendered: string): boolean {
   return BLOCKING_PROMPT_SIGNATURES.some((signature) =>
     signature.some((pattern) => pattern.test(rendered)),
   );
+}
+
+function hasStructuralComposer(rendered: string): boolean {
+  if (!COMPOSER_INPUT_MARKER.test(rendered)) return false;
+  if (COMPOSER_SELECTION_ROW.test(rendered)) return false;
+  return true;
+}
+
+type ReadyPromptKind = "none" | "strong" | "structural";
+
+function classifyReadyPrompt(rendered: string): ReadyPromptKind {
+  if (hasBlockingPromptFragment(rendered)) return "none";
+  if (READY_PROMPT_PATTERNS.some((pattern) => pattern.test(rendered))) {
+    return "strong";
+  }
+  if (
+    COMPOSER_INPUT_MARKER.test(rendered) &&
+    COMPOSER_CWD_FOOTER.test(rendered) &&
+    !COMPOSER_SELECTION_ROW.test(rendered)
+  ) {
+    return "strong";
+  }
+  if (hasStructuralComposer(rendered)) return "structural";
+  return "none";
 }
 
 export interface CodexAdapterOptions {
@@ -343,13 +375,18 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   detectReadyPrompt(terminalOutput: string): boolean {
-    const rendered = stripAnsi(terminalOutput);
-    if (hasBlockingPromptFragment(rendered)) return false;
-    return (
-      READY_PROMPT_PATTERNS.some((pattern) => pattern.test(rendered)) ||
-      (COMPOSER_INPUT_MARKER.test(rendered) &&
-        COMPOSER_CWD_FOOTER.test(rendered))
-    );
+    return classifyReadyPrompt(stripAnsi(terminalOutput)) !== "none";
+  }
+
+  /**
+   * True when readiness is proven only by the structural composer model
+   * (input marker without a numbered selection row), not by known empty-
+   * composer copy or the cwd footer. SessionManager requires consecutive
+   * matching frames before clearing a latched blocker on this path so a
+   * single partial modal repaint cannot reopen injection.
+   */
+  detectStructuralReadyPrompt(terminalOutput: string): boolean {
+    return classifyReadyPrompt(stripAnsi(terminalOutput)) === "structural";
   }
 
   /**
