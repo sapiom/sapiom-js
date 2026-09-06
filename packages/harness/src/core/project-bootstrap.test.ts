@@ -379,6 +379,33 @@ describe("ProjectBootstrapCoordinator", () => {
     expect((await readState(root, session.id)).emptyProject).toBe(false);
   });
 
+  it("keeps a failed first-map reservation explicitly retryable without losing the ready session", async () => {
+    const claimMapGeneration = vi.fn().mockRejectedValueOnce(new Error("temporary storage failure")).mockResolvedValue(true);
+    const coordinator = new ProjectBootstrapCoordinator({ root, sessionManager: manager, claimMapGeneration });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    expect(session.projectBootstrap?.bootstrap).toEqual({ status: "failed", retryable: true, errorCode: "persistence_failed" });
+    expect(submitted).toEqual([]); expect((await readState(root, session.id)).attempts).toEqual([]);
+    await coordinator.retry(session.id);
+    expect(claimMapGeneration).toHaveBeenCalledTimes(2); expect(submitted).toHaveLength(1);
+    expect(session.projectBootstrap?.bootstrap.status).toBe("generating");
+  });
+
+  it("keeps ordinary user input in order when initialization owns the first map", async () => {
+    const claimMapGeneration = vi.fn(async () => false);
+    const coordinator = new ProjectBootstrapCoordinator({ root, sessionManager: manager, claimMapGeneration });
+    await coordinator.register(session, { emptyProject: true, mode: "created" });
+    expect(session.projectBootstrap?.bootstrap).toEqual({ status: "skipped", reason: "map-not-empty" });
+    expect(submitted).toEqual([]);
+    await coordinator.enqueue(session.id, "first user request");
+    await coordinator.enqueue(session.id, "second user request");
+    expect(submitted.map((entry) => entry.text)).toEqual(["first user request"]);
+    coordinator.decorateLocalEvent(analyticsEvent(session.id, "prompt.submitted", { prompt: "first user request" }));
+    await coordinator.onEventPersisted(analyticsEvent(session.id, "turn.completed", { assistantText: "Complete" }));
+    expect(submitted.map((entry) => entry.text)).toEqual(["first user request", "second user request"]);
+    expect(submitted.every((entry) => entry.background !== true)).toBe(true);
+    expect(sessions.size).toBe(1);
+  });
+
   it("correlates one unique evidence-first bootstrap and ignores duplicate readiness and completion signals", async () => {
     const lifecycle: ProjectBootstrapLifecycleEvent[] = [];
     const coordinator = new ProjectBootstrapCoordinator({

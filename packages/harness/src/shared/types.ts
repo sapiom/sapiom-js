@@ -305,15 +305,25 @@ export interface DoctorCheck {
   detail: string;
 }
 
+export interface StructuredInferenceOptions {
+  projectId: string;
+  schema: Record<string, unknown>;
+  schemaFile: string;
+  systemPrompt: string;
+}
+
 export interface SpawnSpec {
   command: string;
   args: string[];
+  stdin?: string;
   /** Merged over process.env. Use `null` to unset a variable. */
   env: Record<string, string | null>;
   cwd: string;
 }
 
 export interface LaunchOpts {
+  /** Internal project-owned inference: no coding capabilities or session configuration. */
+  structuredInference?: StructuredInferenceOptions;
   harnessSessionId: string;
   cwd: string;
   /** Absolute path to the generated system-prompt file (profile). */
@@ -375,6 +385,8 @@ export type SystemPromptDelivery = "launch-flag" | "post-ready-injection";
  * side-effect free until `launch`/`resume` specs are actually spawned.
  */
 export interface HarnessAdapter {
+  /** False for providers that only support the isolated structured background mode. */
+  supportsCodingTasks?: boolean;
   id: HarnessKind;
   /** Binary present, version acceptable. */
   doctor(): Promise<DoctorCheck[]>;
@@ -582,6 +594,7 @@ export type BusMessage =
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
+  | { type: "agent-map.initialization.changed"; status: import("./agent-map-initialization.js").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
@@ -833,6 +846,9 @@ export type AnalyticsEventType =
   | "agent_map.proposal_created"
   | "agent_map.proposal_visible"
   | "agent_map.validation_failed"
+  | "agent_map.legacy_reset"
+  | "agent_map.empty_legacy_container_migrated"
+  | "agent_map.initialization"
   | "agent_map.workspace_initialized"
   | "agent_map.workspace_migrated"
   | "agent_map.workspace_read_failed"

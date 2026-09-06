@@ -154,6 +154,18 @@ describe("ClaudeCodeAdapter", () => {
   });
 
   describe("launchTask", () => {
+    it("restricts inference to structured output while preserving native model selection", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const spec = adapter.launchTask({ harnessSessionId: "private-task", cwd: "/isolated", prompt: "contract evidence",
+        structuredInference: { projectId: "project-test", schema: { type: "object" }, schemaFile: "/isolated/schema.json", systemPrompt: "Return structured JSON" },
+        mcpConfigFile: "/project/mcp.json", settingsFile: "/project/settings.json", systemPromptFile: "/project/instructions" });
+      expect(spec.stdin).toBe("contract evidence");
+      expect(spec.args).toContain("--safe-mode"); expect(spec.args[spec.args.indexOf("--tools") + 1]).toBe("");
+      expect(JSON.parse(spec.args[spec.args.indexOf("--settings") + 1]!)).toMatchObject({ apiKeyHelper: "", awsAuthRefresh: "", awsCredentialExport: "", gcpAuthRefresh: "" });
+      expect(spec.args).not.toContain("--model"); expect(spec.args).not.toContain("--mcp-config");
+      expect(spec.args.join(" ")).not.toContain("/project/"); expect(spec.args).toContain("--no-session-persistence");
+    });
+
     it("builds a headless -p SpawnSpec with the same config flags plus acceptEdits and stream-json output", async () => {
       const promptDir = await mkdtemp(join(tmpdir(), "harness-claude-test-"));
       const promptFile = join(promptDir, "prompt.txt");

@@ -1,3 +1,4 @@
+import type { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { Router } from "express";
 import { z } from "zod";
 import {
@@ -25,6 +26,7 @@ import {
 } from "../core/studio-workspace-preferences.js";
 
 export interface AgentMapRouterOptions {
+  initialization?: AgentMapInitializationCoordinator;
   catalog: StudioProjectCatalog;
   store: AgentMapWorkspaceStore;
   preferences: StudioWorkspacePreferenceStore;
@@ -266,6 +268,22 @@ export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
         .map((binding) => binding.localRootRef),
     };
   };
+  for (const retry of [false, true]) {
+    const endpoint = `/projects/:projectId/agent-map/initialization${retry ? "/retry" : ""}`;
+    router[retry ? "post" : "get"](endpoint, async (req, res) => {
+      try {
+        const context = await projectContext(req.params.projectId);
+        if (!context) { res.status(404).json(errorBody("project_not_found")); return; }
+        const status = options.initialization
+          ? await (retry ? options.initialization.schedule(context.project.projectId, true) : options.initialization.status(context.project.projectId))
+          : { projectId: context.project.projectId, status: "idle", errorCode: null, retryable: false };
+        res.status(retry && status.status === "queued" ? 202 : 200).setHeader("Cache-Control", "no-store").json(status);
+      } catch (error) {
+        const code = error instanceof AgentMapWorkspaceStoreError || error instanceof StudioProjectCatalogError ? error.code : "storage_unavailable";
+        res.status(code === "storage_unavailable" ? 503 : 500).json(errorBody(code));
+      }
+    });
+  }
   router.get("/projects/:projectId/agent-map/workspace", async (req, res) => {
     try {
       const project = await options.catalog.resolve(req.params.projectId);

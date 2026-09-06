@@ -178,6 +178,59 @@ Studio guidance.
 aliases for the corresponding neutral plan, map and brief contracts; they do
 not introduce a second data model.
 
+### Existing projects after an update
+
+Desktop and CLI startup reset only files with outer `storageSchemaVersion: 1`.
+The reset deletes that project's `workspace.json` under its normal write lock and
+journals completion; agent source, project identity, sessions, and history remain.
+Format 2 is never reset. A separate compatibility pass recognizes four exact
+historical wrapped-format-2 container shapes, only at their initial revision with
+identical creation/update timestamps, null map/plan pointers, and every proposal,
+receipt, brief, assignment, approval, consent, and history collection empty.
+Under the project lock it durably saves the original bytes to
+`workspace.empty-wrapped-v2.<sha256>.backup.json`, then atomically converts that
+unused container into current format 2. Shared startup and late reads use the same
+conversion, including initialization eligibility reads. A current-format-2 file
+is never rewritten by this pass. Authored or uncertain older wrappers retain
+their storage error and require separate data-preserving compatibility handling.
+
+Once discovery completes, projects with agents and no authored map receive one
+background structured inference pass. Valid unused format-2 containers qualify;
+any current map, map version, or accepted operation history prevents automatic
+initialization, even if a user emptied the graph. Generation uses static contract
+evidence, two concurrent tasks at most, and a three-minute timeout. Queued work
+resumes on restart; failed or interrupted work requires **Retry generation**.
+The final write rechecks ownership, project access, and absence under the map lock.
+A coding session that creates a map first wins; automatic output is discarded.
+New-project Plan Agents bootstrap shares this first-map ownership decision.
+Static inspection excludes dependency, build, and Studio metadata directories,
+including symlinks at those ignored boundaries. Other source links remain opaque
+and prevent generation from proceeding with incomplete evidence.
+
+The pass uses the project's latest available coding provider, otherwise the host
+default, and its configured default model. Authentication/execution failures do
+not switch providers. Claude exposes only its JSON formatter, with coding tools,
+hooks, MCP servers, and optional user authentication helpers disabled. Native
+OAuth or API-key authentication is retained; helper-only logins cannot initialize
+maps in the background. Codex uses an
+ephemeral app-server thread with no code environment and an isolated provider
+configuration; its login snapshot cannot rotate the native refresh token. Native
+file authentication and Mac's direct keychain are supported; unavailable or
+unsupported credential stores fail without changing the user's authentication.
+These restrictions remove the model's project-write capabilities; native CLIs
+still run as the user and remain subject to administrator-managed authentication.
+No background session tab, provisional inventory graph, or raw inference task is
+published to the browser. Relationships need contract evidence; disconnected
+agents remain visible in a compact component layout. Selection survives topology
+updates; the view follows updates until the user pans or zooms, and **Fit** resumes it.
+
+`GET /api/projects/:projectId/agent-map/initialization` returns bounded lifecycle
+state. The authenticated `POST .../initialization/retry` repeats eligibility checks.
+`agent-map.initialization.changed` announces status only; prompts, source paths,
+credentials, and raw model output are never included.
+While generation is active, the selected project also polls its durable status
+so completion by another Studio process is visible without reloading the page.
+
 ### Agent Map MCP
 
 Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for

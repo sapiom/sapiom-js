@@ -18,6 +18,8 @@
  * sees with zero indication why).
  */
 
+import { fileURLToPath } from "node:url";
+import { unpackedPath } from "../asar-path.js";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
@@ -297,6 +299,16 @@ export class CodexAdapter implements HarnessAdapter {
         },
       ];
     }
+  }
+
+  readonly supportsCodingTasks = false;
+
+  launchTask(opts: LaunchOpts): SpawnSpec {
+    if (!opts.prompt || !opts.structuredInference) throw new Error("Codex background tasks require structured inference mode");
+    return { command: process.execPath,
+      args: [unpackedPath(fileURLToPath(new URL("../codex-structured-inference.js", import.meta.url))), this.binary],
+      cwd: opts.cwd, env: { ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) },
+      stdin: JSON.stringify({ prompt: opts.prompt, systemPrompt: opts.structuredInference.systemPrompt, schema: opts.structuredInference.schema }) };
   }
 
   launch(opts: LaunchOpts): SpawnSpec {

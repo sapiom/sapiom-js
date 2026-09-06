@@ -1,3 +1,4 @@
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
  * section of ../../../src/shared/types.ts). Gated at this layer: with
@@ -251,7 +252,7 @@ export class ApiError extends Error {
   readonly status: number;
   readonly reason: string | undefined;
 
-  constructor(status: number, message: string, reason: string | undefined) {
+  constructor(status: number, message: string, reason: string | undefined, readonly code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -366,6 +367,8 @@ export interface HarnessApi {
   authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
   /** Durable, path-free empty/proposal/revision pointers for one Studio project. */
+  getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
+  retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
   getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
@@ -605,6 +608,7 @@ class RealApi implements HarnessApi {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       let reason: string | undefined;
+      let code: string | undefined;
       try {
         const parsed: unknown = body ? JSON.parse(body) : undefined;
         if (
@@ -613,6 +617,8 @@ class RealApi implements HarnessApi {
           typeof (parsed as { error?: unknown }).error === "string"
         ) {
           reason = (parsed as { error: string }).error;
+          const rawCode = (parsed as { code?: unknown }).code;
+          if (typeof rawCode === "string" && rawCode.length <= 64) code = rawCode;
         }
       } catch {
         // Not JSON — reason stays undefined, callers fall back to .message.
@@ -621,6 +627,7 @@ class RealApi implements HarnessApi {
         res.status,
         `${init?.method ?? "GET"} ${path} → ${res.status}${body ? `: ${body}` : ""}`,
         reason,
+        code,
       );
     }
     return res;
@@ -634,6 +641,13 @@ class RealApi implements HarnessApi {
 
   getState(): Promise<AppState> {
     return this.request<AppState>("/api/state");
+  }
+
+  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization`), projectId);
+  }
+  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization/retry`, { method: "POST" }), projectId);
   }
 
   async getAgentMapWorkspace(
@@ -2401,6 +2415,16 @@ export class MockApi implements HarnessApi {
       ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
     };
+  }
+
+  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    const mode = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("mockMapInitialization");
+    if (mode === "error") throw new ApiError(503, "Agent Map storage is unavailable", "Agent Map storage is unavailable");
+    return { projectId, status: mode === "running" || mode === "queued" || mode === "failed" || mode === "completed" ? mode : "idle",
+      errorCode: mode === "failed" ? "provider_failed" : null, retryable: mode === "failed" };
+  }
+  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    return { projectId, status: "queued", errorCode: null, retryable: false };
   }
 
   async getAgentMapWorkspace(
