@@ -6,6 +6,8 @@ import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
+import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import type {
@@ -17,12 +19,14 @@ import { createAgentMapRouter } from "./agent-map.js";
 
 describe("createAgentMapRouter", () => {
   const roots: string[] = [];
+  const initializers: AgentMapInitializationCoordinator[] = [];
   let server: ReturnType<express.Express["listen"]> | undefined;
 
   afterEach(async () => {
     if (server)
       await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = undefined;
+    await Promise.all(initializers.splice(0).map((coordinator) => coordinator.close()));
     await Promise.all(
       roots
         .splice(0)
@@ -56,6 +60,12 @@ describe("createAgentMapRouter", () => {
       path.join(stateRoot, "agent-map"),
       { onEvent },
     );
+    const proposals = new AgentMapProposalService(store);
+    const infer = vi.fn(async () => { throw new Error("Must not run in endpoint tests"); });
+    const initialization = new AgentMapInitializationCoordinator({ store, proposals, infer, concurrency: 0,
+      project: async (id) => id === project.projectId ? { userId: currentUserId, available: true, discoveryComplete: true,
+        agents: [{ agentId: "agent_00000000-0000-4000-8000-000000000001", name: "Planner", path: privateRoot }], provider: "codex" } : null });
+    initializers.push(initialization);
     const app = express();
     app.use(express.json());
     app.use("/api", createBootTokenMiddleware("test-token"));
@@ -65,6 +75,7 @@ describe("createAgentMapRouter", () => {
       createAgentMapRouter({
         catalog,
         store,
+        initialization,
         preferences: new StudioWorkspacePreferenceStore(
           path.join(stateRoot, "studio-workspace-preferences.json"),
         ),
@@ -94,11 +105,40 @@ describe("createAgentMapRouter", () => {
       scopes,
       listWorkspaceScopes,
       onEvent,
+      store,
+      proposals,
+      infer,
       setCurrentUserId: (userId: string) => {
         currentUserId = userId;
       },
     };
   }
+
+  it("authenticates initialization reads and retries, and rechecks authored history on retry", async () => {
+    const f = await start();
+    const route = `${f.baseUrl}/api/projects/${f.project.projectId}/agent-map/initialization`;
+    const headers = { "X-Harness-Token": "test-token", "Content-Type": "application/json" };
+    expect((await fetch(route)).status).toBe(401);
+    expect((await fetch(`${route}/retry`, { method: "POST" })).status).toBe(401);
+    const idle = await fetch(route, { headers });
+    expect(await idle.json()).toEqual({ projectId: f.project.projectId, status: "idle", errorCode: null, retryable: false });
+    await expect(fs.stat(path.join(f.stateRoot, "agent-map", "projects", f.project.projectId, "workspace.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    const retry = await fetch(`${route}/retry`, { method: "POST", headers, body: JSON.stringify({ projectId: "forged-project", attemptId: "forged-attempt" }) });
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toEqual({ projectId: f.project.projectId, status: "queued", errorCode: null, retryable: false });
+    expect(f.infer).not.toHaveBeenCalled();
+    await f.proposals.propose({ projectId: f.project.projectId, userId: "user-test", sessionId: "ordinary-session" }, {
+      schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "user-first-map",
+      operations: [{ kind: "add-node", draftRef: "planner", node: { kind: "agent", name: "Planner", purpose: "Plan", ownerAgent: null, contractRefs: [] } }],
+    });
+    const before = await fs.readFile(path.join(f.stateRoot, "agent-map", "projects", f.project.projectId, "workspace.json"));
+    const ignored = await fetch(`${route}/retry`, { method: "POST", headers });
+    expect(ignored.status).toBe(200); expect((await ignored.json()).status).toBe("skipped");
+    expect((await (await fetch(route, { headers })).json()).status).toBe("completed");
+    expect(await fs.readFile(path.join(f.stateRoot, "agent-map", "projects", f.project.projectId, "workspace.json"))).toEqual(before);
+    const unknown = await fetch(`${f.baseUrl}/api/projects/project_00000000-0000-4000-8000-000000000099/agent-map/initialization/retry`, { method: "POST", headers });
+    expect(unknown.status).toBe(404); expect(f.infer).not.toHaveBeenCalled();
+  });
 
   it("is boot-token protected, lazy, idempotent, and path-free", async () => {
     const fixture = await start();

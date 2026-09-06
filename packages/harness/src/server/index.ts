@@ -1,3 +1,6 @@
+import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
+import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
+import { hasAuthoredAgentMap } from "../core/agent-map-initialization-record.js";
 /**
  * Harness server — integration point for every workstream.
  *
@@ -884,6 +887,8 @@ export const startServer = async (
   // eslint-disable-next-line prefer-const
   let sessionManager!: SessionManager;
   let projectBootstrap: ProjectBootstrapCoordinator | null = null;
+  let agentMapInitialization: AgentMapInitializationCoordinator | null = null;
+  let scheduleMapInitializations: (() => Promise<void>) | null = null;
   const pendingProjectCwds = new Set<string>();
   const rawProjectRoots = async (): Promise<string[]> => {
     const settings = await loadSettings(statePaths.settings);
@@ -2607,6 +2612,7 @@ export const startServer = async (
             published = await requestAcceptedPublication();
           }
           if (!published) continue;
+          void scheduleMapInitializations?.().catch(() => {});
           if (generation !== flight.generation || flight.pending) {
             continue;
           }
@@ -3153,6 +3159,8 @@ export const startServer = async (
       },
     },
   );
+  // Shared startup reset precedes every bootstrap/map-state recovery. Late reads apply the same policy.
+  await agentMapWorkspaceStore.resetLegacyMaps();
   const studioWorkspacePreferences = new StudioWorkspacePreferenceStore(
     join(statePaths.agentMap, "studio-workspace-preferences.json"),
   );
@@ -3438,17 +3446,70 @@ export const startServer = async (
     });
   };
 
-  const isMeaningfullyEmptyProject = async (
-    projectId: string,
-  ): Promise<boolean> => {
-    const snapshot = await agentMapProposalService.read(projectId);
-    return (
-      snapshot.workspace.confirmedRevisionId === null &&
-      snapshot.workspace.projectBuildPlanId === null &&
-      (snapshot.proposal === null ||
-        (snapshot.proposal.nodes.length === 0 &&
-          snapshot.proposal.relationships.length === 0))
-    );
+  const initializationProject = async (projectId: string) => {
+    const project = await studioProjectCatalog.resolveIdentity(projectId);
+    if (!project) return null;
+    const scopes = await studioWorkspaceScopeCatalog.list();
+    const roots = project.rootBindings.filter((binding) => binding.status === "active" &&
+      scopes.some((scope) => samePath(scope.cwd, binding.localRootRef))).map((binding) => binding.localRootRef);
+    const complete = await isWorkflowScanComplete(roots);
+    const ids = await studioWorkspacePreferences.agentIds(projectId, roots, workflowsCache, complete);
+    const agents = [...ids].flatMap(([workflowPath, agentId]) => {
+      const workflow = workflowsCache.find((entry) => entry.path === workflowPath);
+      return workflow ? [{ agentId, path: workflow.path, name: workflow.sourceDefinitionName ?? workflow.name }] : [];
+    });
+    const available = options.availableHarnesses ?? Object.keys(adapters);
+    const recent = sessionManager.list().filter((session) => session.agentMapIdentity?.projectId === projectId &&
+      available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
+      .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
+    const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
+    return { userId: localProjectPrincipal(projectUserId, machineId), available: roots.length > 0,
+      discoveryComplete: complete, agents, provider: available.includes(preferred) ? preferred : null };
+  };
+  agentMapInitialization = new AgentMapInitializationCoordinator({
+    store: agentMapWorkspaceStore, proposals: agentMapProposalService, project: initializationProject,
+    infer: ({ projectId, attemptId, provider, prompt, signal }) => taskManager.runStructuredInference({
+      projectId, attemptId, harness: provider, prompt, signal, schema: INITIAL_MAP_OUTPUT_SCHEMA,
+    }),
+    onChange: (status) => {
+      bus.publish({ type: "agent-map.initialization.changed", status });
+      const sessionId = `agent-map-${status.projectId}`;
+      const event: AnalyticsEvent = { eventId: randomUUID(), seq: seqCounter.next(sessionId), ts: new Date().toISOString(),
+        userId: identity?.userId ?? null, tenantId: identity?.tenantId ?? null, machineId,
+        harnessSessionId: sessionId, agentSessionId: null, harness: "claude-code", type: "agent_map.initialization",
+        payload: { project_id: status.projectId, status: status.status, error_code: status.errorCode } };
+      void eventStore.append(event).catch(() => {}); batcher.enqueue(event);
+    },
+  });
+  let initializationSchedule: Promise<void> | null = null;
+  let initializationReschedule = false;
+  const scheduleExistingMaps = (): Promise<void> => {
+    if (initializationSchedule) { initializationReschedule = true; return initializationSchedule; }
+    if (!coordinatorActive) return Promise.resolve();
+    const operation = (async () => {
+      do {
+        initializationReschedule = false;
+        for (const project of await studioProjectCatalog.list()) {
+          if (!coordinatorActive) break;
+          await agentMapInitialization!.schedule(project.projectId).catch(() => {
+            // Invalid/unreadable workspaces remain map-load errors, never missing-map jobs.
+          });
+        }
+      } while (coordinatorActive && initializationReschedule);
+    })();
+    initializationSchedule = operation;
+    const settled = () => {
+      initializationSchedule = null;
+      // A discovery notification can arrive between the loop's last condition
+      // and this promise callback. Keep that final notification too.
+      if (coordinatorActive && initializationReschedule) void scheduleExistingMaps().catch(() => {});
+    };
+    void operation.then(settled, settled);
+    return operation;
+  };
+  const isMeaningfullyEmptyProject = async (projectId: string): Promise<boolean> => {
+    const aggregate = await agentMapWorkspaceStore.readAggregate(projectId);
+    return !hasAuthoredAgentMap(aggregate) && aggregate.current.buildPlan === null;
   };
   projectBootstrap = new ProjectBootstrapCoordinator({
     root: statePaths.projectBootstrap,
@@ -3462,6 +3523,7 @@ export const startServer = async (
           studioProjectCatalog.resolveIdentity(projectId),
       }),
     isMeaningfullyEmpty: isMeaningfullyEmptyProject,
+    claimMapGeneration: (projectId) => agentMapInitialization!.reserveForBootstrap(projectId),
     onEvent: emitProjectBootstrapLifecycle,
   });
   afterStudioProjectsCreatedCommit = async (projects) => {
@@ -3808,6 +3870,7 @@ export const startServer = async (
     "/api",
     createAgentMapRouter({
       catalog: studioProjectCatalog,
+      initialization: agentMapInitialization,
       store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
       currentUserId: () => localProjectPrincipal(projectUserId, machineId),
@@ -4494,6 +4557,9 @@ export const startServer = async (
       const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
+      scheduleMapInitializations = null;
+      await agentMapInitialization?.close();
+      await initializationSchedule?.catch(() => {});
       coordinatorEpoch += 1;
       clearInterval(sessionSweepTimer);
       clearInterval(ndjsonRetentionTimer);
@@ -4613,6 +4679,10 @@ export const startServer = async (
     await options.projectBootstrapTestHooks?.afterListenBeforeRecovery?.(
       actualPort,
     );
+
+    // Discovery owns scheduling; browser navigation only observes status. Resume queued work after listen.
+    scheduleMapInitializations = scheduleExistingMaps;
+    void initialWorkflowScan.then(() => scheduleExistingMaps()).catch(() => {});
 
     // A project intent is persisted before its first PTY is created. Reconcile
     // that crash window only after the MCP endpoint is bound: every ordinary

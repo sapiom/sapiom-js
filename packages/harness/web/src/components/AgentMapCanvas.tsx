@@ -54,6 +54,9 @@ interface DragState {
   origin: GraphView;
 }
 
+// Long authored chains must fit as a whole before the user chooses a closer view.
+const AGENT_MAP_MIN_ZOOM = 0.001;
+
 export function AgentMapCanvas({
   proposal,
   selectedNodeId,
@@ -83,6 +86,7 @@ export function AgentMapCanvas({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const fittedProposalRef = useRef<string | null>(null);
+  const followsUpdates = useRef(true);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
   const nodesById = useMemo(
@@ -91,6 +95,7 @@ export function AgentMapCanvas({
   );
 
   const fit = useCallback((): void => {
+    followsUpdates.current = true;
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
     const rect = viewport.getBoundingClientRect();
@@ -101,6 +106,7 @@ export function AgentMapCanvas({
       layout.bounds,
       { width: rect.width, height: rect.height },
       Number.isFinite(root) ? root : 16,
+      AGENT_MAP_MIN_ZOOM,
     );
     setMinZoom(next.minZoom);
     setView({ zoom: Math.min(1, next.zoom), x: 0, y: 0 });
@@ -109,9 +115,11 @@ export function AgentMapCanvas({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
+    if (fittedProposalRef.current !== proposal.id)
+      followsUpdates.current = true;
     const measure = (): void => {
       if (
-        fittedProposalRef.current === proposal.id ||
+        !followsUpdates.current ||
         viewport.getBoundingClientRect().width <= 0
       )
         return;
@@ -132,6 +140,7 @@ export function AgentMapCanvas({
       if ((event.target as Element | null)?.closest(".agent-map-controls"))
         return;
       event.preventDefault();
+      followsUpdates.current = false;
       const rect = viewport.getBoundingClientRect();
       setView((current) =>
         wheelGraphView(
@@ -142,6 +151,7 @@ export function AgentMapCanvas({
             y: event.clientY - rect.top - rect.height / 2,
           },
           minZoom,
+          AGENT_MAP_MIN_ZOOM,
         ),
       );
     };
@@ -163,6 +173,8 @@ export function AgentMapCanvas({
   const movePan = (event: ReactPointerEvent<HTMLDivElement>): void => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.clientX !== drag.x || event.clientY !== drag.y)
+      followsUpdates.current = false;
     setView({
       ...drag.origin,
       x: drag.origin.x + event.clientX - drag.x,
@@ -203,6 +215,7 @@ export function AgentMapCanvas({
           )
             return;
           event.preventDefault();
+          followsUpdates.current = false;
           setView((current) =>
             panGraphViewWithKeyboard(current, event.key as GraphArrowKey),
           );
@@ -312,12 +325,17 @@ export function AgentMapCanvas({
             type="button"
             className="theme-toggle"
             aria-label="Zoom out"
-            onClick={() =>
+            onClick={() => {
+              followsUpdates.current = false;
               setView((current) => ({
                 ...current,
-                zoom: clampGraphZoom(current.zoom - GRAPH_ZOOM_STEP, minZoom),
-              }))
-            }
+                zoom: clampGraphZoom(
+                  current.zoom - GRAPH_ZOOM_STEP,
+                  minZoom,
+                  AGENT_MAP_MIN_ZOOM,
+                ),
+              }));
+            }}
           >
             <Icon name="ZoomOut" size={14} />
           </button>
@@ -325,7 +343,10 @@ export function AgentMapCanvas({
             type="button"
             className="theme-toggle system-graph-zoom-reset"
             aria-label="Reset Agent Map view"
-            onClick={() => setView(resetGraphView())}
+            onClick={() => {
+              followsUpdates.current = false;
+              setView(resetGraphView());
+            }}
           >
             {Math.round(view.zoom * 100)}%
           </button>
@@ -334,12 +355,17 @@ export function AgentMapCanvas({
             className="theme-toggle"
             aria-label="Zoom in"
             disabled={view.zoom >= GRAPH_MAX_ZOOM}
-            onClick={() =>
+            onClick={() => {
+              followsUpdates.current = false;
               setView((current) => ({
                 ...current,
-                zoom: clampGraphZoom(current.zoom + GRAPH_ZOOM_STEP, minZoom),
-              }))
-            }
+                zoom: clampGraphZoom(
+                  current.zoom + GRAPH_ZOOM_STEP,
+                  minZoom,
+                  AGENT_MAP_MIN_ZOOM,
+                ),
+              }));
+            }}
           >
             <Icon name="ZoomIn" size={14} />
           </button>

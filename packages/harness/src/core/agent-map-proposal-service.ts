@@ -1,3 +1,4 @@
+import { hasAuthoredAgentMap } from "./agent-map-initialization-record.js";
 import { v7 as uuidv7 } from "uuid";
 
 import {
@@ -244,6 +245,17 @@ export class AgentMapProposalService {
   }
 
   async propose(identity: ProjectAgentSession, input: unknown): Promise<ProposalBatchResult> {
+    return this.proposeAuthorized(identity, input);
+  }
+
+  /** Internal host authority; never exposed to the inference process or ordinary map tools. */
+  async createInitial(identity: ProjectAgentSession, input: unknown, attemptId: string,
+    authorize: () => Promise<boolean>): Promise<ProposalBatchResult> {
+    return this.proposeAuthorized(identity, input, { attemptId, authorize });
+  }
+
+  private async proposeAuthorized(identity: ProjectAgentSession, input: unknown,
+    initial?: { attemptId: string; authorize: () => Promise<boolean> }): Promise<ProposalBatchResult> {
     const startedAt = Date.now();
     const actor = actorFor(identity);
     const parsed = parseProposalBatchRequest(input);
@@ -256,7 +268,13 @@ export class AgentMapProposalService {
     let replayed = false;
     let result: ProposalBatchResult;
     try {
-      result = await this.store.transact(identity.projectId, async (aggregate) => {
+      result = await this.store.transact(identity.projectId, async (aggregate, journal) => {
+        if (initial) {
+          const owner = await journal.read();
+          if (hasAuthoredAgentMap(aggregate) || request.proposalId !== null || request.expectedVersion !== 0 ||
+            owner?.status !== "running" || owner.attemptId !== initial.attemptId || owner.userId !== identity.userId ||
+            !(await initial.authorize())) throw this.stale(currentVersion(aggregate));
+        }
         if (aggregate.projectId !== identity.projectId) throw new AgentMapProposalProjectError();
         const version = currentVersion(aggregate);
         const digest = requestDigest(request);
