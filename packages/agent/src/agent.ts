@@ -185,21 +185,25 @@ export function defineAgent<TInput = unknown, TShared extends Record<string, unk
       // an `Object.freeze()`d map. The step's `run` and routing declarations are
       // carried over by the spread, so downstream readers of
       // `steps[entry].inputSchema` pick up the contract without special-casing.
-      (def as { steps: Record<string, StepDefinition<TShared>> }).steps = {
-        ...def.steps,
-        [def.entry]: { ...entryStep, inputSchema: def.inputSchema as ZodType<unknown> },
-      };
+      def = {
+        ...def,
+        steps: {
+          ...def.steps,
+          [def.entry]: { ...entryStep, inputSchema: def.inputSchema as ZodType<unknown> },
+        },
+      } as AgentDefinition<TInput, TShared>;
     }
   }
   // Attach the brand as a non-enumerable property so it:
   //   - survives esbuild bundling (symbol properties pass through)
   //   - survives dynamic import (the imported object is the same reference)
   //   - doesn't pollute JSON.stringify or for...in iteration
-  Object.defineProperty(def, AGENT_DEFINITION_BRAND, {
+  const result = { ...def } as AgentDefinition<TInput, TShared>;
+  Object.defineProperty(result, AGENT_DEFINITION_BRAND, {
     value: 1,
     enumerable: false,
     writable: false,
     configurable: false,
   });
-  return def;
+  return result;
 }
