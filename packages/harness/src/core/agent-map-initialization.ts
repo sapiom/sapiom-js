@@ -56,6 +56,7 @@ export interface AgentMapInitializationOptions {
 export class AgentMapInitializationCoordinator {
   private readonly ownerId = randomUUID();
   private readonly pending = new Set<string>();
+  private readonly publishedStatuses = new Map<string, string>();
   private readonly active = new Map<
     string,
     { controller: AbortController; done: Promise<void> }
@@ -86,8 +87,13 @@ export class AgentMapInitializationCoordinator {
     projectId: string,
     record: AgentMapInitializationRecord | null,
   ): void {
+    if (record === null) return;
+    const status = initializationStatus(projectId, record);
+    const signature = JSON.stringify(status);
+    if (this.publishedStatuses.get(projectId) === signature) return;
+    this.publishedStatuses.set(projectId, signature);
     try {
-      this.options.onChange?.(initializationStatus(projectId, record));
+      this.options.onChange?.(status);
     } catch {
       /* observers cannot affect ownership */
     }

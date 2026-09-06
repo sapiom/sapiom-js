@@ -146,6 +146,8 @@ export type WorkspaceWatchFactory = (
 ) => WorkspaceWatchHandle;
 
 export interface WorkspaceWatchOptions {
+  /** Absolute host-owned metadata roots whose native events are not edits. */
+  ignoredEventRoots?: readonly string[];
   sourceDebounceMs?: number;
   inventoryDebounceMs?: number;
   inventoryRetryBaseMs?: number;
@@ -184,6 +186,7 @@ export interface SharedWorkspaceWatchBrokerLike {
 }
 
 export class WorkspaceRootWatcher {
+  private readonly ignoredEventRoots: readonly string[];
   private watcher: WorkspaceWatchHandle | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private sourceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -213,6 +216,9 @@ export class WorkspaceRootWatcher {
     private readonly callbacks: WorkspaceWatchCallbacks,
     private readonly options: WorkspaceWatchOptions,
   ) {
+    this.ignoredEventRoots = (options.ignoredEventRoots ?? []).map(
+      canonicalGraphPath,
+    );
     this.lastInventorySnapshot = null;
     this.arm();
   }
@@ -642,6 +648,17 @@ export class WorkspaceRootWatcher {
         }
         const relativePath = normalizeWatchPath(rawFilename);
         if (ignoredRelativePath(relativePath)) return;
+        const absolutePath = confinedSourcePath(this.root, relativePath);
+        if (
+          absolutePath &&
+          this.ignoredEventRoots.some(
+            (ignoredRoot) =>
+              absolutePath === ignoredRoot ||
+              isNestedSourceRoot(ignoredRoot, absolutePath),
+          )
+        ) {
+          return;
+        }
         if (sourceRelativePath(relativePath)) {
           const sourcePath = confinedSourcePath(this.root, relativePath);
           potential(sourcePath ? [sourcePath] : null);
