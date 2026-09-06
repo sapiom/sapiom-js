@@ -37,25 +37,18 @@ test.describe("legacy-server project row grammar", () => {
     page,
   }) => {
     const row = ROW(page, "acme-app");
-    // Hover actions, not an overflow menu (design-eng D33). The frequent
-    // session action leads; the destructive one is last. The adjacency SAP-2982
-    // worried about is answered by the accessible name and the confirmation,
-    // not by hiding one verb behind a popover.
+    // Hover actions, not an overflow menu (design-eng D33). The `+` is New
+    // agent (IA.md 219, D34a); the destructive one is last. The adjacency
+    // SAP-2982 worried about is answered by the accessible name and the
+    // confirmation, not by hiding one verb behind a popover. A plain session is
+    // not a row verb at all — the tab strip owns it (D34e).
     const actions = row.locator(".workspace-row-action");
-    await expect(actions).toHaveCount(3);
+    await expect(actions).toHaveCount(2);
     await expect(actions.nth(0)).toHaveAttribute(
-      "data-testid",
-      "project-start-session-acme-app",
-    );
-    await expect(actions.nth(0)).toHaveAttribute(
-      "aria-label",
-      "Start a session in acme-app",
-    );
-    await expect(actions.nth(1)).toHaveAttribute(
       "data-testid",
       "project-create-agent-acme-app",
     );
-    await expect(actions.nth(2)).toHaveAttribute(
+    await expect(actions.nth(1)).toHaveAttribute(
       "data-testid",
       "project-remove-acme-app",
     );
@@ -70,17 +63,15 @@ test.describe("legacy-server project row grammar", () => {
     );
   });
 
-  test("a bare project's session shortcut stays distinct from scaffolding", async ({
+  test("a bare project's create verb is scaffold, and says so", async ({
     page,
   }) => {
-    // `scratch` has live sessions and no Sapiom agent. The row `+` can start
-    // another coding session; the legacy scaffold operation keeps its own glyph
-    // and its own name so the two operations do not masquerade as one another.
+    // `scratch` has live sessions and no Sapiom agent, so its create verb is
+    // SCAFFOLD — it grows an agent inside the session already running there
+    // rather than starting a new one. The distinct glyph and the distinct name
+    // are what keep it from reading as the ordinary create.
     const row = ROW(page, "scratch");
-    await expect(row.locator(".workspace-row-action")).toHaveCount(3);
-    await expect(
-      page.getByTestId("project-start-session-scratch"),
-    ).toBeVisible();
+    await expect(row.locator(".workspace-row-action")).toHaveCount(2);
     await expect(
       page.getByTestId("workspace-scaffold-scratch"),
     ).toHaveAttribute("aria-label", "Scaffold an agent in scratch");

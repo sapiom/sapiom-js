@@ -155,24 +155,26 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
     await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
 
+    // D36: an empty project gets no create ROW of its own — its Agent Map row
+    // is the CTA. The row's `+` is a different control and is always there.
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
     await expect(
       group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
     ).toHaveCount(0);
-    await expect(
-      group.getByTestId("project-start-session-blank-slate"),
-    ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
-    // The map is a view, not an authorization gate. Both direct agent creation
-    // and project removal remain ordinary project-level actions — hover actions
-    // on the row itself (D33), not items in a per-row menu.
+    // New agent, scoped to this project, on the row itself (IA.md 219, D34a),
+    // beside Remove: hover actions, not a per-row menu (D33). A plain session
+    // is NOT a row verb; it starts from the tab strip or the project's own
+    // pane (D34e).
     await expect(
       page.getByTestId("project-create-agent-blank-slate"),
-    ).toBeVisible();
+    ).toHaveAttribute("aria-label", "Create an agent in blank-slate");
+    await expect(
+      group.getByTestId("project-start-session-blank-slate"),
+    ).toHaveCount(0);
     await expect(page.getByTestId("project-remove-blank-slate")).toBeVisible();
 
-    // A bare project with an existing ordinary session retains its scaffold
-    // action too.
+    // A bare project keeps the scaffold verb, distinct from creating anew.
     await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
 
