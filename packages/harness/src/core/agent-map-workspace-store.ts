@@ -1,3 +1,4 @@
+import { initializationRecordSchema, type AgentMapInitializationTransaction } from "./agent-map-initialization-record.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -52,6 +53,7 @@ export interface AgentMapStoreSnapshot {
 }
 
 export type AgentMapWorkspaceStoreEvent =
+  | { name: "agent_map.legacy_reset"; projectId: StudioProjectId }
   | { name: "agent_map.workspace_initialized"; projectId: StudioProjectId }
   | { name: "agent_map.workspace_migrated"; projectId: StudioProjectId; fromSchemaVersion: 0 | 1 }
   | {
@@ -173,6 +175,8 @@ export class AgentMapWorkspaceStore {
       now?: () => Date;
       onEvent?: (event: AgentMapWorkspaceStoreEvent) => void | Promise<void>;
       beforePersistStep?: (step: "write" | "file-sync" | "rename" | "directory-sync") => void | Promise<void>;
+      beforeInitializationWrite?: (status: string) => void | Promise<void>;
+      beforeLegacyResetStep?: (step: "prepared" | "deleted") => void | Promise<void>;
       briefReceiptRetentionLimit?: number;
       briefVersionHistoryLimit?: number;
     } = {},
@@ -191,6 +195,86 @@ export class AgentMapWorkspaceStore {
     return path.join(this.agentMapRoot, "projects", projectId, "workspace.json");
   }
 
+  private async writeSidecar(file: string, value: unknown): Promise<void> {
+    const temporary = `${file}.tmp-${randomUUID()}`;
+    try {
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try { await handle.writeFile(`${JSON.stringify(value)}\n`); await handle.sync(); }
+      finally { await handle.close(); }
+      await fs.rename(temporary, file);
+      const directory = await fs.open(path.dirname(file), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    } catch { throw storageError(); }
+    finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+  }
+
+  /** Call only under the workspace lock. Outer version is the sole reset discriminator. */
+  private async resetLegacyLocked(projectId: StudioProjectId): Promise<boolean> {
+    const file = this.workspacePath(projectId);
+    const marker = path.join(path.dirname(file), "legacy-reset.json");
+    let decoded: unknown;
+    try { decoded = JSON.parse(await fs.readFile(file, "utf8")) as unknown; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw storageError();
+      // Invalid JSON is preserved for the map reader to classify; it is never absence.
+    }
+    if (typeof decoded === "object" && decoded !== null &&
+      "storageSchemaVersion" in decoded && decoded.storageSchemaVersion === 1) {
+      await this.writeSidecar(marker, { schemaVersion: 1, projectId, status: "prepared" });
+      await this.options.beforeLegacyResetStep?.("prepared");
+      await fs.unlink(file);
+      const directory = await fs.open(path.dirname(file), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+      await this.options.beforeLegacyResetStep?.("deleted");
+      await this.writeSidecar(marker, { schemaVersion: 1, projectId, status: "completed" });
+      this.emit({ name: "agent_map.legacy_reset", projectId });
+      return true;
+    }
+    // Finish a journal interrupted after deletion. A subsequently authored format 2 is untouched.
+    try {
+      const record = JSON.parse(await fs.readFile(marker, "utf8")) as { status?: string; projectId?: string };
+      if (record.status === "prepared" && record.projectId === projectId)
+        await this.writeSidecar(marker, { schemaVersion: 1, projectId, status: "completed" });
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw storageError(); }
+    return false;
+  }
+
+  /** Shared desktop/CLI startup; does not parse, convert, or persist format-2 workspaces. */
+  async resetLegacyMaps(): Promise<void> {
+    let entries: string[];
+    try { entries = await fs.readdir(path.join(this.agentMapRoot, "projects")); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw storageError(); }
+    for (const projectId of entries.filter(isStudioProjectId)) {
+      try {
+        await this.enqueue(projectId, async () => {
+          const release = await new DurableFileLock(this.workspacePath(projectId), { storageError }).acquire();
+          try { await this.resetLegacyLocked(projectId); } finally { await release(); }
+        });
+      } catch {
+        this.emit({ name: "agent_map.workspace_read_failed", projectId, errorCode: "storage_unavailable" });
+      }
+    }
+  }
+
+  private initializationTransaction(projectId: StudioProjectId): AgentMapInitializationTransaction {
+    const file = path.join(path.dirname(this.workspacePath(projectId)), "initialization.json");
+    return {
+      read: async () => {
+        try {
+          const record = initializationRecordSchema.parse(JSON.parse(await fs.readFile(file, "utf8")));
+          if (record.projectId !== projectId) throw storageError();
+          return record;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw storageError(); }
+      },
+      write: async (record) => {
+        const parsed = initializationRecordSchema.parse(record);
+        if (parsed.projectId !== projectId) throw storageError();
+        await this.options.beforeInitializationWrite?.(parsed.status);
+        await this.writeSidecar(file, parsed);
+      },
+    };
+  }
+
   private emit(event: AgentMapWorkspaceStoreEvent): void {
     try { void Promise.resolve(this.options.onEvent?.(event)).catch(() => {}); } catch { /* telemetry cannot alter storage */ }
   }
@@ -203,12 +287,13 @@ export class AgentMapWorkspaceStore {
     );
   }
 
-  private async readDisk(projectId: StudioProjectId): Promise<{
+  private async readDisk(projectId: StudioProjectId, allowMigration = true): Promise<{
     aggregate: AgentMapProjectAggregate;
     needsWrite: boolean;
     created: boolean;
     migratedFrom?: 0 | 1;
   }> {
+    await this.resetLegacyLocked(projectId);
     const file = this.workspacePath(projectId);
     let decoded: unknown;
     try { decoded = JSON.parse(await fs.readFile(file, "utf8")) as unknown; }
@@ -219,6 +304,8 @@ export class AgentMapWorkspaceStore {
       throw storageError();
     }
     try {
+      if (!allowMigration && (typeof decoded !== "object" || decoded === null || !("storageSchemaVersion" in decoded) || decoded.storageSchemaVersion !== 2))
+        throw new AgentMapWorkspaceStoreError("unsupported_schema");
       const migrated = migrateProjectPlanningAggregate(decoded, projectId);
       const from = typeof decoded === "object" && decoded !== null && "storageSchemaVersion" in decoded ? 1 : 0;
       return { aggregate: migrated.aggregate, needsWrite: migrated.migrated, created: false,
@@ -264,20 +351,21 @@ export class AgentMapWorkspaceStore {
 
   private async locked<T>(projectId: StudioProjectId, operation: (
     aggregate: AgentMapProjectAggregate,
-  ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>): Promise<T> {
+    initialization: AgentMapInitializationTransaction,
+  ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>, persistEmpty = true): Promise<T> {
     if (!isStudioProjectId(projectId)) throw new AgentMapWorkspaceStoreError("malformed_state");
     return this.enqueue(projectId, async () => {
       const release = await new DurableFileLock(this.workspacePath(projectId), { storageError }).acquire();
       try {
-        const loaded = await this.readDisk(projectId);
-        const outcome = await operation(structuredClone(loaded.aggregate));
-        if (loaded.needsWrite || outcome.next) {
+        const loaded = await this.readDisk(projectId, persistEmpty);
+        const outcome = await operation(structuredClone(loaded.aggregate), this.initializationTransaction(projectId));
+        if ((persistEmpty && loaded.needsWrite) || outcome.next) {
           const candidate = outcome.next ?? loaded.aggregate;
           const next = parseProjectPlanningAggregate({ ...candidate,
             aggregateDigest: computeProjectPlanningAggregateDigest(candidate) }, projectId);
           await this.persist(projectId, next);
         }
-        if (loaded.created) this.emit({ name: "agent_map.workspace_initialized", projectId });
+        if (loaded.created && persistEmpty) this.emit({ name: "agent_map.workspace_initialized", projectId });
         if (loaded.migratedFrom !== undefined)
           this.emit({ name: "agent_map.workspace_migrated", projectId, fromSchemaVersion: loaded.migratedFrom });
         return structuredClone(outcome.value);
@@ -305,8 +393,17 @@ export class AgentMapWorkspaceStore {
 
   transact<T>(projectId: StudioProjectId, operation: (
     aggregate: AgentMapProjectAggregate,
+    initialization: AgentMapInitializationTransaction,
   ) => Promise<{ value: T; next?: AgentMapProjectAggregate }>): Promise<T> {
     return this.locked(projectId, operation);
+  }
+
+  /** Eligibility/journal access uses the map lock but never creates an empty map file. */
+  inspectInitialization<T>(projectId: StudioProjectId, operation: (
+    aggregate: AgentMapProjectAggregate,
+    initialization: AgentMapInitializationTransaction,
+  ) => Promise<T>): Promise<T> {
+    return this.locked(projectId, async (aggregate, journal) => ({ value: await operation(aggregate, journal) }), false);
   }
 
   /** Reserved exact-source, idempotent append seam. SAP-3149 has no caller. */

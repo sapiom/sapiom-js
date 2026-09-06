@@ -1,3 +1,4 @@
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
@@ -356,6 +357,7 @@ export interface HarnessStateHook {
     listener: (sessionId: string) => void,
   ) => () => void;
   /** Targeted Agent Map deltas over the existing event-bus connection. */
+  subscribeAgentMapInitializationChanges: (listener: (status: AgentMapInitializationStatus) => void) => () => void;
   subscribeAgentMapProposalChanges: (
     listener: (
       delta: import("@shared/agent-map").AcceptedProposalDelta,
@@ -524,6 +526,11 @@ export function useHarnessState(): HarnessStateHook {
     },
     [],
   );
+  const initializationListeners = useRef(new Set<(status: AgentMapInitializationStatus) => void>());
+  const subscribeAgentMapInitializationChanges = useCallback((listener: (status: AgentMapInitializationStatus) => void) => {
+    initializationListeners.current.add(listener);
+    return () => { initializationListeners.current.delete(listener); };
+  }, []);
   const agentMapProposalChangeListeners = useRef(
     new Set<
       (delta: import("@shared/agent-map").AcceptedProposalDelta) => void
@@ -1288,6 +1295,11 @@ export function useHarnessState(): HarnessStateHook {
           // Invalidate even while its workspace destination is closed. The next
           // open must never resurrect a pre-edit process-lifetime promise.
           systemGraphLoader.invalidate(message.workspaceKey, message.revision);
+        } else if (message.type === "agent-map.initialization.changed") {
+          try {
+            const status = parseAgentMapInitializationStatus(message.status);
+            for (const listener of initializationListeners.current) listener(status);
+          } catch { /* malformed announcements cannot alter map state */ }
         } else if (message.type === "agent-map.proposal.changed") {
           agentMapProposalChangeListeners.current.forEach((listener) =>
             listener(message.delta),
@@ -2387,6 +2399,7 @@ export function useHarnessState(): HarnessStateHook {
     lastMessage,
     subscribeSessionRecordChanges,
     subscribeAgentMapProposalChanges,
+    subscribeAgentMapInitializationChanges,
     subscribeEventReconnects,
     systemGraphAnnouncements,
     runsBySession,

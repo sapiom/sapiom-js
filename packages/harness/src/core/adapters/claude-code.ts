@@ -521,6 +521,18 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     if (!opts.prompt) {
       throw new Error("claude-code adapter: launchTask requires opts.prompt");
     }
+    if (opts.structuredInference) {
+      return { command: this.binary, cwd: opts.cwd, env: { CLAUDECODE: null }, stdin: opts.prompt,
+        args: ["-p", "--safe-mode", "--tools", "", "--no-session-persistence",
+          // Safe mode retains native authentication. Disable optional executable
+          // user helpers too; empty strings (unlike null) override native settings.
+          "--settings", JSON.stringify({ apiKeyHelper: "", awsAuthRefresh: "", awsCredentialExport: "",
+            gcpAuthRefresh: "", otelHeadersHelper: "", proxyAuthHelper: "" }),
+          "--system-prompt", opts.structuredInference.systemPrompt,
+          "--json-schema", JSON.stringify(opts.structuredInference.schema),
+          "--output-format", "stream-json", "--verbose", "--max-turns", "2",
+          ...(opts.model ? ["--model", opts.model] : [])] };
+    }
     const args = ["-p", opts.prompt, ...buildConfigArgs(opts)];
     if (opts.systemPromptFile) {
       args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));

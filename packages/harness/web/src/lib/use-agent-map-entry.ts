@@ -1,3 +1,4 @@
+import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentMapWorkspaceResponse,
@@ -17,7 +18,7 @@ export type AgentMapWorkspacePaneState =
       status: "ready";
       value: AgentMapWorkspaceResponse;
     }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; canRetry?: boolean };
 
 export interface AgentMapEntryState {
   projectId: StudioProjectId | null;
@@ -30,6 +31,9 @@ export interface AgentMapEntryState {
 interface AgentMapEntryOptions {
   projectId: StudioProjectId | null;
   api: HarnessApi;
+  subscribeInitializationChanges?: (
+    listener: (status: AgentMapInitializationStatus) => void,
+  ) => () => void;
   subscribeProposalChanges: (
     listener: (delta: AcceptedProposalDelta) => void,
   ) => () => void;
@@ -96,11 +100,21 @@ export function useAgentMapEntry({
   projectId,
   api,
   subscribeProposalChanges,
+  subscribeInitializationChanges,
   subscribeReconnects,
 }: AgentMapEntryOptions): {
   state: AgentMapEntryState;
   retryWorkspace: () => void;
+  initialization: AgentMapInitializationStatus | null;
+  retryGeneration: () => void;
 } {
+  const [initialization, setInitialization] =
+    useState<AgentMapInitializationStatus | null>(null);
+  const initializationRevisionRef = useRef(0);
+  const [initializationLoadError, setInitializationLoadError] = useState<
+    string | null
+  >(null);
+  const refreshInitializationRef = useRef<(() => void) | null>(null);
   const [state, setState] = useState<AgentMapEntryState>(EMPTY_ENTRY);
   const currentProjectRef = useRef<StudioProjectId | null>(projectId);
   const startedProjectRef = useRef<StudioProjectId | null>(null);
@@ -114,67 +128,87 @@ export function useAgentMapEntry({
   currentProjectRef.current = projectId;
   apiRef.current = api;
 
-  const loadWorkspace = useCallback((target: StudioProjectId): void => {
-    const request = ++workspaceRequestRef.current;
-    setState((current) => ({
-      ...(current.projectId === target
-        ? current
-        : {
-            projectId: target,
-            unavailable: null,
-          }),
-      projectId: target,
-      unavailable: null,
-      workspace: { status: "loading" },
-    }));
-    void agentMapLoader.load(apiRef.current, target).then(
-      (value) => {
-        if (
-          currentProjectRef.current !== target ||
-          workspaceRequestRef.current !== request
-        )
-          return;
-        if (
-          value.proposal &&
-          visibleProposalRef.current.get(target) !== value.proposal.id
-        ) {
-          visibleProposalRef.current.set(target, value.proposal.id);
-          track("agent_map.proposal_created");
-        }
-        setState((current) =>
-          current.projectId === target
-            ? { ...current, unavailable: null, workspace: { status: "ready", value } }
-            : current,
-        );
-      },
-      (error: unknown) => {
-        if (
-          currentProjectRef.current !== target ||
-          workspaceRequestRef.current !== request
-        )
-          return;
-        track("agent_map.workspace_load_failed", {
-          ...failureDimensions(target, error),
-          pane: "map",
-        });
-        const message = errorMessage(
-          error,
-          "Agent Map state could not be loaded.",
-        );
-        setState((current) =>
-          current.projectId === target
-            ? {
-                ...current,
-                workspace: { status: "error", message },
-                unavailable: isWholeWorkspaceUnavailable(error)
-                  ? message
-                  : null,
-              }
-            : current,
-        );
-      },
-    );
-  }, []);
+  const loadWorkspace = useCallback(
+    (target: StudioProjectId, quiet = false): void => {
+      const request = ++workspaceRequestRef.current;
+      setState((current) => ({
+        ...(current.projectId === target
+          ? current
+          : {
+              projectId: target,
+              unavailable: null,
+            }),
+        projectId: target,
+        unavailable: null,
+        workspace:
+          quiet &&
+          current.projectId === target &&
+          current.workspace.status === "ready"
+            ? current.workspace
+            : { status: "loading" },
+      }));
+      void agentMapLoader.load(apiRef.current, target).then(
+        (value) => {
+          if (
+            currentProjectRef.current !== target ||
+            workspaceRequestRef.current !== request
+          )
+            return;
+          if (
+            value.proposal &&
+            visibleProposalRef.current.get(target) !== value.proposal.id
+          ) {
+            visibleProposalRef.current.set(target, value.proposal.id);
+            track("agent_map.proposal_created");
+          }
+          setState((current) =>
+            current.projectId === target
+              ? {
+                  ...current,
+                  unavailable: null,
+                  workspace: { status: "ready", value },
+                }
+              : current,
+          );
+        },
+        (error: unknown) => {
+          if (
+            currentProjectRef.current !== target ||
+            workspaceRequestRef.current !== request
+          )
+            return;
+          track("agent_map.workspace_load_failed", {
+            ...failureDimensions(target, error),
+            pane: "map",
+          });
+          const message = errorMessage(
+            error,
+            "Agent Map state could not be loaded.",
+          );
+          setState((current) =>
+            current.projectId === target
+              ? {
+                  ...current,
+                  workspace: {
+                    status: "error",
+                    message,
+                    canRetry: !(
+                      error instanceof ApiError &&
+                      (error.code === "malformed_state" ||
+                        error.code === "unsupported_schema")
+                    ),
+                  },
+                  unavailable: isWholeWorkspaceUnavailable(error)
+                    ? message
+                    : null,
+                }
+              : current,
+          );
+        },
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!projectId) return;
@@ -284,17 +318,148 @@ export function useAgentMapEntry({
     loadWorkspace(projectId);
   }, [loadWorkspace, projectId]);
 
+  useEffect(() => {
+    setInitialization(null);
+    setInitializationLoadError(null);
+    if (!projectId) return;
+    let disposed = false;
+    const show = (status: AgentMapInitializationStatus) => {
+      if (disposed || status.projectId !== projectId) return;
+      setInitializationLoadError(null);
+      setInitialization(status);
+      if (
+        (status.status === "completed" || status.status === "skipped") &&
+        !agentMapLoader.peek(projectId)?.proposal
+      ) {
+        agentMapLoader.invalidate(projectId);
+        loadWorkspace(projectId, true);
+      }
+    };
+    const refresh = () => {
+      const started = ++initializationRevisionRef.current;
+      void api
+        .getAgentMapInitialization(projectId)
+        .then((status) => {
+          if (initializationRevisionRef.current === started) show(status);
+        })
+        .catch(() => {
+          if (!disposed && initializationRevisionRef.current === started)
+            setInitializationLoadError(
+              "Agent Map generation status could not be loaded.",
+            );
+        });
+    };
+    const unsubscribe = subscribeInitializationChanges?.((status) => {
+      if (status.projectId !== projectId) return;
+      initializationRevisionRef.current += 1;
+      show(status);
+    });
+    const reconnect = subscribeReconnects(refresh);
+    refreshInitializationRef.current = refresh;
+    refresh();
+    return () => {
+      disposed = true;
+      refreshInitializationRef.current = null;
+      unsubscribe?.();
+      reconnect();
+    };
+  }, [
+    api,
+    projectId,
+    subscribeInitializationChanges,
+    subscribeReconnects,
+    loadWorkspace,
+  ]);
+
+  useEffect(() => {
+    if (!projectId || initialization?.projectId !== projectId) return;
+    if (
+      initialization.status !== "queued" &&
+      initialization.status !== "running"
+    )
+      return;
+    let disposed = false;
+    let inFlight = false;
+    // Another Studio process may own the job. Its local event bus cannot notify
+    // this tab, so only active initialization polls its durable project status.
+    const timer = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      const started = ++initializationRevisionRef.current;
+      void api
+        .getAgentMapInitialization(projectId)
+        .then((status) => {
+          if (
+            disposed ||
+            currentProjectRef.current !== projectId ||
+            initializationRevisionRef.current !== started
+          )
+            return;
+          setInitialization(status);
+          setInitializationLoadError(null);
+          if (status.status === "completed" || status.status === "skipped") {
+            agentMapLoader.invalidate(projectId);
+            loadWorkspace(projectId, true);
+          }
+        })
+        .catch(() => {
+          if (!disposed && initializationRevisionRef.current === started)
+            setInitializationLoadError(
+              "Agent Map generation status could not be loaded.",
+            );
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    }, 2000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [api, initialization, projectId, loadWorkspace]);
+
+  const retryGeneration = useCallback(() => {
+    if (!projectId) return;
+    const started = ++initializationRevisionRef.current;
+    void api
+      .retryAgentMapInitialization(projectId)
+      .then((status) => {
+        if (
+          currentProjectRef.current === projectId &&
+          initializationRevisionRef.current === started
+        ) {
+          setInitialization(status);
+          setInitializationLoadError(null);
+        }
+      })
+      .catch(() => {
+        if (currentProjectRef.current === projectId) loadWorkspace(projectId);
+      });
+  }, [api, projectId, loadWorkspace]);
+
   const retryWorkspace = useCallback((): void => {
     const target = currentProjectRef.current;
     if (!target) return;
     setState((current) => ({ ...current, unavailable: null }));
+    refreshInitializationRef.current?.();
     loadWorkspace(target);
   }, [loadWorkspace]);
 
   return {
     state:
       state.projectId === projectId
-        ? state
+        ? initializationLoadError &&
+          state.workspace.status === "ready" &&
+          !state.workspace.value.proposal
+          ? {
+              ...state,
+              workspace: {
+                status: "error",
+                message: initializationLoadError,
+                canRetry: true,
+              },
+            }
+          : state
         : projectId === null
           ? EMPTY_ENTRY
           : {
@@ -303,5 +468,8 @@ export function useAgentMapEntry({
               unavailable: null,
             },
     retryWorkspace,
+    initialization:
+      initialization?.projectId === projectId ? initialization : null,
+    retryGeneration,
   };
 }

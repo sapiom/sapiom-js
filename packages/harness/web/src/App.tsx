@@ -348,6 +348,7 @@ export const App = (): JSX.Element => {
     projectId: agentMapProjectId,
     api: harness.api,
     subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
+    subscribeInitializationChanges: harness.subscribeAgentMapInitializationChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
 
@@ -3552,6 +3553,8 @@ export const App = (): JSX.Element => {
                   state={agentMapEntry.state.workspace}
                   unavailable={agentMapEntry.state.unavailable}
                   onRetry={agentMapEntry.retryWorkspace}
+                  initialization={agentMapEntry.initialization}
+                  onRetryGeneration={agentMapEntry.retryGeneration}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}
                 />
