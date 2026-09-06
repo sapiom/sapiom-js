@@ -75,52 +75,31 @@ export SAPIOM_SMOKE_OUT="$(native "$report_file")"
 # check can assert the WHOLE readiness chain (settings → hook command → node
 # resolution under the hook shell → POST → ready), the exact seam that broke
 # silently on Windows and dropped every held first prompt.
-cat > "$smoke_home/stub-agent.js" <<'STUBJS'
-const fs = require("fs");
-const envFile = process.env.SAPIOM_SMOKE_AGENT_ENV;
-if (envFile) fs.writeFileSync(envFile, Object.entries(process.env).map(([k, v]) => k + "=" + v).join("\n") + "\n");
-try {
-  const i = process.argv.indexOf("--settings");
-  const settingsPath = i > -1 ? process.argv[i + 1] : null;
-  if (settingsPath) {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    const command = settings.hooks.SessionStart[0].hooks[0].command;
-    const { execFileSync, execSync } = require("child_process");
-    if (process.platform === "win32") {
-      const bash = "C:\\Program Files\\Git\\bin\\bash.exe";
-      if (fs.existsSync(bash)) execFileSync(bash, ["-c", command], { stdio: "ignore" });
-      else execSync(command, { stdio: "ignore" });
-    } else {
-      execFileSync("/bin/sh", ["-c", command], { stdio: "ignore" });
-    }
-  }
-} catch {
-  // A failed hook is exactly what the ready-poll in checkSessionCreate reports.
-}
-setTimeout(() => process.exit(0), 3000);
-STUBJS
+cp "$here/smoke-agent-stub.cjs" "$smoke_home/stub-agent.cjs"
 if [ "$(uname -s)" != "Linux" ] && [ "$(uname -s)" != "Darwin" ]; then
   # Shaped like an npm shim on purpose — a `.cmd` that runs `node <script>` — because
   # that is exactly what `claude.cmd` is, and it's the shape resolveSpawnTarget has
   # to see through. A stub that were a plain .cmd (or an .exe) would exercise a path
   # real agents never take, and is now correctly refused rather than shelled out.
   stub="$smoke_home/stub-agent.cmd"
-  printf '@echo off\r\n"%%dp0%%\\node.exe" "%%dp0%%\\stub-agent.js" %%*\r\n' > "$stub"
+  printf '@echo off\r\n"%%dp0%%\\node.exe" "%%dp0%%\\stub-agent.cjs" %%*\r\n' > "$stub"
 else
   # `node` rather than a hardcoded path: the app's PATH augmentation (runtime
   # shims) must make it resolvable — that resolution is part of what's under test.
   stub="$smoke_home/stub-agent.sh"
-  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$smoke_home/stub-agent.js" > "$stub"
+  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$smoke_home/stub-agent.cjs" > "$stub"
   chmod +x "$stub"
 fi
-# Where the stub agent writes its environment, so a check can assert on what the
-# AGENT actually inherited rather than on what the main process meant to pass.
+# Base path where each stub agent writes a session-keyed environment snapshot,
+# so concurrent project sessions cannot overwrite one another's evidence and a
+# check can assert on what the exact AGENT inherited rather than on what the
+# main process meant to pass.
 # This caught a real regression: the desktop host pins ESBUILD_BINARY_PATH so its
 # own bundler can exec a binary outside app.asar, and the whole parent env is
 # copied into the pty — so every agent, and every tool it ran in the user's repo,
 # inherited a pin to OUR esbuild build ("Host version X does not match binary
 # version Y" on a project that builds fine outside the app).
-export SAPIOM_SMOKE_AGENT_ENV="$(native "$smoke_home/agent-env.txt")"
+export SAPIOM_SMOKE_AGENT_ENV="$(native "$smoke_home/agent-env")"
 # Native, because resolveSpawnTarget resolves this inside the app: a POSIX
 # path has no drive letter, so the Windows lookup would never find it.
 export SAPIOM_SMOKE_STUB_AGENT="$(native "$stub")"
