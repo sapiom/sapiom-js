@@ -48,6 +48,18 @@ describe("Windows update process identity", () => {
 });
 
 describe("bounded update processes", () => {
+  it("preserves argument boundaries, environment and both output streams", async () => {
+    const result = await runUpdateCommand(process.execPath, ["-e", `
+      console.log(JSON.stringify({args:process.argv.slice(1), flag:process.env.ELECTRON_RUN_AS_NODE??null, retained:process.env.STUDIO_UPDATE_TEST}));
+      console.error('stderr retained');
+    `, "space and $literal"], {
+      env: { PATH: process.env.PATH, STUDIO_UPDATE_TEST: "retained" }, timeoutMs: 2_000,
+    });
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(result.stdout)).toEqual({args:["space and $literal"],flag:null,retained:"retained"});
+    expect(result.detail).toContain("stderr retained");
+  });
+
   it("reports missing executables and failed commands without hanging startup", async () => {
     const opts = { env: process.env, timeoutMs: 1_000 };
     const missing = await runUpdateCommand(
