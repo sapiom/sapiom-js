@@ -21,6 +21,8 @@ system prompt, in whatever project directory you choose.
   Agent Studio only configures it. The `+` beside a project starts a session at
   that project root; the tab-strip `+` starts a sibling session. Sessions have
   resumable chat history.
+- **Templates** — quick starts, the template gallery, and bundled starters use
+  your selected coding agent.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
   open-in-Sapiom actions. How that discovery is rooted and bounded, how a
