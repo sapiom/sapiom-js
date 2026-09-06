@@ -1,5 +1,28 @@
 import { execFile, spawn } from "node:child_process";
 
+// Keep the owned process-group leader alive until the command's output pipes
+// close, even when the installer exits before its descendants. Input carries
+// the original environment privately; the supervisor's runtime flag is separate.
+const POSIX_SUPERVISOR = `
+const {spawn} = require('node:child_process');
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+  try {
+    const {command, args, env} = JSON.parse(input);
+    const child = spawn(command, args, {env, stdio: ['ignore', 'pipe', 'pipe']});
+    child.stdout.pipe(process.stdout, {end: false});
+    child.stderr.pipe(process.stderr, {end: false});
+    child.on('error', error => { process.stderr.write(error.message); process.exitCode = 1; });
+    child.on('close', code => { process.exitCode = code ?? 1; });
+  } catch (error) {
+    process.stderr.write(error.message);
+    process.exitCode = 1;
+  }
+});
+`;
+
 const running = new Set<() => Promise<void>>();
 let stopping = false;
 
@@ -140,12 +163,17 @@ export function runUpdateCommand(
     let detail = "";
     let timedOut = false;
     const startedAt = Date.now();
-    const child = spawn(command, args, {
-      env: options.env,
-      windowsHide: true,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = process.platform === "win32"
+      ? spawn(command, args, {
+          env: options.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+        })
+      : spawn(process.execPath, ["-e", POSIX_SUPERVISOR], {
+          env: { ...options.env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) },
+          detached: true,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+    child.stdin?.on("error", () => { /* Spawn failure is handled below. */ });
+    child.stdin?.end(JSON.stringify({ command, args, env: options.env }));
     const spawnedAt = Date.now();
     let exitedAt: number | undefined;
     child.once("exit", () => {
@@ -163,21 +191,22 @@ export function runUpdateCommand(
     const stop = (reason: string): Promise<void> => {
       cleanup ??= (async () => {
         if (child.pid) {
-          if (process.platform === "win32")
+          if (process.platform === "win32") {
             await stopWindowsTree({
               pid: child.pid,
               startedAt,
               spawnedAt,
               exitedAt,
             });
-          else {
+            child.kill("SIGKILL");
+          } else if (exitedAt === undefined) {
             try {
               process.kill(-child.pid, "SIGKILL");
             } catch {
               /* Parent/group already exited. */
             }
+            child.kill("SIGKILL");
           }
-          child.kill("SIGKILL");
         }
         // Descendants may retain pipes even after their parent exits.
         child.stdout.destroy();

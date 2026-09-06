@@ -40,7 +40,15 @@ export async function resolveAgentCommand(
       return /\.[cm]?js$/i.test(entry)
         ? {
             binary: runtime.binary,
-            binaryArgs: [...runtime.binaryArgs, entry],
+            binaryArgs: [
+              ...runtime.binaryArgs,
+              // Electron reads this flag at startup. Clear it before the CLI
+              // runs so its shell commands can launch Electron normally.
+              ...(runtime.binaryEnv.ELECTRON_RUN_AS_NODE === "1"
+                ? ["--import", "data:text/javascript,delete%20process.env.ELECTRON_RUN_AS_NODE"]
+                : []),
+              entry,
+            ],
             binaryEnv: { ...runtime.binaryEnv, ...binaryEnv },
           }
         : { binary: entry, binaryArgs: [], binaryEnv };
