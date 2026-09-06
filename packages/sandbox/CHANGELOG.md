@@ -1,5 +1,12 @@
 # @sapiom/sandbox
 
+## 0.8.5
+
+### Patch Changes
+
+- df7667c: Declare the package's GitHub repository so npm trusted publishing can match the
+  release workflow to the package.
+
 ## 0.8.4
 
 ### Patch Changes
