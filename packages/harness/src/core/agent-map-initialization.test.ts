@@ -576,6 +576,27 @@ describe("initialization eligibility and ownership", () => {
 });
 
 describe("initialization shutdown fencing", () => {
+  it("publishes state transitions once and stays silent for ineligible idle projects", async () => {
+    const f = await fixture();
+    const changed = vi.fn();
+    const c = f.create({
+      onChange: changed,
+      infer: async () => {
+        throw new AgentMapInitializationFailure("provider_failed");
+      },
+    });
+    f.project.agents = [];
+    await c.schedule(projectId);
+    await c.schedule(projectId);
+    expect(changed).not.toHaveBeenCalled();
+    f.project.agents = [{ agentId, name: "Research", path: f.source }];
+    await c.schedule(projectId);
+    await finished(c, "failed");
+    const transitions = changed.mock.calls.map(([status]) => status.status);
+    expect(transitions).toEqual(["queued", "running", "failed"]);
+    for (let i = 0; i < 5; i++) await c.schedule(projectId);
+    expect(changed).toHaveBeenCalledTimes(3);
+  });
   it("does not commit if cancelled during the final project lookup", async () => {
     const f = await fixture();
     let release!: () => void;

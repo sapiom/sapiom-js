@@ -1876,6 +1876,11 @@ export const startServer = async (
     }
   };
   const sharedWorkspaceWatchBroker = new SharedWorkspaceWatchBroker({
+    // Desktop sessions can watch the profile itself. Eligibility checks take
+    // map locks; observing those lock/journal writes as project edits would
+    // invalidate discovery and schedule another eligibility check forever.
+    // Exclude this actual metadata root, not user directories named agent-map.
+    ignoredEventRoots: [statePaths.agentMap],
     onLastLeaseReleased: (root) => {
       if (!coordinatorActive) return;
       // Losing continuous observation invalidates freshness, but it is not a
@@ -4683,7 +4688,6 @@ export const startServer = async (
     );
 
     // Discovery owns scheduling; browser navigation only observes status. Resume queued work after listen.
-    scheduleMapInitializations = scheduleExistingMaps;
     initializationDiscovery = initialWorkflowScan.then(async () => {
       if (!coordinatorActive) return;
       // Discovery completeness belongs to an exact root. Desktop's launchDir
@@ -4698,7 +4702,10 @@ export const startServer = async (
           });
         }
       }
-      if (coordinatorActive) await scheduleExistingMaps();
+      if (coordinatorActive) {
+        scheduleMapInitializations = scheduleExistingMaps;
+        await scheduleExistingMaps();
+      }
     }).catch(() => {});
 
     // A project intent is persisted before its first PTY is created. Reconcile

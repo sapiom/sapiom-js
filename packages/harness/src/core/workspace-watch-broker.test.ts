@@ -49,6 +49,100 @@ describe("SharedWorkspaceWatchBroker", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("ignores only the configured metadata subtree before invalidating discovery", async () => {
+    aliasPath = `${root}-alias`;
+    await fs.symlink(root, aliasPath, "dir");
+    const callbacks = subscriber({ onPotentialChange: vi.fn() });
+    const snapshotWorkspace = vi.fn(async () => "inventory");
+    const broker = new SharedWorkspaceWatchBroker({
+      watchFactory,
+      ignoredEventRoots: [path.join(aliasPath, "agent-map")],
+      sourceDebounceMs: 5,
+      inventoryDebounceMs: 5,
+      snapshotWorkspace,
+      snapshotSources: async () => new Map(),
+    });
+    const key = {};
+    try {
+      await broker.subscribe(key, callbacks);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        listener("rename", "agent-map/projects/project-1/workspace.json.lock");
+        listener("rename", "agent-map/projects/project-1/initialization.json");
+        listener("change", "agent-map/internal/index.ts");
+      }
+      expect(callbacks.onPotentialChange).not.toHaveBeenCalled();
+      expect(snapshotWorkspace).toHaveBeenCalledOnce();
+
+      listener("change", "projects/agent-map/index.ts");
+      await vi.waitFor(() =>
+        expect(callbacks.onSourceChange).toHaveBeenCalledWith([
+          path.join(root, "projects/agent-map/index.ts"),
+        ]),
+      );
+      listener("rename", "agent-map-user-project");
+      await vi.waitFor(() =>
+        expect(callbacks.onInventoryChange).toHaveBeenCalledOnce(),
+      );
+      expect(callbacks.onPotentialChange).toHaveBeenCalledTimes(2);
+    } finally {
+      broker.unsubscribe(key);
+    }
+  });
+
+  it("keeps polling quiet for map metadata churn while discovering real projects", async () => {
+    const metadata = path.join(root, "agent-map/projects/project-1");
+    await fs.mkdir(metadata, { recursive: true });
+    const callbacks = subscriber({ onPotentialChange: vi.fn() });
+    const { snapshotWorkspaceWorkflowsAsync } =
+      await import("./workspace-watcher.js");
+    const snapshotWorkspace = vi.fn(snapshotWorkspaceWorkflowsAsync);
+    const broker = new SharedWorkspaceWatchBroker({
+      forcePolling: true,
+      ignoredEventRoots: [path.join(root, "agent-map")],
+      pollIntervalMs: 5,
+      snapshotWorkspace,
+    });
+    const key = {};
+    try {
+      await broker.subscribe(key, callbacks);
+      await vi.waitFor(() =>
+        expect(callbacks.onSourceChange).toHaveBeenCalledOnce(),
+      );
+      vi.mocked(callbacks.onPotentialChange!).mockClear();
+      const polls = snapshotWorkspace.mock.calls.length;
+      await fs.writeFile(path.join(metadata, "workspace.json.lock"), "lock");
+      await fs.writeFile(path.join(metadata, "initialization.json"), "{}");
+      await vi.waitFor(() =>
+        expect(snapshotWorkspace.mock.calls.length).toBeGreaterThan(polls + 1),
+      );
+      await fs.unlink(path.join(metadata, "workspace.json.lock"));
+      const afterWrite = snapshotWorkspace.mock.calls.length;
+      await vi.waitFor(() =>
+        expect(snapshotWorkspace.mock.calls.length).toBeGreaterThan(
+          afterWrite + 1,
+        ),
+      );
+      expect(callbacks.onPotentialChange).not.toHaveBeenCalled();
+      expect(callbacks.onInventoryChange).not.toHaveBeenCalled();
+
+      const agent = path.join(root, "projects/agent-map");
+      await fs.mkdir(agent, { recursive: true });
+      await fs.writeFile(
+        path.join(agent, "sapiom.json"),
+        JSON.stringify({ definitionId: null }),
+      );
+      await fs.writeFile(
+        path.join(agent, "package.json"),
+        '{"name":"agent-map"}',
+      );
+      await vi.waitFor(() =>
+        expect(callbacks.onInventoryChange).toHaveBeenCalled(),
+      );
+    } finally {
+      broker.unsubscribe(key);
+    }
+  });
+
   it("isolates potential and source callback failures between subscribers", async () => {
     const failingPotential = vi.fn(() => {
       throw new Error("potential failed");
