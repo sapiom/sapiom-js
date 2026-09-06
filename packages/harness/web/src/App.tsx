@@ -2797,21 +2797,6 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onStartProjectSession={async (root, label) => {
-              // A project-row `+` explicitly asks to see a fresh coding
-              // session, even when Plan Agents or a legacy project map is the
-              // current altitude. Change views only after creation succeeds so
-              // a failed launch leaves the current view in place.
-              const started = await startProjectSession(
-                root,
-                label,
-                preferredHarness(),
-              );
-              if (!started) return;
-              studioRestoreGenerationRef.current += 1;
-              setStudioSelection(null);
-              setSelectedProject(null);
-            }}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}

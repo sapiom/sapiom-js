@@ -100,22 +100,22 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-session-empty")).toBeVisible();
     await expect(page.locator(".harness-terminal")).toHaveCount(0);
 
+    // D36: an empty project gets no create ROW of its own — its Agent Map row
+    // is the CTA. The row's `+` is a different control and is always there.
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
-    await expect(
-      group.getByTestId("project-start-session-blank-slate"),
-    ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
-    // The visible empty row and the project menu used to be two doors into the
-    // same direct-create flow. A Studio project exposes neither: generated
-    // agents enter through an approved map, while project removal remains an
-    // ordinary project-level action.
+    // New agent, scoped to this project, on the row itself (IA.md 219, D34a).
+    // This used to be suppressed on every Studio project on the grounds that
+    // the pinned Agent Map owned creation — but the map's only route was the
+    // planner session SAP-3143 deletes, so the capability had no door left.
     await expect(
       page.getByTestId("project-create-agent-blank-slate"),
-    ).toHaveCount(0);
+    ).toHaveAttribute("aria-label", "Create an agent in blank-slate");
     await expect(page.getByTestId("project-remove-blank-slate")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveCount(0);
+    // A bare project keeps the scaffold verb, distinct from creating anew.
+    await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
 
     // NOT the rail-wide empty state leaking down: that one says "No agents yet"

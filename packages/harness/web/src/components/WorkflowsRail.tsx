@@ -177,8 +177,6 @@ interface WorkflowsRailProps {
   onOpenProject: (root: string) => Promise<unknown>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  /** Starts a coding-agent session and owns its failure feedback. */
-  onStartProjectSession: (root: string, label: string) => Promise<void>;
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /**
@@ -448,7 +446,6 @@ export function WorkflowsRail({
   onOpenProject,
   launchDir,
   listDir,
-  onStartProjectSession,
   listHarnesses,
   onCreateAgent,
   onScaffoldInSession,
@@ -1192,10 +1189,15 @@ export function WorkflowsRail({
             const studioProject = studioProjects?.find(
               (candidate) => candidate.projectId === workspaceScope?.projectId,
             );
-            // Current servers issue a durable Studio project for every scope,
-            // and that project's Agent Map owns creation. The absent case is a
-            // compatibility payload, not a second creation mode. Keep ownership
-            // independent of the selected axis so Group cannot restore a bypass.
+            // Current servers issue a durable Studio project for every scope.
+            // This no longer gates the row's `+`: creation was delegated to the
+            // pinned Agent Map, whose only working route was the planner session
+            // that SAP-3143 deletes — so on a current server the row and the
+            // empty-project row both went silent and a project with agents had
+            // no scoped way to grow another. The `+` is New agent again
+            // (IA.md 219, D34a). What this still owns is the EMPTY project's
+            // extra create row, which D36 removes in favour of its Agent Map
+            // row acting as the CTA.
             const mapOwnsCreation = studioProject != null;
             const planFirst = axis === "project" && mapOwnsCreation;
             const mapSelected =
@@ -1342,37 +1344,16 @@ export function WorkflowsRail({
                             <Icon name="Waypoints" size={13} />
                           </button>
                         )}
-                      {/* START A SESSION HERE. This is the frequent project-row
-                          action and therefore leads the trailing group. Its
-                          accessible name supplies the noun the glyph cannot:
-                          this starts a coding-agent SESSION at the project
-                          root. It does not scaffold a Sapiom agent or bypass
-                          Plan Agents. */}
-                      {!pending && (
-                        <button
-                          type="button"
-                          className="workspace-row-action"
-                          data-testid={`project-start-session-${project.label}`}
-                          aria-label={`Start a session in ${project.label}`}
-                          data-tooltip="Start a session here"
-                          onClick={() =>
-                            void onStartProjectSession(
-                              project.root,
-                              project.label,
-                            )
-                          }
-                        >
-                          <Icon name="Plus" size={13} />
-                        </button>
-                      )}
-                      {/* THE REST OF THE ROW'S VERBS, as hover actions rather
-                          than an overflow menu (D33). The destructive one is
-                          last and marked; legacy-only agent creation keeps its
-                          own glyph rather than sharing the session `+`. */}
+                      {/* THE ROW'S VERBS, as hover actions rather than an
+                          overflow menu (D33). The `+` is New agent, scoped to
+                          this project (IA.md 219, D34a); the destructive one is
+                          last and marked. A plain session is NOT here: it
+                          starts from the tab strip, or from the Start on the
+                          project's own pane (D34e, D35 item 6). */}
                       <ProjectRowActions
                         label={project.label}
                         create={
-                          mapOwnsCreation || creating
+                          creating
                             ? null
                             : bare
                               ? {

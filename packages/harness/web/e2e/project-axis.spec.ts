@@ -165,7 +165,7 @@ test.describe("ordering", () => {
 });
 
 test.describe("the plan-first project children", () => {
-  test("the project plus starts a coding session at its root without creating an agent", async ({
+  test("the row's plus is New agent; a coding session starts from the project's own pane", async ({
     page,
   }) => {
     await page.evaluate(() => {
@@ -181,13 +181,14 @@ test.describe("the plan-first project children", () => {
     });
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const row = group.getByTestId("project-row-dashboard-keeper");
-    const start = group.getByTestId("project-start-session-dashboard-keeper");
+    const create = group.getByTestId("project-create-agent-dashboard-keeper");
 
-    await expect(start).toHaveAttribute(
+    await expect(create).toHaveAttribute(
       "aria-label",
-      "Start a session in dashboard-keeper",
+      "Create an agent in dashboard-keeper",
     );
-    await expect(start).toHaveAttribute("data-tooltip", "Start a session here");
+    // A plain session is NOT a row verb: it starts from the tab strip or from
+    // the Start on the project's own pane (D34e, D35 item 6).
     expect(
       await row
         .locator(":scope > .workspace-row-action")
@@ -195,18 +196,21 @@ test.describe("the plan-first project children", () => {
           actions.map((action) => action.getAttribute("data-testid")),
         ),
     ).toEqual([
-      "project-start-session-dashboard-keeper",
+      "project-create-agent-dashboard-keeper",
       "project-remove-dashboard-keeper",
     ]);
 
-    // Prove the shortcut also works from map altitude: the new generic session
-    // becomes the visible workbench and no scaffold request is made.
+    // At map altitude the project's pane offers the Start (SAP-3143). The new
+    // generic session becomes the visible workbench, rooted at the project and
+    // on the preferred harness, and no scaffold request is made. The map row
+    // STAYS selected: the session opens in the centre without changing which
+    // rail row you are standing on.
     await group.getByTestId("agent-map-select").click();
     await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    await start.click();
+    await page.getByTestId("project-session-start").click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -233,7 +237,7 @@ test.describe("the plan-first project children", () => {
       });
     await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "true",
     );
     await expect(page.getByTestId("session-context-title")).toContainText(
       "dashboard-keeper",
@@ -266,7 +270,7 @@ test.describe("the plan-first project children", () => {
       ).__MOCK_CREATE_SESSION_FAIL_ONCE__ = true;
     });
 
-    await group.getByTestId("project-start-session-dashboard-keeper").click();
+    await page.getByTestId("project-session-start").click();
     await expect(page.getByTestId("toast")).toContainText(
       "mock: couldn't create session",
     );
