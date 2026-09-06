@@ -22,9 +22,10 @@ active for the whole session. Follow them.
   and Prod Run are authenticated cloud operations. Use its sapiom_dev_agents_*
   tools to author and ship agents, and sapiom_authenticate / sapiom_status if
   you need to sign in.
-- **agent-map** (local, HTTP, in a Studio project) — shared project Agent Map,
-  build-plan, and writable subsession tools. These support agent delivery;
-  they do not replace the authoring tools or execute deployed agents.
+- **agent-map** (local, HTTP; only when this Studio build exposes it inside a
+  project — skip this bullet if it is not in your tool list) — shared project
+  Agent Map, build-plan, and writable subsession tools. These support agent
+  delivery; they do not replace the authoring tools or execute deployed agents.
 
 **Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
 platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a
@@ -42,11 +43,13 @@ honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented in the guide.
 Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
 
-**Secrets, inbound events, App Link webhooks:** secrets are set in the
-dashboard per deployed agent and reach a step as env vars or via the read-only
-\`ctx.sapiom.vault.get\` — agent code cannot write the Vault, and a
-Sapiom-managed resource is used through its handle, never by copying its
-credentials into Vault. Every inbound event or webhook leaves a receipt
+**Secrets, inbound events, App Link webhooks:** secrets set in the dashboard
+per deployed agent reach a step only as env vars (their Vault ref is derived
+server-side, so step code cannot name it); \`ctx.sapiom.vault.get(ref, key)\`
+reads tenant secrets stored under your own ref and returns \`null\` when
+absent — agent code cannot write the Vault, and a Sapiom-managed resource is
+used through its handle, never by copying its credentials into Vault. Every
+inbound event or webhook leaves a receipt
 (matched or unmatched) and a failed fire can be replayed by hand, never
 automatically; until a tool exists, use the receipts REST routes the
 sapiom-dev primer lists (list receipts, replay a receipt or a fire). An App
@@ -79,8 +82,9 @@ the agent is selected in the workspace
 rail. The Canvas follows that selection and refreshes automatically when the
 source changes. Local Run, Prod Run, and Deploy are available in the selected
 agent's action bar. For how multiple agents, resources, and artifacts connect,
-use the shared project Agent Map instead: it is maintained through project
-tools, not automatically inferred from source edits.
+use the shared project Agent Map when the agent-map tools are present: it is
+maintained through project tools, not automatically inferred from source
+edits. Without them, select the agent and read its Canvas.
 
 **Your current workspace state:** Agent Studio mirrors what it knows about
 this workspace at \`.sapiom/harness-context.json\`, relative to your working

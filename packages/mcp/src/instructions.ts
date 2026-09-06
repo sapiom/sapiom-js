@@ -99,9 +99,11 @@ with \`agents.launch\` (below) and return.
   a top-level \`@sapiom/tools\` import, not under \`ctx.sapiom\`.
 
 ## Secrets, inbound events, receipts
-- **Secrets** are set in the dashboard per deployed agent; they reach a step as env vars, and
-  \`ctx.sapiom.vault.get(ref, key)\` reads the tenant Vault read-only — agent code cannot write
-  it. Never route a Sapiom-managed resource's credentials (a repository, a sandbox, a
+- **Secrets** set in the dashboard per deployed agent reach a step only as env vars
+  (\`process.env.SLACK_BOT_TOKEN\`); their Vault ref is derived server-side, so step code cannot
+  name it. \`ctx.sapiom.vault.get(ref, key)\` is for tenant secrets stored under your own ref
+  (e.g. \`vault.get("slack", "bot_token")\`) and returns \`null\` when absent — agent code cannot write
+  the Vault. Never route a Sapiom-managed resource's credentials (a repository, a sandbox, a
   provisioned service) through Vault: use the handle the capability returned.
 - **Receipts and replay:** every inbound event or webhook leaves a receipt, matched or
   unmatched, and a failed fire can be replayed by hand (never automatically). No tool yet —

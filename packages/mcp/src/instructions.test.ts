@@ -101,13 +101,23 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
-    // The per-step debugging endpoint lives in the docs guide, not spelled out here
-    // verbatim (matches this package's own scaffold terminology guard). Until 2.9 this
-    // was a blanket ban on `/v1/workflows/`; the receipts/replay REST surface the primer
-    // now points at lives under that prefix (as do the signals and step-I/O routes
-    // docs.sapiom.ai publishes), so the guard is scoped to the executions path.
+    // The internal `workflows`-service naming stays out of this primer, with one deliberate
+    // exception: the four receipts/replay routes 2.9 points at, because no tool or docs page
+    // covers them yet. They are allow-listed by exact literal so the blanket ban still holds
+    // for everything else under the prefix — the per-step debugging endpoint included, which
+    // lives in the docs guide rather than here.
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
-    expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/executions/");
+    const ALLOWED_WORKFLOWS_ROUTES = [
+      "GET /v1/workflows/receipts?outcome=unmatched",
+      "GET /v1/workflows/receipts/{id}",
+      "POST /v1/workflows/receipts/{id}/replay",
+      "POST /v1/workflows/fires/{id}/replay",
+    ];
+    const outsideAllowList = ALLOWED_WORKFLOWS_ROUTES.reduce(
+      (text, route) => text.split(route).join(""),
+      AUTHORING_INSTRUCTIONS,
+    );
+    expect(outsideAllowList).not.toContain("/v1/workflows/");
     // `LlmRunSpec` has no `deadlineMinutes`; 2.9 dropped the clause that offered it to a
     // one-shot caller. Scoped to that clause, not the identifier: `LlmSubmitSpec` has a
     // real `deadlineMinutes`, and a later primer may document the deferred lane's knob.
@@ -176,7 +186,7 @@ describe("server instructions", () => {
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "541f72e7db0e4d7109569f97bccaaac8e60ee88a23acf23dfbb0de5af23393cc",
+      "ffb497cade769284a3f068304e9368d4de41407d9305b33973d70bba2d0df258",
     );
   });
 
