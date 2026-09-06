@@ -61,7 +61,9 @@ jobs:
   # invokes them — they require real agent binaries and credentials not in CI.
   playwright-mock:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The expanded mock suite has over 560 cases, followed by canvas checks.
+    # Keep the existing per-test deadlines; allow both suites to finish.
+    timeout-minutes: 25
     # Single Node version is enough — the mock tier tests browser behaviour,
     # not Node version compat; that's covered by the matrix job in test.yml.
     steps:
