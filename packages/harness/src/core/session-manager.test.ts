@@ -18,6 +18,9 @@ import {
   SessionBackgroundInputPreemptedError,
   SessionInputIsolationError,
   SessionManagerClosingError,
+  SubsessionBindingMismatchError,
+  SubsessionFreshRestartForbiddenError,
+  type TrustedSubsessionBindingMarker,
   ProjectSessionScopeUnavailableError,
   ProjectBootstrapClaimUnavailableError,
   SessionManager,
@@ -129,6 +132,7 @@ describe("SessionManager", () => {
       onProjectAgentIdentityMigration?: SessionManagerOptions["onProjectAgentIdentityMigration"];
       onProjectBootstrapSession?: SessionManagerOptions["onProjectBootstrapSession"];
       onRuntimeEpochTransition?: SessionManagerOptions["onRuntimeEpochTransition"];
+      onSubsessionUserClosed?: SessionManagerOptions["onSubsessionUserClosed"];
       writeWorkspaceContext?: SessionManagerOptions["writeWorkspaceContext"];
       prepareWorkspaceContext?: SessionManagerOptions["prepareWorkspaceContext"];
       ensureCanvasTemplate?: SessionManagerOptions["ensureCanvasTemplate"];
@@ -137,6 +141,7 @@ describe("SessionManager", () => {
       ingestCredentials?: SessionManagerOptions["ingestCredentials"];
       writeSessionRegistry?: SessionManagerOptions["writeSessionRegistry"];
       writeAgentSessionOwnerRegistry?: SessionManagerOptions["writeAgentSessionOwnerRegistry"];
+      writeSubsessionBindingRegistry?: SessionManagerOptions["writeSubsessionBindingRegistry"];
       /** Pid given to every fake pty this manager spawns — see createFakePty(). */
       fakePid?: number;
     } = {},
@@ -170,7 +175,7 @@ describe("SessionManager", () => {
       onProjectAgentIdentityMigration: opts.onProjectAgentIdentityMigration,
       onProjectBootstrapSession: opts.onProjectBootstrapSession,
       onRuntimeEpochTransition: opts.onRuntimeEpochTransition,
-
+      onSubsessionUserClosed: opts.onSubsessionUserClosed,
       writeWorkspaceContext: opts.writeWorkspaceContext,
       prepareWorkspaceContext: opts.prepareWorkspaceContext,
       ensureCanvasTemplate: opts.ensureCanvasTemplate,
@@ -178,7 +183,7 @@ describe("SessionManager", () => {
       platform: opts.platform,
       writeSessionRegistry: opts.writeSessionRegistry,
       writeAgentSessionOwnerRegistry: opts.writeAgentSessionOwnerRegistry,
-
+      writeSubsessionBindingRegistry: opts.writeSubsessionBindingRegistry,
     });
     managers.push(manager);
     return { manager, adapter, spawns };
@@ -202,6 +207,414 @@ describe("SessionManager", () => {
     expect(session.title).toBe("proj");
     expect(manager.get(session.id)).toEqual(session);
     expect(manager.list()).toHaveLength(1);
+  });
+
+  const marker = (
+    sessionId: string,
+    incarnation = 1,
+    spawnEpoch = 1,
+  ): TrustedSubsessionBindingMarker => ({
+    projectId: "project_00000000-0000-4000-8000-000000000001",
+    parentSessionId: "parent-session-1",
+    bindingId: "binding-1",
+    sessionId,
+    incarnation,
+    spawnEpoch,
+  });
+
+  const delegatedCreate = (sessionId: string) => ({
+    cwd: "/tmp/proj",
+    harness: "claude-code" as const,
+    trusted: {
+      agentMapIdentity: () => ({
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-1",
+        sessionId,
+      }),
+      initialTitle: "Collect evidence",
+    },
+  });
+
+  it("creates a reserved writable session only with its exact private binding", async () => {
+    const { manager, adapter } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000111";
+    const input = delegatedCreate(sessionId);
+    const session = await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+
+    expect(session).toMatchObject({
+      id: sessionId,
+      status: "running",
+      title: "Collect evidence",
+      ready: false,
+      agentMapIdentity: {
+        projectId: marker(sessionId).projectId,
+        sessionId,
+      },
+    });
+    expect(adapter.launch).toHaveBeenCalledTimes(1);
+    expect(manager.matchesSubsessionBinding(marker(sessionId))).toBe(true);
+    expect(await readFile(sessionsPath, "utf8")).not.toContain("binding-1");
+    const sidecar = `${sessionsPath}.subsession-bindings.json`;
+    expect(JSON.parse(await readFile(sidecar, "utf8"))).toMatchObject({
+      version: 1,
+      markers: { [sessionId]: marker(sessionId) },
+      closedSessionIds: [],
+    });
+    expect((await stat(sidecar)).mode & 0o777).toBe(0o600);
+
+    const { manager: restartedManager } = makeManager();
+    await restartedManager.init();
+    expect(restartedManager.getSubsessionBinding(sessionId)).toEqual(
+      marker(sessionId),
+    );
+
+    await expect(
+      manager.createReserved(
+        sessionId,
+        { cwd: input.cwd, harness: input.harness },
+        { ...marker(sessionId), bindingId: "foreign-binding" },
+        input.trusted,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(adapter.launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never adopts a manual row merely because its reserved id matches", async () => {
+    const { manager } = makeManager();
+    const manual = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const input = delegatedCreate(manual.id);
+    await expect(
+      manager.createReserved(
+        manual.id,
+        { cwd: input.cwd, harness: input.harness },
+        marker(manual.id),
+        input.trusted,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(manager.getSubsessionBinding(manual.id)).toBeNull();
+  });
+
+  it("fresh-restarts an exact zero-turn bound row under the same Harness id", async () => {
+    const { manager, adapter, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000112";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    spawns[0]!.emitExit(1);
+    await manager.flush();
+
+    const restarted = await manager.restartFreshBound(
+      sessionId,
+      marker(sessionId),
+      marker(sessionId, 2, 2),
+      input.trusted,
+      async () => false,
+    );
+    expect(restarted).toMatchObject({ id: sessionId, status: "running" });
+    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(
+      marker(sessionId, 2, 2),
+    );
+    expect(adapter.launch).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes an exact coordinator-owned conversation under an advanced marker", async () => {
+    const { manager, adapter, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000115";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    const firstRuntime = manager.getRuntimeEpoch(sessionId)!;
+    await manager.setAgentSessionId(
+      sessionId,
+      "agent-session-1",
+      "startup",
+      firstRuntime,
+    );
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+
+    const resumed = await manager.resumeBound(
+      sessionId,
+      marker(sessionId),
+      marker(sessionId, 2, 2),
+    );
+
+    expect(resumed).toMatchObject({ id: sessionId, status: "running" });
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(
+      marker(sessionId, 2, 2),
+    );
+    expect(adapter.resume).toHaveBeenCalledWith(
+      "agent-session-1",
+      expect.objectContaining({ harnessSessionId: sessionId }),
+    );
+    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
+  });
+
+  it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
+    const initial = createFakePty();
+    const resumedPty = createFakePty();
+    const spawnPty = vi.fn<PtySpawnFn>()
+      .mockReturnValueOnce(initial.pty as unknown as ReturnType<PtySpawnFn>)
+      .mockImplementationOnce(() => { throw new Error("resume spawn failed"); })
+      .mockReturnValue(resumedPty.pty as unknown as ReturnType<PtySpawnFn>);
+    const { manager, adapter } = makeManager({ spawnPty });
+    const sessionId = "00000000-0000-4000-8000-000000000116";
+    const input = delegatedCreate(sessionId);
+    const expected = marker(sessionId);
+    const next = marker(sessionId, 2, 2);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      expected,
+      input.trusted,
+    );
+    await manager.setAgentSessionId(
+      sessionId,
+      "agent-resume-retry",
+      "startup",
+      manager.getRuntimeEpoch(sessionId)!,
+    );
+    initial.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toThrow(
+      "resume spawn failed",
+    );
+    expect(manager.get(sessionId)?.status).toBe("exited");
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
+    expect(JSON.parse(await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8")))
+      .toMatchObject({ markers: { [sessionId]: next } });
+
+    // Already-next recovery still requires this exact project, parent, binding,
+    // and next incarnation; it cannot adopt a foreign coordinator's marker.
+    await expect(manager.resumeBound(
+      sessionId,
+      { ...expected, bindingId: "foreign-binding" },
+      next,
+    )).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    await expect(manager.resumeBound(sessionId, expected, marker(sessionId, 3, 3)))
+      .rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(spawnPty).toHaveBeenCalledTimes(2);
+
+    await expect(manager.resumeBound(sessionId, expected, next)).resolves.toMatchObject({
+      id: sessionId,
+      status: "running",
+      agentSessionId: "agent-resume-retry",
+    });
+    expect(adapter.resume).toHaveBeenCalledTimes(2);
+    expect(spawnPty).toHaveBeenCalledTimes(3);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
+    expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
+    resumedPty.emitExit(0);
+    await manager.flush();
+  });
+
+  it("refuses a fresh bound restart when any recorded turn exists", async () => {
+    const { manager, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000113";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    spawns[0]!.emitExit(1);
+    await manager.flush();
+    await expect(
+      manager.restartFreshBound(
+        sessionId,
+        marker(sessionId),
+        marker(sessionId, 2, 2),
+        input.trusted,
+        async () => true,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
+  });
+
+  it("persists an explicit delegated-session close and forbids automatic resurrection", async () => {
+    const { manager, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000114";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    const closing = manager.close(sessionId);
+    spawns[0]!.emitExit(0);
+    await closing;
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+    await manager.flush();
+    await expect(
+      manager.restartFreshBound(
+        sessionId,
+        marker(sessionId),
+        marker(sessionId, 2, 2),
+        input.trusted,
+        async () => false,
+      ),
+    ).rejects.toBeInstanceOf(SubsessionFreshRestartForbiddenError);
+    expect(
+      JSON.parse(
+        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
+      ),
+    ).toMatchObject({ closedSessionIds: [sessionId] });
+  });
+
+  it("terminates a delegated PTY even when its user-close tombstone cannot persist", async () => {
+    let failCloseWrite = false;
+    const writeSubsessionBindingRegistry = vi.fn(async () => {
+      if (failCloseWrite) throw new Error("injected close persistence failure");
+    });
+    const onSubsessionUserClosed = vi.fn(async () => {});
+    const { manager, spawns } = makeManager({
+      writeSubsessionBindingRegistry,
+      onSubsessionUserClosed,
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000115";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+    failCloseWrite = true;
+
+    const closing = manager.close(sessionId);
+    expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1);
+    spawns[0]!.emitExit(0);
+    await expect(closing).rejects.toThrow("injected close persistence failure");
+    expect(manager.get(sessionId)).toMatchObject({ status: "exited" });
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+    expect(onSubsessionUserClosed).toHaveBeenCalledWith(marker(sessionId));
+
+    failCloseWrite = false;
+    await expect(manager.close(sessionId)).resolves.toBe(false);
+    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(4);
+    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
+  });
+
+  it("prunes durably closed binding proof across release churn and restart", async () => {
+    const onSubsessionUserClosed = vi.fn(async () => {});
+    const { manager, spawns } = makeManager({ onSubsessionUserClosed });
+
+    for (let index = 0; index < 70; index += 1) {
+      const sessionId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+      const input = delegatedCreate(sessionId);
+      await manager.createReserved(
+        sessionId,
+        { cwd: input.cwd, harness: input.harness },
+        marker(sessionId),
+        input.trusted,
+      );
+      const closing = manager.closeBound(marker(sessionId));
+      spawns[index]!.emitExit(0);
+      await closing;
+      expect(manager.getSubsessionBinding(sessionId)).toBeNull();
+    }
+
+    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(70);
+    expect(
+      JSON.parse(
+        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
+      ),
+    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
+    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
+    await restarted.init();
+    expect(restarted.getSubsessionBinding(
+      "00000000-0000-4000-8000-000000000000",
+    )).toBeNull();
+  });
+
+  it("retains exact binding proof when final cleanup fails and prunes it after restart", async () => {
+    let writeCount = 0;
+    const writeSubsessionBindingRegistry = vi.fn(
+      async (file: string, serialized: string) => {
+        writeCount += 1;
+        if (writeCount === 3)
+          throw new Error("injected cleanup persistence failure");
+        await writeFile(file, serialized, "utf8");
+      },
+    );
+    const onSubsessionUserClosed = vi.fn(async () => {});
+    const { manager, spawns } = makeManager({
+      writeSubsessionBindingRegistry,
+      onSubsessionUserClosed,
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000117";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+
+    const closing = manager.closeBound(marker(sessionId));
+    spawns[0]!.emitExit(0);
+    await expect(closing).rejects.toThrow("injected cleanup persistence failure");
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
+
+    const { manager: restarted } = makeManager({ onSubsessionUserClosed });
+    await restarted.init();
+    expect(restarted.getSubsessionBinding(sessionId)).toEqual(marker(sessionId));
+    await expect(restarted.closeBound(marker(sessionId))).resolves.toBe(false);
+    expect(restarted.getSubsessionBinding(sessionId)).toBeNull();
+    expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(3);
+    expect(onSubsessionUserClosed).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(
+        await readFile(`${sessionsPath}.subsession-bindings.json`, "utf8"),
+      ),
+    ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
+  });
+
+  it("closes only an exact coordinator-owned binding through the trusted path", async () => {
+    const { manager, spawns } = makeManager();
+    const sessionId = "00000000-0000-4000-8000-000000000116";
+    const input = delegatedCreate(sessionId);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      marker(sessionId),
+      input.trusted,
+    );
+
+    await expect(
+      manager.closeBound({ ...marker(sessionId), bindingId: "binding_foreign" }),
+    ).rejects.toBeInstanceOf(SubsessionBindingMismatchError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    const closing = manager.closeBound(marker(sessionId));
+    await vi.waitFor(() =>
+      expect(spawns[0]!.pty.kill).toHaveBeenCalledTimes(1),
+    );
+    spawns[0]!.emitExit(0);
+    await expect(closing).resolves.toBe(true);
+    await expect(manager.closeBound(marker(sessionId))).resolves.toBe(false);
+    expect(manager.wasSubsessionClosedByUser(marker(sessionId))).toBe(true);
   });
 
   it("persists sessions to disk and reconciles non-exited sessions to exited on reload", async () => {

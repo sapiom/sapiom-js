@@ -269,6 +269,15 @@ export interface FindRolloutFileOptions {
   agentSessionId?: string;
   /** Overridable for tests. */
   homeDir?: string;
+  /** Exact paths already owned by another live Harness runtime. */
+  excludePaths?: ReadonlySet<string>;
+}
+
+export interface CodexRolloutCandidate {
+  path: string;
+  agentSessionId: string | null;
+  timestampMs: number | null;
+  mtimeMs: number;
 }
 
 interface RolloutSessionMeta {
@@ -342,6 +351,14 @@ async function collectRolloutFiles(dir: string, depth = 0): Promise<string[]> {
  * exact rollout path in advance (it's a timestamp+UUID Codex generates itself).
  */
 export async function findRolloutFile(options: FindRolloutFileOptions): Promise<string | null> {
+  const candidates = await findRolloutCandidates(options);
+  return candidates.at(-1)?.path ?? null;
+}
+
+/** Returns every compatible rollout in deterministic chronological order. */
+export async function findRolloutCandidates(
+  options: FindRolloutFileOptions,
+): Promise<CodexRolloutCandidate[]> {
   const homeDir = options.homeDir ?? homedir();
   const root = join(homeDir, ".codex", "sessions");
   const files = await collectRolloutFiles(root);
@@ -356,21 +373,28 @@ export async function findRolloutFile(options: FindRolloutFileOptions): Promise<
   // exited, or a test double that never touches the real filesystem).
   const resolvedCwd = await realpath(options.cwd).catch(() => options.cwd);
 
-  let best: { path: string; mtimeMs: number } | null = null;
+  const candidates: CodexRolloutCandidate[] = [];
   for (const filePath of files) {
+    if (options.excludePaths?.has(filePath)) continue;
     const meta = await readSessionMetaHead(filePath);
     if (!meta || meta.cwd !== resolvedCwd) continue;
 
     if (options.agentSessionId !== undefined) {
       if (meta.id !== options.agentSessionId) continue;
-      return filePath;
+      const fileStat = await stat(filePath).catch(() => null);
+      if (fileStat)
+        candidates.push({ path: filePath, agentSessionId: meta.id,
+          timestampMs: meta.timestampMs, mtimeMs: fileStat.mtimeMs });
+      continue;
     }
 
     if (options.sinceMs !== undefined && meta.timestampMs !== null && meta.timestampMs < options.sinceMs) continue;
 
     const fileStat = await stat(filePath).catch(() => null);
     if (!fileStat) continue;
-    if (!best || fileStat.mtimeMs > best.mtimeMs) best = { path: filePath, mtimeMs: fileStat.mtimeMs };
+    candidates.push({ path: filePath, agentSessionId: meta.id,
+      timestampMs: meta.timestampMs, mtimeMs: fileStat.mtimeMs });
   }
-  return best?.path ?? null;
+  return candidates.sort((left, right) =>
+    left.mtimeMs - right.mtimeMs || left.path.localeCompare(right.path));
 }

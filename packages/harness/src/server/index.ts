@@ -7,6 +7,7 @@
  * src/shared/types.ts for the full protocol contract.
  */
 
+import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import { AgentBriefService } from "../core/agent-brief-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
@@ -97,7 +98,7 @@ import { migrateHarnessIdentity } from "../core/collector/identity-migration.js"
 import { normalizeHookEvent } from "../core/collector/normalizer.js";
 import { enrichTurnCompleted } from "../core/collector/transcript.js";
 import { createSeqCounter } from "../core/collector/seq.js";
-import { findRolloutFile, tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
+import { tailCodexRollout, type CodexTailerHandle } from "../core/collector/codex-tailer.js";
 import { getOrCreateMachineId } from "../cli/machine-id.js";
 import { loadSettings, pruneDeadRecentDirs } from "../cli/settings.js";
 import type { HarnessIdentity } from "../cli/auth.js";
@@ -694,6 +695,7 @@ export const startServer = async (
     organizationName: identity?.organizationName ?? null,
   });
   const statePaths = resolveStatePaths(options.stateRoot);
+  const codexRolloutBroker = new CodexRolloutBroker(options.codexHomeDir);
   const projectBootstrapOutbox = new ProjectBootstrapOutbox(
     join(statePaths.projectBootstrap, "project-outbox"),
   );
@@ -1505,6 +1507,18 @@ export const startServer = async (
     onTerminalInput: (sessionId, context) =>
       projectBootstrap?.onTerminalInput(sessionId, context),
     onRuntimeEpochTransition: async (session, runtimeEpoch) => {
+      if (adapters[session.harness]?.eventSource === "transcript-tail") {
+        if (runtimeEpoch) {
+          codexRolloutBroker.register({
+            sessionId: session.id,
+            runtimeEpoch,
+            cwd: session.cwd,
+            sinceMs: Date.now(),
+          });
+        } else {
+          codexRolloutBroker.releaseSession(session.id);
+        }
+      }
       if (!session.projectBootstrap) return;
       if (!projectBootstrap) {
         throw new Error("project bootstrap coordinator unavailable");
@@ -4137,25 +4151,34 @@ export const startServer = async (
 
   async function discoverCodexRolloutPath(
     session: HarnessSession,
-  ): Promise<string | null> {
+    runtimeEpoch: string,
+  ): Promise<{ path: string | null; ambiguous: boolean }> {
     const deadline = Date.now() + CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS;
     const sinceMs = Date.parse(session.createdAt);
+    let ambiguous = false;
     for (;;) {
-      const found = await findRolloutFile(
-        session.agentSessionId
-          ? {
-              cwd: session.cwd,
-              agentSessionId: session.agentSessionId,
-              homeDir: options.codexHomeDir,
-            }
-          : {
-              cwd: session.cwd,
-              sinceMs: Number.isNaN(sinceMs) ? undefined : sinceMs,
-              homeDir: options.codexHomeDir,
-            },
-      );
-      if (found) return found;
-      if (Date.now() >= deadline) return null;
+      // An exited or replaced runtime must not re-register itself on the next
+      // discovery poll after lifecycle cleanup released its ownership.
+      if (!sessionManager.isCurrentRuntimeEpoch(session.id, runtimeEpoch))
+        return { path: null, ambiguous };
+      const claim = session.agentSessionId
+        ? await codexRolloutBroker.claimExact({
+            sessionId: session.id,
+            runtimeEpoch,
+            cwd: session.cwd,
+            sinceMs: Number.isNaN(sinceMs) ? Date.now() : sinceMs,
+            agentSessionId: session.agentSessionId,
+          })
+        : await codexRolloutBroker.claimFresh({
+            sessionId: session.id,
+            runtimeEpoch,
+            cwd: session.cwd,
+            sinceMs: Number.isNaN(sinceMs) ? Date.now() : sinceMs,
+          });
+      if (claim.outcome === "claimed")
+        return { path: claim.path, ambiguous: false };
+      if (claim.outcome === "ambiguous") ambiguous = true;
+      if (Date.now() >= deadline) return { path: null, ambiguous };
       await new Promise((resolve) =>
         setTimeout(resolve, CODEX_ROLLOUT_DISCOVERY_POLL_MS),
       );
@@ -4165,21 +4188,35 @@ export const startServer = async (
   async function startCodexTailerFor(harnessSessionId: string): Promise<void> {
     if (codexTailers.has(harnessSessionId)) return;
     const session = sessionManager.get(harnessSessionId);
-    if (!session) return;
-
     const runtimeEpoch = sessionManager.getRuntimeEpoch(harnessSessionId);
-    if (runtimeEpoch === null) return;
-    const rolloutPath = await discoverCodexRolloutPath(session);
+    if (!session || runtimeEpoch === null) return;
+
+    const discovery = await discoverCodexRolloutPath(session, runtimeEpoch);
+    const rolloutPath = discovery.path;
     if (!rolloutPath) {
+      codexRolloutBroker.release(harnessSessionId, runtimeEpoch);
+      if (!sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch))
+        return;
+      sessionManager.setAdapterIdentityState(
+        harnessSessionId,
+        runtimeEpoch,
+        discovery.ambiguous ? "ambiguous" : "unavailable",
+      );
       console.error(
-        `[harness] codex tailer: no rollout file found for session ${harnessSessionId} (cwd=${session.cwd}) within ${CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS}ms`,
+        `[harness] codex tailer: rollout identity ${discovery.ambiguous ? "ambiguous" : "unavailable"} for session ${harnessSessionId} within ${CODEX_ROLLOUT_DISCOVERY_TIMEOUT_MS}ms`,
       );
       return;
     }
     // The session may have exited (or already started another tailer via a
     // status-change re-entry) while discovery was polling.
     if (codexTailers.has(harnessSessionId)) return;
-    if (!sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch)) return;
+    if (
+      sessionManager.get(harnessSessionId)?.status !== "running" ||
+      !sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch)
+    ) {
+      codexRolloutBroker.release(harnessSessionId, runtimeEpoch);
+      return;
+    }
 
     const tailer = tailCodexRollout({
       rolloutPath,
@@ -4206,9 +4243,10 @@ export const startServer = async (
         console.error("[harness] codex tailer parse error:", err),
     });
     codexTailers.set(harnessSessionId, tailer);
+    sessionManager.setAdapterIdentityState(harnessSessionId, runtimeEpoch, "ready");
   }
 
-  sessionManager.onStatusChange((session) => {
+  sessionManager.onStatusChange((session, context) => {
     // The codex tailer is only needed for harnesses whose analytics come
     // from the rollout file (eventSource: "transcript-tail"). Harnesses with
     // eventSource: "hooks" (claude-code) drive the same pipeline via real
@@ -4218,9 +4256,18 @@ export const startServer = async (
     if (adapters[session.harness]?.eventSource !== "transcript-tail") return;
     if (session.status === "running") {
       startCodexTailerFor(session.id).catch((err: unknown) => {
+        if (context.runtimeEpoch) {
+          codexRolloutBroker.release(session.id, context.runtimeEpoch);
+          sessionManager.setAdapterIdentityState(
+            session.id,
+            context.runtimeEpoch,
+            "unavailable",
+          );
+        }
         console.error("[harness] codex tailer startup failed:", err);
       });
     } else if (session.status === "exited") {
+      codexRolloutBroker.releaseSession(session.id);
       const tailer = codexTailers.get(session.id);
       if (tailer) {
         tailer.emitSessionEnd(

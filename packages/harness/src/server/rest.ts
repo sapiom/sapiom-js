@@ -909,14 +909,18 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
-  router.delete("/sessions/:id", (req, res) => {
+  router.delete("/sessions/:id", async (req, res, next) => {
     const existed = sessionManager.get(req.params.id) !== undefined;
     if (!existed) {
       res.status(404).json({ error: "session not found" });
       return;
     }
-    void sessionManager.kill(req.params.id);
-    res.json({ ok: true });
+    try {
+      await sessionManager.close(req.params.id);
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/sessions/:id/input", async (req, res, next) => {

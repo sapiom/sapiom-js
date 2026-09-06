@@ -13,11 +13,12 @@ import { join } from "node:path";
 
 vi.mock("../core/collector/codex-tailer.js", () => ({
   tailCodexRollout: vi.fn(),
-  findRolloutFile: vi.fn(),
+  findRolloutCandidates: vi.fn(),
 }));
 
-import { tailCodexRollout, findRolloutFile, type CodexEventListener } from "../core/collector/codex-tailer.js";
+import { tailCodexRollout, findRolloutCandidates, type CodexEventListener } from "../core/collector/codex-tailer.js";
 import { startServer, type HarnessServer } from "./index.js";
+import { CodexRolloutBroker } from "../core/collector/codex-rollout-broker.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 
 type FakeTailerHandle = { stop: ReturnType<typeof vi.fn>; emitSessionEnd: ReturnType<typeof vi.fn> };
@@ -62,16 +63,24 @@ describe("codex tailer lifecycle wiring", () => {
   let server: HarnessServer | undefined;
   let fakeHandle: FakeTailerHandle;
   let lastTailerOnEvent: CodexEventListener | undefined;
+  let tailerEvents: CodexEventListener[];
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "harness-codex-wiring-"));
 
     fakeHandle = { stop: vi.fn(), emitSessionEnd: vi.fn() };
+    tailerEvents = [];
     vi.mocked(tailCodexRollout).mockReset().mockImplementation((opts) => {
       lastTailerOnEvent = opts.onEvent;
+      tailerEvents.push(opts.onEvent);
       return fakeHandle;
     });
-    vi.mocked(findRolloutFile).mockReset().mockResolvedValue("/fake/rollout/path.jsonl");
+    vi.mocked(findRolloutCandidates).mockReset().mockResolvedValue([{
+      path: "/fake/rollout/path.jsonl",
+      agentSessionId: "agent-fixture",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    }]);
   });
 
   afterEach(async () => {
@@ -85,6 +94,7 @@ describe("codex tailer lifecycle wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -103,16 +113,16 @@ describe("codex tailer lifecycle wiring", () => {
     expect(session.status).toBe("running");
 
     await vi.waitFor(() => {
-      expect(findRolloutFile).toHaveBeenCalled();
+      expect(findRolloutCandidates).toHaveBeenCalled();
       expect(tailCodexRollout).toHaveBeenCalledWith(
         expect.objectContaining({ rolloutPath: "/fake/rollout/path.jsonl" }),
       );
     });
 
-    // findRolloutFile should have been asked for this session's cwd, and (a
+    // Rollout discovery should have been asked for this session's cwd, and (a
     // fresh launch has no agentSessionId yet) bounded by sinceMs rather than
     // an exact id.
-    expect(findRolloutFile).toHaveBeenCalledWith(
+    expect(findRolloutCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ cwd, sinceMs: expect.any(Number) }),
     );
 
@@ -140,6 +150,89 @@ describe("codex tailer lifecycle wiring", () => {
     // too, the outer test timeout could fire first and mask it entirely.
   }, 15_000);
 
+  it("releases a timed-out discovery so the next same-root runtime owns its rollout", async () => {
+    const cwd = join(dir, "project");
+    const register = vi.spyOn(CodexRolloutBroker.prototype, "register");
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      autoCreateSession: false,
+      adapters: { codex: fakeCodexAdapter() },
+      stateRoot: dir,
+    });
+    // Advance only the discovery deadline; keep real timer scheduling and PTY
+    // cleanup so this proves timeout handling without waiting fifteen seconds.
+    const realNow = Date.now.bind(Date);
+    let discoveryAdvance = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + discoveryAdvance);
+    vi.mocked(findRolloutCandidates).mockImplementation(async () => {
+      discoveryAdvance += 16_000;
+      return [];
+    });
+    const session = await server.sessionManager.create({ cwd, harness: "codex" });
+    const runtimeEpoch = server.sessionManager.getRuntimeEpoch(session.id)!;
+    await vi.waitFor(() => expect(server!.sessionManager.getAdapterIdentityState(
+      session.id,
+      runtimeEpoch,
+    )).toBe("unavailable"));
+    vi.mocked(Date.now).mockRestore();
+    expect(tailCodexRollout).not.toHaveBeenCalled();
+    vi.mocked(findRolloutCandidates).mockResolvedValue([{
+      path: "/fake/rollout/path.jsonl",
+      agentSessionId: "agent-next",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    }]);
+
+    const broker = register.mock.contexts[0] as CodexRolloutBroker;
+    // UUIDs sort before this later id. A leaked pending registration would
+    // receive the singleton candidate and strand this new runtime.
+    await expect(broker.claimFresh({
+      sessionId: "zz-next-session",
+      runtimeEpoch: "next-runtime",
+      cwd,
+      sinceMs: Date.now(),
+    })).resolves.toEqual({ outcome: "claimed", path: "/fake/rollout/path.jsonl" });
+    await server.sessionManager.kill(session.id);
+  }, 15_000);
+
+  it("releases every pending epoch on an epochless final exit", async () => {
+    const cwd = join(dir, "project");
+    const register = vi.spyOn(CodexRolloutBroker.prototype, "register");
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      autoCreateSession: false,
+      adapters: { codex: fakeCodexAdapter() },
+      stateRoot: dir,
+    });
+    const session = await server.sessionManager.create({ cwd, harness: "codex" });
+    await vi.waitFor(() => expect(tailCodexRollout).toHaveBeenCalled());
+    await server.sessionManager.kill(session.id);
+    const broker = register.mock.contexts[0] as CodexRolloutBroker;
+    broker.register({ sessionId: session.id, runtimeEpoch: "orphaned-epoch", cwd, sinceMs: 0 });
+    // A stale non-exited registry row has no live PTY. Its close path emits an
+    // exited status with runtimeEpoch=null and must retire all prior epochs.
+    session.status = "running";
+    expect(server.sessionManager.getRuntimeEpoch(session.id)).toBeNull();
+    await server.sessionManager.kill(session.id);
+    expect(session.status).toBe("exited");
+    vi.mocked(findRolloutCandidates).mockResolvedValue([{
+      path: "/fake/rollout/next.jsonl",
+      agentSessionId: "agent-next",
+      timestampMs: Date.now(),
+      mtimeMs: Date.now(),
+    }]);
+    await expect(broker.claimFresh({
+      sessionId: "zz-next-session",
+      runtimeEpoch: "next-runtime",
+      cwd,
+      sinceMs: Date.now(),
+    })).resolves.toEqual({ outcome: "claimed", path: "/fake/rollout/next.jsonl" });
+  }, 15_000);
+
   it("resumes by exact agentSessionId rather than cwd+sinceMs when one is already known", async () => {
     const cwd = join(dir, "project");
     server = await startServer({
@@ -162,7 +255,7 @@ describe("codex tailer lifecycle wiring", () => {
     const resumed = await server.sessionManager.resume(historical.id);
 
     await vi.waitFor(() => {
-      expect(findRolloutFile).toHaveBeenCalledWith(
+      expect(findRolloutCandidates).toHaveBeenCalledWith(
         expect.objectContaining({ cwd, agentSessionId: "agent-resumed" }),
       );
     });
@@ -174,6 +267,60 @@ describe("codex tailer lifecycle wiring", () => {
       expect(server!.sessionManager.get(resumed.id)?.status).toBe("exited");
     }, PTY_EXIT_WAIT_OPTIONS);
     // See the first test's comment: the outer test timeout needs the same bump.
+  }, 15_000);
+
+  it("rejects a late event from the stopped tailer after the same session resumes", async () => {
+    const cwd = join(dir, "project");
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      autoCreateSession: false,
+      adapters: { codex: fakeCodexAdapter() },
+      stateRoot: dir,
+    });
+
+    const session = await server.sessionManager.create({ cwd, harness: "codex" });
+    await vi.waitFor(() => expect(tailerEvents).toHaveLength(1));
+    const firstRuntimeEvent = tailerEvents[0]!;
+    firstRuntimeEvent("SessionStart", {
+      source: "codex",
+      cwd,
+      session_id: "provider-shared",
+    });
+    await vi.waitFor(() => {
+      expect(server!.sessionManager.get(session.id)?.agentSessionId).toBe(
+        "provider-shared",
+      );
+      expect(server!.sessionManager.get(session.id)?.ready).toBe(true);
+    });
+
+    await server.sessionManager.kill(session.id);
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
+    );
+    await server.sessionManager.resume(session.id);
+    await vi.waitFor(() => expect(tailerEvents).toHaveLength(2));
+    expect(server.sessionManager.get(session.id)?.ready).toBe(false);
+
+    firstRuntimeEvent("SessionStart", {
+      source: "codex",
+      cwd,
+      session_id: "provider-shared",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.sessionManager.get(session.id)?.ready).toBe(false);
+
+    tailerEvents[1]!("SessionStart", {
+      source: "codex",
+      cwd,
+      session_id: "provider-shared",
+    });
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)?.ready).toBe(true),
+    );
+
+    await server.sessionManager.kill(session.id);
   }, 15_000);
 
   it("stops the tailer and does not start a new one for a non-codex session", async () => {
@@ -206,7 +353,7 @@ describe("codex tailer lifecycle wiring", () => {
 
     // Give any (incorrect) codex wiring a chance to fire before asserting it didn't.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(findRolloutFile).not.toHaveBeenCalled();
+    expect(findRolloutCandidates).not.toHaveBeenCalled();
     expect(tailCodexRollout).not.toHaveBeenCalled();
 
     // See the first test's comment: wait for the real spawned process to
