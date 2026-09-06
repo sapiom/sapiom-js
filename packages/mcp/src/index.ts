@@ -9,6 +9,7 @@ import { register as registerStatus } from "./tools/status.js";
 import { register as registerAgents } from "./tools/agents.js";
 import { register as registerSandbox } from "./tools/sandbox.js";
 import { register as registerAppPublish } from "./tools/app-publish.js";
+import { register as registerAppManage } from "./tools/app-manage.js";
 import { register as registerFeedback } from "./tools/feedback.js";
 import { fetchInstructions } from "./instructions-fetch.js";
 
@@ -60,6 +61,7 @@ async function main(): Promise<void> {
   registerAgents(server, env);
   registerSandbox(server, env);
   registerAppPublish(server, env);
+  registerAppManage(server, env);
   registerFeedback(server, env);
 
   // Connect via stdio transport
