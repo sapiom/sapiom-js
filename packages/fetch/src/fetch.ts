@@ -12,6 +12,7 @@ import {
   PaymentConfig,
   CompletionConfig,
 } from "./interceptors.js";
+import { cloneRequest, requestFromInput } from "./sapiom-request.js";
 
 /**
  * Configuration for Sapiom-enabled Fetch client
@@ -120,7 +121,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    let request = new Request(input, init);
+    let request = requestFromInput(input, init);
 
     const requestMetadata = (request as any).__sapiom || {};
     const userMetadata = { ...defaultMetadata, ...requestMetadata };
@@ -137,7 +138,7 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
       if (identityHeaders["Sapiom-Identity"]) {
         const headers = new Headers(request.headers);
         headers.set("Sapiom-Identity", identityHeaders["Sapiom-Identity"]);
-        request = new Request(request, { headers });
+        request = cloneRequest(request, { headers });
       }
     }
 
