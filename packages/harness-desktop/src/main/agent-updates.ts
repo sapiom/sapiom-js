@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 import {
@@ -98,6 +98,8 @@ export async function ensureAgentUpdates(
   const log = options.onLine ?? (() => {});
   for (const kind of Object.keys(AGENT_PACKAGES) as AgentKind[]) {
     if (options.signal?.aborted) break;
+    let unpublishedPrefix: string | undefined;
+    let unpublishedSelector: string | undefined;
     try {
       const agent = AGENT_PACKAGES[kind];
       const existing = await loadSelection(options.root, kind);
@@ -153,6 +155,7 @@ export async function ensureAgentUpdates(
       const parent = path.join(options.root, kind);
       const prefix = path.join(parent, directory);
       options.signal?.throwIfAborted();
+      unpublishedPrefix = prefix;
       await mkdir(prefix, { recursive: true });
       log(`Updating ${agent.binary} to ${latest}…`);
       if (!(await options.install(`${agent.package}@${latest}`, prefix, log)))
@@ -163,6 +166,7 @@ export async function ensureAgentUpdates(
       // Publish only after verification; preserve the previous selection on failure.
       const temp = path.join(parent, `active-${randomUUID()}.json`);
       options.signal?.throwIfAborted();
+      unpublishedSelector = temp;
       await writeFile(
         temp,
         JSON.stringify({ version: latest, directory } satisfies Selection),
@@ -170,12 +174,20 @@ export async function ensureAgentUpdates(
       );
       options.signal?.throwIfAborted();
       await rename(temp, path.join(parent, "active.json"));
+      unpublishedSelector = undefined;
+      unpublishedPrefix = undefined;
       selected[kind] = { prefix, version: latest, command };
       log(`${agent.binary} updated to ${latest}.`);
     } catch (err) {
       log(
         `${AGENT_PACKAGES[kind].binary} update deferred; keeping the installed version. ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      // Clean only this attempt's unpublished files. Previously selected
+      // installs can still belong to running processes.
+      for (const file of [unpublishedSelector, unpublishedPrefix]) {
+        if (file) await rm(file, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
   return selected;

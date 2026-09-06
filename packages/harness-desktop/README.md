@@ -9,7 +9,9 @@ On each normal launch, Studio checks installed Claude Code and Codex against npm
 
 Updates use isolated per-user `agent-versions/` directories and pass a version
 check before activation. Global installations stay untouched; newer or unknown
-versions on PATH are preserved. Previous directories remain for running processes.
+versions on PATH are preserved. Previous successful directories remain for running
+processes; automatic eviction is not implemented. Failed or cancelled attempts
+clean up their own unpublished installation and temporary selector.
 
 Registry requests time out after five seconds; installers are stopped after
 90 seconds, with bounded child-process cleanup. Failed/offline updates keep the
