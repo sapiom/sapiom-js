@@ -42,13 +42,26 @@ const DEFAULT_BASE_URL =
  */
 export const CODING_RESULT_SIGNAL = "models.coding.result";
 
-/** Run lifecycle, mirrored from the gateway's `ModelsRunStatus`. */
+/**
+ * Run lifecycle, mirrored from the gateway's `ModelsRunStatus`.
+ *
+ * `awaiting_capacity` is the deferred state a run sits in when it carried a
+ * {@link CodingRunSpec.deadlineMinutes} and the platform parked it for a
+ * cheaper lane instead of dispatching immediately. It is NOT terminal: `run()`
+ * and a `launch()` handle keep polling through it.
+ */
 export type RunStatus =
   | "pending"
   | "queued"
+  | "awaiting_capacity"
   | "running"
   | "completed"
   | "failed";
+/**
+ * The states `run()`'s poll loop and `handle.wait()` stop on. Deliberately just
+ * the two end states: every other status — `awaiting_capacity` included — keeps
+ * the loop polling, so a deferred run is never resolved with a null result.
+ */
 const TERMINAL = new Set<RunStatus>(["completed", "failed"]);
 
 export interface CodingRunSpec {
@@ -70,6 +83,20 @@ export interface CodingRunSpec {
    * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
+  /**
+   * How long you're willing to wait for this run, in minutes — the deadline
+   * half of the label + deadline vocabulary. You say the kind of call
+   * (`model`) and how long you can wait; the platform derives the billing lane
+   * (`run_now` / `priority` / `standard` / `flex`) from it — you never name a
+   * lane yourself.
+   *
+   * Omit it (the default) for `run_now`: the request is byte-identical to one
+   * sent before this field existed, and the run dispatches immediately. Give it
+   * a value and the platform may park the run in `awaiting_capacity` until a
+   * cheaper lane is free, dispatching in time to finish within the deadline.
+   * `wait()`'s default poll budget widens to cover the deadline you asked for.
+   */
+  deadlineMinutes?: number;
 }
 
 /**
@@ -193,6 +220,7 @@ export class CodingResultSchemaError extends Error {}
 const RUN_STATUSES: readonly RunStatus[] = [
   "pending",
   "queued",
+  "awaiting_capacity",
   "running",
   "completed",
   "failed",
@@ -291,6 +319,52 @@ function workflowResumeHeaders(
   return token ? { "x-sapiom-workflow-token": token } : {};
 }
 
+/**
+ * Default poll budget for a handle's `wait()`, widened to cover a deadline the
+ * caller asked for. A deferred run sits in `awaiting_capacity` for up to its
+ * deadline, so a fixed default would throw on exactly the runs the deadline
+ * exists for — `run({ deadlineMinutes: 60 })` against a 20-minute default.
+ *
+ * The deadline bounds when the run FINISHES, so the surface default is added on
+ * top as slack rather than replaced: it covers dispatch latency at the far end
+ * of the window plus poll granularity. Never shrinks the default (a deadline
+ * under it, or a non-positive one, leaves the default alone), and an explicit
+ * `wait({ timeoutMs })` still wins over all of this.
+ */
+function defaultWaitMs(
+  deadlineMinutes: number | undefined,
+  surfaceDefaultMs: number,
+): number {
+  if (typeof deadlineMinutes !== "number" || !(deadlineMinutes > 0))
+    return surfaceDefaultMs;
+  return deadlineMinutes * 60_000 + surfaceDefaultMs;
+}
+
+/** Ceiling for the deferred-run backoff below. */
+const DEFERRED_POLL_CAP_MS = 60_000;
+
+/**
+ * Poll interval for the next tick of a `wait()` loop.
+ *
+ * A run parked in `awaiting_capacity` has nothing new to report until the
+ * platform dispatches it, and a long deadline widens the poll budget to match —
+ * so at a flat interval an 8-hour deadline would spend ~14,000 GETs of the
+ * caller's rate limit doing nothing. While deferred, the interval doubles up to
+ * {@link DEFERRED_POLL_CAP_MS}, which brings that back to a few hundred.
+ *
+ * Every other status — including `running` — snaps straight back to the
+ * caller's `pollMs`, so a run that is actually moving is still observed at full
+ * cadence and a terminal transition is caught promptly.
+ */
+function nextPollMs(
+  status: string,
+  currentMs: number,
+  callerPollMs: number,
+): number {
+  if (status !== "awaiting_capacity") return callerPollMs;
+  return Math.min(currentMs * 2, DEFERRED_POLL_CAP_MS);
+}
+
 // --- wire shapes (snake_case, as served by the gateway serializer) ---
 
 interface WireResult {
@@ -352,6 +426,9 @@ function buildBody(spec: CodingRunSpec): Record<string, unknown> {
     working_directory: spec.workingDirectory,
     keep_sandbox: spec.keepSandbox ?? true,
     model: spec.model,
+    // Left `undefined` when unset, so `JSON.stringify` drops the key entirely —
+    // the server must be able to tell "no deadline" from a `0` or a `null`.
+    deadline_minutes: spec.deadlineMinutes,
   };
 }
 
@@ -417,18 +494,24 @@ export async function codingLaunch(
     async status() {
       return (await fetchDoc()).data.attributes.status;
     },
-    async wait({ timeoutMs = 20 * 60_000, pollMs = 3_000 } = {}) {
+    async wait({
+      timeoutMs = defaultWaitMs(spec.deadlineMinutes, 20 * 60_000),
+      pollMs = 3_000,
+    } = {}) {
       const deadline = Date.now() + timeoutMs;
+      let intervalMs = pollMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const d = await fetchDoc();
-        if (TERMINAL.has(d.data.attributes.status)) return toResult(d);
+        const status = d.data.attributes.status;
+        if (TERMINAL.has(status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
-            `coding run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`,
+            `coding run ${runId} timed out after ${timeoutMs}ms (last status: ${status})`,
           );
         }
-        await new Promise((r) => setTimeout(r, pollMs));
+        intervalMs = nextPollMs(status, intervalMs, pollMs);
+        await new Promise((r) => setTimeout(r, intervalMs));
       }
     },
   };
@@ -464,8 +547,26 @@ export const coding = { run: codingRun, launch: codingLaunch };
  */
 export const MODEL_RUN_RESULT_SIGNAL = "models.run.result";
 
-/** Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`). */
-export type ModelRunStatus = "pending" | "running" | "completed" | "failed";
+/**
+ * Run lifecycle, mirrored from the gateway's `ModelRunStatus` (no `queued`),
+ * plus `awaiting_capacity`.
+ *
+ * `awaiting_capacity` is RESERVED rather than mirrored: the gateway does not
+ * emit it on this surface today. It is declared because this surface accepts a
+ * {@link ModelRunSpec.deadlineMinutes}, and the only reason to send a deadline
+ * is for the platform to defer — so the day it does, a union too narrow to hold
+ * the value would mis-type `handle.status()` and make
+ * `modelRunResultSchema.parse` reject a real payload. Reserving it costs a
+ * consumer one branch that is currently unreachable; omitting it would cost a
+ * silent type lie. It carries the same meaning as on {@link RunStatus} and is
+ * likewise NOT terminal.
+ */
+export type ModelRunStatus =
+  | "pending"
+  | "awaiting_capacity"
+  | "running"
+  | "completed"
+  | "failed";
 const MODEL_TERMINAL = new Set<ModelRunStatus>(["completed", "failed"]);
 
 /** A remote MCP server (Streamable HTTP) the agent may call tools on. */
@@ -489,6 +590,20 @@ export interface ModelRunSpec {
    * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    */
   model?: ModelLabel;
+  /**
+   * How long you're willing to wait for this run, in minutes — the deadline
+   * half of the label + deadline vocabulary. You say the kind of call
+   * (`model`) and how long you can wait; the platform derives the billing lane
+   * (`run_now` / `priority` / `standard` / `flex`) from it — you never name a
+   * lane yourself.
+   *
+   * Omit it (the default) for `run_now`: the request is byte-identical to one
+   * sent before this field existed, and the run dispatches immediately. Give it
+   * a value and the platform may park the run in `awaiting_capacity` until a
+   * cheaper lane is free, dispatching in time to finish within the deadline.
+   * `wait()`'s default poll budget widens to cover the deadline you asked for.
+   */
+  deadlineMinutes?: number;
   /** Max output tokens per turn. */
   maxTokens?: number;
   /** Remote MCP servers the agent may call tools on (network round-trip per call). */
@@ -589,7 +704,7 @@ export const modelRunResultSchema = {
     if (!value || typeof value !== "object") fail("not an object");
     const v = value as Record<string, unknown>;
     if (typeof v.runId !== "string") fail("runId must be a string");
-    if (!(["pending", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
+    if (!(["pending", "awaiting_capacity", "running", "completed", "failed"] as ModelRunStatus[]).includes(v.status as ModelRunStatus))
       fail("status must be a valid ModelRunStatus");
     if (v.output !== null && typeof v.output !== "string") fail("output must be a string or null");
     if (v.result !== null && (typeof v.result !== "object" || !v.result)) fail("result must be an object or null");
@@ -686,6 +801,9 @@ function buildModelBody(spec: ModelRunSpec): Record<string, unknown> {
     prompt: spec.prompt,
     system: spec.system,
     model: spec.model,
+    // Same encoding as the coding body: unset ⇒ `undefined` ⇒ the key is
+    // absent on the wire, never `0` or `null`.
+    deadline_minutes: spec.deadlineMinutes,
     max_tokens: spec.maxTokens,
     mcps: spec.mcps,
   };
@@ -721,18 +839,24 @@ export async function launch(
     async status() {
       return (await fetchDoc()).data.attributes.status;
     },
-    async wait({ timeoutMs = 10 * 60_000, pollMs = 2_000 } = {}) {
+    async wait({
+      timeoutMs = defaultWaitMs(spec.deadlineMinutes, 10 * 60_000),
+      pollMs = 2_000,
+    } = {}) {
       const deadline = Date.now() + timeoutMs;
+      let intervalMs = pollMs;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const d = await fetchDoc();
-        if (MODEL_TERMINAL.has(d.data.attributes.status)) return toResult(d);
+        const status = d.data.attributes.status;
+        if (MODEL_TERMINAL.has(status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
-            `agent run ${runId} timed out after ${timeoutMs}ms (last status: ${d.data.attributes.status})`,
+            `agent run ${runId} timed out after ${timeoutMs}ms (last status: ${status})`,
           );
         }
-        await new Promise((r) => setTimeout(r, pollMs));
+        intervalMs = nextPollMs(status, intervalMs, pollMs);
+        await new Promise((r) => setTimeout(r, intervalMs));
       }
     },
   };
