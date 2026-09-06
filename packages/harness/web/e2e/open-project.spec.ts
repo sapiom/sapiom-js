@@ -46,6 +46,8 @@ test.describe("the header + opens a project", () => {
   test("a folder with NO agent in it becomes a project row, and survives a reload", async ({
     page,
   }) => {
+    await page.goto("/?mockFixtures=agent-map&mockAutoPlanAgents=1");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
     await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
 
     await page.getByTestId("rail-add-project").click();
@@ -68,15 +70,54 @@ test.describe("the header + opens a project", () => {
 
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
     const group = page.getByTestId("workspace-group-blank-slate");
-    // First visit lands on the pinned Agent Map without a label click.
-    await expect(group.getByTestId("agent-map-row")).toBeVisible();
-    await expect(group.getByTestId("agent-map-select")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    // The project itself owns its read-only Agent Map destination; there is no
+    // pinned planning row masquerading as a session.
+    await expect(group.getByTestId("agent-map-row")).toHaveCount(0);
+    await expect(
+      group.getByTestId("project-select-blank-slate"),
+    ).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-empty")).toHaveText(
       "Nothing generated yet",
     );
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    // The server-owned project-open lifecycle contributes one real ordinary
+    // session. Plan Agents is only that tab's initial title—never a pinned row
+    // or a second synthetic navigation element.
+    const tabs = page.locator(".session-tabs-list > .session-tab");
+    await expect(tabs).toHaveCount(1);
+    await expect(page.getByText("Plan Agents", { exact: true })).toHaveCount(1);
+    const firstSessionId = (
+      await tabs.first().getAttribute("data-testid")
+    )?.replace("session-tab-", "");
+    expect(firstSessionId).toBeTruthy();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __HARNESS_TEST__?: { createSessionCalls?: unknown[] };
+              }
+            ).__HARNESS_TEST__?.createSessionCalls?.length ?? 0,
+        ),
+      )
+      .toBe(0);
+
+    await page.getByTestId(`session-tab-main-${firstSessionId}`).click();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      firstSessionId!,
+    );
+    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+    await expect(page.getByTestId("agent-view")).toBeVisible();
+
+    await group.getByTestId("project-select-blank-slate").click();
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+    await expect(page.getByTestId("session-context")).toHaveAttribute(
+      "data-session-id",
+      firstSessionId!,
+    );
+    await expect(tabs).toHaveCount(1);
     // The row is REMEMBERED, not just rendered: `recentDirs` is the harness's
     // one workspace list, and the whole rail re-derives from it when the axis
     // changes. (A cross-RELOAD assertion belongs against a real server — the
@@ -86,9 +127,24 @@ test.describe("the header + opens a project", () => {
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
+
+    // Ending the automatic conversation must not bring back the retired
+    // first-agent action beneath the still-empty project.
+    await page.getByTestId(`session-tab-main-${firstSessionId}`).click();
+    await page.getByTestId("session-menu").click();
+    await page.getByTestId("session-end-btn").click();
+    await page.getByTestId("end-session-confirm-btn").click();
+    await expect(page.getByTestId("session-context")).not.toHaveAttribute(
+      "data-session-id",
+      firstSessionId!,
+    );
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    await expect(
+      group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
+    ).toHaveCount(0);
   });
 
-  test("a planning project keeps sessions direct while hiding standalone agent creation", async ({
+  test("a Studio project keeps ordinary session and agent creation available", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
@@ -96,52 +152,36 @@ test.describe("the header + opens a project", () => {
     await page.getByTestId("open-project").click();
 
     const group = page.getByTestId("workspace-group-blank-slate");
-    await expect(group.getByTestId("agent-map-row")).toBeVisible();
+    await expect(group.getByTestId("agent-map-row")).toHaveCount(0);
+    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
     await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
 
-    // Once the initial planner is no longer a live bare session, the old rail
-    // exposed its standalone-agent shortcut again. Ending it reproduces the
-    // stable empty-project state from the reported sidebar.
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-end-btn").click();
-    await page.getByTestId("end-session-confirm-btn").click();
-    await expect(page.getByTestId("planner-session-ended")).toBeVisible();
-
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    await expect(
+      group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
+    ).toHaveCount(0);
     await expect(
       group.getByTestId("project-start-session-blank-slate"),
     ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
-    // The visible empty row and the project menu used to be two doors into the
-    // same direct-create flow. A planning project exposes neither: generated
-    // agents enter through an approved map, while project removal remains an
-    // ordinary project-level action.
+    // The map is a view, not an authorization gate. Both direct agent creation
+    // and project removal remain ordinary project-level actions.
     await openProjectMenu(page, "blank-slate");
     await expect(
       page.getByTestId("project-create-agent-blank-slate"),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await expect(page.getByTestId("project-remove-blank-slate")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    // The same ownership rule covers a bare project with an existing session:
-    // its former in-session scaffold action cannot bypass planning either.
+    // A bare project with an existing ordinary session retains its scaffold
+    // action too.
     await openProjectMenu(page, "scratch");
-    await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveCount(0);
+    await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
 
     // NOT the rail-wide empty state leaking down: that one says "No agents yet"
     // and only exists when the rail has nothing at all.
     await expect(page.locator(".rail-empty")).toHaveCount(0);
-  });
-
-  test("the empty row does NOT appear under a merged root-agent project", async ({
-    page,
-  }) => {
-    // `rfq-agent` is a root that IS an agent — `projectIsEmpty` consults
-    // `rootAgent` precisely so its row does not get "no agents" printed under
-    // the agent it is showing.
-    await expect(page.getByTestId("workflow-rfq")).toBeVisible();
-    await expect(page.getByTestId("project-empty-rfq-agent")).toHaveCount(0);
   });
 
   test("opening a folder that IS an agent project registers the agent too", async ({

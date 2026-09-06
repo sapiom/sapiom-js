@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 
-import { DEFAULT_SYSTEM_PROMPT } from "./default.js";
+import { DEFAULT_SYSTEM_PROMPT, resolveKnownSystemPrompt } from "./default.js";
 
 const sha256 = (content: string) =>
   createHash("sha256").update(content, "utf8").digest("hex");
@@ -11,7 +12,12 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "a32a1d00c56287c96bfcbf2b1dd78e2b7b278fbaa0fd1997df8567d0c5bc4d27";
+  "763753540d048e8edc4eae2e4fdd047b4a5e11f34b8c1ee4c71254118b5b6987";
+
+const legacy = readFileSync(
+  new URL("./fixtures/legacy-system-prompt.md", import.meta.url),
+  "utf8",
+).trim();
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("stays byte-identical to the copy the backend serves (cross-repo pin, SAP-2810)", () => {
@@ -38,6 +44,15 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_send_feedback");
   });
 
+  it("orients to the project map without delaying a clear first request", () => {
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("agent-map");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("shared project Agent Map");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("clear task");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("two Sapiom MCP servers");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("The two MCPs");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("then stop");
+  });
+
   it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
     // The digest above only proves the two copies match; it cannot tell a sync that keeps
     // this paragraph from one that drops it. These are the load-bearing facts, so a future
@@ -57,5 +72,58 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("/hook/<path>");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("byte-exact");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("60 s");
+  });
+});
+
+describe("known served-prompt compatibility", () => {
+  it("pins the one historical revision that is safe to upgrade", () => {
+    expect(sha256(legacy)).toBe(
+      "f9128ff6afed47242b7bc7946b2e1dab20627171371191cdd2c45537198ce8ed",
+    );
+    expect(resolveKnownSystemPrompt(`\n${legacy}\n`)).toBe(
+      DEFAULT_SYSTEM_PROMPT,
+    );
+  });
+
+  it("never replaces unknown, custom, or newer remote guidance", () => {
+    for (const prompt of [
+      "custom profile",
+      DEFAULT_SYSTEM_PROMPT,
+      `${legacy}\nNew runtime instructions from the backend.`,
+    ]) {
+      expect(resolveKnownSystemPrompt(prompt)).toBe(prompt);
+    }
+  });
+
+  it("preserves the legacy feedback and workspace guidance verbatim", () => {
+    // The legacy LLM paragraph is no longer byte-preserved: the SAP-3180 content release
+    // extends it with `agents.launch` and follows it with a secrets/receipts/webhooks
+    // paragraph. Its load-bearing sentences are asserted below instead; the feedback and
+    // workspace blocks are still carried verbatim.
+    for (const [start, end] of [
+      ["**When something about Sapiom is wrong", "**The authoring loop"],
+      ["**Your current workspace state", "**In your very first reply"],
+    ]) {
+      const block = legacy
+        .slice(legacy.indexOf(start), legacy.indexOf(end))
+        .trim();
+      expect(block.length).toBeGreaterThan(100);
+      expect(DEFAULT_SYSTEM_PROMPT).toContain(block);
+    }
+  });
+
+  it("keeps every legacy LLM call-surface claim while extending the paragraph", () => {
+    for (const claim of [
+      "one-shot call → `ctx.sapiom.llm.run`",
+      "platform-driven multi-turn loop → `ctx.sapiom.models.run`",
+      "dispatching a deployed agent by slug →\n`ctx.sapiom.agents.run`",
+      "Structured output = tool-use/schema output",
+      "**Omit `model` entirely**",
+      "Raw provider ids are never\nhonored",
+      "Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.",
+    ]) {
+      expect(legacy).toContain(claim);
+      expect(DEFAULT_SYSTEM_PROMPT).toContain(claim);
+    }
   });
 });
