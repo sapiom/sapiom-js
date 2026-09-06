@@ -1,3 +1,4 @@
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
  * section of ../../../src/shared/types.ts). Gated at this layer: with
@@ -5,6 +6,7 @@
  * touches the network — this is what lets the SPA build ahead of a running
  * server.
  */
+import { buildIdeaWithAttachments } from "@shared/initial-prompt";
 import type {
   AccountPlanView,
   AgentSecret,
@@ -48,10 +50,6 @@ import type {
   AcceptedProposalDelta,
   AgentMapWorkspaceResponse,
   MapOperation,
-  PlannerMessageRequest,
-  PlannerSessionMetadataResponse,
-  PlannerSessionRequest,
-  PlannerSessionResponse,
   PutStudioCurrentWorkspaceRequest,
   StudioCurrentWorkspaceResponse,
   StudioProjectId,
@@ -254,7 +252,7 @@ export class ApiError extends Error {
   readonly status: number;
   readonly reason: string | undefined;
 
-  constructor(status: number, message: string, reason: string | undefined) {
+  constructor(status: number, message: string, reason: string | undefined, readonly code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -369,6 +367,8 @@ export interface HarnessApi {
   authStatus(): Promise<AuthStatusResponse>;
   getState(): Promise<AppState>;
   /** Durable, path-free empty/proposal/revision pointers for one Studio project. */
+  getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
+  retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus>;
   getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
@@ -379,23 +379,6 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     selection: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse>;
-  openPlannerSession(
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ): Promise<PlannerSessionResponse>;
-  /** Compatibility surface for coordinator-driven clients. The Studio renders
-   * the planner's raw CLI and does not project this protocol into a second
-   * transcript/composer UI. */
-  sendPlannerMessage(
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ): Promise<PlannerSessionMetadataResponse>;
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  retryPlannerGreeting(
-    projectId: StudioProjectId,
-    sessionId: string,
-  ): Promise<PlannerSessionMetadataResponse>;
   /** Revisioned local dependency projection for one server-issued workspace key. */
   getSystemGraph(
     workspaceKey: WorkspaceKey,
@@ -625,6 +608,7 @@ class RealApi implements HarnessApi {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       let reason: string | undefined;
+      let code: string | undefined;
       try {
         const parsed: unknown = body ? JSON.parse(body) : undefined;
         if (
@@ -633,6 +617,8 @@ class RealApi implements HarnessApi {
           typeof (parsed as { error?: unknown }).error === "string"
         ) {
           reason = (parsed as { error: string }).error;
+          const rawCode = (parsed as { code?: unknown }).code;
+          if (typeof rawCode === "string" && rawCode.length <= 64) code = rawCode;
         }
       } catch {
         // Not JSON — reason stays undefined, callers fall back to .message.
@@ -641,6 +627,7 @@ class RealApi implements HarnessApi {
         res.status,
         `${init?.method ?? "GET"} ${path} → ${res.status}${body ? `: ${body}` : ""}`,
         reason,
+        code,
       );
     }
     return res;
@@ -654,6 +641,13 @@ class RealApi implements HarnessApi {
 
   getState(): Promise<AppState> {
     return this.request<AppState>("/api/state");
+  }
+
+  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization`), projectId);
+  }
+  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization/retry`, { method: "POST" }), projectId);
   }
 
   async getAgentMapWorkspace(
@@ -688,37 +682,6 @@ class RealApi implements HarnessApi {
       },
     );
     return parseStudioCurrentWorkspaceResponse(value, projectId);
-  }
-
-  openPlannerSession(
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ): Promise<PlannerSessionResponse> {
-    return this.request<PlannerSessionResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  async sendPlannerMessage(
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ): Promise<PlannerSessionMetadataResponse> {
-    return this.request<PlannerSessionMetadataResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/messages`,
-      { method: "POST", body: JSON.stringify(request) },
-    );
-  }
-
-  async retryPlannerGreeting(
-    projectId: StudioProjectId,
-    sessionId: string,
-  ): Promise<PlannerSessionMetadataResponse> {
-    return this.request<PlannerSessionMetadataResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/planner-sessions/${encodeURIComponent(sessionId)}/greeting/retry`,
-      { method: "POST", body: "{}" },
-    );
   }
 
   async getSystemGraph(
@@ -1927,8 +1890,6 @@ function goldenAgentMapFixture(
   const actor = {
     userId,
     sessionId,
-    role: "map-planner" as const,
-    assignment: null,
   };
   const delta: AcceptedProposalDelta = {
     schemaVersion: 1,
@@ -2071,13 +2032,21 @@ export class MockApi implements HarnessApi {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("mockNoLiveSessions") ===
       "1";
+  // A Studio restart retains registry history while every native runtime has
+  // exited. Keep both providers' exact saved IDs for restoration journeys.
+  private readonly restoredSessions =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("mockRestoredSessions") ===
+      "1";
   private sessionsStore: HarnessSession[] =
     this.fresh || this.noLiveSessions
       ? []
-      : MOCK_SESSIONS.map((session) => ({ ...session }));
-  /** Live planner records are mutable mock state, unlike the fixed history
-   * fixtures. They exercise the same record-refetch path as the real server. */
-  private plannerSessionRecords = new Map<string, SessionRecord>();
+      : MOCK_SESSIONS.map((session) => ({
+          ...session,
+          ...(this.restoredSessions
+            ? { status: "exited" as const, ready: false }
+            : {}),
+        }));
   private workflowsStore: WorkflowInfo[] = this.fresh
     ? []
     : [
@@ -2262,9 +2231,64 @@ export class MockApi implements HarnessApi {
     }));
   }
 
+  /** Mirror the server's neutral project principal in opt-in Studio fixtures. */
+  private studioSession(
+    session: HarnessSession,
+    projects: readonly StudioProjectSummary[] | undefined,
+  ): HarnessSession {
+    if (!projects) return session;
+    const projectIds = new Set(projects.map((project) => project.projectId));
+    const matches = this.workspaceScopes()
+      .filter(
+        (scope) =>
+          scope.projectId &&
+          projectIds.has(scope.projectId) &&
+          isWithinDir(scope.cwd, session.cwd),
+      )
+      .sort(
+        (left, right) =>
+          right.cwd.length - left.cwd.length ||
+          left.cwd.localeCompare(right.cwd),
+      );
+    const nearestDepth = matches[0]?.cwd.length;
+    const nearestProjectIds = new Set(
+      matches
+        .filter((scope) => scope.cwd.length === nearestDepth)
+        .map((scope) => scope.projectId),
+    );
+    const projectId =
+      nearestProjectIds.size === 1 ? matches[0]?.projectId : undefined;
+    if (!projectId || !projectIds.has(projectId)) return session;
+    const usePlanAgentsFixture =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get(
+        "mockPlanAgentsSession",
+      ) === "1" &&
+      session.id === "sess-boot";
+    const useRestoreBindingConflictFixture =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get(
+        "mockRestoreBindingConflict",
+      ) === "1" &&
+      session.id === "sess-boot";
+    return {
+      ...session,
+      ...(usePlanAgentsFixture ? { title: "Plan Agents" } : {}),
+      ...(useRestoreBindingConflictFixture
+        ? { boundWorkflowPath: "/Users/demo/polsia/services/workers" }
+        : {}),
+      agentMapIdentity: {
+        projectId,
+        userId: "user_mock",
+        sessionId: session.id,
+      },
+    };
+  }
+
   private studioWorkflows(): WorkflowInfo[] {
     const scopes = this.workspaceScopes();
-    return this.workflows.map((workflow, index) => {
+    const workflows = this.workflows.map((workflow, index) => {
+      if (workflow.studioBindings?.length) return workflow;
       const bindings = scopes
         .filter(
           (candidate) =>
@@ -2281,6 +2305,28 @@ export class MockApi implements HarnessApi {
           }
         : workflow;
     });
+    // Regression fixture: successful scaffold in the original conversation,
+    // but on disk beside its root. Never turn this path into a root candidate.
+    if (
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockCreatedSibling") === "1"
+    ) {
+      const projectId = scopes.find(
+        (scope) => scope.cwd === "/Users/demo/acme-app",
+      )?.projectId;
+      if (projectId) workflows.push({
+        name: "report-reviewer",
+        path: "/Users/demo/report-reviewer",
+        definitionId: null,
+        definitionSlug: "report-reviewer",
+        source: "scan",
+        studioBindings: [{
+          projectId,
+          agentId: "agent_00000000-0000-4000-8000-000000000999",
+        }],
+      });
+    }
+    return workflows;
   }
 
   async getState(): Promise<AppState> {
@@ -2353,7 +2399,9 @@ export class MockApi implements HarnessApi {
         ) === "off"
           ? false
           : true,
-      sessions: this.sessions,
+      sessions: this.sessions.map((session) =>
+        this.studioSession(session, studioProjects),
+      ),
       workflows: this.studioWorkflows(),
       workspaceScopes: this.workspaceScopes(),
       ...(studioProjects ? { studioProjects } : {}),
@@ -2367,6 +2415,16 @@ export class MockApi implements HarnessApi {
       ...(mockEnvReason ? { consentEnvReason: mockEnvReason } : {}),
       ...(this.fresh ? { firstRun: true } : {}),
     };
+  }
+
+  async getAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    const mode = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("mockMapInitialization");
+    if (mode === "error") throw new ApiError(503, "Agent Map storage is unavailable", "Agent Map storage is unavailable");
+    return { projectId, status: mode === "running" || mode === "queued" || mode === "failed" || mode === "completed" ? mode : "idle",
+      errorCode: mode === "failed" ? "provider_failed" : null, retryable: mode === "failed" };
+  }
+  async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
+    return { projectId, status: "queued", errorCode: null, retryable: false };
   }
 
   async getAgentMapWorkspace(
@@ -2423,7 +2481,7 @@ export class MockApi implements HarnessApi {
         "Studio project is not available",
       );
     }
-    if (!project) {
+    if (failure === "missing" || !project) {
       throw new ApiError(
         404,
         "Studio project not found",
@@ -2515,311 +2573,6 @@ export class MockApi implements HarnessApi {
       : { kind: "agent-map" as const, projectId };
     this.studioPreferences.set(projectId, selection);
     return { ...current, selection, repaired: !valid };
-  }
-
-  async openPlannerSession(
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ): Promise<PlannerSessionResponse> {
-    if (typeof window !== "undefined") {
-      const win = window as unknown as {
-        __HARNESS_TEST__?: Record<string, unknown>;
-      };
-      const previous =
-        (win.__HARNESS_TEST__?.openPlannerSessionCalls as
-          | unknown[]
-          | undefined) ?? [];
-      win.__HARNESS_TEST__ = {
-        ...(win.__HARNESS_TEST__ ?? {}),
-        openPlannerSessionCalls: [...previous, { projectId, request }],
-      };
-    }
-    const failure =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("mockPlanner");
-    if (failure === "error") {
-      throw new ApiError(
-        503,
-        "Planner service is unavailable",
-        "Planner service is unavailable",
-      );
-    }
-    if (failure === "unauthorized") {
-      throw new ApiError(
-        403,
-        "Planner project is not available",
-        "Planner project is not available",
-      );
-    }
-    const existing = this.sessions
-      .filter(
-        (session) =>
-          session.status !== "exited" &&
-          session.planning?.identity.projectId === projectId &&
-          session.planning.identity.userId === "user_mock",
-      )
-      .sort((left, right) =>
-        right.lastActiveAt.localeCompare(left.lastActiveAt),
-      )[0];
-    if (request.mode === "resume-or-create" && existing) {
-      return { session: existing, resolution: "live" };
-    }
-    const root = [...this.studioProjectIds.entries()].find(
-      ([, id]) => id === projectId,
-    )?.[0];
-    if (!root) {
-      throw new ApiError(
-        404,
-        "Studio project not found",
-        "Studio project not found",
-      );
-    }
-    const session = await this.createSession({
-      cwd: root,
-      harness: request.harness ?? "claude-code",
-      ...(request.theme ? { theme: request.theme } : {}),
-    });
-    const greetingFixture =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("mockGreeting");
-    session.planning = {
-      identity: {
-        projectId,
-        sessionId: session.id,
-        userId: "user_mock",
-        role: "map-planner",
-      },
-      greeting:
-        greetingFixture === "generating"
-          ? { status: "generating", attemptId: "attempt_mock" }
-          : greetingFixture === "failed"
-            ? {
-                status: "failed",
-                retryable: true,
-                errorCode: "model_turn_failed",
-              }
-            : {
-                status: "delivered",
-                messageId: "message_mock_greeting",
-              },
-      queuedInputIds: [],
-    };
-    const now = new Date().toISOString();
-    this.plannerSessionRecords.set(session.id, {
-      harnessSessionId: session.id,
-      mergedSessionIds: [session.id],
-      agentSessionId: session.agentSessionId,
-      harness: session.harness,
-      cwd: session.cwd,
-      startedAt: now,
-      endedAt: null,
-      turns:
-        session.planning.greeting.status === "delivered"
-          ? [
-              {
-                index: 1,
-                prompt: null,
-                promptAt: null,
-                toolCalls: [],
-                assistantText:
-                  "I’m your project planning agent. We’ll plan the agents, responsibilities, data flow, resources, and connectors together. What kind of agent architecture do you want to build?",
-                model: "mock-planner",
-                usage: null,
-                completedAt: now,
-                incomplete: false,
-              },
-            ]
-          : [],
-      turnCount: 0,
-      eventCount: session.planning.greeting.status === "delivered" ? 2 : 0,
-      reconstructed: true,
-      archivedAt: null,
-      limitations: [],
-    });
-    return { session, resolution: "created" };
-  }
-
-  async sendPlannerMessage(
-    projectId: StudioProjectId,
-    sessionId: string,
-    request: PlannerMessageRequest,
-  ): Promise<PlannerSessionMetadataResponse> {
-    const session = this.sessions.find(
-      (candidate) => candidate.id === sessionId,
-    );
-    if (session?.planning?.identity.projectId !== projectId) {
-      throw new ApiError(
-        403,
-        "Forbidden planner session",
-        "Forbidden planner session",
-      );
-    }
-    const inputId = `input_mock_${Date.now()}`;
-    session.planning = {
-      ...session.planning,
-      greeting:
-        session.planning.greeting.status === "delivered" ||
-        session.planning.greeting.status === "skipped"
-          ? session.planning.greeting
-          : { status: "skipped", reason: "user-proceeded" },
-      queuedInputIds: [...session.planning.queuedInputIds, inputId],
-    };
-    await this.injectInput(sessionId, { text: request.text });
-    const accepted = structuredClone(session.planning);
-    const project = this.studioProjects()?.find(
-      (candidate) => candidate.projectId === projectId,
-    );
-    const goldenFixtureEnabled =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockAgentMapGolden") ===
-        "1";
-    setTimeout(
-      () => {
-        const current = this.sessions.find(
-          (candidate) => candidate.id === sessionId,
-        );
-        const record = this.plannerSessionRecords.get(sessionId);
-        if (!current?.planning || !record) return;
-        const completedAt = new Date().toISOString();
-        const turns = [
-          ...record.turns,
-          {
-            index: record.turns.length + 1,
-            prompt: request.text,
-            promptAt: completedAt,
-            toolCalls: [],
-            assistantText:
-              "Let’s start by clarifying the outcome, the actors involved, and the information they need to exchange.",
-            model: "mock-planner",
-            usage: null,
-            completedAt,
-            incomplete: false,
-          },
-        ];
-        this.plannerSessionRecords.set(sessionId, {
-          ...record,
-          turns,
-          turnCount: record.turnCount + 1,
-          eventCount: record.eventCount + 2,
-        });
-        current.planning = {
-          ...current.planning,
-          queuedInputIds: current.planning.queuedInputIds.filter(
-            (candidate) => candidate !== inputId,
-          ),
-        };
-        void import("./events").then(({ publishMockBusMessage }) => {
-          if (goldenFixtureEnabled && !this.agentMapSnapshots.has(projectId)) {
-            if (!project) return;
-            const fixture = goldenAgentMapFixture(
-              project,
-              new Date().toISOString(),
-              accepted.identity.userId,
-              sessionId,
-            );
-            this.agentMapSnapshots.set(projectId, fixture.snapshot);
-            publishMockBusMessage({
-              type: "agent-map.proposal.changed",
-              delta: fixture.delta,
-            });
-          }
-          publishMockBusMessage({ type: "session.status", session: current });
-          publishMockBusMessage({
-            type: "session.record.changed",
-            harnessSessionId: sessionId,
-          });
-        });
-      },
-      goldenFixtureEnabled ? 0 : 250,
-    );
-    return { metadata: accepted };
-  }
-
-  async retryPlannerGreeting(
-    projectId: StudioProjectId,
-    sessionId: string,
-  ): Promise<PlannerSessionMetadataResponse> {
-    const session = this.sessions.find(
-      (candidate) => candidate.id === sessionId,
-    );
-    if (session?.planning?.identity.projectId !== projectId) {
-      throw new ApiError(
-        403,
-        "Forbidden planner session",
-        "Forbidden planner session",
-      );
-    }
-    const retryFailure =
-      typeof window === "undefined"
-        ? null
-        : new URLSearchParams(window.location.search).get("mockGreetingRetry");
-    if (retryFailure === "error") {
-      throw new ApiError(
-        503,
-        "Greeting retry is temporarily unavailable",
-        "Greeting retry is temporarily unavailable",
-      );
-    }
-    if (
-      session.planning.greeting.status !== "failed" ||
-      !session.planning.greeting.retryable ||
-      session.planning.queuedInputIds.length > 0
-    ) {
-      throw new ApiError(
-        409,
-        "Greeting retry is not available",
-        "Greeting retry is not available",
-      );
-    }
-    session.planning = {
-      ...session.planning,
-      greeting: { status: "generating", attemptId: "attempt_mock_retry" },
-    };
-    const retrying = structuredClone(session.planning);
-    setTimeout(() => {
-      const current = this.sessions.find(
-        (candidate) => candidate.id === sessionId,
-      );
-      const record = this.plannerSessionRecords.get(sessionId);
-      if (!current?.planning || !record) return;
-      const completedAt = new Date().toISOString();
-      current.planning = {
-        ...current.planning,
-        greeting: {
-          status: "delivered",
-          messageId: "message_mock_greeting_retry",
-        },
-      };
-      this.plannerSessionRecords.set(sessionId, {
-        ...record,
-        turns: [
-          ...record.turns,
-          {
-            index: record.turns.length + 1,
-            prompt: null,
-            promptAt: null,
-            toolCalls: [],
-            assistantText:
-              "I’m your project planning agent. What kind of agent architecture do you want to build?",
-            model: "mock-planner",
-            usage: null,
-            completedAt,
-            incomplete: false,
-          },
-        ],
-        eventCount: record.eventCount + 2,
-      });
-      void import("./events").then(({ publishMockBusMessage }) => {
-        publishMockBusMessage({ type: "session.status", session: current });
-        publishMockBusMessage({
-          type: "session.record.changed",
-          harnessSessionId: sessionId,
-        });
-      });
-    }, 250);
-    return { metadata: retrying };
   }
 
   async getSystemGraph(
@@ -3020,7 +2773,16 @@ export class MockApi implements HarnessApi {
   }
 
   async createSession(req: CreateSessionRequest): Promise<HarnessSession> {
-    await delay(300);
+    const requestedDelay =
+      typeof window === "undefined"
+        ? null
+        : (window as unknown as { __MOCK_CREATE_SESSION_DELAY_MS__?: number })
+            .__MOCK_CREATE_SESSION_DELAY_MS__;
+    await delay(
+      typeof requestedDelay === "number" && requestedDelay >= 0
+        ? requestedDelay
+        : 300,
+    );
     if (typeof window !== "undefined") {
       const win = window as unknown as {
         __HARNESS_TEST__?: Record<string, unknown>;
@@ -3034,14 +2796,28 @@ export class MockApi implements HarnessApi {
         lastCreateSession: { req },
         createSessionCalls: [...previous, { req }],
       };
-      recordCreateStep("session", req.cwd);
       if (win.__MOCK_CREATE_SESSION_FAIL_ONCE__) {
         win.__MOCK_CREATE_SESSION_FAIL_ONCE__ = false;
         throw new Error("mock: couldn't create session");
       }
     }
-    const session: HarnessSession = {
-      id: `sess-mock-${this.sessions.length + 1}`,
+    if (req.scaffold) {
+      const separator = req.cwd.lastIndexOf("/");
+      await this.scaffoldAgent(req.cwd.slice(0, separator), req.cwd.slice(separator + 1), req.scaffold.template);
+    }
+    const id = `sess-mock-${this.sessions.length + 1}`;
+    const attachments: { path: string }[] = [];
+    for (const attachment of req.initialAttachments ?? []) {
+      attachments.push(attachment.kind === "path" ? attachment : await this.materializeMockFile(id, req.cwd, attachment));
+    }
+    const initialPrompt = buildIdeaWithAttachments(req.initialPrompt ?? "", attachments);
+    recordCreateStep("session", req.cwd);
+    if (typeof window !== "undefined" && initialPrompt) {
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = { ...(win.__HARNESS_TEST__ ?? {}), lastInitialInput: { id, text: initialPrompt } };
+    }
+    let session: HarnessSession = {
+      id,
       agentSessionId: null,
       boundWorkflowPath: null,
       harness: req.harness,
@@ -3060,6 +2836,10 @@ export class MockApi implements HarnessApi {
       ready: false,
     };
     this.sessions = [...this.sessions, session];
+    session = this.studioSession(session, this.studioProjects());
+    this.sessions = this.sessions.map((candidate) =>
+      candidate.id === session.id ? session : candidate,
+    );
     // Mirror the real server: create answers "starting", and the event bus
     // promotes the session to running/ready moments later. Without this, a
     // mock-created session would stay unready forever and gate the action
@@ -3112,6 +2892,11 @@ export class MockApi implements HarnessApi {
     if (!session)
       throw new ApiError(404, "session not found", "session not found");
 
+    return this.materializeMockFile(id, session.cwd, req);
+  }
+
+  private async materializeMockFile(id: string, cwd: string, req: AttachFileRequest): Promise<AttachFileResponse> {
+    await delay();
     const testWindow =
       typeof window === "undefined"
         ? undefined
@@ -3123,7 +2908,7 @@ export class MockApi implements HarnessApi {
       throw new ApiError(
         500,
         "attachment materialization failed",
-        "attachment materialization failed",
+        `Couldn't attach ${req.filename}: attachment materialization failed`,
       );
     }
 
@@ -3132,7 +2917,7 @@ export class MockApi implements HarnessApi {
       throw new ApiError(400, "invalid attachment", "invalid attachment");
     const filename = req.filename.split(/[\\/]/).pop() || "pasted-file";
     const response: AttachFileResponse = {
-      path: `${session.cwd}/.sapiom/uploads/mock-${filename}`,
+      path: `${cwd}/.sapiom/uploads/mock-${filename}`,
       mediaType: match[1]!,
       bytes: atob(match[2]!).length,
     };
@@ -3168,12 +2953,21 @@ export class MockApi implements HarnessApi {
     await delay();
     // Null for an id with no fixture — the same "nothing recorded" answer the
     // real client returns for a 404, so the empty state is exercised too.
-    return (
-      this.plannerSessionRecords.get(id) ?? MOCK_SESSION_RECORDS[id] ?? null
-    );
+    return MOCK_SESSION_RECORDS[id] ?? null;
   }
 
   async resumeSession(id: string): Promise<HarnessSession> {
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.resumeSessionCalls as string[] | undefined) ?? [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        resumeSessionCalls: [...previous, id],
+      };
+    }
     await delay(300);
     const existing = this.sessions.find(
       (session) => session.agentSessionId === id || session.id === id,
@@ -3667,8 +3461,51 @@ export class MockApi implements HarnessApi {
     // reload can (and in the spec does) start before this delay resolves. A
     // write behind the delay would lose the dismiss to its own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
+    const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
     this.settings = { ...this.settings, ...patch };
+    // Opt-in parity fixture for the production project-open lifecycle: a newly
+    // durable project gets one ordinary first session titled Plan Agents. This
+    // is intentionally not routed through the mock create-session endpoint;
+    // the server owns it, so a project-name click still makes zero client
+    // session requests.
+    const autoPlanAgents =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mockAutoPlanAgents") ===
+        "1";
+    const addedRoots = (patch.recentDirs ?? []).filter(
+      (root) => !previousRecentDirs.has(root),
+    );
+    if (autoPlanAgents && addedRoots.length > 0) {
+      const { publishMockBusMessage } = await import("./events");
+      for (const root of addedRoots) {
+        if (this.sessions.some((session) => samePath(session.cwd, root))) {
+          continue;
+        }
+        const projectId = this.studioProjectId(root);
+        const id = `sess-plan-agents-${this.sessions.length + 1}`;
+        const now = new Date().toISOString();
+        const session: HarnessSession = {
+          id,
+          agentSessionId: null,
+          boundWorkflowPath: null,
+          harness: "claude-code",
+          cwd: root,
+          title: "Plan Agents",
+          status: "running",
+          createdAt: now,
+          lastActiveAt: now,
+          ready: true,
+          agentMapIdentity: {
+            projectId,
+            userId: "user_mock",
+            sessionId: id,
+          },
+        };
+        this.sessions = [...this.sessions, session];
+        publishMockBusMessage({ type: "session.status", session });
+      }
+    }
     return this.settings;
   }
 

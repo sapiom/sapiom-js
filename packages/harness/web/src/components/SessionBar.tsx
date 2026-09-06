@@ -20,9 +20,6 @@ function workspaceLabelOf(path: string): string {
 const EMPTY_BUSY_SESSION_IDS: ReadonlySet<string> = new Set();
 
 interface SessionBarProps {
-  /** Planner sessions keep normal tabs/rename/end but have no meaningful
-   * filesystem path or editor action in this workspace. */
-  planning?: boolean;
   /** The main panel is showing the Overview/intro, not a session. */
   overviewMode?: boolean;
   /** Set while an agent is open whose workspace has no live session. */
@@ -86,7 +83,6 @@ interface SessionBarProps {
  * its caret, while agent actions remain right-anchored on the same row.
  */
 export function SessionBar({
-  planning = false,
   overviewMode = false,
   openedAgentName = null,
   reviewTitle = null,
@@ -219,18 +215,19 @@ export function SessionBar({
               </span>
             </button>
           ) : null
-        ) : activeSession &&
-          activeSession.status !== "exited" &&
-          sessions.length > 0 &&
+        ) : sessions.length > 0 &&
           onSelectSession &&
           onNewSession &&
           labelOf ? (
           <SessionTabs
             sessions={sessions}
-            activeSessionId={activeSession.id}
+            activeSessionId={activeSession?.id ?? null}
             busySessionIds={busySessionIds}
             labelOf={labelOf}
-            subjectName={subjectName ?? workspaceLabelOf(activeSession.cwd)}
+            subjectName={
+              subjectName ??
+              (activeSession ? workspaceLabelOf(activeSession.cwd) : "project")
+            }
             onSelect={onSelectSession}
             onNew={onNewSession}
             newSessionPending={newSessionPending}
@@ -238,9 +235,9 @@ export function SessionBar({
             onToggleMenu={() => setMenuOpen((open) => !open)}
             menuTriggerRef={menuTriggerRef}
             menuTooltip={
-              planning
-                ? `${HARNESS_LABELS[activeSession.harness]} · Agent Map`
-                : `${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`
+              activeSession
+                ? `${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`
+                : undefined
             }
             renaming={renaming}
             renameDraft={renameDraft}
@@ -274,11 +271,7 @@ export function SessionBar({
                 data-testid="session-menu"
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                data-tooltip={
-                  planning
-                    ? `${HARNESS_LABELS[activeSession.harness]} · Agent Map`
-                    : `${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`
-                }
+                data-tooltip={`${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`}
                 onClick={() => setMenuOpen((open) => !open)}
                 {...trackingAttrs({ object: "session" })}
               >
@@ -332,22 +325,20 @@ export function SessionBar({
             </div>
           )}
 
-          {!planning && (
-            <button
-              role="menuitem"
-              className="profile-menu-item"
-              onClick={() => {
-                void navigator.clipboard
-                  ?.writeText(activeSession.cwd)
-                  .then(() => onToast("Path copied.", "success"))
-                  .catch(() => onToast("Couldn't copy the path."));
-                closeMenu();
-              }}
-            >
-              <Icon name="Copy" size={13} />
-              Copy path
-            </button>
-          )}
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(activeSession.cwd)
+                .then(() => onToast("Path copied.", "success"))
+                .catch(() => onToast("Couldn't copy the path."));
+              closeMenu();
+            }}
+          >
+            <Icon name="Copy" size={13} />
+            Copy path
+          </button>
           <button
             role="menuitem"
             className="profile-menu-item"
@@ -361,20 +352,18 @@ export function SessionBar({
             <Icon name="Pencil" size={13} />
             Rename session
           </button>
-          {!planning && (
-            <button
-              role="menuitem"
-              className="profile-menu-item"
-              data-testid="session-open-editor"
-              onClick={() => {
-                onOpenInEditor(activeSession.cwd);
-                closeMenu();
-              }}
-            >
-              <Icon name="Code" size={13} />
-              Open in {editorLabel}
-            </button>
-          )}
+          <button
+            role="menuitem"
+            className="profile-menu-item"
+            data-testid="session-open-editor"
+            onClick={() => {
+              onOpenInEditor(activeSession.cwd);
+              closeMenu();
+            }}
+          >
+            <Icon name="Code" size={13} />
+            Open in {editorLabel}
+          </button>
           {activeSession.status !== "exited" && (
             <button
               role="menuitem"
@@ -395,43 +384,27 @@ export function SessionBar({
       {/* Ended sessions do not join the live strip, but their + still starts a
           fresh session from the same folder/provider/binding. Live-session +
           is pinned inside SessionTabs, outside its scrolling list. */}
-      {onNewSession && activeSession?.status === "exited" && !composing && (
-        <button
-          type="button"
-          className="theme-toggle session-tab-new"
-          data-testid="session-tab-new"
-          aria-label={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
-          aria-busy={newSessionPending}
-          data-tooltip={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
-          disabled={newSessionPending}
-          onClick={onNewSession}
-        >
-          {newSessionPending ? (
-            <span className="session-busy" aria-hidden="true" />
-          ) : (
-            <Icon name="Plus" size={14} />
-          )}
-        </button>
-      )}
-
-      {planning && onNewSession && !activeSession && !composing && (
-        <button
-          type="button"
-          className="theme-toggle session-tab-new"
-          data-testid="session-tab-new"
-          aria-label="New planning session"
-          aria-busy={newSessionPending}
-          data-tooltip="New planning session"
-          disabled={newSessionPending}
-          onClick={onNewSession}
-        >
-          {newSessionPending ? (
-            <span className="session-busy" aria-hidden="true" />
-          ) : (
-            <Icon name="Plus" size={14} />
-          )}
-        </button>
-      )}
+      {onNewSession &&
+        activeSession?.status === "exited" &&
+        sessions.length === 0 &&
+        !composing && (
+          <button
+            type="button"
+            className="theme-toggle session-tab-new"
+            data-testid="session-tab-new"
+            aria-label={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
+            aria-busy={newSessionPending}
+            data-tooltip={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
+            disabled={newSessionPending}
+            onClick={onNewSession}
+          >
+            {newSessionPending ? (
+              <span className="session-busy" aria-hidden="true" />
+            ) : (
+              <Icon name="Plus" size={14} />
+            )}
+          </button>
+        )}
 
       {actions}
 
@@ -455,11 +428,6 @@ export function SessionBar({
       {confirmingClose && activeSession && (
         <EndSessionConfirm
           triggerRef={menuTriggerRef}
-          description={
-            planning
-              ? "This stops the planning conversation and any work the planner is doing right now. You can start a fresh planning session from Plan Agents."
-              : undefined
-          }
           onCancel={() => setConfirmingClose(false)}
           onConfirm={() => {
             setConfirmingClose(false);
