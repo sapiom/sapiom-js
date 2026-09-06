@@ -50,24 +50,18 @@ describe("Windows update process identity", () => {
 describe("bounded update processes", () => {
   it("reports missing executables and failed commands without hanging startup", async () => {
     const opts = { env: process.env, timeoutMs: 1_000 };
-    expect(
-      (
-        await runUpdateCommand(
-          "studio-deliberately-missing-executable",
-          [],
-          opts,
-        )
-      ).ok,
-    ).toBe(false);
-    expect(
-      (
-        await runUpdateCommand(
-          process.execPath,
-          ["-e", "process.exit(1)"],
-          opts,
-        )
-      ).ok,
-    ).toBe(false);
+    const missing = await runUpdateCommand(
+      "studio-deliberately-missing-executable",
+      [],
+      opts,
+    );
+    const failed = await runUpdateCommand(
+      process.execPath,
+      ["-e", "process.exit(1)"],
+      opts,
+    );
+    expect(missing.ok).toBe(false);
+    expect(failed.ok).toBe(false);
   });
 
   it.each([false, true])(
@@ -85,8 +79,7 @@ describe("bounded update processes", () => {
         expect(result.ok).toBe(false);
         expect(result.detail).toContain("Timed out");
         const pid = Number(await readFile(marker, "utf8"));
-        // Signal delivery and OS teardown are asynchronous. Linux may retain a
-        // dead grandchild as a zombie; missing or zombie both prove it stopped.
+        // Linux can retain a terminated process as a zombie.
         await vi.waitFor(
           async () => {
             if (process.platform === "linux") {
@@ -126,17 +119,14 @@ describe("bounded update processes", () => {
     await started;
     await commands.stopAgentUpdateCommands();
     expect((await command).detail).toBe("Studio is quitting");
-    expect(
-      (
-        await commands.runUpdateCommand(
-          process.execPath,
-          ["-e", "process.exit(0)"],
-          {
-            env: process.env,
-            timeoutMs: 1_000,
-          },
-        )
-      ).ok,
-    ).toBe(false);
+    const rejected = await commands.runUpdateCommand(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      {
+        env: process.env,
+        timeoutMs: 1_000,
+      },
+    );
+    expect(rejected.ok).toBe(false);
   });
 });

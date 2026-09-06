@@ -51,7 +51,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { app } from "electron";
 import { AGENT_STUDIO_PRODUCT_NAME, createCodexAdapter, resolveSpawnTarget } from "@sapiom/harness";
-import { resolveAgentCommand } from "./agent-updates.js";
+import { resolveAgentCommand } from "./managed-agent.js";
 import { createSetupWindow } from "./windows.js";
 import { resolveWebDir } from "./paths.js";
 import { shimDir } from "./runtime-shims.js";
@@ -81,8 +81,7 @@ async function check(name: string, fn: () => Promise<string>): Promise<SmokeChec
   }
 }
 
-/** A managed npm Codex is a JS entry, including on Node-less Windows machines.
- * Prove the packaged runtime can launch/resume that shape through a real PTY. */
+/** Verify managed JS launchers through the packaged runtime and a real PTY. */
 async function checkManagedAgent(): Promise<string> {
   const prefix = mkdtempSync(path.join(tmpdir(), "studio managed agent "));
   try {

@@ -3,7 +3,6 @@ import { execFile, spawn } from "node:child_process";
 const running = new Set<() => Promise<void>>();
 let stopping = false;
 
-/** Called before quitting, including while the setup window is still open. */
 export async function stopAgentUpdateCommands(): Promise<void> {
   stopping = true;
   await Promise.allSettled([...running].map((stop) => stop()));
@@ -22,8 +21,7 @@ interface ProcessIdentity {
   exitedAt?: number;
 }
 
-/** Parent PIDs alone are unsafe after npm exits: Windows may reuse the PID.
- * Keep only descendants consistent with the original process's lifetime. */
+// Windows can reuse npm's PID after it exits; validate the process lifetime.
 export function windowsUpdateTree(
   snapshot: WindowsProcess[],
   identity: ProcessIdentity,
@@ -101,9 +99,7 @@ async function stopWindowsTree(identity: ProcessIdentity): Promise<void> {
     );
     const tree = windowsUpdateTree(snapshot, identity, stoppedAt);
     if (!tree.length) return;
-    // Open and retain the process handle before reading StartTime. Kill through
-    // that handle only if it still matches the snapshot, never by a bare PID.
-    // Only validated numbers enter this script, never paths or package output.
+    // Pin the handle and match its creation time before killing a Windows PID.
     await powershell(
       tree
         .map(
@@ -123,8 +119,7 @@ export interface UpdateCommandResult {
   detail: string;
 }
 
-/** Update work has its own process group, so a deadline stops npm's postinstall
- * children too. A timeout must not leave an installer running after boot. */
+/** Stop installers and their children on timeout or shutdown. */
 export function runUpdateCommand(
   command: string,
   args: string[],
@@ -184,8 +179,7 @@ export function runUpdateCommand(
           }
           child.kill("SIGKILL");
         }
-        // Even failed OS cleanup cannot make startup wait forever for a pipe
-        // retained by a descendant. The incomplete prefix is never selected.
+        // Descendants may retain pipes even after their parent exits.
         child.stdout.destroy();
         child.stderr.destroy();
         finish(false, reason);

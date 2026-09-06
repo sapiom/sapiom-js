@@ -126,8 +126,7 @@ export function installClaudeCode(
   return installNpmGlobal(packageSpecFromInstallCommand(CLAUDE_INSTALL_COMMAND), onLine);
 }
 
-/** Update into an isolated prefix. Both npm network retries and the complete
- * process tree are bounded; failure leaves the currently selected CLI intact. */
+/** Install an exact version into an isolated prefix with a bounded deadline. */
 export async function installAgentVersion(
   packageSpec: string,
   prefix: string,

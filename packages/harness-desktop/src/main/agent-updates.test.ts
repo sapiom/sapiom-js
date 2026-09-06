@@ -10,15 +10,17 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  AGENT_PACKAGES,
   cliVersion,
   ensureAgentUpdates,
   isNewerStable,
+  type AgentUpdateOptions,
+} from "./agent-updates.js";
+import {
+  AGENT_PACKAGES,
   resolveAgentCommand,
   type AgentCommand,
   type AgentKind,
-  type AgentUpdateOptions,
-} from "./agent-updates.js";
+} from "./managed-agent.js";
 import { runUpdateCommand } from "./agent-update-process.js";
 
 const runtime: AgentCommand = {
@@ -100,8 +102,6 @@ describe("startup CLI updates", () => {
     expect(result.codex?.version).toBe("0.134.0");
     expect(await options.probe(result.codex!.command)).toBe("0.134.0");
     expect(result["claude-code"]).toBeUndefined();
-    // The published selector is the only mutable pointer; installation is not
-    // performed over the external binary or over a shared npm-global prefix.
     expect(
       JSON.parse(
         await readFile(path.join(root, "codex", "active.json"), "utf8"),

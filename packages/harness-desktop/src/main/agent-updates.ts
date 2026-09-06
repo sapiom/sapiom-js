@@ -1,20 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
-export const AGENT_PACKAGES = {
-  "claude-code": { binary: "claude", package: "@anthropic-ai/claude-code" },
-  codex: { binary: "codex", package: "@openai/codex" },
-} as const;
-export type AgentKind = keyof typeof AGENT_PACKAGES;
+import {
+  AGENT_PACKAGES,
+  resolveAgentCommand,
+  type AgentCommand,
+  type AgentKind,
+} from "./managed-agent.js";
 
-/** Mirrors the adapter's optional interpreter prefix. npm's Codex entry is JS;
- * on Windows a Node-less desktop cannot launch its .cmd through node-pty. */
-export interface AgentCommand {
-  binary: string;
-  binaryArgs: string[];
-  binaryEnv: Record<string, string>;
-}
 export interface ManagedAgent {
   prefix: string;
   version: string;
@@ -32,8 +26,7 @@ export function cliVersion(line: string | null): string | null {
   return line?.match(/\d+\.\d+\.\d+(?:-[\da-zA-Z.-]+)?/)?.[0] ?? null;
 }
 
-/** The registry target is stable. Keep a newer local/beta build; promote a
- * pre-release only when the same core version has reached stable. */
+// Promote prereleases once stable, without downgrading newer local builds.
 export function isNewerStable(latest: string, current: string): boolean {
   if (!STABLE_VERSION.test(latest)) return false;
   const a = latest.split(".").map(Number);
@@ -59,44 +52,6 @@ export async function latestAgentVersion(kind: AgentKind): Promise<string> {
     throw new Error("Registry did not return a stable CLI version");
   }
   return data.version;
-}
-
-export async function resolveAgentCommand(
-  prefix: string,
-  kind: AgentKind,
-  runtime: AgentCommand,
-): Promise<AgentCommand | null> {
-  const agent = AGENT_PACKAGES[kind];
-  for (const modules of ["node_modules", path.join("lib", "node_modules")]) {
-    try {
-      const packageDir = path.join(prefix, modules, agent.package);
-      const pkg = JSON.parse(
-        await readFile(path.join(packageDir, "package.json"), "utf8"),
-      ) as {
-        bin?: string | Record<string, string>;
-      };
-      const bin =
-        typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.[agent.binary];
-      if (!bin) continue;
-      const entry = path.resolve(packageDir, bin);
-      const relative = path.relative(packageDir, entry);
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
-        continue;
-      await access(entry);
-      const binaryEnv: Record<string, string> =
-        kind === "claude-code" ? { DISABLE_AUTOUPDATER: "1" } : {};
-      return /\.[cm]?js$/i.test(entry)
-        ? {
-            binary: runtime.binary,
-            binaryArgs: [...runtime.binaryArgs, entry],
-            binaryEnv: { ...runtime.binaryEnv, ...binaryEnv },
-          }
-        : { binary: entry, binaryArgs: [], binaryEnv };
-    } catch {
-      /* Try the other global npm layout. */
-    }
-  }
-  return null;
 }
 
 async function loadSelection(
@@ -135,10 +90,7 @@ export interface AgentUpdateOptions {
   onLine?: (line: string) => void;
 }
 
-/** Check each detected CLI on every normal boot, before any session exists.
- * Install into a fresh, immutable prefix, verify the actual executable, then
- * atomically select it. Never mutate a working global or managed installation.
- * Old versions are retained: an external process may still be using one. */
+/** Install and verify each update before atomically selecting its immutable prefix. */
 export async function ensureAgentUpdates(
   options: AgentUpdateOptions,
 ): Promise<Partial<Record<AgentKind, ManagedAgent>>> {
@@ -180,8 +132,7 @@ export async function ensureAgentUpdates(
           currentVersion = managedVersion;
         }
       }
-      // Missing agents still use boot's existing default-agent installation flow.
-      // An unknown local version is not evidence that replacing it is an upgrade.
+      // An unrecognized local build is not evidence that an update is needed.
       if (
         !options.enabled ||
         (!existing && external === null) ||
@@ -209,8 +160,7 @@ export async function ensureAgentUpdates(
       const command = await resolveAgentCommand(prefix, kind, options.runtime);
       if (!command || cliVersion(await options.probe(command)) !== latest)
         throw new Error("New CLI failed its version check");
-      // The selection is the commit point. Interrupted downloads/installs cannot
-      // replace it, and no version's files move after npm writes its launchers.
+      // Publish only after verification; preserve the previous selection on failure.
       const temp = path.join(parent, `active-${randomUUID()}.json`);
       options.signal?.throwIfAborted();
       await writeFile(
