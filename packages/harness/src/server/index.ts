@@ -7,6 +7,8 @@
  * src/shared/types.ts for the full protocol contract.
  */
 
+import { BuildPlanStore } from "../core/build-plan-store.js";
+import { BuildPlanService } from "../core/build-plan-service.js";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -3067,6 +3069,36 @@ export const startServer = async (
         bus.publish({ type: "agent-map.proposal.changed", delta }),
     },
   );
+  const buildPlanStore = new BuildPlanStore(agentMapWorkspaceStore);
+  const buildPlanService = new BuildPlanService(
+    buildPlanStore,
+    {
+      onOutcome: (event) => {
+        const analyticsEvent: AnalyticsEvent = {
+          eventId: randomUUID(),
+          seq: seqCounter.next(event.sessionId),
+          ts: new Date().toISOString(),
+          userId: identity?.userId ?? null,
+          tenantId: identity?.tenantId ?? null,
+          machineId,
+          harnessSessionId: event.sessionId,
+          agentSessionId: null,
+          harness: sessionManager.get(event.sessionId)?.harness ?? "claude-code",
+          type: "build_plan.operation",
+          payload: {
+            project_id: event.projectId,
+            operation: event.operation,
+            outcome: event.outcome,
+            plan_version: event.version,
+            diagnostic_count: Math.max(0, Math.min(64, event.diagnosticCount)),
+            affected_count: Math.max(0, Math.min(256, event.affectedCount)),
+          },
+        };
+        void eventStore.append(analyticsEvent).catch(() => {});
+        batcher.enqueue(analyticsEvent);
+      },
+    },
+  );
   emitAgentMapCapabilityEvent = (event) => {
     const analyticsEvent: AnalyticsEvent = {
       eventId: randomUUID(),
@@ -3090,6 +3122,7 @@ export const startServer = async (
   agentMapMcp = createAgentMapMcpRouter({
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
+    buildPlanService,
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
