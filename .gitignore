@@ -55,3 +55,7 @@ Thumbs.db
 
 # Subagent-driven-development scratch (ledger, briefs, review packages) — never committed
 .superpowers/
+
+# Throwaway verification probes, never committed.
+packages/harness/.probe*.mjs
+packages/harness/.shot.mjs

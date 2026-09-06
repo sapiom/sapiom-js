@@ -225,6 +225,15 @@ describe("renderCanvasForSession", () => {
     expect(html).toContain("render failed");
     expect(html).toContain("Could not extract this agent's step graph");
     expect(html).toContain('id="sapiom-render-error"');
+    // Embedded, the SPA's Render-failed card is the one message; the document's
+    // prose steps aside instead of drawing through it (SAP-3199).
+    expect(html).toContain('class="canvas-empty-note canvas-render-error-note"');
+    expect(html).toContain(":root[data-canvas-embedded] .canvas-render-error-note { display: none; }");
+    expect(html).toContain('root.setAttribute("data-canvas-embedded", "")');
+    // The flag is withdrawn again if nothing takes the message over, so a
+    // document that cannot post is never left blank (SAP-3199 review round 1).
+    expect(html).toContain('root.removeAttribute("data-canvas-embedded")');
+    expect(html).toContain('document.documentElement.setAttribute("data-canvas-error-posted", "")');
     expect(html).toContain('"title":"broken-flow"');
     expect(html).toContain("sapiom-canvas:error");
     expect(html).not.toContain('class="canvas-node '); // no diagram — just the note
