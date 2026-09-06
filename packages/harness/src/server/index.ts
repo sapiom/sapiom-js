@@ -3044,7 +3044,9 @@ export const startServer = async (
                     ? { schema_version: event.schemaVersion }
                     : {}),
                 }
-              : {}),
+              : event.name === "agent_map.workspace_migrated"
+                ? { from_schema_version: event.fromSchemaVersion }
+                : {}),
           },
         };
         void eventStore.append(analyticsEvent).catch(() => {});

@@ -8,10 +8,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import type { ProjectAgentSession, PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
+import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService, AgentMapProposalQuotaError } from "../core/agent-map-proposal-service.js";
+import { AgentMapWorkspaceStore, AgentMapWorkspaceStoreError, AgentBriefAppendQuotaError } from "../core/agent-map-workspace-store.js";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouterOptions,
@@ -70,23 +71,11 @@ async function connect(url: URL, token: string) {
 }
 
 describe("Agent Map Streamable HTTP MCP", () => {
-  it.each<PlanningSessionIdentity>([
-    { projectId, sessionId: "planner", userId: "user", role: "map-planner" },
-    {
-      projectId,
-      sessionId: "planned",
-      userId: "user",
-      role: "agent-builder",
-      assignment: { kind: "planned", agentId: "agent-1" },
-    },
-    {
-      projectId,
-      sessionId: "manual",
-      userId: "user",
-      role: "agent-builder",
-      assignment: { kind: "unplanned" },
-    },
-  ])("exposes the same strict tools to $role/$sessionId", async (identity) => {
+  it.each<ProjectAgentSession>([
+    { projectId, sessionId: "first", userId: "user" },
+    { projectId, sessionId: "created", userId: "user" },
+    { projectId, sessionId: "resumed", userId: "user" },
+  ])("exposes the same strict tools to $sessionId", async (identity) => {
     const { capabilities, url } = await fixture();
     const issued = capabilities.issue(identity);
     const client = await connect(url, issued.token);
@@ -191,6 +180,21 @@ describe("Agent Map Streamable HTTP MCP", () => {
 
     capabilities.rotate(identity);
     await expect(client.callTool({ name: "agent_map_read", arguments: {} })).rejects.toThrow();
+  });
+
+  it.each([
+    new AgentMapProposalQuotaError("map_versions"),
+    new AgentBriefAppendQuotaError("brief_versions"),
+    new AgentMapAggregateError("malformed_state"),
+    new AgentMapAggregateError("unsupported_schema", 3),
+    new AgentMapWorkspaceStoreError("malformed_state"),
+    new AgentMapWorkspaceStoreError("unsupported_schema", 3),
+  ])("returns manual intervention for permanent storage failure $name $code", async (error) => {
+    const { capabilities, url } = await fixture({ readSnapshotFor: async () => { throw error; } });
+    const client = await connect(url, capabilities.issue({ projectId, userId: "user", sessionId: "permanent-storage" }).token);
+    await expect(client.callTool({ name: "agent_map_read", arguments: {} })).resolves.toMatchObject({
+      isError: true, structuredContent: { code: error.code, recovery: "manual_intervention" },
+    });
   });
 
   it("returns a bounded terminal recovery when the capability project is unavailable", async () => {

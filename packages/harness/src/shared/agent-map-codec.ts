@@ -356,24 +356,12 @@ export function parseAcceptedProposalDelta(
 export function parseProposalActor(value: unknown): ProposalActor {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["userId", "sessionId", "role", "assignment"]) ||
+    !hasExactKeys(value, ["userId", "sessionId"]) ||
     !isAgentMapBoundedText(value.userId, 256) ||
     !isAgentMapBoundedText(value.sessionId, 256)
   )
     throw new Error("invalid Agent Map actor");
-  if (value.role === "map-planner" && value.assignment === null)
-    return structuredClone(value) as unknown as ProposalActor;
-  if (
-    value.role !== "agent-builder" ||
-    !isRecord(value.assignment) ||
-    (value.assignment.kind === "planned"
-      ? !hasExactKeys(value.assignment, ["kind", "agentId"]) ||
-        !isAgentMapBoundedText(value.assignment.agentId, 256)
-      : value.assignment.kind !== "unplanned" ||
-        !hasExactKeys(value.assignment, ["kind"]))
-  )
-    throw new Error("invalid Agent Map actor");
-  return structuredClone(value) as unknown as ProposalActor;
+  return { userId: value.userId, sessionId: value.sessionId };
 }
 
 export function parseMapChangeProposal(

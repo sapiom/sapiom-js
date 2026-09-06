@@ -1875,8 +1875,6 @@ function goldenAgentMapFixture(
   const actor = {
     userId,
     sessionId,
-    role: "map-planner" as const,
-    assignment: null,
   };
   const delta: AcceptedProposalDelta = {
     schemaVersion: 1,

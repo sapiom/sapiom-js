@@ -298,7 +298,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     const inspector = page.getByTestId("agent-map-inspector");
     await expect(inspector).toContainText("Purpose");
     await expect(inspector).toContainText("Contracts");
-    await expect(inspector).toContainText("Map planner");
+    await expect(inspector).toContainText("Project agent");
     await page.getByRole("button", { name: "Close node details" }).click();
     await expect(inspector).toHaveCount(0);
     await expect(researchReport).toBeFocused();
@@ -343,8 +343,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
           actor: {
             userId: "user_mock",
             sessionId: "builder_mock",
-            role: "agent-builder",
-            assignment: { kind: "unplanned" },
           },
           acceptedAt: new Date().toISOString(),
         },
@@ -363,7 +361,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     await page.getByText("Campaign Marketing", { exact: true }).click();
     await expect(
       page.getByTestId("agent-map-latest-attribution"),
-    ).toContainText("Agent builder");
+    ).toContainText("Project agent");
     await expect(nodes).toHaveCount(6);
   });
 

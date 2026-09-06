@@ -850,16 +850,16 @@ it("automatically seeds one durable map through the real E2 tools without replay
     await fs.readFile(durableFile, "utf8"),
   ) as {
     storageSchemaVersion: number;
-    proposal: { version: number; nodes: unknown[]; history: unknown[] };
-    receipts: unknown[];
+    mapVersions: Array<{ version: number; graph: { nodes: unknown[] } }>;
+    mapOperationHistory: unknown[];
   };
-  expect(durableBeforeRestart.storageSchemaVersion).toBe(1);
-  expect(durableBeforeRestart.proposal).toMatchObject({
+  expect(durableBeforeRestart.storageSchemaVersion).toBe(2);
+  expect(durableBeforeRestart.mapVersions).toHaveLength(1);
+  expect(durableBeforeRestart.mapVersions[0]).toMatchObject({
     version: 1,
-    nodes: [expect.any(Object)],
+    graph: { nodes: [expect.any(Object)] },
   });
-  expect(durableBeforeRestart.proposal.history).toHaveLength(1);
-  expect(durableBeforeRestart.receipts).toHaveLength(1);
+  expect(durableBeforeRestart.mapOperationHistory).toHaveLength(1);
   expect(await capturedInputs(session!.id)).toHaveLength(1);
 
   await server.close();
@@ -919,13 +919,13 @@ it("automatically seeds one durable map through the real E2 tools without replay
   const durableAfterRestart = JSON.parse(
     await fs.readFile(durableFile, "utf8"),
   ) as {
-    proposal: { version: number; nodes: unknown[]; history: unknown[] };
-    receipts: unknown[];
+    mapVersions: Array<{ version: number; graph: { nodes: unknown[] } }>;
+    mapOperationHistory: unknown[];
   };
-  expect(durableAfterRestart.proposal).toMatchObject({ version: 1 });
-  expect(durableAfterRestart.proposal.nodes).toHaveLength(1);
-  expect(durableAfterRestart.proposal.history).toHaveLength(1);
-  expect(durableAfterRestart.receipts).toHaveLength(1);
+  expect(durableAfterRestart.mapVersions).toHaveLength(1);
+  expect(durableAfterRestart.mapVersions[0]).toMatchObject({ version: 1 });
+  expect(durableAfterRestart.mapVersions[0]!.graph.nodes).toHaveLength(1);
+  expect(durableAfterRestart.mapOperationHistory).toHaveLength(1);
 });
 
 it("initializes every newly opened root once when one settings update creates multiple projects", async () => {

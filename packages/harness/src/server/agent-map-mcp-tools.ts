@@ -1,15 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { ProjectAgentSession, PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalProjectError,
+  AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
 } from "../core/agent-map-proposal-service.js";
 import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
-import { AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
+import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
+
+import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
 
 /**
  * MCP discovery sees the complete SAP-3061 input contract. Field-level `catch`
@@ -78,10 +81,12 @@ function errorResult(error: unknown) {
         ? { ...error.conflict }
         : error instanceof AgentMapProposalProjectError
           ? { code: "forbidden", recovery: "reread" }
+          : error instanceof AgentMapProposalQuotaError || error instanceof AgentBriefAppendQuotaError
+            ? { code: error.code, recovery: "manual_intervention" }
           : error instanceof AgentMapMcpProjectUnavailableError
             ? { code: "project_unavailable", recovery: "reread" }
-          : error instanceof AgentMapWorkspaceStoreError
-            ? { code: "storage_unavailable", recovery: "retry" }
+          : error instanceof AgentMapWorkspaceStoreError || error instanceof AgentMapAggregateError
+            ? { code: error.code, recovery: error.code === "storage_unavailable" ? "retry" : "manual_intervention" }
             : { code: "internal_error", recovery: "retry" };
   return {
     isError: true,
@@ -97,18 +102,12 @@ function toolResult(value: object, message: string) {
   };
 }
 
-/** Registers the identical project-wide surface for every trusted role. */
+/** Registers the identical project-wide surface for every trusted session. */
 export function createAgentMapToolServer(
   identity: ProjectAgentSession,
   service: AgentMapProposalService,
   options: AgentMapMcpToolsOptions = {},
 ): McpServer {
-  // The deployed proposal codec still requires its historical actor shape.
-  // Keep that storage-only adapter here until the aggregate/writer cutover;
-  // neither the capability nor tool authorization consumes these fields.
-  const legacyStoragePrincipal: PlanningSessionIdentity = {
-    ...identity, role: "agent-builder", assignment: { kind: "unplanned" },
-  };
   const server = new McpServer({ name: "sapiom-studio-agent-map", version: "1" });
   const emit = (event: AgentMapToolEvent): void => {
     try {
@@ -169,7 +168,7 @@ export function createAgentMapToolServer(
     },
     async (request) =>
       instrument("agent_map_validate", async () => {
-        const result = await service.validate(legacyStoragePrincipal, request);
+        const result = await service.validate(identity, request);
         return toolResult(result, `Proposal batch is valid at version ${result.currentVersion}.`);
       }),
   );
@@ -183,7 +182,7 @@ export function createAgentMapToolServer(
     },
     async (request) =>
       instrument("agent_map_propose", async () => {
-        const result = await service.propose(legacyStoragePrincipal, request);
+        const result = await service.propose(identity, request);
         return toolResult(result, `Accepted Agent Map proposal version ${result.version}.`);
       }),
   );
