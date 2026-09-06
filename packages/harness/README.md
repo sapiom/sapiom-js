@@ -84,80 +84,46 @@ Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
 
-### Agent Map planner sessions
+### Project sessions and Agent Map navigation
 
-In Studio, the pinned **Plan Agents** tab opens the project's Agent Map.
-**Plan Agents** names the planning entry point; **Agent Map** remains the name
-of the proposal view and its underlying protocol.
+Every coding-agent session in a project uses the same writable
+`ProjectAgentSession { projectId, userId, sessionId }` identity and common
+project instructions. Map access comes from that trusted identity. Roles and
+agent assignments do not grant a separate kind of session or capability.
 
-The authenticated local API owns planner identity; a model or generic session
-request cannot assign itself the `map-planner` role. The public planner surface
-is project-scoped:
+Click the project name to open its shared Agent Map without starting a coding
+agent. Conversation tabs identify exact sessions, and selecting a session
+restores its own terminal and Canvas. The map selection and agent Steps
+view remain independent of the selected conversation. There is no pinned
+planning-session tab; existing session titles and conversations are preserved.
 
-- `POST /api/projects/:projectId/planner-sessions` with
-  `{ "mode": "resume-or-create" }` deterministically reuses the latest owned
-  live/resumable planner or creates one. Use `{ "mode": "fresh" }` to always
-  create a new planner.
-- `POST /api/projects/:projectId/planner-sessions/:sessionId/messages` durably
-  accepts planner input and releases it FIFO after greeting resolution.
-- `POST /api/projects/:projectId/planner-sessions/:sessionId/greeting/retry`
-  retries an eligible failed automatic greeting.
+The authenticated local API resolves project identity from durable project
+roots. New sessions, resume, and transcript adoption use the generic session
+routes. Resuming a project session revalidates its current signed-in owner and
+active root binding before launching a process. Nested coding-agent directories
+resolve to their containing project instead of inventing duplicate roots.
 
-Planner metadata is part of the session registry. Its input FIFO and greeting
-attempt state live at
-`<state-root>/agent-map/planner-sessions/<sessionId>/input-queue.json`; corrupt
-queue files are quarantined beside that file so one session cannot block boot.
-An adjacent content-free `accepted-inputs.json` ledger commits PTY-accepted FIFO
-entries before they are removed from the queue, so a failed queue rewrite can
-finish after restart without replaying the message. A write-ahead dispatch
-intent without that durable acknowledgement is never guessed or automatically
-replayed: it is resolved at-most-once with a bounded
-`planner_session.input_delivery_uncertain` event, then later FIFO entries may
-continue. A PTY write and a filesystem write cannot provide true exactly-once
-delivery without an idempotent external acknowledgement.
-When vendor resume falls back to a replacement planner, the whole coordinator
-directory is atomically handed to that exact successor before it can receive
-input. A later replacement follows the queue-owning predecessor while its
-focused rehydration brief may still come from an older recorded ancestor, so a
-pre-ready exit cannot orphan or duplicate accepted FIFO work.
+**Migration note (breaking):** `HarnessSession.agentMapIdentity` now contains
+only project, user, and session IDs. Stop branching on its former `role` or
+`assignment` fields. Valid persisted legacy metadata is normalized while
+preserving the session/provider IDs, cwd, title, transcript, and Canvas;
+conflicting or malformed authority fails closed. Optional `projectBootstrap`
+is lifecycle metadata, not an authority or session type. The legacy startup
+projection and project-scoped aliases remain temporarily for existing durable
+startup queues. Migrated sessions use ordinary HTTP input, with the server
+retaining FIFO ownership until those queues finish.
 
-The focused system context contains only bounded project/session identity,
-current workspace pointer IDs, and binding references. The current workspace
-store does not yet own revision, proposal, or build-plan detail records, so
-their bounded digest, summary, status, and warning slots are honestly
-`null`/empty until those records land. Local root paths and source inventories
-are never included.
+`POST /api/sessions` accepts the content-free
+`initialUserInputPending: true` hint when the caller owns the first prompt.
+Client-authored authority and other unknown fields are rejected. The browser
+still submits that prompt to the returned exact session after readiness.
 
-The browser/host token gates every `/api` planner route and is never injected
-into a coding-agent PTY. Each PTY instead receives a random `/ingest` capability
-bound to its exact session ID; presenting it with another event `sessionId` is
-rejected, it grants no `/api` authority, and it is rotated or revoked with the
-process lifecycle. A vendor resume pointer is pinned to one harness session;
-only a short-lived, one-shot `/clear` or `/resume` transition observed on the
-trusted terminal/input path may rotate it, and a pointer already owned by
-another harness session is always rejected. Current and rotated pointers are
-reserved in a server-private, SHA-256-keyed, mode-`0600` sidecar next to the
-session registry; raw historical aliases never enter a browser DTO. Planner
-reuse and input additionally require the session cwd to remain one of the
-project's current active root bindings and its owner to match the live signed-in
-identity (or stable machine-local principal while signed out).
-
-**Migration note (breaking):** `POST /api/sessions` now rejects unknown fields,
-including client-authored planner metadata. Generic
-`POST /api/sessions/:id/input`, `POST /api/sessions/:id/resume`, and
-`POST /api/sessions/adopt` reject planner sessions. Adopt also returns a
-bounded `AGENT_SESSION_IDENTITY_RESERVED` 409 for any ordinary current-owner
-conflict or durable historical alias (including a pre-`/clear` or
-pre-`/resume` identity), before probing or spawning an agent.
-Clients must open, message, and retry planners through the project-scoped
-routes above. Generic coding-agent sessions also use the durable vendor-ID pin;
-their only rotation exception is the same trusted `/clear`/`/resume` gesture.
-On upgrade, if legacy `sessions.json` rows contain the same vendor resume
-pointer, the first persisted row keeps it and later duplicate rows are repaired
-to `agentSessionId: null`. This does not delete the provider's transcript or
-conversation history, but the losing local row can no longer resume or adopt
-that fenced identity. Start a fresh session in the losing row's directory to
-continue there.
+The browser/host token gates `/api` routes and is never injected into a
+coding-agent PTY. Each PTY receives a separate `/ingest` capability bound to its
+session ID. Vendor resume pointers remain pinned to one harness session;
+current owners and durable historical aliases cannot be adopted into another
+session. Duplicate persisted provider IDs are repaired conservatively during
+boot, preserving the first owner and clearing the later duplicate pointer.
 
 ### Agent Map MCP
 
@@ -173,7 +139,7 @@ renews its inactivity lease, while session exit, resume rotation, signed-in
 principal changes, and server shutdown revoke it. Consumers should not copy,
 persist, log, or reuse the capability outside the launched session.
 
-Every trusted Agent Map role receives the same three project-wide tools:
+Every trusted project session receives the same three project-wide tools:
 
 - `agent_map_read` reads the current confirmed workspace and shared proposal.
 - `agent_map_validate` validates one complete operation batch without mutating

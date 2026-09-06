@@ -12,8 +12,9 @@ import {
   parseMapChangeProposal,
 } from "@shared/agent-map-codec";
 import type { WorkspaceScopeSummary } from "@shared/system-graph";
+import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
 
-import { isWithinDir, stripTrailingSep } from "./paths";
+import { samePath } from "./paths";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -330,23 +331,19 @@ export function mostSpecificStudioScope(
   projects: readonly StudioProjectSummary[],
 ): (WorkspaceScopeSummary & { projectId: string }) | null {
   const projectIds = new Set(projects.map((project) => project.projectId));
-  return (
-    scopes
-      .filter((scope): scope is WorkspaceScopeSummary & { projectId: string } =>
-        Boolean(
-          scope.projectId &&
-          projectIds.has(scope.projectId) &&
-          isWithinDir(scope.cwd, targetPath),
-        ),
-      )
-      .map((scope) => ({
-        scope,
-        depth: stripTrailingSep(scope.cwd).length,
-      }))
-      .sort(
-        (left, right) =>
-          right.depth - left.depth ||
-          left.scope.projectId.localeCompare(right.scope.projectId),
-      )[0]?.scope ?? null
+  const candidates = scopes.filter(
+    (scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+      Boolean(scope.projectId && projectIds.has(scope.projectId)),
   );
+  const resolved = resolveProjectRootForPath(targetPath, candidates);
+  if (!resolved) return null;
+  return candidates
+    .filter(
+      (scope) =>
+        scope.projectId === resolved.projectId &&
+        samePath(scope.cwd, resolved.cwd),
+    )
+    .sort((left, right) =>
+      left.workspaceKey.localeCompare(right.workspaceKey),
+    )[0]!;
 }

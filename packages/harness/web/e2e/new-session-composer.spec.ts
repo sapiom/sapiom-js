@@ -39,7 +39,6 @@ const sessionEvidence = (
   injectInputCalls: number;
   injectedSessionId: string | null;
   injectedText: string;
-  openPlannerSessionCalls: number;
 }> =>
   page.evaluate(() => {
     const testState = (
@@ -48,7 +47,6 @@ const sessionEvidence = (
           createSessionCalls?: unknown[];
           injectInputCalls?: unknown[];
           lastInjectInput?: { id?: string; req?: { text?: string } };
-          openPlannerSessionCalls?: unknown[];
         };
       }
     ).__HARNESS_TEST__;
@@ -61,7 +59,6 @@ const sessionEvidence = (
       injectInputCalls: testState?.injectInputCalls?.length ?? 0,
       injectedSessionId: testState?.lastInjectInput?.id ?? null,
       injectedText: testState?.lastInjectInput?.req?.text ?? "",
-      openPlannerSessionCalls: testState?.openPlannerSessionCalls?.length ?? 0,
     };
   });
 
@@ -107,24 +104,63 @@ test("describing an outcome starts a session and hands the agent that outcome", 
     .toContain("Diff our competitors' pricing pages");
 });
 
-test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents is explicitly selected", async ({
+test("Enter keeps a new-agent prompt in its exact session while the project map is inspected", async ({
   page,
 }) => {
   await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  // The parent project exists, but with no live session it has never restored
-  // its default Plan Agents workspace. Creating beneath it must not give that
-  // parent restore a head start over the explicit standalone builder intent.
+  // The parent project exists, but has no live session or restored workspace.
+  // Creating beneath it must not give preference restoration a head start over
+  // the explicit standalone-session intent.
   await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   const before = await sessionEvidence(page);
   expect(before.activeSessionId).toBeNull();
   expect(before.createSessionCalls).toBe(0);
-  expect(before.openPlannerSessionCalls).toBe(0);
 
   await page.getByTestId("rail-create-new").click();
   const idea = "Build a sales outreach agent.";
   await page.getByTestId("composer-input").fill(idea);
+  await page.evaluate(() => {
+    // Hold the explicit create open long enough for the project's automatic
+    // first session to arrive and become active first.
+    (
+      window as unknown as { __MOCK_CREATE_SESSION_DELAY_MS__?: number }
+    ).__MOCK_CREATE_SESSION_DELAY_MS__ = 2_000;
+  });
   await page.getByTestId("composer-input").press("Enter");
+
+  await page.evaluate(() => {
+    const publish = (
+      window as unknown as {
+        __HARNESS_TEST__?: { publish?: (message: unknown) => void };
+      }
+    ).__HARNESS_TEST__?.publish;
+    publish?.({
+      type: "session.status",
+      session: {
+        id: "sess-competing-plan-agents",
+        agentSessionId: null,
+        boundWorkflowPath: null,
+        harness: "claude-code",
+        cwd: "/Users/demo/acme-app/projects/build-sales-outreach",
+        title: "Plan Agents",
+        status: "running",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActiveAt: "2026-01-01T00:00:00.000Z",
+        ready: true,
+        agentMapIdentity: {
+          projectId: "project_ffffffff-ffff-4fff-8fff-ffffffffffff",
+          userId: "user_mock",
+          sessionId: "sess-competing-plan-agents",
+        },
+      },
+    });
+  });
+  await selectMockSessionFromPalette(page, "Plan Agents");
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-competing-plan-agents",
+  );
 
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect
@@ -133,40 +169,57 @@ test("Enter keeps a new-agent prompt in its standalone builder until Plan Agents
 
   const evidence = await sessionEvidence(page);
   expect(evidence.createSessionCalls).toBe(before.createSessionCalls + 1);
-  expect(evidence.openPlannerSessionCalls).toBe(before.openPlannerSessionCalls);
   expect(evidence.injectedSessionId).not.toBeNull();
+  expect(evidence.injectedSessionId).not.toBe("sess-competing-plan-agents");
   expect(evidence.activeSessionId).toBe(evidence.injectedSessionId);
   expect(evidence.activeSessionId).not.toBe(before.activeSessionId);
   expect(evidence.injectInputCalls).toBe(before.injectInputCalls + 1);
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __HARNESS_TEST__?: {
+              lastCreateSession?: {
+                req?: { initialUserInputPending?: boolean };
+              };
+            };
+          }
+        ).__HARNESS_TEST__?.lastCreateSession?.req?.initialUserInputPending,
+    ),
+  ).toBe(true);
 
   const project = page.getByTestId(
     "workspace-group-acme-app/projects/build-sales-outreach",
   );
-  const planAgents = project.getByTestId("agent-map-select");
-  await expect(planAgents).toHaveAttribute("aria-pressed", "false");
+  const projectMap = project.getByTestId(
+    "project-select-acme-app/projects/build-sales-outreach",
+  );
+  await expect(projectMap).toHaveAttribute("aria-pressed", "false");
+  await expect(project.getByTestId("agent-map-row")).toHaveCount(0);
 
-  await planAgents.click();
-  await expect
-    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
-    .toBe(before.openPlannerSessionCalls + 1);
-  await expect(planAgents).toHaveAttribute("aria-pressed", "true");
+  const beforeMap = await sessionEvidence(page);
+  await projectMap.click();
+  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+  await expect(projectMap).toHaveAttribute("aria-pressed", "true");
+  expect(await sessionEvidence(page)).toEqual(beforeMap);
+
+  await page
+    .getByTestId(`session-tab-main-${evidence.activeSessionId}`)
+    .click();
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+  expect((await sessionEvidence(page)).activeSessionId).toBe(
+    evidence.activeSessionId,
+  );
 });
 
-test("returning to an in-progress standalone builder does not restore Plan Agents", async ({
+test("returning to an in-progress standalone session does not restore the project map", async ({
   page,
 }) => {
   await page.goto("/?seed=0&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect
-    .poll(async () => (await sessionEvidence(page)).openPlannerSessionCalls)
-    .toBeGreaterThan(0);
-  await expect
-    .poll(async () => {
-      const evidence = await sessionEvidence(page);
-      return evidence.createSessionCalls - evidence.openPlannerSessionCalls;
-    })
-    .toBe(0);
   const before = await sessionEvidence(page);
+  expect(before.createSessionCalls).toBe(0);
 
   await page.getByTestId("rail-create-new").click();
   const idea = "Build a revisit guard agent.";
@@ -192,7 +245,8 @@ test("returning to an in-progress standalone builder does not restore Plan Agent
     .poll(async () => (await sessionEvidence(page)).injectedText)
     .toContain(idea);
   // Let the session we deliberately visited finish its own normal restore;
-  // only planner work caused by returning to the builder is under test.
+  // only map restoration caused by returning to the explicit session is under
+  // test.
   await page.waitForTimeout(500);
   const beforeReturn = await sessionEvidence(page);
 
@@ -204,14 +258,12 @@ test("returning to an in-progress standalone builder does not restore Plan Agent
   expect((await sessionEvidence(page)).activeSessionId).not.toBe(awaySessionId);
   await page.waitForTimeout(500);
   const afterReturn = await sessionEvidence(page);
-  expect(afterReturn.openPlannerSessionCalls).toBe(
-    beforeReturn.openPlannerSessionCalls,
-  );
   await expect(
     page
       .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")
-      .getByTestId("agent-map-select"),
+      .getByTestId("project-select-acme-app/projects/build-revisit-guard"),
   ).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
 });
 
 test("a picked file reaches the first request without naming the project", async ({
@@ -637,7 +689,9 @@ for (const agent of [
     // Make the next session never reach ready on its own — the stand-in for a
     // user still on an agent's login, trust, or onboarding screen.
     await page.addInitScript(() => {
-      (window as unknown as { __MOCK_WITHHOLD_READY__?: boolean }).__MOCK_WITHHOLD_READY__ = true;
+      (
+        window as unknown as { __MOCK_WITHHOLD_READY__?: boolean }
+      ).__MOCK_WITHHOLD_READY__ = true;
     });
     await page.goto("/?seed=0");
     await expect(page.locator(".rail-workflows")).toBeVisible();
@@ -646,7 +700,9 @@ for (const agent of [
     if (agent.id === "codex") {
       await page.getByTestId("composer-harness-select").click();
       await page.getByTestId("composer-harness-option-codex").click();
-      await expect(page.getByTestId("composer-harness-select")).toContainText("Codex");
+      await expect(page.getByTestId("composer-harness-select")).toContainText(
+        "Codex",
+      );
     }
     const prompt = `Summarise my ${agent.label} inbox every morning.`;
     await page.getByTestId("composer-input").fill(prompt);
@@ -661,7 +717,9 @@ for (const agent of [
       () =>
         (
           window as unknown as {
-            __HARNESS_TEST__?: { lastCreateSession?: { req?: { harness?: string } } };
+            __HARNESS_TEST__?: {
+              lastCreateSession?: { req?: { harness?: string } };
+            };
           }
         ).__HARNESS_TEST__?.lastCreateSession?.req?.harness,
     );
@@ -679,7 +737,9 @@ for (const agent of [
     // not inject the held intent a second time.
     await page.evaluate(() =>
       (
-        window as unknown as { __HARNESS_TEST__?: { promoteReady?: () => void } }
+        window as unknown as {
+          __HARNESS_TEST__?: { promoteReady?: () => void };
+        }
       ).__HARNESS_TEST__?.promoteReady?.(),
     );
     await expect.poll(() => lastInjectText(page)).toContain(prompt);
@@ -687,7 +747,9 @@ for (const agent of [
 
     await page.evaluate(() =>
       (
-        window as unknown as { __HARNESS_TEST__?: { promoteReady?: () => void } }
+        window as unknown as {
+          __HARNESS_TEST__?: { promoteReady?: () => void };
+        }
       ).__HARNESS_TEST__?.promoteReady?.(),
     );
     await page.waitForTimeout(500);

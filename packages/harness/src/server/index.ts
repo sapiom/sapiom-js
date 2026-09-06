@@ -101,7 +101,7 @@ import {
 } from "../core/inject/retention.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../profiles/default.js";
 import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
-import { ProjectSessionScopeUnavailableError } from "../core/session-manager.js";
+import { ProjectSessionScopeUnavailableError, SessionNotReadyError } from "../core/session-manager.js";
 import { localProjectPrincipal } from "../core/project-session.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
@@ -178,7 +178,7 @@ import {
   localPlanningPrincipal,
   PlanningSessionService,
 } from "../core/planning-session.js";
-import { PlannerGreetingCoordinator } from "../core/planner-greeting.js";
+import { PlannerDispatchForbiddenError, PlannerGreetingCoordinator } from "../core/planner-greeting.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -3069,6 +3069,36 @@ export const startServer = async (
         workflowsCache.find((w) => w.path === workflowPath) ?? null,
       writeWorkspaceContext: writeSessionContext,
       renderCanvas,
+      // Private compatibility boundary: migrated sessions use the ordinary
+      // HTTP endpoint while their persisted startup FIFO remains authoritative.
+      // The project bootstrap cutover replaces this coordinator in one place.
+      submitSessionInput: async (sessionId, text, submit) => {
+        const session = sessionManager.get(sessionId);
+        if (session?.planning) {
+          if (!(await isPlannerDispatchAuthorized({
+            session,
+            currentPrincipal: () => localPlanningPrincipal(planningUserId, machineId),
+            resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+          }))) throw new ProjectSessionScopeUnavailableError(sessionId);
+          if (submit) {
+            try {
+              await plannerGreeting.enqueue(sessionId, text);
+            } catch (error) {
+              if (error instanceof PlannerDispatchForbiddenError) {
+                throw new ProjectSessionScopeUnavailableError(sessionId);
+              }
+              throw error;
+            }
+            return true;
+          }
+          // Draft text cannot interleave with a pending automatic greeting.
+          if (session.planning.greeting.status === "pending" ||
+              session.planning.greeting.status === "generating") {
+            throw new SessionNotReadyError(sessionId);
+          }
+        }
+        return sessionManager.submitInput(sessionId, text, submit);
+      },
       onTelemetryOptInChange: (optIn) => batcher.setTelemetryOptIn(optIn),
       onSessionCreated: (cwd, harnessSessionId) => {
         scanWorkflowsAndBroadcast(cwd, "session-create", { dirty: true })

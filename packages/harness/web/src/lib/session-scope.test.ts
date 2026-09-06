@@ -7,6 +7,7 @@ import {
   conversationSubject,
   liveSessionsForFocus,
   liveSessionsForProject,
+  liveSessionsForStudioProject,
   mergeSubjectRuns,
   OBSERVED_RUN_WINDOW,
   projectRootForAgent,
@@ -61,7 +62,9 @@ describe("projectRootForAgent: a session boots at the project root", () => {
     // Honest degradation: an agent discovered outside every opened project
     // still opens rather than failing to start.
     expect(projectRootForAgent(ADS, [])).toBe(ADS);
-    expect(projectRootForAgent(ADS, [`${HOME}/unrelated`, `${HOME}/other`])).toBe(ADS);
+    expect(
+      projectRootForAgent(ADS, [`${HOME}/unrelated`, `${HOME}/other`]),
+    ).toBe(ADS);
   });
 
   it("matches on segment boundaries, so a same-prefix sibling root never wins", () => {
@@ -99,12 +102,21 @@ describe("projectRootForAgent: a session boots at the project root", () => {
     // The server hands the SPA native paths and the SPA holds whatever
     // recentDirs recorded, so the two spellings of one directory must resolve
     // to the same project (paths.ts's mixed-form contract).
-    expect(projectRootForAgent("C:\\Users\\demo\\polsia\\agents\\ads", ["C:\\Users\\demo\\polsia"]))
-      .toBe("C:\\Users\\demo\\polsia");
-    expect(projectRootForAgent("C:\\Users\\demo\\polsia\\agents\\ads", ["C:/Users/demo/polsia"]))
-      .toBe("C:/Users/demo/polsia");
-    expect(projectRootForAgent("C:\\Users\\demo\\polsia-old\\ads", ["C:\\Users\\demo\\polsia"]))
-      .toBe("C:\\Users\\demo\\polsia-old\\ads");
+    expect(
+      projectRootForAgent("C:\\Users\\demo\\polsia\\agents\\ads", [
+        "C:\\Users\\demo\\polsia",
+      ]),
+    ).toBe("C:\\Users\\demo\\polsia");
+    expect(
+      projectRootForAgent("C:\\Users\\demo\\polsia\\agents\\ads", [
+        "C:/Users/demo/polsia",
+      ]),
+    ).toBe("C:/Users/demo/polsia");
+    expect(
+      projectRootForAgent("C:\\Users\\demo\\polsia-old\\ads", [
+        "C:\\Users\\demo\\polsia",
+      ]),
+    ).toBe("C:\\Users\\demo\\polsia-old\\ads");
   });
 });
 
@@ -163,41 +175,64 @@ const session = (over: Partial<ScopedSession> = {}): ScopedSession => ({
 describe("liveSessionsForFocus", () => {
   const bound = session({ id: "b", boundWorkflowPath: ADS, cwd: POLSIA });
   const inFolder = session({ id: "f", cwd: ADS });
-  const elsewhere = session({ id: "e", boundWorkflowPath: `${POLSIA}/other`, cwd: POLSIA });
+  const elsewhere = session({
+    id: "e",
+    boundWorkflowPath: `${POLSIA}/other`,
+    cwd: POLSIA,
+  });
   const dead = session({ id: "d", boundWorkflowPath: ADS, status: "exited" });
 
   it("claims bound sessions and unbound sessions sitting in the folder", () => {
-    expect(liveSessionsForFocus([bound, inFolder, elsewhere, dead], ADS).map((s) => s.id)).toEqual([
-      "b",
-      "f",
-    ]);
+    expect(
+      liveSessionsForFocus([bound, inFolder, elsewhere, dead], ADS).map(
+        (s) => s.id,
+      ),
+    ).toEqual(["b", "f"]);
   });
 
   it("never claims a session bound elsewhere just because the cwd matches", () => {
     // A session bound to another agent belongs to that agent's strip, whatever
     // folder it happens to sit in.
-    const boundElsewhereInFolder = session({ id: "x", boundWorkflowPath: POLSIA, cwd: ADS });
+    const boundElsewhereInFolder = session({
+      id: "x",
+      boundWorkflowPath: POLSIA,
+      cwd: ADS,
+    });
     expect(liveSessionsForFocus([boundElsewhereInFolder], ADS)).toEqual([]);
   });
 
   it("orders oldest first, the order Cmd/Ctrl+1..9 selects, and stably on a tie", () => {
-    const older = session({ id: "z", cwd: ADS, createdAt: "2026-08-01T09:00:00.000Z" });
-    const newer = session({ id: "a", cwd: ADS, createdAt: "2026-08-01T11:00:00.000Z" });
-    expect(liveSessionsForFocus([newer, older], ADS).map((s) => s.id)).toEqual(["z", "a"]);
+    const older = session({
+      id: "z",
+      cwd: ADS,
+      createdAt: "2026-08-01T09:00:00.000Z",
+    });
+    const newer = session({
+      id: "a",
+      cwd: ADS,
+      createdAt: "2026-08-01T11:00:00.000Z",
+    });
+    expect(liveSessionsForFocus([newer, older], ADS).map((s) => s.id)).toEqual([
+      "z",
+      "a",
+    ]);
     // Same timestamp, ordered by id, so the strip never reorders between renders.
     expect(
-      liveSessionsForFocus([session({ id: "m", cwd: ADS }), session({ id: "k", cwd: ADS })], ADS).map(
-        (s) => s.id,
-      ),
+      liveSessionsForFocus(
+        [session({ id: "m", cwd: ADS }), session({ id: "k", cwd: ADS })],
+        ADS,
+      ).map((s) => s.id),
     ).toEqual(["k", "m"]);
   });
 
   it("compares paths, not strings, so a trailing separator still matches", () => {
     // The server resolve()s the cwd it stores while the selection is whatever
     // recentDirs kept — a raw === hid the session the user had just created.
-    expect(liveSessionsForFocus([session({ id: "t", cwd: `${ADS}/` })], ADS).map((s) => s.id)).toEqual(
-      ["t"],
-    );
+    expect(
+      liveSessionsForFocus([session({ id: "t", cwd: `${ADS}/` })], ADS).map(
+        (s) => s.id,
+      ),
+    ).toEqual(["t"]);
   });
 
   it("is empty for no subject", () => {
@@ -218,25 +253,42 @@ describe("liveSessionsForProject: a session belongs to its PROJECT", () => {
     // EMPTY strip under `liveSessionsForFocus` — a project you can select but
     // cannot see your own conversations in.
     expect(liveSessionsForFocus([boundToAds], POLSIA)).toEqual([]);
-    expect(liveSessionsForProject([boundToAds], POLSIA).map((s) => s.id)).toEqual(["b"]);
+    expect(
+      liveSessionsForProject([boundToAds], POLSIA).map((s) => s.id),
+    ).toEqual(["b"]);
   });
 
   it("claims every live session inside the root and nothing outside it", () => {
     expect(
-      liveSessionsForProject([boundToAds, unbound, nested, elsewhere, dead], POLSIA).map((s) => s.id),
+      liveSessionsForProject(
+        [boundToAds, unbound, nested, elsewhere, dead],
+        POLSIA,
+      ).map((s) => s.id),
     ).toEqual(["b", "n", "u"]);
   });
 
   it("is asymmetric, exactly like sessionReachesFocus: the outer project contains the nested one's sessions, never the reverse", () => {
     const workers = `${POLSIA}/services/workers`;
-    expect(liveSessionsForProject([nested], POLSIA).map((s) => s.id)).toEqual(["n"]);
+    expect(liveSessionsForProject([nested], POLSIA).map((s) => s.id)).toEqual([
+      "n",
+    ]);
     expect(liveSessionsForProject([unbound], workers)).toEqual([]);
   });
 
   it("orders oldest first and stably, the same order the strip renders", () => {
-    const older = session({ id: "z", cwd: POLSIA, createdAt: "2026-08-01T09:00:00.000Z" });
-    const newer = session({ id: "a", cwd: POLSIA, createdAt: "2026-08-01T11:00:00.000Z" });
-    expect(liveSessionsForProject([newer, older], POLSIA).map((s) => s.id)).toEqual(["z", "a"]);
+    const older = session({
+      id: "z",
+      cwd: POLSIA,
+      createdAt: "2026-08-01T09:00:00.000Z",
+    });
+    const newer = session({
+      id: "a",
+      cwd: POLSIA,
+      createdAt: "2026-08-01T11:00:00.000Z",
+    });
+    expect(
+      liveSessionsForProject([newer, older], POLSIA).map((s) => s.id),
+    ).toEqual(["z", "a"]);
   });
 
   it("is empty for no project", () => {
@@ -247,6 +299,88 @@ describe("liveSessionsForProject: a session belongs to its PROJECT", () => {
   });
 });
 
+describe("liveSessionsForStudioProject: project identity owns session tabs", () => {
+  const projectId = "project_alpha";
+
+  it("uses exact project identity instead of cwd containment", () => {
+    const matchingOutsideRoot = session({
+      id: "matching",
+      cwd: SIDEQUEST,
+      agentMapIdentity: { projectId },
+    });
+    const foreignInsideRoot = session({
+      id: "foreign",
+      cwd: POLSIA,
+      agentMapIdentity: { projectId: "project_beta" },
+    });
+
+    expect(
+      liveSessionsForStudioProject(
+        [foreignInsideRoot, matchingOutsideRoot],
+        projectId,
+      ).map((candidate) => candidate.id),
+    ).toEqual(["matching"]);
+  });
+
+  it("excludes exited, foreign, and missing project identities", () => {
+    const live = session({ id: "live", agentMapIdentity: { projectId } });
+    const exited = session({
+      id: "exited",
+      status: "exited",
+      agentMapIdentity: { projectId },
+    });
+    const foreign = session({
+      id: "foreign",
+      agentMapIdentity: { projectId: "project_beta" },
+    });
+    const missing = session({ id: "missing", agentMapIdentity: null });
+
+    expect(
+      liveSessionsForStudioProject(
+        [exited, foreign, missing, live],
+        projectId,
+      ).map((candidate) => candidate.id),
+    ).toEqual(["live"]);
+  });
+
+  it("orders oldest first, uses id as a stable tie-breaker, and deduplicates session IDs", () => {
+    const older = session({
+      id: "z",
+      createdAt: "2026-08-01T09:00:00.000Z",
+      agentMapIdentity: { projectId },
+    });
+    const tiedLaterId = session({
+      id: "m",
+      agentMapIdentity: { projectId },
+    });
+    const tiedEarlierId = session({
+      id: "k",
+      agentMapIdentity: { projectId },
+    });
+    const duplicate = session({
+      id: "z",
+      createdAt: "2026-08-01T11:00:00.000Z",
+      agentMapIdentity: { projectId },
+    });
+
+    expect(
+      liveSessionsForStudioProject(
+        [tiedLaterId, duplicate, tiedEarlierId, older],
+        projectId,
+      ).map((candidate) => candidate.id),
+    ).toEqual(["z", "k", "m"]);
+  });
+
+  it("is empty when no project is selected", () => {
+    expect(
+      liveSessionsForStudioProject(
+        [session({ agentMapIdentity: { projectId } })],
+        null,
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("conversationSubject: the chat belongs to a project", () => {
   const roots = [POLSIA, SIDEQUEST];
 
@@ -254,7 +388,10 @@ describe("conversationSubject: the chat belongs to a project", () => {
     // E3.4 on screen, not merely in the session pointer: the agent selection is
     // not an input here, so the strip is the SAME set before and after the click.
     const active = session({ boundWorkflowPath: ADS, cwd: POLSIA });
-    expect(conversationSubject(active, ADS, null, roots)).toEqual({ kind: "project", root: POLSIA });
+    expect(conversationSubject(active, ADS, null, roots)).toEqual({
+      kind: "project",
+      root: POLSIA,
+    });
     expect(conversationSubject(active, OUTREACH, null, roots)).toEqual({
       kind: "project",
       root: POLSIA,
@@ -273,9 +410,17 @@ describe("conversationSubject: the chat belongs to a project", () => {
   });
 
   it("names the SELECTED project when nothing is running, so a project you just picked is already the subject", () => {
-    expect(conversationSubject(null, ADS, POLSIA, roots)).toEqual({ kind: "project", root: POLSIA });
+    expect(conversationSubject(null, ADS, POLSIA, roots)).toEqual({
+      kind: "project",
+      root: POLSIA,
+    });
     expect(
-      conversationSubject(session({ status: "exited", cwd: POLSIA }), ADS, POLSIA, roots),
+      conversationSubject(
+        session({ status: "exited", cwd: POLSIA }),
+        ADS,
+        POLSIA,
+        roots,
+      ),
     ).toEqual({ kind: "project", root: POLSIA });
   });
 
@@ -291,13 +436,22 @@ describe("conversationSubject: the chat belongs to a project", () => {
   it("falls back to the agent subject for a session outside every known root", () => {
     // A scaffold folder not yet in recentDirs has no project. Inventing one
     // from its cwd would give the strip a root no rail row corresponds to.
-    const loose = session({ cwd: `${HOME}/scratch`, boundWorkflowPath: `${HOME}/scratch/bot` });
+    const loose = session({
+      cwd: `${HOME}/scratch`,
+      boundWorkflowPath: `${HOME}/scratch/bot`,
+    });
     expect(conversationSubject(loose, ADS, null, roots)).toEqual({
       kind: "focus",
       path: `${HOME}/scratch/bot`,
     });
-    expect(conversationSubject(null, ADS, null, roots)).toEqual({ kind: "focus", path: ADS });
-    expect(conversationSubject(null, null, null, roots)).toEqual({ kind: "focus", path: null });
+    expect(conversationSubject(null, ADS, null, roots)).toEqual({
+      kind: "focus",
+      path: ADS,
+    });
+    expect(conversationSubject(null, null, null, roots)).toEqual({
+      kind: "focus",
+      path: null,
+    });
   });
 });
 
@@ -306,7 +460,9 @@ describe("sessionStripSubject: the strip follows the ACTIVE session", () => {
     // Selecting F while B's session runs must leave B's tabs on screen. Keyed
     // to the selection, the strip emptied itself under the session still
     // running in the pane below it.
-    expect(sessionStripSubject(session({ boundWorkflowPath: ADS }), OUTREACH)).toBe(ADS);
+    expect(
+      sessionStripSubject(session({ boundWorkflowPath: ADS }), OUTREACH),
+    ).toBe(ADS);
   });
 
   it("falls back to the session's own folder when it is unbound", () => {
@@ -316,7 +472,10 @@ describe("sessionStripSubject: the strip follows the ACTIVE session", () => {
   it("names the rail selection only when there is no live active session", () => {
     expect(sessionStripSubject(null, ADS)).toBe(ADS);
     expect(
-      sessionStripSubject(session({ status: "exited", boundWorkflowPath: POLSIA }), ADS),
+      sessionStripSubject(
+        session({ status: "exited", boundWorkflowPath: POLSIA }),
+        ADS,
+      ),
     ).toBe(ADS);
     expect(sessionStripSubject(null, null)).toBeNull();
   });
@@ -324,15 +483,28 @@ describe("sessionStripSubject: the strip follows the ACTIVE session", () => {
 
 describe("sessionForFocus: selection moves the session across projects, never within one", () => {
   const at = (over: Partial<ScopedSession>): ScopedSession => session(over);
-  const polsiaSession = at({ id: "p", cwd: POLSIA, lastActiveAt: "2026-08-02T10:00:00.000Z" });
-  const otherSession = at({ id: "o", cwd: SIDEQUEST, lastActiveAt: "2026-08-02T09:00:00.000Z" });
+  const polsiaSession = at({
+    id: "p",
+    cwd: POLSIA,
+    lastActiveAt: "2026-08-02T10:00:00.000Z",
+  });
+  const otherSession = at({
+    id: "o",
+    cwd: SIDEQUEST,
+    lastActiveAt: "2026-08-02T09:00:00.000Z",
+  });
   const roots = [POLSIA, SIDEQUEST];
 
   it("keeps the session when the selected agent is in its project", () => {
     // The whole point of the decoupling: read F's board while still talking to
     // B. One session has context on every agent in its project.
     expect(
-      sessionForFocus({ focusPath: ADS, active: polsiaSession, sessions: [polsiaSession], roots }),
+      sessionForFocus({
+        focusPath: ADS,
+        active: polsiaSession,
+        sessions: [polsiaSession],
+        roots,
+      }),
     ).toEqual({ kind: "keep" });
     expect(
       sessionForFocus({
@@ -359,7 +531,12 @@ describe("sessionForFocus: selection moves the session across projects, never wi
 
   it("switches to none when the selected project has no live session", () => {
     expect(
-      sessionForFocus({ focusPath: ADS, active: otherSession, sessions: [otherSession], roots }),
+      sessionForFocus({
+        focusPath: ADS,
+        active: otherSession,
+        sessions: [otherSession],
+        roots,
+      }),
     ).toEqual({ kind: "switch", to: null });
   });
 
@@ -389,9 +566,16 @@ describe("sessionForFocus: selection moves the session across projects, never wi
     // Reachable after closing the last tab: the pane said "no running session
     // for F" while F's project had one, which was a false absence.
     expect(
-      sessionForFocus({ focusPath: ADS, active: null, sessions: [polsiaSession], roots }),
+      sessionForFocus({
+        focusPath: ADS,
+        active: null,
+        sessions: [polsiaSession],
+        roots,
+      }),
     ).toEqual({ kind: "switch", to: polsiaSession });
-    expect(sessionForFocus({ focusPath: ADS, active: null, sessions: [], roots })).toEqual({
+    expect(
+      sessionForFocus({ focusPath: ADS, active: null, sessions: [], roots }),
+    ).toEqual({
       kind: "switch",
       to: null,
     });
@@ -438,8 +622,16 @@ describe("sessionForFocus: selection moves the session across projects, never wi
       }),
     ).toEqual({ kind: "switch", to: older });
     // With no lastActiveAt anywhere, createdAt is the fallback ordering.
-    const c1 = at({ id: "c1", cwd: POLSIA, createdAt: "2026-07-01T00:00:00.000Z" });
-    const c2 = at({ id: "c2", cwd: POLSIA, createdAt: "2026-08-04T00:00:00.000Z" });
+    const c1 = at({
+      id: "c1",
+      cwd: POLSIA,
+      createdAt: "2026-07-01T00:00:00.000Z",
+    });
+    const c2 = at({
+      id: "c2",
+      cwd: POLSIA,
+      createdAt: "2026-08-04T00:00:00.000Z",
+    });
     expect(
       sessionForFocus({
         focusPath: ADS,
@@ -470,8 +662,16 @@ describe("sessionForFocus: selection moves the session across projects, never wi
     // Not symmetric, and deliberately: a session rooted at the NESTED project
     // cannot reach up to an agent outside it, so that one hands over — to the
     // outer project's own most-recently-worked-in session.
-    const inner = at({ id: "inner", cwd: nested, lastActiveAt: "2026-08-01T00:00:00.000Z" });
-    const outerRecent = at({ id: "outer", cwd: POLSIA, lastActiveAt: "2026-08-09T00:00:00.000Z" });
+    const inner = at({
+      id: "inner",
+      cwd: nested,
+      lastActiveAt: "2026-08-01T00:00:00.000Z",
+    });
+    const outerRecent = at({
+      id: "outer",
+      cwd: POLSIA,
+      lastActiveAt: "2026-08-09T00:00:00.000Z",
+    });
     expect(
       sessionForFocus({
         focusPath: ADS,
@@ -482,12 +682,59 @@ describe("sessionForFocus: selection moves the session across projects, never wi
     ).toEqual({ kind: "switch", to: outerRecent });
   });
 
+  it("uses neutral project identity instead of cwd containment for a Studio handoff", () => {
+    const nested = `${POLSIA}/services/workers`;
+    const worker = `${nested}/ads`;
+    const outer = at({
+      id: "outer",
+      cwd: POLSIA,
+      agentMapIdentity: { projectId: "project_outer" },
+    });
+    const nestedSession = at({
+      id: "nested",
+      cwd: nested,
+      agentMapIdentity: { projectId: "project_nested" },
+    });
+    expect(
+      sessionForFocus({
+        focusPath: worker,
+        active: outer,
+        sessions: [outer, nestedSession],
+        roots: [POLSIA, nested],
+        targetProjectId: "project_nested",
+        targetProjectRoot: nested,
+      }),
+    ).toEqual({ kind: "switch", to: nestedSession });
+  });
+
+  it("falls back safely for identity-less legacy sessions without admitting an outer root", () => {
+    const nested = `${POLSIA}/services/workers`;
+    const worker = `${nested}/ads`;
+    const outerLegacy = at({ id: "outer-legacy", cwd: POLSIA });
+    const nestedLegacy = at({ id: "nested-legacy", cwd: nested });
+    expect(
+      sessionForFocus({
+        focusPath: worker,
+        active: outerLegacy,
+        sessions: [outerLegacy, nestedLegacy],
+        roots: [POLSIA, nested],
+        targetProjectId: "project_nested",
+        targetProjectRoot: nested,
+      }),
+    ).toEqual({ kind: "switch", to: nestedLegacy });
+  });
+
   it("keeps a session left rooted in an agent's own folder when a sibling is selected", () => {
     // Older builds rooted sessions at the agent. That session still belongs to
     // the project around it, so a sibling selection must not read as a jump.
     const legacy = at({ id: "legacy", cwd: ADS });
     expect(
-      sessionForFocus({ focusPath: OUTREACH, active: legacy, sessions: [legacy], roots }),
+      sessionForFocus({
+        focusPath: OUTREACH,
+        active: legacy,
+        sessions: [legacy],
+        roots,
+      }),
     ).toEqual({ kind: "keep" });
   });
 
@@ -496,13 +743,30 @@ describe("sessionForFocus: selection moves the session across projects, never wi
     // Its own folder is the fallback project, so only sessions inside it can
     // claim it.
     expect(
-      sessionForFocus({ focusPath: orphan, active: polsiaSession, sessions: [polsiaSession], roots }),
+      sessionForFocus({
+        focusPath: orphan,
+        active: polsiaSession,
+        sessions: [polsiaSession],
+        roots,
+      }),
     ).toEqual({ kind: "switch", to: null });
     const inOrphan = at({ id: "orphan", cwd: orphan });
     expect(
-      sessionForFocus({ focusPath: orphan, active: polsiaSession, sessions: [inOrphan], roots }),
+      sessionForFocus({
+        focusPath: orphan,
+        active: polsiaSession,
+        sessions: [inOrphan],
+        roots,
+      }),
     ).toEqual({ kind: "switch", to: inOrphan });
-    expect(sessionForFocus({ focusPath: orphan, active: null, sessions: [], roots: [] })).toEqual({
+    expect(
+      sessionForFocus({
+        focusPath: orphan,
+        active: null,
+        sessions: [],
+        roots: [],
+      }),
+    ).toEqual({
       kind: "switch",
       to: null,
     });
@@ -510,7 +774,12 @@ describe("sessionForFocus: selection moves the session across projects, never wi
 
   it("keeps the session when the selection is the project root itself", () => {
     expect(
-      sessionForFocus({ focusPath: POLSIA, active: polsiaSession, sessions: [polsiaSession], roots }),
+      sessionForFocus({
+        focusPath: POLSIA,
+        active: polsiaSession,
+        sessions: [polsiaSession],
+        roots,
+      }),
     ).toEqual({ kind: "keep" });
   });
 });
@@ -543,12 +812,20 @@ describe("canvasSourceFor: which entry point serves the subject's board", () => 
     // That route is the one canvas.reload addresses and the run-state bridge
     // posts into; reaching for the workflow-keyed one here would trade a live
     // board for a snapshot.
-    expect(canvasSourceFor({ subjectPath: ADS, bindingPath: ADS, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({ subjectPath: ADS, bindingPath: ADS, sessionId: "s1" }),
+    ).toEqual({
       kind: "session",
       sessionId: "s1",
     });
     // Separator/trailing-slash spellings are the same place.
-    expect(canvasSourceFor({ subjectPath: ADS, bindingPath: `${ADS}/`, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({
+        subjectPath: ADS,
+        bindingPath: `${ADS}/`,
+        sessionId: "s1",
+      }),
+    ).toEqual({
       kind: "session",
       sessionId: "s1",
     });
@@ -557,7 +834,13 @@ describe("canvasSourceFor: which entry point serves the subject's board", () => 
   it("uses the workflow-keyed route whenever the session is bound elsewhere", () => {
     // /canvas/:sessionId/ resolves by the BINDING, so it would serve the wrong
     // agent's board — this is the mis-draw the route exists to prevent.
-    expect(canvasSourceFor({ subjectPath: ADS, bindingPath: OUTREACH, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({
+        subjectPath: ADS,
+        bindingPath: OUTREACH,
+        sessionId: "s1",
+      }),
+    ).toEqual({
       kind: "agent",
       path: ADS,
     });
@@ -566,19 +849,25 @@ describe("canvasSourceFor: which entry point serves the subject's board", () => 
   it("uses the workflow-keyed route for an agent with no session at all", () => {
     // The criterion IA-01 landed for: an agent that has never hosted a session
     // still has a board.
-    expect(canvasSourceFor({ subjectPath: ADS, bindingPath: null, sessionId: null })).toEqual({
+    expect(
+      canvasSourceFor({ subjectPath: ADS, bindingPath: null, sessionId: null }),
+    ).toEqual({
       kind: "agent",
       path: ADS,
     });
     // A live but unbound session is the same case.
-    expect(canvasSourceFor({ subjectPath: ADS, bindingPath: null, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({ subjectPath: ADS, bindingPath: null, sessionId: "s1" }),
+    ).toEqual({
       kind: "agent",
       path: ADS,
     });
   });
 
   it("has no source without a subject", () => {
-    expect(canvasSourceFor({ subjectPath: null, bindingPath: ADS, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({ subjectPath: null, bindingPath: ADS, sessionId: "s1" }),
+    ).toEqual({
       kind: "none",
     });
   });
@@ -600,47 +889,67 @@ describe("lifecycleVerbGate: the verbs are gated BY the selection, not aimed at 
     // The prototype's bug in one assertion: subject and enabled-state came from
     // different agents. One call returns both, so they cannot drift apart.
     for (const verb of ["prod", "test", "run", "deploy"] as const) {
-      expect(lifecycleVerbGate(verb, { ...signedIn, subject: draft }).subjectPath).toBe(ADS);
+      expect(
+        lifecycleVerbGate(verb, { ...signedIn, subject: draft }).subjectPath,
+      ).toBe(ADS);
     }
   });
 
   it("disables Prod and Run for an undeployed agent, with the reason", () => {
     // The exact mis-target: selecting the undeployed agent left Prod and Run
     // live against the deployed one the session was bound to.
-    expect(lifecycleVerbGate("prod", { ...signedIn, subject: draft }).reason).toBe(
-      "Not deployed yet",
-    );
-    expect(lifecycleVerbGate("run", { ...signedIn, subject: draft }).reason).toBe(
-      "Not deployed yet",
-    );
+    expect(
+      lifecycleVerbGate("prod", { ...signedIn, subject: draft }).reason,
+    ).toBe("Not deployed yet");
+    expect(
+      lifecycleVerbGate("run", { ...signedIn, subject: draft }).reason,
+    ).toBe("Not deployed yet");
   });
 
   it("leaves Test and Deploy available on an undeployed agent", () => {
     // They are precisely what you CAN do to it; disabling the verbs that fix
     // the state you are being told about would be honest about nothing.
-    expect(lifecycleVerbGate("test", { ...signedIn, subject: draft }).reason).toBeNull();
-    expect(lifecycleVerbGate("deploy", { ...signedIn, subject: draft }).reason).toBeNull();
+    expect(
+      lifecycleVerbGate("test", { ...signedIn, subject: draft }).reason,
+    ).toBeNull();
+    expect(
+      lifecycleVerbGate("deploy", { ...signedIn, subject: draft }).reason,
+    ).toBeNull();
   });
 
   it("enables Prod and Run on a deployed agent", () => {
-    expect(lifecycleVerbGate("prod", { ...signedIn, subject: deployed }).reason).toBeNull();
-    expect(lifecycleVerbGate("run", { ...signedIn, subject: deployed }).reason).toBeNull();
+    expect(
+      lifecycleVerbGate("prod", { ...signedIn, subject: deployed }).reason,
+    ).toBeNull();
+    expect(
+      lifecycleVerbGate("run", { ...signedIn, subject: deployed }).reason,
+    ).toBeNull();
   });
 
   it("puts the auth gate ahead of the deployment gate on the cloud verbs", () => {
     // Signed out, "Not deployed yet" would send the user to Deploy, which is
     // also blocked — the reason has to name the thing they can act on.
     expect(
-      lifecycleVerbGate("run", { subject: draft, authenticated: false, deployError: null }).reason,
+      lifecycleVerbGate("run", {
+        subject: draft,
+        authenticated: false,
+        deployError: null,
+      }).reason,
     ).toBe("Connect your account first");
     expect(
-      lifecycleVerbGate("deploy", { subject: draft, authenticated: false, deployError: null })
-        .reason,
+      lifecycleVerbGate("deploy", {
+        subject: draft,
+        authenticated: false,
+        deployError: null,
+      }).reason,
     ).toBe("Connect your account first");
     // Prod is a read, not a cloud call: it needs a definition, not a session.
     expect(
-      lifecycleVerbGate("prod", { subject: deployed, authenticated: false, deployError: null })
-        .reason,
+      lifecycleVerbGate("prod", {
+        subject: deployed,
+        authenticated: false,
+        deployError: null,
+      }).reason,
     ).toBeNull();
   });
 
@@ -656,8 +965,11 @@ describe("lifecycleVerbGate: the verbs are gated BY the selection, not aimed at 
     ).toBe("Last deploy failed — retry Deploy");
     // A ready build outlives a stale failure (workflow-deployment's rule).
     expect(
-      lifecycleVerbGate("run", { subject: deployed, authenticated: true, deployError: "boom" })
-        .reason,
+      lifecycleVerbGate("run", {
+        subject: deployed,
+        authenticated: true,
+        deployError: "boom",
+      }).reason,
     ).toBeNull();
     // Prod only asks whether there is a page to open.
     expect(
@@ -673,11 +985,17 @@ describe("lifecycleVerbGate: the verbs are gated BY the selection, not aimed at 
     expect(
       lifecycleVerbGate("run", {
         ...signedIn,
-        subject: agent({ definitionId: 4821, activeBuildRunStatus: "building" }),
+        subject: agent({
+          definitionId: 4821,
+          activeBuildRunStatus: "building",
+        }),
       }).reason,
     ).toBe("Build in progress");
     expect(
-      lifecycleVerbGate("run", { ...signedIn, subject: agent({ definitionId: 4821 }) }).reason,
+      lifecycleVerbGate("run", {
+        ...signedIn,
+        subject: agent({ definitionId: 4821 }),
+      }).reason,
     ).toBe("No ready deployment yet");
   });
 
@@ -717,7 +1035,9 @@ describe("run evidence follows the subject, not the session", () => {
     // unattributed runs on EVERY subject — that is how a run no agent produced
     // appears under one that never ran it. Matches this repo's existing
     // `observedRunMatchesWorkflow`.
-    expect(runsForSubject([mine, theirs, unattributed], null)).toEqual([unattributed]);
+    expect(runsForSubject([mine, theirs, unattributed], null)).toEqual([
+      unattributed,
+    ]);
   });
 
   it("keeps the shown run only while it belongs to the subject", () => {
@@ -768,25 +1088,32 @@ describe("run evidence follows the subject, not the session", () => {
     // They are its own and some are still polling; evicting them for another
     // session's finished history would drop the live half of the evidence.
     const observed = [run("a", ADS), run("b", ADS), run("c", ADS)];
-    expect(mergeSubjectRuns(observed, [run("x", ADS), run("y", ADS)], 3)).toEqual(observed);
+    expect(
+      mergeSubjectRuns(observed, [run("x", ADS), run("y", ADS)], 3),
+    ).toEqual(observed);
     // Room for exactly one extra, and it is the newest of them.
     expect(
-      mergeSubjectRuns(observed, [run("x", ADS), run("y", ADS)], 4).map((r) => r.run.executionId),
+      mergeSubjectRuns(observed, [run("x", ADS), run("y", ADS)], 4).map(
+        (r) => r.run.executionId,
+      ),
     ).toEqual(["a", "b", "c", "y"]);
   });
 
   it("keeps the newest observed runs when the observed list alone exceeds the window", () => {
     const observed = [run("old", ADS), run("mid", ADS), run("new", ADS)];
-    expect(mergeSubjectRuns(observed, [run("x", ADS)], 2).map((r) => r.run.executionId)).toEqual([
-      "mid",
-      "new",
-    ]);
+    expect(
+      mergeSubjectRuns(observed, [run("x", ADS)], 2).map(
+        (r) => r.run.executionId,
+      ),
+    ).toEqual(["mid", "new"]);
     expect(mergeSubjectRuns(observed, [], 0)).toEqual([]);
   });
 
   it("is the observed list when there is nothing to add, and vice versa", () => {
     expect(mergeSubjectRuns([mine], [])).toEqual([mine]);
-    expect(mergeSubjectRuns([], [theirs]).map((r) => r.run.executionId)).toEqual(["x2"]);
+    expect(
+      mergeSubjectRuns([], [theirs]).map((r) => r.run.executionId),
+    ).toEqual(["x2"]);
     expect(mergeSubjectRuns([], [])).toEqual([]);
   });
 
@@ -820,7 +1147,9 @@ describe("sessionReachesFocus: one containment answer, two callers", () => {
     expect(sessionReachesFocus(at({ cwd: POLSIA }), ADS, [POLSIA])).toBe(true);
     // The session's own PROJECT, not its raw cwd: a session an older build left
     // rooted in the agent's folder still belongs to the project around it.
-    expect(sessionReachesFocus(at({ cwd: ADS }), OUTREACH, [POLSIA])).toBe(true);
+    expect(sessionReachesFocus(at({ cwd: ADS }), OUTREACH, [POLSIA])).toBe(
+      true,
+    );
   });
 
   it("is false for an agent in another project", () => {
@@ -828,13 +1157,48 @@ describe("sessionReachesFocus: one containment answer, two callers", () => {
     // tab in a project falls back to whatever else is running, and the
     // workbench then pointed at a project that does not contain the agent on
     // screen.
-    expect(sessionReachesFocus(at({ cwd: SIDEQUEST }), ADS, [POLSIA, SIDEQUEST])).toBe(false);
+    expect(
+      sessionReachesFocus(at({ cwd: SIDEQUEST }), ADS, [POLSIA, SIDEQUEST]),
+    ).toBe(false);
+  });
+
+  it("treats a neutral Studio principal as the project boundary", () => {
+    const nested = `${POLSIA}/services/workers`;
+    const worker = `${nested}/ads`;
+    expect(
+      sessionReachesFocus(
+        at({
+          cwd: POLSIA,
+          agentMapIdentity: { projectId: "project_outer" },
+        }),
+        worker,
+        [POLSIA, nested],
+        "project_nested",
+        nested,
+      ),
+    ).toBe(false);
+    expect(
+      sessionReachesFocus(
+        at({
+          cwd: POLSIA,
+          agentMapIdentity: { projectId: "project_nested" },
+        }),
+        worker,
+        [POLSIA, nested],
+        "project_nested",
+        nested,
+      ),
+    ).toBe(true);
   });
 
   it("is false with nothing active, an exited session, or no selection", () => {
     expect(sessionReachesFocus(null, ADS, [POLSIA])).toBe(false);
-    expect(sessionReachesFocus(at({ cwd: POLSIA, status: "exited" }), ADS, [POLSIA])).toBe(false);
-    expect(sessionReachesFocus(at({ cwd: POLSIA }), null, [POLSIA])).toBe(false);
+    expect(
+      sessionReachesFocus(at({ cwd: POLSIA, status: "exited" }), ADS, [POLSIA]),
+    ).toBe(false);
+    expect(sessionReachesFocus(at({ cwd: POLSIA }), null, [POLSIA])).toBe(
+      false,
+    );
   });
 
   it("agrees with sessionForFocus, which is the point of having one answer", () => {
@@ -862,14 +1226,26 @@ describe("canvasSourceFor: a session bound to nothing still draws its own board"
     // live session whose board the pane has always drawn and whose empty-state
     // copy speaks about it. Reading "no subject" as "no source" replaced that
     // with a fresh-install "No session" message under a running session.
-    expect(canvasSourceFor({ subjectPath: null, bindingPath: null, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({
+        subjectPath: null,
+        bindingPath: null,
+        sessionId: "s1",
+      }),
+    ).toEqual({
       kind: "session",
       sessionId: "s1",
     });
   });
 
   it("is nothing when there is neither a subject nor a session", () => {
-    expect(canvasSourceFor({ subjectPath: null, bindingPath: null, sessionId: null })).toEqual({
+    expect(
+      canvasSourceFor({
+        subjectPath: null,
+        bindingPath: null,
+        sessionId: null,
+      }),
+    ).toEqual({
       kind: "none",
     });
   });
@@ -877,7 +1253,9 @@ describe("canvasSourceFor: a session bound to nothing still draws its own board"
   it("is nothing when the subject is suppressed under a bound session", () => {
     // The create-new draft or a review owns the centre: an absence must not
     // have the bound agent's board sitting behind it.
-    expect(canvasSourceFor({ subjectPath: null, bindingPath: ADS, sessionId: "s1" })).toEqual({
+    expect(
+      canvasSourceFor({ subjectPath: null, bindingPath: ADS, sessionId: "s1" }),
+    ).toEqual({
       kind: "none",
     });
   });

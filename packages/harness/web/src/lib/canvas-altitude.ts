@@ -23,7 +23,6 @@ import type { WorkspaceKey, WorkspaceScopeSummary } from "@shared/system-graph";
 import type { StudioWorkspaceSelection } from "@shared/agent-map";
 
 import { basenameOf, samePath } from "./paths";
-import { projectRootForAgent } from "./session-scope";
 
 /** A project as both surfaces need it: the rail's row and the graph's key. */
 export interface ProjectRef {
@@ -92,31 +91,11 @@ export function projectRefForRoot(
   if (!root) return null;
   const scope = scopes.find((candidate) => samePath(candidate.cwd, root));
   if (!scope) return null;
-  return { workspaceKey: scope.workspaceKey, root, label: label ?? basenameOf(root) };
-}
-
-/**
- * The project an agent's board can cut UP to, or null.
- *
- * DERIVED from containment on every call, never remembered from the click that
- * drilled down. Remembering it would make the way back depend on how you got
- * here — an agent reached from the rail would have no way up while the same
- * agent reached from the map would — and it would go stale the moment a
- * project is removed or an agent is moved. Derived, the way up is the same
- * one door however you arrived, and it disappears exactly when the project does.
- */
-export function projectAbove(
-  agentPath: string | null,
-  roots: readonly string[],
-  scopes: readonly WorkspaceScopeSummary[],
-): ProjectRef | null {
-  if (!agentPath) return null;
-  const root = projectRootForAgent(agentPath, roots);
-  // `projectRootForAgent` falls back to the agent's own folder when no known
-  // root contains it. That is not a project, and offering "up" to it would
-  // send the user to a map of one agent — itself.
-  if (samePath(root, agentPath)) return null;
-  return projectRefForRoot(root, null, scopes);
+  return {
+    workspaceKey: scope.workspaceKey,
+    root,
+    label: label ?? basenameOf(root),
+  };
 }
 
 /**
