@@ -11,7 +11,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "f9128ff6afed47242b7bc7946b2e1dab20627171371191cdd2c45537198ce8ed";
+  "a32a1d00c56287c96bfcbf2b1dd78e2b7b278fbaa0fd1997df8567d0c5bc4d27";
 
 describe("DEFAULT_SYSTEM_PROMPT", () => {
   it("stays byte-identical to the copy the backend serves (cross-repo pin, SAP-2810)", () => {
@@ -36,5 +36,26 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain(".sapiom/harness-context.json");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Local Run, Prod Run, and Deploy");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_send_feedback");
+  });
+
+  it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // The digest above only proves the two copies match; it cannot tell a sync that keeps
+    // this paragraph from one that drops it. These are the load-bearing facts, so a future
+    // "re-pin the digest" sync that loses them fails here by name.
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("ctx.sapiom.vault.get");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "agent code cannot write the Vault",
+    );
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("ctx.sapiom.agents.launch");
+    // The routes are named by what they do and deferred to the sapiom-dev primer, never
+    // spelled with their REST prefix: this prompt is Agent Studio visible text and subject
+    // to scripts/agent-studio-terminology-check.mjs.
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("receipts REST routes");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("replay a receipt or a fire");
+    expect(DEFAULT_SYSTEM_PROMPT).not.toMatch(/workflows?/i);
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("webhooksEnabled");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("/hook/<path>");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("byte-exact");
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("60 s");
   });
 });
