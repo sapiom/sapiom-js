@@ -178,6 +178,19 @@ Things to know:
   ```
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
+- **Every pause has a deadline.** `timeoutMs` sets it; omitted, the engine applies
+  its default of 7 days (the capability resume-token TTL). A pause that receives no
+  signal by then is finalized as failed with `PauseTimeoutError`, so a lost result
+  surfaces as an error instead of a run that waits forever. Pass an explicit
+  `timeoutMs` when a human gate needs longer, or when the wait should give up sooner:
+
+  ```ts
+  return pauseUntilSignal({
+    signal: "demo.approval",
+    resumeStep: "finalize",
+    timeoutMs: 30 * 24 * 60 * 60 * 1000, // 30 days
+  });
+  ```
 
 ### Compatible capabilities
 
