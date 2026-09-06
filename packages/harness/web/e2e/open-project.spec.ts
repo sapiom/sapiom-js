@@ -155,20 +155,19 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
     await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
 
+    // D36: an empty project gets no create ROW of its own — its Agent Map row
+    // is the CTA. The row's `+` is a different control and is always there.
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
     await expect(
       group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
     ).toHaveCount(0);
-    await expect(
-      group.getByTestId("project-start-session-blank-slate"),
-    ).toHaveAttribute("aria-label", "Start a session in blank-slate");
 
-    // The map is a view, not an authorization gate. Both direct agent creation
-    // and project removal remain ordinary project-level actions, and both are
-    // now row actions rather than items behind a popover.
+    // New agent, scoped to this project, on the row itself (IA.md 219, D34a).
+    // A plain session is not a row verb: the tab strip owns it, and the
+    // project's own pane carries the Start (D34e, D35 item 6).
     await expect(
       page.getByTestId("project-create-agent-blank-slate"),
-    ).toBeVisible();
+    ).toHaveAttribute("aria-label", "Create an agent in blank-slate");
     await expect(page.getByTestId("project-remove-blank-slate")).toBeVisible();
     await page.keyboard.press("Escape");
 

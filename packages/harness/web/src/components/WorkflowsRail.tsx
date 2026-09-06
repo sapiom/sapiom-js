@@ -177,8 +177,6 @@ interface WorkflowsRailProps {
   onOpenProject: (root: string) => Promise<unknown>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  /** Starts a coding-agent session and owns its failure feedback. */
-  onStartProjectSession: (root: string, label: string) => Promise<void>;
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /**
@@ -445,7 +443,6 @@ export function WorkflowsRail({
   onOpenProject,
   launchDir,
   listDir,
-  onStartProjectSession,
   listHarnesses,
   onCreateAgent,
   onScaffoldInSession,
@@ -1378,33 +1375,12 @@ export function WorkflowsRail({
                             <Icon name="Waypoints" size={13} />
                           </button>
                         )}
-                      {/* START A SESSION HERE. This is the frequent project-row
-                          action and therefore stays one click away, immediately
-                          before the overflow menu. Its accessible name supplies
-                          the noun the glyph cannot: this starts a coding-agent
-                          SESSION at the project root. It does not scaffold a
-                          Sapiom agent. */}
-                      {!pending && (
-                        <button
-                          type="button"
-                          className="workspace-row-action"
-                          data-testid={`project-start-session-${project.label}`}
-                          aria-label={`Start a session in ${project.label}`}
-                          data-tooltip="Start a session here"
-                          onClick={() =>
-                            void onStartProjectSession(
-                              project.root,
-                              project.label,
-                            )
-                          }
-                        >
-                          <Icon name="Plus" size={13} />
-                        </button>
-                      )}
-                      {/* THE REST OF THE ROW'S VERBS, as hover actions rather
-                          than an overflow menu (D33). The destructive one is
-                          last and marked; legacy-only agent creation keeps its
-                          own glyph rather than sharing the session `+`. */}
+                      {/* THE ROW'S VERBS, as hover actions rather than an
+                          overflow menu (D33). The `+` is New agent, scoped to
+                          this project (IA.md 219, D34a); the destructive one is
+                          last and marked. A plain session is NOT here: it
+                          starts from the tab strip, or from the Start on the
+                          project's own pane (D34e, D35 item 6). */}
                       <ProjectRowActions
                         label={project.label}
                         create={
