@@ -1,8 +1,7 @@
 ---
-"@sapiom/harness": patch
-"@sapiom/harness-desktop": patch
+"@sapiom/harness": minor
 ---
 
-Support isolated coding-agent installs and bundled-runtime launches, including
-resume and private Agent Map initialization. Add optional adapter interpreter arguments/environment and export
-`createCodexAdapter`. Bound installer processes and verify packaged CLI launches.
+Add optional interpreter arguments and environment to coding-provider adapters
+and export `createCodexAdapter`. Preserve managed launch configuration across
+new sessions, resume, and private structured inference for both providers.

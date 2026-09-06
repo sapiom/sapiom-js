@@ -104,7 +104,7 @@ async function checkManagedAgent(): Promise<string> {
     const packageDir = path.join(prefix, modules, "@openai", "codex");
     mkdirSync(packageDir, { recursive: true });
     writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ bin: { codex: "cli.cjs" } }));
-    writeFileSync(path.join(packageDir, "cli.cjs"), "console.log(process.argv.includes('--version') ? '99.0.0' : 'managed-codex-ready');\n");
+    writeFileSync(path.join(packageDir, "cli.cjs"), "if (process.env.ELECTRON_RUN_AS_NODE) throw new Error('Host runtime flag leaked into managed CLI');\nconsole.log(process.argv.includes('--version') ? '99.0.0' : 'managed-codex-ready');\n");
     const command = await resolveAgentCommand(prefix, "codex", {
       binary: process.execPath, binaryArgs: [], binaryEnv: { ELECTRON_RUN_AS_NODE: "1" },
     });
