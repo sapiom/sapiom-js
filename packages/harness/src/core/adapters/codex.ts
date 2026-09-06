@@ -149,6 +149,9 @@ function hasBlockingPromptFragment(rendered: string): boolean {
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
   binary?: string;
+  /** Host-supplied interpreter/entry script for a managed CLI (e.g. Electron-as-Node). */
+  binaryArgs?: string[];
+  binaryEnv?: Record<string, string>;
   /** Overridable for tests. Defaults to the real home directory. */
   homeDir?: string;
 }
@@ -279,16 +282,22 @@ export class CodexAdapter implements HarnessAdapter {
    *  too and neither adapter needs a rehydration-specific code path. */
   readonly systemPromptDelivery = "launch-flag" as const;
   private readonly binary: string;
+  private readonly binaryArgs: string[];
+  private readonly binaryEnv: Record<string, string>;
   private readonly homeDir: string;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.binary = options.binary ?? "codex";
+    this.binaryArgs = options.binaryArgs ?? [];
+    this.binaryEnv = options.binaryEnv ?? {};
     this.homeDir = options.homeDir ?? homedir();
   }
 
   async doctor(): Promise<DoctorCheck[]> {
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
+      const { stdout } = await execFileAsync(this.binary, [...this.binaryArgs, "--version"], {
+        timeout: 5_000, windowsHide: true, env: { ...process.env, ...this.binaryEnv },
+      });
       return [{ name: "codex", ok: true, detail: stdout.trim() || "installed" }];
     } catch {
       return [
@@ -306,8 +315,8 @@ export class CodexAdapter implements HarnessAdapter {
   launchTask(opts: LaunchOpts): SpawnSpec {
     if (!opts.prompt || !opts.structuredInference) throw new Error("Codex background tasks require structured inference mode");
     return { command: process.execPath,
-      args: [unpackedPath(fileURLToPath(new URL("../codex-structured-inference.js", import.meta.url))), this.binary],
-      cwd: opts.cwd, env: { ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) },
+      args: [unpackedPath(fileURLToPath(new URL("../codex-structured-inference.js", import.meta.url))), this.binary, ...this.binaryArgs],
+      cwd: opts.cwd, env: { ...this.binaryEnv, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) },
       stdin: JSON.stringify({ prompt: opts.prompt, systemPrompt: opts.structuredInference.systemPrompt, schema: opts.structuredInference.schema }) };
   }
 
@@ -316,12 +325,12 @@ export class CodexAdapter implements HarnessAdapter {
     if (opts.initialPrompt) args.push("--", opts.initialPrompt);
     return {
       command: this.binary,
-      args,
+      args: [...this.binaryArgs, ...args],
       // Codex has no analog to Claude's CLAUDECODE nested-agent guard; no env
       // overrides are needed for a fresh launch.
-      env: opts.agentMapMcp
+      env: { ...this.binaryEnv, ...(opts.agentMapMcp
         ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
-        : {},
+        : {}) },
       cwd: opts.cwd,
     };
   }
@@ -329,10 +338,10 @@ export class CodexAdapter implements HarnessAdapter {
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec {
     return {
       command: this.binary,
-      args: ["resume", agentSessionId, ...buildConfigArgs(opts)],
-      env: opts.agentMapMcp
+      args: [...this.binaryArgs, "resume", agentSessionId, ...buildConfigArgs(opts)],
+      env: { ...this.binaryEnv, ...(opts.agentMapMcp
         ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
-        : {},
+        : {}) },
       cwd: opts.cwd,
     };
   }

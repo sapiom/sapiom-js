@@ -227,8 +227,8 @@
     "id": "agent-map-pane-icon-identifier",
     "path": "packages/harness/web/src/components/AgentMapPane.tsx",
     "pattern": "^Workflow$",
-    "occurrences": 2,
-    "reason": "The design-system Workflow icon identifier remains private in the neutral Agent Map loading and empty states."
+    "occurrences": 3,
+    "reason": "The design-system Workflow icon identifier remains private in the Agent Map loading, generating, and empty states."
   },
   {
     "id": "agent-map-canvas-icon-identifier",
