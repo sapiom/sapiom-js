@@ -170,8 +170,15 @@ export async function listSourceFilesWithObservations(
     }
     for (const entry of entries) {
       const candidate = path.join(dir, entry.name);
+      // Ignored dependency/build/metadata roots are outside owned source scope
+      // even when package managers or workspaces represent them as symlinks.
+      // Other links remain opaque below; never follow them to gather evidence.
+      if (
+        (entry.isDirectory() || entry.isSymbolicLink()) &&
+        SKIP_DIR_NAMES.has(entry.name)
+      )
+        continue;
       if (entry.isDirectory()) {
-        if (SKIP_DIR_NAMES.has(entry.name)) continue;
         if (depth >= maxDepth) {
           complete = false;
           continue;

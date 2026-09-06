@@ -277,6 +277,35 @@ describe("format-1 reset", () => {
 });
 
 describe("initialization eligibility and ownership", () => {
+  it("initializes an old empty container when dependencies are symlinked", async () => {
+    const f = await fixture();
+    const dependency = path.join(f.root, "external-dependency");
+    await fs.mkdir(dependency);
+    await fs.writeFile(
+      path.join(dependency, "index.ts"),
+      'const description = "EXTERNAL_SOURCE_MUST_NOT_ENTER_EVIDENCE";',
+    );
+    await fs.symlink(
+      dependency,
+      path.join(f.source, "node_modules"),
+      "junction",
+    );
+    await f.write(emptyLegacyContainer(projectId));
+    const c = f.create();
+    await c.schedule(projectId);
+    await finished(c);
+    expect(f.infer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        prompt: expect.not.stringContaining(
+          "EXTERNAL_SOURCE_MUST_NOT_ENTER_EVIDENCE",
+        ),
+      }),
+    );
+    expect(
+      (await f.store.readSnapshot(projectId)).proposal?.nodes,
+    ).toHaveLength(1);
+  });
+
   it.each(["missing", "current", "legacy"])(
     "publishes a complete initial map only once (%s container)",
     async (kind) => {

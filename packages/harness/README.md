@@ -203,6 +203,9 @@ resumes on restart; failed or interrupted work requires **Retry generation**.
 The final write rechecks ownership, project access, and absence under the map lock.
 A coding session that creates a map first wins; automatic output is discarded.
 New-project Plan Agents bootstrap shares this first-map ownership decision.
+Static inspection excludes dependency, build, and Studio metadata directories,
+including symlinks at those ignored boundaries. Other source links remain opaque
+and prevent generation from proceeding with incomplete evidence.
 
 The pass uses the project's latest available coding provider, otherwise the host
 default, and its configured default model. Authentication/execution failures do
