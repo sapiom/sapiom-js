@@ -49,6 +49,23 @@ const isLive = (session: ScopedSession): boolean => session.status !== "exited";
  * reading: until a session is bound, no group can claim it, and picking one
  * would be a guess printed as a fact.
  *
+ * THE ASYMMETRY RUNS THE OTHER WAY TOO, and is deliberate. A project row counts
+ * by containment alone (`liveSessionsForProject`), while a group counts by
+ * binding, so a session bound to an agent under a project but rooted OUTSIDE it
+ * lights the group header and leaves the project row dark: a child marked live
+ * inside a parent that is not. `POST /api/agents/move` is the way to produce it,
+ * by moving an agent out from under a running session.
+ *
+ * It is left standing rather than fixed, because both halves are already right
+ * on their own terms and the alternative is worse. A group is a label over
+ * agents with nothing on disk behind it, so binding is the only membership it
+ * has; this is the same rule `liveSessionsForFocus` applies to one agent, and
+ * that agent's own tab strip lists the very same session. Intersecting the
+ * group rule with the project's containment would make a group mean something
+ * different from the agent rows inside it, and adding containment to the
+ * project rule is the second membership answer SAP-3200's first review round
+ * removed. The mark is briefly odd; the rules stay singular.
+ *
  * `samePath`, not `===`, for the reason that function gives: the server
  * `path.resolve()`s what it stores while the rail holds whatever the registry
  * reported, so a trailing separator or a `C:/…` spelling would hide a session
