@@ -41,14 +41,16 @@ session lifecycle) to improve Sapiom. Opt out any time; `--no-telemetry`
 disables collection entirely. Events are also written locally to
 `~/.sapiom/harness/events.ndjson` for your own inspection.
 
-Project bootstrap adds content-free `project_bootstrap.*` and
-`project_agent.identity_*` lifecycle events. They contain bounded project,
-session, attempt, retry, queue-depth, and error-code fields. Prompts, assistant
-text, local paths, and provider error text remain local. The same telemetry
-opt-in controls whether lifecycle events leave the machine. Project hook
-projections reduce session-start source to a fixed enum, model identity to a
-presence boolean, and usage to allowlisted, clamped token counters; arbitrary
-provider strings and usage fields remain local.
+Project bootstrap and identity migration add content-free `project_bootstrap.*`
+and `project_agent.identity_*` lifecycle events. Navigation distinguishes
+`agent_map.entered` from `session.switched`. These events contain bounded
+project/session/attempt identifiers, retry ordinals, queue depths, outcomes, and
+error codes only. Prompts, assistant text, source text, local paths, connector
+payloads, secrets, and raw provider errors remain local. The same telemetry
+opt-in controls whether lifecycle events leave the machine. Hook projections
+reduce session-start source to a fixed enum, model identity to a presence
+boolean, and usage to allowlisted, clamped token counters; arbitrary provider
+strings and usage fields remain local.
 
 ## Outbound requests
 
@@ -57,9 +59,10 @@ Agent Studio makes one Sapiom request of its own, separate from telemetry
 from what its other components do on their own (the app's product analytics, and
 `npx @sapiom/mcp@latest` fetching and running the local MCP server each session):
 
-Project bootstrap adds no separate network endpoint. Its state, durable input
-FIFO, and recovery stay inside the local server. The initial map seed uses the
-coding agent's ordinary provider traffic and existing project tools.
+Project bootstrap makes no additional network request. Its attempt
+coordination, durable input ordering, and lifecycle persistence stay inside the
+local server. Existing outbound surfaces remain the system-prompt fetch below,
+the coding agent's ordinary provider traffic, and opt-in telemetry.
 
 - **System prompt, on every session start** — an unauthenticated
   `GET https://api.sapiom.ai/v1/harness/system-prompt`, so the Studio conventions
@@ -83,52 +86,72 @@ Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
 
-### Project sessions and Agent Map navigation
+### Project sessions and Agent Map bootstrap
 
-Every coding-agent session in a project uses the same writable
-`ProjectAgentSession { projectId, userId, sessionId }` identity and common
-project instructions. Map access comes from that trusted identity. Roles and
-agent assignments do not grant a separate kind of session or capability.
+Every session whose working directory resolves to a Studio project is an
+ordinary writable coding session with the same server-derived
+`{ projectId, userId, sessionId }` principal, project-agent prompt appendix, and
+Agent Map tools. Assignment or bootstrap metadata is context only and cannot
+change the prompt profile, tools, filesystem policy, or implementation
+authority.
 
-Click the project name to open its shared Agent Map without starting a coding
-agent. Conversation tabs identify exact sessions, and selecting a session
-restores its own terminal and Canvas. The map selection and agent Steps
-view remain independent of the selected conversation. There is no pinned
-planning-session tab; existing session titles and conversations are preserved.
+Clicking a project name opens its durable Agent Map without creating, resuming,
+focusing, or prompting a session. Every tab represents one real session ID and
+opens that session's ordinary conversation and Canvas/Steps experience. A new
+project's first ordinary session is initially titled **Plan Agents**; the title
+does not confer a role and can be renamed like any other session.
 
-The authenticated local API resolves project identity from durable project
-roots. New sessions, resume, and transcript adoption use the generic session
-routes. Resuming a project session revalidates its current signed-in owner and
-active root binding before launching a process. Nested coding-agent directories
-resolve to their containing project instead of inventing duplicate roots.
+When a new project gains its first active root binding, Studio durably schedules
+one evidence-first map bootstrap for that first session. The model reads the
+current map and uses the same structured tools available to every project
+session. It only proposes an initial map while the durable map remains
+meaningfully empty. Attempt IDs, retry ordinals, readiness and model-turn
+timeouts, terminal outcomes, and input-delivery acknowledgements survive
+restart. Real user input has priority: an initial prompt prevents bootstrap
+from starting, and later input preempts a pending or still-staged attempt. If
+the bootstrap Enter may already have crossed the PTY boundary, the user input
+is durably accepted and held until a correlated completion or process restart
+proves that turn cannot overlap; prompts are never concatenated or blindly
+interleaved. Opening the map never schedules bootstrap.
 
-**Migration note (breaking):** `HarnessSession.agentMapIdentity` now contains
-only project, user, and session IDs. Stop branching on its former `role` or
-`assignment` fields. Valid persisted legacy metadata is normalized while
-preserving the session/provider IDs, cwd, title, transcript, and Canvas;
-conflicting or malformed authority fails closed. Optional `projectBootstrap`
-is lifecycle metadata, not an authority or session type. On upgrade, the server migrates legacy startup queues into the durable bootstrap
-FIFO. The old planner-session create, message, and retry routes are removed.
-Use the ordinary `/api/sessions` create, resume, and input routes.
+Bootstrap state lives under
+`<state-root>/agent-map/project-bootstrap/`. Valid pre-upgrade session metadata
+and queue files are read and normalized without changing the session ID,
+provider binding, working directory, title, transcript, or Canvas. Malformed or
+ambiguous legacy identity is retained and rejected safely rather than deleting
+or duplicating the session. Retired record strings live only in dedicated,
+tested migration decoders. Live clients use the generic session routes.
 
-When Studio opens a new project, it schedules one automatic first conversation,
-named **Plan Agents**, to seed an evidence-supported Agent Map. The catalog
-outbox and first-session claim keep this lifecycle recoverable across restart.
-The complete coordinator handles readiness, interrupted delivery, retries,
-user-input preemption, and shutdown before another turn may be sent. Existing
-projects are not enrolled merely by reading their map.
+#### Embedder migration
 
-`POST /api/sessions` accepts the content-free
-`initialUserInputPending: true` hint when the caller owns the first prompt.
-Client-authored authority and other unknown fields are rejected. The browser
-still submits that prompt to the returned exact session after readiness.
+The public `HarnessSession.agentMapIdentity` is now the exported
+`ProjectAgentSession { projectId, userId, sessionId }`. Embedders must stop
+reading the removed `role` and `assignment` fields; those fields no longer
+describe live authority. `AgentMapToolEvent.role` is also removed; consumers use
+neutral project, session, tool, and outcome fields. Persisted pre-upgrade
+project-session data is migration input only.
+Read the optional `projectBootstrap` field when displaying bootstrap lifecycle
+state. If an embedder already owns the first prompt for a session, set
+`initialUserInputPending: true` in that session's `CreateSessionRequest`; this
+content-free flag makes project bootstrap yield before launch and never changes
+the session's authority or tools.
 
-The browser/host token gates `/api` routes and is never injected into a
-coding-agent PTY. Each PTY receives a separate `/ingest` capability bound to its
-session ID. Vendor resume pointers remain pinned to one harness session;
-current owners and durable historical aliases cannot be adopted into another
-session. Duplicate persisted provider IDs are repaired conservatively during
-boot, preserving the first owner and clearing the later duplicate pointer.
+To deliver the first task as part of session creation, send `initialPrompt`
+with optional `initialAttachments` and `scaffold: { template }` in
+`CreateSessionRequest`. Attachments accept `{ kind: "path", path }` references or inline
+`{ kind: "inline", filename, dataUrl }` data. Studio prepares the scaffold and
+attachments before launching the CLI with that first task. Adapter authors
+receive it as `LaunchOpts.initialPrompt` on fresh launches; resume does not
+replay it. Embedders that configure their own HTTP body parser can use the
+exported `CREATE_SESSION_JSON_LIMIT_BYTES` for this route. Session creation
+and attachment uploads each allow 30 requests per minute in independent
+buckets.
+
+The browser/host token gates `/api` routes and is never injected into a coding
+agent PTY. Each PTY instead receives session-bound ingest and Agent Map
+capabilities. Project scope is re-derived from trusted server state before every
+launch or resume; capabilities rotate on resume, revoke on exit or principal
+change, expire when inactive, and fail closed outside their project.
 
 ### Project contract helpers
 
@@ -138,6 +161,13 @@ For example, use `parseProjectBuildPlanVersion` to validate a plan record and
 `computeBuildPlanSemanticDigest` to compare its authored meaning independently
 of timestamps or attribution. These data contracts do not require a live session
 or an active MCP tool. Store and tool activation are separate integrations.
+
+For offline prompt composition, `PROJECT_AGENT_PROMPT_APPENDIX` provides the
+common Studio project guidance and `projectAgentPromptAppendix(focusedContext?)`
+appends an optional already-rendered `FocusedSessionContextProjection`. These
+supported exports let an embedder reuse Studio's instructions without starting
+a server. Use the returned string as prompt content; its wording evolves with
+Studio guidance.
 
 `BuildPlanId`, `ArchitectureSourceRef`, `AgentMapRevisionId`,
 `AgentBriefVersionRecord`, and `computeArchitectureGraphDigest` are supported
@@ -165,10 +195,14 @@ Every trusted project session receives the same nine project-wide tools:
   shared state or allocating permanent IDs.
 - `agent_map_propose` atomically and idempotently applies one validated batch
   to the shared Proposed map.
-- `build_plan_read` reads the current plan or an exact historical version.
-- `build_plan_validate` previews a plan replacement without writing it.
-- `build_plan_apply` commits an idempotent plan replacement.
-- `build_plan_rebase` reconciles the current plan against an exact map version.
+- `build_plan_read` reads the current plan or one exact immutable historical
+  version.
+- `build_plan_validate` previews the same strict request accepted by apply
+  without writing state or consuming IDs.
+- `build_plan_apply` atomically appends an idempotent plan version using exact
+  expected map and plan references.
+- `build_plan_rebase` moves the current plan between exact map versions using
+  explicit remap or removal resolutions.
 - `build_plan_brief_refresh` refreshes canonical or focused context from exact sources.
 - `project_subsession_delegate` creates or reuses writable child sessions,
   refreshes focused context, releases owned children, or reclaims dormant bindings.
@@ -177,6 +211,12 @@ Delegation accepts up to 16 children per batch, four nesting levels and 64 activ
 or explicitly re-referenced coordinator-owned sessions per project. Readiness
 waits share a 30-second batch budget; partial `readiness_timeout` results can be
 retried explicitly with the same request key and durable session identities.
+
+The map and plan use append-only immutable histories with optimistic
+concurrency. Roles, assignment completeness, proposal state, and focused brief
+availability never determine whether a session may use these tools or write
+code. See [`docs/shared-build-plan.md`](docs/shared-build-plan.md) for the
+version, replay, rebase, and brief-storage contracts.
 
 HTTP contracts that need more than a type to use are written up under `docs/`:
 

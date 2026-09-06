@@ -388,6 +388,7 @@ function buildInteractiveConfigArgs(opts: LaunchOpts): string[] {
 export const CLAUDE_BLOCKING_PROMPT_PATTERNS: readonly RegExp[] = [
   // First-run / new-directory trust dialog.
   /do\s+you\s+trust\s+the\s+files\s+in\s+this\s+(folder|directory)/i,
+  /quick\s*safety\s*check|yes,?\s*i\s*trust\s*this\s*folder/i,
   // First-run theme picker.
   /choose\s+the\s+text\s+style/i,
   // Signed-out login flow.
@@ -475,6 +476,9 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     if (opts.systemPromptFile) {
       args.push("--append-system-prompt", readPromptFile(opts.systemPromptFile));
     }
+    // A positional initial task is consumed by Claude after onboarding/trust.
+    // Do not paste it into the PTY or interpret leading dashes as CLI options.
+    if (opts.initialPrompt) args.push("--", opts.initialPrompt);
     return {
       command: this.binary,
       args,

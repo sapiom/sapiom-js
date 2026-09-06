@@ -13,6 +13,7 @@
     "useDefineForClassFields": true,
     "types": ["vite/client", "node"],
     "paths": {
+      "@shared/initial-prompt": ["../src/shared/initial-prompt.ts"],
       "@shared/types": ["../src/shared/types.ts"],
       "@shared/system-graph": ["../src/shared/system-graph.ts"],
       "@shared/agent-map": ["../src/shared/agent-map.ts"],

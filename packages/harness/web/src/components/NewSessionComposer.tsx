@@ -7,7 +7,7 @@ import {
   type TemplateListResponse,
 } from "@shared/types";
 
-import type { FsListResponse } from "../lib/api";
+import { errorMessage, type FsListResponse } from "../lib/api";
 import {
   FALLBACK_HARNESSES,
   harnessLabel,
@@ -225,8 +225,7 @@ export function NewSessionComposer({
           setSubmitting(false);
           textareaRef.current?.focus();
           onAttachmentError(
-            (err as Error).message ||
-              "Couldn't start a session with those files.",
+            errorMessage(err, "Couldn't start the coding session."),
           );
         },
       );

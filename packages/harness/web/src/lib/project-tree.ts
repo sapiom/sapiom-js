@@ -1,6 +1,25 @@
 import type { WorkflowInfo } from "@shared/types";
 import type { RailSort } from "../../../src/shared/project-roots.js";
 
+type ProjectScope = { cwd: string; projectId?: string };
+
+/** Same membership rule for the Project axis, Group axis, and outside bucket. */
+export function agentBelongsToProjectRoot(
+  workflow: WorkflowInfo,
+  root: string,
+  scopes: readonly ProjectScope[] = [],
+): boolean {
+  const projectId = scopes.find((scope) =>
+    samePath(scope.cwd, root),
+  )?.projectId;
+  if (projectId && workflow.studioBindings?.length) {
+    return workflow.studioBindings.some(
+      (binding) => binding.projectId === projectId,
+    );
+  }
+  return isWithinDir(root, workflow.path);
+}
+
 import { displayAgentName } from "./agent-name";
 import {
   basenameOf,
@@ -378,13 +397,19 @@ export function buildProjectTree(
   workflows: WorkflowInfo[],
   roots: readonly string[],
   sort: RailSort = "recent",
+  scopes: readonly ProjectScope[] = [],
 ): ProjectNode[] {
   const label = projectLabeller(roots);
   return roots.map((root) => {
     const trieRoot = newTrieNode(basenameOf(root), root);
+    const associated: WorkflowInfo[] = [];
 
     for (const workflow of workflows) {
-      if (!isUnder(workflow.path, root)) continue;
+      if (!agentBelongsToProjectRoot(workflow, root, scopes)) continue;
+      if (!isUnder(workflow.path, root)) {
+        associated.push(workflow);
+        continue;
+      }
       const segments = segmentsBetween(root, workflow.path);
       if (segments.length === 0) {
         // The root folder is itself an agent project.
@@ -410,7 +435,9 @@ export function buildProjectTree(
       root,
       label: label(root),
       dirs,
-      agents,
+      agents: [...agents, ...unrootedAgents(associated, [], sort)].sort(
+        agentOrder(sort),
+      ),
       rootAgent: trieRoot.agent
         ? { workflow: trieRoot.agent, prefix: "", prefixFull: "" }
         : null,
@@ -455,7 +482,10 @@ export function agentPrefixes(
   root: string,
 ): Map<string, AgentNode> {
   const chains = workflows.map((workflow) =>
-    segmentsBetween(root, workflow.path).slice(0, -1),
+    (isUnder(workflow.path, root)
+      ? segmentsBetween(root, workflow.path)
+      : canonical(workflow.path).split("/").filter(Boolean)
+    ).slice(0, -1),
   );
   // COMPARE WHAT THE ROW PRINTS, not the registry's raw name. The row renders
   // `displayAgentName`, which strips an npm scope and a leading `example-` — so
@@ -492,9 +522,11 @@ export function unrootedAgents(
   workflows: WorkflowInfo[],
   roots: readonly string[],
   sort: RailSort = "recent",
+  scopes: readonly ProjectScope[] = [],
 ): AgentNode[] {
   const outside = workflows.filter(
-    (workflow) => !roots.some((root) => isUnder(workflow.path, root)),
+    (workflow) =>
+      !roots.some((root) => agentBelongsToProjectRoot(workflow, root, scopes)),
   );
   // The chain ABOVE each agent's own directory, canonical, deepest segment
   // last. There is no project root to measure from here, so the chain is the

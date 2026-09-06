@@ -6,6 +6,47 @@ map and build-plan MCP tools. Trusted `{ projectId, userId, sessionId }` scope
 comes only from the private session capability; tool input cannot select or
 override it.
 
+## Coding-agent guidance and discovery
+
+Agent delivery remains the priority: scaffold/check/local testing and runtime
+capability guidance are not replaced by project coordination. The shared
+`profiles/project-agent.ts` appendix teaches all nine project tools to every
+ordinary writable project session, including focused children. MCP descriptions
+and schema field descriptions carry the detailed request/reference contracts so
+the startup prompt need not reproduce full schemas.
+
+The Agent Map is distinct from the automatic per-agent Canvas. During
+implementation, establish a real initial map once boundaries are clear and keep
+meaningful agents, contracts, artifacts, and data flow current. Saving a new
+`summary.md`, for example, warrants an artifact and writes/reads relationships
+even without adding an agent. Read, validate, propose, and verify the saved map
+before claiming it is current; validation alone does not persist anything.
+Read-only requests still authorize no project-state mutation.
+
+Use a build plan when coordination needs assignments, sequencing, or acceptance
+criteria, not as a prerequisite for a small edit. Obtain exact references from
+`build_plan_read({kind: "current"})`, not the compatibility map snapshot. Plan
+tool input references omit `projectId`; delegation focus references include it.
+After a map-version change, rebase an existing plan before applying plan edits.
+Canonical brief refresh is already attempted after apply/rebase and can be
+retried independently of the accepted plan.
+
+Delegated sessions are writable execution contexts sharing the parent's cwd,
+not automatically isolated worktrees. Specify disjoint ownership and written
+deliverables. A ready session or acknowledged kickoff is not proof the task is
+finished; inspect/test its deliverables. Creating a map node, plan, or brief
+does not automatically delegate work.
+
+Startup materialization upgrades only the exact known legacy base-prompt
+revision pinned by `profiles/fixtures/legacy-system-prompt.md`; unknown/custom
+remote prompts remain untouched. This prevents the old two-MCP, sample-project,
+and stop-for-an-invitation orientation from returning while a backend still
+serves that revision. The common project appendix also states current
+orientation precedence. Keep the current fallback digest and backend served
+copy synchronized when publishing; the fixture's historical digest must not
+move with the current prompt pin. Local delivery tests do not prove a backend
+deployment or that a model consistently follows the instructions.
+
 ## Digests and exact references
 
 `GraphContentDigest` identifies canonical graph semantics without project,
@@ -173,8 +214,16 @@ The budget bounds readiness waiting; in-flight durable writes and process creati
 finish before their result is reported. Trusted tests or hosts can lower the budget
 with `batchWaitTimeoutMs`, but cannot increase it beyond 30 seconds.
 
-The coordinator waits for canonical adapter readiness and exact transcript
-identity, then uses fenced spawn and delivery epochs to submit one kickoff.
+The coordinator waits for canonical adapter readiness and uses fenced spawn and
+delivery epochs to submit one kickoff. Fresh Codex produces its rollout only after
+that first turn, so an exact privately owned Codex runtime with a pending first
+kickoff can submit before transcript discovery. The host prefixes that prompt
+with a non-secret runtime digest marker; its rollout broker requires the same
+marker before attributing the transcript. Ordinary pending runtimes cannot claim
+marked child rollouts, and metadata-only files remain unassigned until the real
+first user turn is available. Existing or ambiguous identities retain the usual
+gates. A submitted kickoff restarts collection if an idle runtime outlived the
+initial discovery window; it never starts another kickoff.
 Delivery states distinguish pending, claimed, submitted without acknowledgement,
 acknowledged, and uncertain. An uncertain delivery is never resent blindly.
 Exact focused references are checked before delivery, and stale context returns

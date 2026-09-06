@@ -192,8 +192,8 @@
     "id": "server-workflow-change-event",
     "path": "packages/harness/src/server/index.ts",
     "pattern": "^workflows\\.changed$",
-    "occurrences": 1,
-    "reason": "The internal WebSocket event name remains stable for existing clients; accepted agent discovery publishes it from the coordinator."
+    "occurrences": 2,
+    "reason": "The internal WebSocket event name remains stable for existing clients; accepted discovery and created-agent registration publish it."
   },
   {
     "id": "rest-session-binding-route",
@@ -578,6 +578,14 @@
     "reason": "Migration fixture proves a durable pre-upgrade input FIFO is normalized without losing input or replaying bootstrap."
   },
   {
+    "id": "legacy-project-bootstrap-store-fixture",
+    "rule": "unified-agent-model",
+    "path": "packages/harness/src/core/project-bootstrap-store.test.ts",
+    "pattern": "map-planner",
+    "occurrences": 1,
+    "reason": "Migration fixture proves the stored bootstrap queue normalizes its pre-upgrade principal without losing accepted input."
+  },
+  {
     "id": "legacy-session-migration-fixtures",
     "rule": "unified-agent-model",
     "path": "packages/harness/src/core/session-manager.test.ts",
@@ -600,13 +608,5 @@
     "pattern": "plannerOrigin",
     "occurrences": 1,
     "reason": "Released-event fixture proves the private infrastructure bootstrap prompt never becomes a human transcript turn after upgrade."
-  },
-  {
-    "id": "legacy-project-bootstrap-store-fixture",
-    "rule": "unified-agent-model",
-    "path": "packages/harness/src/core/project-bootstrap-store.test.ts",
-    "pattern": "map-planner",
-    "occurrences": 1,
-    "reason": "Extracted persistence fixture verifies the released bootstrap queue migrates without replacing its project identity."
   }
 ]

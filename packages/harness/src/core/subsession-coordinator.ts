@@ -76,6 +76,8 @@ export class SubsessionCoordinatorError extends Error {
   }
 }
 
+import { codexRuntimeMarker } from "./collector/codex-runtime-marker.js";
+
 export interface SubsessionCoordinatorOptions {
   store: SubsessionCoordinatorStore;
   sessionManager: SessionManager;
@@ -1030,7 +1032,16 @@ export class SubsessionCoordinator {
     if (binding.sessionState === "awaiting-ready") {
       const ready = await this.waitForReady(binding.sessionId, runtimeToken, waitDeadline);
       if (!ready) throw new SessionNotReadyError(binding.sessionId);
-      await this.waitForAdapterIdentity(binding.sessionId, runtimeToken, waitDeadline);
+      const session = this.options.sessionManager.get(binding.sessionId);
+      const identityState = this.options.sessionManager.getAdapterIdentityState(binding.sessionId, runtimeToken);
+      // Fresh Codex creates its rollout only after the first turn. The exact
+      // private binding and runtime own this PTY; its marked first prompt lets
+      // the broker prove transcript ownership after submission.
+      const firstOwnedCodexTurn = binding.harness === "codex" && session?.agentSessionId === null &&
+        binding.contextEpoch === 1 && currentDelivery(binding).state === "pending" &&
+        identityState !== "ambiguous" && binding.runtime?.runtimeToken === runtimeToken;
+      if (!firstOwnedCodexTurn)
+        await this.waitForAdapterIdentity(binding.sessionId, runtimeToken, waitDeadline);
       binding = await this.options.store.transitionSession(
         identity,
         binding.bindingId,
@@ -1214,6 +1225,8 @@ export class SubsessionCoordinator {
       ].join("\n\n");
     }
     return [
+      ...(binding.harness === "codex" && binding.runtime
+        ? [codexRuntimeMarker(binding.runtime.runtimeToken)] : []),
       "You are an ordinary writable project session delegated by another project session.",
       `Outcome: ${binding.outcome}`,
       ...(binding.kickoffContext

@@ -27,6 +27,8 @@ describe("ClaudeCodeAdapter", () => {
         adapter.detectBlockingPrompt("\x1b[1mDo you trust the files in this folder?\x1b[0m"),
       ).toBe(true);
       expect(adapter.detectBlockingPrompt("Do you trust the files in this directory?")).toBe(true);
+      expect(adapter.detectBlockingPrompt("Quick safety check: Is this a project you created or one you trust?")).toBe(true);
+      expect(adapter.detectBlockingPrompt("Yes, I trust this folder")).toBe(true);
       expect(adapter.detectBlockingPrompt("Choose the text style that looks best")).toBe(true);
       expect(adapter.detectBlockingPrompt("Select login method:")).toBe(true);
       expect(adapter.detectBlockingPrompt("> welcome, composer is ready")).toBe(false);
@@ -66,6 +68,17 @@ describe("ClaudeCodeAdapter", () => {
   });
 
   describe("launch/resume", () => {
+    it("hands the initial user task to the CLI once, separately from startup instructions", () => {
+      const adapter = new ClaudeCodeAdapter({ binary: "fake-claude" });
+      const opts = {
+        harnessSessionId: "first-task",
+        cwd: "/tmp/proj",
+        initialPrompt: "--help\nBuild my ticket triage agent",
+      };
+      expect(adapter.launch(opts).args.slice(-2)).toEqual(["--", opts.initialPrompt]);
+      expect(adapter.resume("native-id", opts).args).not.toContain(opts.initialPrompt);
+    });
+
     it("builds a launch SpawnSpec with settings/mcp-config/system-prompt flags and unsets CLAUDECODE", async () => {
       const promptDir = await mkdtemp(join(tmpdir(), "harness-claude-test-"));
       const promptFile = join(promptDir, "prompt.txt");

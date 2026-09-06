@@ -104,6 +104,11 @@ export const MAX_INLINE_ATTACHMENTS_TOTAL_BYTES = 50 * 1024 * 1024;
  */
 export const JSON_BODY_LIMIT_BYTES = 15 * 1024 * 1024;
 
+/** First-turn uploads arrive together, bounded by the composer's 50 MiB cap.
+ * Other endpoints keep the smaller JSON limit. */
+export const CREATE_SESSION_JSON_LIMIT_BYTES =
+  Math.ceil(MAX_INLINE_ATTACHMENTS_TOTAL_BYTES * 4 / 3) + 1024 * 1024;
+
 /**
  * Workspace-state convention: Agent Studio mirrors this session's binding,
  * the full agent registry, and its own identity here, relative to the
@@ -214,10 +219,10 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
+  /** Durable lifecycle state for a new project's one automatic map seed. */
+  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
   agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
-  /** Context for the existing project startup; separate from authority. */
-  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
 }
 
 /**
@@ -326,6 +331,9 @@ export interface LaunchOpts {
    * --plugin-dir (e.g. codex) silently ignore this field.
    */
   pluginDir?: string;
+  /** User-authored first turn, passed to the interactive CLI at fresh launch.
+   * Never persisted in session metadata or replayed by resume. */
+  initialPrompt?: string;
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
@@ -1102,13 +1110,26 @@ export interface AgentScaffoldResponse {
 export type UiTheme = "light" | "dark";
 
 export interface CreateSessionRequest {
-  /** An explicit UI action already owns the first user input. Bootstrap consumes
-   * this hint when activated; it never contributes session authority. */
-  initialUserInputPending?: boolean;
   cwd: string;
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+  /** First user turn. The CLI owns delivery after its trust/login screens. */
+  initialPrompt?: string;
+  /** Files to materialize before spawning, in the user's selected order. */
+  initialAttachments?: Array<
+    | { kind: "path"; path: string }
+    | ({ kind: "inline" } & AttachFileRequest)
+  >;
+  /** Create a new project at cwd using the same guarded scaffold as agent +.
+   * Omitted for sessions in existing projects. */
+  scaffold?: { template: string };
+  /**
+   * Content-free lifecycle hint: the UI already owns a real first input that
+   * will be delivered after readiness/attachments. A new-project bootstrap
+   * yields to that input instead of racing it. This never affects authority.
+   */
+  initialUserInputPending?: boolean;
   /**
    * Portable continue: seed this fresh session with a reconstruction of a
    * prior one instead of asking the vendor to reattach. Accepts either a
@@ -1183,6 +1204,20 @@ export interface InjectInputRequest {
    */
   requestId?: string;
 }
+
+export interface InjectInputResponse {
+  ok: true;
+  /** Present only when the durable bootstrap FIFO handled this request. */
+  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+}
+
+/** Internal server boundary shared by the canonical route and rolling alias. */
+export type SessionInputSubmissionResult =
+  | { ok: false }
+  | {
+      ok: true;
+      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+    };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
  *  must be a path already known to the workflow registry (scan/connect). */
@@ -1841,16 +1876,3 @@ export interface StudioRailLaunchEdge {
 export interface StudioRailLaunchEdgesResponse {
   edges: StudioRailLaunchEdge[];
 }
-
-export interface InjectInputResponse {
-  ok: true;
-  /** Present only when the durable bootstrap FIFO handled this request. */
-  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
-}
-
-export type SessionInputSubmissionResult =
-  | { ok: false }
-  | {
-      ok: true;
-      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
-    };

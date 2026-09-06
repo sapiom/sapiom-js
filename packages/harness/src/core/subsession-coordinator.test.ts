@@ -185,6 +185,7 @@ describe("SubsessionCoordinator", () => {
     storeOptions: NonNullable<
       ConstructorParameters<typeof SubsessionCoordinatorStore>[1]
     > = {},
+    harness: "claude-code" | "codex" = "claude-code",
   ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "subsession-service-"));
     roots.push(root);
@@ -198,10 +199,10 @@ describe("SubsessionCoordinator", () => {
     const closeStore: { current?: SubsessionCoordinatorStore } = {};
     const manager = new SessionManager({
       adapters: {
-        "claude-code": adapter(
+        [harness]: { ...adapter(
           resumable,
           childIdentityState ? "transcript-tail" : "hooks",
-        ),
+        ), id: harness },
       },
       ingestUrl: "http://127.0.0.1:4100/ingest",
       ingestCredentials: new IngestCredentialRegistry(),
@@ -220,7 +221,7 @@ describe("SubsessionCoordinator", () => {
     managers.push(manager);
     await manager.init();
     await manager.create(
-      { cwd: root, harness: "claude-code" },
+      { cwd: root, harness },
       {
         agentMapIdentity: (sessionId) => ({ ...identity, sessionId }),
       },
@@ -465,6 +466,27 @@ describe("SubsessionCoordinator", () => {
     });
     expect(manager.getSubsessionBinding(childId)).toBeNull();
     expect(writeSubsessionBindingRegistry).toHaveBeenCalledTimes(5);
+  });
+
+  it("submits a fresh owned Codex kickoff before its first rollout exists", async () => {
+    const { manager, caller, coordinator, spawned, unsubscribe } = await fixture(false, "ready", {}, {}, "codex");
+    unsubscribe();
+    const stop = manager.onStatusChange((session, context) => {
+      if (session.id !== caller.sessionId && session.status === "running" && !session.ready && context.runtimeEpoch)
+        manager.setReady(session.id, context.runtimeEpoch);
+    });
+    try {
+      const first = await coordinator.execute(caller, request);
+      expect(first.results[0]).toMatchObject({ outcome: "created", sessionState: "ready", kickoffState: "submitted-unacknowledged" });
+      const childId = first.results[0]!.sessionId!;
+      expect(manager.get(childId)?.agentSessionId).toBeNull();
+      const writes = spawned[1]!.writes.join("");
+      expect(writes).toMatch(/<sapiom-codex-runtime ref="sha256:[a-f0-9]{64}" \/>/u);
+      expect(writes).toContain("sapiom-project-delegation");
+      await coordinator.execute(caller, request);
+      expect(spawned).toHaveLength(2);
+      expect(spawned[1]!.writes.join("")).toBe(writes);
+    } finally { stop(); }
   });
 
   it("bounds a not-ready batch and resumes the same durable children only on an explicit retry", async () => {

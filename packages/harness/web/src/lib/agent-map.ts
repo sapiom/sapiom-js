@@ -12,6 +12,7 @@ import {
   parseMapChangeProposal,
 } from "@shared/agent-map-codec";
 import type { WorkspaceScopeSummary } from "@shared/system-graph";
+import type { WorkflowInfo } from "@shared/types";
 import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
 
 import { samePath } from "./paths";
@@ -346,4 +347,45 @@ export function mostSpecificStudioScope(
     .sort((left, right) =>
       left.workspaceKey.localeCompare(right.workspaceKey),
     )[0]!;
+}
+
+/** An agent's server-issued membership can point outside its project's root. */
+export function studioScopeForAgent(
+  workflow: Pick<WorkflowInfo, "path" | "studioBindings">,
+  scopes: readonly WorkspaceScopeSummary[],
+  projects: readonly StudioProjectSummary[],
+  preferredProjectId?: string | null,
+): (WorkspaceScopeSummary & { projectId: string }) | null {
+  const bindings = workflow.studioBindings ?? [];
+  if (bindings.length === 0)
+    return preferredProjectId
+      ? null
+      : mostSpecificStudioScope(workflow.path, scopes, projects);
+  const eligible = projects.filter(
+    (project) =>
+      (!preferredProjectId || project.projectId === preferredProjectId) &&
+      bindings.some((binding) => binding.projectId === project.projectId),
+  );
+  const eligibleIds = new Set(eligible.map((project) => project.projectId));
+  const candidates = scopes.filter(
+    (scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+      Boolean(scope.projectId && eligibleIds.has(scope.projectId)),
+  );
+  const containing = mostSpecificStudioScope(
+    workflow.path,
+    candidates,
+    eligible,
+  );
+  if (containing) return containing;
+  // No path evidence: an explicit single project is enough, but ambiguous
+  // membership must not silently select a different conversation.
+  if (new Set(candidates.map((scope) => scope.projectId)).size !== 1)
+    return null;
+  return (
+    candidates.sort(
+      (a, b) =>
+        a.cwd.localeCompare(b.cwd) ||
+        a.workspaceKey.localeCompare(b.workspaceKey),
+    )[0] ?? null
+  );
 }

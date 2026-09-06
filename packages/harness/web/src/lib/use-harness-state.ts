@@ -707,6 +707,9 @@ export function useHarnessState(): HarnessStateHook {
   const switchSeqRef = useRef(0);
   const selectSession = useCallback((id: string | null): void => {
     switchSeqRef.current += 1;
+    // Persist at explicit selection, not from an effect: initial hydration's
+    // null must never overwrite the conversation being restored.
+    saveUiPrefs({ activeSessionId: id });
     setActiveSessionId(id);
   }, []);
 
@@ -1148,10 +1151,13 @@ export function useHarnessState(): HarnessStateHook {
         setSettings(harnessSettings);
         setErrorKind(null);
         if (appState.tasks) setTasks(appState.tasks);
-        const running = appState.sessions.find(
-          (session) => session.status !== "exited",
-        );
-        if (running) setActiveSessionId(running.id);
+        const savedSessionId = loadUiPrefs().activeSessionId;
+        const selected =
+          appState.sessions.find((session) => session.id === savedSessionId) ??
+          appState.sessions.find((session) => session.status !== "exited");
+        // This is display hydration only. An exited record stays exited and
+        // a stale preference keeps the existing live-session fallback.
+        if (selected) setActiveSessionId(selected.id);
         if (workflows[0]) setSelectedWorkflowPath(workflows[0].path);
       })
       .catch((err: unknown) => {
@@ -1941,6 +1947,10 @@ export function useHarnessState(): HarnessStateHook {
       const ending = new Set(plan.endSessionIds);
       if (ending.size > 0) {
         switchSeqRef.current += 1;
+        const savedSessionId = loadUiPrefs().activeSessionId;
+        if (savedSessionId && ending.has(savedSessionId)) {
+          saveUiPrefs({ activeSessionId: null });
+        }
         setActiveSessionId((prev) =>
           prev != null && ending.has(prev) ? null : prev,
         );

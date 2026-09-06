@@ -69,6 +69,7 @@ import {
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import {
   agentPrefixes,
+  agentBelongsToProjectRoot,
   buildProjectTree,
   projectIsEmpty,
   projectRoots,
@@ -694,7 +695,21 @@ export function WorkflowsRail({
   const openRoots = [...recentDirs, ...pendingCwds];
   const shown = (path: string): boolean =>
     !hiddenByClosedProject(path, closedProjects, openRoots);
-  const visibleWorkflows = workflows.filter((workflow) => shown(workflow.path));
+  const visibleWorkflows = workflows.filter((workflow) => {
+    const owners = (workspaceScopes ?? []).filter((scope) =>
+      workflow.studioBindings?.some(
+        (binding) => binding.projectId === scope.projectId,
+      ),
+    );
+    // Closing a project also hides its logically associated sibling folders.
+    // Its durable identity may outlive its final published/open root.
+    if (owners.length === 0 && workflow.studioBindings?.some((binding) =>
+      studioProjects?.some((project) => project.projectId === binding.projectId),
+    )) return false;
+    return owners.length > 0
+      ? owners.some((scope) => shown(scope.cwd))
+      : shown(workflow.path);
+  });
   const durableRootCandidates = (workspaceScopes ?? []).flatMap((scope) =>
     scope.projectId ? [{ projectId: scope.projectId, cwd: scope.cwd }] : [],
   );
@@ -723,10 +738,16 @@ export function WorkflowsRail({
     agentPaths: visibleWorkflows.map((workflow) => workflow.path),
     sort,
   }).filter(shown);
-  const projects = buildProjectTree(visibleWorkflows, roots, sort);
+  const projects = buildProjectTree(
+    visibleWorkflows, roots, sort, workspaceScopes,
+  );
   // Agents no open root contains. Rarer than the old "No workspace" bucket,
   // but dropping them would hide an agent that exists.
-  const strays = unrootedAgents(visibleWorkflows, roots, sort);
+  const strays = unrootedAgents(visibleWorkflows, roots, sort, workspaceScopes);
+  const agentsInProject = (root: string): WorkflowInfo[] =>
+    visibleWorkflows.filter((workflow) =>
+      agentBelongsToProjectRoot(workflow, root, workspaceScopes),
+    );
   // Every REGISTERED agent path, hidden ones included: "Open as project" counts
   // what a folder would bring in, and a folder that would un-hide a removed
   // project's agents is exactly the case that number has to be honest about.
@@ -824,7 +845,7 @@ export function WorkflowsRail({
    * with nowhere to be stored.
    */
   const onGroupDrop = (root: string, request: GroupDropRequest): void => {
-    const rootAgents = railGroups.agentsIn(root);
+    const rootAgents = agentsInProject(root);
     if (!rootAgents.some((workflow) => workflow.path === request.path)) return;
     setFreshGroupLabel(null);
     railGroups.edit(root, rootAgents, (state) =>
@@ -1295,7 +1316,7 @@ export function WorkflowsRail({
             // where a scope header belongs — and the root agent is often the
             // head of the very group being shown.
             const groupAgents =
-              axis === "group" ? railGroups.agentsIn(project.root) : [];
+              axis === "group" ? agentsInProject(project.root) : [];
             const showGroups = axis === "group" && groupAgents.length > 1;
             const soloAgents = groupAgents.filter(
               (workflow) => workflow.path !== project.rootAgent?.workflow.path,

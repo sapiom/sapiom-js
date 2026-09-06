@@ -25,6 +25,7 @@ import {
   AgentMapMcpProjectUnavailableError,
   createAgentMapToolServer,
 } from "./agent-map-mcp-tools.js";
+import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 const clients: Client[] = [];
@@ -120,6 +121,22 @@ describe("Agent Map Streamable HTTP MCP", () => {
       "build_plan_validate",
       "project_subsession_delegate",
     ]);
+    for (const tool of tools.tools) {
+      expect(PROJECT_AGENT_PROMPT_APPENDIX).toContain(tool.name);
+    }
+    const descriptions = Object.fromEntries(tools.tools.map(({ name, description }) => [name, description]));
+    expect(descriptions.agent_map_read).toContain("null if empty");
+    expect(descriptions.agent_map_validate).toContain("Validation alone never updates");
+    expect(descriptions.agent_map_propose).toContain("not an approval request");
+    expect(descriptions.build_plan_read).toContain("current");
+    expect(descriptions.build_plan_validate).toContain("preserve unrelated intent");
+    expect(descriptions.build_plan_apply).toContain("retry failed refresh independently");
+    expect(descriptions.build_plan_rebase).toContain("resolutions:[]");
+    expect(descriptions.build_plan_brief_refresh).toContain("does not change plan intent");
+    expect(descriptions.project_subsession_delegate).toContain("not completed work");
+    const mapInput = tools.tools.find(({ name }) => name === "agent_map_propose")!.inputSchema;
+    expect(JSON.stringify(mapInput.properties?.proposalId)).toContain("agent_map_read");
+    expect(JSON.stringify(mapInput.properties?.expectedVersion)).toContain("0");
     const nonStrict = tools.tools.filter((tool) => !(tool.inputSchema.additionalProperties === false ||
       (Array.isArray(tool.inputSchema.anyOf) && tool.inputSchema.anyOf.every((variant) =>
         typeof variant === "object" && variant !== null && "additionalProperties" in variant &&
