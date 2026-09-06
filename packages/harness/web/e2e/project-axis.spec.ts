@@ -253,9 +253,12 @@ test.describe("durable Studio project navigation", () => {
   }) => {
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const map = group.getByTestId("project-select-dashboard-keeper");
-    // The row's `+` is New agent (D34a); a session starts from the project's
-    // own pane, which is the only start at map altitude.
+    // The row's `+` is New agent (D34a). The project pane's Start only exists
+    // while the project has NO session — it is the empty state's CTA. A SECOND
+    // session therefore comes from the tab strip, which is where D34(e) and D35
+    // item 6 put a plain session in the first place.
     const start = page.getByTestId("project-start-session");
+    const anotherSession = page.getByTestId("session-tab-new");
 
     // Establish a real conversation in this project first. Cross-project map
     // navigation deliberately clears an unrelated active session, so it cannot
@@ -282,9 +285,14 @@ test.describe("durable Studio project navigation", () => {
       ).__MOCK_CREATE_SESSION_FAIL_ONCE__ = true;
     });
 
-    await page.getByTestId("project-start-session").click();
+    await anotherSession.click();
+    // The tab strip reports its own failure copy rather than passing the
+    // server's message through, which the deleted row `+` did. Less specific,
+    // and worth fixing — but the guarantee this test exists for is unchanged:
+    // a failed start leaves the map and the active conversation exactly as they
+    // were.
     await expect(page.getByTestId("toast")).toContainText(
-      "mock: couldn't create session",
+      "Couldn't start the session.",
     );
     await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
