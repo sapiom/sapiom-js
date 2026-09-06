@@ -23,6 +23,7 @@ import {
 } from "../shared/types.js";
 import type {
   PlannerSessionMetadata,
+  ProjectBootstrapMetadata,
   ProjectAgentSession,
 } from "../shared/agent-map.js";
 import { migratePersistedProjectIdentity } from "./project-session-legacy-migration.js";
@@ -46,7 +47,7 @@ import {
   UnknownSessionError,
 } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
-import type { IngestCredentialProvider } from "./ingest-credentials.js";
+import type { IngestCredentialProvider, IssuedIngestCredential } from "./ingest-credentials.js";
 
 export {
   AdapterNotFoundError,
@@ -305,7 +306,10 @@ export function sanitizeExitTail(raw: string): string | null {
   return trimmed.slice(-EXIT_TAIL_BYTES);
 }
 
-export type SessionStatusListener = (session: HarnessSession) => void;
+export type SessionStatusListener = (
+  session: HarnessSession,
+  context: SessionStatusContext,
+) => void;
 export type SessionDataListener = (chunk: string) => void;
 /** See `onActivity()`. */
 export type SessionActivityListener = (harnessSessionId: string) => void;
@@ -337,6 +341,23 @@ export type LaunchOptsBuilder = (
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
 
 export interface SessionManagerOptions {
+  /**
+   * Serializes coordinator ownership before a PTY generation is published.
+   * `null` retracts a prepared epoch when pre-publication setup fails.
+   */
+  onRuntimeEpochTransition?: (
+    session: HarnessSession,
+    runtimeEpoch: string | null,
+  ) => Promise<void> | void;
+
+  /** Synchronous notification before a real terminal write crosses the PTY. */
+  onTerminalInput?: (sessionId: string, context: TerminalInputContext) => void;
+
+  /** Async node-pty loader seam used only when `spawnPty` is absent. Production
+   * uses the module loader; tests use this to prove authorization is checked
+   * after that final await and before PTY admission. */
+  loadSpawnPty?: () => Promise<PtySpawnFn>;
+
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   /** Base URL the harness server is reachable at, e.g. http://127.0.0.1:4100. */
   ingestUrl: string;
@@ -436,6 +457,9 @@ export interface TrustedSessionResumeOptions {
 }
 
 interface PtyHandle {
+  /** Server-owned identity for this exact live PTY generation. */
+  runtimeEpoch: string;
+
   pty: IPty;
   buffer: string;
   /** Latest content-bearing terminal repaint used for current-screen checks.
@@ -513,10 +537,321 @@ interface PtyHandle {
   killed: boolean;
 }
 
+export type AdapterIdentityState =
+  | "not-required"
+  | "pending"
+  | "ready"
+  | "ambiguous"
+  | "unavailable";
+
+
+export interface SessionStatusContext {
+  /** Exact live/retiring PTY generation, or null before a PTY exists. */
+  runtimeEpoch: string | null;
+}
+
+
+export interface TerminalInputContext {
+  /** Server-owned identity of the exact PTY receiving these bytes. */
+  runtimeEpoch: string;
+  /** The current adapter screen is a recognized trust/login/setup blocker. */
+  blockingPrompt: boolean;
+}
+
+
+export type TrackedSessionInputResult = Readonly<{
+  accepted: boolean;
+  phase: SessionInputWritePhase;
+  error?: unknown;
+}>;
+
+
+export type SessionInputWritePhase =
+  | "not-written"
+  | "text-staged"
+  | "enter-written";
+
+
+export interface SessionInputWriteLifecycle {
+  /** Durable transition that must commit before the first PTY byte. */
+  beforeFirstWrite?: () => Promise<void>;
+  /** Synchronous final admission fence checked immediately before each write. */
+  canWriteNow?: () => boolean;
+  /** Durable positive evidence that the writer returned before attempting
+   * Enter. Errors at the Enter write are intentionally excluded. */
+  onNotSubmitted?: () => Promise<void>;
+  /** Synchronous byte-boundary observation for durable delivery recovery. */
+  onWritePhase?: (phase: SessionInputWritePhase) => void;
+}
+
+
+/** A prior partial PTY write could not be safely removed from the composer. */
+export class SessionInputIsolationError extends Error {
+  readonly code = "SESSION_INPUT_ISOLATION_REQUIRED";
+
+  constructor() {
+    super("session input is blocked until the terminal composer is reset");
+    this.name = "SessionInputIsolationError";
+  }
+}
+
+
+export class SessionManagerClosingError extends Error {
+  readonly code = "SESSION_MANAGER_CLOSING";
+
+  constructor() {
+    super("session manager is shutting down");
+    this.name = "SessionManagerClosingError";
+  }
+}
+
+
+/** A real terminal write preempted a lower-priority background injection. */
+export class SessionBackgroundInputPreemptedError extends Error {
+  readonly code = "SESSION_BACKGROUND_INPUT_PREEMPTED";
+
+  constructor(readonly staged: boolean) {
+    super("background session input was preempted by user input");
+    this.name = "SessionBackgroundInputPreemptedError";
+  }
+}
+
+
 export class SessionManager {
+
+  /**
+   * Internal tracked variant for retry-safe coordinator delivery. It never
+   * turns an ambiguous write exception into zero-byte proof: callers receive
+   * the furthest phase observed at the exact PTY boundary.
+   */
+  async submitInputTracked(
+    id: string,
+    text: string,
+    options: Readonly<{
+      canWrite?: () => boolean | Promise<boolean>;
+      lifecycle?: Omit<SessionInputWriteLifecycle, "onWritePhase">;
+      background?: boolean;
+    }> = {},
+  ): Promise<TrackedSessionInputResult> {
+    let phase: SessionInputWritePhase = "not-written";
+    try {
+      const accepted = await this.submitInput(
+        id,
+        text,
+        true,
+        options.canWrite,
+        options.background ?? true,
+        {
+          ...options.lifecycle,
+          onWritePhase: (next) => {
+            phase = next;
+          },
+        },
+      );
+      return { accepted, phase };
+    } catch (error) {
+      return { accepted: false, phase, error };
+    }
+  }
+
+
+  /**
+   * Cancel only a lower-priority server-owned background submission. Unlike
+   * write(), this does not forward bytes or preempt an ordinary user/API
+   * submission. It is safe to call before staging begins; the coordinator's
+   * submit guard covers that side of the race.
+   */
+  preemptBackgroundInput(id: string): boolean {
+    const staged = this.stagedInputs.get(id);
+    if (!staged?.background || staged.preempted) return false;
+    staged.preempted = true;
+    if (staged.textWritten) {
+      if (this.abandonStagedLine(staged.handle)) {
+        staged.lineCleared = true;
+      }
+    }
+    return true;
+  }
+
+
+  /** Abandon a fully staged line. Ctrl-C is a safe fallback here because a
+   * successful full bracketed-paste write already carried its closing marker. */
+  private abandonStagedLine(handle: PtyHandle): boolean {
+    try {
+      handle.pty.write("\x15");
+      this.observeTrustedTerminalInput(handle, "\x15");
+      return true;
+    } catch {
+      try {
+        handle.pty.write("\x03");
+        this.observeTrustedTerminalInput(handle, "\x03");
+        return true;
+      } catch {
+        this.markComposerUnsafe(handle, false);
+        return false;
+      }
+    }
+  }
+
+
+  /**
+   * Recover only a previously poisoned composer, before any new user or
+   * server-owned text is written. Closing bracketed paste (when required) and
+   * abandoning the line are both non-submitting operations. Failure leaves
+   * the handle poisoned and no caller payload is forwarded.
+   */
+  private resetUnsafeComposer(handle: PtyHandle): boolean {
+    const unsafe = this.unsafeComposers.get(handle);
+    if (!unsafe) return true;
+    if (this.closing) return false;
+    let pasteMayBeOpen = unsafe.pasteMayBeOpen;
+    if (pasteMayBeOpen) {
+      try {
+        handle.pty.write(BRACKETED_PASTE_END);
+        this.observeTrustedTerminalInput(handle, BRACKETED_PASTE_END);
+        pasteMayBeOpen = false;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      handle.pty.write("\x15");
+      this.observeTrustedTerminalInput(handle, "\x15");
+    } catch {
+      this.unsafeComposers.set(handle, { pasteMayBeOpen });
+      return false;
+    }
+    this.unsafeComposers.delete(handle);
+    return true;
+  }
+
+
+  private markComposerUnsafe(
+    handle: PtyHandle,
+    pasteMayBeOpen: boolean,
+  ): void {
+    const current = this.unsafeComposers.get(handle);
+    this.unsafeComposers.set(handle, {
+      pasteMayBeOpen: current?.pasteMayBeOpen === true || pasteMayBeOpen,
+    });
+  }
+
+
+  /** Close admission before a server shutdown snapshots live PTYs. */
+  beginShutdown(): void {
+    this.closing = true;
+  }
+
+
+  /** Kill only the exact PTY generation a losing coordinator created. */
+  killIfRuntime(id: string, runtimeEpoch: string): Promise<boolean> {
+    if (this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch)
+      return Promise.resolve(false);
+    return this.kill(id);
+  }
+
+
+  /**
+   * Fail-closed admission for already-authenticated ingest work. A terminal
+   * event may finish after its PTY retires, but a replacement handle always
+   * takes ownership immediately and rejects every earlier epoch.
+   */
+  acceptsIngestRuntimeEpoch(id: string, runtimeEpoch: string): boolean {
+    const live = this.ptys.get(id);
+    if (live) return live.runtimeEpoch === runtimeEpoch;
+    return (
+      this.sessions.get(id)?.status === "exited" &&
+      this.retiredRuntimeEpochs.get(id) === runtimeEpoch
+    );
+  }
+
+
+  /** True only for the exact PTY generation that is live right now. */
+  isCurrentRuntimeEpoch(id: string, runtimeEpoch: string): boolean {
+    const live = this.ptys.get(id);
+    return live?.runtimeEpoch === runtimeEpoch;
+  }
+
+
+  /** Server-only acknowledgement from an adapter-owned identity broker. */
+  setAdapterIdentityState(
+    id: string,
+    runtimeEpoch: string,
+    state: Exclude<AdapterIdentityState, "not-required" | "pending">,
+  ): boolean {
+    const current = this.adapterIdentityStates.get(id);
+    if (!current || current.runtimeEpoch !== runtimeEpoch ||
+        !this.isCurrentRuntimeEpoch(id, runtimeEpoch)) return false;
+    current.state = state;
+    return true;
+  }
+
+
+  /** Exact-runtime adapter identity used by trusted background delivery. */
+  getAdapterIdentityState(id: string, runtimeEpoch: string): AdapterIdentityState {
+    const state = this.adapterIdentityStates.get(id);
+    if (!state || state.runtimeEpoch !== runtimeEpoch) return "pending";
+    return state.state;
+  }
+
+
+  /** Opaque identity for the exact live PTY generation behind `id`. */
+  getRuntimeEpoch(id: string): string | null {
+    return this.ptys.get(id)?.runtimeEpoch ?? null;
+  }
+
+  private closing = false;
+
+  /** Handle-local poison from a partial write whose composer cleanup could not
+   * be proven. A replacement PTY is clean by construction; the same handle
+   * must complete this reset before any later text or Enter is allowed. */
+  private readonly unsafeComposers = new WeakMap<
+    PtyHandle,
+    { pasteMayBeOpen: boolean }
+  >();
+
+  /** One text→Enter transaction may be staged per session. */
+  private readonly stagedInputs = new Map<
+    string,
+    {
+      handle: PtyHandle;
+      background: boolean;
+      preempted: boolean;
+      textWritten: boolean;
+      lineCleared: boolean;
+    }
+  >();
+
+  /** Monotonic raw-input observations used to preempt background injection. */
+  private readonly terminalInputEpochs = new Map<string, number>();
+
+  /** Adapter-owned correlation for transcript-backed runtimes. This is kept
+   * separate from terminal readiness: a TUI can be interactive before its
+   * exact vendor transcript has been identified. */
+  private readonly adapterIdentityStates = new Map<
+    string,
+    { runtimeEpoch: string; state: AdapterIdentityState }
+  >();
+
+  /** Last cleanly retired PTY generation. It may finish already-admitted ingest
+   * work while the session is exited, but loses immediately to a replacement. */
+  private readonly retiredRuntimeEpochs = new Map<string, string>();
+
+  private readonly onRuntimeEpochTransition: SessionManagerOptions["onRuntimeEpochTransition"];
+
+  private readonly onTerminalInput: (
+    sessionId: string,
+    context: TerminalInputContext,
+  ) => void;
+
+  private readonly loadSpawnPty: () => Promise<PtySpawnFn>;
+
+  private readonly issueIngestCredential: (
+    sessionId: string,
+  ) => IssuedIngestCredential;
+
   private readonly adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   private readonly ingestUrl: string;
-  private readonly issueIngestToken: (sessionId: string) => string;
   private readonly revokeIngestToken: (sessionId: string) => void;
   private readonly collectorUrl: string | undefined;
   private readonly sessionsPath: string;
@@ -569,7 +904,7 @@ export class SessionManager {
   constructor(options: SessionManagerOptions) {
     this.adapters = options.adapters;
     this.ingestUrl = options.ingestUrl;
-    this.issueIngestToken = (sessionId) =>
+    this.issueIngestCredential = (sessionId) =>
       options.ingestCredentials.issue(sessionId);
     this.revokeIngestToken = (sessionId) =>
       options.ingestCredentials.revoke(sessionId);
@@ -577,6 +912,9 @@ export class SessionManager {
     this.sessionsPath = expandHome(options.sessionsPath ?? HARNESS_PATHS.sessions);
     this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
     this.spawnPty = options.spawnPty;
+    this.loadSpawnPty = options.loadSpawnPty ?? loadDefaultSpawn;
+    this.onTerminalInput = options.onTerminalInput ?? (() => {});
+    this.onRuntimeEpochTransition = options.onRuntimeEpochTransition;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
@@ -718,6 +1056,7 @@ export class SessionManager {
     req: CreateSessionRequest,
     trusted: TrustedSessionCreateOptions = {},
   ): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
     const id = this.generateId();
     const adapter = this.getAdapter(req.harness);
     const planning = trusted.planning?.(id);
@@ -787,8 +1126,9 @@ export class SessionManager {
       // "running" — it must never show a bare empty iframe because nothing's
       // been written to .sapiom/canvas/index.html yet.
       await this.ensureCanvasTemplate(session.cwd);
-      await this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity);
-      await this.spawn(session, spec);
+      await this.spawn(session, spec, () =>
+        this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
+      );
     } catch (err) {
       // The first persist may itself be the failure, so reconciliation is
       // best-effort: always repair the in-memory record to "exited", attempt
@@ -863,6 +1203,7 @@ export class SessionManager {
     id: string,
     trusted: TrustedSessionResumeOptions = {},
   ): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (this.rejectedProjectSessionMetadata.has(id)) throw new ProjectSessionScopeUnavailableError(id);
@@ -903,41 +1244,56 @@ export class SessionManager {
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else delete session.agentMapIdentity;
-    const launchContext =
-      trusted.promptAppendix || agentMapIdentity
-        ? {
-            ...(trusted.promptAppendix
-              ? { promptAppendix: trusted.promptAppendix }
-              : {}),
-            ...(agentMapIdentity ? { agentMapIdentity } : {}),
-            resume: true as const,
-          }
-        : undefined;
-    const opts: LaunchOpts = {
-      harnessSessionId: id,
-      cwd: session.cwd,
-      ...(await (launchContext
-        ? this.buildLaunchOpts(id, session, launchContext)
-        : this.buildLaunchOpts(id, session))),
-    };
+    // Claim the pre-PTY resume window before generated launch state is built.
+    // Exit observers may finish asynchronous bookkeeping after kill() resolves;
+    // they must see this lifecycle as starting, not schedule cleanup against
+    // files that the resumed process is currently regenerating.
+    const lastActiveBeforeResume = session.lastActiveAt;
+    const statusBeforeResume = session.status;
+    const exitCodeBeforeResume = session.exitCode;
+    session.status = "starting";
+    session.exitCode = null;
+    session.lastActiveAt = this.now();
+    let opts: LaunchOpts;
     let spec: SpawnSpec;
     try {
+      const launchContext =
+        trusted.promptAppendix || agentMapIdentity
+          ? {
+              ...(trusted.promptAppendix
+                ? { promptAppendix: trusted.promptAppendix }
+                : {}),
+              ...(agentMapIdentity ? { agentMapIdentity } : {}),
+              resume: true as const,
+            }
+          : undefined;
+      opts = {
+        harnessSessionId: id,
+        cwd: session.cwd,
+        ...(await (launchContext
+          ? this.buildLaunchOpts(id, session, launchContext)
+          : this.buildLaunchOpts(id, session))),
+      };
       spec = adapter.resume(session.agentSessionId, opts);
     } catch (error) {
+      // Resume preparation may rotate project capabilities or write generated
+      // launch state before the process exists. No starting state was exposed
+      // or persisted yet, so restore the exact prior record while releasing
+      // any prepared authority.
+      session.status = statusBeforeResume;
+      session.exitCode = exitCodeBeforeResume;
+      session.lastActiveAt = lastActiveBeforeResume;
       await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
       throw error;
     }
-    // Kept so the failure path below can put it back: `lastActiveAt` is
-    // stamped here only to keep sweepDeadSessions() from reaping this record
+    // The prior value is kept so the failure path below can put it back:
+    // `lastActiveAt` is stamped only to keep sweepDeadSessions() from reaping
+    // this record
     // during the pre-pty window (it reaps non-exited records with no pty once
     // they're older than the grace period). If the resume never produces a
     // pty, that stamp is not activity and must not survive — otherwise a
     // session idle since last night reports "Ran for 6h 25m" purely because
     // someone clicked Resume.
-    const lastActiveBeforeResume = session.lastActiveAt;
-    session.status = "starting";
-    session.exitCode = null;
-    session.lastActiveAt = this.now();
     try {
       await this.persist();
       this.emitStatus(session);
@@ -951,8 +1307,14 @@ export class SessionManager {
       // — a session from before the canvas kit existed, or one whose canvas
       // file was somehow deleted, still gets a live pane on resume.
       await this.ensureCanvasTemplate(session.cwd);
-      await this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity);
-      await this.spawn(session, spec);
+      await this.spawn(session, spec, () =>
+        this.revalidateAgentMapIdentity(
+          session.id,
+          session.cwd,
+          agentMapIdentity,
+        ),
+      );
+
     } catch (err) {
       // Same best-effort reconciliation as create(): the first persist can be
       // the failure, and a failed repair must not replace that original error.
@@ -1090,12 +1452,60 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Forward terminal bytes without submitting a separate prompt.
+   * @throws SessionInputIsolationError when prior partial input cannot be cleared.
+   */
   write(id: string, data: string): boolean {
     const handle = this.ptys.get(id);
     if (!handle) return false;
-    handle.pty.write(data);
-    this.observeTrustedTerminalInput(handle, data);
+    if (!this.resetUnsafeComposer(handle)) {
+      throw new SessionInputIsolationError();
+    }
     const session = this.sessions.get(id);
+    if (session && session.status !== "exited") {
+      try {
+        const adapter = this.adapters[session.harness];
+        const blockingPrompt = Boolean(
+          adapter?.detectBlockingPrompt &&
+          (this.hasCurrentBlockingPrompt(adapter, handle) ||
+            this.hasRetainedBlockingPrompt(adapter, handle)),
+        );
+        this.onTerminalInput(id, {
+          runtimeEpoch: handle.runtimeEpoch,
+          blockingPrompt,
+        });
+      } catch {
+        // Input priority is local correctness; lifecycle telemetry/persistence
+        // callbacks are best effort and cannot block a person's terminal.
+      }
+    }
+    this.terminalInputEpochs.set(
+      id,
+      (this.terminalInputEpochs.get(id) ?? 0) + 1,
+    );
+    const staged = this.stagedInputs.get(id);
+    if (staged?.handle === handle && !staged.preempted) {
+      staged.preempted = true;
+      if (staged.textWritten) {
+        // Remove the server-staged line before forwarding the person's bytes,
+        // so the two inputs can never be submitted as one corrupted prompt.
+        if (!this.abandonStagedLine(handle)) {
+          throw new SessionInputIsolationError();
+        }
+        staged.lineCleared = true;
+      }
+    }
+    try {
+      handle.pty.write(data);
+    } catch (error) {
+      // Raw terminal data can also be reported failed after staging a prefix.
+      // Fence the exact handle before any later user or server-owned write;
+      // bracketed-paste input requires its closing marker during recovery.
+      this.markComposerUnsafe(handle, data.includes(BRACKETED_PASTE_START));
+      throw error;
+    }
+    this.observeTrustedTerminalInput(handle, data);
     if (session) {
       session.lastActiveAt = this.now();
       void this.persist();
@@ -1123,6 +1533,8 @@ export class SessionManager {
     text: string,
     submit = true,
     canWrite?: () => boolean | Promise<boolean>,
+    background = false,
+    lifecycle?: SessionInputWriteLifecycle,
   ): Promise<boolean> {
     const remainsAuthorized = async (): Promise<boolean> => {
       if (!canWrite) return true;
@@ -1134,6 +1546,7 @@ export class SessionManager {
     };
     const session = this.sessions.get(id);
     if (!session) return false;
+    const initialTerminalInputEpoch = this.terminalInputEpochs.get(id) ?? 0;
 
     // An external-harness session (e.g. conductor) never has a pty — surfacing
     // HARNESS_EXTERNAL here gives a 409 "managed by the X app" instead of a
@@ -1141,7 +1554,8 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) {
       const info = listHarnessAdapters().find((a) => a.id === session.harness);
-      if (info?.mode === "external") throw new ExternalHarnessError(session.harness, info.label);
+      if (info?.mode === "external")
+        throw new ExternalHarnessError(session.harness, info.label);
       return false;
     }
     if (!this.isReadyEnough(session, handle)) {
@@ -1158,12 +1572,64 @@ export class SessionManager {
     if (canWrite && !(await remainsAuthorized())) {
       throw new SessionInputGuardRejectedError(false);
     }
+    if (
+      background &&
+      (this.terminalInputEpochs.get(id) ?? 0) !== initialTerminalInputEpoch
+    ) {
+      throw new SessionBackgroundInputPreemptedError(false);
+    }
+    if (!this.resetUnsafeComposer(handle)) {
+      // No byte from this logical submission has been written, but the prior
+      // unknown composer cannot yet be declared clean. Let durable callers
+      // keep their request queued; never append it to residual text.
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionInputIsolationError();
+    }
+    if (lifecycle?.beforeFirstWrite) {
+      try {
+        await lifecycle.beforeFirstWrite();
+      } catch (error) {
+        await lifecycle.onNotSubmitted?.().catch(() => {});
+        throw error;
+      }
+    }
+    if (
+      background &&
+      (this.terminalInputEpochs.get(id) ?? 0) !== initialTerminalInputEpoch
+    ) {
+      // The durable claim may yield while a person types into this composer.
+      // Retire that claim without appending background text or pressing Enter.
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionBackgroundInputPreemptedError(false);
+    }
+    if (this.closing || (lifecycle?.canWriteNow && !lifecycle.canWriteNow())) {
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionInputGuardRejectedError(false);
+    }
 
     if (!submit) {
-      handle.pty.write(text);
+      try {
+        lifecycle?.onWritePhase?.("text-staged");
+        handle.pty.write(text);
+      } catch (error) {
+        // submit:false is public arbitrary draft text, not a single control
+        // byte. A partial failure can therefore leave composer content even
+        // though no Enter was requested.
+        this.markComposerUnsafe(handle, false);
+        throw error;
+      }
       this.observeTrustedSubmittedText(handle, text);
     } else if (text.length === 0) {
-      handle.pty.write("\r");
+      try {
+        lifecycle?.onWritePhase?.("text-staged");
+        handle.pty.write("\r");
+        lifecycle?.onWritePhase?.("enter-written");
+      } catch (error) {
+        // Enter may have crossed or may have left an existing draft intact.
+        // Either way, require a proven reset before another submission.
+        this.markComposerUnsafe(handle, false);
+        throw error;
+      }
       this.observeTrustedTerminalInput(handle, "\r");
     } else {
       // Bracketed when the app supports it: newlines in the prompt (the canvas
@@ -1186,27 +1652,103 @@ export class SessionManager {
         ? handle.bracketedPaste.enabled
         : this.platform === "win32" &&
           (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
-      handle.pty.write(paste ? wrapPaste(text) : text);
-      // Observe the server-owned plaintext rather than the bracketed-paste
-      // transport wrapper. Embedded newlines invalidate the line, so prompt
-      // text containing `/clear` cannot impersonate an exact slash command.
-      this.observeTrustedSubmittedText(handle, text);
-      await sleep(SUBMIT_DELAY_MS);
-      // The pty may have been killed/replaced while we were waiting.
-      if (this.ptys.get(id) !== handle) return false;
-      // A project/account can change during the deliberate text→Enter delay.
-      // Do not submit the staged text under stale authority.
-      if (canWrite && !(await remainsAuthorized())) {
-        // Text was staged but not submitted. Clear the composer before
-        // releasing control so a later keypress cannot submit project-scoped
-        // content into the now-stale planner. Ctrl-U is a local line-clear,
-        // not an Enter/submission gesture.
-        handle.pty.write("\x15");
-        this.observeTrustedTerminalInput(handle, "\x15");
-        throw new SessionInputGuardRejectedError(true);
+      const staged = {
+        handle,
+        background,
+        preempted: false,
+        textWritten: false,
+        lineCleared: false,
+      };
+      if (this.stagedInputs.has(id)) {
+        await lifecycle?.onNotSubmitted?.().catch(() => {});
+        throw new SessionBackgroundInputPreemptedError(false);
       }
-      handle.pty.write("\r");
-      this.observeTrustedTerminalInput(handle, "\r");
+      this.stagedInputs.set(id, staged);
+      let enterAttempted = false;
+      try {
+        try {
+          lifecycle?.onWritePhase?.("text-staged");
+          handle.pty.write(paste ? wrapPaste(text) : text);
+        } catch (error) {
+          // A PTY can report a text-write failure after staging a prefix. Clear
+          // that possible partial line before claiming the logical submission
+          // is safe to retry. A partial bracketed paste can leave the terminal
+          // inside paste mode, where Ctrl-U is merely pasted content, so close
+          // that mode first. Every required cleanup write must succeed before
+          // exposing positive not-submitted evidence.
+          let pasteClosed = !paste;
+          try {
+            if (paste) {
+              handle.pty.write(BRACKETED_PASTE_END);
+              this.observeTrustedTerminalInput(handle, BRACKETED_PASTE_END);
+              pasteClosed = true;
+            }
+          } catch {
+            // Still attempt a non-submitting line clear below, but do not call
+            // it proof when the terminal may remain in bracketed-paste mode.
+          }
+          try {
+            handle.pty.write("\x15");
+            this.observeTrustedTerminalInput(handle, "\x15");
+            staged.lineCleared = pasteClosed;
+          } catch {
+            // The coordinator retains its dispatch intent and fails closed.
+          }
+          if (!staged.lineCleared) {
+            this.markComposerUnsafe(handle, !pasteClosed);
+          }
+          throw error;
+        }
+        staged.textWritten = true;
+        // Observe the server-owned plaintext rather than the bracketed-paste
+        // transport wrapper. Embedded newlines invalidate the line, so prompt
+        // text containing `/clear` cannot impersonate an exact slash command.
+        this.observeTrustedSubmittedText(handle, text);
+        await sleep(SUBMIT_DELAY_MS);
+        if (staged.preempted) {
+          throw new SessionBackgroundInputPreemptedError(true);
+        }
+        // The pty may have been killed/replaced while we were waiting.
+        if (this.ptys.get(id) !== handle) return false;
+        // A project/account can change during the deliberate text→Enter delay.
+        // Do not submit the staged text under stale authority.
+        if (canWrite && !(await remainsAuthorized())) {
+          // Text was staged but not submitted. Clear the composer before
+          // releasing control so a later keypress cannot submit project-scoped
+          // content into the now-stale session. Ctrl-U is a local line-clear,
+          // not an Enter/submission gesture.
+          staged.lineCleared = this.abandonStagedLine(handle);
+          throw new SessionInputGuardRejectedError(true);
+        }
+        // `await remainsAuthorized()` necessarily yields. Shutdown or a
+        // coordinator generation change can win in that gap, so this final
+        // synchronous fence is the last operation before Enter.
+        if (
+          this.closing ||
+          (lifecycle?.canWriteNow && !lifecycle.canWriteNow())
+        ) {
+          staged.lineCleared = this.abandonStagedLine(handle);
+          throw new SessionInputGuardRejectedError(true);
+        }
+        enterAttempted = true;
+        handle.pty.write("\r");
+        lifecycle?.onWritePhase?.("enter-written");
+        this.observeTrustedTerminalInput(handle, "\r");
+      } catch (error) {
+        if (enterAttempted) {
+          // A failed Enter write is ambiguous: it may have submitted A or may
+          // have left A's full staged line in place. Fence the handle so B can
+          // never append until a non-submitting reset succeeds.
+          this.markComposerUnsafe(handle, false);
+        } else if (staged.lineCleared) {
+          await lifecycle?.onNotSubmitted?.().catch(() => {});
+        }
+        throw error;
+      } finally {
+        if (this.stagedInputs.get(id) === staged) {
+          this.stagedInputs.delete(id);
+        }
+      }
     }
 
     session.lastActiveAt = this.now();
@@ -1386,9 +1928,10 @@ export class SessionManager {
     id: string,
     agentSessionId: string,
     source?: unknown,
+    runtimeEpoch?: string,
   ): Promise<boolean> {
     return this.serializeAgentSessionIdentity(() =>
-      this.setAgentSessionIdLocked(id, agentSessionId, source),
+      this.setAgentSessionIdLocked(id, agentSessionId, source, runtimeEpoch),
     );
   }
 
@@ -1414,19 +1957,23 @@ export class SessionManager {
     id: string,
     agentSessionId: string,
     source?: unknown,
+    runtimeEpoch?: string,
   ): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
     const handle = this.ptys.get(id);
-    const transitionSource = source === "clear" || source === "resume" ? source : null;
+    if (runtimeEpoch !== undefined && handle?.runtimeEpoch !== runtimeEpoch) {
+      return false;
+    }
+    const transitionSource =
+      source === "clear" || source === "resume" ? source : null;
     let authorization = handle?.agentSessionRotation ?? null;
     if (handle && authorization && authorization.expiresAt <= Date.now()) {
       handle.agentSessionRotation = null;
       authorization = null;
     }
     const matchesAuthorization =
-      transitionSource !== null &&
-      authorization?.source === transitionSource;
+      transitionSource !== null && authorization?.source === transitionSource;
 
     // A matching clear/resume SessionStart consumes the user gesture even
     // when this is the first vendor id, Claude keeps the same id, or the
@@ -1451,7 +1998,8 @@ export class SessionManager {
     // pointers. A fresh session can therefore never reclaim A's old id and
     // merge its events/transcript with A after a restart.
     if (ownerId !== undefined && ownerId !== id) return false;
-    if (ownerId === undefined) await this.reserveAgentSessionIdentity(digest, id);
+    if (ownerId === undefined)
+      await this.reserveAgentSessionIdentity(digest, id);
 
     const candidate = { ...session, agentSessionId };
     let releaseFence: () => void = () => {};
@@ -1634,15 +2182,36 @@ export class SessionManager {
    * translated for Codex), or from an adapter-declared readiness fallback.
    * Idempotent; a session that's exited or already ready is a silent no-op.
    */
-  setReady(id: string): void {
+  setReady(id: string, runtimeEpoch?: string): void {
     const session = this.sessions.get(id);
-    if (!session || session.ready) return;
+    if (
+      !session ||
+      session.status === "exited" ||
+      session.ready ||
+      (runtimeEpoch !== undefined &&
+        this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch)
+    )
+      return;
     session.ready = true;
     void this.persist();
     this.emitStatus(session);
   }
 
   /** Persist a coordinator-owned metadata projection before exposing it. */
+
+
+  /** Persist the neutral project-bootstrap projection before exposing it. */
+  async setProjectBootstrapMetadata(
+    id: string,
+    metadata: ProjectBootstrapMetadata,
+  ): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    session.projectBootstrap = structuredClone(metadata);
+    await this.persist();
+    this.emitStatus(session);
+  }
+
   async setPlanningMetadata(
     id: string,
     metadata: PlannerSessionMetadata,
@@ -1869,9 +2438,21 @@ export class SessionManager {
     this.emitStatus(session);
   }
 
-  private async spawn(session: HarnessSession, spec: SpawnSpec): Promise<void> {
+  private async spawn(
+    session: HarnessSession,
+    spec: SpawnSpec,
+    revalidateAdmission?: () => Promise<void>,
+  ): Promise<void> {
+    if (this.closing) throw new SessionManagerClosingError();
     const adapter = this.getAdapter(session.harness);
-    const spawnFn = this.spawnPty ?? (await loadDefaultSpawn());
+    const spawnFn = this.spawnPty ?? (await this.loadSpawnPty());
+    // Loading node-pty is lazy and asynchronous. Revalidate the project
+    // principal only after that final setup await; a binding or authenticated
+    // user can change while the module loads. The closing check follows the
+    // authorization await and then admission remains synchronous, so
+    // beginShutdown/killAll cannot miss a newly admitted process either.
+    await revalidateAdmission?.();
+    if (this.closing) throw new SessionManagerClosingError();
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined) env[key] = value;
@@ -1892,7 +2473,12 @@ export class SessionManager {
     env.TERM = "xterm-256color";
     env.COLORTERM = "truecolor";
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
-    env[ENV.ingestToken] = this.issueIngestToken(session.id);
+    const ingestCredential = this.issueIngestCredential(session.id);
+    this.adapterIdentityStates.set(session.id, {
+      runtimeEpoch: ingestCredential.runtimeEpoch,
+      state: adapter.eventSource === "transcript-tail" ? "pending" : "not-required",
+    });
+    env[ENV.ingestToken] = ingestCredential.token;
     env[ENV.sessionId] = session.id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
 
@@ -1904,17 +2490,45 @@ export class SessionManager {
     // No-op on POSIX.
     const target = resolveSpawnTarget(spec.command, spec.args);
 
-    // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
-    // node-pty prebuild surfaces there, not at import time) — propagates to
-    // create()/resume(), which own reconciling the session record to
-    // "exited" for every pre-pty failure, not just this one.
-    const pty: IPty = spawnFn(target.command, target.args, {
-      name: "xterm-256color",
-      cols: DEFAULT_COLS,
-      rows: DEFAULT_ROWS,
-      cwd: spec.cwd,
-      env,
-    });
+    let epochTransitioned = false;
+    let pty: IPty;
+    try {
+      // The coordinator must durably retire every owner from the prior PTY
+      // generation before this replacement becomes observable. Its epoch is
+      // server-generated beside the private ingest capability and never comes
+      // from a hook, model payload, or browser request.
+      await this.onRuntimeEpochTransition?.(
+        { ...session },
+        ingestCredential.runtimeEpoch,
+      );
+      epochTransitioned = true;
+      // Epoch transition is fallible and may wait on durable state. Revalidate
+      // project/user scope and shutdown admission once more after that await.
+      await revalidateAdmission?.();
+      if (this.closing) throw new SessionManagerClosingError();
+      // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
+      // node-pty prebuild surfaces there, not at import time) — propagates to
+      // create()/resume(), which own reconciling the session record to
+      // "exited" for every pre-pty failure, not just this one.
+      pty = spawnFn(target.command, target.args, {
+        name: "xterm-256color",
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
+        cwd: spec.cwd,
+        env,
+      });
+    } catch (error) {
+      this.revokeIngestToken(session.id);
+      const identityState = this.adapterIdentityStates.get(session.id);
+      if (identityState?.runtimeEpoch === ingestCredential.runtimeEpoch)
+        this.adapterIdentityStates.delete(session.id);
+      if (epochTransitioned) {
+        await Promise.resolve(
+          this.onRuntimeEpochTransition?.({ ...session }, null),
+        ).catch(() => {});
+      }
+      throw error;
+    }
 
     const emitter = new EventEmitter();
     emitter.setMaxListeners(0);
@@ -1924,6 +2538,7 @@ export class SessionManager {
     });
     const handle: PtyHandle = {
       pty,
+      runtimeEpoch: ingestCredential.runtimeEpoch,
       buffer: "",
       readinessBuffer: "",
       readinessHistory: "",
@@ -1945,6 +2560,7 @@ export class SessionManager {
       resolveExited,
       killed: false,
     };
+    this.retiredRuntimeEpochs.delete(session.id);
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -2059,7 +2675,11 @@ export class SessionManager {
    * silent no-op rather than double-transitioning or clobbering a newer
    * session/handle that's since taken its place (e.g. a resume).
    */
-  private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
+  private markExited(
+    id: string,
+    handle: PtyHandle,
+    exitCode: number | null,
+  ): void {
     if (this.ptys.get(id) !== handle) return;
     // Preserve the tail of output BEFORE the handle (and its buffer) is dropped
     // — this is the only chance to keep the agent's own error line. Worth it
@@ -2076,13 +2696,20 @@ export class SessionManager {
         ? sanitizeExitTail(handle.buffer)
         : null;
     this.ptys.delete(id);
+    const identityState = this.adapterIdentityStates.get(id);
+    if (identityState?.runtimeEpoch === handle.runtimeEpoch)
+      this.adapterIdentityStates.delete(id);
+    this.retiredRuntimeEpochs.set(id, handle.runtimeEpoch);
     this.lastActivityBroadcast.delete(id);
     // Resolve after the pty map is cleaned up. transitionExited runs
     // synchronously to set status before any awaiting continuation resumes.
     handle.resolveExited();
     const session = this.sessions.get(id);
     if (!session) return;
-    void this.transitionExited(session, exitCode, { exitTail });
+    void this.transitionExited(session, exitCode, {
+      exitTail,
+      runtimeEpoch: handle.runtimeEpoch,
+    });
   }
 
   /**
@@ -2096,11 +2723,21 @@ export class SessionManager {
   private transitionExited(
     session: HarnessSession,
     exitCode: number | null,
-    { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
+    {
+      stampLastActive = true,
+      exitTail = null,
+      runtimeEpoch = null,
+    }: {
+      stampLastActive?: boolean;
+      exitTail?: string | null;
+      runtimeEpoch?: string | null;
+    } = {},
   ): Promise<void> {
     this.revokeIngestToken(session.id);
     try {
-      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(() => {});
+      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(
+        () => {},
+      );
     } catch {
       // Capability cleanup never delays durable session reconciliation.
     }
@@ -2116,12 +2753,19 @@ export class SessionManager {
     // what made an untouched session's duration grow on every failed Resume.
     if (stampLastActive) session.lastActiveAt = this.now();
     const persisted = this.persist();
-    this.emitStatus(session);
+    this.emitStatus(session, runtimeEpoch);
     return persisted;
   }
 
-  private emitStatus(session: HarnessSession): void {
-    this.statusEmitter.emit("status", { ...session });
+  private emitStatus(
+    session: HarnessSession,
+    runtimeEpoch = this.getRuntimeEpoch(session.id),
+  ): void {
+    this.statusEmitter.emit(
+      "status",
+      { ...session },
+      { runtimeEpoch } satisfies SessionStatusContext,
+    );
   }
 
   private agentSessionIdentityDigest(agentSessionId: string): string {

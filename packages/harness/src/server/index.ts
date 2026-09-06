@@ -3557,9 +3557,11 @@ export const startServer = async (
   const ingestDeps: IngestDeps = {
     authenticate: (sessionId, token) =>
       ingestCredentials.authenticate(sessionId, token),
+    isCurrentRuntime: (sessionId, runtimeEpoch) =>
+      sessionManager.acceptsIngestRuntimeEpoch(sessionId, runtimeEpoch),
     normalize: normalizeHookEvent,
     resolveSession: resolveIngestSession,
-    onAgentSessionResolved: (harnessSessionId, agentSessionId, source) => {
+    onAgentSessionResolved: (harnessSessionId, agentSessionId, source, runtimeEpoch) => {
       // Record the agent session id — used by session-manager for resume
       // (agentSessionId feeds the --resume flag) and by the codex tailer for
       // exact-match rollout discovery.
@@ -3567,10 +3569,11 @@ export const startServer = async (
         harnessSessionId,
         agentSessionId,
         source,
+        runtimeEpoch,
       );
     },
-    onSessionReady: (harnessSessionId) => {
-      sessionManager.setReady(harnessSessionId);
+    onSessionReady: (harnessSessionId, runtimeEpoch) => {
+      sessionManager.setReady(harnessSessionId, runtimeEpoch);
     },
     store: eventStore,
     batcher,
@@ -3665,6 +3668,8 @@ export const startServer = async (
     const session = sessionManager.get(harnessSessionId);
     if (!session) return;
 
+    const runtimeEpoch = sessionManager.getRuntimeEpoch(harnessSessionId);
+    if (runtimeEpoch === null) return;
     const rolloutPath = await discoverCodexRolloutPath(session);
     if (!rolloutPath) {
       console.error(
@@ -3675,7 +3680,7 @@ export const startServer = async (
     // The session may have exited (or already started another tailer via a
     // status-change re-entry) while discovery was polling.
     if (codexTailers.has(harnessSessionId)) return;
-    if (sessionManager.get(harnessSessionId)?.status !== "running") return;
+    if (!sessionManager.isCurrentRuntimeEpoch(harnessSessionId, runtimeEpoch)) return;
 
     const tailer = tailCodexRollout({
       rolloutPath,
@@ -3692,7 +3697,7 @@ export const startServer = async (
           harnessSessionId,
           payload,
         };
-        void processIngest(body, ingestDeps, seqCounter).catch(
+        void processIngest(body, ingestDeps, seqCounter, runtimeEpoch).catch(
           (err: unknown) => {
             console.error("[harness] codex tailer ingest error:", err);
           },
@@ -3840,6 +3845,7 @@ export const startServer = async (
       // itself is bounded (KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS
       // = 2500ms); the outer timeout here is a final safety net above that.
       const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
+      sessionManager.beginShutdown();
       const killsSettled = Promise.all([
         sessionManager.killAll(),
         taskManager.killAll(),
