@@ -409,6 +409,10 @@ export class AgentRunnerCore {
   /**
    * Finalize a paused execution whose `paused_until` elapsed with no signal.
    * Called by the sweep processor; null on benign races.
+   *
+   * This is a terminal failure (`PauseTimeoutError`), not a resume. Authors
+   * who need "wait-or-proceed" must fire the same signal from an external
+   * timer; `timeoutMs` cannot branch inside the workflow.
    */
   async expirePausedExecution(executionId: string): Promise<AdvanceResult | null> {
     const row = await this.deps.store.loadExecution(executionId);

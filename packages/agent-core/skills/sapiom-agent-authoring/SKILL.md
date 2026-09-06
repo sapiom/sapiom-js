@@ -573,6 +573,11 @@ Key rules:
   Passing the handle to `pauseUntilSignal(handle, ...)` wires the signal automatically.
 - The **resumed step's `input` is the run's result payload** (`CodingResultPayload`).
   Annotate it explicitly — don't hand-roll the shape.
+- **`timeoutMs` on `pauseUntilSignal` is a hard failure**, not a branch. When it
+  elapses the run becomes `failed` with `PauseTimeoutError`; `resumeStep` is not
+  invoked. Omit it for an indefinite wait. Drive reminders/escalation by firing
+  the same signal (see `examples/approval-chain`), not by sizing `timeoutMs` to
+  a reminder interval.
 - The payload crossed a process boundary: **no live handles**. Re-attach a sandbox from
   `result.executionEnvironment.id` if needed; stash everything else in `ctx.shared` before pausing.
 - For a **manual human-gate** (no capability handle), use the object form and fire the signal
