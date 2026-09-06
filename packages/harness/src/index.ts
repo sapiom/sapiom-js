@@ -4,6 +4,11 @@
  */
 
 export * from "./shared/types.js";
+export type {
+  AgentMapInitializationError,
+  AgentMapInitializationState,
+  AgentMapInitializationStatus,
+} from "./shared/agent-map-initialization.js";
 export {
   AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
   EXECUTION_MODES,

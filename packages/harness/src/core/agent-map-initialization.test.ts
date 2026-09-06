@@ -125,6 +125,52 @@ async function finished(
 }
 
 describe("format-1 reset", () => {
+  it.each(["malformed", "null", "unreadable"])(
+    "keeps an authored format-2 map readable with a %s reset marker",
+    async (kind) => {
+      const f = await fixture();
+      await f.proposals.propose(actor, {
+        schemaVersion: 1,
+        proposalId: null,
+        expectedVersion: 0,
+        requestId: "authored-before-reset",
+        operations: [node],
+      });
+      const marker = path.join(path.dirname(f.file), "legacy-reset.json");
+      if (kind === "unreadable") await fs.mkdir(marker);
+      else await fs.writeFile(marker, kind === "malformed" ? "{" : "null");
+      const before = await fs.readFile(f.file);
+      await f.store.resetLegacyMaps();
+      await f.store.resetLegacyMaps();
+      const snapshot = await f.store.readSnapshot(projectId);
+      expect(snapshot.proposal?.nodes).toHaveLength(1);
+      expect(await fs.readFile(f.file)).toEqual(before);
+      await f.create().schedule(projectId);
+      expect(f.infer).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not let a corrupt reset marker change primary map classification", async () => {
+    const f = await fixture();
+    await fs.mkdir(path.dirname(f.file), { recursive: true });
+    await fs.writeFile(
+      path.join(path.dirname(f.file), "legacy-reset.json"),
+      "{",
+    );
+    const c = f.create();
+    await c.schedule(projectId);
+    await finished(c);
+    expect(f.infer).toHaveBeenCalledOnce();
+    await f.write({ storageSchemaVersion: 2, workspace: { schemaVersion: 1 } });
+    await expect(f.store.readSnapshot(projectId)).rejects.toMatchObject({
+      code: "malformed_state",
+    });
+    await f.write({ storageSchemaVersion: 99 });
+    await expect(f.store.readSnapshot(projectId)).rejects.toMatchObject({
+      code: "unsupported_schema",
+    });
+  });
+
   it.each([null, { nodes: [{ name: "Legacy agent" }], relationships: [] }])(
     "deletes only the qualifying workspace and preserves neighboring state (%j)",
     async (proposal) => {

@@ -143,6 +143,60 @@ describe("SharedWorkspaceWatchBroker", () => {
     }
   });
 
+  it("falls back to fingerprints for unnamed events when watching host metadata", async () => {
+    const metadata = path.join(root, "agent-map/projects/project-1");
+    const agent = path.join(root, "projects/research");
+    await fs.mkdir(metadata, { recursive: true });
+    await fs.mkdir(agent, { recursive: true });
+    await fs.writeFile(
+      path.join(agent, "sapiom.json"),
+      '{"definitionId":null}',
+    );
+    await fs.writeFile(path.join(agent, "package.json"), '{"name":"research"}');
+    await fs.writeFile(
+      path.join(agent, "index.ts"),
+      "export const before = 1;",
+    );
+    const callbacks = subscriber({
+      listSourceRoots: () => [agent],
+      onPotentialChange: vi.fn(),
+    });
+    const { snapshotWorkspaceWorkflowsAsync } =
+      await import("./workspace-watcher.js");
+    const snapshotWorkspace = vi.fn(snapshotWorkspaceWorkflowsAsync);
+    const broker = new SharedWorkspaceWatchBroker({
+      watchFactory,
+      ignoredEventRoots: [path.join(root, "agent-map")],
+      pollIntervalMs: 5,
+      sourceDebounceMs: 5,
+      snapshotWorkspace,
+    });
+    const key = {};
+    try {
+      await broker.subscribe(key, callbacks);
+      await fs.writeFile(path.join(metadata, "workspace.json.lock"), "lock");
+      listener("rename", null);
+      expect(close).toHaveBeenCalledOnce();
+      await vi.waitFor(() =>
+        expect(snapshotWorkspace.mock.calls.length).toBeGreaterThan(2),
+      );
+      expect(callbacks.onPotentialChange).not.toHaveBeenCalled();
+      expect(callbacks.onSourceChange).not.toHaveBeenCalled();
+      expect(callbacks.onInventoryChange).not.toHaveBeenCalled();
+
+      await fs.writeFile(
+        path.join(agent, "index.ts"),
+        "export const after = 22;",
+      );
+      await vi.waitFor(() =>
+        expect(callbacks.onSourceChange).toHaveBeenCalledWith([agent]),
+      );
+      expect(callbacks.onPotentialChange).toHaveBeenCalledWith([agent]);
+    } finally {
+      broker.unsubscribe(key);
+    }
+  });
+
   it("isolates potential and source callback failures between subscribers", async () => {
     const failingPotential = vi.fn(() => {
       throw new Error("potential failed");
