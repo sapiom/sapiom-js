@@ -604,11 +604,21 @@ it("creates one ordinary Plan Agents session for a newly opened project and neve
     body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
   });
   expect(firstOpen.status).toBe(200);
-  await vi.waitFor(() => expect(server!.sessionManager.list()).toHaveLength(1));
+  // Settings schedules creation asynchronously. Read the published state, as
+  // the app does, rather than observing the private row before its PTY exists.
+  await vi.waitFor(async () => {
+    const visibleState = await request("/state");
+    expect(visibleState.status).toBe(200);
+    const state = await visibleState.json();
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].status).toBe("running");
+  });
   expect(launches).toHaveLength(1);
   const [firstSession] = server.sessionManager.list();
   const freshProjectId = firstSession!.agentMapIdentity!.projectId;
   expect(firstSession).toMatchObject({
+    status: "running",
+    ready: false,
     title: "Plan Agents",
     cwd: freshRoot,
     agentMapIdentity: {
