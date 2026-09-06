@@ -23,6 +23,7 @@ export type {
   PlanRelationshipId,
   ProposalActor,
   ProjectAgentSession,
+  ProjectBootstrapInputReceipt,
   ProjectBootstrapMetadata,
   ProjectBootstrapState,
   ProposalOperationId,

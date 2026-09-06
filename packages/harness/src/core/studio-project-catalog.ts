@@ -327,6 +327,25 @@ function storageError(): StudioProjectCatalogError {
 /** Internal deterministic seams used only by file-lock race regressions. */
 export type StudioProjectCatalogLockTestHooks = DurableFileLockTestHooks;
 
+export interface StudioProjectCatalogLifecycleHooks {
+  /**
+   * Runs under the catalog lock before newly allocated project identities are
+   * committed. A durable write-ahead consumer can make the subsequent catalog
+   * commit recoverable without changing the public project schema.
+   */
+  beforeProjectsCreatedCommit?: (
+    projects: readonly StudioProjectSummary[],
+  ) => void | Promise<void>;
+  /**
+   * Runs after both the catalog file and this instance reflect the committed
+   * identities. Delivery may be retried, so consumers must be project-keyed
+   * and idempotent.
+   */
+  afterProjectsCreatedCommit?: (
+    projects: readonly StudioProjectSummary[],
+  ) => void | Promise<void>;
+}
+
 /**
  * Durable, serialized owner of Studio project identity. Catalog reads never
  * run package inventory or source discovery; callers provide the already
@@ -342,6 +361,7 @@ export class StudioProjectCatalog {
     private readonly catalogPath: string,
     private readonly now: () => Date = () => new Date(),
     private readonly lockTestHooks: StudioProjectCatalogLockTestHooks = {},
+    private readonly lifecycleHooks: StudioProjectCatalogLifecycleHooks = {},
   ) {}
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -506,9 +526,14 @@ export class StudioProjectCatalog {
         updatedAt: timestamp,
       };
       const next = [...cloneProjects(this.projects!), project];
+      await this.lifecycleHooks.beforeProjectsCreatedCommit?.([
+        publicSummary(project),
+      ]);
       await this.persist(next);
       this.projects = next;
-      return publicSummary(project);
+      const summary = publicSummary(project);
+      await this.lifecycleHooks.afterProjectsCreatedCommit?.([summary]);
+      return summary;
     });
   }
 
@@ -610,6 +635,7 @@ export class StudioProjectCatalog {
       }
 
       const reconciledScopes: WorkspaceScopeSummary[] = [];
+      const createdProjects: StudioProjectIdentity[] = [];
       for (const { canonical, scope } of dedupedScopes.values()) {
         const matchingProjects = next.filter(
           (candidate) =>
@@ -644,6 +670,7 @@ export class StudioProjectCatalog {
             updatedAt: timestamp,
           };
           next.push(project);
+          createdProjects.push(project);
           changed = true;
         } else {
           let projectChanged = false;
@@ -679,8 +706,18 @@ export class StudioProjectCatalog {
       }
 
       if (changed) {
+        if (createdProjects.length > 0) {
+          await this.lifecycleHooks.beforeProjectsCreatedCommit?.(
+            createdProjects.map(publicSummary),
+          );
+        }
         await this.persist(next);
         this.projects = next;
+        if (createdProjects.length > 0) {
+          await this.lifecycleHooks.afterProjectsCreatedCommit?.(
+            createdProjects.map(publicSummary),
+          );
+        }
       }
       return {
         projects: (changed ? next : this.projects!).map(publicSummary),
