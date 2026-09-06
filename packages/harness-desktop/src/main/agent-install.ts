@@ -23,6 +23,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { CLAUDE_INSTALL_COMMAND } from "@sapiom/harness";
+import { runUpdateCommand } from "./agent-update-process.js";
 import {
   SAPIOM_CLI_PACKAGE,
   SAPIOM_MCP_PACKAGE,
@@ -123,6 +124,21 @@ export function installClaudeCode(
   onLine: (line: string) => void,
 ): Promise<InstallResult> {
   return installNpmGlobal(packageSpecFromInstallCommand(CLAUDE_INSTALL_COMMAND), onLine);
+}
+
+/** Update into an isolated prefix. Both npm network retries and the complete
+ * process tree are bounded; failure leaves the currently selected CLI intact. */
+export async function installAgentVersion(
+  packageSpec: string,
+  prefix: string,
+  onLine: (line: string) => void,
+): Promise<boolean> {
+  const result = await runUpdateCommand(process.execPath, [
+    resolveNpmCli(), "install", "--global", packageSpec, "--prefix", prefix,
+    "--no-audit", "--no-fund", "--loglevel=info", "--fetch-retries=0", "--fetch-timeout=15000",
+  ], { env: npmInstallEnv(process.env), timeoutMs: 90_000, onLine });
+  if (!result.ok) onLine(result.detail);
+  return result.ok;
 }
 
 /**

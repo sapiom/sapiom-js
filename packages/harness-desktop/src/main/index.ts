@@ -18,6 +18,7 @@ import { initFileLog } from "./log-file.js";
 import { resolveInstanceLockAction } from "./single-instance.js";
 import { createSetupWindow } from "./windows.js";
 import { boot, type BootResult } from "./boot.js";
+import { stopAgentUpdateCommands } from "./agent-update-process.js";
 import { runSmokeChecks, reportSmoke } from "./smoke.js";
 import { initUpdater, previewDownloadedUpdateCard } from "./updater.js";
 import { initDialogs } from "./dialogs.js";
@@ -54,6 +55,7 @@ if (process.env.SAPIOM_KEEP_HTTP2 !== "1") {
   app.commandLine.appendSwitch("disable-http2");
 }
 
+const bootAbort = new AbortController();
 let bootResult: BootResult | null = null;
 let quitting = false;
 /**
@@ -67,11 +69,11 @@ let quitting = false;
  */
 let shuttingDown: Promise<void> | null = null;
 function shutdownServer(): Promise<void> {
-  if (!bootResult) return Promise.resolve();
   // Set synchronously, before any await: the quit hook reads it to decide whether
   // to intercept, and a later assignment would let it intercept its own re-quit.
   quitting = true;
-  shuttingDown ??= bootResult.server.close().catch(() => {
+  bootAbort.abort();
+  shuttingDown ??= stopAgentUpdateCommands().then(() => bootResult?.server.close()).catch(() => {
     /* close() is internally race-bounded to 5s; ignore errors on shutdown */
   });
   return shuttingDown;
@@ -177,7 +179,7 @@ if (lock.action === "fail") {
       const coldLink = pendingDeepLink ?? deepLinkFromArgv(process.argv);
       pendingDeepLink = null;
       const coldTarget = coldLink ? parseDeepLink(coldLink) : null;
-      bootResult = await boot(setupWin, { devMode, smoke: smokeMode, deepLink: coldTarget ?? undefined });
+      bootResult = await boot(setupWin, { devMode, smoke: smokeMode, deepLink: coldTarget ?? undefined, signal: bootAbort.signal });
       if (devMode || smokeMode) {
         // Dev/smoke hook: print the UI-authorized launch URL so a harness can
         // verify the server booted without driving the GUI.
@@ -247,6 +249,7 @@ if (lock.action === "fail") {
         if (buffered) handleDeepLink(buffered);
       });
     } catch (err) {
+      if (bootAbort.signal.aborted) return;
       if (smokeMode) {
         // A boot failure IS the smoke result — report it as one and fail fast
         // rather than showing an error window nobody is watching.
@@ -271,7 +274,7 @@ if (lock.action === "fail") {
 
 // Kill PTYs before exit: intercept quit, close the server, then really quit.
 app.on("before-quit", (event) => {
-  if (quitting || !bootResult) return;
+  if (quitting) return;
   event.preventDefault();
   void shutdownServer().finally(() => app.quit());
 });

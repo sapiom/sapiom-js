@@ -43,14 +43,15 @@
  * so a CI log shows exactly which layer broke.
  */
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { app } from "electron";
-import { AGENT_STUDIO_PRODUCT_NAME, resolveSpawnTarget } from "@sapiom/harness";
+import { AGENT_STUDIO_PRODUCT_NAME, createCodexAdapter, resolveSpawnTarget } from "@sapiom/harness";
+import { resolveAgentCommand } from "./agent-updates.js";
 import { createSetupWindow } from "./windows.js";
 import { resolveWebDir } from "./paths.js";
 import { shimDir } from "./runtime-shims.js";
@@ -78,6 +79,43 @@ async function check(name: string, fn: () => Promise<string>): Promise<SmokeChec
   } catch (err) {
     return { name, ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** A managed npm Codex is a JS entry, including on Node-less Windows machines.
+ * Prove the packaged runtime can launch/resume that shape through a real PTY. */
+async function checkManagedAgent(): Promise<string> {
+  const prefix = mkdtempSync(path.join(tmpdir(), "studio managed agent "));
+  try {
+    const modules = process.platform === "win32" ? "node_modules" : path.join("lib", "node_modules");
+    const packageDir = path.join(prefix, modules, "@openai", "codex");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ bin: { codex: "cli.cjs" } }));
+    writeFileSync(path.join(packageDir, "cli.cjs"), "console.log(process.argv.includes('--version') ? '99.0.0' : 'managed-codex-ready');\n");
+    const command = await resolveAgentCommand(prefix, "codex", {
+      binary: process.execPath, binaryArgs: [], binaryEnv: { ELECTRON_RUN_AS_NODE: "1" },
+    });
+    if (!command) throw new Error("Managed Codex entry did not resolve");
+    const adapter = createCodexAdapter(command);
+    if (!(await adapter.doctor())[0]?.ok) throw new Error("Managed Codex version probe failed");
+    const opts = { harnessSessionId: "managed-smoke", cwd: prefix };
+    const pty = await import("node-pty");
+    for (const spec of [adapter.launch(opts), adapter.resume("previous", opts)]) {
+      await new Promise<void>((resolve, reject) => {
+        const child = pty.spawn(spec.command, spec.args, {
+          cwd: prefix, env: { ...process.env, ...command.binaryEnv }, cols: 80, rows: 24,
+        });
+        let output = "";
+        const timer = setTimeout(() => { child.kill(); reject(new Error("Managed CLI PTY timed out")); }, 5_000);
+        child.onData((data) => { output += data; });
+        child.onExit(({ exitCode }) => {
+          clearTimeout(timer);
+          if (exitCode === 0 && output.includes("managed-codex-ready")) resolve();
+          else reject(new Error(`Managed CLI PTY failed (${exitCode}): ${output}`));
+        });
+      });
+    }
+    return "managed JS CLI verified, launched and resumed through the packaged runtime";
+  } finally { rmSync(prefix, { recursive: true, force: true }); }
 }
 
 /** GET with the boot token, asserting status and (optionally) a body substring. */
@@ -917,6 +955,7 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     }),
     await check("session-create", () => checkSessionCreate(base, token)),
     await check("agent-shim", checkAgentShim),
+    await check("managed-agent", checkManagedAgent),
     await check("preload-bridge", checkPreloadBridge),
     await check("node-pty", checkNodePty),
     await check("unpacked-deps", checkUnpackedDeps),

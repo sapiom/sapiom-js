@@ -82,6 +82,7 @@ export type { SpawnTarget } from "./core/spawn-target.js";
 // desktop app's --smoke mode to create a REAL session against a stub agent, so
 // per-OS session coverage doesn't require Claude Code installed on a CI runner.
 export { createClaudeCodeAdapter } from "./core/adapters/claude-code.js";
+export { createCodexAdapter } from "./core/adapters/codex.js";
 export {
   loadSettings,
   saveSettings,
