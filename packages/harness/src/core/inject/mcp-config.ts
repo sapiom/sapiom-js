@@ -56,11 +56,12 @@ export interface McpConfigOptions {
 }
 
 /**
- * Writes the `--mcp-config` file for a harness session: the remote HTTP
+ * Writes the MCP config file for a harness session: the remote HTTP
  * capability MCP (`sapiom`) and the local stdio authoring MCP (`sapiom-dev`).
  * Written under `HARNESS_PATHS.generated/<harnessSessionId>/` so concurrent
  * sessions never share (or race on) a config file. Returns the file's
- * absolute path for the adapter to pass as `--mcp-config <path>`.
+ * absolute path. Claude passes it as `--mcp-config <path>`; Codex translates
+ * it to per-process config overrides and environment variables.
  */
 export async function generateMcpConfig(
   harnessSessionId: string,
