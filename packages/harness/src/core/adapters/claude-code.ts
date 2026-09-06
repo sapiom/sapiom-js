@@ -157,6 +157,9 @@ const DEFAULT_FULL_SCAN_MAX_BYTES = 5_242_880; // 5 MiB
 export interface ClaudeCodeAdapterOptions {
   /** Overridable for tests (e.g. spawn `bash` instead of a real, auth-gated `claude`). */
   binary?: string;
+  /** Host-supplied interpreter/entry script for a managed CLI (e.g. Electron-as-Node). */
+  binaryArgs?: string[];
+  binaryEnv?: Record<string, string>;
   /** Overridable for tests. Defaults to the real home directory. */
   homeDir?: string;
   /** Overridable for tests. Max transcript size (bytes) to read in full for an
@@ -420,11 +423,15 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
    */
   readonly assumesBracketedPaste = true;
   private readonly binary: string;
+  private readonly binaryArgs: string[];
+  private readonly binaryEnv: Record<string, string>;
   private readonly homeDir: string;
   private readonly fullScanMaxBytes: number;
 
   constructor(options: ClaudeCodeAdapterOptions = {}) {
     this.binary = options.binary ?? "claude";
+    this.binaryArgs = options.binaryArgs ?? [];
+    this.binaryEnv = options.binaryEnv ?? {};
     this.homeDir = options.homeDir ?? homedir();
     this.fullScanMaxBytes = options.fullScanMaxBytes ?? DEFAULT_FULL_SCAN_MAX_BYTES;
   }
@@ -444,7 +451,9 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
   async doctor(): Promise<DoctorCheck[]> {
     let versionLine: string;
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
+      const { stdout } = await execFileAsync(this.binary, [...this.binaryArgs, "--version"], {
+        timeout: 5_000, windowsHide: true, env: { ...process.env, ...this.binaryEnv },
+      });
       versionLine = stdout.trim();
     } catch {
       return [
@@ -477,11 +486,11 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     }
     return {
       command: this.binary,
-      args,
+      args: [...this.binaryArgs, ...args],
       // Nested-agent conflict: Claude Code refuses to run "inside itself" if
       // CLAUDECODE is already set, which it will be if the harness server
       // itself was launched from within a Claude Code session.
-      env: { CLAUDECODE: null },
+      env: { ...this.binaryEnv, CLAUDECODE: null },
       cwd: opts.cwd,
     };
   }
@@ -493,8 +502,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     }
     return {
       command: this.binary,
-      args,
-      env: { CLAUDECODE: null },
+      args: [...this.binaryArgs, ...args],
+      env: { ...this.binaryEnv, CLAUDECODE: null },
       cwd: opts.cwd,
     };
   }
@@ -526,8 +535,8 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
     args.push("--permission-mode", "acceptEdits", "--output-format", "stream-json", "--verbose");
     return {
       command: this.binary,
-      args,
-      env: { CLAUDECODE: null },
+      args: [...this.binaryArgs, ...args],
+      env: { ...this.binaryEnv, CLAUDECODE: null },
       cwd: opts.cwd,
     };
   }
