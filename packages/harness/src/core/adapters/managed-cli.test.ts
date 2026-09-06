@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +18,9 @@ import { CodexAdapter } from "./codex.js";
 let root: string;
 let entry: string;
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "managed CLI with spaces "));
+  root = await realpath(
+    await mkdtemp(join(tmpdir(), "managed CLI with spaces ")),
+  );
   entry = join(root, "cli.cjs");
   await writeFile(
     entry,
@@ -172,7 +181,7 @@ require('node:readline').createInterface({input: process.stdin}).on('line', (lin
       },
     });
     expect(spec.args.slice(1)).toEqual([process.execPath, entry]);
-    // Use the source worker under the test loader; packaged smoke exercises its emitted JS.
+    // Load the source worker so this check does not require build output.
     const sourceWorker = spec.args[0]!.replace(/\.js$/, ".ts");
     const loader = createRequire(import.meta.url).resolve("tsx/esm");
     const child = execFile(
