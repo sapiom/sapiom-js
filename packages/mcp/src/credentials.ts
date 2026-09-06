@@ -101,6 +101,16 @@ async function readCredentialsFile(): Promise<CredentialsFile | null> {
 async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
   const filePath = getCredentialsPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  // `mode` below only applies when the file is created, so a credentials.json
+  // left behind with looser permissions would keep them. Tighten first, then
+  // write: chmod'ing afterwards would leave a window in which the fresh API key
+  // is already on disk under the old, wider mode.
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // No pre-existing file, or a filesystem that refuses chmod. The `mode`
+    // below covers the create case; best effort either way.
+  }
   await fs.writeFile(filePath, JSON.stringify(file, null, 2) + "\n", {
     mode: 0o600,
   });
