@@ -31,12 +31,23 @@ export type ToolResult = {
 };
 
 /**
- * Truncate `text` to `budget` characters, appending an honest marker that
- * records how many characters were dropped and — when a `webappUrl` is given —
- * where the full value can be read. Returns the input unchanged when it already
- * fits. This is the primitive the execution projection uses to guarantee a tool
- * result can never exceed its char budget regardless of how large the underlying
- * step input/output/logs were (a single step output can be multiple MB).
+ * Truncate `text` to fit within `budget` characters TOTAL (content + marker),
+ * appending an honest marker that records how many characters were dropped
+ * and — when a `webappUrl` is given — where the full value can be read.
+ * Returns the input unchanged when it already fits. This is the primitive
+ * the execution projection uses to guarantee a tool result can never exceed
+ * its char budget regardless of how large the underlying step
+ * input/output/logs were (a single step output can be multiple MB).
+ *
+ * The marker's own length depends on the dropped-char count (more digits as
+ * more is dropped), which depends on where we slice, which depends on the
+ * marker's length — so getting `result.length <= budget` exactly right takes
+ * a few passes: each pass's marker can only grow as the slice point shrinks
+ * to make room for it, so `sliceLen` is non-increasing and this always
+ * converges (in practice within one or two iterations; the loop bound below
+ * is a generous safety margin, not an expected iteration count). The final
+ * `.slice(0, budget)` is a hard backstop for the degenerate case where
+ * `budget` is too small to fit the marker at all.
  */
 export function capText(
   text: string,
@@ -44,9 +55,20 @@ export function capText(
   webappUrl?: string,
 ): string {
   if (text.length <= budget) return text;
-  const dropped = text.length - budget;
   const where = webappUrl ? ` — open ${webappUrl} for the full value` : "";
-  return `${text.slice(0, budget)}…[truncated ${dropped} chars${where}]`;
+  let sliceLen = budget;
+  for (let i = 0; i < 5; i++) {
+    const dropped = text.length - sliceLen;
+    const marker = `…[truncated ${dropped} chars${where}]`;
+    const nextSliceLen = Math.max(0, budget - marker.length);
+    if (nextSliceLen === sliceLen) {
+      return `${text.slice(0, sliceLen)}${marker}`.slice(0, budget);
+    }
+    sliceLen = nextSliceLen;
+  }
+  const dropped = text.length - sliceLen;
+  const marker = `…[truncated ${dropped} chars${where}]`;
+  return `${text.slice(0, sliceLen)}${marker}`.slice(0, budget);
 }
 
 export function ok(data: unknown): ToolResult {
