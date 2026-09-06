@@ -642,6 +642,21 @@ export class WorkspaceRootWatcher {
           }
         };
         if (rawFilename === null) {
+          if (
+            this.ignoredEventRoots.some(
+              (ignoredRoot) =>
+                ignoredRoot === this.root ||
+                isNestedSourceRoot(this.root, ignoredRoot) ||
+                isNestedSourceRoot(ignoredRoot, this.root),
+            )
+          ) {
+            // Without a filename we cannot distinguish host metadata from a
+            // source edit. Use the supported fingerprint polling fallback:
+            // real edits still invalidate discovery, while lock writes cannot
+            // start an unbounded event -> rescan -> lock-write feedback loop.
+            this.fallBackToPolling();
+            return;
+          }
           potential(null);
           this.scheduleSourceChange(null);
           return;

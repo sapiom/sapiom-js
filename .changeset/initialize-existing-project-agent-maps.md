@@ -1,8 +1,10 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 ---
 
-Reset only legacy format-1 Agent Maps at Studio startup. Initialize missing maps
-for existing agents with one isolated, structured Claude Code or Codex inference
-pass. Protect authored format-2 history from automatic edits, persist generation
-status and explicit retries, and pack disconnected components into compact layouts.
+Delete only legacy format-1 Agent Map workspace records during shared desktop and
+CLI startup. Automatically generate missing maps for existing agents in the
+background with one isolated, structured Claude Code or Codex inference pass.
+Protect authored format-2 history from automatic edits, expose named initialization
+status types and authenticated status/retry endpoints, and pack disconnected
+components into compact layouts.

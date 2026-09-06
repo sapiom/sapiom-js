@@ -235,7 +235,13 @@ export class AgentMapWorkspaceStore {
       const record = JSON.parse(await fs.readFile(marker, "utf8")) as { status?: string; projectId?: string };
       if (record.status === "prepared" && record.projectId === projectId)
         await this.writeSidecar(marker, { schemaVersion: 1, projectId, status: "completed" });
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw storageError(); }
+    } catch {
+      // This marker records reset progress; it is not map authority. A damaged
+      // or unreadable marker must not hide an intact format-2 workspace. The
+      // primary read below still distinguishes absence from malformed state
+      // and I/O failures, and a qualifying format 1 always prepares a new marker
+      // successfully before deletion.
+    }
     return false;
   }
 
