@@ -130,6 +130,20 @@ current owners and durable historical aliases cannot be adopted into another
 session. Duplicate persisted provider IDs are repaired conservatively during
 boot, preserving the first owner and clearing the later duplicate pointer.
 
+### Project contract helpers
+
+`@sapiom/harness` exports immutable map, plan and brief record types, exact-version
+references, strict codecs and canonical digest helpers for offline validation.
+For example, use `parseProjectBuildPlanVersion` to validate a plan record and
+`computeBuildPlanSemanticDigest` to compare its authored meaning independently
+of timestamps or attribution. These data contracts do not require a live session
+or an active MCP tool. Store and tool activation are separate integrations.
+
+`BuildPlanId`, `ArchitectureSourceRef`, `AgentMapRevisionId`,
+`AgentBriefVersionRecord`, and `computeArchitectureGraphDigest` are supported
+aliases for the corresponding neutral plan, map and brief contracts; they do
+not introduce a second data model.
+
 ### Agent Map MCP
 
 Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for

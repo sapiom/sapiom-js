@@ -23,6 +23,11 @@ export type PlanNodeId = AgentMapBrand<"PlanNodeId">;
 export type PlanRelationshipId = AgentMapBrand<"PlanRelationshipId">;
 export type MapProposalId = AgentMapBrand<"MapProposalId">;
 export type ProposalOperationId = AgentMapBrand<"ProposalOperationId">;
+export type AgentMapVersionId = AgentMapBrand<"AgentMapVersionId">;
+/** Identity of normalized graph meaning. It is deliberately project-neutral. */
+export type GraphContentDigest = AgentMapBrand<"GraphContentDigest">;
+/** Integrity identity for a complete immutable record or aggregate. */
+export type RecordDigest = AgentMapBrand<"RecordDigest">;
 /** A caller-authored alias whose lifetime is exactly one operation batch. */
 export type DraftRef = AgentMapBrand<"DraftRef">;
 
@@ -275,6 +280,64 @@ export type PlanningSessionIdentity =
       role: "agent-builder";
       assignment: { kind: "unplanned" };
     });
+
+/** Trusted, role-neutral attribution stored on immutable project records. */
+export type ProjectAgentActorRef = Readonly<{
+  userId: string;
+  sessionId: string;
+}>;
+
+/** Exact project-bound identity of immutable Agent Map content. */
+export type AgentMapVersionRef = Readonly<{
+  projectId: StudioProjectId;
+  versionId: AgentMapVersionId;
+  contentDigest: GraphContentDigest;
+}>;
+
+export type ProjectVersionChangeKind = "created" | "edited" | "rebased" | "restored" | "migrated";
+
+export type ProjectMutationOrigin =
+  | Readonly<{
+      kind: "request";
+      requestDigest: string;
+      operationIds: readonly ProposalOperationId[];
+      touchKeys: readonly string[];
+    }>
+  | Readonly<{
+      kind: "migration";
+      requestDigest: string;
+      operationIds: readonly ProposalOperationId[];
+      touchKeys: readonly string[];
+      legacyProposalId: MapProposalId | null;
+      legacyAcceptedVersion: number | null;
+    }>;
+
+/** One immutable entry in the sole project Agent Map history. */
+export type AgentMapVersion = Readonly<{
+  schemaVersion: 1;
+  projectId: StudioProjectId;
+  versionId: AgentMapVersionId;
+  version: number;
+  parentVersionId: AgentMapVersionId | null;
+  changeKind: ProjectVersionChangeKind;
+  restoredFromVersionId: AgentMapVersionId | null;
+  graph: AgentMapGraph;
+  contentDigest: GraphContentDigest;
+  authoredBy: ProjectAgentActorRef;
+  createdAt: string;
+  origin: ProjectMutationOrigin;
+  recordDigest: RecordDigest;
+}>;
+
+/** Role-neutral operation provenance used after the deployed E2 migration. */
+export type RoleNeutralMapOperationRecord = Readonly<{
+  id: ProposalOperationId;
+  requestId: string;
+  acceptedVersion: number;
+  operation: MapOperation;
+  actor: ProjectAgentActorRef;
+  acceptedAt: string;
+}>;
 
 export interface ProposalActor {
   userId: string;
