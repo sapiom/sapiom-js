@@ -108,13 +108,13 @@ export class TransactionPoller {
       const transaction =
         await this.sapiomClient.transactions.get(transactionId);
 
-      if (transaction.status === TransactionStatus.AUTHORIZED) {
+      if (transaction?.status === TransactionStatus.AUTHORIZED) {
         return { status: "authorized", transaction };
       }
 
       if (
-        transaction.status === TransactionStatus.DENIED ||
-        transaction.status === TransactionStatus.CANCELLED
+        transaction?.status === TransactionStatus.DENIED ||
+        transaction?.status === TransactionStatus.CANCELLED
       ) {
         return { status: "denied", transaction };
       }
