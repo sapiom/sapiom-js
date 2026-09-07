@@ -17,7 +17,7 @@ export type { TransportConfig, Attribution } from "./_client/index.js";
 
 // The generic dispatch contract: any capability handle that carries a `dispatch`
 // member is pausable via `pauseUntilSignal` in @sapiom/agent.
-export type { DispatchHandle } from "./dispatch.js";
+export type { DispatchHandle, MaybeDispatchHandle } from "./dispatch.js";
 
 export * as sandboxes from "./sandboxes/index.js";
 export { Sandbox } from "./sandboxes/index.js";

@@ -12,7 +12,7 @@
  * pause directives in the shape the routing layer will consume.
  */
 
-import type { DispatchHandle } from '@sapiom/tools';
+import type { MaybeDispatchHandle } from '@sapiom/tools';
 
 /**
  * Single source of truth for directive `kind` values.
@@ -230,7 +230,9 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  *   2. A dispatched-capability handle, or the launch promise itself (async — it
  *      awaits the launch). Reads the `signal` + `correlationId` off the handle's
  *      `dispatch` member, so the author writes neither. Erases to the identical
- *      `Pause` directive as form (1).
+ *      `Pause` directive as form (1). A handle with NO `dispatch` — a capability
+ *      that resolves a rejected dispatch as data, so no run exists to pause on —
+ *      is refused with a pointed error instead of parking the step forever.
  *
  *        return pauseUntilSignal(ctx.sapiom.models.coding.launch({ task }), { resumeStep: 'review' });
  *
@@ -246,23 +248,30 @@ export function pauseUntilSignal<const Resume extends string>(args: {
   output?: unknown;
 }): Pause<Resume>;
 export function pauseUntilSignal<const Resume extends string>(
-  handle: DispatchHandle | Promise<DispatchHandle>,
+  handle: MaybeDispatchHandle | Promise<MaybeDispatchHandle>,
   opts?: { resumeStep?: Resume; timeoutMs?: number; output?: unknown },
 ): Promise<Pause<Resume>>;
 export function pauseUntilSignal<const Resume extends string>(
   argOrHandle:
     | { signal: string; resumeStep?: Resume; correlationId?: string; timeoutMs?: number; output?: unknown }
-    | DispatchHandle
-    | Promise<DispatchHandle>,
+    | MaybeDispatchHandle
+    | Promise<MaybeDispatchHandle>,
   opts?: { resumeStep?: Resume; timeoutMs?: number; output?: unknown },
 ): Pause<Resume> | Promise<Pause<Resume>> {
   // The launch promise — await it, then build from the resolved handle.
   if (isThenable(argOrHandle)) {
     return Promise.resolve(argOrHandle).then((handle) => pauseFromHandle(handle, opts));
   }
-  // A resolved dispatch handle — async for a uniform handle-form contract.
-  if ('dispatch' in argOrHandle) {
-    return Promise.resolve(pauseFromHandle(argOrHandle, opts));
+  // Explicit args carry a `signal` name; anything else is a handle. Keyed on
+  // `signal` rather than on `dispatch` because a REJECTED launch handle has no
+  // `dispatch` member — reading it as explicit args would build a pause on
+  // `signal: undefined` and hang the step forever.
+  if (!('signal' in argOrHandle)) {
+    // A resolved dispatch handle — async for a uniform handle-form contract.
+    // Built inside `then` so a dispatch-less handle surfaces as a REJECTED
+    // promise (what the declared return type promises), not a sync throw.
+    const handle = argOrHandle;
+    return Promise.resolve().then(() => pauseFromHandle(handle, opts));
   }
   // Explicit args — synchronous.
   return {
@@ -274,17 +283,29 @@ export function pauseUntilSignal<const Resume extends string>(
   };
 }
 
-function isThenable(x: unknown): x is Promise<DispatchHandle> {
+function isThenable(x: unknown): x is Promise<MaybeDispatchHandle> {
   return x != null && typeof (x as { then?: unknown }).then === 'function';
 }
 
 function pauseFromHandle<Resume extends string>(
-  handle: DispatchHandle,
+  handle: MaybeDispatchHandle,
   opts: { resumeStep?: Resume; timeoutMs?: number; output?: unknown } | undefined,
 ): Pause<Resume> {
+  const dispatch = handle.dispatch;
+  // No `dispatch` means the dispatch was rejected (unknown slug, refused input,
+  // transport fault) or is otherwise unpausable: no run exists, so nothing will
+  // ever fire the resume signal. Fail loudly here instead of pausing the step on
+  // a signal that never arrives.
+  if (!dispatch) {
+    throw new Error(
+      'pauseUntilSignal: this launch handle carries no `dispatch`, so there is nothing to pause on — ' +
+        'the dispatch was rejected before a run existed. Read the rejection off the handle ' +
+        '(`handle.rejection`, or `await handle.wait()`) and branch on it instead of pausing.',
+    );
+  }
   return {
     kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
-    signal: { name: handle.dispatch.resultSignal, correlationId: handle.dispatch.correlationId },
+    signal: { name: dispatch.resultSignal, correlationId: dispatch.correlationId },
     resumeStep: opts?.resumeStep,
     timeoutMs: opts?.timeoutMs,
     output: opts?.output,

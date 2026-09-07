@@ -9,7 +9,10 @@ import {
   agentResultSchema,
 } from "./index.js";
 
-function fakeFetch(capture?: { headers?: Record<string, string>; url?: string }): typeof globalThis.fetch {
+function fakeFetch(capture?: {
+  headers?: Record<string, string>;
+  url?: string;
+}): typeof globalThis.fetch {
   return (async (url: string, init: RequestInit = {}) => {
     if (capture) {
       capture.headers = init.headers as Record<string, string>;
@@ -19,7 +22,8 @@ function fakeFetch(capture?: { headers?: Record<string, string>; url?: string })
       ok: true,
       status: 201,
       json: async () => ({ status: "enqueued", executionId: "exec-9" }),
-      text: async () => JSON.stringify({ status: "enqueued", executionId: "exec-9" }),
+      text: async () =>
+        JSON.stringify({ status: "enqueued", executionId: "exec-9" }),
     } as unknown as Response;
   }) as unknown as typeof globalThis.fetch;
 }
@@ -27,7 +31,10 @@ function fakeFetch(capture?: { headers?: Record<string, string>; url?: string })
 describe("orchestrations.launch — dispatch handle", () => {
   it("returns a handle satisfying DispatchHandle (correlationId = child execution id)", async () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch() });
-    const handle = await sapiom.agents.launch({ definition: "enrich-lead", input: { a: 1 } });
+    const handle = await sapiom.agents.launch({
+      definition: "enrich-lead",
+      input: { a: 1 },
+    });
     expect(handle.executionId).toBe("exec-9");
     expect(handle.dispatch).toEqual({
       correlationId: "exec-9",
@@ -39,7 +46,9 @@ describe("orchestrations.launch — dispatch handle", () => {
     const capture: { url?: string } = {};
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch(capture) });
     await sapiom.agents.launch({ definition: "enrich-lead" });
-    expect(capture.url).toContain("/agents/v1/definitions/enrich-lead/executions");
+    expect(capture.url).toContain(
+      "/agents/v1/definitions/enrich-lead/executions",
+    );
   });
 
   it("AGENTS_RESULT_SIGNAL is the capability-stable terminal signal", () => {
@@ -70,7 +79,13 @@ describe("orchestrations.launch — workflow resume token", () => {
 });
 
 describe("agentResultSchema", () => {
-  const base = { executionId: "e", definition: "d", version: "1", startedAt: "t0", finishedAt: "t1" };
+  const base = {
+    executionId: "e",
+    definition: "d",
+    version: "1",
+    startedAt: "t0",
+    finishedAt: "t1",
+  };
 
   it("accepts a completed payload", () => {
     const p = { ...base, status: "completed", output: { ok: true } };
@@ -89,8 +104,261 @@ describe("agentResultSchema", () => {
   });
 
   it("rejects a completed payload missing output", () => {
-    expect(() => agentResultSchema.parse({ ...base, status: "completed" })).toThrow(
-      AgentResultSchemaError,
-    );
+    expect(() =>
+      agentResultSchema.parse({ ...base, status: "completed" }),
+    ).toThrow(AgentResultSchemaError);
+  });
+});
+
+/**
+ * SAP-3219 — a rejected DISPATCH is data, not a throw. A coordinator dispatching
+ * several children by slug must be able to branch on one bad slug (or one input
+ * the engine's pre-gate refuses) without the calling step blowing up and
+ * retrying to its cap.
+ */
+describe("orchestrations dispatch rejection — resolves, never throws", () => {
+  /** A fetch that answers the create-execution POST with one non-2xx. */
+  function rejectingFetch(
+    status: number,
+    body: unknown,
+  ): typeof globalThis.fetch {
+    return (async () => ({
+      ok: false,
+      status,
+      text: async () =>
+        typeof body === "string" ? body : JSON.stringify(body),
+    })) as unknown as typeof globalThis.fetch;
+  }
+
+  it("resolves an unknown slug (404) as status 'rejected' with code 'not_found'", async () => {
+    const body = {
+      statusCode: 404,
+      code: "definition_not_found",
+      message: "no such definition: typo-slug",
+    };
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(404, body),
+    });
+
+    const result = await sapiom.agents.run({ definition: "typo-slug" });
+
+    expect(result).toEqual({
+      executionId: null,
+      status: "rejected",
+      output: null,
+      error: {
+        code: "not_found",
+        message: "no such definition: typo-slug",
+        status: 404,
+        details: body,
+      },
+    });
+  });
+
+  it("resolves input the engine's pre-gate refuses (400) as code 'invalid_input'", async () => {
+    const body = {
+      statusCode: 400,
+      code: "step_input_invalid",
+      message: "step 'entry' input invalid: /topic must be string",
+    };
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(400, body),
+    });
+
+    const result = await sapiom.agents.run({
+      definition: "research-topic",
+      input: { topic: 7 },
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.executionId).toBeNull();
+    // `details` keeps the platform's own body, so the author can read its stable
+    // code and validation issues.
+    expect(result.error).toMatchObject({
+      code: "invalid_input",
+      status: 400,
+      details: body,
+    });
+  });
+
+  it("resolves a transport fault as code 'transport' with a null status", async () => {
+    const fetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch });
+
+    const result = await sapiom.agents.run({ definition: "enrich-lead" });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error).toEqual({
+      code: "transport",
+      message: "fetch failed",
+      status: null,
+      details: null,
+    });
+  });
+
+  it("buckets any other non-2xx as code 'http' and keeps a non-JSON body as text", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(503, "upstream unavailable"),
+    });
+
+    const result = await sapiom.agents.run({ definition: "enrich-lead" });
+
+    expect(result.error).toMatchObject({
+      code: "http",
+      status: 503,
+      details: "upstream unavailable",
+    });
+  });
+
+  it("`status !== 'completed'` is the single branch for a rejection", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(404, { message: "gone" }),
+    });
+    const result = await sapiom.agents.run({ definition: "typo-slug" });
+    expect(result.status).not.toBe("completed");
+  });
+
+  it("launch resolves a NON-pausable handle: no `dispatch`, rejection readable, wait() resolves it", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(404, { message: "gone" }),
+    });
+
+    const handle = await sapiom.agents.launch({ definition: "typo-slug" });
+
+    expect(handle.executionId).toBeNull();
+    // No child exists, so nothing can ever fire the resume signal — the absent
+    // `dispatch` is what makes `pauseUntilSignal` refuse the handle.
+    expect(handle.dispatch).toBeUndefined();
+    expect(handle.rejection).toMatchObject({ code: "not_found", status: 404 });
+    expect(await handle.status()).toBe("rejected");
+    expect(await handle.wait()).toMatchObject({
+      status: "rejected",
+      executionId: null,
+    });
+  });
+
+  it("resolves a refused delayed dispatch (`at`) the same way", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(404, { message: "gone" }),
+    });
+
+    const handle = await sapiom.agents.launch({
+      definition: "typo-slug",
+      at: "2099-01-01T00:00:00.000Z",
+    });
+
+    expect(handle.dispatch).toBeUndefined();
+    expect(handle.rejection).toMatchObject({ code: "not_found" });
+  });
+});
+
+describe("orchestrations wait() — non-terminal outcomes are data too", () => {
+  /** POST the launch, then answer every status read with `doc`. */
+  function launchThenStatus(
+    doc: () => Promise<unknown>,
+  ): typeof globalThis.fetch {
+    let first = true;
+    return (async () => {
+      if (first) {
+        first = false;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ status: "enqueued", executionId: "exec-9" }),
+          text: async () => "",
+        } as unknown as Response;
+      }
+      return (await doc()) as Response;
+    }) as unknown as typeof globalThis.fetch;
+  }
+
+  it("resolves 'timed_out' (keeping the executionId) instead of throwing at the deadline", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: launchThenStatus(async () => {
+        // Outlast the 1ms budget so the deadline has certainly passed by the
+        // time the first poll is evaluated.
+        await new Promise((r) => setTimeout(r, 5));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: "running" }),
+          text: async () => "",
+        };
+      }),
+    });
+    const handle = await sapiom.agents.launch({ definition: "slow-child" });
+
+    const result = await handle.wait({ timeoutMs: 1, pollMs: 1 });
+
+    expect(result).toMatchObject({
+      executionId: "exec-9",
+      status: "timed_out",
+      output: null,
+      error: { code: "timeout", status: null },
+    });
+  });
+
+  it("resolves a 4xx on the status read as 'rejected' rather than polling to the deadline", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: launchThenStatus(async () => ({
+        ok: false,
+        status: 404,
+        text: async () =>
+          JSON.stringify({ code: "execution_not_found", message: "gone" }),
+      })),
+    });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const result = await handle.wait({ timeoutMs: 60_000, pollMs: 1 });
+
+    expect(result).toMatchObject({
+      executionId: "exec-9",
+      status: "rejected",
+      error: { code: "not_found", status: 404 },
+    });
+  });
+
+  it("keeps polling through a transient 5xx and resolves the terminal status", async () => {
+    let reads = 0;
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: launchThenStatus(async () => {
+        reads += 1;
+        if (reads === 1) {
+          return {
+            ok: false,
+            status: 503,
+            text: async () => "upstream unavailable",
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: "completed", output: { ok: true } }),
+          text: async () => "",
+        };
+      }),
+    });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const result = await handle.wait({ timeoutMs: 60_000, pollMs: 1 });
+
+    expect(result).toEqual({
+      executionId: "exec-9",
+      status: "completed",
+      output: { ok: true },
+      error: null,
+    });
+    expect(reads).toBe(2);
   });
 });

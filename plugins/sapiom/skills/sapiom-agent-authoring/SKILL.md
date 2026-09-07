@@ -429,9 +429,12 @@ const research = await ctx.sapiom.agents.run({
   definition: "research-topic", // the deployed child's slug
   input: { topic: input.topic },
 });
-// agents.run resolves on ANY terminal status (completed | failed | cancelled)
-// and does NOT throw — a non-completed child is data the coordinator must
-// branch on, or a failed stage silently feeds `null` downstream.
+// agents.run NEVER throws. It resolves on any terminal status
+// (completed | failed | cancelled), on a REJECTED dispatch (unknown slug,
+// input the engine refused, transport fault — status "rejected",
+// executionId null, error { code, message, status, details }), and on a
+// wait timeout ("timed_out"). So this ONE branch covers every way a stage
+// can not deliver — skip it and a bad stage silently feeds `null` onward.
 if (research.status !== "completed") {
   // (fail() requires this step to declare canFail: true)
   return fail(`research-topic ${research.status}: ${String(research.error)}`);
@@ -441,7 +444,9 @@ const script = await ctx.sapiom.agents.run({
   input: { research: research.output },
 });
 // …and so on. Use agents.launch + pauseUntilSignal for a long-running child
-// so the coordinator's step doesn't time out.
+// so the coordinator's step doesn't time out. launch doesn't throw either, but
+// a REJECTED dispatch produced no child to pause on — check `child.rejection`
+// before pauseUntilSignal.
 ```
 
 Building a system in one session? Scaffold the stages as separate projects and deploy

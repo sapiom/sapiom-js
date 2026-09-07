@@ -13,8 +13,20 @@
  * `run` is `launch` + `wait` — it blocks until the run reaches a terminal state, so
  * use it for inline standalone calls, NOT to pause a step (it returns a result, not
  * a pausable handle). An orchestration is addressed by its **slug** (its stable handle).
+ *
+ * Failure is data on EVERY path, including a rejected dispatch. An unknown slug,
+ * input the engine's pre-gate refuses, or a transport fault does not throw out of
+ * `run`/`launch` — it resolves an {@link AgentRunResult} with `status: "rejected"`
+ * and a structured {@link AgentRunError}. So `if (result.status !== "completed")`
+ * stays the single branch an author writes, whether the child failed or never
+ * started. (`launch` still returns a handle, but a REJECTED one carries no
+ * `dispatch` — there is no child to pause on; see {@link RunHandle}.)
  */
-import { Transport, defaultTransport } from "../_client/index.js";
+import {
+  Transport,
+  TransportHttpError,
+  defaultTransport,
+} from "../_client/index.js";
 import type { DispatchHandle } from "../dispatch.js";
 
 const DEFAULT_BASE_URL =
@@ -39,6 +51,50 @@ export type ExecutionStatus =
   | "cancelled";
 const TERMINAL = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
 
+/**
+ * Every status an {@link AgentRunResult} can carry: a run's own lifecycle, plus
+ * the two outcomes where no child lifecycle exists to report.
+ *
+ *   - `"rejected"`  — the DISPATCH was refused, so no run was ever created
+ *                     (unknown slug, input the engine's pre-gate refuses, a
+ *                     transport fault, a credential the platform declined).
+ *   - `"timed_out"` — the run was created and is likely still going; `wait()`
+ *                     stopped polling at its `timeoutMs`. `executionId` is set,
+ *                     so you can keep checking it later.
+ *
+ * Both are NON-completed statuses, which is all an author has to know:
+ * `if (result.status !== "completed")` covers them alongside `failed`.
+ */
+export type AgentRunStatus = ExecutionStatus | "rejected" | "timed_out";
+
+/** Why an {@link AgentRunResult} carries `status: "rejected"` or `"timed_out"`. */
+export type AgentRunErrorCode =
+  /** 404 — no deployed orchestration answers to that slug. */
+  | "not_found"
+  /** 400/422 — the engine's input pre-gate refused `input`. */
+  | "invalid_input"
+  /** Any other non-2xx from the platform (401/403/409/5xx). */
+  | "http"
+  /** The request never got an answer: DNS, socket, abort, missing credential. */
+  | "transport"
+  /** `wait()` hit its `timeoutMs` before the run reached a terminal state. */
+  | "timeout";
+
+/**
+ * A dispatch rejection (or a `wait()` timeout) as data. `details` is the parsed
+ * platform response body when there was one — it carries the platform's own
+ * stable `code` (e.g. `"step_input_invalid"`) and validation issues — and `null`
+ * for a transport fault or a timeout.
+ */
+export interface AgentRunError {
+  code: AgentRunErrorCode;
+  message: string;
+  /** HTTP status the platform answered with; `null` when there was no response. */
+  status: number | null;
+  /** Parsed platform response body (or its raw text); `null` when there was none. */
+  details: unknown;
+}
+
 export interface AgentRunSpec {
   /** Slug of the deployed orchestration to run (its stable handle). */
   definition: string;
@@ -57,11 +113,21 @@ export interface AgentRunSpec {
   at?: string | Date;
 }
 
-/** A live, awaited run (the standalone `run()`/`wait()` result). */
+/**
+ * The standalone `run()`/`wait()` result. Resolved on every outcome — a completed
+ * run, a failed run, a rejected dispatch, a `wait()` timeout — so failure is
+ * always data to branch on and never a thrown exception.
+ */
 export interface AgentRunResult {
-  executionId: string;
-  status: ExecutionStatus;
+  /** The child run's id, or `null` when the dispatch was rejected (no run exists). */
+  executionId: string | null;
+  status: AgentRunStatus;
+  /** The run's output on `"completed"`; `null` otherwise. */
   output: unknown;
+  /**
+   * The child's own error on `"failed"` (whatever shape it reported), or an
+   * {@link AgentRunError} on `"rejected"` / `"timed_out"`. `null` on success.
+   */
   error: unknown;
 }
 
@@ -76,6 +142,11 @@ export interface AgentRunResult {
  *       if (result.status === "failed") { … }
  *     },
  *   });
+ *
+ * There is deliberately no `"rejected"` variant here, unlike
+ * {@link AgentRunResult}: a rejected dispatch never creates a child, so nothing
+ * ever fires the resume signal and no resume payload is produced. That rejection
+ * surfaces on the `launch` handle and from `run`/`wait` instead.
  */
 export type AgentRunResultPayload<TOutput = unknown> =
   | {
@@ -107,9 +178,7 @@ export class AgentResultSchemaError extends Error {}
  * `output` itself is the child orchestration's contract, not validated here.
  */
 export const agentResultSchema = {
-  parse<TOutput = unknown>(
-    value: unknown,
-  ): AgentRunResultPayload<TOutput> {
+  parse<TOutput = unknown>(value: unknown): AgentRunResultPayload<TOutput> {
     const fail = (msg: string): never => {
       throw new AgentResultSchemaError(
         `invalid orchestration result payload: ${msg}`,
@@ -135,19 +204,45 @@ export const agentResultSchema = {
 };
 
 /**
- * A launched-but-not-awaited child run. Satisfies {@link DispatchHandle}, so it can
- * be handed straight to `pauseUntilSignal(handle, { resumeStep })` to suspend the
- * step until the child finishes — or `wait()`-ed inline for standalone use.
+ * A launched-but-not-awaited child run. Normally satisfies {@link DispatchHandle},
+ * so it can be handed straight to `pauseUntilSignal(handle, { resumeStep })` to
+ * suspend the step until the child finishes — or `wait()`-ed inline for standalone
+ * use. A handle from a REJECTED dispatch is the exception: no child exists, so it
+ * carries no `dispatch` and cannot be paused on (see `dispatch`/`rejection`).
  */
-export interface RunHandle extends DispatchHandle {
-  executionId: string;
-  /** Fetch the current status without blocking. */
-  status(): Promise<ExecutionStatus>;
-  /** Poll to a terminal state and resolve the run result. */
-  wait(opts?: {
-    timeoutMs?: number;
-    pollMs?: number;
-  }): Promise<AgentRunResult>;
+export interface RunHandle {
+  /** The child run's id, or `null` when the dispatch was rejected. */
+  executionId: string | null;
+  /**
+   * @internal Framework plumbing consumed by `pauseUntilSignal`.
+   *
+   * ABSENT when the dispatch was rejected: no child exists, so nothing will ever
+   * fire the resume signal and the handle is not pausable. Pausing on such a
+   * handle throws from `pauseUntilSignal` rather than hanging until the pause
+   * times out — branch on {@link RunHandle.rejection} (or `await wait()`) first.
+   */
+  readonly dispatch?: DispatchHandle["dispatch"];
+  /**
+   * Set — and `dispatch` unset — exactly when the dispatch was rejected. The
+   * cheap check before pausing:
+   *
+   *   const child = await ctx.sapiom.orchestrations.launch({ definition, input });
+   *   if (child.rejection) return fail(`dispatch rejected: ${child.rejection.message}`);
+   *   return pauseUntilSignal(child, { resumeStep: "use-result" });
+   */
+  readonly rejection?: AgentRunError;
+  /**
+   * Fetch the current status without blocking. `"rejected"` (without a request)
+   * on a rejected handle. Unlike `wait()` this is a direct query, so a transport
+   * fault reading the status DOES throw.
+   */
+  status(): Promise<AgentRunStatus>;
+  /**
+   * Poll to a terminal state and resolve the run result. Never throws: a
+   * rejected dispatch, a status read the platform refuses, and hitting
+   * `timeoutMs` all resolve a non-completed {@link AgentRunResult}.
+   */
+  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<AgentRunResult>;
 }
 
 /**
@@ -175,21 +270,92 @@ interface ExecutionDoc {
 }
 
 /**
+ * Classify a thrown dispatch/poll failure as an {@link AgentRunError}. The
+ * platform's own body (which carries its stable `code` and any validation
+ * issues) is preserved verbatim in `details`; `code` here is the coarse,
+ * author-facing bucket derived from the status.
+ */
+function asRunError(error: unknown): AgentRunError {
+  if (error instanceof TransportHttpError) {
+    return {
+      code:
+        error.status === 404
+          ? "not_found"
+          : error.status === 400 || error.status === 422
+            ? "invalid_input"
+            : "http",
+      message: platformMessage(error.body) ?? error.message,
+      status: error.status,
+      details: error.body,
+    };
+  }
+  return {
+    code: "transport",
+    message: error instanceof Error ? error.message : String(error),
+    status: null,
+    details: null,
+  };
+}
+
+/** The platform's own `message` from an error body, when it sent a usable one. */
+function platformMessage(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const message = (body as Record<string, unknown>).message;
+  return typeof message === "string" && message.length > 0 ? message : null;
+}
+
+/**
+ * The handle a REJECTED dispatch resolves to: no `dispatch` (nothing exists to
+ * pause on), the rejection readable off the handle, and `wait()` resolving it as
+ * an {@link AgentRunResult} so `run()` — which is `launch().wait()` — returns
+ * the rejection as data instead of throwing.
+ */
+function rejectedHandle(rejection: AgentRunError): RunHandle {
+  const result: AgentRunResult = {
+    executionId: null,
+    status: "rejected",
+    output: null,
+    error: rejection,
+  };
+  return {
+    executionId: null,
+    rejection,
+    status: () => Promise.resolve("rejected"),
+    wait: () => Promise.resolve(result),
+  };
+}
+
+/**
  * Delayed dispatch: create a one-off schedule (carrying the parent resume token) instead of a run
  * now. The child fires at `spec.at`; when it finishes it resumes the step paused on this handle.
  * The correlation is derived from the created schedule's id (`trigger-<id>`) — the same value the
  * engine stamps on the eventually-fired child, so the resume lands. Pause-only: there is no child
  * to poll until the scheduled time, so `status`/`wait` throw.
  */
-async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl: string): Promise<RunHandle> {
-  const res = await transport.request<{ id: string }>(
-    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/triggers`,
-    {
-      method: "POST",
-      body: JSON.stringify({ kind: "schedule_once", at: spec.at, input: spec.input ?? {} }),
-      headers: workflowResumeHeaders(transport.resumeToken),
-    },
-  );
+async function launchScheduled(
+  spec: AgentRunSpec,
+  transport: Transport,
+  baseUrl: string,
+): Promise<RunHandle> {
+  let res: { id: string };
+  try {
+    res = await transport.request<{ id: string }>(
+      `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/triggers`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "schedule_once",
+          at: spec.at,
+          input: spec.input ?? {},
+        }),
+        headers: workflowResumeHeaders(transport.resumeToken),
+      },
+    );
+  } catch (error) {
+    // Same contract as an immediate dispatch: a refused schedule is data, not a
+    // throw. The handle carries no `dispatch`, so it isn't pausable.
+    return rejectedHandle(asRunError(error));
+  }
   const notAvailable = (): never => {
     throw new Error(
       "status()/wait() are not available for a scheduled (delayed) dispatch — the child runs at the scheduled time. Use launch + pauseUntilSignal (not run).",
@@ -197,7 +363,10 @@ async function launchScheduled(spec: AgentRunSpec, transport: Transport, baseUrl
   };
   return {
     executionId: "", // no child execution exists until the schedule fires
-    dispatch: { correlationId: `trigger-${res.id}`, resultSignal: AGENTS_RESULT_SIGNAL },
+    dispatch: {
+      correlationId: `trigger-${res.id}`,
+      resultSignal: AGENTS_RESULT_SIGNAL,
+    },
     status: notAvailable,
     wait: notAvailable,
   };
@@ -211,17 +380,27 @@ export async function launch(
   if (spec.at) {
     return launchScheduled(spec, transport, baseUrl);
   }
-  const res = await transport.request<StartResponse>(
-    `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/executions`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        input: spec.input ?? {},
-        idempotencyKey: spec.idempotencyKey,
-      }),
-      headers: workflowResumeHeaders(transport.resumeToken),
-    },
-  );
+  let res: StartResponse;
+  try {
+    res = await transport.request<StartResponse>(
+      `${baseUrl}/agents/v1/definitions/${encodeURIComponent(spec.definition)}/executions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          input: spec.input ?? {},
+          idempotencyKey: spec.idempotencyKey,
+        }),
+        headers: workflowResumeHeaders(transport.resumeToken),
+      },
+    );
+  } catch (error) {
+    // The dispatch itself was refused — unknown slug (404), input the engine's
+    // pre-gate rejected (400), a transport fault. No child run exists, so this
+    // resolves as data (`status: "rejected"`) rather than throwing: a
+    // coordinator dispatching several children must be able to branch on one
+    // bad slug without the whole calling step blowing up. See SAP-3219.
+    return rejectedHandle(asRunError(error));
+  }
   const executionId = res.executionId;
 
   const fetchDoc = () =>
@@ -242,21 +421,53 @@ export async function launch(
     },
     async wait({ timeoutMs = 60 * 60_000, pollMs = 3_000 } = {}) {
       const deadline = Date.now() + timeoutMs;
+      let lastStatus = "unknown";
+      let lastPollError: AgentRunError | null = null;
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        const d = await fetchDoc();
-        if (TERMINAL.has(d.status)) {
-          return {
-            executionId,
-            status: d.status,
-            output: d.output ?? null,
-            error: d.error ?? null,
-          };
+        try {
+          const d = await fetchDoc();
+          lastStatus = d.status;
+          lastPollError = null;
+          if (TERMINAL.has(d.status)) {
+            return {
+              executionId,
+              status: d.status,
+              output: d.output ?? null,
+              error: d.error ?? null,
+            };
+          }
+        } catch (error) {
+          const pollError = asRunError(error);
+          // A 4xx on the status read won't cure itself (execution gone, key
+          // refused) — resolve it now instead of polling to the deadline.
+          // 5xx / transport faults are transient: keep polling, and only
+          // surface the last one if we run out of time.
+          if (pollError.status !== null && pollError.status < 500) {
+            return {
+              executionId,
+              status: "rejected",
+              output: null,
+              error: pollError,
+            };
+          }
+          lastPollError = pollError;
         }
         if (Date.now() > deadline) {
-          throw new Error(
-            `orchestration ${executionId} timed out after ${timeoutMs}ms (last status: ${d.status})`,
-          );
+          // Not a throw: the run is still out there, and `executionId` lets the
+          // caller check on it later. Timing out is one more non-completed
+          // status to branch on.
+          return {
+            executionId,
+            status: "timed_out",
+            output: null,
+            error: lastPollError ?? {
+              code: "timeout",
+              message: `orchestration ${executionId} timed out after ${timeoutMs}ms (last status: ${lastStatus})`,
+              status: null,
+              details: null,
+            },
+          };
         }
         await new Promise((r) => setTimeout(r, pollMs));
       }
@@ -264,6 +475,16 @@ export async function launch(
   };
 }
 
+/**
+ * `launch` + `wait` — block until the run reaches a terminal state and resolve
+ * its result. Never throws: a failed child, a rejected dispatch (unknown slug,
+ * refused input, transport fault) and a `wait()` timeout all resolve an
+ * {@link AgentRunResult} whose `status` is not `"completed"`.
+ *
+ * The one exception is a delayed dispatch (`spec.at`): there is no run to wait
+ * on until the scheduled time, so `run` throws the same way `wait` does on that
+ * handle. Use `launch` + `pauseUntilSignal` for a delayed child.
+ */
 export async function run(
   spec: AgentRunSpec,
   transport: Transport = defaultTransport(),

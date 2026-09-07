@@ -24,3 +24,16 @@ export interface DispatchHandle {
     readonly resultSignal: string;
   };
 }
+
+/**
+ * A launch handle that MAY not be pausable: `dispatch` is absent when the
+ * dispatch was rejected before any run existed (unknown slug, refused input, a
+ * transport fault). Those capabilities resolve the rejection as data instead of
+ * throwing, so their handle type is this one — `pauseUntilSignal` accepts it and
+ * throws a pointed error when `dispatch` is missing, rather than pausing the
+ * step on a signal nothing will ever fire.
+ */
+export interface MaybeDispatchHandle {
+  /** @internal See {@link DispatchHandle.dispatch}. Absent on a rejected dispatch. */
+  readonly dispatch?: DispatchHandle["dispatch"];
+}
