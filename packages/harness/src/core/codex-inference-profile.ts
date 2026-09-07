@@ -137,6 +137,7 @@ export async function prepareCodexInferenceProfile(
   binary: string,
   cwd: string,
   startupArgs: string[],
+  binaryArgs: readonly string[] = [],
 ): Promise<string> {
   const originalHome = await fs.realpath(
     process.env.CODEX_HOME ?? join(homedir(), ".codex"),
@@ -146,7 +147,7 @@ export async function prepareCodexInferenceProfile(
     join(originalHome, "studio-inference-auth"),
     { timeoutMs: 180000 },
   ).acquire();
-  const broker = spawn(binary, ["app-server", ...startupArgs], {
+  const broker = spawn(binary, [...binaryArgs, "app-server", ...startupArgs], {
     cwd,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
