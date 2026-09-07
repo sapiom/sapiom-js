@@ -30,11 +30,23 @@ directories:
 # Without it the build succeeds, the app runs, and updates silently never happen.
 # The packaged `update-config` smoke check exists to catch exactly that.
 #
-# The repo is public, so the app needs no token to read releases.
+# `generic`, NOT `github`. The github provider makes ~3 unauthenticated requests
+# to github.com's web frontend per check (releases.atom, /releases/latest, the
+# manifest), and GitHub throttles non-browser clients per IP — so an office or
+# VPN NAT with a handful of Studios each checking at launch gets 429'd for
+# everyone behind it, and nothing client-side can fix a shared-IP limit. The
+# generic provider fetches ONE file from a host we control (GitHub Pages,
+# published by the release job's "Publish update manifests" step), whose
+# `url:`s are absolute links to the release assets — so github.com is only
+# touched when there is actually something to download.
+#
+# `useMultipleRangeRequest: false` for the same reason the github provider
+# hardcodes it: release assets are served from S3, which rejects multi-range
+# requests, and differential downloads would otherwise fail on every update.
 publish:
-  provider: github
-  owner: sapiom
-  repo: sapiom-js
+  provider: generic
+  url: https://sapiom.github.io/sapiom-js/desktop/
+  useMultipleRangeRequest: false
 
 # Default file globbing packs production node_modules + package.json. We add
 # our built output explicitly and keep source/maps out of the bundle.

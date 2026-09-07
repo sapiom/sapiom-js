@@ -658,3 +658,81 @@ jobs:
 
             Something not working? [Open an issue](https://github.com/sapiom/sapiom-js/issues) and
             tell us which platform you're on — it helps a lot.
+
+      # The update FEED lives on GitHub Pages, not in the release.
+      #
+      # Installed apps use electron-updater's `generic` provider pointed at
+      # https://sapiom.github.io/sapiom-js/desktop/ (electron-builder.yml). The
+      # github provider needed ~3 unauthenticated github.com requests per check and
+      # GitHub throttles those per IP, so one office NAT full of Studios was a 429
+      # for everybody. Pages has no such limit; the installers themselves stay on
+      # the release, so each manifest's `url:` is rewritten from a bare filename
+      # to the absolute release-asset link before it is published.
+      #
+      # AFTER the release step, on purpose: a manifest that advertises assets which
+      # are not attached yet is a 404 on every client that checks in the gap.
+      #
+      # The `gh-pages` branch is updated incrementally (clone, copy, commit), so a
+      # beta release — which publishes only `beta*.yml` — leaves `latest*.yml`
+      # untouched, and vice versa. A whole-site Pages deploy would wipe the other
+      # channel every time.
+      #
+      # PREREQUISITE (one-time, repo settings): Pages → Source "Deploy from a
+      # branch" → `gh-pages` / `/ (root)`. Until that is on, this step still
+      # pushes, but the URL 404s and installed apps report "no release published".
+      - name: Publish update manifests to the GitHub Pages feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          assets="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          feed="$(mktemp -d)"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git clone --quiet --depth 1 --branch gh-pages "$remote" "$feed" 2>/dev/null; then
+            echo "updating existing gh-pages"
+          else
+            git -C "$feed" init --quiet -b gh-pages
+            git -C "$feed" remote add origin "$remote"
+            # Pages serves a Jekyll build by default, which drops nothing we ship
+            # but adds a build step and its failure modes. Opt out.
+            touch "$feed/.nojekyll"
+            echo "creating gh-pages"
+          fi
+          mkdir -p "$feed/desktop"
+          shopt -s nullglob globstar
+          published=()
+          # `**` also matches zero directories, so the mirrored `beta*.yml` written
+          # to dist-artifacts/ itself is included.
+          for manifest in dist-artifacts/**/latest*.yml dist-artifacts/**/beta*.yml; do
+            base="$(basename "$manifest")"
+            # `url:` (files[]) and `path:` (legacy single-file field) both name a bare
+            # asset filename; make each an absolute link into this release. Asset
+            # names are space-free by construction (see the name-match step above),
+            # so the token after the key IS the whole filename.
+            sed -E "s#^([[:space:]]*(-[[:space:]]+)?(url|path):[[:space:]]+)([^[:space:]]+)\$#\1${assets}/\4#" \
+              "$manifest" > "$feed/desktop/$base"
+            published+=("$base")
+          done
+          if [ ${#published[@]} -eq 0 ]; then
+            echo "::error::no manifests to publish — the feed would not learn about ${TAG}"
+            exit 1
+          fi
+          # Every rewritten url must be an absolute release link, or a client would
+          # resolve it against the Pages origin and 404 on download.
+          if grep -hE '^[[:space:]]*(-[[:space:]]+)?(url|path):' "$feed"/desktop/*.yml | grep -vF "$assets/"; then
+            echo "::error::a manifest url was not rewritten to an absolute release-asset link"
+            exit 1
+          fi
+          cd "$feed"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "feed already up to date for ${TAG}"
+            exit 0
+          fi
+          git commit --quiet -m "desktop: publish update feed for ${TAG} (${published[*]})"
+          git push --quiet origin gh-pages
+          echo "published to gh-pages/desktop: ${published[*]}"
+          cat desktop/*.yml

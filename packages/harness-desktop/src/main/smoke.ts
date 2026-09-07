@@ -1024,16 +1024,19 @@ async function checkUpdateConfig(): Promise<string> {
     raw.match(new RegExp(`^${key}:\\s*(\\S+)`, "m"))?.[1];
 
   const provider = field("provider");
-  const owner = field("owner");
-  const repo = field("repo");
-  if (provider !== "github") {
+  // The dumper may quote a URL; the check is about the value, not the quoting.
+  const feedUrl = field("url")?.replace(/^['"]|['"]$/g, "");
+  // `generic` is deliberate — see the publish block in electron-builder.yml. The
+  // github provider is what put every Studio behind one office NAT into a 429.
+  if (provider !== "generic") {
     throw new Error(
-      `app-update.yml provider is "${provider ?? "(none)"}", expected "github"`,
+      `app-update.yml provider is "${provider ?? "(none)"}", expected "generic"`,
     );
   }
-  if (!owner || !repo) {
+  if (!feedUrl || !/^https:\/\/\S+\/$/.test(feedUrl)) {
     throw new Error(
-      `app-update.yml names no owner/repo (owner="${owner}", repo="${repo}")`,
+      `app-update.yml feed url is "${feedUrl ?? "(none)"}" — expected an https URL ending in "/" ` +
+        `(electron-updater resolves the channel file against it)`,
     );
   }
 
@@ -1068,7 +1071,7 @@ async function checkUpdateConfig(): Promise<string> {
   // Report the channel so a CI log answers "which channel did this artifact ship
   // on?" without anyone having to reason about the tag.
   return (
-    `${kind} → ${provider}:${owner}/${repo}, channel "${channel}"` +
+    `${kind} → ${provider} feed ${feedUrl}, channel "${channel}"` +
     `${overridden ? " (env override)" : ""} (v${app.getVersion()})`
   );
 }

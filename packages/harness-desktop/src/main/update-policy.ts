@@ -17,10 +17,11 @@ export interface ChannelDecision {
   /** The channel file the updater reads: `latest*.yml` or `beta*.yml`. */
   channel: UpdateChannel;
   /**
-   * Whether pre-release GitHub Releases are considered at all. The GitHub
-   * provider filters pre-releases out of the release feed *before* looking for a
-   * channel file, so a beta install needs this on or it never sees the beta
-   * release the channel name points at.
+   * Whether pre-release builds are considered at all. Inert under the `generic`
+   * provider the app ships with (the channel FILE is the whole decision there),
+   * but kept honest: electron-updater's GitHub provider filters pre-releases out
+   * of its feed *before* looking for a channel file, so anyone pointing the app
+   * back at GitHub needs this on or a beta install never sees a beta.
    */
   allowPrerelease: boolean;
   /**
@@ -235,7 +236,14 @@ export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; summa
       summary: "GitHub is rate-limiting this network — it clears on its own; try again in a while",
     };
   }
-  if (/unable to find latest version|ensure a production release exists|no published versions/i.test(collapsed)) {
+  // The generic provider's 404 ("Cannot find channel \"beta-mac.yml\" update
+  // info") is the same normal state as GitHub's "no published versions": the
+  // feed has nothing for this channel yet.
+  if (
+    /unable to find latest version|ensure a production release exists|no published versions|cannot find channel/i.test(
+      collapsed,
+    )
+  ) {
     return { kind: "no-release", summary: "no release has been published on this channel yet" };
   }
   if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|net::ERR/i.test(collapsed)) {

@@ -226,6 +226,18 @@ describe("classifyUpdateError", () => {
     }
   });
 
+  it("reads the generic provider's missing channel file as no-release", () => {
+    // Verbatim shape from GenericProvider.getLatestVersion on a 404: the feed
+    // simply has nothing for this channel yet (e.g. beta before any beta ships).
+    const missing =
+      'Cannot find channel "beta-mac.yml" update info: HttpError: 404 Not Found\n' +
+      '"method: GET url: https://sapiom.github.io/sapiom-js/desktop/beta-mac.yml?noCache=1abc"\n' +
+      "    at createHttpError (…/electron-updater/…)";
+    const { kind, summary } = classifyUpdateError(missing);
+    expect(kind).toBe("no-release");
+    expect(summary).not.toMatch(/404|HttpError/);
+  });
+
   it("still reads a 429 that GitHubProvider wrapped as a no-release message", () => {
     // Verbatim shape from electron-updater: getLatestTagName wraps ANY failure
     // of /releases/latest in its own "ensure a production release exists"
