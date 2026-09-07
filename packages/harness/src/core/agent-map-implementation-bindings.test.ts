@@ -149,6 +149,52 @@ async function fixture(initial = false, refs = [`studio-agent:${agentId}`]) {
 }
 
 describe("Agent Map implementation bindings", () => {
+  it.each(["inventory", "projection", "target"] as const)(
+    "does not hold the map lock while %s waits for inventory",
+    async (method) => {
+      const f = await fixture();
+      await f.bind(agentId);
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      f.lookup.mockImplementationOnce(async () => {
+        entered();
+        await gate;
+        return f.inventory;
+      });
+      const reading =
+        method === "target"
+          ? f.service.target(projectId, f.nodeId, authorize)
+          : f.service[method](projectId, authorize);
+      await started;
+      let completed = false;
+      const writing = f
+        .edit([
+          {
+            kind: "update-node",
+            nodeId: f.nodeId,
+            changes: { name: "Still writable" },
+          },
+        ])
+        .then(() => {
+          completed = true;
+        });
+      try {
+        await vi.waitFor(() => expect(completed).toBe(true), {
+          timeout: 1_000,
+        });
+      } finally {
+        release();
+        await Promise.all([reading, writing]);
+      }
+    },
+  );
+
   it("persists exact identity without changing authored history, even for same-name cloud clones", async () => {
     const f = await fixture();
     const before = await fs.readFile(f.workspace);
@@ -404,7 +450,7 @@ describe("Agent Map implementation bindings", () => {
         return f.inventory;
       });
       const check = () => {
-        if (!live) throw new AgentMapBindingError("unauthorized");
+        if (!live) throw new Error("Session authority was revoked");
       };
       const pending =
         operation === "bind"
@@ -439,6 +485,7 @@ describe("Agent Map implementation bindings", () => {
         });
       await expect(f.bind(secondId, 1)).rejects.toMatchObject({
         code: "storage_unavailable",
+        detail: { recovery: "reread" },
       });
       spy.mockRestore();
       expect(

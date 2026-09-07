@@ -76,13 +76,17 @@ export class AgentMapBindingError extends Error {
     super(code);
   }
   get detail() {
-    const recovery = ["storage_unavailable", "discovery_unavailable"].includes(
-      this.code,
-    )
-      ? "retry"
-      : ["stale_map", "stale_binding", "target_in_use"].includes(this.code)
-        ? "reread"
-        : "correct";
+    const recovery =
+      this.code === "discovery_unavailable"
+        ? "retry"
+        : [
+              "storage_unavailable",
+              "stale_map",
+              "stale_binding",
+              "target_in_use",
+            ].includes(this.code)
+          ? "reread"
+          : "correct";
     return {
       ok: false as const,
       code: this.code,
@@ -97,6 +101,14 @@ function fail(code: BindingErrorCode): never {
   throw new AgentMapBindingError(code);
 }
 
+function checkAuthorization(authorize: () => void): void {
+  try {
+    authorize();
+  } catch {
+    fail("unauthorized");
+  }
+}
+
 export class AgentMapImplementationBindings {
   constructor(
     private readonly store: AgentMapWorkspaceStore,
@@ -104,6 +116,16 @@ export class AgentMapImplementationBindings {
       projectId: string,
     ) => Promise<ImplementationInventory | null>,
   ) {}
+
+  private async readInventory(projectId: string) {
+    let inventoryFailed = false;
+    const inventory = await this.lookup(projectId).catch(() => {
+      inventoryFailed = true;
+      return { discoveryComplete: false, candidates: [] };
+    });
+    if (!inventory) fail("project_not_found");
+    return { inventory, inventoryFailed };
+  }
 
   private async inspect<T>(
     projectId: string,
@@ -116,9 +138,12 @@ export class AgentMapImplementationBindings {
       rows: z.infer<typeof rowSchema>[];
       write: (value: unknown) => Promise<void>;
     }) => Promise<T> | T,
+    mode: "read" | "write" = "read",
   ): Promise<T> {
     try {
-      assertAuthorized();
+      checkAuthorization(assertAuthorized);
+      const prefetched =
+        mode === "read" ? await this.readInventory(projectId) : null;
       return await this.store.inspectImplementationBindings(
         projectId,
         async (aggregate, journal, sidecar) => {
@@ -161,12 +186,8 @@ export class AgentMapImplementationBindings {
               uncertain = true;
             }
           }
-          let inventoryFailed = false;
-          const inventory = await this.lookup(projectId).catch(() => {
-            inventoryFailed = true;
-            return { discoveryComplete: false, candidates: [] };
-          });
-          if (!inventory) fail("project_not_found");
+          const { inventory, inventoryFailed } =
+            prefetched ?? (await this.readInventory(projectId));
           const bindings: AgentMapImplementation[] = nodes
             .filter(eligible)
             .map((node) => {
@@ -220,7 +241,7 @@ export class AgentMapImplementationBindings {
             )
               binding.resolution = "ambiguous";
           }
-          assertAuthorized();
+          checkAuthorization(assertAuthorized);
           return operation({
             projection: {
               projectId,
@@ -350,7 +371,7 @@ export class AgentMapImplementationBindings {
           revision: current.revision + (changed ? 1 : 0),
         };
         if (changed) {
-          assertAuthorized();
+          checkAuthorization(assertAuthorized);
           await write({
             schemaVersion: 1,
             projectId,
@@ -373,6 +394,7 @@ export class AgentMapImplementationBindings {
           },
         };
       },
+      "write",
     );
   }
 }
