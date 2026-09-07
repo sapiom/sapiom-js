@@ -135,12 +135,17 @@ const jsonRes = (body: unknown, status = 200) => ({
 });
 
 /** The happy-path backend: upsert → bundle → publish. */
-function mockHappyBackend(): ReturnType<typeof vi.fn> {
+function mockHappyBackend(
+  overrides: Partial<typeof APP_LINK> = {},
+): ReturnType<typeof vi.fn> {
+  // `overrides` exists for `visibility`: the summary branches on it, and the default
+  // fixture is org-scoped, so the public branch is unreachable without this.
+  const link = { ...APP_LINK, ...overrides };
   const fetchMock = vi
     .fn()
-    .mockResolvedValueOnce(jsonRes(APP_LINK, 201))
+    .mockResolvedValueOnce(jsonRes(link, 201))
     .mockResolvedValueOnce(jsonRes(BUNDLE))
-    .mockResolvedValueOnce(jsonRes(APP_LINK));
+    .mockResolvedValueOnce(jsonRes(link));
   globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
   return fetchMock;
 }
@@ -210,6 +215,39 @@ describe("sapiom_dev_app_publish tool", () => {
     expect(description).toMatch(/same slug again replaces the app in place/i);
     expect(description).toMatch(/TEXT-ONLY/);
     expect(description).toMatch(/10 MiB/);
+  });
+
+  it("says the link is a redirector, not a reverse proxy (SAP-3217)", () => {
+    // Studio feedback 7a59535a: "DURABLE link" plus "safe to hand to a teammate" reads
+    // as a stable BASE url, so an agent points the app's own fetches at sub-paths of it.
+    // The host serves the root (a 302), `/__status`, and `/hook`/`/hook/*` — every other
+    // sub-path is its 404, never the app. Assert the claim, not one phrasing of it.
+    const { description } = setup();
+    expect(description).toMatch(/REDIRECTOR, not a reverse proxy/);
+    expect(description).toMatch(/sub-paths are NOT proxied/);
+    expect(description).toMatch(/__status/);
+    expect(description).toMatch(/\/hook\//);
+    // Plus the facts that keep the bare claim from misleading in a new way. Re-resolve
+    // rather than store: an org app's tokenized URL 401s inside a single wake, which
+    // "changes across wakes" does not predict. `/hook/` forwards only for a link with
+    // `webhooksEnabled`, off by default and not in this schema.
+    expect(description).toMatch(/re-resolve it per use/);
+    expect(description).toMatch(/short-lived token that expires/);
+    expect(description).toMatch(/webhooksEnabled.*off by default/s);
+    // And WHO can take the recovery routes, scoped correctly. The gate reads a browser
+    // cookie and no API key, so an org app's API is browser-only — but the backend
+    // authorizes a public + browser resolve with no token at all, so a public app's link
+    // and `__status` need no session, and stating the gate unconditionally would rule out
+    // the one route a cron job has. `currentPreviewUrl` is deliberately never offered as
+    // an address: it is null right after a publish, and reading it wakes nothing.
+    expect(description).toMatch(/browser session/);
+    expect(description).toMatch(/NOT an API/);
+    expect(description).toMatch(/browser-only/);
+    expect(description).toMatch(/for an org-scoped app that means/);
+    expect(description).toMatch(
+      /public app's link and `\/__status` need no session/,
+    );
+    expect(description).not.toMatch(/currentPreviewUrl/);
   });
 
   it("is not authenticated without a cached credential, and makes no call", async () => {
@@ -462,7 +500,49 @@ describe("sapiom_dev_app_publish tool", () => {
     });
     expect(payload.summary).toContain("https://apps.sapiom.ai/acme/dash");
     expect(payload.summary).toMatch(/durable/i);
+    // SAP-3217: the summary is what the agent hands the user AND what it reads back when
+    // it decides where to point the app's own fetches, so it carries the redirector fact.
+    expect(payload.summary).toMatch(/REDIRECTOR, not a reverse proxy/);
+    expect(payload.summary).toContain(
+      "https://apps.sapiom.ai/acme/dash/__status",
+    );
+    // This fixture is the default org-scoped app, so the summary takes the browser-only
+    // branch: both recovery routes need a member's session, and the machine routes are a
+    // public app or `/hook/` (which needs webhooksEnabled, off by default).
+    expect(payload.summary).toMatch(/re-resolve it per use/);
+    expect(payload.summary).toMatch(/short-lived token that expires/);
+    expect(payload.summary).toMatch(/browser-only/);
+    expect(payload.summary).toMatch(/NOT an API key/);
+    expect(payload.summary).toContain("https://apps.sapiom.ai/acme/dash/hook/");
+    expect(payload.summary).toMatch(
+      /requires webhooksEnabled on\s+the link, off by default/,
+    );
     expect(payload.summary.split("\n")).toHaveLength(1);
+  });
+
+  it("takes the public branch of the summary — no browser-only warning", async () => {
+    // `mockHappyBackend` returns `visibility: "organization"`, so every other summary
+    // assertion in this file exercises the org branch only. A public app must NOT be told
+    // its API is browser-only and that it needs "the app published as `public`" — advice
+    // it has already taken — so the branch needs its own case.
+    mockHappyBackend({ visibility: "public" });
+    const res = await setup().handler({
+      dir: project(),
+      slug: "dash",
+      name: "Dash",
+      visibility: "public",
+      confirmPublic: true,
+      dailySpendCapUsd: "5.00",
+    });
+
+    const { summary } = parse(res);
+    expect(summary).toMatch(/REDIRECTOR, not a reverse proxy/);
+    expect(summary).toMatch(/need no login/);
+    expect(summary).toMatch(/what wakes the app/);
+    expect(summary).not.toMatch(/browser-only/);
+    expect(summary).not.toMatch(/NOT an API key/);
+    expect(summary).not.toMatch(/webhooksEnabled/);
+    expect(summary.split("\n")).toHaveLength(1);
   });
 
   it("forwards the optional metadata a public app needs", async () => {
