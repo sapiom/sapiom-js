@@ -150,7 +150,7 @@ export function isLegacyOrchestrationDefinition(val: unknown): val is AgentDefin
 export function defineAgent<TInput = unknown, TShared extends Record<string, unknown> = Record<string, unknown>>(
   def: AgentDefinition<TInput, TShared>,
 ): AgentDefinition<TInput, TShared> {
-  if (!def.name) {
+  if (typeof def.name !== 'string' || def.name.trim() === '') {
     throw new Error('Agent definition must have a non-empty name');
   }
   if (!def.entry) {

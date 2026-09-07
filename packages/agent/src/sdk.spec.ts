@@ -87,6 +87,16 @@ describe('defineAgent', () => {
     ).toThrow('Agent definition must have a non-empty name');
   });
 
+  it('throws when name is whitespace-only', () => {
+    expect(() =>
+      defineAgent({
+        name: '   ',
+        entry: 'start',
+        steps: { start: makeStep('start') },
+      }),
+    ).toThrow('Agent definition must have a non-empty name');
+  });
+
   it('throws when entry is empty string', () => {
     expect(() =>
       defineAgent({
