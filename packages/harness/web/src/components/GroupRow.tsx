@@ -397,9 +397,9 @@ export function GroupSections({
   onToggleCollapsed: (key: string) => void;
   focusedAgentPath: string | null;
   onFocusAgent: (path: string) => void;
-  /** Every session the rail knows about, so each header can count its own live
-   *  ones. Structurally typed (`ScopedSession`), like the rules in
-   *  `session-scope.ts`, so a test can pin a header with an object literal. */
+  /** Live sessions belonging to this project. Each group further restricts
+   *  membership to its own agents; a shared agent path cannot bring in another
+   *  project's sessions. */
   sessions: readonly ScopedSession[];
   onCreate: () => void;
   onRename: (groupId: string, label: string) => void;

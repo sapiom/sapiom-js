@@ -8,19 +8,11 @@
  * answered at a glance without the rail growing session rows it deliberately
  * does not have.
  *
- * THE PROJECT SIDE OF THE MARK IS NOT HERE. A project's live sessions are
- * `liveSessionsForProject` (session-scope.ts), the same function the session tab
- * strip renders from, and the mark calls it rather than defining membership a
- * second time. An earlier draft of this module added a binding clause on top of
- * that containment, which would have let one session mark two projects at once
- * after `POST /api/agents/move` moved an agent out from under a running session,
- * while the strip on the second project stayed empty. That is precisely the
- * disagreement `session-scope.ts` says it exists to prevent, and one function
- * answering the question is the only way to keep it prevented.
- *
- * What remains here is the part session-scope has no answer for: a group is a
- * label over agents with no directory behind it, so it cannot be asked the
- * containment question a project is asked.
+ * WorkflowsRail first selects the project's live sessions with
+ * `liveSessionsForStudioProject`, the same project-ID rule the session tabs
+ * use. Only legacy rows without a Studio project use `liveSessionsForProject`.
+ * Group membership narrows that list by agent; a shared path cannot make a
+ * session light groups in another durable project.
  *
  * Pure, and free of React and of fixtures, for the reason `session-scope.ts`
  * gives: a rule you can call with two arguments is a rule a test can pin.
@@ -36,10 +28,10 @@ const isLive = (session: ScopedSession): boolean => session.status !== "exited";
 /**
  * The live sessions on any of a set of agents: a GROUP's members.
  *
- * A group is a label over agents and has no directory behind it, so it cannot
- * be asked the containment question a project is asked. Membership is the same
- * rule `liveSessionsForFocus` applies to one agent, over several: bound to a
- * member, or unbound and sitting in a member's own folder.
+ * The caller supplies sessions already scoped to the owning project. Within
+ * that project, membership uses the rule `liveSessionsForFocus` applies to one
+ * agent, over several: bound to a member, or unbound and sitting in a member's
+ * own folder.
  *
  * A CONSEQUENCE WORTH STATING, because it looks like a bug and is not: a
  * session created at a project root is unbound until the agent it works on is
@@ -48,23 +40,6 @@ const isLive = (session: ScopedSession): boolean => session.status !== "exited";
  * under it, and the group headers light as binding arrives. That is the honest
  * reading: until a session is bound, no group can claim it, and picking one
  * would be a guess printed as a fact.
- *
- * THE ASYMMETRY RUNS THE OTHER WAY TOO, and is deliberate. A project row counts
- * by containment alone (`liveSessionsForProject`), while a group counts by
- * binding, so a session bound to an agent under a project but rooted OUTSIDE it
- * lights the group header and leaves the project row dark: a child marked live
- * inside a parent that is not. `POST /api/agents/move` is the way to produce it,
- * by moving an agent out from under a running session.
- *
- * It is left standing rather than fixed, because both halves are already right
- * on their own terms and the alternative is worse. A group is a label over
- * agents with nothing on disk behind it, so binding is the only membership it
- * has; this is the same rule `liveSessionsForFocus` applies to one agent, and
- * that agent's own tab strip lists the very same session. Intersecting the
- * group rule with the project's containment would make a group mean something
- * different from the agent rows inside it, and adding containment to the
- * project rule is the second membership answer SAP-3200's first review round
- * removed. The mark is briefly odd; the rules stay singular.
  *
  * `samePath`, not `===`, for the reason that function gives: the server
  * `path.resolve()`s what it stores while the rail holds whatever the registry

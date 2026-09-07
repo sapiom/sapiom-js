@@ -145,7 +145,7 @@ export function liveSessionsForFocus<S extends ScopedSession>(
 }
 
 /**
- * Live sessions belonging to a PROJECT, in the same tab order.
+ * Live sessions belonging to a legacy folder-based project, in tab order.
  *
  * The sibling above answers "whose session is this" for an AGENT, by binding
  * or by an exact cwd match. A project cannot be asked that way: since SAP-2927
@@ -165,10 +165,9 @@ export function liveSessionsForFocus<S extends ScopedSession>(
  * nested one's sessions (it genuinely contains them) and the nested one lists
  * only its own.
  *
- * NOTE the membership is DERIVED, never stamped. A `projectId` on the session
- * record would be wrong the moment a project is removed or `POST
- * /api/agents/move` moves an agent, and a second, staler answer to the same
- * question is exactly what this module exists to prevent.
+ * Use this only when no durable Studio project is available. Current servers
+ * provide project identities; `liveSessionsForStudioProject` below owns that
+ * membership even when roots overlap or one project has multiple roots.
  */
 export function liveSessionsForProject<S extends ScopedSession>(
   sessions: readonly S[],

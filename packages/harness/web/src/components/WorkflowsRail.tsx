@@ -83,7 +83,10 @@ import {
 } from "../lib/project-membership";
 import type { RailAxis, RailSort } from "../lib/project-tree";
 import { samePath } from "../lib/paths";
-import { liveSessionsForProject } from "../lib/session-scope";
+import {
+  liveSessionsForProject,
+  liveSessionsForStudioProject,
+} from "../lib/session-scope";
 import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
@@ -1271,6 +1274,12 @@ export function WorkflowsRail({
             const studioProject = studioProjects?.find(
               (candidate) => candidate.projectId === workspaceScope?.projectId,
             );
+            // Use the session tab strip's project identity for both levels of
+            // the live indicator. Older servers without Studio projects retain
+            // their folder-based membership.
+            const projectSessions = studioProject
+              ? liveSessionsForStudioProject(sessions, studioProject.projectId)
+              : liveSessionsForProject(sessions, project.root);
             // Current servers issue a durable Studio project for every scope.
             // Its project label owns Agent Map navigation; creation remains an
             // ordinary project action available beside that read-only view.
@@ -1381,15 +1390,10 @@ export function WorkflowsRail({
                   }
                   trailing={
                     <>
-                      {/* LIVE, at a glance (SAP-3200, D37): something is
-                          running inside this project. Derived, never a row, and
-                          derived by the SAME function the session tab strip
-                          renders from, so the dot and the tabs cannot disagree
-                          about which project a session is in. */}
+                      {/* Project and group marks share the project membership
+                          used by the session tabs (SAP-3200, D37). */}
                       <LiveMark
-                        count={
-                          liveSessionsForProject(sessions, project.root).length
-                        }
+                        count={projectSessions.length}
                         testId={`project-live-${project.label}`}
                       />
                       {creating && (
@@ -1573,7 +1577,7 @@ export function WorkflowsRail({
                     onToggleCollapsed={toggleCollapsed}
                     focusedAgentPath={focusedAgentPath}
                     onFocusAgent={focusProjectAgent}
-                    sessions={sessions}
+                    sessions={projectSessions}
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>
