@@ -692,6 +692,26 @@ describe("search.emailSearch.findEmail()", () => {
         expect(calls).toHaveLength(0);
       });
     }
+
+    it("throws SearchHttpError and does not fetch when fields are whitespace-only", async () => {
+      const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+      await expect(
+        findEmail(
+          { domain: "   ", fullName: "Ada Lovelace" },
+          transport,
+          BASE,
+        ),
+      ).rejects.toBeInstanceOf(SearchHttpError);
+      await expect(
+        findEmail(
+          { domain: "example.com", fullName: "   " },
+          transport,
+          BASE,
+        ),
+      ).rejects.toBeInstanceOf(SearchHttpError);
+      expect(calls).toHaveLength(0);
+    });
   });
 
   it("throws SearchHttpError (status + body) on a non-2xx", async () => {
@@ -803,6 +823,15 @@ describe("search.emailSearch.verifyEmail()", () => {
 
     await expect(
       verifyEmail({ email: "" as string }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws SearchHttpError before fetching when email is whitespace-only", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      verifyEmail({ email: "   " }, transport, BASE),
     ).rejects.toBeInstanceOf(SearchHttpError);
     expect(calls).toHaveLength(0);
   });
@@ -927,6 +956,15 @@ describe("search.emailSearch.domainSearch()", () => {
 
     await expect(
       domainSearch({ domain: "" } as { domain: string }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws SearchHttpError before fetching when domain is whitespace-only", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      domainSearch({ domain: "   " }, transport, BASE),
     ).rejects.toBeInstanceOf(SearchHttpError);
     expect(calls).toHaveLength(0);
   });

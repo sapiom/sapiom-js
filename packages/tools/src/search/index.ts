@@ -35,6 +35,12 @@ import { SearchHttpError } from "./errors.js";
 
 export { SearchHttpError };
 
+/** True when a string is present after trim — rejects null/undefined/""/"   ". */
+function hasText(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+
 /** Build the capability-specific error the routed call throws on a non-2xx. */
 const searchError = (message: string, status: number, body: unknown): Error =>
   new SearchHttpError(message, status, body);
@@ -377,10 +383,10 @@ export async function findEmail(
   // truthiness check rejects null/undefined/empty-string for JS callers. (The
   // router validates the same combination, but the client guard keeps the
   // no-network-on-invalid contract the SDK has always offered.)
-  const hasOrg = Boolean(input.domain) || Boolean(input.company);
+  const hasOrg = hasText(input.domain) || hasText(input.company);
   const hasPerson =
-    Boolean(input.fullName) ||
-    (Boolean(input.firstName) && Boolean(input.lastName));
+    hasText(input.fullName) ||
+    (hasText(input.firstName) && hasText(input.lastName));
   if (!hasOrg || !hasPerson) {
     throw new SearchHttpError(
       "findEmail requires (domain or company) and (fullName or firstName + lastName)",
@@ -474,7 +480,7 @@ export async function verifyEmail(
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<VerifyEmailResult> {
-  if (!input.email) {
+  if (!hasText(input.email)) {
     throw new SearchHttpError("verifyEmail requires an email", 400, undefined);
   }
   const raw = await capabilityCall<RawVerifyEmail>(
@@ -598,7 +604,7 @@ export async function domainSearch(
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<DomainSearchResult> {
-  if (!input.domain) {
+  if (!hasText(input.domain)) {
     throw new SearchHttpError("domainSearch requires a domain", 400, undefined);
   }
   // Forward only the provided fields. Array filters travel as arrays in the router
