@@ -8,6 +8,13 @@
  * receives. (Constructing them with Zod would also load a second Zod module
  * instance through the SDK's CJS build, which this package's test environment
  * cannot do.)
+ *
+ * Nothing here asserts that normalization leaves an author's `default` payload
+ * intact, even though this gate normalizes: AJV is built without `useDefaults`,
+ * so `default` is annotation-only and cannot change a verdict. Any assertion
+ * made through this gate would pass whether or not the payload was rewritten.
+ * That property is tested where it is observable — against the emitted schema,
+ * in `@sapiom/agent`'s `introspection.spec.ts`.
  */
 import { validateManifestStepInput } from './manifest-validation';
 
@@ -59,21 +66,6 @@ describe('validateManifestStepInput', () => {
 
   it('accepts unknown extra fields (the Zod parse strips rather than rejects them)', () => {
     expect(accepts(legacySchema, { name: 'x', opts: {}, addedUpstream: 1 })).toBe(true);
-  });
-
-  it('does not let normalization corrupt an author default that looks like a schema', () => {
-    const payload = {
-      properties: { a: { type: 'string', default: 'x' } },
-      required: ['a'],
-      additionalProperties: false,
-    };
-    const schema = {
-      type: 'object',
-      properties: { childSchema: { type: 'object', default: payload } },
-    };
-    // The gate must still validate against the SCHEMA, not the payload inside it.
-    expect(accepts(schema, { childSchema: { anything: true } })).toBe(true);
-    expect(accepts(schema, { childSchema: 'not-an-object' })).toBe(false);
   });
 
   it('is a no-op for a step that declares no schema', () => {
