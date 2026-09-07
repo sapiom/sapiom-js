@@ -13,6 +13,7 @@ import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
 import { AgentMapProposalService, AgentMapProposalQuotaError } from "../core/agent-map-proposal-service.js";
 import { AgentMapWorkspaceStore, AgentMapWorkspaceStoreError, AgentBriefAppendQuotaError } from "../core/agent-map-workspace-store.js";
+import { AgentMapImplementationBindings, type ImplementationInventory } from "../core/agent-map-implementation-bindings.js";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
@@ -42,7 +43,7 @@ async function fixture(
   options: Partial<
     Pick<
       AgentMapMcpRouterOptions,
-      "createToolServer" | "createTransport" | "onEvent" | "readSnapshotFor"
+      "createToolServer" | "createTransport" | "onEvent" | "readSnapshotFor" | "assertAuthorizedFor"
     >
   > & {
     createAgentBriefService?: (store: BuildPlanStore) => AgentBriefService;
@@ -71,8 +72,11 @@ async function fixture(
       results: [],
     })),
   } as unknown as SubsessionCoordinator;
+  const implementationLookup = vi.fn(async (id: string): Promise<ImplementationInventory | null> =>
+    id === projectId ? { discoveryComplete: true, candidates: [] } : null);
+  const implementations = new AgentMapImplementationBindings(workspaceStore, implementationLookup);
   const mcp = createAgentMapMcpRouter({ capabilities, service, buildPlanService,
-    agentBriefService, subsessionCoordinator, ...routerOptions });
+    agentBriefService, subsessionCoordinator, implementations, ...routerOptions });
   const app = express();
   app.use(express.json());
   app.use(mcp.router);
@@ -87,7 +91,7 @@ async function fixture(
     await new Promise<void>((resolve) => http.close(() => resolve()));
     await fs.rm(root, { recursive: true, force: true });
   });
-  return { capabilities, url, workspaceStore, service, buildPlanService, agentBriefService };
+  return { capabilities, url, workspaceStore, service, buildPlanService, agentBriefService, implementations, implementationLookup };
 }
 
 async function connect(url: URL, token: string) {
@@ -101,6 +105,65 @@ async function connect(url: URL, token: string) {
 }
 
 describe("Agent Map Streamable HTTP MCP", () => {
+  it("lists exact private candidates and binds with a bounded stale-write response", async () => {
+    const onEvent = vi.fn();
+    const f = await fixture({ onEvent });
+    const identity = { projectId, sessionId: "builder", userId: "user" };
+    const issued = f.capabilities.issue(identity);
+    const client = await connect(f.url, issued.token);
+    const agentId = "agent_00000000-0000-4000-8000-000000000001";
+    const secondId = "agent_00000000-0000-4000-8000-000000000002";
+    const candidates = [{ agentId, name: "Same", path: "/private/a", definitionId: 42 },
+      { agentId: secondId, name: "Same", path: "/private/b", definitionId: 42 }];
+    f.implementationLookup.mockResolvedValue({ candidates, discoveryComplete: true });
+    await client.callTool({ name: "agent_map_propose", arguments: { schemaVersion: 1, proposalId: null,
+      expectedVersion: 0, requestId: "map", operations: [{ kind: "add-node", draftRef: "node",
+        node: { kind: "agent", name: "Same", purpose: "Test", ownerAgent: null, contractRefs: [] } }] } });
+    const read = await client.callTool({ name: "agent_map_implementations", arguments: {} });
+    expect(read.structuredContent).toMatchObject({ projectId, candidates, discoveryComplete: true });
+    const { mapVersionId, bindings } = await f.implementations.projection(projectId, () => {});
+    const input = { expectedMapVersionId: mapVersionId, nodeId: bindings[0].nodeId, expectedRevision: 0, agentId: secondId };
+    await expect(client.callTool({ name: "agent_map_bind", arguments: { ...input, expectedRevision: -1 } }))
+      .resolves.toMatchObject({ isError: true, structuredContent: { ok: false, code: "malformed_input", recovery: "correct" } });
+    await expect(client.callTool({ name: "agent_map_bind", arguments: input })).resolves.toMatchObject({
+      structuredContent: { ok: true, changed: true, binding: { agentId: secondId, revision: 1 } },
+    });
+    await expect(client.callTool({ name: "agent_map_bind", arguments: { ...input, agentId } })).resolves.toMatchObject({
+      isError: true, structuredContent: { ok: false, code: "stale_binding", recovery: "reread", current: { agentId: secondId, revision: 1 } },
+    });
+    await expect(client.callTool({ name: "agent_map_bind", arguments: { ...input, projectId: "foreign" } }))
+      .resolves.toMatchObject({ isError: true });
+    expect(JSON.stringify(onEvent.mock.calls)).not.toContain("/private/");
+    const foreignId = "project_00000000-0000-4000-8000-000000000099";
+    f.implementationLookup.mockImplementation(async id => id === projectId ? { candidates, discoveryComplete: true } : null);
+    const foreign = await connect(f.url, f.capabilities.issue({ ...identity, projectId: foreignId, sessionId: "foreign" }).token);
+    const foreignRead = await foreign.callTool({ name: "agent_map_implementations", arguments: {} });
+    expect(foreignRead).toMatchObject({ isError: true });
+    expect(JSON.stringify(foreignRead)).not.toContain("/private/");
+  });
+
+  it.each(["agent_map_implementations", "agent_map_bind"])("blocks %s after capability rotation during lookup", async tool => {
+    const f = await fixture();
+    const identity = { projectId, sessionId: "revoked", userId: "user" };
+    const client = await connect(f.url, f.capabilities.issue(identity).token);
+    const agentId = "agent_00000000-0000-4000-8000-000000000001";
+    const created = await f.service.propose(identity, { schemaVersion: 1, proposalId: null, expectedVersion: 0,
+      requestId: "map", operations: [{ kind: "add-node", draftRef: "node",
+        node: { kind: "agent", name: "Agent", purpose: "Test", ownerAgent: null, contractRefs: [] } }] });
+    const projection = await f.implementations.projection(projectId, () => {});
+    f.implementationLookup.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      f.capabilities.rotate(identity);
+      return { discoveryComplete: true, candidates: [{ agentId, name: "Agent", path: "/private/revoked", definitionId: null }] };
+    });
+    const result = await client.callTool({ name: tool, arguments: tool === "agent_map_bind" ? {
+      expectedMapVersionId: projection.mapVersionId, expectedRevision: 0, nodeId: Object.values(created.allocatedNodeIds)[0], agentId,
+    } : {} });
+    expect(result).toMatchObject({ isError: true, structuredContent: { ok: false, code: "unauthorized" } });
+    expect(JSON.stringify(result)).not.toContain("/private/");
+    expect((await f.implementations.projection(projectId, () => {})).bindings[0].revision).toBe(0);
+  });
+
   it.each<ProjectAgentSession>([
     { projectId, sessionId: "first", userId: "user" },
     { projectId, sessionId: "created", userId: "user" },
@@ -111,6 +174,8 @@ describe("Agent Map Streamable HTTP MCP", () => {
     const client = await connect(url, issued.token);
     const tools = await client.listTools();
     expect(tools.tools.map(({ name }) => name).sort()).toEqual([
+      "agent_map_bind",
+      "agent_map_implementations",
       "agent_map_propose",
       "agent_map_read",
       "agent_map_validate",

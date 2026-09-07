@@ -48,14 +48,14 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5 });
 });
 
-it("uses the actual ephemeral port and revokes private MCP launch authority on exit", async () => {
+it.each(["claude-code", "codex"] as const)("uses the actual ephemeral port for %s and revokes private MCP launch authority on exit", async (kind) => {
   let launchOpts: LaunchOpts | undefined;
   const launch = (opts: LaunchOpts): SpawnSpec => {
     launchOpts = opts;
     return { command: "bash", args: [], env: {}, cwd: opts.cwd };
   };
   const adapter: HarnessAdapter = {
-    id: "claude-code",
+    id: kind,
     eventSource: "hooks",
     doctor: async () => [],
     launch,
@@ -77,7 +77,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
       apiKey: "sk_test",
       source: "cached",
     },
-    adapters: { "claude-code": adapter },
+    adapters: { [kind]: adapter },
     stateRoot: root,
     launchDir: projectRoot,
     webDir,
@@ -86,7 +86,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
   });
   const session = await server.sessionManager.create({
     cwd: projectRoot,
-    harness: "claude-code",
+    harness: kind,
   });
   const metadata = launchOpts?.agentMapMcp;
   expect(metadata?.url).toBe(`http://127.0.0.1:${server.port}/mcp/agent-map`);
@@ -109,6 +109,8 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
   await client.connect(transport);
   const tools = await client.listTools();
   expect(tools.tools.map(({ name }) => name).sort()).toEqual([
+    "agent_map_bind",
+    "agent_map_implementations",
     "agent_map_propose",
     "agent_map_read",
     "agent_map_validate",
@@ -129,6 +131,16 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     project: { projectId: session.agentMapIdentity!.projectId },
     proposal: null,
   });
+  const inventory = await client.callTool({ name: "agent_map_implementations", arguments: {} });
+  expect(inventory.isError).not.toBe(true);
+  expect(inventory.structuredContent).toMatchObject({ projectId: session.agentMapIdentity!.projectId, bindings: [] });
+  const changedIdentity = vi.spyOn(server.sessionManager, "get").mockReturnValueOnce({
+    ...session, agentMapIdentity: { ...session.agentMapIdentity!, userId: "foreign-user" },
+  });
+  await expect(client.callTool({ name: "agent_map_implementations", arguments: {} })).resolves.toMatchObject({
+    isError: true, structuredContent: { ok: false, code: "unauthorized" },
+  });
+  changedIdentity.mockRestore();
   const stopReadyBridge = server.sessionManager.onStatusChange(
     (candidate, context) => {
       if (
@@ -458,6 +470,8 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
   await client.connect(transport);
   const tools = await client.listTools();
   expect(tools.tools.map(({ name }) => name).sort()).toEqual([
+    "agent_map_bind",
+    "agent_map_implementations",
     "agent_map_propose",
     "agent_map_read",
     "agent_map_validate",

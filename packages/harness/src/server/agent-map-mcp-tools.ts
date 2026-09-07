@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { agentMapBindingRequestSchema, AgentMapBindingError, type AgentMapImplementationBindings } from "../core/agent-map-implementation-bindings.js";
 
 import type { ProjectAgentSession } from "../shared/agent-map.js";
 import {
@@ -122,7 +123,7 @@ const projectSubsessionRequestSchema = z.object({
 }).strict();
 
 export interface AgentMapToolEvent {
-  tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose" |
+  tool: "agent_map_read" | "agent_map_validate" | "agent_map_propose" | "agent_map_implementations" | "agent_map_bind" |
     "build_plan_read" | "build_plan_validate" | "build_plan_apply" | "build_plan_rebase" |
     "build_plan_brief_refresh" | "project_subsession_delegate";
   outcome: "ok" | "error";
@@ -131,6 +132,8 @@ export interface AgentMapToolEvent {
 }
 
 export interface AgentMapMcpToolsOptions {
+  implementations?: AgentMapImplementationBindings;
+  assertAuthorized?: () => void;
   onEvent?: (event: AgentMapToolEvent) => void;
   readSnapshot?: () => Promise<object>;
 }
@@ -144,7 +147,7 @@ export class AgentMapMcpProjectUnavailableError extends Error {
 
 function errorResult(error: unknown) {
   const details =
-    error instanceof AgentMapProposalValidationError
+    error instanceof AgentMapBindingError ? error.detail : error instanceof AgentMapProposalValidationError
       ? {
           code: error.code,
           currentVersion: error.currentVersion,
@@ -247,6 +250,37 @@ export function createAgentMapToolServer(
     }
   };
 
+  server.registerTool(
+    "agent_map_implementations",
+    {
+      description: "Read exact same-project Studio implementations and current node bindings. Candidates include private local paths to distinguish same-name agents. Copy mapVersionId, nodeId and revision for agent_map_bind; retry a later read if scaffold discovery is incomplete.",
+      inputSchema: z.object({}).strict(),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => instrument("agent_map_implementations", async () => {
+      if (!options.implementations || !options.assertAuthorized) throw new AgentMapBindingError("discovery_unavailable");
+      const result = await options.implementations.inventory(identity.projectId, options.assertAuthorized);
+      options.assertAuthorized();
+      return toolResult(result, "Current implementation bindings");
+    }),
+  );
+  server.registerTool(
+    "agent_map_bind",
+    {
+      description: "Link an existing planned agent/subagent node to one exact Studio agentId from agent_map_implementations; null explicitly unlinks. Copy expectedMapVersionId and expectedRevision from that read. Reread after conflicts; this does not edit map history or build plans.",
+      inputSchema: z.object({
+        expectedMapVersionId: preserveInvalidForService(agentMapBindingRequestSchema.shape.expectedMapVersionId),
+        nodeId: preserveInvalidForService(agentMapBindingRequestSchema.shape.nodeId),
+        expectedRevision: preserveInvalidForService(agentMapBindingRequestSchema.shape.expectedRevision),
+        agentId: preserveInvalidForService(agentMapBindingRequestSchema.shape.agentId),
+      }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async input => instrument("agent_map_bind", async () => {
+      if (!options.implementations || !options.assertAuthorized) throw new AgentMapBindingError("discovery_unavailable");
+      return toolResult(await options.implementations.bind(identity.projectId, input, options.assertAuthorized), "Implementation binding saved");
+    }),
+  );
   server.registerTool(
     "agent_map_read",
     {

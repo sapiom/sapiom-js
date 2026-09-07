@@ -231,6 +231,24 @@ credentials, and raw model output are never included.
 While generation is active, the selected project also polls its durable status
 so completion by another Studio process is visible without reloading the page.
 
+### Agent Map implementation links
+
+`agent_map_implementations({})` lists current node bindings and exact same-project
+Studio candidates, including private paths for distinguishing same-name agents.
+After scaffold/discovery, use `agent_map_bind` with the returned `mapVersionId`
+as `expectedMapVersionId`, the planned `nodeId`, its `revision` as
+`expectedRevision`, and the chosen `agentId`. Set `agentId: null` to unlink;
+reread after conflicts or delayed discovery. Bindings preserve map history and
+build plans. Missing implementations retain their planned node and can be
+explicitly relinked. Existing generated maps inherit only uniquely proven
+initialization links; an explicit bind or unlink takes precedence.
+
+The boot-token-protected `GET /api/projects/:projectId/agent-map/implementations`
+returns a path-free projection. `GET .../nodes/:nodeId/implementation` resolves
+the current exact local target for navigation. Both are uncached reads and do
+not start sessions, scans or another model pass. Node click navigation and
+Draft/Deployed indicators are separate UI features.
+
 ### Agent Map MCP
 
 Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for
@@ -245,13 +263,15 @@ renews its inactivity lease, while session exit, resume rotation, signed-in
 principal changes, and server shutdown revoke it. Consumers should not copy,
 persist, log, or reuse the capability outside the launched session.
 
-Every trusted project session receives the same nine project-wide tools:
+Every trusted project session receives the same eleven project-wide tools:
 
 - `agent_map_read` reads the current confirmed workspace and shared proposal.
 - `agent_map_validate` validates one complete operation batch without mutating
   shared state or allocating permanent IDs.
 - `agent_map_propose` atomically and idempotently applies one validated batch
   to the shared Proposed map.
+- `agent_map_implementations` reads exact implementation candidates and bindings.
+- `agent_map_bind` explicitly links or unlinks a planned agent node.
 - `build_plan_read` reads the current plan or one exact immutable historical
   version.
 - `build_plan_validate` previews the same strict request accepted by apply
