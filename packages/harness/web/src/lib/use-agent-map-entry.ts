@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentMapWorkspaceResponse,
   AcceptedProposalDelta,
-  PlannerSessionRequest,
-  PlannerSessionResponse,
   StudioProjectId,
 } from "@shared/agent-map";
-import type { HarnessKind, HarnessSession, UiTheme } from "@shared/types";
 
 import { ApiError, errorMessage, type HarnessApi } from "./api";
 import { track } from "./track";
@@ -20,41 +18,22 @@ export type AgentMapWorkspacePaneState =
       status: "ready";
       value: AgentMapWorkspaceResponse;
     }
-  | { status: "error"; message: string };
-
-export type AgentMapPlannerPaneState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready"; value: PlannerSessionResponse }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; canRetry?: boolean };
 
 export interface AgentMapEntryState {
   projectId: StudioProjectId | null;
   workspace: AgentMapWorkspacePaneState;
-  planner: AgentMapPlannerPaneState;
-  /** Missing/deleted/foreign projects are the only errors that replace both
-   * panes. Every ordinary read/launch failure stays local to its own pane. */
+  /** Missing/deleted/foreign projects are bounded separately from ordinary
+   * map-read failures so the renderer can present the right recovery copy. */
   unavailable: string | null;
 }
 
 interface AgentMapEntryOptions {
   projectId: StudioProjectId | null;
-  /** The user's explicit live planner selection, when it already belongs to
-   * this project. It is more specific than project-level resume ordering. */
-  selectedPlanner: HarnessSession | null;
   api: HarnessApi;
-  /** Read at launch time so a theme/provider change made while the workspace
-   * is open is honored by the next explicit fresh-session action. */
-  harness: () => HarnessKind;
-  theme: () => UiTheme;
-  openPlannerSession: (
-    projectId: StudioProjectId,
-    request: PlannerSessionRequest,
-  ) => Promise<PlannerSessionResponse>;
-  onPlannerReady: (
-    response: PlannerSessionResponse,
-    mode: PlannerSessionRequest["mode"],
-  ) => void;
+  subscribeInitializationChanges?: (
+    listener: (status: AgentMapInitializationStatus) => void,
+  ) => () => void;
   subscribeProposalChanges: (
     listener: (delta: AcceptedProposalDelta) => void,
   ) => () => void;
@@ -64,7 +43,6 @@ interface AgentMapEntryOptions {
 const EMPTY_ENTRY: AgentMapEntryState = {
   projectId: null,
   workspace: { status: "idle" },
-  planner: { status: "idle" },
   unavailable: null,
 };
 
@@ -93,18 +71,6 @@ function failureDimensions(
   };
 }
 
-function selectedPlannerResponse(
-  projectId: StudioProjectId | null,
-  session: HarnessSession | null,
-): PlannerSessionResponse | null {
-  return projectId !== null &&
-    session?.status !== "exited" &&
-    session?.planning?.identity.role === "map-planner" &&
-    session.planning.identity.projectId === projectId
-    ? { session, resolution: "live" }
-    : null;
-}
-
 /** The shared gate before an accepted delta may mutate state or telemetry. */
 export function shouldCommitAcceptedDelta(
   currentProjectId: StudioProjectId | null,
@@ -123,42 +89,37 @@ export function shouldCommitAcceptedDelta(
 }
 
 /**
- * Opens the two halves of the first Agent Map experience concurrently.
+ * Loads the durable Agent Map for the selected project.
  *
- * Workspace reads and planner launches have separate request generations and
- * separate retry verbs. A late response from a project the user already left
- * is ignored. The hook intentionally does not own session state: the returned
- * planner session is handed to the central harness store through
- * `openPlannerSession`, so tabs, status events, and planner metadata share one
- * canonical `HarnessSession` projection.
+ * This hook deliberately owns no session behavior. Selecting a project is a
+ * read-only navigation action: it may read map state, but it cannot create,
+ * resume, focus, or prompt a coding session. A late response from a project the
+ * user already left is ignored.
  */
 export function useAgentMapEntry({
   projectId,
-  selectedPlanner,
   api,
-  harness,
-  theme,
-  openPlannerSession,
-  onPlannerReady,
   subscribeProposalChanges,
+  subscribeInitializationChanges,
   subscribeReconnects,
 }: AgentMapEntryOptions): {
   state: AgentMapEntryState;
   retryWorkspace: () => void;
-  retryPlanner: () => void;
-  retryAll: () => void;
-  openFreshPlanner: () => void;
+  initialization: AgentMapInitializationStatus | null;
+  retryGeneration: () => void;
 } {
+  const [initialization, setInitialization] =
+    useState<AgentMapInitializationStatus | null>(null);
+  const initializationRevisionRef = useRef(0);
+  const [initializationLoadError, setInitializationLoadError] = useState<
+    string | null
+  >(null);
+  const refreshInitializationRef = useRef<(() => void) | null>(null);
   const [state, setState] = useState<AgentMapEntryState>(EMPTY_ENTRY);
   const currentProjectRef = useRef<StudioProjectId | null>(projectId);
   const startedProjectRef = useRef<StudioProjectId | null>(null);
   const workspaceRequestRef = useRef(0);
-  const plannerRequestRef = useRef(0);
   const apiRef = useRef(api);
-  const harnessRef = useRef(harness);
-  const themeRef = useRef(theme);
-  const openPlannerRef = useRef(openPlannerSession);
-  const onPlannerReadyRef = useRef(onPlannerReady);
   const visibleProposalRef = useRef(new Map<StudioProjectId, string>());
   const visibleDeltaRef = useRef(
     new Map<StudioProjectId, { proposalId: string; version: number }>(),
@@ -166,81 +127,88 @@ export function useAgentMapEntry({
 
   currentProjectRef.current = projectId;
   apiRef.current = api;
-  harnessRef.current = harness;
-  themeRef.current = theme;
-  openPlannerRef.current = openPlannerSession;
-  onPlannerReadyRef.current = onPlannerReady;
 
-  const selectedResponse = useMemo(
-    () => selectedPlannerResponse(projectId, selectedPlanner),
-    [projectId, selectedPlanner],
-  );
-
-  const loadWorkspace = useCallback((target: StudioProjectId): void => {
-    const request = ++workspaceRequestRef.current;
-    setState((current) => ({
-      ...(current.projectId === target
-        ? current
-        : {
-            projectId: target,
-            planner: { status: "idle" } as AgentMapPlannerPaneState,
-            unavailable: null,
-          }),
-      projectId: target,
-      workspace: { status: "loading" },
-    }));
-    void agentMapLoader.load(apiRef.current, target).then(
-      (value) => {
-        if (
-          currentProjectRef.current !== target ||
-          workspaceRequestRef.current !== request
-        )
-          return;
-        if (
-          value.proposal &&
-          visibleProposalRef.current.get(target) !== value.proposal.id
-        ) {
-          visibleProposalRef.current.set(target, value.proposal.id);
-          const latest = value.proposal.history.at(-1);
-          track("agent_map.proposal_created", {
-            author_role: latest?.actor.role ?? "unknown",
-            assignment_kind: latest?.actor.assignment?.kind ?? "none",
+  const loadWorkspace = useCallback(
+    (target: StudioProjectId, quiet = false): void => {
+      const request = ++workspaceRequestRef.current;
+      setState((current) => ({
+        ...(current.projectId === target
+          ? current
+          : {
+              projectId: target,
+              unavailable: null,
+            }),
+        projectId: target,
+        unavailable: null,
+        workspace:
+          quiet &&
+          current.projectId === target &&
+          current.workspace.status === "ready"
+            ? current.workspace
+            : { status: "loading" },
+      }));
+      void agentMapLoader.load(apiRef.current, target).then(
+        (value) => {
+          if (
+            currentProjectRef.current !== target ||
+            workspaceRequestRef.current !== request
+          )
+            return;
+          if (
+            value.proposal &&
+            visibleProposalRef.current.get(target) !== value.proposal.id
+          ) {
+            visibleProposalRef.current.set(target, value.proposal.id);
+            track("agent_map.proposal_created");
+          }
+          setState((current) =>
+            current.projectId === target
+              ? {
+                  ...current,
+                  unavailable: null,
+                  workspace: { status: "ready", value },
+                }
+              : current,
+          );
+        },
+        (error: unknown) => {
+          if (
+            currentProjectRef.current !== target ||
+            workspaceRequestRef.current !== request
+          )
+            return;
+          track("agent_map.workspace_load_failed", {
+            ...failureDimensions(target, error),
+            pane: "map",
           });
-        }
-        setState((current) =>
-          current.projectId === target
-            ? { ...current, workspace: { status: "ready", value } }
-            : current,
-        );
-      },
-      (error: unknown) => {
-        if (
-          currentProjectRef.current !== target ||
-          workspaceRequestRef.current !== request
-        )
-          return;
-        track("agent_map.workspace_load_failed", {
-          ...failureDimensions(target, error),
-          pane: "map",
-        });
-        const message = errorMessage(
-          error,
-          "Agent Map state could not be loaded.",
-        );
-        setState((current) =>
-          current.projectId === target
-            ? {
-                ...current,
-                workspace: { status: "error", message },
-                unavailable: isWholeWorkspaceUnavailable(error)
-                  ? message
-                  : current.unavailable,
-              }
-            : current,
-        );
-      },
-    );
-  }, []);
+          const message = errorMessage(
+            error,
+            "Agent Map state could not be loaded.",
+          );
+          setState((current) =>
+            current.projectId === target
+              ? {
+                  ...current,
+                  workspace: {
+                    status: "error",
+                    message,
+                    canRetry: !(
+                      error instanceof ApiError &&
+                      (error.code === "malformed_state" ||
+                        error.code === "unsupported_schema")
+                    ),
+                  },
+                  unavailable: isWholeWorkspaceUnavailable(error)
+                    ? message
+                    : null,
+                }
+              : current,
+          );
+        },
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!projectId) return;
@@ -300,8 +268,6 @@ export function useAgentMapEntry({
             : current,
         );
         track("agent_map.proposal_visible", {
-          author_role: delta.actor.role,
-          assignment_kind: delta.actor.assignment?.kind ?? "none",
           visible_latency_ms: visibleLatency,
         });
       };
@@ -332,142 +298,178 @@ export function useAgentMapEntry({
     };
   }, [loadWorkspace, projectId, subscribeProposalChanges, subscribeReconnects]);
 
-  const loadPlanner = useCallback(
-    (target: StudioProjectId, mode: PlannerSessionRequest["mode"]): void => {
-      const request = ++plannerRequestRef.current;
-      setState((current) => ({
-        ...(current.projectId === target
-          ? current
-          : {
-              projectId: target,
-              workspace: { status: "idle" } as AgentMapWorkspacePaneState,
-              unavailable: null,
-            }),
-        projectId: target,
-        planner: { status: "loading" },
-      }));
-      void openPlannerRef
-        .current(target, {
-          mode,
-          harness: harnessRef.current(),
-          theme: themeRef.current(),
-        })
-        .then(
-          (value) => {
-            if (
-              currentProjectRef.current !== target ||
-              plannerRequestRef.current !== request
-            )
-              return;
-            onPlannerReadyRef.current(value, mode);
-            setState((current) =>
-              current.projectId === target
-                ? { ...current, planner: { status: "ready", value } }
-                : current,
-            );
-          },
-          (error: unknown) => {
-            if (
-              currentProjectRef.current !== target ||
-              plannerRequestRef.current !== request
-            )
-              return;
-            track("agent_map.workspace_load_failed", {
-              ...failureDimensions(target, error),
-              pane: "planner",
-            });
-            const message = errorMessage(
-              error,
-              "The planning conversation could not be opened.",
-            );
-            setState((current) =>
-              current.projectId === target
-                ? {
-                    ...current,
-                    planner: { status: "error", message },
-                    unavailable: isWholeWorkspaceUnavailable(error)
-                      ? message
-                      : current.unavailable,
-                  }
-                : current,
-            );
-          },
-        );
-    },
-    [],
-  );
-
   useEffect(() => {
     if (projectId === null) {
       startedProjectRef.current = null;
       workspaceRequestRef.current += 1;
-      plannerRequestRef.current += 1;
       setState(EMPTY_ENTRY);
       return;
     }
     // The ref survives React StrictMode's setup/cleanup probe, preventing two
-    // planner launches and duplicate entry telemetry for one visible visit.
+    // map reads and duplicate entry telemetry for one visible visit.
     if (startedProjectRef.current === projectId) return;
     startedProjectRef.current = projectId;
     setState({
       projectId,
       workspace: { status: "loading" },
-      planner: selectedResponse
-        ? { status: "ready", value: selectedResponse }
-        : { status: "loading" },
       unavailable: null,
     });
     track("agent_map.entered", { project_id: projectId });
     loadWorkspace(projectId);
-    if (!selectedResponse) loadPlanner(projectId, "resume-or-create");
-  }, [loadPlanner, loadWorkspace, projectId, selectedResponse]);
+  }, [loadWorkspace, projectId]);
+
+  useEffect(() => {
+    setInitialization(null);
+    setInitializationLoadError(null);
+    if (!projectId) return;
+    let disposed = false;
+    const show = (status: AgentMapInitializationStatus) => {
+      if (disposed || status.projectId !== projectId) return;
+      setInitializationLoadError(null);
+      setInitialization(status);
+      if (
+        (status.status === "completed" || status.status === "skipped") &&
+        !agentMapLoader.peek(projectId)?.proposal
+      ) {
+        agentMapLoader.invalidate(projectId);
+        loadWorkspace(projectId, true);
+      }
+    };
+    const refresh = () => {
+      const started = ++initializationRevisionRef.current;
+      void api
+        .getAgentMapInitialization(projectId)
+        .then((status) => {
+          if (initializationRevisionRef.current === started) show(status);
+        })
+        .catch(() => {
+          if (!disposed && initializationRevisionRef.current === started)
+            setInitializationLoadError(
+              "Agent Map generation status could not be loaded.",
+            );
+        });
+    };
+    const unsubscribe = subscribeInitializationChanges?.((status) => {
+      if (status.projectId !== projectId) return;
+      initializationRevisionRef.current += 1;
+      show(status);
+    });
+    const reconnect = subscribeReconnects(refresh);
+    refreshInitializationRef.current = refresh;
+    refresh();
+    return () => {
+      disposed = true;
+      refreshInitializationRef.current = null;
+      unsubscribe?.();
+      reconnect();
+    };
+  }, [
+    api,
+    projectId,
+    subscribeInitializationChanges,
+    subscribeReconnects,
+    loadWorkspace,
+  ]);
+
+  useEffect(() => {
+    if (!projectId || initialization?.projectId !== projectId) return;
+    if (
+      initialization.status !== "queued" &&
+      initialization.status !== "running"
+    )
+      return;
+    let disposed = false;
+    let inFlight = false;
+    // Another Studio process may own the job. Its local event bus cannot notify
+    // this tab, so only active initialization polls its durable project status.
+    const timer = setInterval(() => {
+      if (inFlight) return;
+      inFlight = true;
+      const started = ++initializationRevisionRef.current;
+      void api
+        .getAgentMapInitialization(projectId)
+        .then((status) => {
+          if (
+            disposed ||
+            currentProjectRef.current !== projectId ||
+            initializationRevisionRef.current !== started
+          )
+            return;
+          setInitialization(status);
+          setInitializationLoadError(null);
+          if (status.status === "completed" || status.status === "skipped") {
+            agentMapLoader.invalidate(projectId);
+            loadWorkspace(projectId, true);
+          }
+        })
+        .catch(() => {
+          if (!disposed && initializationRevisionRef.current === started)
+            setInitializationLoadError(
+              "Agent Map generation status could not be loaded.",
+            );
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    }, 2000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [api, initialization, projectId, loadWorkspace]);
+
+  const retryGeneration = useCallback(() => {
+    if (!projectId) return;
+    const started = ++initializationRevisionRef.current;
+    void api
+      .retryAgentMapInitialization(projectId)
+      .then((status) => {
+        if (
+          currentProjectRef.current === projectId &&
+          initializationRevisionRef.current === started
+        ) {
+          setInitialization(status);
+          setInitializationLoadError(null);
+        }
+      })
+      .catch(() => {
+        if (currentProjectRef.current === projectId) loadWorkspace(projectId);
+      });
+  }, [api, projectId, loadWorkspace]);
 
   const retryWorkspace = useCallback((): void => {
     const target = currentProjectRef.current;
     if (!target) return;
     setState((current) => ({ ...current, unavailable: null }));
+    refreshInitializationRef.current?.();
     loadWorkspace(target);
   }, [loadWorkspace]);
-
-  const retryPlanner = useCallback((): void => {
-    const target = currentProjectRef.current;
-    if (!target) return;
-    setState((current) => ({ ...current, unavailable: null }));
-    loadPlanner(target, "resume-or-create");
-  }, [loadPlanner]);
-
-  const retryAll = useCallback((): void => {
-    const target = currentProjectRef.current;
-    if (!target) return;
-    setState((current) => ({ ...current, unavailable: null }));
-    loadWorkspace(target);
-    loadPlanner(target, "resume-or-create");
-  }, [loadPlanner, loadWorkspace]);
-
-  const openFreshPlanner = useCallback((): void => {
-    const target = currentProjectRef.current;
-    if (!target) return;
-    setState((current) => ({ ...current, unavailable: null }));
-    loadPlanner(target, "fresh");
-  }, [loadPlanner]);
 
   return {
     state:
       state.projectId === projectId
-        ? state
+        ? initializationLoadError &&
+          state.workspace.status === "ready" &&
+          !state.workspace.value.proposal
+          ? {
+              ...state,
+              workspace: {
+                status: "error",
+                message: initializationLoadError,
+                canRetry: true,
+              },
+            }
+          : state
         : projectId === null
           ? EMPTY_ENTRY
           : {
               projectId,
               workspace: { status: "loading" },
-              planner: selectedResponse
-                ? { status: "ready", value: selectedResponse }
-                : { status: "loading" },
               unavailable: null,
             },
     retryWorkspace,
-    retryPlanner,
-    retryAll,
-    openFreshPlanner,
+    initialization:
+      initialization?.projectId === projectId ? initialization : null,
+    retryGeneration,
   };
 }

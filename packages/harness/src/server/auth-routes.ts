@@ -118,6 +118,8 @@ export interface AuthRoutesOptions {
   performBrowserAuthImpl?: typeof performBrowserAuth;
   /** Server-private identity projection for authorization consumers. It is
    * intentionally not added to AuthState or any browser response. */
+  onProjectUserChanged?: (userId: string | null) => void;
+  /** @deprecated Use onProjectUserChanged; remove in SAP-3152. */
   onPlanningUserChanged?: (userId: string | null) => void;
 }
 
@@ -136,8 +138,11 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     authEnabled = true,
     environment,
     performBrowserAuthImpl = performBrowserAuth,
+    onProjectUserChanged,
     onPlanningUserChanged,
   } = opts;
+  const notifyProjectUserChanged =
+    onProjectUserChanged ?? onPlanningUserChanged;
 
   // Track any in-flight start() call so a second concurrent POST /api/auth/start
   // returns a clear error rather than racing two browser-open flows.
@@ -215,7 +220,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
         // CLI identity uses tenantId as HarnessIdentity.userId. Update the
         // private live principal in the same committed transition as auth;
         // never expose it in the public auth status payload.
-        onPlanningUserChanged?.(result.tenantId);
+        notifyProjectUserChanged?.(result.tenantId);
         bus.publish({
           type: "auth.changed",
           authenticated: true,
@@ -270,7 +275,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
       apiKeyProvider.clear();
 
       authState.set({ authenticated: false, organizationName: null });
-      onPlanningUserChanged?.(null);
+      notifyProjectUserChanged?.(null);
       bus.publish({
         type: "auth.changed",
         authenticated: false,

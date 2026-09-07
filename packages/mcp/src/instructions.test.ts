@@ -177,12 +177,12 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.9 (servers named by role, not alias — SAP-3179).
+    // Current release: 2.11 (servers named by role, not alias — SAP-3179; carries 2.10's trigger kinds).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "5e9e2d2ac724c0a34c46e96f2092c5d0788929ada9ffadc236e6a0decabde211",
+      "bc477eb0f75be49b5b2bd872128876707c58ee85efe78600aea41adcd64b738b",
     );
   });
 });

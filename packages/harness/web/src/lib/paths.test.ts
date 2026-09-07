@@ -6,6 +6,7 @@ import {
   looksAbsolutePath,
   middleTruncatePath,
   parentOf,
+  samePath,
   sepOf,
   stripTrailingSep,
 } from "./paths";
@@ -25,7 +26,9 @@ describe("sepOf", () => {
 
 describe("joinPath", () => {
   it("joins POSIX with /", () => {
-    expect(joinPath("/Users/demo", "price-watch")).toBe("/Users/demo/price-watch");
+    expect(joinPath("/Users/demo", "price-watch")).toBe(
+      "/Users/demo/price-watch",
+    );
   });
 
   it("joins Windows with \\ — the headline fix, no mixed-separator output", () => {
@@ -113,11 +116,59 @@ describe("isWithinDir", () => {
     expect(isWithinDir("C:\\a\\b", "C:\\a\\other")).toBe(false);
   });
 
-  it("matches a mixed-separator child against its native parent — the shipped bug", () => {
-    expect(isWithinDir("C:\\Users\\x\\projects", "C:\\Users\\x\\projects/newsletter-autopilot")).toBe(
-      true,
+  it("case-folds Windows drive and UNC paths without weakening segment boundaries", () => {
+    expect(
+      samePath("C:\\Users\\Alice\\Project", "c:/users/alice/project/"),
+    ).toBe(true);
+    expect(
+      isWithinDir("C:\\Users\\Alice\\Project", "c:/USERS/alice/PROJECT/src"),
+    ).toBe(true);
+    expect(
+      isWithinDir("C:\\Users\\Alice\\Project", "c:/users/alice/project-two"),
+    ).toBe(false);
+    expect(
+      isWithinDir("C:\\Users\\Alice\\Project", "D:/users/alice/project/src"),
+    ).toBe(false);
+
+    expect(
+      samePath(
+        "\\\\BuildServer\\AgentShare\\Project",
+        "//buildserver/agentshare/project/",
+      ),
+    ).toBe(true);
+    expect(
+      isWithinDir(
+        "\\\\BuildServer\\AgentShare\\Project",
+        "//BUILDSERVER/AGENTSHARE/project/packages/app",
+      ),
+    ).toBe(true);
+    expect(
+      isWithinDir(
+        "\\\\BuildServer\\AgentShare\\Project",
+        "//buildserver/other-share/project",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps POSIX path comparisons case-sensitive", () => {
+    expect(samePath("/Users/Alice/Project", "/users/alice/project")).toBe(
+      false,
     );
-    expect(isWithinDir("C:\\Users\\x\\projects/app", "C:\\Users\\x\\projects\\app")).toBe(true);
+    expect(
+      isWithinDir("/Users/Alice/Project", "/users/alice/project/src"),
+    ).toBe(false);
+  });
+
+  it("matches a mixed-separator child against its native parent — the shipped bug", () => {
+    expect(
+      isWithinDir(
+        "C:\\Users\\x\\projects",
+        "C:\\Users\\x\\projects/newsletter-autopilot",
+      ),
+    ).toBe(true);
+    expect(
+      isWithinDir("C:\\Users\\x\\projects/app", "C:\\Users\\x\\projects\\app"),
+    ).toBe(true);
   });
 
   it("ignores trailing separators on either side", () => {
@@ -144,7 +195,9 @@ describe("looksAbsolutePath", () => {
 
 describe("middleTruncatePath", () => {
   it("middle-truncates a long POSIX path", () => {
-    expect(middleTruncatePath("/Users/demo/work/onboarding-flow")).toBe("/Users/…/onboarding-flow");
+    expect(middleTruncatePath("/Users/demo/work/onboarding-flow")).toBe(
+      "/Users/…/onboarding-flow",
+    );
   });
 
   it("middle-truncates a Windows path in its own separator", () => {

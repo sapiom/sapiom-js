@@ -5,8 +5,8 @@
 
 Name the two Sapiom MCP servers by role in both offline fallbacks — "the local
 authoring server" and "the hosted capability server" — instead of by registration
-alias, matching the 2.9 authoring primer and the 1.1 Agent Studio system prompt the
-backend now serves (SAP-3179).
+alias, matching the 2.11 authoring primer (which also carries 2.10's trigger-kinds section,
+SAP-3174) and the 1.1 Agent Studio system prompt the backend now serves (SAP-3179).
 
 The two texts disagreed: the Studio prompt called the servers `sapiom` (hosted) and
 `sapiom-dev` (local), which is what Studio registers; the authoring primer called them
