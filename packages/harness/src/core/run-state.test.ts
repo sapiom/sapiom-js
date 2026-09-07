@@ -54,6 +54,7 @@ function refreshingProvider(
   const provider = {
     refreshCalls: 0,
     getKey: () => current,
+    snapshot: () => ({ apiKey: current, generation: 0 }),
     refresh: () => {
       provider.refreshCalls += 1;
       if (!refreshed) {

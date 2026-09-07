@@ -40,6 +40,8 @@ import { readCredentialsOrThrow, resolveEnvironment } from "@sapiom/mcp/auth";
 export interface ApiKeyProvider {
   /** The current API key, or null when the harness is not signed in. */
   getKey(): string | null;
+  /** Atomically read the key and the generation that owns it. */
+  snapshot(): ApiKeySnapshot;
   /**
    * Re-read the shared credential store. A successful read is authoritative;
    * a failed read preserves and returns the last-known key. Never throws.
@@ -50,6 +52,12 @@ export interface ApiKeyProvider {
    * disconnect so that {@link getKey} returns null immediately.
    */
   clear(): void;
+}
+
+/** Private launch-time identity for one effective credential value. */
+export interface ApiKeySnapshot {
+  apiKey: string | null;
+  generation: number;
 }
 
 /** Overridable reads for the credential store — a test seam. Defaults hit the
@@ -90,20 +98,34 @@ export function createApiKeyProvider(
   deps: ApiKeyProviderDeps = {},
 ): ApiKeyProvider {
   let current = initialKey;
+  let generation = 0;
+  // `clear()` is synchronous so disconnect removes the in-memory key
+  // immediately. Advancing this barrier also prevents a refresh whose store
+  // read is already in flight from adopting its now-stale result afterward.
+  let mutationBarrier = 0;
   const resolveEnvName =
     deps.resolveEnvironmentName ??
     (() => defaultResolveEnvironmentName(deps.environment));
   const readApiKey = deps.readApiKeyForEnv ?? defaultReadApiKeyForEnv;
   let refreshQueue: Promise<void> = Promise.resolve();
 
-  const refreshFromStore = async (): Promise<string | null> => {
+  const adopt = (next: string | null): void => {
+    if (next === current) return;
+    current = next;
+    generation++;
+  };
+
+  const refreshFromStore = async (
+    expectedBarrier: number,
+  ): Promise<string | null> => {
     try {
       const envName = await resolveEnvName();
       const latest = await readApiKey(envName);
+      if (expectedBarrier !== mutationBarrier) return current;
       // A completed strict read is authoritative. Null/empty means the
       // credential was deliberately removed; only a thrown read preserves the
       // last-known key.
-      current = latest?.trim() ? latest : null;
+      adopt(latest?.trim() ? latest : null);
     } catch {
       // Store unreadable (permissions, malformed JSON, transient I/O) or an
       // invalid environment — preserve the last-known key.
@@ -115,10 +137,14 @@ export function createApiKeyProvider(
     getKey(): string | null {
       return current;
     },
+    snapshot(): ApiKeySnapshot {
+      return { apiKey: current, generation };
+    },
     refresh(): Promise<string | null> {
       // Queue the whole resolve+read+adopt transaction. Without this, a slower
       // older refresh can finish after a newer one and restore stale state.
-      const result = refreshQueue.then(refreshFromStore);
+      const expectedBarrier = mutationBarrier;
+      const result = refreshQueue.then(() => refreshFromStore(expectedBarrier));
       refreshQueue = result.then(
         () => undefined,
         () => undefined,
@@ -126,7 +152,8 @@ export function createApiKeyProvider(
       return result;
     },
     clear(): void {
-      current = null;
+      mutationBarrier++;
+      adopt(null);
     },
   };
 }
@@ -140,6 +167,7 @@ export function createApiKeyProvider(
 export function staticApiKeyProvider(key: string | null): ApiKeyProvider {
   return {
     getKey: () => key,
+    snapshot: () => ({ apiKey: key, generation: 0 }),
     refresh: () => Promise.resolve(key),
     clear: () => {
       /* static key — clear is a no-op */
