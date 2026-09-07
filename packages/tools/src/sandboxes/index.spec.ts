@@ -107,6 +107,75 @@ describe("Sandbox.exec — terminal status handling", () => {
   });
 });
 
+describe("Sandbox.execStream — post-stream status reconciliation", () => {
+  /**
+   * Route that returns a real streaming Response for `/logs/stream` (so
+   * `res.body.getReader()` works) and FakeResponses for process create/status.
+   */
+  function streamSandbox(pollStatuses: Array<Record<string, unknown>>) {
+    let polls = 0;
+    return sandboxWith((url, init) => {
+      if ((init.method ?? "GET") === "POST" && url.endsWith("/process")) {
+        return ok({ pid: "p-stream", status: "running" });
+      }
+      if (/\/logs\/stream$/.test(url)) {
+        // Real Response so ReadableStream is available to execStream.
+        return new Response("stdout:hello\n") as unknown as FakeResponse;
+      }
+      const body = pollStatuses[Math.min(polls, pollStatuses.length - 1)]!;
+      polls += 1;
+      return ok({ pid: "p-stream", ...body });
+    });
+  }
+
+  it("reconciles an exit code reported after the log stream ends", async () => {
+    jest.useFakeTimers();
+    try {
+      const box = streamSandbox([
+        { status: "running" },
+        { status: "failed", exitCode: 3 },
+      ]);
+
+      const stream = await box.execStream("false");
+      const drained = (async () => {
+        const seen: Array<{ stream: string; data: string }> = [];
+        for await (const line of stream.output) seen.push(line);
+        return seen;
+      })();
+
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(await drained).toEqual([{ stream: "stdout", data: "hello" }]);
+      expect(stream.exitCode).toBe(3);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  // Regression: the reconciliation poll above ran with no deadline, so a
+  // process that never reports a terminal status hung the consumer forever
+  // instead of failing with the exec timeout every other poll path applies.
+  it("times out when the process never reaches a terminal status", async () => {
+    jest.useFakeTimers();
+    try {
+      const box = streamSandbox([{ status: "running" }]);
+
+      const stream = await box.execStream("sleep 999");
+      const drained = (async () => {
+        for await (const line of stream.output) void line;
+      })();
+      const rejection = expect(drained).rejects.toThrow(
+        "Process p-stream timed out after 60000ms",
+      );
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      await rejection;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe("Sandbox.uploadFile — multipart lifecycle", () => {
   it("initiates, uploads each part, and completes", async () => {
     const calls: string[] = [];

@@ -548,9 +548,19 @@ export class Sandbox {
         reader.releaseLock();
       }
 
+      // If the process hasn't finished yet (e.g. stream disconnected before
+      // the process finished), poll until it does — bounded by the same exec
+      // timeout pollProcess applies, so a process that never reports a
+      // terminal status fails loudly instead of polling forever.
+      const deadline = Date.now() + DEFAULT_EXEC_TIMEOUT;
       let status = await readStatus();
       while (!isProcessTerminal(status.status)) {
-        await new Promise((r) => setTimeout(r, 1000));
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `Process ${proc.pid} timed out after ${DEFAULT_EXEC_TIMEOUT}ms`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, DEFAULT_POLL_INTERVAL));
         status = await readStatus();
       }
       finalExitCode = terminalExitCode(status);
