@@ -45,7 +45,7 @@ describe("server instructions", () => {
 
   it("names the two servers by role and keeps distinct aliases in the registration commands", () => {
     // Two-MCP frame: this server authors agents; the hosted capability server answers
-    // one-off calls. Since 2.9 (SAP-3179) both are named by ROLE — "the local authoring
+    // one-off calls. Under SAP-3179 both are named by ROLE — "the local authoring
     // server", "the hosted capability server" — with the same phrases the Agent Studio
     // system prompt uses, because the aliases differ by context: Studio wires `sapiom`
     // (hosted) / `sapiom-dev` (local), while a plain Claude Code user registers `sapiom`
