@@ -99,6 +99,9 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_sandbox_check`           | —                | Validate the project's sandbox resources without deploying                 |
 | `sapiom_dev_sandbox_preview`         | ✓                | Deploy the app to a sandbox for a live URL that expires with its `ttl`     |
 | `sapiom_dev_app_publish`             | ✓                | Publish the same app to a durable App Link (`apps.sapiom.ai/{org}/{slug}`) |
+| `sapiom_dev_app_list`                | ✓                | List the org's App Links: URL, visibility, webhooks, spend cap, wake state |
+| `sapiom_dev_app_settings`            | ✓                | Change a link's `webhooksEnabled`, visibility, spend cap, wake rate limit  |
+| `sapiom_dev_app_delete`              | ✓                | Delete a link (URL stops resolving, slug freed); `confirm: true` required  |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
@@ -110,6 +113,15 @@ once the link needs to be permanent or shared. `app_publish` reads the same
 (≤ 10 MiB), and returns a durable `https://apps.sapiom.ai/{org}/{slug}` URL that
 wakes the app on demand — republishing the same slug updates it in place. See
 the `sapiom-sandbox-preview` skill for the routing rules.
+
+Once a link exists, `app_list`, `app_settings` and `app_delete` manage it without
+leaving the terminal. Webhooks are **off by default**: `app_settings { slug,
+webhooksEnabled: true }` turns them on, after which third parties POST to
+`https://apps.sapiom.ai/{org}/{slug}/hook/<path>` (the `/hook` prefix is
+stripped and the body forwarded byte-exact, so Slack/Stripe/GitHub signature
+checks run inside the app). These settings need the `org.write` permission —
+publish authority alone is not enough — and a refusal comes back as a message
+naming the permission and the fields, for the agent to relay rather than retry.
 
 ## How capabilities fit in
 

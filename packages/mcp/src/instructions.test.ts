@@ -100,6 +100,22 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
+  it("teaches App Link management from this server, version-gated (SAP-3178)", () => {
+    // 2.8 taught publishing and nothing else about a link, so an offline session
+    // could not learn that webhooks are off by default, how to turn them on, or
+    // that `/hook/*` is the receiver. The three management tools ship in 0.15;
+    // the gate is the same one `_publish` carries, for the same reason.
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_list");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_settings");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_delete");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
+    expect(AUTHORING_INSTRUCTIONS).toContain("Webhooks are OFF by default");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("settings need `org.write`");
+  });
+
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
     // The primer is the only always-in-context surface, so authors learn the entry
     // contract here. Kept byte-identical to the backend DEFAULT_MCP_INSTRUCTIONS copy.
@@ -177,12 +193,17 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.11 (servers named by role, not alias — SAP-3179; carries 2.10's trigger kinds).
+    // Current release: App Link management tools + webhook receiver (SAP-3178) on top of
+    // 2.10's trigger kinds (SAP-3174), plus the two Sapiom servers named by role rather
+    // than by alias (SAP-3179). Both sides of this merge claimed "2.11"; the paired
+    // backend release for SAP-3179 (sapiom/Sapiom#4884) is still open and predates
+    // SAP-3178, so it must adopt this same body and settle the release number before the
+    // two pins can agree.
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "bc477eb0f75be49b5b2bd872128876707c58ee85efe78600aea41adcd64b738b",
+      "8a529780d5b85c5408862cd1cc145095ebce1a792875deefc1de3ace8db2170e",
     );
   });
 });
