@@ -105,7 +105,13 @@ export type { ResolveResourceHandleOptions } from './config.js';
 
 // Introspection — zod→JSON-Schema conversion + step/workflow input contracts.
 // Shared by engine tooling and the build phase (runs outside the engine).
-export { zodToJsonSchema, exampleFromJsonSchema, stepInputContract, workflowInputContract } from './introspection.js';
+export {
+  zodToJsonSchema,
+  normalizeInputJsonSchema,
+  exampleFromJsonSchema,
+  stepInputContract,
+  workflowInputContract,
+} from './introspection.js';
 export type { StepInputContract, AgentInputContract } from './introspection.js';
 
 // Manifest types, Zod schema, and generator — the build→engine contract.

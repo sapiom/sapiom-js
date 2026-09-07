@@ -34,11 +34,103 @@ export interface StepInputContract {
 export type AgentInputContract = StepInputContract;
 
 /**
- * Convert a Zod schema to its JSON Schema representation.
- * Used by the manifest generator (build phase, sandbox) and by engine tooling.
+ * Convert a Zod schema to the JSON Schema of what a CALLER MAY SEND.
+ *
+ * Used by the manifest generator (build phase, sandbox), by the input-contract
+ * helpers below, and by engine tooling. Every consumer of this function
+ * describes an input — a step's `inputSchema` — so the conversion is done in
+ * Zod's `io: "input"` mode and then normalized by
+ * {@link normalizeInputJsonSchema}. See both for why.
  */
 export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
-  return z.toJSONSchema(schema) as Record<string, unknown>;
+  // `io: "input"` describes the value a caller SENDS rather than the value a
+  // parse RETURNS. Three consequences, all of them what an input contract
+  // wants:
+  //   - a field with `.default()` / `.prefault()` / `.catch()` is not listed in
+  //     `required` (at every depth), because omitting it is legal — Zod
+  //     supplies the value on parse;
+  //   - a `.pipe()` / `.transform()` is described by its INPUT type, so the
+  //     pre-gate checks what was actually sent (and `.transform()` no longer
+  //     throws "Transforms cannot be represented in JSON Schema" at build);
+  //   - plain `z.object()` is not emitted as closed, matching its
+  //     strip-not-reject parse.
+  const jsonSchema = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+  return normalizeInputJsonSchema(jsonSchema);
+}
+
+/**
+ * Normalize an already-converted input JSON Schema so it accepts exactly what
+ * the Zod schema behind it parses. Pure JSON in, pure JSON out — no Zod
+ * involved, so a caller that must run `z.toJSONSchema` with its own Zod module
+ * instance (the engine does, to keep `.meta()` registry lookups on one
+ * instance) can still share this normalization.
+ *
+ * Two rules, applied recursively at every depth (`properties`, `items`,
+ * `prefixItems`, `anyOf`/`oneOf`/`allOf`, `$defs`, …):
+ *
+ * 1. Drop `additionalProperties: false`. `z.strictObject()` still emits it in
+ *    input mode, and an AJV pre-gate that rejects unnamed fields is stricter
+ *    than the authoritative Zod parse downstream — including for additive
+ *    fields an upstream layer adds that the author does not control. A typed
+ *    catchall (`additionalProperties: { … }`) is preserved; a property
+ *    literally named `additionalProperties` is never the boolean `false`, so it
+ *    is never mis-stripped.
+ *
+ * 2. Drop from `required` any key whose `properties` entry declares a
+ *    `default`. A caller may omit such a field, so reporting it missing makes a
+ *    PARTIAL input stricter than an omitted one (SAP-3218). `io: "input"`
+ *    already does this, so in practice this rule is an invariant guard rather
+ *    than the load-bearing mechanism — it also covers a caller that converted
+ *    in output mode.
+ */
+export function normalizeInputJsonSchema(
+  jsonSchema: Record<string, unknown>,
+): Record<string, unknown> {
+  return normalizeNode(jsonSchema) as Record<string, unknown>;
+}
+
+function normalizeNode(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeNode);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const node = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(node)) {
+    // Rule 1: the closed-object marker goes; a typed catchall stays.
+    if (key === 'additionalProperties' && v === false) {
+      continue;
+    }
+    // Rule 2: a schema node is never an array and a `properties` MAP never
+    // carries an array under `required`, so this pair only ever matches a real
+    // object-schema node — not a property literally named `required`.
+    if (key === 'required' && Array.isArray(v)) {
+      out[key] = dropDefaultedKeys(v, node.properties);
+      continue;
+    }
+    out[key] = normalizeNode(v);
+  }
+  return out;
+}
+
+/**
+ * Filter a `required` array down to the keys the caller must actually supply:
+ * a key whose sibling `properties` entry declares a `default` may be omitted.
+ * Non-string entries and keys with no `properties` entry are left alone.
+ */
+function dropDefaultedKeys(required: unknown[], properties: unknown): unknown[] {
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return required;
+  }
+  const props = properties as Record<string, unknown>;
+  return required.filter((key) => {
+    if (typeof key !== 'string') return true;
+    const prop = props[key];
+    return !(prop && typeof prop === 'object' && 'default' in prop);
+  });
 }
 
 /**
