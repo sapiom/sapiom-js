@@ -187,6 +187,51 @@ describe('normalizeInputJsonSchema', () => {
     expect(propAt(schema, 'required').type).toBe('array');
     expect(propAt(schema, 'additionalProperties').type).toBe('boolean');
   });
+
+  // The traversal descends only through subschema keywords. `default`, `const`,
+  // `enum`, `examples` and `example` carry arbitrary AUTHOR DATA, and an
+  // author's default may itself be a JSON-Schema-shaped object — an agent whose
+  // input IS a schema is a real case. Rewriting it would corrupt the value the
+  // step receives and the value the Run form prefills.
+  it('never rewrites a JSON-Schema-shaped default value', () => {
+    const payload = {
+      type: 'object',
+      properties: { a: { type: 'string', default: 'x' } },
+      required: ['a'],
+      additionalProperties: false,
+    };
+    const schema = zodToJsonSchema(
+      z.object({ childSchema: z.record(z.string(), z.unknown()).default(payload) }),
+    );
+
+    expect(propAt(schema, 'childSchema').default).toEqual(payload);
+  });
+
+  it('never rewrites a JSON-Schema-shaped .meta() example', () => {
+    const example = {
+      childSchema: { properties: { a: { default: 1 } }, required: ['a'], additionalProperties: false },
+    };
+    const schema = zodToJsonSchema(
+      z.object({ childSchema: z.record(z.string(), z.unknown()) }).meta({ examples: [example] }),
+    );
+
+    expect(schema.examples).toEqual([example]);
+  });
+
+  it('normalizes a real subschema even when the property is NAMED like a keyword', () => {
+    // Position, not name, decides: these are property VALUES, so they are
+    // subschemas and both rules apply inside them.
+    const schema = zodToJsonSchema(
+      z.object({
+        default: z.object({ nested: z.number().default(1) }),
+        items: z.strictObject({ nested: z.number().default(2) }),
+      }),
+    );
+
+    expect(requiredOf(propAt(schema, 'default'))).toEqual([]);
+    expect(requiredOf(propAt(schema, 'items'))).toEqual([]);
+    expect(JSON.stringify(schema)).not.toContain('"additionalProperties":false');
+  });
 });
 
 describe('stepInputContract / workflowInputContract', () => {

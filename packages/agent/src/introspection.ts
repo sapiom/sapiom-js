@@ -63,55 +63,113 @@ export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
  * the Zod schema behind it parses. Pure JSON in, pure JSON out — no Zod
  * involved, so a caller that must run `z.toJSONSchema` with its own Zod module
  * instance (the engine does, to keep `.meta()` registry lookups on one
- * instance) can still share this normalization.
+ * instance) can still share this normalization, and so can a pre-gate holding
+ * only a stored manifest.
  *
- * Two rules, applied recursively at every depth (`properties`, `items`,
- * `prefixItems`, `anyOf`/`oneOf`/`allOf`, `$defs`, …):
+ * Two rules, applied to every schema node reachable from the root:
  *
  * 1. Drop `additionalProperties: false`. `z.strictObject()` still emits it in
  *    input mode, and an AJV pre-gate that rejects unnamed fields is stricter
  *    than the authoritative Zod parse downstream — including for additive
  *    fields an upstream layer adds that the author does not control. A typed
- *    catchall (`additionalProperties: { … }`) is preserved; a property
- *    literally named `additionalProperties` is never the boolean `false`, so it
- *    is never mis-stripped.
+ *    catchall (`additionalProperties: { … }`) is preserved.
  *
  * 2. Drop from `required` any key whose `properties` entry declares a
  *    `default`. A caller may omit such a field, so reporting it missing makes a
  *    PARTIAL input stricter than an omitted one (SAP-3218). `io: "input"`
- *    already does this, so in practice this rule is an invariant guard rather
- *    than the load-bearing mechanism — it also covers a caller that converted
- *    in output mode.
+ *    already does this, so for a freshly converted schema this rule is an
+ *    invariant guard rather than the load-bearing mechanism. It IS load-bearing
+ *    for a schema converted in output mode, and for a manifest built by an
+ *    older SDK that a pre-gate has to normalize without a redeploy.
  */
 export function normalizeInputJsonSchema(
   jsonSchema: Record<string, unknown>,
 ): Record<string, unknown> {
-  return normalizeNode(jsonSchema) as Record<string, unknown>;
+  return normalizeSchemaNode(jsonSchema) as Record<string, unknown>;
 }
 
-function normalizeNode(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(normalizeNode);
-  }
-  if (!value || typeof value !== 'object') {
-    return value;
-  }
+// The traversal is STRUCTURAL, not a blind deep walk: it descends only through
+// keywords whose values are subschemas. That matters because several JSON
+// Schema keywords carry arbitrary CALLER DATA — `default`, `const`, `enum`,
+// `examples`, `example` — and an author's default or example may itself be a
+// JSON-Schema-shaped object (an agent whose input IS a schema is a real case).
+// A blind walk applies both rules to that payload and silently rewrites it:
+// a `default` of `{ properties: …, required: ["a"], additionalProperties: false }`
+// would come back with `required: []` and no `additionalProperties`. Anything
+// not listed below is copied through untouched, payload and validation
+// keywords alike.
+//
+// The inverse hazard is why this cannot instead be a blind walk that skips
+// payload KEYS: inside a `properties` map, a property may legitimately be
+// NAMED `default` or `required`, and its value is a real subschema that must
+// be normalized. Only position — not name — distinguishes the two.
 
-  const node = value as Record<string, unknown>;
+/** Keywords whose value is a single subschema (or, pre-2020-12, a list of them). */
+const SUBSCHEMA_KEYWORDS = new Set([
+  'items',
+  'additionalItems',
+  'contains',
+  'propertyNames',
+  'not',
+  'if',
+  'then',
+  'else',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+]);
+
+/** Keywords whose value is an array of subschemas. */
+const SUBSCHEMA_LIST_KEYWORDS = new Set(['anyOf', 'oneOf', 'allOf', 'prefixItems']);
+
+/** Keywords whose value is a map of name → subschema. */
+const SUBSCHEMA_MAP_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  'dependentSchemas',
+  '$defs',
+  'definitions',
+]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSchemaNode(value: unknown): unknown {
+  // A boolean schema (`true` / `false`) and any non-object are already final.
+  if (!isPlainObject(value)) return value;
+
+  const node = value;
   const out: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(node)) {
-    // Rule 1: the closed-object marker goes; a typed catchall stays.
-    if (key === 'additionalProperties' && v === false) {
+  for (const [keyword, v] of Object.entries(node)) {
+    // Rule 1. `additionalProperties` is the one keyword that is either a
+    // boolean constraint or a subschema, so it is handled before the rest.
+    if (keyword === 'additionalProperties') {
+      if (v === false) continue;
+      out[keyword] = isPlainObject(v) ? normalizeSchemaNode(v) : v;
       continue;
     }
-    // Rule 2: a schema node is never an array and a `properties` MAP never
-    // carries an array under `required`, so this pair only ever matches a real
-    // object-schema node — not a property literally named `required`.
-    if (key === 'required' && Array.isArray(v)) {
-      out[key] = dropDefaultedKeys(v, node.properties);
+    // Rule 2.
+    if (keyword === 'required' && Array.isArray(v)) {
+      out[keyword] = dropDefaultedKeys(v, node.properties);
       continue;
     }
-    out[key] = normalizeNode(v);
+    if (SUBSCHEMA_KEYWORDS.has(keyword)) {
+      out[keyword] = Array.isArray(v) ? v.map(normalizeSchemaNode) : normalizeSchemaNode(v);
+      continue;
+    }
+    if (SUBSCHEMA_LIST_KEYWORDS.has(keyword)) {
+      out[keyword] = Array.isArray(v) ? v.map(normalizeSchemaNode) : v;
+      continue;
+    }
+    if (SUBSCHEMA_MAP_KEYWORDS.has(keyword) && isPlainObject(v)) {
+      const mapped: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(v)) {
+        mapped[name] = normalizeSchemaNode(sub);
+      }
+      out[keyword] = mapped;
+      continue;
+    }
+    out[keyword] = v;
   }
   return out;
 }
@@ -122,14 +180,13 @@ function normalizeNode(value: unknown): unknown {
  * Non-string entries and keys with no `properties` entry are left alone.
  */
 function dropDefaultedKeys(required: unknown[], properties: unknown): unknown[] {
-  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+  if (!isPlainObject(properties)) {
     return required;
   }
-  const props = properties as Record<string, unknown>;
   return required.filter((key) => {
     if (typeof key !== 'string') return true;
-    const prop = props[key];
-    return !(prop && typeof prop === 'object' && 'default' in prop);
+    const prop = properties[key];
+    return !(isPlainObject(prop) && 'default' in prop);
   });
 }
 
