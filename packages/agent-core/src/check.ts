@@ -182,6 +182,14 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
         platform: "node",
         target: "node20",
         format: "esm",
+        // A bundled dep that does a dynamic require() — e.g. googleapis →
+        // google-auth-library `require('child_process')` — would otherwise hit
+        // esbuild's ESM shim that throws "Dynamic require not supported". This
+        // banner gives the shim a real `require` so those resolve at runtime
+        // (the documented esbuild workaround). Inert for bundles that do none.
+        banner: {
+          js: "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);",
+        },
         logLevel: "silent",
       });
     } catch (err) {
