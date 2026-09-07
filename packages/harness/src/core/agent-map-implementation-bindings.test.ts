@@ -149,11 +149,12 @@ async function fixture(initial = false, refs = [`studio-agent:${agentId}`]) {
 }
 
 describe("Agent Map implementation bindings", () => {
-  it.each(["inventory", "projection", "target"] as const)(
+  it.each(["inventory", "projection", "target", "bind"] as const)(
     "does not hold the map lock while %s waits for inventory",
     async (method) => {
       const f = await fixture();
       await f.bind(agentId);
+      const { mapVersionId } = await f.read();
       let release!: () => void;
       let entered!: () => void;
       const gate = new Promise<void>((resolve) => {
@@ -168,9 +169,22 @@ describe("Agent Map implementation bindings", () => {
         return f.inventory;
       });
       const reading =
-        method === "target"
-          ? f.service.target(projectId, f.nodeId, authorize)
-          : f.service[method](projectId, authorize);
+        method === "bind"
+          ? expect(
+              f.service.bind(
+                projectId,
+                {
+                  expectedMapVersionId: mapVersionId,
+                  nodeId: f.nodeId,
+                  expectedRevision: 1,
+                  agentId: secondId,
+                },
+                authorize,
+              ),
+            ).rejects.toMatchObject({ code: "stale_map" })
+          : method === "target"
+            ? f.service.target(projectId, f.nodeId, authorize)
+            : f.service[method](projectId, authorize);
       await started;
       let completed = false;
       const writing = f

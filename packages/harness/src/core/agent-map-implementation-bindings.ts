@@ -138,12 +138,11 @@ export class AgentMapImplementationBindings {
       rows: z.infer<typeof rowSchema>[];
       write: (value: unknown) => Promise<void>;
     }) => Promise<T> | T,
-    mode: "read" | "write" = "read",
   ): Promise<T> {
     try {
       checkAuthorization(assertAuthorized);
-      const prefetched =
-        mode === "read" ? await this.readInventory(projectId) : null;
+      const { inventory, inventoryFailed } =
+        await this.readInventory(projectId);
       return await this.store.inspectImplementationBindings(
         projectId,
         async (aggregate, journal, sidecar) => {
@@ -186,8 +185,6 @@ export class AgentMapImplementationBindings {
               uncertain = true;
             }
           }
-          const { inventory, inventoryFailed } =
-            prefetched ?? (await this.readInventory(projectId));
           const bindings: AgentMapImplementation[] = nodes
             .filter(eligible)
             .map((node) => {
@@ -394,7 +391,6 @@ export class AgentMapImplementationBindings {
           },
         };
       },
-      "write",
     );
   }
 }
