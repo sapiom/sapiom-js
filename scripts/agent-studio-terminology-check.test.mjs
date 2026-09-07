@@ -12,9 +12,10 @@ function source(content, kind = "code", sourcePath = fixturePath) {
   return { path: sourcePath, kind, content };
 }
 
-function allowed(id, pattern, occurrences = 1) {
+function allowed(id, pattern, occurrences = 1, rule = "workflow") {
   return {
     id,
+    rule,
     path: fixturePath,
     pattern,
     occurrences,
@@ -209,6 +210,39 @@ describe("Agent Studio terminology guard", () => {
     assert.equal(result.unusedAllowlist[0].occurrences, 2);
   });
 
+  it("rejects retired project-agent authority terms in code, tests, and prose", () => {
+    const result = auditSources({
+      sources: [
+        source('export const authority = "map-planner";'),
+        source('it("never becomes planning-readonly", () => {});', "code", "packages/harness/src/example.test.ts"),
+        source("A BuilderPlanningSubmission authorizes coding.", "text", "docs/example.md"),
+        source('export const retiredEventKey = "plannerOrigin";', "code", "packages/harness/src/legacy-event.ts"),
+      ],
+    });
+
+    assert.deepEqual(
+      result.violations.map(({ rule, token }) => [rule, token]),
+      [
+        ["unified-agent-model", "map-planner"],
+        ["unified-agent-model", "planning-readonly"],
+        ["unified-agent-model", "BuilderPlanningSubmission"],
+        ["unified-agent-model", "plannerOrigin"],
+      ],
+    );
+  });
+
+  it("scopes retained migration literals to the exact rule, path, and count", () => {
+    const result = auditSources({
+      sources: [source('export const retired = "agent-builder";')],
+      allowlist: [
+        allowed("retired-migration", "agent-builder", 1, "unified-agent-model"),
+      ],
+    });
+
+    assert.deepEqual(result.violations, []);
+    assert.deepEqual(result.unusedAllowlist, []);
+  });
+
   it("keeps the repository-owned scope and allowlist in sync", async () => {
     const result = await auditRepository();
 
@@ -218,6 +252,8 @@ describe("Agent Studio terminology guard", () => {
       result.files.includes("packages/harness-desktop/src/preload/desktop.mts"),
     );
     assert.ok(result.files.includes("packages/harness/web/src/styles.css"));
+    assert.ok(result.files.includes("packages/harness/web/e2e/project-map-navigation.spec.ts"));
+    assert.ok(result.files.some((file) => file.startsWith(".changeset/")));
     assert.deepEqual(result.violations, []);
     assert.deepEqual(result.unusedAllowlist, []);
   });

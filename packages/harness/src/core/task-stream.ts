@@ -89,12 +89,19 @@ export function parseTaskStreamLine(line: string): TaskStreamUpdate | null {
     return statusLines.length > 0 ? { statusLines } : null;
   }
 
+  if (event.type === "item.completed" && typeof event.item === "object" && event.item !== null) {
+    const item = event.item as Record<string, unknown>;
+    if (item.type === "agent_message" && typeof item.text === "string")
+      return { statusLines: [], result: { isError: false, text: item.text } };
+  }
+  if (event.type === "turn.failed" || event.type === "error")
+    return { statusLines: [], result: { isError: true, text: "Provider execution failed" } };
   if (event.type === "result") {
     return {
       statusLines: [],
       result: {
         isError: event.is_error === true,
-        text: typeof event.result === "string" ? event.result : "",
+        text: event.structured_output !== undefined ? JSON.stringify(event.structured_output) : typeof event.result === "string" ? event.result : "",
       },
     };
   }

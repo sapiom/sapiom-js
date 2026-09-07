@@ -104,6 +104,11 @@ export const MAX_INLINE_ATTACHMENTS_TOTAL_BYTES = 50 * 1024 * 1024;
  */
 export const JSON_BODY_LIMIT_BYTES = 15 * 1024 * 1024;
 
+/** First-turn uploads arrive together, bounded by the composer's 50 MiB cap.
+ * Other endpoints keep the smaller JSON limit. */
+export const CREATE_SESSION_JSON_LIMIT_BYTES =
+  Math.ceil(MAX_INLINE_ATTACHMENTS_TOTAL_BYTES * 4 / 3) + 1024 * 1024;
+
 /**
  * Workspace-state convention: Agent Studio mirrors this session's binding,
  * the full agent registry, and its own identity here, relative to the
@@ -214,10 +219,10 @@ export interface HarnessSession {
    * answer the blocking prompt themselves.
    */
   ready: boolean;
-  /** Trusted Studio-owned role metadata. Generic POST /sessions cannot set it. */
-  planning?: import("./agent-map.js").PlannerSessionMetadata;
+  /** Durable lifecycle state for a new project's one automatic map seed. */
+  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("./agent-map.js").PlanningSessionIdentity;
+  agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
 }
 
 /**
@@ -300,15 +305,25 @@ export interface DoctorCheck {
   detail: string;
 }
 
+export interface StructuredInferenceOptions {
+  projectId: string;
+  schema: Record<string, unknown>;
+  schemaFile: string;
+  systemPrompt: string;
+}
+
 export interface SpawnSpec {
   command: string;
   args: string[];
+  stdin?: string;
   /** Merged over process.env. Use `null` to unset a variable. */
   env: Record<string, string | null>;
   cwd: string;
 }
 
 export interface LaunchOpts {
+  /** Internal project-owned inference: no coding capabilities or session configuration. */
+  structuredInference?: StructuredInferenceOptions;
   harnessSessionId: string;
   cwd: string;
   /** Absolute path to the generated system-prompt file (profile). */
@@ -326,6 +341,9 @@ export interface LaunchOpts {
    * --plugin-dir (e.g. codex) silently ignore this field.
    */
   pluginDir?: string;
+  /** User-authored first turn, passed to the interactive CLI at fresh launch.
+   * Never persisted in session metadata or replayed by resume. */
+  initialPrompt?: string;
   /** Only consulted by `launchTask` — the one-shot prompt a headless
    *  background task runs, then exits. Unused by `launch`/`resume`. */
   prompt?: string;
@@ -367,6 +385,8 @@ export type SystemPromptDelivery = "launch-flag" | "post-ready-injection";
  * side-effect free until `launch`/`resume` specs are actually spawned.
  */
 export interface HarnessAdapter {
+  /** False for providers that only support the isolated structured background mode. */
+  supportsCodingTasks?: boolean;
   id: HarnessKind;
   /** Binary present, version acceptable. */
   doctor(): Promise<DoctorCheck[]>;
@@ -574,6 +594,7 @@ export type BusMessage =
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
+  | { type: "agent-map.initialization.changed"; status: import("./agent-map-initialization.js").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
@@ -825,23 +846,43 @@ export type AnalyticsEventType =
   | "agent_map.proposal_created"
   | "agent_map.proposal_visible"
   | "agent_map.validation_failed"
+  | "agent_map.legacy_reset"
+  | "agent_map.empty_legacy_container_migrated"
+  | "agent_map.initialization"
   | "agent_map.workspace_initialized"
+  | "agent_map.workspace_migrated"
   | "agent_map.workspace_read_failed"
   | "agent_map.mcp_tool"
   | "agent_map.capability"
-  | "planner_session.created"
-  | "planner_session.resumed"
-  | "planner_session.input_delivery_uncertain"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.attempted"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.delivered"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.failed"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.skipped"
-  /** @deprecated Compatibility-only; new planner sessions do not inject synthetic greetings. */
-  | "planner_greeting.retried";
+  | "build_plan.operation"
+  | "agent_brief.refresh"
+  | "subsession.store_initialized"
+  | "subsession.binding_reserved"
+  | "subsession.duplicate_prevented"
+  | "subsession.spawn_claimed"
+  | "subsession.requested"
+  | "subsession.created"
+  | "subsession.reused"
+  | "subsession.released"
+  | "subsession.ready"
+  | "subsession.failed"
+  | "subsession.kickoff_claimed"
+  | "subsession.kickoff_submitted"
+  | "subsession.kickoff_acknowledged"
+  | "subsession.kickoff_uncertain"
+  | "subsession.context_stale"
+  | "subsession.manual_session_protected"
+  | "project_agent.identity_migrated"
+  | "project_agent.identity_rejected"
+  | "project_bootstrap.scheduled"
+  | "project_bootstrap.recovered"
+  | "project_bootstrap.attempted"
+  | "project_bootstrap.retried"
+  | "project_bootstrap.delivered"
+  | "project_bootstrap.failed"
+  | "project_bootstrap.preempted"
+  | "project_bootstrap.skipped"
+  | "project_bootstrap.input_delivery_uncertain";
 
 /**
  * The normalized event — the shape that (with opt-in) is batched to the
@@ -1040,7 +1081,7 @@ export interface SessionRecord {
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
-// POST   /api/sessions/:id/input        InjectInputRequest → { ok: true }
+// POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
 // PATCH  /api/sessions/:id/workflow     BindWorkflowRequest → HarnessSession
 // POST   /api/agents/scaffold           { root, name, template? } → AgentScaffoldResponse (the harness creates the agent)
@@ -1089,6 +1130,22 @@ export interface CreateSessionRequest {
   harness: HarnessKind;
   /** Profile id; omit for default. */
   profile?: string;
+  /** First user turn. The CLI owns delivery after its trust/login screens. */
+  initialPrompt?: string;
+  /** Files to materialize before spawning, in the user's selected order. */
+  initialAttachments?: Array<
+    | { kind: "path"; path: string }
+    | ({ kind: "inline" } & AttachFileRequest)
+  >;
+  /** Create a new project at cwd using the same guarded scaffold as agent +.
+   * Omitted for sessions in existing projects. */
+  scaffold?: { template: string };
+  /**
+   * Content-free lifecycle hint: the UI already owns a real first input that
+   * will be delivered after readiness/attachments. A new-project bootstrap
+   * yields to that input instead of racing it. This never affects authority.
+   */
+  initialUserInputPending?: boolean;
   /**
    * Portable continue: seed this fresh session with a reconstruction of a
    * prior one instead of asking the vendor to reattach. Accepts either a
@@ -1156,7 +1213,27 @@ export interface InjectInputRequest {
   text: string;
   /** Append a carriage return (submit). Default true. */
   submit?: boolean;
+  /**
+   * Optional idempotency key used only when the new-project bootstrap FIFO
+   * owns this submitted turn. Ordinary post-bootstrap input remains one
+   * intentional message per request.
+   */
+  requestId?: string;
 }
+
+export interface InjectInputResponse {
+  ok: true;
+  /** Present only when the durable bootstrap FIFO handled this request. */
+  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+}
+
+/** Internal server boundary shared by the canonical route and rolling alias. */
+export type SessionInputSubmissionResult =
+  | { ok: false }
+  | {
+      ok: true;
+      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+    };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
  *  must be a path already known to the workflow registry (scan/connect). */

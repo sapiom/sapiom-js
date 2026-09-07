@@ -101,11 +101,23 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
-    // The internal `workflows`-service naming must never reach this customer-facing
-    // primer — the per-step debugging endpoint lives in the docs guide, not spelled
-    // out here verbatim (matches this package's own scaffold terminology guard).
+    // The internal `workflows`-service naming stays out of this primer, with one deliberate
+    // exception: the four receipts/replay routes 2.9 points at, because no tool or docs page
+    // covers them yet. They are allow-listed by exact literal so the blanket ban still holds
+    // for everything else under the prefix — the per-step debugging endpoint included, which
+    // lives in the docs guide rather than here.
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
-    expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
+    const ALLOWED_WORKFLOWS_ROUTES = [
+      "GET /v1/workflows/receipts?outcome=unmatched",
+      "GET /v1/workflows/receipts/{id}",
+      "POST /v1/workflows/receipts/{id}/replay",
+      "POST /v1/workflows/fires/{id}/replay",
+    ];
+    const outsideAllowList = ALLOWED_WORKFLOWS_ROUTES.reduce(
+      (text, route) => text.split(route).join(""),
+      AUTHORING_INSTRUCTIONS,
+    );
+    expect(outsideAllowList).not.toContain("/v1/workflows/");
     // Structured/forced-tool output has no `text` block — the reply lives in the
     // `tool_use` block's `input`. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
@@ -201,5 +213,31 @@ describe("server instructions", () => {
     expect(sha256).toBe(
       "47a4e3a355584f40345e4a6dc9d695663aa24fc613e93eaf4559465b02b8b457",
     );
+  });
+
+  // SKIPPED, deliberately: #815 moved this fallback to a 2.9 body whose server-side release
+  // (sapiom/Sapiom#4885) has not merged — Sapiom `main` serves 2.10 (SAP-3174, digest
+  // 47a4e3a3…), which is what this copy tracks. Un-skip when #4885 lands (rebased onto 2.10 it
+  // becomes 2.11 and carries both sections) and this copy is re-synced to that body.
+  it.skip("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // Each of these shipped without any served text teaching it, so an agent could only
+    // guess at it. Byte-identical to the backend copy, so asserted here too.
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
+    expect(AUTHORING_INSTRUCTIONS).toContain("agent code cannot write");
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.launch");
+    expect(AUTHORING_INSTRUCTIONS).toContain("GET /v1/workflows/receipts");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "POST /v1/workflows/fires/{id}/replay",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("webhooksEnabled");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("byte-exact");
+    expect(AUTHORING_INSTRUCTIONS).toContain("held up to 60 s");
+    // `LlmRunSpec` has no `deadlineMinutes`; 2.9 dropped the clause that offered it to a
+    // one-shot caller. Scoped to that clause, not the identifier: `LlmSubmitSpec` has a
+    // real `deadlineMinutes`, and a later primer may document the deferred lane's knob.
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("Say how long you can wait");
   });
 });

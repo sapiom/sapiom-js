@@ -5,9 +5,18 @@
  * server restarts, even though the ptys themselves do not.
  */
 
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, rename, writeFile, chmod } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 
@@ -22,9 +31,13 @@ import {
   type SpawnSpec,
 } from "../shared/types.js";
 import type {
-  PlannerSessionMetadata,
-  PlanningSessionIdentity,
+  ProjectAgentSession,
+  ProjectBootstrapMetadata,
 } from "../shared/agent-map.js";
+import {
+  migratePersistedProjectIdentity,
+  removeLegacyProjectSessionMetadata,
+} from "./project-session-legacy-migration.js";
 import { expandHome } from "./paths.js";
 import {
   initialBracketedPasteState,
@@ -42,10 +55,15 @@ import {
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
+  SubsessionBindingMismatchError,
+  SubsessionFreshRestartForbiddenError,
   UnknownSessionError,
 } from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
-import type { IngestCredentialProvider } from "./ingest-credentials.js";
+import type {
+  IngestCredentialProvider,
+  IssuedIngestCredential,
+} from "./ingest-credentials.js";
 
 export {
   AdapterNotFoundError,
@@ -54,6 +72,8 @@ export {
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
+  SubsessionBindingMismatchError,
+  SubsessionFreshRestartForbiddenError,
   UnknownSessionError,
 } from "./errors.js";
 
@@ -66,12 +86,79 @@ export class SessionInputGuardRejectedError extends Error {
   }
 }
 
+export class ProjectSessionScopeUnavailableError extends Error {
+  readonly code = "PROJECT_SESSION_SCOPE_UNAVAILABLE";
+
+  constructor(readonly sessionId: string) {
+    super("the session's Studio project scope could not be revalidated");
+    this.name = "ProjectSessionScopeUnavailableError";
+  }
+}
+
+function sameProjectAgent(
+  left: ProjectAgentSession,
+  right: ProjectAgentSession,
+): boolean {
+  return (
+    left.projectId === right.projectId &&
+    left.userId === right.userId &&
+    left.sessionId === right.sessionId
+  );
+}
+
+function parseTrustedSubsessionBindingMarker(
+  value: unknown,
+  expectedSessionId?: string,
+): TrustedSubsessionBindingMarker | null {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).sort().join(",") !==
+      "bindingId,incarnation,parentSessionId,projectId,sessionId,spawnEpoch" ||
+    ![value.projectId, value.parentSessionId, value.bindingId, value.sessionId].every(
+      (entry) =>
+        typeof entry === "string" &&
+        entry.length > 0 &&
+        entry.length <= 256 &&
+        ![...entry].some((character) => {
+          const point = character.codePointAt(0) ?? 0;
+          return point <= 0x1f || point === 0x7f;
+        }),
+    ) ||
+    (expectedSessionId !== undefined && value.sessionId !== expectedSessionId) ||
+    !Number.isSafeInteger(value.incarnation) ||
+    (value.incarnation as number) < 1 ||
+    !Number.isSafeInteger(value.spawnEpoch) ||
+    (value.spawnEpoch as number) < 1
+  ) {
+    return null;
+  }
+  return structuredClone(value) as TrustedSubsessionBindingMarker;
+}
+
+function sameSubsessionBinding(
+  left: TrustedSubsessionBindingMarker,
+  right: TrustedSubsessionBindingMarker,
+): boolean {
+  return (
+    left.projectId === right.projectId &&
+    left.parentSessionId === right.parentSessionId &&
+    left.bindingId === right.bindingId &&
+    left.sessionId === right.sessionId &&
+    left.incarnation === right.incarnation &&
+    left.spawnEpoch === right.spawnEpoch
+  );
+}
+
 // node-pty is a native module. Load it lazily so a missing/broken prebuild on
 // an unsupported platform surfaces as a spawn-time error instead of crashing
 // the whole server at import time.
 type IPty = import("node-pty").IPty;
 type PtyForkOptions = import("node-pty").IPtyForkOptions;
-export type PtySpawnFn = (file: string, args: string[], options: PtyForkOptions) => IPty;
+export type PtySpawnFn = (
+  file: string,
+  args: string[],
+  options: PtyForkOptions,
+) => IPty;
 
 let defaultSpawn: PtySpawnFn | undefined;
 let defaultSpawnError: Error | undefined;
@@ -90,7 +177,9 @@ let defaultSpawnError: Error | undefined;
 export async function ensureSpawnHelperExecutable(): Promise<void> {
   if (process.platform === "win32") return;
   try {
-    const nodePtyPkgJson = createRequire(import.meta.url).resolve("node-pty/package.json");
+    const nodePtyPkgJson = createRequire(import.meta.url).resolve(
+      "node-pty/package.json",
+    );
     const helperPath = join(
       dirname(nodePtyPkgJson),
       "prebuilds",
@@ -226,6 +315,9 @@ const BRACKETED_PASTE_END = "\x1b[201~";
 const AGENT_SESSION_OWNER_FILE_VERSION = 1;
 const AGENT_SESSION_OWNER_MAX_ENTRIES = 50_000;
 const AGENT_SESSION_OWNER_MAX_BYTES = 4 * 1024 * 1024;
+const SUBSESSION_BINDING_FILE_VERSION = 1;
+const SUBSESSION_BINDING_MAX_ENTRIES = 8_192;
+const SUBSESSION_BINDING_MAX_BYTES = 2 * 1024 * 1024;
 /** See `recordActivity()`: minimum gap between two `onActivity` broadcasts
  *  for the same session — pty.onData fires per chunk (often many times a
  *  second for a busy TUI), but the SPA's busy indicator only needs "this
@@ -287,7 +379,10 @@ export function sanitizeExitTail(raw: string): string | null {
   return trimmed.slice(-EXIT_TAIL_BYTES);
 }
 
-export type SessionStatusListener = (session: HarnessSession) => void;
+export type SessionStatusListener = (
+  session: HarnessSession,
+  context: SessionStatusContext,
+) => void;
 export type SessionDataListener = (chunk: string) => void;
 /** See `onActivity()`. */
 export type SessionActivityListener = (harnessSessionId: string) => void;
@@ -304,17 +399,23 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
  */
 export type LaunchOptsBuilder = (
   harnessSessionId: string,
-  req: Pick<CreateSessionRequest, "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme">,
+  req: Pick<
+    CreateSessionRequest,
+    "cwd" | "harness" | "profile" | "rehydrateFrom" | "theme"
+  >,
   context?: {
     promptAppendix?: string;
+    focusedContext?: FocusedSessionContextProjection;
     /** Native CLI notice shown before a fresh session's first prompt. */
     sessionStartSystemMessage?: string;
-    agentMapIdentity?: PlanningSessionIdentity;
+    agentMapIdentity?: ProjectAgentSession;
     /** Server-composed secret launch metadata, never accepted from REST. */
     agentMapMcp?: { url: string; bearerToken: string };
     resume?: boolean;
   },
-) => Omit<LaunchOpts, "harnessSessionId" | "cwd"> | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
+) =>
+  | Omit<LaunchOpts, "harnessSessionId" | "cwd">
+  | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
 
@@ -330,13 +431,50 @@ export interface SessionManagerOptions {
   sessionsPath?: string;
   /** Injectable for tests. Defaults to a lazily-loaded node-pty. */
   spawnPty?: PtySpawnFn;
+  /** Async node-pty loader seam used only when `spawnPty` is absent. Production
+   * uses the module loader; tests use this to prove authorization is checked
+   * after that final await and before PTY admission. */
+  loadSpawnPty?: () => Promise<PtySpawnFn>;
   buildLaunchOpts?: LaunchOptsBuilder;
   /** Revalidates cwd containment and current principal before every spawn. */
   resolveAgentMapIdentity?: (
     sessionId: string,
     cwd: string,
-    persisted?: PlanningSessionIdentity,
-  ) => Promise<PlanningSessionIdentity | undefined>;
+    persisted?: ProjectAgentSession,
+  ) => Promise<ProjectAgentSession | undefined>;
+  /** Claims new-project lifecycle metadata after trusted scope resolution. */
+  prepareProjectSession?: (
+    identity: ProjectAgentSession,
+    request: CreateSessionRequest,
+  ) => Promise<{
+    initialTitle?: string;
+    projectBootstrap?: ProjectBootstrapMetadata;
+  }>;
+  /** Synchronous notification before a real terminal write crosses the PTY. */
+  onTerminalInput?: (sessionId: string, context: TerminalInputContext) => void;
+  /** Content-free observability for persisted identity normalization. */
+  onProjectAgentIdentityMigration?: (event: {
+    sessionId: string;
+    outcome: "migrated" | "rejected";
+  }) => void;
+  /** Registers only sessions that carry a durable bootstrap lifecycle. */
+  onProjectBootstrapSession?: (
+    session: HarnessSession,
+    mode: "created" | "resumed",
+    runtimeEpoch: string,
+  ) => Promise<void> | void;
+  /**
+   * Serializes coordinator ownership before a PTY generation is published.
+   * `null` retracts a prepared epoch when pre-publication setup fails.
+   */
+  onRuntimeEpochTransition?: (
+    session: HarnessSession,
+    runtimeEpoch: string | null,
+  ) => Promise<void> | void;
+  /** Mirrors an explicit user close into the coordinator-owned aggregate. */
+  onSubsessionUserClosed?: (
+    marker: TrustedSubsessionBindingMarker,
+  ) => Promise<void> | void;
   /** Revokes launch capabilities/transports after every exit path. */
   onAgentMapSessionExit?: (sessionId: string) => void | Promise<void>;
   now?: () => string;
@@ -346,6 +484,11 @@ export interface SessionManagerOptions {
   writeSessionRegistry?: (file: string, serialized: string) => Promise<void>;
   /** Test seam for faults after the private identity ledger becomes durable. */
   writeAgentSessionOwnerRegistry?: (
+    file: string,
+    serialized: string,
+  ) => Promise<void>;
+  /** Fault-injection seam for the private coordinator ownership sidecar. */
+  writeSubsessionBindingRegistry?: (
     file: string,
     serialized: string,
   ) => Promise<void>;
@@ -393,28 +536,41 @@ export interface SessionManagerOptions {
 }
 
 export interface TrustedSessionCreateOptions {
-  /** Server-authored only. Never populated from CreateSessionRequest. */
-  planning?: (sessionId: string) => PlannerSessionMetadata;
   /** Future E5 seam for a server-authored planned builder assignment. */
-  agentMapIdentity?: (sessionId: string) => PlanningSessionIdentity;
+  agentMapIdentity?: (sessionId: string) => ProjectAgentSession;
+  /** Server-owned initial title. Generic POST /sessions cannot set it. */
+  initialTitle?: string;
   /** Focused trusted context composed into the existing system prompt. */
   promptAppendix?: (sessionId: string) => string;
+  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
+  focusedContext?: (sessionId: string) => FocusedSessionContextProjection;
   /** Server-authored native CLI orientation for a newly created session. */
   sessionStartSystemMessage?: (sessionId: string) => string;
   /** Server-owned coordinator predecessor. This may differ from the older
    * history record used to build the rehydration brief. */
   handoffFromSessionId?: string;
+  /** Internal auto-create guard. Ordinary/user-requested creates omit this and
+   * remain valid even when the project's first-session lifecycle already has
+   * an owner. */
+  requireProjectBootstrapClaim?: boolean;
 }
 
 export interface TrustedSessionResumeOptions {
-  /** Server-authored only. Used to suppress fresh-only lifecycle work. */
-  planning?: PlannerSessionMetadata;
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
+  /** Optional output of serializeFocusedSessionContext; valid only for a project-agent session. */
+  focusedContext?: FocusedSessionContextProjection;
+  /** Private two-sided coordinator transition, never accepted by REST. */
+  subsessionBindingTransition?: Readonly<{
+    expected: TrustedSubsessionBindingMarker;
+    next: TrustedSubsessionBindingMarker;
+  }>;
 }
 
 interface PtyHandle {
   pty: IPty;
+  /** Server-owned identity for this exact live PTY generation. */
+  runtimeEpoch: string;
   buffer: string;
   /** Latest content-bearing terminal repaint used for current-screen checks.
    * Unlike `buffer`, animation-only ANSI churn cannot evict the visible text. */
@@ -491,10 +647,332 @@ interface PtyHandle {
   killed: boolean;
 }
 
+export type AdapterIdentityState =
+  | "not-required"
+  | "pending"
+  | "ready"
+  | "ambiguous"
+  | "unavailable";
+
+
+export interface SessionStatusContext {
+  /** Exact live/retiring PTY generation, or null before a PTY exists. */
+  runtimeEpoch: string | null;
+}
+
+
+export interface TerminalInputContext {
+  /** Server-owned identity of the exact PTY receiving these bytes. */
+  runtimeEpoch: string;
+  /** The current adapter screen is a recognized trust/login/setup blocker. */
+  blockingPrompt: boolean;
+}
+
+
+export type TrackedSessionInputResult = Readonly<{
+  accepted: boolean;
+  phase: SessionInputWritePhase;
+  error?: unknown;
+}>;
+
+/** Server-private half of a coordinator/session ownership proof. */
+export type TrustedSubsessionBindingMarker = Readonly<{
+  projectId: string;
+  parentSessionId: string;
+  bindingId: string;
+  sessionId: string;
+  incarnation: number;
+  spawnEpoch: number;
+}>;
+
+
+export type SessionInputWritePhase =
+  | "not-written"
+  | "text-staged"
+  | "enter-written";
+
+
+export interface SessionInputWriteLifecycle {
+  /** Durable transition that must commit before the first PTY byte. */
+  beforeFirstWrite?: () => Promise<void>;
+  /** Synchronous final admission fence checked immediately before each write. */
+  canWriteNow?: () => boolean;
+  /** Durable positive evidence that the writer returned before attempting
+   * Enter. Errors at the Enter write are intentionally excluded. */
+  onNotSubmitted?: () => Promise<void>;
+  /** Synchronous byte-boundary observation for durable delivery recovery. */
+  onWritePhase?: (phase: SessionInputWritePhase) => void;
+}
+
+
+/** A prior partial PTY write could not be safely removed from the composer. */
+export class SessionInputIsolationError extends Error {
+  readonly code = "SESSION_INPUT_ISOLATION_REQUIRED";
+
+  constructor() {
+    super("session input is blocked until the terminal composer is reset");
+    this.name = "SessionInputIsolationError";
+  }
+}
+
+
+export class SessionManagerClosingError extends Error {
+  readonly code = "SESSION_MANAGER_CLOSING";
+
+  constructor() {
+    super("session manager is shutting down");
+    this.name = "SessionManagerClosingError";
+  }
+}
+
+
+/** A real terminal write preempted a lower-priority background injection. */
+export class SessionBackgroundInputPreemptedError extends Error {
+  readonly code = "SESSION_BACKGROUND_INPUT_PREEMPTED";
+
+  constructor(readonly staged: boolean) {
+    super("background session input was preempted by user input");
+    this.name = "SessionBackgroundInputPreemptedError";
+  }
+}
+
+
 export class SessionManager {
+
+  /**
+   * Internal tracked variant for retry-safe coordinator delivery. It never
+   * turns an ambiguous write exception into zero-byte proof: callers receive
+   * the furthest phase observed at the exact PTY boundary.
+   */
+  async submitInputTracked(
+    id: string,
+    text: string,
+    options: Readonly<{
+      canWrite?: () => boolean | Promise<boolean>;
+      lifecycle?: Omit<SessionInputWriteLifecycle, "onWritePhase">;
+      background?: boolean;
+    }> = {},
+  ): Promise<TrackedSessionInputResult> {
+    let phase: SessionInputWritePhase = "not-written";
+    try {
+      const accepted = await this.submitInput(
+        id,
+        text,
+        true,
+        options.canWrite,
+        options.background ?? true,
+        {
+          ...options.lifecycle,
+          onWritePhase: (next) => {
+            phase = next;
+          },
+        },
+      );
+      return { accepted, phase };
+    } catch (error) {
+      return { accepted: false, phase, error };
+    }
+  }
+
+
+  /**
+   * Cancel only a lower-priority server-owned background submission. Unlike
+   * write(), this does not forward bytes or preempt an ordinary user/API
+   * submission. It is safe to call before staging begins; the coordinator's
+   * submit guard covers that side of the race.
+   */
+  preemptBackgroundInput(id: string): boolean {
+    const staged = this.stagedInputs.get(id);
+    if (!staged?.background || staged.preempted) return false;
+    staged.preempted = true;
+    if (staged.textWritten) {
+      if (this.abandonStagedLine(staged.handle)) {
+        staged.lineCleared = true;
+      }
+    }
+    return true;
+  }
+
+
+  /** Abandon a fully staged line. Ctrl-C is a safe fallback here because a
+   * successful full bracketed-paste write already carried its closing marker. */
+  private abandonStagedLine(handle: PtyHandle): boolean {
+    try {
+      handle.pty.write("\x15");
+      this.observeTrustedTerminalInput(handle, "\x15");
+      return true;
+    } catch {
+      try {
+        handle.pty.write("\x03");
+        this.observeTrustedTerminalInput(handle, "\x03");
+        return true;
+      } catch {
+        this.markComposerUnsafe(handle, false);
+        return false;
+      }
+    }
+  }
+
+
+  /**
+   * Recover only a previously poisoned composer, before any new user or
+   * server-owned text is written. Closing bracketed paste (when required) and
+   * abandoning the line are both non-submitting operations. Failure leaves
+   * the handle poisoned and no caller payload is forwarded.
+   */
+  private resetUnsafeComposer(handle: PtyHandle): boolean {
+    const unsafe = this.unsafeComposers.get(handle);
+    if (!unsafe) return true;
+    if (this.closing) return false;
+    let pasteMayBeOpen = unsafe.pasteMayBeOpen;
+    if (pasteMayBeOpen) {
+      try {
+        handle.pty.write(BRACKETED_PASTE_END);
+        this.observeTrustedTerminalInput(handle, BRACKETED_PASTE_END);
+        pasteMayBeOpen = false;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      handle.pty.write("\x15");
+      this.observeTrustedTerminalInput(handle, "\x15");
+    } catch {
+      this.unsafeComposers.set(handle, { pasteMayBeOpen });
+      return false;
+    }
+    this.unsafeComposers.delete(handle);
+    return true;
+  }
+
+
+  private markComposerUnsafe(
+    handle: PtyHandle,
+    pasteMayBeOpen: boolean,
+  ): void {
+    const current = this.unsafeComposers.get(handle);
+    this.unsafeComposers.set(handle, {
+      pasteMayBeOpen: current?.pasteMayBeOpen === true || pasteMayBeOpen,
+    });
+  }
+
+
+  /** Close admission before a server shutdown snapshots live PTYs. */
+  beginShutdown(): void {
+    this.closing = true;
+  }
+
+
+  /** Kill only the exact PTY generation a losing coordinator created. */
+  killIfRuntime(id: string, runtimeEpoch: string): Promise<boolean> {
+    if (this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch)
+      return Promise.resolve(false);
+    return this.kill(id);
+  }
+
+
+  /**
+   * Fail-closed admission for already-authenticated ingest work. A terminal
+   * event may finish after its PTY retires, but a replacement handle always
+   * takes ownership immediately and rejects every earlier epoch.
+   */
+  acceptsIngestRuntimeEpoch(id: string, runtimeEpoch: string): boolean {
+    const live = this.ptys.get(id);
+    if (live) return live.runtimeEpoch === runtimeEpoch;
+    return (
+      this.sessions.get(id)?.status === "exited" &&
+      this.retiredRuntimeEpochs.get(id) === runtimeEpoch
+    );
+  }
+
+
+  /** True only for the exact PTY generation that is live right now. */
+  isCurrentRuntimeEpoch(id: string, runtimeEpoch: string): boolean {
+    const live = this.ptys.get(id);
+    return live?.runtimeEpoch === runtimeEpoch;
+  }
+
+
+  /** Server-only acknowledgement from an adapter-owned identity broker. */
+  setAdapterIdentityState(
+    id: string,
+    runtimeEpoch: string,
+    state: Exclude<AdapterIdentityState, "not-required" | "pending">,
+  ): boolean {
+    const current = this.adapterIdentityStates.get(id);
+    if (!current || current.runtimeEpoch !== runtimeEpoch ||
+        !this.isCurrentRuntimeEpoch(id, runtimeEpoch)) return false;
+    current.state = state;
+    return true;
+  }
+
+
+  /** Exact-runtime adapter identity used by trusted background delivery. */
+  getAdapterIdentityState(id: string, runtimeEpoch: string): AdapterIdentityState {
+    const state = this.adapterIdentityStates.get(id);
+    if (!state || state.runtimeEpoch !== runtimeEpoch) return "pending";
+    return state.state;
+  }
+
+
+  /** Opaque identity for the exact live PTY generation behind `id`. */
+  getRuntimeEpoch(id: string): string | null {
+    return this.ptys.get(id)?.runtimeEpoch ?? null;
+  }
+
+  private closing = false;
+
+  /** Handle-local poison from a partial write whose composer cleanup could not
+   * be proven. A replacement PTY is clean by construction; the same handle
+   * must complete this reset before any later text or Enter is allowed. */
+  private readonly unsafeComposers = new WeakMap<
+    PtyHandle,
+    { pasteMayBeOpen: boolean }
+  >();
+
+  /** One text→Enter transaction may be staged per session. */
+  private readonly stagedInputs = new Map<
+    string,
+    {
+      handle: PtyHandle;
+      background: boolean;
+      preempted: boolean;
+      textWritten: boolean;
+      lineCleared: boolean;
+    }
+  >();
+
+  /** Monotonic raw-input observations used to preempt background injection. */
+  private readonly terminalInputEpochs = new Map<string, number>();
+
+  /** Adapter-owned correlation for transcript-backed runtimes. This is kept
+   * separate from terminal readiness: a TUI can be interactive before its
+   * exact vendor transcript has been identified. */
+  private readonly adapterIdentityStates = new Map<
+    string,
+    { runtimeEpoch: string; state: AdapterIdentityState }
+  >();
+
+  /** Last cleanly retired PTY generation. It may finish already-admitted ingest
+   * work while the session is exited, but loses immediately to a replacement. */
+  private readonly retiredRuntimeEpochs = new Map<string, string>();
+
+  private readonly onRuntimeEpochTransition: SessionManagerOptions["onRuntimeEpochTransition"];
+  private readonly onSubsessionUserClosed: SessionManagerOptions["onSubsessionUserClosed"];
+
+  private readonly onTerminalInput: (
+    sessionId: string,
+    context: TerminalInputContext,
+  ) => void;
+
+  private readonly loadSpawnPty: () => Promise<PtySpawnFn>;
+
+  private readonly issueIngestCredential: (
+    sessionId: string,
+  ) => IssuedIngestCredential;
+
   private readonly adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   private readonly ingestUrl: string;
-  private readonly issueIngestToken: (sessionId: string) => string;
   private readonly revokeIngestToken: (sessionId: string) => void;
   private readonly collectorUrl: string | undefined;
   private readonly sessionsPath: string;
@@ -502,12 +980,14 @@ export class SessionManager {
    * accepted by a HarnessSession. Keeping this outside sessions.json avoids
    * leaking historical aliases through the browser DTO. */
   private readonly agentSessionOwnersPath: string;
+  /** Never projected through REST; public session fields are not ownership. */
+  private readonly subsessionBindingsPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
-  private readonly resolveAgentMapIdentity:
-    | SessionManagerOptions["resolveAgentMapIdentity"];
-  private readonly onAgentMapSessionExit:
-    | SessionManagerOptions["onAgentMapSessionExit"];
+  private readonly resolveAgentMapIdentity: SessionManagerOptions["resolveAgentMapIdentity"];
+  private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
+  private readonly rejectedProjectSessionMetadata = new Set<string>();
+  private readonly onAgentMapSessionExit: SessionManagerOptions["onAgentMapSessionExit"];
   private readonly now: () => string;
   private readonly generateId: () => string;
   private readonly writeSessionRegistry:
@@ -516,8 +996,15 @@ export class SessionManager {
   private readonly writeAgentSessionOwnerRegistry:
     | ((file: string, serialized: string) => Promise<void>)
     | undefined;
-  private readonly writeWorkspaceContext: (session: HarnessSession) => Promise<void>;
-  private readonly prepareWorkspaceContext: (session: HarnessSession) => Promise<void>;
+  private readonly writeSubsessionBindingRegistry:
+    | ((file: string, serialized: string) => Promise<void>)
+    | undefined;
+  private readonly writeWorkspaceContext: (
+    session: HarnessSession,
+  ) => Promise<void>;
+  private readonly prepareWorkspaceContext: (
+    session: HarnessSession,
+  ) => Promise<void>;
   private readonly ensureCanvasTemplate: (cwd: string) => Promise<void>;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly platform: NodeJS.Platform;
@@ -535,35 +1022,58 @@ export class SessionManager {
    * state only after the candidate was published or rejected. */
   private sessionRegistryIdentityFence: Promise<void> | null = null;
   private readonly agentSessionOwners = new Map<string, string>();
+  private readonly subsessionBindings = new Map<
+    string,
+    TrustedSubsessionBindingMarker
+  >();
+  private readonly userClosedSubsessions = new Set<string>();
   /** Serializes the full authorize -> reserve -> pointer commit transition.
    * A file-level atomic rename alone is insufficient when two starts race the
    * in-memory ownership check before either write begins. */
   private agentSessionIdentityQueue: Promise<void> = Promise.resolve();
   private agentSessionOwnerWriteSeq = 0;
+  private subsessionBindingWriteSeq = 0;
+  private subsessionBindingQueue: Promise<void> = Promise.resolve();
   private initialized = false;
 
   constructor(options: SessionManagerOptions) {
     this.adapters = options.adapters;
     this.ingestUrl = options.ingestUrl;
-    this.issueIngestToken = (sessionId) =>
+    this.issueIngestCredential = (sessionId) =>
       options.ingestCredentials.issue(sessionId);
     this.revokeIngestToken = (sessionId) =>
       options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
-    this.sessionsPath = expandHome(options.sessionsPath ?? HARNESS_PATHS.sessions);
+    this.sessionsPath = expandHome(
+      options.sessionsPath ?? HARNESS_PATHS.sessions,
+    );
     this.agentSessionOwnersPath = `${this.sessionsPath}.agent-session-owners.json`;
+    this.subsessionBindingsPath = `${this.sessionsPath}.subsession-bindings.json`;
     this.spawnPty = options.spawnPty;
+    this.loadSpawnPty = options.loadSpawnPty ?? loadDefaultSpawn;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
+    this.prepareProjectSession = options.prepareProjectSession;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
+    this.onTerminalInput = options.onTerminalInput ?? (() => {});
+    this.onProjectAgentIdentityMigration =
+      options.onProjectAgentIdentityMigration;
+    this.onProjectBootstrapSession = options.onProjectBootstrapSession;
+    this.onRuntimeEpochTransition = options.onRuntimeEpochTransition;
+    this.onSubsessionUserClosed = options.onSubsessionUserClosed;
     this.now = options.now ?? (() => new Date().toISOString());
     this.generateId = options.generateId ?? randomUUID;
     this.writeSessionRegistry = options.writeSessionRegistry;
     this.writeAgentSessionOwnerRegistry =
       options.writeAgentSessionOwnerRegistry;
-    this.writeWorkspaceContext = options.writeWorkspaceContext ?? (async () => {});
-    this.prepareWorkspaceContext = options.prepareWorkspaceContext ?? (async () => {});
-    this.ensureCanvasTemplate = options.ensureCanvasTemplate ?? (async () => {});
+    this.writeSubsessionBindingRegistry =
+      options.writeSubsessionBindingRegistry;
+    this.writeWorkspaceContext =
+      options.writeWorkspaceContext ?? (async () => {});
+    this.prepareWorkspaceContext =
+      options.prepareWorkspaceContext ?? (async () => {});
+    this.ensureCanvasTemplate =
+      options.ensureCanvasTemplate ?? (async () => {});
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     this.platform = options.platform ?? process.platform;
     // Many WS clients (terminal + events) can subscribe over a long-running process.
@@ -587,6 +1097,36 @@ export class SessionManager {
     }
     let dirty = false;
     for (const session of persisted) {
+      const migration = migratePersistedProjectIdentity(session);
+      if (migration.outcome === "rejected") {
+        this.rejectedProjectSessionMetadata.add(session.id);
+      }
+      if (migration.outcome === "migrated") {
+        if (migration.identity) {
+          session.agentMapIdentity = structuredClone(migration.identity);
+        } else {
+          delete session.agentMapIdentity;
+        }
+        if (migration.bootstrap) {
+          session.projectBootstrap = structuredClone(migration.bootstrap);
+        } else {
+          delete session.projectBootstrap;
+        }
+        // Planner-era metadata is never live authority after normalization.
+        // Its on-disk input queue is migrated by ProjectBootstrapCoordinator.
+        removeLegacyProjectSessionMetadata(session);
+        dirty = true;
+      }
+      if (migration.outcome !== "unchanged") {
+        try {
+          this.onProjectAgentIdentityMigration?.({
+            sessionId: session.id,
+            outcome: migration.outcome,
+          });
+        } catch {
+          // Observability is best effort and cannot affect session recovery.
+        }
+      }
       if (session.status !== "exited") {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;
@@ -609,6 +1149,7 @@ export class SessionManager {
       this.sessions.set(session.id, session);
     }
     dirty = (await this.loadAgentSessionOwners(persisted)) || dirty;
+    await this.loadSubsessionBindings();
     if (dirty) await this.persist();
   }
 
@@ -641,88 +1182,28 @@ export class SessionManager {
     return adapter;
   }
 
+  /** Recheck the immutable project principal immediately before spawning. */
+  private async revalidateAgentMapIdentity(
+    sessionId: string,
+    cwd: string,
+    expected: ProjectAgentSession | undefined,
+  ): Promise<void> {
+    if (!expected || !this.resolveAgentMapIdentity) return;
+    const current = await this.resolveAgentMapIdentity(
+      sessionId,
+      cwd,
+      expected,
+    );
+    if (!current || !sameProjectAgent(current, expected)) {
+      throw new ProjectSessionScopeUnavailableError(sessionId);
+    }
+  }
+
   async create(
     req: CreateSessionRequest,
     trusted: TrustedSessionCreateOptions = {},
   ): Promise<HarnessSession> {
-    const id = this.generateId();
-    const adapter = this.getAdapter(req.harness);
-    const planning = trusted.planning?.(id);
-    const trustedIdentity = trusted.agentMapIdentity?.(id) ?? planning?.identity;
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
-      : trustedIdentity;
-    const promptAppendix = trusted.promptAppendix?.(id);
-    const sessionStartSystemMessage = trusted.sessionStartSystemMessage?.(id);
-    const launchContext =
-      promptAppendix || sessionStartSystemMessage || agentMapIdentity
-        ? {
-            ...(promptAppendix ? { promptAppendix } : {}),
-            ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
-            ...(agentMapIdentity ? { agentMapIdentity } : {}),
-          }
-        : undefined;
-    const opts: LaunchOpts = {
-      harnessSessionId: id,
-      cwd: req.cwd,
-      ...(await (launchContext
-        ? this.buildLaunchOpts(id, req, launchContext)
-        : this.buildLaunchOpts(id, req))),
-    };
-    let spec: SpawnSpec;
-    try {
-      spec = adapter.launch(opts);
-    } catch (error) {
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
-    const session: HarnessSession = {
-      id,
-      agentSessionId: null,
-      harness: req.harness,
-      cwd: req.cwd,
-      title: basename(req.cwd) || req.cwd,
-      status: "starting",
-      createdAt: this.now(),
-      lastActiveAt: this.now(),
-      exitCode: null,
-      boundWorkflowPath: null,
-      // Ordinary callers record only what the builder actually rehydrated.
-      // A trusted planner replacement records its exact FIFO predecessor even
-      // when the brief came from an older recorded ancestor in that chain.
-      rehydratedFrom:
-        trusted.handoffFromSessionId ?? opts.rehydratedFrom ?? null,
-      // Persisted so resume() regenerates the same ANSI base — otherwise a
-      // resumed session would fall back to the server default and its dim text
-      // could lose contrast against a differently-themed terminal.
-      ...(req.theme ? { theme: req.theme } : {}),
-      ready: false,
-      ...(planning ? { planning } : {}),
-      ...(agentMapIdentity
-        ? { agentMapIdentity: structuredClone(agentMapIdentity) }
-        : {}),
-    };
-    this.sessions.set(id, session);
-    try {
-      await this.persist();
-      // Before spawning, not fire-and-forget: the agent's very first read of
-      // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
-      // regardless of which entry point called create() (REST, autoCreateSession).
-      await this.writeWorkspaceContext(session);
-      // Same reasoning: the canvas pane opens immediately once the session is
-      // "running" — it must never show a bare empty iframe because nothing's
-      // been written to .sapiom/canvas/index.html yet.
-      await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(session, spec);
-    } catch (err) {
-      // The first persist may itself be the failure, so reconciliation is
-      // best-effort: always repair the in-memory record to "exited", attempt
-      // the durable repair, and preserve the original actionable failure if
-      // that second write also fails.
-      await this.transitionExited(session, null).catch(() => {});
-      throw err;
-    }
-    return session;
+    return this.createWithId(this.generateId(), req, trusted);
   }
 
   /**
@@ -788,6 +1269,7 @@ export class SessionManager {
     id: string,
     trusted: TrustedSessionResumeOptions = {},
   ): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
@@ -795,6 +1277,37 @@ export class SessionManager {
     }
     if (this.ptys.has(id)) {
       throw new SessionAlreadyLiveError(id);
+    }
+    if (this.rejectedProjectSessionMetadata.has(id)) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
+    const bindingTransition = trusted.subsessionBindingTransition;
+    if (bindingTransition) {
+      const expected = parseTrustedSubsessionBindingMarker(
+        bindingTransition.expected,
+        id,
+      );
+      const next = parseTrustedSubsessionBindingMarker(
+        bindingTransition.next,
+        id,
+      );
+      const current = this.subsessionBindings.get(id);
+      if (
+        !expected ||
+        !next ||
+        !current ||
+        (!sameSubsessionBinding(current, expected) &&
+          !sameSubsessionBinding(current, next)) ||
+        next.projectId !== expected.projectId ||
+        next.parentSessionId !== expected.parentSessionId ||
+        next.bindingId !== expected.bindingId ||
+        next.sessionId !== expected.sessionId ||
+        next.incarnation !== expected.incarnation + 1 ||
+        next.spawnEpoch <= expected.spawnEpoch ||
+        this.userClosedSubsessions.has(id)
+      ) {
+        throw new SubsessionBindingMismatchError();
+      }
     }
     const adapter = this.getAdapter(session.harness);
     // Pre-flight against the agent's OWN store before touching the record.
@@ -805,62 +1318,91 @@ export class SessionManager {
     // Failing here instead keeps the record exactly as it was — unspawned,
     // and (see below) with its real lastActiveAt intact.
     if (!(await adapter.canResume(session.agentSessionId, session.cwd))) {
-      const label = listHarnessAdapters().find((a) => a.id === session.harness)?.label ?? session.harness;
+      const label =
+        listHarnessAdapters().find((a) => a.id === session.harness)?.label ??
+        session.harness;
       throw new SessionNotResumeableError(
         id,
         `${label} no longer has the conversation for this session (${session.agentSessionId}) in ${session.cwd}. ` +
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
-    if (trusted.planning) {
-      session.planning = structuredClone(trusted.planning);
+    if (bindingTransition) {
+      const current = this.subsessionBindings.get(id)!;
+      // A failed spawn may leave the exact next marker durably committed.
+      // Retrying that same transition must not require the old marker again.
+      if (!sameSubsessionBinding(current, bindingTransition.next)) {
+        this.subsessionBindings.set(id, bindingTransition.next);
+        try {
+          await this.persistSubsessionBindings();
+        } catch (error) {
+          this.subsessionBindings.set(id, current);
+          throw error;
+        }
+      }
     }
-    const trustedIdentity = trusted.planning?.identity;
+    const trustedIdentity = session.agentMapIdentity;
     const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(
-          id,
-          session.cwd,
-          trustedIdentity ?? session.agentMapIdentity,
-        )
-      : trustedIdentity ?? session.agentMapIdentity;
+      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
+      : trustedIdentity;
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
-    else delete session.agentMapIdentity;
-    const launchContext =
-      trusted.promptAppendix || agentMapIdentity
-        ? {
-            ...(trusted.promptAppendix
-              ? { promptAppendix: trusted.promptAppendix }
-              : {}),
-            ...(agentMapIdentity ? { agentMapIdentity } : {}),
-            resume: true as const,
-          }
-        : undefined;
-    const opts: LaunchOpts = {
-      harnessSessionId: id,
-      cwd: session.cwd,
-      ...(await (launchContext
-        ? this.buildLaunchOpts(id, session, launchContext)
-        : this.buildLaunchOpts(id, session))),
-    };
+    else if (trustedIdentity) throw new ProjectSessionScopeUnavailableError(id);
+    if (trusted.focusedContext && !agentMapIdentity)
+      throw new TypeError("Focused project context requires a project-agent identity");
+    // Claim the pre-PTY resume window before generated launch state is built.
+    // Exit observers may finish asynchronous bookkeeping after kill() resolves;
+    // they must see this lifecycle as starting, not schedule cleanup against
+    // files that the resumed process is currently regenerating.
+    const lastActiveBeforeResume = session.lastActiveAt;
+    const statusBeforeResume = session.status;
+    const exitCodeBeforeResume = session.exitCode;
+    session.status = "starting";
+    session.exitCode = null;
+    session.lastActiveAt = this.now();
+    let opts: LaunchOpts;
     let spec: SpawnSpec;
     try {
+      const launchContext =
+        trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
+          ? {
+              ...(trusted.promptAppendix
+                ? { promptAppendix: trusted.promptAppendix }
+                : {}),
+              ...(trusted.focusedContext
+                ? { focusedContext: trusted.focusedContext }
+                : {}),
+              ...(agentMapIdentity ? { agentMapIdentity } : {}),
+              resume: true as const,
+            }
+          : undefined;
+      opts = {
+        harnessSessionId: id,
+        cwd: session.cwd,
+        ...(await (launchContext
+          ? this.buildLaunchOpts(id, session, launchContext)
+          : this.buildLaunchOpts(id, session))),
+      };
       spec = adapter.resume(session.agentSessionId, opts);
     } catch (error) {
+      // Resume preparation may rotate project capabilities or write generated
+      // launch state before the process exists. No starting state was exposed
+      // or persisted yet, so restore the exact prior record while releasing
+      // any prepared authority.
+      session.status = statusBeforeResume;
+      session.exitCode = exitCodeBeforeResume;
+      session.lastActiveAt = lastActiveBeforeResume;
       await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
       throw error;
     }
-    // Kept so the failure path below can put it back: `lastActiveAt` is
-    // stamped here only to keep sweepDeadSessions() from reaping this record
+    // The prior value is kept so the failure path below can put it back:
+    // `lastActiveAt` is stamped only to keep sweepDeadSessions() from reaping
+    // this record
     // during the pre-pty window (it reaps non-exited records with no pty once
     // they're older than the grace period). If the resume never produces a
     // pty, that stamp is not activity and must not survive — otherwise a
     // session idle since last night reports "Ran for 6h 25m" purely because
     // someone clicked Resume.
-    const lastActiveBeforeResume = session.lastActiveAt;
-    session.status = "starting";
-    session.exitCode = null;
-    session.lastActiveAt = this.now();
     try {
       await this.persist();
       this.emitStatus(session);
@@ -874,7 +1416,20 @@ export class SessionManager {
       // — a session from before the canvas kit existed, or one whose canvas
       // file was somehow deleted, still gets a live pane on resume.
       await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(session, spec);
+      await this.spawn(session, spec, () =>
+        this.revalidateAgentMapIdentity(
+          session.id,
+          session.cwd,
+          agentMapIdentity,
+        ),
+      );
+      if (session.projectBootstrap) {
+        const runtimeEpoch = this.getRuntimeEpoch(session.id);
+        if (runtimeEpoch === null) throw new Error("session runtime unavailable");
+        await Promise.resolve(
+          this.onProjectBootstrapSession?.(session, "resumed", runtimeEpoch),
+        ).catch(() => {});
+      }
     } catch (err) {
       // Same best-effort reconciliation as create(): the first persist can be
       // the failure, and a failed repair must not replace that original error.
@@ -888,6 +1443,96 @@ export class SessionManager {
       throw err;
     }
     return session;
+  }
+
+  /** Server-only same-ID resume fenced by the coordinator's private marker. */
+  resumeBound(
+    id: string,
+    expected: TrustedSubsessionBindingMarker,
+    next: TrustedSubsessionBindingMarker,
+    trusted: Omit<TrustedSessionResumeOptions, "subsessionBindingTransition"> = {},
+  ): Promise<HarnessSession> {
+    return this.resume(id, {
+      ...trusted,
+      subsessionBindingTransition: { expected, next },
+    });
+  }
+
+  /**
+   * Close the session and durably record a user-closed delegated binding.
+   * Termination starts before storage writes, so a persistence failure cannot
+   * leave its PTY running. Failed closure bookkeeping retains a tombstone that
+   * prevents automatic recovery and can be retried by a later close.
+   *
+   * Await this operation and handle rejection: binding persistence and the
+   * coordinator callback can fail, and their completion has no time bound.
+   * On success, returns kill()'s result: whether a live or stale session was
+   * transitioned to exited.
+   */
+  async close(id: string): Promise<boolean> {
+    const binding = this.subsessionBindings.get(id);
+    if (binding) {
+      this.userClosedSubsessions.add(id);
+    }
+    // Start termination before persistence so a sidecar fsync failure cannot
+    // leave a delegated PTY running after the user closes its tab. Keep the
+    // in-memory tombstone on failure and let a later close retry persistence.
+    const termination = this.kill(id);
+    let persistenceError: unknown;
+    let coordinatorCloseRecorded = false;
+    if (binding) {
+      try {
+        await this.persistSubsessionBindings();
+      } catch (error) {
+        persistenceError = error;
+      }
+      try {
+        if (this.onSubsessionUserClosed) {
+          await this.onSubsessionUserClosed(binding);
+          coordinatorCloseRecorded = true;
+        }
+      } catch (error) {
+        persistenceError ??= error;
+      }
+    }
+    const killed = await termination;
+    if (binding && persistenceError === undefined && coordinatorCloseRecorded) {
+      const current = this.subsessionBindings.get(id);
+      if (current && sameSubsessionBinding(current, binding)) {
+        this.subsessionBindings.delete(id);
+        this.userClosedSubsessions.delete(id);
+        try {
+          await this.persistSubsessionBindings();
+        } catch (error) {
+          this.subsessionBindings.set(id, binding);
+          this.userClosedSubsessions.add(id);
+          persistenceError = error;
+        }
+      }
+    }
+    if (persistenceError !== undefined) throw persistenceError;
+    return killed;
+  }
+
+  /** Close only when the caller proves the exact coordinator-owned binding. */
+  async closeBound(expected: TrustedSubsessionBindingMarker): Promise<boolean> {
+    const parsed = parseTrustedSubsessionBindingMarker(
+      expected,
+      expected.sessionId,
+    );
+    if (!parsed) throw new SubsessionBindingMismatchError();
+    const operation = async (): Promise<boolean> => {
+      const current = this.subsessionBindings.get(parsed.sessionId);
+      if (!current || !sameSubsessionBinding(current, parsed))
+        throw new SubsessionBindingMismatchError();
+      return this.close(parsed.sessionId);
+    };
+    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
+    this.subsessionBindingQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   /**
@@ -1012,12 +1657,60 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Forward terminal bytes without submitting a separate prompt.
+   * @throws SessionInputIsolationError when prior partial input cannot be cleared.
+   */
   write(id: string, data: string): boolean {
     const handle = this.ptys.get(id);
     if (!handle) return false;
-    handle.pty.write(data);
-    this.observeTrustedTerminalInput(handle, data);
+    if (!this.resetUnsafeComposer(handle)) {
+      throw new SessionInputIsolationError();
+    }
     const session = this.sessions.get(id);
+    if (session && session.status !== "exited") {
+      try {
+        const adapter = this.adapters[session.harness];
+        const blockingPrompt = Boolean(
+          adapter?.detectBlockingPrompt &&
+          (this.hasCurrentBlockingPrompt(adapter, handle) ||
+            this.hasRetainedBlockingPrompt(adapter, handle)),
+        );
+        this.onTerminalInput(id, {
+          runtimeEpoch: handle.runtimeEpoch,
+          blockingPrompt,
+        });
+      } catch {
+        // Input priority is local correctness; lifecycle telemetry/persistence
+        // callbacks are best effort and cannot block a person's terminal.
+      }
+    }
+    this.terminalInputEpochs.set(
+      id,
+      (this.terminalInputEpochs.get(id) ?? 0) + 1,
+    );
+    const staged = this.stagedInputs.get(id);
+    if (staged?.handle === handle && !staged.preempted) {
+      staged.preempted = true;
+      if (staged.textWritten) {
+        // Remove the server-staged line before forwarding the person's bytes,
+        // so the two inputs can never be submitted as one corrupted prompt.
+        if (!this.abandonStagedLine(handle)) {
+          throw new SessionInputIsolationError();
+        }
+        staged.lineCleared = true;
+      }
+    }
+    try {
+      handle.pty.write(data);
+    } catch (error) {
+      // Raw terminal data can also be reported failed after staging a prefix.
+      // Fence the exact handle before any later user or server-owned write;
+      // bracketed-paste input requires its closing marker during recovery.
+      this.markComposerUnsafe(handle, data.includes(BRACKETED_PASTE_START));
+      throw error;
+    }
+    this.observeTrustedTerminalInput(handle, data);
     if (session) {
       session.lastActiveAt = this.now();
       void this.persist();
@@ -1045,6 +1738,8 @@ export class SessionManager {
     text: string,
     submit = true,
     canWrite?: () => boolean | Promise<boolean>,
+    background = false,
+    lifecycle?: SessionInputWriteLifecycle,
   ): Promise<boolean> {
     const remainsAuthorized = async (): Promise<boolean> => {
       if (!canWrite) return true;
@@ -1056,6 +1751,7 @@ export class SessionManager {
     };
     const session = this.sessions.get(id);
     if (!session) return false;
+    const initialTerminalInputEpoch = this.terminalInputEpochs.get(id) ?? 0;
 
     // An external-harness session (e.g. conductor) never has a pty — surfacing
     // HARNESS_EXTERNAL here gives a 409 "managed by the X app" instead of a
@@ -1063,7 +1759,8 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) {
       const info = listHarnessAdapters().find((a) => a.id === session.harness);
-      if (info?.mode === "external") throw new ExternalHarnessError(session.harness, info.label);
+      if (info?.mode === "external")
+        throw new ExternalHarnessError(session.harness, info.label);
       return false;
     }
     if (!this.isReadyEnough(session, handle)) {
@@ -1080,12 +1777,64 @@ export class SessionManager {
     if (canWrite && !(await remainsAuthorized())) {
       throw new SessionInputGuardRejectedError(false);
     }
+    if (
+      background &&
+      (this.terminalInputEpochs.get(id) ?? 0) !== initialTerminalInputEpoch
+    ) {
+      throw new SessionBackgroundInputPreemptedError(false);
+    }
+    if (!this.resetUnsafeComposer(handle)) {
+      // No byte from this logical submission has been written, but the prior
+      // unknown composer cannot yet be declared clean. Let durable callers
+      // keep their request queued; never append it to residual text.
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionInputIsolationError();
+    }
+    if (lifecycle?.beforeFirstWrite) {
+      try {
+        await lifecycle.beforeFirstWrite();
+      } catch (error) {
+        await lifecycle.onNotSubmitted?.().catch(() => {});
+        throw error;
+      }
+    }
+    if (
+      background &&
+      (this.terminalInputEpochs.get(id) ?? 0) !== initialTerminalInputEpoch
+    ) {
+      // The durable claim may yield while a person types into this composer.
+      // Retire that claim without appending background text or pressing Enter.
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionBackgroundInputPreemptedError(false);
+    }
+    if (this.closing || (lifecycle?.canWriteNow && !lifecycle.canWriteNow())) {
+      await lifecycle?.onNotSubmitted?.().catch(() => {});
+      throw new SessionInputGuardRejectedError(false);
+    }
 
     if (!submit) {
-      handle.pty.write(text);
+      try {
+        lifecycle?.onWritePhase?.("text-staged");
+        handle.pty.write(text);
+      } catch (error) {
+        // submit:false is public arbitrary draft text, not a single control
+        // byte. A partial failure can therefore leave composer content even
+        // though no Enter was requested.
+        this.markComposerUnsafe(handle, false);
+        throw error;
+      }
       this.observeTrustedSubmittedText(handle, text);
     } else if (text.length === 0) {
-      handle.pty.write("\r");
+      try {
+        lifecycle?.onWritePhase?.("text-staged");
+        handle.pty.write("\r");
+        lifecycle?.onWritePhase?.("enter-written");
+      } catch (error) {
+        // Enter may have crossed or may have left an existing draft intact.
+        // Either way, require a proven reset before another submission.
+        this.markComposerUnsafe(handle, false);
+        throw error;
+      }
       this.observeTrustedTerminalInput(handle, "\r");
     } else {
       // Bracketed when the app supports it: newlines in the prompt (the canvas
@@ -1108,27 +1857,103 @@ export class SessionManager {
         ? handle.bracketedPaste.enabled
         : this.platform === "win32" &&
           (this.adapters[session.harness]?.assumesBracketedPaste ?? false);
-      handle.pty.write(paste ? wrapPaste(text) : text);
-      // Observe the server-owned plaintext rather than the bracketed-paste
-      // transport wrapper. Embedded newlines invalidate the line, so prompt
-      // text containing `/clear` cannot impersonate an exact slash command.
-      this.observeTrustedSubmittedText(handle, text);
-      await sleep(SUBMIT_DELAY_MS);
-      // The pty may have been killed/replaced while we were waiting.
-      if (this.ptys.get(id) !== handle) return false;
-      // A project/account can change during the deliberate text→Enter delay.
-      // Do not submit the staged text under stale authority.
-      if (canWrite && !(await remainsAuthorized())) {
-        // Text was staged but not submitted. Clear the composer before
-        // releasing control so a later keypress cannot submit project-scoped
-        // content into the now-stale planner. Ctrl-U is a local line-clear,
-        // not an Enter/submission gesture.
-        handle.pty.write("\x15");
-        this.observeTrustedTerminalInput(handle, "\x15");
-        throw new SessionInputGuardRejectedError(true);
+      const staged = {
+        handle,
+        background,
+        preempted: false,
+        textWritten: false,
+        lineCleared: false,
+      };
+      if (this.stagedInputs.has(id)) {
+        await lifecycle?.onNotSubmitted?.().catch(() => {});
+        throw new SessionBackgroundInputPreemptedError(false);
       }
-      handle.pty.write("\r");
-      this.observeTrustedTerminalInput(handle, "\r");
+      this.stagedInputs.set(id, staged);
+      let enterAttempted = false;
+      try {
+        try {
+          lifecycle?.onWritePhase?.("text-staged");
+          handle.pty.write(paste ? wrapPaste(text) : text);
+        } catch (error) {
+          // A PTY can report a text-write failure after staging a prefix. Clear
+          // that possible partial line before claiming the logical submission
+          // is safe to retry. A partial bracketed paste can leave the terminal
+          // inside paste mode, where Ctrl-U is merely pasted content, so close
+          // that mode first. Every required cleanup write must succeed before
+          // exposing positive not-submitted evidence.
+          let pasteClosed = !paste;
+          try {
+            if (paste) {
+              handle.pty.write(BRACKETED_PASTE_END);
+              this.observeTrustedTerminalInput(handle, BRACKETED_PASTE_END);
+              pasteClosed = true;
+            }
+          } catch {
+            // Still attempt a non-submitting line clear below, but do not call
+            // it proof when the terminal may remain in bracketed-paste mode.
+          }
+          try {
+            handle.pty.write("\x15");
+            this.observeTrustedTerminalInput(handle, "\x15");
+            staged.lineCleared = pasteClosed;
+          } catch {
+            // The coordinator retains its dispatch intent and fails closed.
+          }
+          if (!staged.lineCleared) {
+            this.markComposerUnsafe(handle, !pasteClosed);
+          }
+          throw error;
+        }
+        staged.textWritten = true;
+        // Observe the server-owned plaintext rather than the bracketed-paste
+        // transport wrapper. Embedded newlines invalidate the line, so prompt
+        // text containing `/clear` cannot impersonate an exact slash command.
+        this.observeTrustedSubmittedText(handle, text);
+        await sleep(SUBMIT_DELAY_MS);
+        if (staged.preempted) {
+          throw new SessionBackgroundInputPreemptedError(true);
+        }
+        // The pty may have been killed/replaced while we were waiting.
+        if (this.ptys.get(id) !== handle) return false;
+        // A project/account can change during the deliberate text→Enter delay.
+        // Do not submit the staged text under stale authority.
+        if (canWrite && !(await remainsAuthorized())) {
+          // Text was staged but not submitted. Clear the composer before
+          // releasing control so a later keypress cannot submit project-scoped
+          // content into the now-stale session. Ctrl-U is a local line-clear,
+          // not an Enter/submission gesture.
+          staged.lineCleared = this.abandonStagedLine(handle);
+          throw new SessionInputGuardRejectedError(true);
+        }
+        // `await remainsAuthorized()` necessarily yields. Shutdown or a
+        // coordinator generation change can win in that gap, so this final
+        // synchronous fence is the last operation before Enter.
+        if (
+          this.closing ||
+          (lifecycle?.canWriteNow && !lifecycle.canWriteNow())
+        ) {
+          staged.lineCleared = this.abandonStagedLine(handle);
+          throw new SessionInputGuardRejectedError(true);
+        }
+        enterAttempted = true;
+        handle.pty.write("\r");
+        lifecycle?.onWritePhase?.("enter-written");
+        this.observeTrustedTerminalInput(handle, "\r");
+      } catch (error) {
+        if (enterAttempted) {
+          // A failed Enter write is ambiguous: it may have submitted A or may
+          // have left A's full staged line in place. Fence the handle so B can
+          // never append until a non-submitting reset succeeds.
+          this.markComposerUnsafe(handle, false);
+        } else if (staged.lineCleared) {
+          await lifecycle?.onNotSubmitted?.().catch(() => {});
+        }
+        throw error;
+      } finally {
+        if (this.stagedInputs.get(id) === staged) {
+          this.stagedInputs.delete(id);
+        }
+      }
     }
 
     session.lastActiveAt = this.now();
@@ -1308,9 +2133,10 @@ export class SessionManager {
     id: string,
     agentSessionId: string,
     source?: unknown,
+    runtimeEpoch?: string,
   ): Promise<boolean> {
     return this.serializeAgentSessionIdentity(() =>
-      this.setAgentSessionIdLocked(id, agentSessionId, source),
+      this.setAgentSessionIdLocked(id, agentSessionId, source, runtimeEpoch),
     );
   }
 
@@ -1336,19 +2162,23 @@ export class SessionManager {
     id: string,
     agentSessionId: string,
     source?: unknown,
+    runtimeEpoch?: string,
   ): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
     const handle = this.ptys.get(id);
-    const transitionSource = source === "clear" || source === "resume" ? source : null;
+    if (runtimeEpoch !== undefined && handle?.runtimeEpoch !== runtimeEpoch) {
+      return false;
+    }
+    const transitionSource =
+      source === "clear" || source === "resume" ? source : null;
     let authorization = handle?.agentSessionRotation ?? null;
     if (handle && authorization && authorization.expiresAt <= Date.now()) {
       handle.agentSessionRotation = null;
       authorization = null;
     }
     const matchesAuthorization =
-      transitionSource !== null &&
-      authorization?.source === transitionSource;
+      transitionSource !== null && authorization?.source === transitionSource;
 
     // A matching clear/resume SessionStart consumes the user gesture even
     // when this is the first vendor id, Claude keeps the same id, or the
@@ -1373,7 +2203,8 @@ export class SessionManager {
     // pointers. A fresh session can therefore never reclaim A's old id and
     // merge its events/transcript with A after a restart.
     if (ownerId !== undefined && ownerId !== id) return false;
-    if (ownerId === undefined) await this.reserveAgentSessionIdentity(digest, id);
+    if (ownerId === undefined)
+      await this.reserveAgentSessionIdentity(digest, id);
 
     const candidate = { ...session, agentSessionId };
     let releaseFence: () => void = () => {};
@@ -1433,7 +2264,9 @@ export class SessionManager {
         const possibleControls = handle.trustedInputPasting
           ? [BRACKETED_PASTE_END]
           : [BRACKETED_PASTE_START, BRACKETED_PASTE_END];
-        if (possibleControls.some((candidate) => candidate.startsWith(control))) {
+        if (
+          possibleControls.some((candidate) => candidate.startsWith(control))
+        ) {
           if (control === BRACKETED_PASTE_START) {
             handle.trustedInputPasting = true;
             handle.trustedInputLine = "";
@@ -1467,7 +2300,9 @@ export class SessionManager {
       }
       if (char === "\r") {
         if (!handle.trustedInputInvalid) {
-          const transition = this.rotationForTrustedLine(handle.trustedInputLine);
+          const transition = this.rotationForTrustedLine(
+            handle.trustedInputLine,
+          );
           if (transition) {
             const now = Date.now();
             handle.agentSessionRotation = {
@@ -1556,22 +2391,32 @@ export class SessionManager {
    * translated for Codex), or from an adapter-declared readiness fallback.
    * Idempotent; a session that's exited or already ready is a silent no-op.
    */
-  setReady(id: string): void {
+  setReady(id: string, runtimeEpoch?: string): void {
     const session = this.sessions.get(id);
-    if (!session || session.ready) return;
+    if (
+      !session ||
+      session.status === "exited" ||
+      session.ready ||
+      (runtimeEpoch !== undefined &&
+        this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch)
+    )
+      return;
     session.ready = true;
     void this.persist();
     this.emitStatus(session);
   }
 
   /** Persist a coordinator-owned metadata projection before exposing it. */
-  async setPlanningMetadata(
+
+
+  /** Persist the neutral project-bootstrap projection before exposing it. */
+  async setProjectBootstrapMetadata(
     id: string,
-    metadata: PlannerSessionMetadata,
+    metadata: ProjectBootstrapMetadata,
   ): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
-    session.planning = structuredClone(metadata);
+    session.projectBootstrap = structuredClone(metadata);
     await this.persist();
     this.emitStatus(session);
   }
@@ -1744,7 +2589,10 @@ export class SessionManager {
    * keystrokes) must never wait on this, since a human answering the very
    * prompt this is waiting out is exactly how a session becomes ready.
    */
-  private async waitUntilReady(id: string, timeoutMs: number): Promise<boolean> {
+  private async waitUntilReady(
+    id: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const handle = this.ptys.get(id);
@@ -1759,7 +2607,15 @@ export class SessionManager {
   /** Waits for all in-flight registry writes to settle. Useful before process
    * shutdown (and in tests that assert against the on-disk registry). */
   async flush(): Promise<void> {
+    // Project-session creation owns setup and registry writes that may span
+    // several awaits. Shutdown closes admission first, then waits for every
+    // already-queued publication to settle before considering persistence
+    // drained.
+    while (this.projectCreateQueues.size > 0) {
+      await Promise.all([...this.projectCreateQueues.values()]);
+    }
     await this.agentSessionIdentityQueue;
+    await this.subsessionBindingQueue;
     await this.writeQueue;
   }
 
@@ -1784,9 +2640,21 @@ export class SessionManager {
     this.emitStatus(session);
   }
 
-  private async spawn(session: HarnessSession, spec: SpawnSpec): Promise<void> {
+  private async spawn(
+    session: HarnessSession,
+    spec: SpawnSpec,
+    revalidateAdmission?: () => Promise<void>,
+  ): Promise<void> {
+    if (this.closing) throw new SessionManagerClosingError();
     const adapter = this.getAdapter(session.harness);
-    const spawnFn = this.spawnPty ?? (await loadDefaultSpawn());
+    const spawnFn = this.spawnPty ?? (await this.loadSpawnPty());
+    // Loading node-pty is lazy and asynchronous. Revalidate the project
+    // principal only after that final setup await; a binding or authenticated
+    // user can change while the module loads. The closing check follows the
+    // authorization await and then admission remains synchronous, so
+    // beginShutdown/killAll cannot miss a newly admitted process either.
+    await revalidateAdmission?.();
+    if (this.closing) throw new SessionManagerClosingError();
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined) env[key] = value;
@@ -1807,7 +2675,12 @@ export class SessionManager {
     env.TERM = "xterm-256color";
     env.COLORTERM = "truecolor";
     env[ENV.ingestUrl] = `${this.ingestUrl.replace(/\/$/, "")}/ingest`;
-    env[ENV.ingestToken] = this.issueIngestToken(session.id);
+    const ingestCredential = this.issueIngestCredential(session.id);
+    this.adapterIdentityStates.set(session.id, {
+      runtimeEpoch: ingestCredential.runtimeEpoch,
+      state: adapter.eventSource === "transcript-tail" ? "pending" : "not-required",
+    });
+    env[ENV.ingestToken] = ingestCredential.token;
     env[ENV.sessionId] = session.id;
     if (this.collectorUrl) env[ENV.collectorUrl] = this.collectorUrl;
 
@@ -1819,17 +2692,45 @@ export class SessionManager {
     // No-op on POSIX.
     const target = resolveSpawnTarget(spec.command, spec.args);
 
-    // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
-    // node-pty prebuild surfaces there, not at import time) — propagates to
-    // create()/resume(), which own reconciling the session record to
-    // "exited" for every pre-pty failure, not just this one.
-    const pty: IPty = spawnFn(target.command, target.args, {
-      name: "xterm-256color",
-      cols: DEFAULT_COLS,
-      rows: DEFAULT_ROWS,
-      cwd: spec.cwd,
-      env,
-    });
+    let epochTransitioned = false;
+    let pty: IPty;
+    try {
+      // The coordinator must durably retire every owner from the prior PTY
+      // generation before this replacement becomes observable. Its epoch is
+      // server-generated beside the private ingest capability and never comes
+      // from a hook, model payload, or browser request.
+      await this.onRuntimeEpochTransition?.(
+        { ...session },
+        ingestCredential.runtimeEpoch,
+      );
+      epochTransitioned = true;
+      // Epoch transition is fallible and may wait on durable state. Revalidate
+      // project/user scope and shutdown admission once more after that await.
+      await revalidateAdmission?.();
+      if (this.closing) throw new SessionManagerClosingError();
+      // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
+      // node-pty prebuild surfaces there, not at import time) — propagates to
+      // create()/resume(), which own reconciling the session record to
+      // "exited" for every pre-pty failure, not just this one.
+      pty = spawnFn(target.command, target.args, {
+        name: "xterm-256color",
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
+        cwd: spec.cwd,
+        env,
+      });
+    } catch (error) {
+      this.revokeIngestToken(session.id);
+      const identityState = this.adapterIdentityStates.get(session.id);
+      if (identityState?.runtimeEpoch === ingestCredential.runtimeEpoch)
+        this.adapterIdentityStates.delete(session.id);
+      if (epochTransitioned) {
+        await Promise.resolve(
+          this.onRuntimeEpochTransition?.({ ...session }, null),
+        ).catch(() => {});
+      }
+      throw error;
+    }
 
     const emitter = new EventEmitter();
     emitter.setMaxListeners(0);
@@ -1839,6 +2740,7 @@ export class SessionManager {
     });
     const handle: PtyHandle = {
       pty,
+      runtimeEpoch: ingestCredential.runtimeEpoch,
       buffer: "",
       readinessBuffer: "",
       readinessHistory: "",
@@ -1860,6 +2762,7 @@ export class SessionManager {
       resolveExited,
       killed: false,
     };
+    this.retiredRuntimeEpochs.delete(session.id);
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -1926,7 +2829,11 @@ export class SessionManager {
 
     const poll = setInterval(() => {
       const current = this.sessions.get(id);
-      if (!current || this.ptys.get(id) !== handle || current.status !== "running") {
+      if (
+        !current ||
+        this.ptys.get(id) !== handle ||
+        current.status !== "running"
+      ) {
         clearInterval(poll);
         return;
       }
@@ -1957,7 +2864,7 @@ export class SessionManager {
             `(is \`node\` resolvable from the agent's hook shell?).`,
         );
       }
-      this.setReady(id);
+      this.setReady(id, handle.runtimeEpoch);
     }, pollMs);
     // Never the reason the process stays alive; tests with fake timers and
     // the real server both tear down via the exited hook below anyway.
@@ -1974,7 +2881,11 @@ export class SessionManager {
    * silent no-op rather than double-transitioning or clobbering a newer
    * session/handle that's since taken its place (e.g. a resume).
    */
-  private markExited(id: string, handle: PtyHandle, exitCode: number | null): void {
+  private markExited(
+    id: string,
+    handle: PtyHandle,
+    exitCode: number | null,
+  ): void {
     if (this.ptys.get(id) !== handle) return;
     // Preserve the tail of output BEFORE the handle (and its buffer) is dropped
     // — this is the only chance to keep the agent's own error line. Worth it
@@ -1991,13 +2902,20 @@ export class SessionManager {
         ? sanitizeExitTail(handle.buffer)
         : null;
     this.ptys.delete(id);
+    const identityState = this.adapterIdentityStates.get(id);
+    if (identityState?.runtimeEpoch === handle.runtimeEpoch)
+      this.adapterIdentityStates.delete(id);
+    this.retiredRuntimeEpochs.set(id, handle.runtimeEpoch);
     this.lastActivityBroadcast.delete(id);
     // Resolve after the pty map is cleaned up. transitionExited runs
     // synchronously to set status before any awaiting continuation resumes.
     handle.resolveExited();
     const session = this.sessions.get(id);
     if (!session) return;
-    void this.transitionExited(session, exitCode, { exitTail });
+    void this.transitionExited(session, exitCode, {
+      exitTail,
+      runtimeEpoch: handle.runtimeEpoch,
+    });
   }
 
   /**
@@ -2011,11 +2929,21 @@ export class SessionManager {
   private transitionExited(
     session: HarnessSession,
     exitCode: number | null,
-    { stampLastActive = true, exitTail = null }: { stampLastActive?: boolean; exitTail?: string | null } = {},
+    {
+      stampLastActive = true,
+      exitTail = null,
+      runtimeEpoch = null,
+    }: {
+      stampLastActive?: boolean;
+      exitTail?: string | null;
+      runtimeEpoch?: string | null;
+    } = {},
   ): Promise<void> {
     this.revokeIngestToken(session.id);
     try {
-      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(() => {});
+      void Promise.resolve(this.onAgentMapSessionExit?.(session.id)).catch(
+        () => {},
+      );
     } catch {
       // Capability cleanup never delays durable session reconciliation.
     }
@@ -2031,12 +2959,19 @@ export class SessionManager {
     // what made an untouched session's duration grow on every failed Resume.
     if (stampLastActive) session.lastActiveAt = this.now();
     const persisted = this.persist();
-    this.emitStatus(session);
+    this.emitStatus(session, runtimeEpoch);
     return persisted;
   }
 
-  private emitStatus(session: HarnessSession): void {
-    this.statusEmitter.emit("status", { ...session });
+  private emitStatus(
+    session: HarnessSession,
+    runtimeEpoch = this.getRuntimeEpoch(session.id),
+  ): void {
+    this.statusEmitter.emit(
+      "status",
+      { ...session },
+      { runtimeEpoch } satisfies SessionStatusContext,
+    );
   }
 
   private agentSessionIdentityDigest(agentSessionId: string): string {
@@ -2087,7 +3022,9 @@ export class SessionManager {
         record.owners === null ||
         Array.isArray(record.owners)
       ) {
-        throw new Error("agent-session owner ledger has an unsupported version");
+        throw new Error(
+          "agent-session owner ledger has an unsupported version",
+        );
       }
       const entries = Object.entries(record.owners as Record<string, unknown>);
       if (entries.length > AGENT_SESSION_OWNER_MAX_ENTRIES) {
@@ -2100,7 +3037,9 @@ export class SessionManager {
           ownerId.length === 0 ||
           ownerId.length > 256
         ) {
-          throw new Error("agent-session owner ledger contains an invalid entry");
+          throw new Error(
+            "agent-session owner ledger contains an invalid entry",
+          );
         }
         this.agentSessionOwners.set(digest, ownerId);
       }
@@ -2176,6 +3115,99 @@ export class SessionManager {
     await rename(tmpPath, this.agentSessionOwnersPath);
   }
 
+  private async loadSubsessionBindings(): Promise<void> {
+    let decoded: unknown;
+    try {
+      const raw = await readFile(this.subsessionBindingsPath, "utf8");
+      if (Buffer.byteLength(raw, "utf8") > SUBSESSION_BINDING_MAX_BYTES)
+        throw new Error("subsession binding registry exceeds its size limit");
+      decoded = JSON.parse(raw) as unknown;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (
+      !isRecord(decoded) ||
+      Object.keys(decoded).sort().join(",") !==
+        "closedSessionIds,markers,version" ||
+      decoded.version !== SUBSESSION_BINDING_FILE_VERSION ||
+      !isRecord(decoded.markers) ||
+      !Array.isArray(decoded.closedSessionIds) ||
+      decoded.closedSessionIds.length > SUBSESSION_BINDING_MAX_ENTRIES ||
+      !decoded.closedSessionIds.every(
+        (sessionId) => typeof sessionId === "string",
+      )
+    ) {
+      throw new Error("subsession binding registry is malformed");
+    }
+    const entries = Object.entries(decoded.markers);
+    if (entries.length > SUBSESSION_BINDING_MAX_ENTRIES)
+      throw new Error("subsession binding registry exceeds its entry limit");
+    const bindingIds = new Set<string>();
+    for (const [sessionId, value] of entries) {
+      const marker = parseTrustedSubsessionBindingMarker(value, sessionId);
+      if (!marker || bindingIds.has(marker.bindingId))
+        throw new Error("subsession binding registry is malformed");
+      bindingIds.add(marker.bindingId);
+      this.subsessionBindings.set(sessionId, marker);
+    }
+    for (const sessionId of decoded.closedSessionIds) {
+      if (!this.subsessionBindings.has(sessionId))
+        throw new Error("subsession binding registry is malformed");
+      this.userClosedSubsessions.add(sessionId);
+    }
+  }
+
+  private async persistSubsessionBindings(): Promise<void> {
+    const markers = Object.fromEntries(
+      [...this.subsessionBindings.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([sessionId, marker]) => [sessionId, marker]),
+    );
+    const serialized = `${JSON.stringify(
+      {
+        version: SUBSESSION_BINDING_FILE_VERSION,
+        markers,
+        closedSessionIds: [...this.userClosedSubsessions].sort(),
+      },
+      null,
+      2,
+    )}\n`;
+    if (Buffer.byteLength(serialized, "utf8") > SUBSESSION_BINDING_MAX_BYTES)
+      throw new Error("subsession binding registry exceeds its size limit");
+    if (this.writeSubsessionBindingRegistry) {
+      await this.writeSubsessionBindingRegistry(
+        this.subsessionBindingsPath,
+        serialized,
+      );
+      return;
+    }
+    const directory = dirname(this.subsessionBindingsPath);
+    await mkdir(directory, { recursive: true });
+    const temporary = `${this.subsessionBindingsPath}.tmp-${process.pid}-${
+      this.subsessionBindingWriteSeq++
+    }`;
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      handle = await open(temporary, "wx", 0o600);
+      await handle.writeFile(serialized, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await rename(temporary, this.subsessionBindingsPath);
+      await chmod(this.subsessionBindingsPath, 0o600);
+      const directoryHandle = await open(directory, "r");
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
+    } finally {
+      await handle?.close().catch(() => {});
+      await rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+
   private persistIdentityCandidate(candidate: HarnessSession): Promise<void> {
     const current = this.list();
     const index = current.findIndex((session) => session.id === candidate.id);
@@ -2230,4 +3262,435 @@ export class SessionManager {
       JSON.stringify(this.list(), null, 2) + "\n",
     );
   }
+
+  private readonly prepareProjectSession: SessionManagerOptions["prepareProjectSession"];
+
+  private readonly onProjectBootstrapSession: SessionManagerOptions["onProjectBootstrapSession"];
+
+  /** Publish project sessions in claim order so the first durable/visible row
+   * is also the one that owns the first-session lifecycle. */
+  private readonly projectCreateQueues = new Map<string, Promise<void>>();
+
+  private readonly pendingCreates = new Map<
+    string,
+    Pick<HarnessSession, "cwd" | "agentMapIdentity">
+  >();
+
+
+  /** Read-only vendor-history probe used before a coordinator claims recovery. */
+  async canResumeSession(id: string): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (!session?.agentSessionId) return false;
+    return this.getAdapter(session.harness).canResume(
+      session.agentSessionId,
+      session.cwd,
+    );
+  }
+
+
+  private serializeProjectCreate<T>(
+    projectId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const prior = this.projectCreateQueues.get(projectId) ?? Promise.resolve();
+    const next = prior.catch(() => {}).then(operation);
+    const settled = next.then(
+      () => {},
+      () => {},
+    );
+    this.projectCreateQueues.set(projectId, settled);
+    void settled.then(() => {
+      if (this.projectCreateQueues.get(projectId) === settled) {
+        this.projectCreateQueues.delete(projectId);
+      }
+    });
+    return next;
+  }
+
+
+  /** Keep ordinary project roots discoverable during asynchronous launch
+   * preparation, before their session rows can be published. Server-only. */
+  listPendingCreates(): Pick<HarnessSession, "cwd" | "agentMapIdentity">[] {
+    return [...this.pendingCreates.values()];
+  }
+
+  /**
+   * Server-only reserved-ID create. The private marker is committed before a
+   * session row or process can exist, closing the row-before-binding crash
+   * window while preserving the ordinary writable create path.
+   */
+  async createReserved(
+    reservedSessionId: string,
+    req: CreateSessionRequest,
+    markerInput: TrustedSubsessionBindingMarker,
+    trusted: TrustedSessionCreateOptions,
+  ): Promise<HarnessSession> {
+    const marker = parseTrustedSubsessionBindingMarker(
+      markerInput,
+      reservedSessionId,
+    );
+    if (!marker) throw new SubsessionBindingMismatchError();
+    const operation = async (): Promise<HarnessSession> => {
+      const existingMarker = this.subsessionBindings.get(reservedSessionId);
+      const existingSession = this.sessions.get(reservedSessionId);
+      if (existingMarker) {
+        if (!sameSubsessionBinding(existingMarker, marker))
+          throw new SubsessionBindingMismatchError();
+        if (this.userClosedSubsessions.has(reservedSessionId))
+          throw new SubsessionFreshRestartForbiddenError();
+        if (existingSession) return existingSession;
+      } else {
+        if (existingSession) throw new SubsessionBindingMismatchError();
+        this.subsessionBindings.set(reservedSessionId, marker);
+        try {
+          await this.persistSubsessionBindings();
+        } catch (error) {
+          if (this.subsessionBindings.get(reservedSessionId) === marker)
+            this.subsessionBindings.delete(reservedSessionId);
+          throw error;
+        }
+      }
+      return this.createWithId(reservedSessionId, req, trusted, marker);
+    };
+    const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
+    this.subsessionBindingQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  getSubsessionBinding(
+    sessionId: string,
+  ): TrustedSubsessionBindingMarker | null {
+    const marker = this.subsessionBindings.get(sessionId);
+    return marker ? structuredClone(marker) : null;
+  }
+
+  matchesSubsessionBinding(
+    expected: TrustedSubsessionBindingMarker,
+  ): boolean {
+    const parsed = parseTrustedSubsessionBindingMarker(
+      expected,
+      expected.sessionId,
+    );
+    const current = parsed
+      ? this.subsessionBindings.get(parsed.sessionId)
+      : undefined;
+    return Boolean(parsed && current && sameSubsessionBinding(current, parsed));
+  }
+
+  wasSubsessionClosedByUser(
+    expected: TrustedSubsessionBindingMarker,
+  ): boolean {
+    return (
+      this.matchesSubsessionBinding(expected) &&
+      this.userClosedSubsessions.has(expected.sessionId)
+    );
+  }
+
+  private async createWithId(
+    id: string,
+    req: CreateSessionRequest,
+    trusted: TrustedSessionCreateOptions,
+    expectedSubsessionBinding?: TrustedSubsessionBindingMarker,
+  ): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
+    const marker = this.subsessionBindings.get(id);
+    if (
+      (marker !== undefined || expectedSubsessionBinding !== undefined) &&
+      (!marker ||
+        !expectedSubsessionBinding ||
+        !sameSubsessionBinding(marker, expectedSubsessionBinding))
+    ) {
+      throw new SubsessionBindingMismatchError();
+    }
+    if (this.sessions.has(id)) throw new SubsessionBindingMismatchError();
+    const adapter = this.getAdapter(req.harness);
+    const trustedIdentity = trusted.agentMapIdentity?.(id);
+    const agentMapIdentity = this.resolveAgentMapIdentity
+      ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
+      : trustedIdentity;
+    const createResolved = async (): Promise<HarnessSession> => {
+      // A project create may have been waiting behind another publication
+      // when shutdown closed admission. Refuse it before claiming bootstrap,
+      // issuing capabilities, or writing generated session state.
+      if (this.closing) throw new SessionManagerClosingError();
+      let preparedProjectSession:
+        | Awaited<
+            ReturnType<
+              NonNullable<SessionManagerOptions["prepareProjectSession"]>
+            >
+          >
+        | undefined;
+      let opts: LaunchOpts;
+      let spec: SpawnSpec;
+      try {
+        preparedProjectSession =
+          agentMapIdentity && this.prepareProjectSession
+            ? await this.prepareProjectSession(agentMapIdentity, req)
+            : undefined;
+        if (
+          trusted.requireProjectBootstrapClaim &&
+          !preparedProjectSession?.projectBootstrap
+        ) {
+          throw new ProjectBootstrapClaimUnavailableError();
+        }
+        // Retain only AFTER claiming first-session ownership. Advertising the
+        // root earlier could start an automatic session ahead of this request.
+        this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
+        const promptAppendix = trusted.promptAppendix?.(id);
+        const focusedContext = trusted.focusedContext?.(id);
+        if (focusedContext && !agentMapIdentity)
+          throw new TypeError("Focused project context requires a project-agent identity");
+        const sessionStartSystemMessage =
+          trusted.sessionStartSystemMessage?.(id);
+        const launchContext =
+          promptAppendix || focusedContext || sessionStartSystemMessage || agentMapIdentity
+            ? {
+                ...(promptAppendix ? { promptAppendix } : {}),
+                ...(focusedContext ? { focusedContext } : {}),
+                ...(sessionStartSystemMessage
+                  ? { sessionStartSystemMessage }
+                  : {}),
+                ...(agentMapIdentity ? { agentMapIdentity } : {}),
+              }
+            : undefined;
+        opts = {
+          harnessSessionId: id,
+          cwd: req.cwd,
+          ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
+          ...(await (launchContext
+            ? this.buildLaunchOpts(id, req, launchContext)
+            : this.buildLaunchOpts(id, req))),
+        };
+        spec = adapter.launch(opts);
+      } catch (error) {
+        // Scope resolution may already have claimed bootstrap ownership, and
+        // launch preparation may already have issued a capability. Revoke both
+        // for every setup failure, including prompt composition/config writes,
+        // while preserving the original actionable error.
+        await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
+        throw error;
+      }
+      const projectBootstrap = preparedProjectSession?.projectBootstrap;
+      const session: HarnessSession = {
+        id,
+        agentSessionId: null,
+        harness: req.harness,
+        cwd: req.cwd,
+        title:
+          trusted.initialTitle ??
+          preparedProjectSession?.initialTitle ??
+          (basename(req.cwd) || req.cwd),
+        status: "starting",
+        createdAt: this.now(),
+        lastActiveAt: this.now(),
+        exitCode: null,
+        boundWorkflowPath: null,
+        // Ordinary callers record only what the builder actually rehydrated.
+        // A trusted planner replacement records its exact FIFO predecessor even
+        // when the brief came from an older recorded ancestor in that chain.
+        rehydratedFrom:
+          trusted.handoffFromSessionId ?? opts.rehydratedFrom ?? null,
+        // Persisted so resume() regenerates the same ANSI base — otherwise a
+        // resumed session would fall back to the server default and its dim text
+        // could lose contrast against a differently-themed terminal.
+        ...(req.theme ? { theme: req.theme } : {}),
+        ready: false,
+        ...(projectBootstrap
+          ? { projectBootstrap: structuredClone(projectBootstrap) }
+          : {}),
+        ...(agentMapIdentity
+          ? { agentMapIdentity: structuredClone(agentMapIdentity) }
+          : {}),
+      };
+      this.sessions.set(id, session);
+      try {
+        await this.persist();
+        // Before spawning, not fire-and-forget: the agent's very first read of
+        // HARNESS_CONTEXT_FILE must never race session creation with an ENOENT,
+        // regardless of which entry point called create() (REST, autoCreateSession).
+        await this.writeWorkspaceContext(session);
+        // Same reasoning: the canvas pane opens immediately once the session is
+        // "running" — it must never show a bare empty iframe because nothing's
+        // been written to .sapiom/canvas/index.html yet.
+        await this.ensureCanvasTemplate(session.cwd);
+        await this.spawn(session, spec, () =>
+          this.revalidateAgentMapIdentity(
+            session.id,
+            session.cwd,
+            agentMapIdentity,
+          ),
+        );
+        if (session.projectBootstrap) {
+          const runtimeEpoch = this.getRuntimeEpoch(session.id);
+          if (runtimeEpoch === null) throw new Error("session runtime unavailable");
+          await Promise.resolve(
+            this.onProjectBootstrapSession?.(session, "created", runtimeEpoch),
+          ).catch(() => {});
+        }
+      } catch (err) {
+        // The first persist may itself be the failure, so reconciliation is
+        // best-effort: always repair the in-memory record to "exited", attempt
+        // the durable repair, and preserve the original actionable failure if
+        // that second write also fails.
+        await this.transitionExited(session, null).catch(() => {});
+        throw err;
+      }
+      return session;
+    };
+    try {
+      return await (agentMapIdentity
+        ? this.serializeProjectCreate(agentMapIdentity.projectId, createResolved)
+        : createResolved());
+    } finally {
+      this.pendingCreates.delete(id);
+    }
+  }
+
+  /**
+   * Narrow recovery for an exact coordinator-owned row that exited before its
+   * first turn and has no resumable vendor conversation. The Harness ID stays
+   * fixed; the private marker advances before a fresh PTY can be admitted.
+   */
+  async restartFreshBound(
+    id: string,
+    expected: TrustedSubsessionBindingMarker,
+    nextInput: TrustedSubsessionBindingMarker,
+    trusted: TrustedSessionCreateOptions,
+    hasRecordedTurns: (sessionId: string) => Promise<boolean>,
+  ): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
+    const currentExpected = parseTrustedSubsessionBindingMarker(expected, id);
+    const next = parseTrustedSubsessionBindingMarker(nextInput, id);
+    const current = this.subsessionBindings.get(id);
+    const session = this.sessions.get(id);
+    if (
+      !currentExpected ||
+      !next ||
+      !current ||
+      !session ||
+      (current.projectId !== currentExpected.projectId ||
+        current.parentSessionId !== currentExpected.parentSessionId ||
+        current.bindingId !== currentExpected.bindingId ||
+        current.sessionId !== currentExpected.sessionId) ||
+      next.projectId !== currentExpected.projectId ||
+      next.parentSessionId !== currentExpected.parentSessionId ||
+      next.bindingId !== currentExpected.bindingId ||
+      next.sessionId !== currentExpected.sessionId ||
+      next.incarnation !== currentExpected.incarnation + 1 ||
+      next.spawnEpoch <= currentExpected.spawnEpoch ||
+      this.ptys.has(id) ||
+      session.status !== "exited"
+    ) {
+      throw new SubsessionBindingMismatchError();
+    }
+    if (this.userClosedSubsessions.has(id))
+      throw new SubsessionFreshRestartForbiddenError();
+    // A retry may observe the already-advanced marker after the sidecar write
+    // committed but before the fresh process existed.
+    if (
+      !sameSubsessionBinding(current, currentExpected) &&
+      !sameSubsessionBinding(current, next)
+    ) {
+      throw new SubsessionBindingMismatchError();
+    }
+    const adapter = this.getAdapter(session.harness);
+    if (
+      (session.agentSessionId !== null &&
+        (await adapter.canResume(session.agentSessionId, session.cwd))) ||
+      (await hasRecordedTurns(id))
+    ) {
+      throw new SubsessionFreshRestartForbiddenError();
+    }
+
+    if (!sameSubsessionBinding(current, next)) {
+      this.subsessionBindings.set(id, next);
+      try {
+        await this.persistSubsessionBindings();
+      } catch (error) {
+        this.subsessionBindings.set(id, current);
+        throw error;
+      }
+    }
+
+    const trustedIdentity = trusted.agentMapIdentity?.(id);
+    const agentMapIdentity = this.resolveAgentMapIdentity
+      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
+      : trustedIdentity;
+    if (
+      !agentMapIdentity ||
+      agentMapIdentity.projectId !== next.projectId ||
+      agentMapIdentity.sessionId !== id
+    ) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
+
+    const lastActiveBeforeRestart = session.lastActiveAt;
+    session.status = "starting";
+    session.exitCode = null;
+    session.exitTail = null;
+    session.agentSessionId = null;
+    session.agentMapIdentity = structuredClone(agentMapIdentity);
+    session.lastActiveAt = this.now();
+    let spec: SpawnSpec;
+    try {
+      const promptAppendix = trusted.promptAppendix?.(id);
+      const focusedContext = trusted.focusedContext?.(id);
+      const sessionStartSystemMessage =
+        trusted.sessionStartSystemMessage?.(id);
+      const context = {
+        ...(promptAppendix ? { promptAppendix } : {}),
+        ...(focusedContext ? { focusedContext } : {}),
+        ...(sessionStartSystemMessage
+          ? { sessionStartSystemMessage }
+          : {}),
+        agentMapIdentity,
+      };
+      const opts: LaunchOpts = {
+        harnessSessionId: id,
+        cwd: session.cwd,
+        ...(await this.buildLaunchOpts(id, session, context)),
+      };
+      spec = adapter.launch(opts);
+    } catch (error) {
+      session.status = "exited";
+      session.lastActiveAt = lastActiveBeforeRestart;
+      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
+      throw error;
+    }
+    try {
+      await this.persist();
+      this.emitStatus(session);
+      await this.writeWorkspaceContext(session);
+      await this.ensureCanvasTemplate(session.cwd);
+      await this.spawn(session, spec, () =>
+        this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
+      );
+      return session;
+    } catch (error) {
+      session.lastActiveAt = lastActiveBeforeRestart;
+      await this.transitionExited(session, null, {
+        stampLastActive: false,
+      }).catch(() => {});
+      throw error;
+    }
+  }
+}
+
+
+
+/** An automatic first-session create lost the project bootstrap claim. */
+export class ProjectBootstrapClaimUnavailableError extends Error {
+  readonly code = "PROJECT_BOOTSTRAP_CLAIM_UNAVAILABLE";
+
+  constructor() {
+    super("the project bootstrap claim is already owned by another session");
+    this.name = "ProjectBootstrapClaimUnavailableError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
