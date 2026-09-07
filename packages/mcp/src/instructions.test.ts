@@ -180,13 +180,13 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.9 (Vault semantics, `agents.launch`, receipts/replay, App Link
+    // Current release: 2.11 (2.10 trigger kinds + Vault semantics, `agents.launch`, receipts/replay, App Link
     // webhooks — SAP-3180).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "ffb497cade769284a3f068304e9368d4de41407d9305b33973d70bba2d0df258",
+      "46a48ad30cf15008d232ed496f055e3b39b160322adc7488ece6c4ea99ce2d89",
     );
   });
 
