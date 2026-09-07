@@ -1282,6 +1282,7 @@ const MOCK_LAUNCH_EDGES: StudioRailLaunchEdge[] = [
 
 /** One key per project root, mirroring one file per project root. */
 const MOCK_RAIL_STATE_PREFIX = "sapiom-mock-studio-rail:";
+const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
 
 /**
  * Mock mode's stand-in for the ONE settings field whose whole contract is
@@ -2521,6 +2522,27 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
   ): Promise<StudioCurrentWorkspaceResponse> {
     await delay();
+    return this.readStudioCurrentWorkspace(projectId);
+  }
+
+  private saveStudioPreference(
+    projectId: StudioProjectId,
+    selection: StudioWorkspaceSelection,
+  ): void {
+    this.studioPreferences.set(projectId, selection);
+    try {
+      window.localStorage.setItem(
+        `${MOCK_WORKSPACE_PREFERENCE_PREFIX}${projectId}`,
+        JSON.stringify(selection),
+      );
+    } catch {
+      // As with mock rail state, keep live state when storage is unavailable.
+    }
+  }
+
+  private readStudioCurrentWorkspace(
+    projectId: StudioProjectId,
+  ): StudioCurrentWorkspaceResponse {
     const failure =
       typeof window === "undefined"
         ? null
@@ -2548,16 +2570,28 @@ export class MockApi implements HarnessApi {
           ]
         : [];
     });
-    const requested = this.studioPreferences.get(projectId);
+    let requested = this.studioPreferences.get(projectId);
+    if (!requested) {
+      try {
+        const raw = window.localStorage.getItem(
+          `${MOCK_WORKSPACE_PREFERENCE_PREFIX}${projectId}`,
+        );
+        if (raw) requested = JSON.parse(raw) as StudioWorkspaceSelection;
+      } catch {
+        // Missing or unreadable mock preferences use the default workspace.
+      }
+    }
     const valid =
-      requested?.kind !== "agent" ||
-      agents.some((agent) => agent.agentId === requested.agentId);
+      requested?.projectId === projectId &&
+      (requested.kind === "agent-map" ||
+        (requested.kind === "agent" &&
+          agents.some((agent) => agent.agentId === requested.agentId)));
     const repaired = Boolean(requested && !valid);
     const selection =
       requested && valid
         ? requested
         : { kind: "agent-map" as const, projectId };
-    if (repaired) this.studioPreferences.set(projectId, selection);
+    if (repaired) this.saveStudioPreference(projectId, selection);
     return parseStudioCurrentWorkspaceResponse(
       { projectId, selection, agents, repaired },
       projectId,
@@ -2568,7 +2602,7 @@ export class MockApi implements HarnessApi {
     projectId: StudioProjectId,
     requested: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse> {
-    const current = await this.getStudioCurrentWorkspace(projectId);
+    const current = this.readStudioCurrentWorkspace(projectId);
     const valid =
       requested.projectId === projectId &&
       (requested.kind === "agent-map" ||
@@ -2576,7 +2610,10 @@ export class MockApi implements HarnessApi {
     const selection = valid
       ? requested
       : { kind: "agent-map" as const, projectId };
-    this.studioPreferences.set(projectId, selection);
+    // Match the persisted server preference across reloads. Commit before
+    // artificial response latency, as saveRailState does for ordered writes.
+    this.saveStudioPreference(projectId, selection);
+    await delay();
     return { ...current, selection, repaired: !valid };
   }
 

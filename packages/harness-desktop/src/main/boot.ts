@@ -25,6 +25,7 @@ import {
   hasStoredSettings,
   startServer,
   createClaudeCodeAdapter,
+  createCodexAdapter,
   resolveSpawnTarget,
   CLAUDE_INSTALL_COMMAND,
   CODEX_INSTALL_COMMAND,
@@ -37,7 +38,9 @@ import { augmentProcessPath } from "./env.js";
 import { esbuildBinaryPath } from "./esbuild-binary.js";
 import { resolveWebDir } from "./paths.js";
 import { createMainWindow } from "./windows.js";
-import { agentPrefixDir, ensureSapiomCli, installClaudeCode, installSapiomMcp } from "./agent-install.js";
+import { agentPrefixDir, ensureSapiomCli, installAgentVersion, installClaudeCode, installSapiomMcp } from "./agent-install.js";
+import { ensureAgentUpdates } from "./agent-updates.js";
+import { runUpdateCommand } from "./agent-update-process.js";
 import { agentRepairDecision } from "./agent-repair.js";
 import { ensureMinGit } from "./git-provision.js";
 import { ensureSapiomMcp } from "./mcp-install.js";
@@ -266,6 +269,8 @@ async function ensureAgentAvailable(setupWin: BrowserWindow, initialReport: Doct
 }
 
 export interface BootMode {
+  /** Cancel startup when the user quits from the setup window. */
+  signal?: AbortSignal;
   /** `--dev`: skips the consent prompt and logs the ready URL. */
   devMode: boolean;
   /**
@@ -335,6 +340,34 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     // the actionable GIT_NOT_INSTALLED remedy when actually used.
   }
 
+  // Refresh installed providers before doctor/session creation. A newer Codex
+  // model catalog belongs to the new CLI process, not to the Studio app bundle.
+  const managedAgents = await ensureAgentUpdates({
+    root: path.join(app.getPath("userData"), "agent-versions"),
+    runtime: { binary: process.execPath, binaryArgs: [], binaryEnv: { ELECTRON_RUN_AS_NODE: "1" } },
+    enabled: !devMode && !smoke && process.env.SAPIOM_DISABLE_AGENT_UPDATES !== "1",
+    signal: mode.signal,
+    install: installAgentVersion,
+    probe: async (command) => {
+      try {
+        const target = resolveSpawnTarget(command.binary, [...command.binaryArgs, "--version"]);
+        const result = await runUpdateCommand(target.command, target.args, {
+          env: { ...process.env, ...command.binaryEnv, DISABLE_AUTOUPDATER: "1" },
+          timeoutMs: 5_000,
+        });
+        return result.ok ? result.stdout.trim() : null;
+      } catch { return null; }
+    },
+    onLine: (line) => {
+      console.log(`[boot] agent-update: ${line}`);
+      progress(setupWin, { phase: "installing-agent", message: line, status: "active" });
+    },
+  });
+  const managedBins = Object.values(managedAgents).map(({ prefix }) =>
+    process.platform === "win32" ? prefix : path.join(prefix, "bin"));
+  if (managedBins.length) process.env.PATH = [...managedBins, process.env.PATH ?? ""].join(path.delimiter);
+  mode.signal?.throwIfAborted();
+
   // 2. Doctor.
   progress(setupWin, { phase: "doctor", message: "Checking your environment…", status: "active" });
   let report = await runDoctor();
@@ -368,7 +401,7 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
       path.join(agentPrefixDir(), "node_modules", "@anthropic-ai", "claude-code"),
       path.join(agentPrefixDir(), "lib", "node_modules", "@anthropic-ai", "claude-code"),
     ].some((dir) => fs.existsSync(dir));
-  if (!smoke && report.availableHarnesses.includes("claude-code")) {
+  if (!smoke && !managedAgents["claude-code"] && report.availableHarnesses.includes("claude-code")) {
     const decision = agentRepairDecision({
       platform: process.platform,
       managedInstallExists: managedClaudeInstalled(),
@@ -392,7 +425,7 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
   //      the user runs their own claude (their install, their update policy) —
   //      the managed prefix is prepended to PATH, so when it exists it IS the
   //      active claude.
-  if (managedClaudeInstalled()) {
+  if (managedAgents["claude-code"] || managedClaudeInstalled()) {
     process.env.DISABLE_AUTOUPDATER = "1";
     debug("managed Claude Code install detected — agent self-updater disabled for sessions");
   }
@@ -549,7 +582,10 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     defaultHarnessKind: stubbedHarnesses ? "claude-code" : pickDefaultHarness(report),
     availableHarnesses: stubbedHarnesses ? [...stubbedHarnesses] : report.availableHarnesses,
     firstRun,
-    ...(stubAgent ? { adapters: { "claude-code": createClaudeCodeAdapter({ binary: stubAgent }) } } : {}),
+    adapters: {
+      "claude-code": createClaudeCodeAdapter(stubAgent ? { binary: stubAgent } : managedAgents["claude-code"]?.command),
+      codex: createCodexAdapter(managedAgents.codex?.command),
+    },
   });
 
   // 9. Load the SPA in the main window; close setup once it renders.
