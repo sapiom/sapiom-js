@@ -43,6 +43,14 @@ rather than `""`); `AgentRunResult.status` and `RunHandle.status()` widen from
 `"timed_out"`; `RunHandle.dispatch` becomes optional and gains a sibling
 `rejection?`.
 
+In `createStubClient` (and so `run_local`), `agents.launch` now resolves through the
+overrides — `agents.launch` then the shared `agents.run`, merged over the built-in
+defaults, matching `models.coding.launch`. It previously built a completed run
+unconditionally, which left the `if (child.rejection)` branch the docs require
+impossible to cover in a local test. Stub `{ status: "rejected", error: { … } }` for a
+refused dispatch or `{ status: "failed" }` for a child that ran and failed; the resume
+payload a paused step receives follows the stubbed status too.
+
 `AgentRunSpec`, `AgentRunResult`, `AgentRunStatus`, `AgentRunError`,
 `AgentRunErrorCode`, `AgentRunHandle` and `AgentExecutionStatus` are now exported
 from the package root, matching the `models` equivalents — previously they were

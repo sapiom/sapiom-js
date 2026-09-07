@@ -458,7 +458,9 @@ export async function launch(
     },
     async wait({ timeoutMs = 60 * 60_000, pollMs = 3_000 } = {}) {
       const deadline = Date.now() + timeoutMs;
-      let lastStatus = "unknown";
+      // Not "unknown" — that is now a real status, and this string only ever
+      // lands in the timeout message as "we never read one".
+      let lastStatus = "unread";
       let consecutiveFaults = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {

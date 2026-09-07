@@ -670,6 +670,11 @@ Stub naming rules:
   `models.launch()`'s inline result and its resume payload. A partial value (e.g.
   `{ "output": "..." }`) is merged over the built-in defaults, so the result stays a full
   `ModelRunResult`.
+- Child dispatch works the same: `agents.run` (or `agents.launch`) controls both the inline
+  result and the resume payload, merged over the defaults. This is how you cover the branches
+  a coordinator must have — `{ "status": "failed" }` for a child that ran and failed, and
+  `{ "status": "rejected", "error": { "code": "not_found", "message": "…" } }` for a dispatch
+  that was refused, which yields a handle with no `dispatch` and a `rejection` to read.
 - `run_local` reports `unusedStubs` (key matched nothing — usually a typo or plural/singular
   slip) and `stubWarnings` (key matched but wrong shape). A green run with either non-empty
   means the stub silently didn't apply.
