@@ -165,7 +165,7 @@ test.describe("ordering", () => {
 });
 
 test.describe("durable Studio project navigation", () => {
-  test("the project plus starts a coding session at its root without creating an agent", async ({
+  test("the row's plus is New agent; a coding session starts from the project's own pane", async ({
     page,
   }) => {
     await page.evaluate(() => {
@@ -181,13 +181,14 @@ test.describe("durable Studio project navigation", () => {
     });
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const row = group.getByTestId("project-row-dashboard-keeper");
-    const start = group.getByTestId("project-start-session-dashboard-keeper");
+    const create = group.getByTestId("project-create-agent-dashboard-keeper");
 
-    await expect(start).toHaveAttribute(
+    await expect(create).toHaveAttribute(
       "aria-label",
-      "Start a session in dashboard-keeper",
+      "Create an agent in dashboard-keeper",
     );
-    await expect(start).toHaveAttribute("data-tooltip", "Start a session here");
+    // A plain session is NOT a row verb: it starts from the tab strip or from
+    // the Start on the project's own pane (D34e, D35 item 6).
     expect(
       await row
         .locator(":scope > .workspace-row-action")
@@ -195,17 +196,17 @@ test.describe("durable Studio project navigation", () => {
           actions.map((action) => action.getAttribute("data-testid")),
         ),
     ).toEqual([
-      "project-start-session-dashboard-keeper",
-      "project-menu-dashboard-keeper",
+      "project-create-agent-dashboard-keeper",
+      "project-remove-dashboard-keeper",
     ]);
 
-    // The ordinary project action also works while its read-only map is open.
-    // A successful create selects the exact new conversation and no scaffold
-    // operation is smuggled into that session action.
+    // At map altitude the project's own pane carries the Start. The new
+    // generic session becomes the visible workbench, rooted at the project and
+    // on the preferred harness, and no scaffold request is smuggled into it.
     const map = group.getByTestId("project-select-dashboard-keeper");
     await map.click();
     await expect(map).toHaveAttribute("aria-pressed", "true");
-    await start.click();
+    await page.getByTestId("project-start-session").click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -252,7 +253,12 @@ test.describe("durable Studio project navigation", () => {
   }) => {
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const map = group.getByTestId("project-select-dashboard-keeper");
-    const start = group.getByTestId("project-start-session-dashboard-keeper");
+    // The row's `+` is New agent (D34a). The project pane's Start only exists
+    // while the project has NO session — it is the empty state's CTA. A SECOND
+    // session therefore comes from the tab strip, which is where D34(e) and D35
+    // item 6 put a plain session in the first place.
+    const start = page.getByTestId("project-start-session");
+    const anotherSession = page.getByTestId("session-tab-new");
 
     // Establish a real conversation in this project first. Cross-project map
     // navigation deliberately clears an unrelated active session, so it cannot
@@ -279,9 +285,14 @@ test.describe("durable Studio project navigation", () => {
       ).__MOCK_CREATE_SESSION_FAIL_ONCE__ = true;
     });
 
-    await start.click();
+    await anotherSession.click();
+    // The tab strip reports its own failure copy rather than passing the
+    // server's message through, which the deleted row `+` did. Less specific,
+    // and worth fixing — but the guarantee this test exists for is unchanged:
+    // a failed start leaves the map and the active conversation exactly as they
+    // were.
     await expect(page.getByTestId("toast")).toContainText(
-      "mock: couldn't create session",
+      "Couldn't start the session.",
     );
     await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
@@ -344,10 +355,14 @@ test.describe("durable Studio project navigation", () => {
         .getByTestId("workflow-dashboard-keeper")
         .locator(".workflow-status"),
     ).toHaveCount(1);
+    // The row's one `+` is New agent (D34a). A plain session is not a row verb:
+    // the tab strip owns it, and the project's pane carries the Start.
+    await expect(
+      group.getByTestId("project-create-agent-dashboard-keeper"),
+    ).toBeVisible();
     await expect(
       group.getByTestId("project-start-session-dashboard-keeper"),
-    ).toBeVisible();
-    // The removed legacy shortcut is not a second project-level `+`.
+    ).toHaveCount(0);
     await expect(
       page.locator('.rail-list [data-testid^="workspace-new-session-"]'),
     ).toHaveCount(0);

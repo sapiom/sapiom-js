@@ -2048,13 +2048,13 @@ button.rail-footer-card:hover {
 /* A collapsed merged group keeps its caret button visible, matching the
    inline caret's "there's more here" cue on plain headers.
 
-   NOT the project row's ⋮. This selector tests only that `aria-expanded` is
-   PRESENT, and the row menu's trigger always carries it — so without the
-   exclusion every collapsed project row grew a standing ⋮, which is the
-   "loudest thing in the rail" the trailing actions are hover-revealed to
-   avoid. An open menu keeps its own trigger visible through the rule below. */
-.workspace-row.is-collapsed
-  .workspace-row-action[aria-expanded]:not(.project-row-menu-trigger) {
+   The selector tests only that `aria-expanded` is PRESENT, so it catches any
+   row action that can open something. It used to need an exclusion for the
+   project row's ⋮, whose trigger always carried the attribute and therefore
+   stood permanently visible on every collapsed row — "the loudest thing in the
+   rail", which hover-revealing the trailing actions exists to avoid. That menu
+   is gone; the exclusion went with it. */
+.workspace-row.is-collapsed .workspace-row-action[aria-expanded] {
   opacity: 1;
 }
 
@@ -2136,24 +2136,16 @@ button.rail-footer-card:hover {
   color: var(--text);
 }
 
-/* ---- Project row ⋮ menu ---------------------------------------------- */
-/* Wide enough for the longest item to state its subject on one line — the
-   whole point of the menu is that "Remove acme-app from the rail" is read,
-   not inferred from a glyph, and a wrapped or ellipsed label gives that back. */
-.project-row-menu {
-  min-width: 248px;
-}
+/* ---- Project row remove ------------------------------------------------ */
+/* The destructive row action, marked on hover with a wash (`color-mix`), never
+   a full-strength surface — the same weight the menu item it replaced carried.
 
-/* The destructive item, marked on hover the way the session menu's is. A wash
-   (`color-mix`), never a full-strength surface.
-
-   The `.session-dropdown-item` qualifier is load-bearing, not decoration: the
-   menu items wear that class for their anatomy, its own `:hover` rule ties
-   this one on specificity, and it is declared LATER in this file — so the
-   neutral hover won and the destructive item marked itself in text colour
-   alone. Measured, not guessed: the computed background came back
-   `rgba(17, 17, 20, 0.04)`. */
-.session-dropdown-item.project-row-menu-danger:hover {
+   The `.workspace-row-action` qualifier is load-bearing, not decoration: row
+   actions wear that class for their anatomy, its own `:hover` rule ties this
+   one on specificity, and it is declared EARLIER in this file, so the neutral
+   hover would otherwise win on source order and the destructive action would
+   mark itself in text colour alone. */
+.workspace-row-action.project-row-remove:hover {
   color: var(--red-text);
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }

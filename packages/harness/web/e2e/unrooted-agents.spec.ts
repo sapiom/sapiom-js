@@ -21,7 +21,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
 
 const ORCHESTRATION = "/Users/demo/design-eng/ari/orchestration";
 const FIX_ORCHESTRATION = "/Users/demo/design-eng-fix/ari/orchestration";
@@ -426,7 +425,6 @@ test.describe("(c) there is a way OUT", () => {
     // removal whose rows merely move somewhere else has renamed the project,
     // not removed it — `accumulation-guard.spec.ts` pins that), so the count
     // does NOT climb here.
-    await openProjectMenu(page, "design-eng");
     await page.getByTestId("project-remove-design-eng").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("project-row-design-eng")).toHaveCount(0);

@@ -26,7 +26,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
 
 const ROOT = "/Users/demo/acme-app";
 
@@ -59,7 +58,6 @@ test.describe("legacy-server agent creation compatibility", () => {
   test("the menu opens a dialog that STATES the project, and starts nothing", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
 
     const dialog = page.getByTestId("create-agent-dialog");
@@ -81,7 +79,6 @@ test.describe("legacy-server agent creation compatibility", () => {
   });
 
   test("creation completes BEFORE the session starts", async ({ page }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     await page.getByTestId("create-agent-name").fill("billing-bot");
     await page.getByTestId("create-agent-submit").click();
@@ -102,7 +99,6 @@ test.describe("legacy-server agent creation compatibility", () => {
   test("a first instruction reaches the session, and never asks for a scaffold", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     await page.getByTestId("create-agent-name").fill("digest-bot");
     await page
@@ -125,7 +121,6 @@ test.describe("legacy-server agent creation compatibility", () => {
   test("a duplicate name is refused by the SERVER, in the dialog, and nothing starts", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     // `leasing` is a fixture agent in this project. The field has no opinion
     // about it — only the endpoint knows what is already there.
@@ -150,7 +145,6 @@ test.describe("legacy-server agent creation compatibility", () => {
   test("a name that is not one folder segment is refused before it is sent", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     const name = page.getByTestId("create-agent-name");
     const submit = page.getByTestId("create-agent-submit");
@@ -181,7 +175,6 @@ test.describe("legacy-server agent creation compatibility", () => {
   test("Return submits from the name field — and Return on Cancel cancels", async ({
     page,
   }) => {
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     await page.getByTestId("create-agent-name").fill("returned");
     await page.getByTestId("create-agent-name").press("Enter");
@@ -190,7 +183,6 @@ test.describe("legacy-server agent creation compatibility", () => {
     // The dialog took Return for the whole form, so a focused Cancel took it
     // too: pressing Return on "Cancel" closed the dialog AND created the
     // agent — the opposite of what was pressed. Measured, before the guard.
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
     await page.getByTestId("create-agent-name").fill("cancelled");
     await page.getByRole("button", { name: "Cancel" }).focus();
@@ -215,7 +207,6 @@ test.describe("legacy-server agent creation compatibility", () => {
         name: /^Create (the first |an )agent here$/,
       }),
     ).toHaveCount(0);
-    await openProjectMenu(page, "blank-slate");
     await page.getByTestId("project-create-agent-blank-slate").click();
 
     await expect(page.getByTestId("create-agent-dialog")).toBeVisible();

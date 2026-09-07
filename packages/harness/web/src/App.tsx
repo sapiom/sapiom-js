@@ -2923,7 +2923,6 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onStartProjectSession={handleStartProjectSession}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}
