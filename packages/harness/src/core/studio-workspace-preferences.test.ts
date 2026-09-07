@@ -38,6 +38,131 @@ describe("StudioWorkspacePreferenceStore", () => {
     };
   }
 
+  it("keeps a scaffolded sibling in its creating project across scans and restart", async () => {
+    const value = await fixture();
+    const projectRoot = path.join(value.root, "project");
+    const sibling = {
+      name: "Reviewer",
+      path: path.join(value.root, "reviewer"),
+      definitionId: null,
+    };
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    const created = await store.registerCreatedAgent(
+      value.projectId,
+      "session-a",
+      sibling,
+    );
+    expect(created).toBe(true);
+    const first = await store.current(
+      "user",
+      value.projectId,
+      [projectRoot],
+      [sibling],
+      true,
+    );
+    expect(first.agents).toHaveLength(1);
+    await store.put(
+      "user",
+      value.projectId,
+      {
+        kind: "agent",
+        projectId: value.projectId,
+        agentId: first.agents[0]!.agentId,
+      },
+      [projectRoot],
+      [sibling],
+      true,
+    );
+    // A complete scan of the project directory says nothing about its sibling.
+    expect(
+      await store.current("user", value.projectId, [projectRoot], [], true),
+    ).toMatchObject({ repaired: false });
+    expect(
+      await store.put(
+        "user",
+        value.projectId,
+        {
+          kind: "agent",
+          projectId: value.projectId,
+          agentId: first.agents[0]!.agentId,
+        },
+        [projectRoot],
+        [],
+        true,
+      ),
+    ).toMatchObject({ repaired: false });
+    const restarted = new StudioWorkspacePreferenceStore(value.file);
+    await restarted.registerCreatedAgent(value.projectId, "session-a", sibling);
+    const restored = await restarted.current(
+      "user",
+      value.projectId,
+      [projectRoot],
+      [sibling],
+      true,
+    );
+    expect(restored.agents).toEqual(first.agents);
+    expect(restored.selection).toMatchObject({
+      kind: "agent",
+      agentId: first.agents[0]!.agentId,
+    });
+    expect(JSON.stringify(restored)).not.toContain(sibling.path);
+    expect(await restarted.createdAgents()).toMatchObject([
+      {
+        projectId: value.projectId,
+        path: sibling.path,
+        createdBySessionId: "session-a",
+      },
+    ]);
+  });
+
+  it("does not let another project claim a created agent, even through a containing root", async () => {
+    const value = await fixture();
+    const foreign = "project_00000000-0000-4000-8000-000000000002";
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    await store.registerCreatedAgent(
+      value.projectId,
+      "session-a",
+      value.workflows[0]!,
+    );
+    expect(
+      await store.registerCreatedAgent(
+        foreign,
+        "session-b",
+        value.workflows[0]!,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        await store.current(
+          "user",
+          foreign,
+          [value.root],
+          value.workflows,
+          true,
+        )
+      ).agents,
+    ).toEqual([]);
+  });
+
+  it("does not take over an agent already assigned to another project", async () => {
+    const value = await fixture();
+    const store = new StudioWorkspacePreferenceStore(value.file);
+    await store.current(
+      "user",
+      value.projectId,
+      [value.root],
+      value.workflows,
+      true,
+    );
+    expect(
+      await store.registerCreatedAgent(
+        "project_00000000-0000-4000-8000-000000000002",
+        "session-b",
+        value.workflows[0]!,
+      ),
+    ).toBe(false);
+  });
+
   it("defaults to map and restores an opaque agent selection after restart", async () => {
     const value = await fixture();
     const projectRoot = path.join(value.root, "project");

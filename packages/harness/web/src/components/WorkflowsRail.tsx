@@ -39,7 +39,6 @@ import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import {
   ProjectRow,
   ProjectTreeRows,
-  AgentMapRow,
   dirKey,
   projectKey,
 } from "./ProjectTreeRows";
@@ -70,9 +69,11 @@ import {
 import { loadUiPrefs, saveUiPrefs } from "../lib/ui-prefs";
 import {
   agentPrefixes,
+  agentBelongsToProjectRoot,
   buildProjectTree,
   projectIsEmpty,
   projectRoots,
+  projectSessionRoot,
   unrootedAgents,
 } from "../lib/project-tree";
 import {
@@ -123,7 +124,6 @@ interface WorkflowsRailProps {
     root: string,
     label: string,
   ) => void;
-  onSelectAgentMap: (projectId: string, root: string, label: string) => void;
   onSelectStudioAgent: (
     workflow: WorkflowInfo,
     projectId: string,
@@ -159,7 +159,7 @@ interface WorkflowsRailProps {
    *  itself, its agents, and the session cwds under it — minus any project
    *  opened separately inside it. See `lib/project-membership.ts`. */
   closedProjects: string[];
-  /** Checkouts a scan of each root declined to enter — see the empty-project row. */
+  /** Checkouts a scan of each root declined to enter — shown in a note row. */
   unsearchedCheckouts: Record<string, string[]>;
   /** Removes a project: out of `recentDirs`, out of the rail, and the live
    *  sessions rooted in it end. Nothing on disk is touched. */
@@ -267,8 +267,8 @@ const SORT_LABELS: Record<RailSort, string> = {
  *
  * The adjacent `+` has one stable meaning: start a coding-agent session at this
  * project's root. This menu keeps the lower-frequency, explicitly named
- * project actions. On legacy servers that includes scaffolding a Sapiom agent;
- * on current plan-first projects, agent creation remains owned by Plan Agents.
+ * project actions, including creating or scaffolding a Sapiom agent. Opening
+ * the Agent Map never takes ownership of those ordinary build controls.
  *
  * Named items say it instead. Each carries the project's own label, so the
  * subject is read rather than inferred, and the destructive one is last and
@@ -284,10 +284,9 @@ function ProjectRowMenu({
   onRemove,
 }: {
   label: string;
-  /** The compatibility create action this project currently offers, or null
-   *  when its Agent Map owns creation / while one is mid-creation. A bare
-   *  project (sessions, no agent) scaffolds into its existing session; every
-   *  other project starts a new one rooted at the project. */
+  /** The create action this project currently offers, or null while one is
+   *  mid-creation. A bare project (sessions, no agent) scaffolds into its
+   *  existing session; every other project starts a new one at the root. */
   create: {
     kind: "create" | "scaffold";
     testid: string;
@@ -463,7 +462,6 @@ export function WorkflowsRail({
   studioSelection,
   selectedWorkspaceKey,
   onSelectWorkspace,
-  onSelectAgentMap,
   onSelectStudioAgent,
   onFocusAgent,
   onOpenPalette,
@@ -697,20 +695,59 @@ export function WorkflowsRail({
   const openRoots = [...recentDirs, ...pendingCwds];
   const shown = (path: string): boolean =>
     !hiddenByClosedProject(path, closedProjects, openRoots);
-  const visibleWorkflows = workflows.filter((workflow) => shown(workflow.path));
+  const visibleWorkflows = workflows.filter((workflow) => {
+    const owners = (workspaceScopes ?? []).filter((scope) =>
+      workflow.studioBindings?.some(
+        (binding) => binding.projectId === scope.projectId,
+      ),
+    );
+    // Closing a project also hides its logically associated sibling folders.
+    // Its durable identity may outlive its final published/open root.
+    if (owners.length === 0 && workflow.studioBindings?.some((binding) =>
+      studioProjects?.some((project) => project.projectId === binding.projectId),
+    )) return false;
+    return owners.length > 0
+      ? owners.some((scope) => shown(scope.cwd))
+      : shown(workflow.path);
+  });
+  const durableRootCandidates = (workspaceScopes ?? []).flatMap((scope) =>
+    scope.projectId ? [{ projectId: scope.projectId, cwd: scope.cwd }] : [],
+  );
+  const rootedSessions = sessions.flatMap((session) => {
+    if (!session.agentMapIdentity) return [session];
+    const root = projectSessionRoot(
+      {
+        cwd: session.cwd,
+        projectId: session.agentMapIdentity.projectId,
+      },
+      durableRootCandidates,
+    );
+    // Match the server scope catalog: a neutral session contributes its
+    // trusted durable root, never a descendant cwd or a stale binding.
+    return root ? [{ ...session, cwd: root }] : [];
+  });
   const roots = projectRoots({
     recentDirs,
-    sessions,
+    sessions: rootedSessions,
     pendingCwds,
+    pinnedRoots: (workspaceScopes ?? [])
+      .filter((scope) => scope.projectId != null)
+      .map((scope) => scope.cwd),
     // Hidden agents are deliberately NOT passed. A removed project's agents are
     // not on screen, so they cannot be the reason a folder is filed away.
     agentPaths: visibleWorkflows.map((workflow) => workflow.path),
     sort,
   }).filter(shown);
-  const projects = buildProjectTree(visibleWorkflows, roots, sort);
+  const projects = buildProjectTree(
+    visibleWorkflows, roots, sort, workspaceScopes,
+  );
   // Agents no open root contains. Rarer than the old "No workspace" bucket,
   // but dropping them would hide an agent that exists.
-  const strays = unrootedAgents(visibleWorkflows, roots, sort);
+  const strays = unrootedAgents(visibleWorkflows, roots, sort, workspaceScopes);
+  const agentsInProject = (root: string): WorkflowInfo[] =>
+    visibleWorkflows.filter((workflow) =>
+      agentBelongsToProjectRoot(workflow, root, workspaceScopes),
+    );
   // Every REGISTERED agent path, hidden ones included: "Open as project" counts
   // what a folder would bring in, and a folder that would un-hide a removed
   // project's agents is exactly the case that number has to be honest about.
@@ -738,8 +775,8 @@ export function WorkflowsRail({
    * without touching disk is the Group axis, above.)
    *
    * Offered ONLY on the project axis. The plan comes from `lib/agent-move.ts`;
-   * the endpoint guards itself again, so a refusal can still arrive for a plan
-   * this rail blessed — a planner is not a permission system.
+   * the endpoint guards itself again, so a refusal can still arrive for a move
+   * this rail considered valid — client geometry is not server authority.
    */
   const drag: RailDrag | undefined =
     axis === "project"
@@ -808,7 +845,7 @@ export function WorkflowsRail({
    * with nowhere to be stored.
    */
   const onGroupDrop = (root: string, request: GroupDropRequest): void => {
-    const rootAgents = railGroups.agentsIn(root);
+    const rootAgents = agentsInProject(root);
     if (!rootAgents.some((workflow) => workflow.path === request.path)) return;
     setFreshGroupLabel(null);
     railGroups.edit(root, rootAgents, (state) =>
@@ -1232,12 +1269,10 @@ export function WorkflowsRail({
             const studioProject = studioProjects?.find(
               (candidate) => candidate.projectId === workspaceScope?.projectId,
             );
-            // Current servers issue a durable Studio project for every scope,
-            // and that project's Agent Map owns creation. The absent case is a
-            // compatibility payload, not a second creation mode. Keep ownership
-            // independent of the selected axis so Group cannot restore a bypass.
-            const mapOwnsCreation = studioProject != null;
-            const planFirst = axis === "project" && mapOwnsCreation;
+            // Current servers issue a durable Studio project for every scope.
+            // Its project label owns Agent Map navigation; creation remains an
+            // ordinary project action available beside that read-only view.
+            const planFirst = studioProject != null;
             const mapSelected =
               planFirst &&
               studioSelection?.kind === "agent-map" &&
@@ -1281,7 +1316,7 @@ export function WorkflowsRail({
             // where a scope header belongs — and the root agent is often the
             // head of the very group being shown.
             const groupAgents =
-              axis === "group" ? railGroups.agentsIn(project.root) : [];
+              axis === "group" ? agentsInProject(project.root) : [];
             const showGroups = axis === "group" && groupAgents.length > 1;
             const soloAgents = groupAgents.filter(
               (workflow) => workflow.path !== project.rootAgent?.workflow.path,
@@ -1311,18 +1346,20 @@ export function WorkflowsRail({
                       workspaceScope?.workspaceKey === selectedWorkspaceKey)
                   }
                   onSelectProject={onSelectWorkspace}
+                  projectViewLabel={planFirst ? "Agent Map" : undefined}
                   focusedAgentPath={focusedAgentPath}
                   onFocusAgent={focusProjectAgent}
-                  focusable={creating || bare != null}
+                  focusable={!planFirst && (creating || bare != null)}
                   disclosable={
                     planFirst
-                      ? true
+                      ? project.rootAgent != null ||
+                        project.dirs.length > 0 ||
+                        project.agents.length > 0
                       : axis === "group"
                         ? showGroups || soloAgents.length > 0
                         : project.dirs.length > 0 || project.agents.length > 0
                   }
                   busy={creating}
-                  disclosureOnly={planFirst}
                   drag={drag}
                   mainTestid={
                     workspaceScope
@@ -1387,7 +1424,7 @@ export function WorkflowsRail({
                           before the overflow menu. Its accessible name supplies
                           the noun the glyph cannot: this starts a coding-agent
                           SESSION at the project root. It does not scaffold a
-                          Sapiom agent or bypass Plan Agents. */}
+                          Sapiom agent. */}
                       {!pending && (
                         <button
                           type="button"
@@ -1412,7 +1449,7 @@ export function WorkflowsRail({
                       <ProjectRowMenu
                         label={project.label}
                         create={
-                          mapOwnsCreation || creating
+                          creating
                             ? null
                             : bare
                               ? {
@@ -1444,110 +1481,54 @@ export function WorkflowsRail({
                     </>
                   }
                 />
-                {!collapsed && planFirst && studioProject && (
-                  <>
-                    <AgentMapRow
-                      selected={mapSelected}
-                      onSelect={() => {
-                        revealProject(project.root);
-                        onSelectAgentMap(
-                          studioProject.projectId,
-                          project.root,
-                          project.label,
-                        );
-                      }}
+                {!collapsed &&
+                  planFirst &&
+                  studioProject &&
+                  !showGroups &&
+                  project.rootAgent && (
+                    <WorkflowRow
+                      workflow={project.rootAgent.workflow}
+                      isFocused={
+                        studioSelection?.kind === "agent" &&
+                        studioSelection.agentId ===
+                          project.rootAgent.workflow.studioBindings?.find(
+                            (candidate) =>
+                              candidate.projectId === studioProject.projectId,
+                          )?.agentId
+                      }
+                      onFocus={focusProjectAgent}
+                      depth={0}
                     />
-                    {project.rootAgent && (
-                      <WorkflowRow
-                        workflow={project.rootAgent.workflow}
-                        isFocused={
-                          studioSelection?.kind === "agent" &&
-                          studioSelection.agentId ===
-                            project.rootAgent.workflow.studioBindings?.find(
-                              (candidate) =>
-                                candidate.projectId === studioProject.projectId,
-                            )?.agentId
-                        }
-                        onFocus={focusProjectAgent}
-                        depth={0}
+                  )}
+                {/* Preserve the scan boundary explanation for an empty project.
+                    First-agent creation belongs to the project menu; an empty
+                    project never gets a separate inline creation action. */}
+                {!collapsed &&
+                  empty &&
+                  !creating &&
+                  bare == null &&
+                  (unsearchedCheckouts[project.root]?.length ?? 0) > 0 && (
+                    <div className="workspace-row is-nested">
+                      <span
+                        className="row-disclosure row-disclosure-static"
+                        aria-hidden="true"
                       />
-                    )}
-                  </>
-                )}
-                {/* AN EMPTY LEGACY PROJECT SAYS SO, on its own row.
-                    `projectIsEmpty` is the one emptiness answer and it consults
-                    `rootAgent` — a merged root-agent project has nothing in
-                    `dirs` or `agents` and a naive check would print this line
-                    under an agent row. A planner-managed project deliberately
-                    renders no direct-create row: its pinned Agent Map is the
-                    only route to generating agents. `creating` already has its
-                    own spinner, and a bare legacy project with a live session
-                    already has its Scaffold affordance, so neither reaches
-                    this. */}
-                {!collapsed && empty && !creating && bare == null && (
-                  <>
-                    {!mapOwnsCreation && (
-                      <div className="workspace-row is-nested workspace-row-empty">
-                        <span
-                          className="row-disclosure row-disclosure-static"
-                          aria-hidden="true"
-                        />
-                        <button
-                          type="button"
-                          className="tree-row tree-row-empty-action"
-                          data-testid={`project-empty-${project.label}`}
-                          data-tooltip={`Start an agent in ${project.root}`}
-                          onClick={() =>
-                            onCreateAgent(project.root, project.label)
-                          }
-                        >
-                          <Icon name="Sparkles" size={13} />
-                          <span className="tree-row-label">
-                            {(unsearchedCheckouts[project.root]?.length ?? 0) >
-                            0
-                              ? "Create an agent here"
-                              : "Create the first agent here"}
-                          </span>
-                        </button>
+                      <div
+                        className="tree-row tree-row-note"
+                        data-testid={`project-unsearched-${project.label}`}
+                        title={`Open one as its own project to see its agents:\n${unsearchedCheckouts[
+                          project.root
+                        ]!.join("\n")}`}
+                      >
+                        <Icon name="GitBranch" size={13} />
+                        <span className="tree-row-label">
+                          {unsearchedCheckouts[project.root]!.length === 1
+                            ? "1 checkout not searched"
+                            : `${unsearchedCheckouts[project.root]!.length} checkouts not searched`}
+                        </span>
                       </div>
-                    )}
-                    {/* THE BOUNDARY'S OWN ANSWER, when there is one.
-                        A scan stops at every separate checkout, so a folder that
-                        is not itself a repo but holds several clones finds
-                        NOTHING while the agents are right there. Rendering only
-                        "Create the FIRST agent here" over that folder states
-                        something false, and falsely in the worst direction: it
-                        tells the user the agents they can see on disk do not
-                        exist. The count is the difference between "there is
-                        nothing here" and "I did not look in there". */}
-                    {(unsearchedCheckouts[project.root]?.length ?? 0) > 0 && (
-                      <div className="workspace-row is-nested">
-                        <span
-                          className="row-disclosure row-disclosure-static"
-                          aria-hidden="true"
-                        />
-                        <div
-                          className="tree-row tree-row-note"
-                          data-testid={`project-unsearched-${project.label}`}
-                          /* The ROW states the fact; the tooltip carries the
-                             remedy and the paths. A 320px rail cannot hold both
-                             in one line, and truncating the remedy would leave
-                             the fact looking like a dead end. */
-                          title={`Open one as its own project to see its agents:\n${unsearchedCheckouts[
-                            project.root
-                          ]!.join("\n")}`}
-                        >
-                          <Icon name="GitBranch" size={13} />
-                          <span className="tree-row-label">
-                            {unsearchedCheckouts[project.root]!.length === 1
-                              ? "1 checkout not searched"
-                              : `${unsearchedCheckouts[project.root]!.length} checkouts not searched`}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
+                    </div>
+                  )}
                 {!collapsed && axis === "project" && (
                   <ProjectTreeRows
                     dirs={project.dirs}
@@ -1578,7 +1559,7 @@ export function WorkflowsRail({
                     collapsedKeys={collapsedKeys}
                     onToggleCollapsed={toggleCollapsed}
                     focusedAgentPath={focusedAgentPath}
-                    onFocusAgent={onFocusAgent}
+                    onFocusAgent={focusProjectAgent}
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>
@@ -1629,7 +1610,7 @@ export function WorkflowsRail({
                         prefix={node?.prefix ?? ""}
                         prefixFull={node?.prefixFull ?? ""}
                         isFocused={workflow.path === focusedAgentPath}
-                        onFocus={onFocusAgent}
+                        onFocus={focusProjectAgent}
                       />
                     );
                   })}

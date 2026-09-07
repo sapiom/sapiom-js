@@ -23,6 +23,11 @@ export type PlanNodeId = AgentMapBrand<"PlanNodeId">;
 export type PlanRelationshipId = AgentMapBrand<"PlanRelationshipId">;
 export type MapProposalId = AgentMapBrand<"MapProposalId">;
 export type ProposalOperationId = AgentMapBrand<"ProposalOperationId">;
+export type AgentMapVersionId = AgentMapBrand<"AgentMapVersionId">;
+/** Identity of normalized graph meaning. It is deliberately project-neutral. */
+export type GraphContentDigest = AgentMapBrand<"GraphContentDigest">;
+/** Integrity identity for a complete immutable record or aggregate. */
+export type RecordDigest = AgentMapBrand<"RecordDigest">;
 /** A caller-authored alias whose lifetime is exactly one operation batch. */
 export type DraftRef = AgentMapBrand<"DraftRef">;
 
@@ -261,26 +266,75 @@ export interface SessionPrincipal {
   userId: string;
 }
 
-export type PlanningSessionIdentity =
-  | (SessionPrincipal & { role: "map-planner" })
-  | (SessionPrincipal & {
-      role: "agent-builder";
-      assignment: { kind: "planned"; agentId: string };
-    })
-  | (SessionPrincipal & {
-      role: "agent-builder";
-      assignment: { kind: "unplanned" };
-    });
+/**
+ * Server-derived authority for an ordinary session inside a Studio project.
+ *
+ * Optional assignment, bootstrap, and focused-context metadata deliberately
+ * live outside this principal: they may describe why a session exists, but
+ * they cannot change which project tools or execution policy it receives.
+ */
+export type ProjectAgentSession = Readonly<SessionPrincipal>;
 
-export interface ProposalActor {
+/** Trusted, role-neutral attribution stored on immutable project records. */
+export type ProjectAgentActorRef = Readonly<{
   userId: string;
   sessionId: string;
-  role: "map-planner" | "agent-builder";
-  assignment:
-    | { kind: "planned"; agentId: string }
-    | { kind: "unplanned" }
-    | null;
-}
+}>;
+
+/** Exact project-bound identity of immutable Agent Map content. */
+export type AgentMapVersionRef = Readonly<{
+  projectId: StudioProjectId;
+  versionId: AgentMapVersionId;
+  contentDigest: GraphContentDigest;
+}>;
+
+export type ProjectVersionChangeKind = "created" | "edited" | "rebased" | "restored" | "migrated";
+
+export type ProjectMutationOrigin =
+  | Readonly<{
+      kind: "request";
+      requestDigest: string;
+      operationIds: readonly ProposalOperationId[];
+      touchKeys: readonly string[];
+    }>
+  | Readonly<{
+      kind: "migration";
+      requestDigest: string;
+      operationIds: readonly ProposalOperationId[];
+      touchKeys: readonly string[];
+      legacyProposalId: MapProposalId | null;
+      legacyAcceptedVersion: number | null;
+    }>;
+
+/** One immutable entry in the sole project Agent Map history. */
+export type AgentMapVersion = Readonly<{
+  schemaVersion: 1;
+  projectId: StudioProjectId;
+  versionId: AgentMapVersionId;
+  version: number;
+  parentVersionId: AgentMapVersionId | null;
+  changeKind: ProjectVersionChangeKind;
+  restoredFromVersionId: AgentMapVersionId | null;
+  graph: AgentMapGraph;
+  contentDigest: GraphContentDigest;
+  authoredBy: ProjectAgentActorRef;
+  createdAt: string;
+  origin: ProjectMutationOrigin;
+  recordDigest: RecordDigest;
+}>;
+
+/** Role-neutral operation provenance used after the deployed E2 migration. */
+export type RoleNeutralMapOperationRecord = Readonly<{
+  id: ProposalOperationId;
+  requestId: string;
+  acceptedVersion: number;
+  operation: MapOperation;
+  actor: ProjectAgentActorRef;
+  acceptedAt: string;
+}>;
+
+/** Live proposal attribution is the same role-neutral project actor vocabulary. */
+export type ProposalActor = ProjectAgentActorRef;
 
 export interface ProposalOperationRecord {
   id: ProposalOperationId;
@@ -333,102 +387,107 @@ export interface AgentMapReadSnapshot {
   proposal: MapChangeProposal | null;
 }
 
-export type PlannerGreetingErrorCode =
+export type ProjectBootstrapErrorCode =
   | "session_not_ready"
   | "session_exited"
   | "injection_failed"
   | "model_turn_failed"
   | "delivery_timeout"
-  | "persistence_failed";
+  | "persistence_failed"
+  | "scope_unavailable";
 
-export type PlannerGreetingState =
+export type ProjectBootstrapState =
   | { status: "pending" }
   | { status: "generating"; attemptId: string }
   | { status: "delivered"; messageId: string }
   | {
       status: "failed";
       retryable: boolean;
-      errorCode: PlannerGreetingErrorCode;
+      errorCode: ProjectBootstrapErrorCode;
     }
-  | { status: "skipped"; reason: "user-proceeded" };
+  | {
+      status: "skipped";
+      reason: "user-proceeded" | "map-not-empty";
+    };
 
-export interface PlannerSessionMetadata {
-  identity: Extract<PlanningSessionIdentity, { role: "map-planner" }>;
-  greeting: PlannerGreetingState;
+/**
+ * Lifecycle context for the one automatic map seed owned by a newly created
+ * project. It is deliberately separate from ProjectAgentSession authority.
+ */
+export interface ProjectBootstrapMetadata {
+  projectId: StudioProjectId;
+  userId: string;
+  targetSessionId: string;
+  bootstrap: ProjectBootstrapState;
   queuedInputIds: string[];
 }
 
-export interface PlannerQueuedInput {
+export interface ProjectBootstrapQueuedInput {
   id: string;
   sessionId: string;
   text: string;
   acceptedAt: string;
 }
 
-export interface PlannerSessionRequest {
-  mode: "resume-or-create" | "fresh";
-  harness?: import("./types.js").HarnessKind;
-  theme?: import("./types.js").UiTheme;
-}
-
-export interface PlannerSessionResponse {
-  session: import("./types.js").HarnessSession;
-  resolution: "created" | "live" | "resumed" | "rehydrated";
-}
-
-export interface PlannerMessageRequest {
-  text: string;
-}
-
-/** Authoritative coordinator state returned after a planner mutation. */
-export interface PlannerSessionMetadataResponse {
-  metadata: PlannerSessionMetadata;
-}
-
 /**
- * Content-free planner lifecycle telemetry. Callers may persist these fields,
- * but must never add prompts, assistant text, local paths, or provider errors.
+ * Content-free receipt for input accepted by the durable bootstrap FIFO.
+ * `uncertain` is terminal: Studio cannot prove whether that logical turn ran,
+ * so it will never replay it automatically.
  */
-export type PlannerLifecycleEvent =
+export interface ProjectBootstrapInputReceipt {
+  requestId: string | null;
+  inputId: string;
+  status: "queued" | "submitted" | "uncertain" | "completed";
+  acceptedAt: string;
+}
+
+export type ProjectBootstrapRegistrationMode =
+  | "boot"
+  | "created"
+  | "live"
+  | "resumed";
+
+/** Content-free lifecycle telemetry for project bootstrap reliability. */
+export type ProjectBootstrapLifecycleEvent =
   | {
-      name: "planner_session.created" | "planner_session.resumed";
+      name: "project_bootstrap.scheduled" | "project_bootstrap.recovered";
       projectId: StudioProjectId;
       sessionId: string;
-      resolution: PlannerSessionResponse["resolution"];
     }
   | {
-      name: "planner_greeting.attempted" | "planner_greeting.retried";
+      name: "project_bootstrap.attempted" | "project_bootstrap.retried";
+      projectId: StudioProjectId;
+      sessionId: string;
+      attemptId: string;
+      retryOrdinal: number;
+      queueDepth: number;
+    }
+  | {
+      name: "project_bootstrap.delivered";
       projectId: StudioProjectId;
       sessionId: string;
       attemptId: string;
       queueDepth: number;
     }
   | {
-      name: "planner_greeting.delivered";
-      projectId: StudioProjectId;
-      sessionId: string;
-      attemptId: string;
-      queueDepth: number;
-    }
-  | {
-      name: "planner_greeting.failed";
+      name: "project_bootstrap.failed";
       projectId: StudioProjectId;
       sessionId: string;
       attemptId?: string;
-      errorCode: PlannerGreetingErrorCode;
+      errorCode: ProjectBootstrapErrorCode;
       retryable: boolean;
       queueDepth: number;
     }
   | {
-      name: "planner_greeting.skipped";
+      name: "project_bootstrap.preempted" | "project_bootstrap.skipped";
       projectId: StudioProjectId;
       sessionId: string;
       attemptId?: string;
-      reason: "user-proceeded";
+      reason: "user-proceeded" | "map-not-empty";
       queueDepth: number;
     }
   | {
-      name: "planner_session.input_delivery_uncertain";
+      name: "project_bootstrap.input_delivery_uncertain";
       projectId: StudioProjectId;
       sessionId: string;
       inputId: string;

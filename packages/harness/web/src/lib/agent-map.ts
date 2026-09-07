@@ -12,8 +12,10 @@ import {
   parseMapChangeProposal,
 } from "@shared/agent-map-codec";
 import type { WorkspaceScopeSummary } from "@shared/system-graph";
+import type { WorkflowInfo } from "@shared/types";
+import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
 
-import { isWithinDir, stripTrailingSep } from "./paths";
+import { samePath } from "./paths";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -330,23 +332,60 @@ export function mostSpecificStudioScope(
   projects: readonly StudioProjectSummary[],
 ): (WorkspaceScopeSummary & { projectId: string }) | null {
   const projectIds = new Set(projects.map((project) => project.projectId));
+  const candidates = scopes.filter(
+    (scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+      Boolean(scope.projectId && projectIds.has(scope.projectId)),
+  );
+  const resolved = resolveProjectRootForPath(targetPath, candidates);
+  if (!resolved) return null;
+  return candidates
+    .filter(
+      (scope) =>
+        scope.projectId === resolved.projectId &&
+        samePath(scope.cwd, resolved.cwd),
+    )
+    .sort((left, right) =>
+      left.workspaceKey.localeCompare(right.workspaceKey),
+    )[0]!;
+}
+
+/** An agent's server-issued membership can point outside its project's root. */
+export function studioScopeForAgent(
+  workflow: Pick<WorkflowInfo, "path" | "studioBindings">,
+  scopes: readonly WorkspaceScopeSummary[],
+  projects: readonly StudioProjectSummary[],
+  preferredProjectId?: string | null,
+): (WorkspaceScopeSummary & { projectId: string }) | null {
+  const bindings = workflow.studioBindings ?? [];
+  if (bindings.length === 0)
+    return preferredProjectId
+      ? null
+      : mostSpecificStudioScope(workflow.path, scopes, projects);
+  const eligible = projects.filter(
+    (project) =>
+      (!preferredProjectId || project.projectId === preferredProjectId) &&
+      bindings.some((binding) => binding.projectId === project.projectId),
+  );
+  const eligibleIds = new Set(eligible.map((project) => project.projectId));
+  const candidates = scopes.filter(
+    (scope): scope is WorkspaceScopeSummary & { projectId: string } =>
+      Boolean(scope.projectId && eligibleIds.has(scope.projectId)),
+  );
+  const containing = mostSpecificStudioScope(
+    workflow.path,
+    candidates,
+    eligible,
+  );
+  if (containing) return containing;
+  // No path evidence: an explicit single project is enough, but ambiguous
+  // membership must not silently select a different conversation.
+  if (new Set(candidates.map((scope) => scope.projectId)).size !== 1)
+    return null;
   return (
-    scopes
-      .filter((scope): scope is WorkspaceScopeSummary & { projectId: string } =>
-        Boolean(
-          scope.projectId &&
-          projectIds.has(scope.projectId) &&
-          isWithinDir(scope.cwd, targetPath),
-        ),
-      )
-      .map((scope) => ({
-        scope,
-        depth: stripTrailingSep(scope.cwd).length,
-      }))
-      .sort(
-        (left, right) =>
-          right.depth - left.depth ||
-          left.scope.projectId.localeCompare(right.scope.projectId),
-      )[0]?.scope ?? null
+    candidates.sort(
+      (a, b) =>
+        a.cwd.localeCompare(b.cwd) ||
+        a.workspaceKey.localeCompare(b.workspaceKey),
+    )[0] ?? null
   );
 }
