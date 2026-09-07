@@ -87,6 +87,25 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
+  // SKIPPED, deliberately, for the same reason as the SAP-3180 block below: #816 moved this
+  // fallback to a body whose server-side release (sapiom/Sapiom#4886) has not merged. Sapiom
+  // `main` serves 2.10 (digest 47a4e3a3…). Un-skip when #4886 lands and this copy is re-synced.
+  it.skip("teaches App Link management from this server, version-gated (SAP-3178)", () => {
+    // 2.8 taught publishing and nothing else about a link, so an offline session
+    // could not learn that webhooks are off by default, how to turn them on, or
+    // that `/hook/*` is the receiver. The three management tools ship in 0.15;
+    // the gate is the same one `_publish` carries, for the same reason.
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_list");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_settings");
+    expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_delete");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
+    expect(AUTHORING_INSTRUCTIONS).toContain("Webhooks are OFF by default");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("settings need `org.write`");
+  });
+
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
     // The primer is the only always-in-context surface, so authors learn the entry
     // contract here. Kept byte-identical to the backend DEFAULT_MCP_INSTRUCTIONS copy.
@@ -101,11 +120,9 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("You never pick a model");
-    // The internal `workflows`-service naming stays out of this primer, with one deliberate
-    // exception: the four receipts/replay routes 2.9 points at, because no tool or docs page
-    // covers them yet. They are allow-listed by exact literal so the blanket ban still holds
-    // for everything else under the prefix — the per-step debugging endpoint included, which
-    // lives in the docs guide rather than here.
+    // The internal `workflows`-service naming must never reach this customer-facing
+    // primer — the per-step debugging endpoint lives in the docs guide, not spelled
+    // out here verbatim (matches this package's own scaffold terminology guard).
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
     const ALLOWED_WORKFLOWS_ROUTES = [
       "GET /v1/workflows/receipts?outcome=unmatched",

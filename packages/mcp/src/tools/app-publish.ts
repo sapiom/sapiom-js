@@ -16,7 +16,8 @@
  *   PUT  /v1/app-links/{id}/bundle
  *   POST /v1/app-links/{id}/publish
  *
- * Auth is the cached `sapiom_authenticate` credential as `x-api-key`.
+ * Auth is the cached `sapiom_authenticate` credential as `x-api-key`, over the
+ * App Links transport shared with the management tools (app-links-api.ts).
  *
  * The first call CREATES the link, so a failure in either of the last two
  * leaves a real link with no active bundle. Error copy is step-aware for
@@ -49,11 +50,17 @@ import { z } from "zod";
 
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
 import { registerTool } from "../register-tool.js";
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
+import {
+  appLinksFetch,
+  asAppLink,
+  codeFrom,
+  fail,
+  messageFrom,
+  NOT_AUTHED,
+  ok,
+  type AppLinkWire,
+  type ErrorBody,
+} from "./app-links-api.js";
 
 /** Same shape as the backend's `APP_LINK_SLUG_PATTERN` (app-links.types.ts). */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -83,16 +90,6 @@ interface AppLinkManifest {
   envKeys: string[];
   fileCount: number;
   bytes: number;
-}
-
-interface AppLinkWire {
-  id: string;
-  slug: string;
-  name: string;
-  visibility: string;
-  url: string;
-  /** Null until a bundle is activated; set on the publish response. */
-  bundleSha256?: string | null;
 }
 
 interface UploadBundleWire {
@@ -310,16 +307,6 @@ function summarize(
   );
 }
 
-/** A wire body that is usable as an app link, or `null`. */
-function asAppLink(data: unknown): AppLinkWire | null {
-  const link = data as AppLinkWire | undefined;
-  const usable =
-    typeof link?.id === "string" &&
-    link.id !== "" &&
-    typeof link.url === "string";
-  return usable ? (link as AppLinkWire) : null;
-}
-
 /**
  * The step-1 body, which MUST be a link: its `id` addresses the next two calls,
  * so a 201 that is not JSON (`safeParse` hands back the raw string) or has no
@@ -481,12 +468,8 @@ function aftermath(step: PublishStep, slug: string): string {
 }
 
 /**
- * One JSON call against the backend's App Links REST API, with the wire error
- * codes turned into errors the agent can act on.
- *
- * A bare `GatewayClient` would not do: its mapping keeps only `HTTP_<status>`
- * and drops the body's `code`, and `BUNDLE_BINARY_FILE` / `BUNDLE_TOO_LARGE`
- * carry the detail (`path`, `bytes`) that makes the failure fixable.
+ * One publish-step call over the shared App Links transport (app-links-api.ts),
+ * with the wire error codes turned into step-aware errors the agent can act on.
  */
 async function appLinksRequest(
   apiURL: string,
@@ -497,38 +480,17 @@ async function appLinksRequest(
   route: string,
   body: unknown,
 ): Promise<unknown> {
-  // Concatenated, not `new URL(route, base)`: a custom `apiURL` carrying a base
-  // path (a local proxy, a tunnel) would have it silently dropped by the latter.
-  const url = `${apiURL.replace(/\/+$/, "")}${route}`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: { "x-api-key": apiKey, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (cause) {
+  const res = await appLinksFetch(apiURL, apiKey, method, route, body);
+  if (res.kind === "network") {
     throw new PreviewOperationError({
       code: "NETWORK",
-      message: `Could not reach ${url}. ${aftermath(step, slug)}`,
+      message: `Could not reach ${res.url}. ${aftermath(step, slug)}`,
       step: STEP_ROUTE[step],
-      hint: cause instanceof Error ? cause.message : String(cause),
+      hint: res.cause instanceof Error ? res.cause.message : String(res.cause),
     });
   }
-
-  const text = await res.text();
-  const data = text ? safeParse(text) : undefined;
-  if (!res.ok) throw publishError(res.status, data, step, slug);
-  return data;
-}
-
-interface ErrorBody {
-  code?: unknown;
-  message?: unknown;
-  /** `BUNDLE_BINARY_FILE`: the offending FILE path, not the request URL. */
-  path?: unknown;
-  bytes?: unknown;
-  maxBytes?: unknown;
+  if (!res.ok) throw publishError(res.status, res.data, step, slug);
+  return res.data;
 }
 
 /**
@@ -543,7 +505,7 @@ function publishError(
   slug: string,
 ): PreviewOperationError {
   const bodyError = (data ?? {}) as ErrorBody;
-  const code = typeof bodyError.code === "string" ? bodyError.code : undefined;
+  const code = codeFrom(data);
   const message = messageFrom(bodyError);
   const where = STEP_ROUTE[step];
   const left = aftermath(step, slug);
@@ -629,57 +591,3 @@ function publishError(
     step: where,
   });
 }
-
-function safeParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-function messageFrom(body: ErrorBody): string | undefined {
-  const m = body.message;
-  if (Array.isArray(m)) return m.join("; ");
-  if (typeof m === "string") return m;
-  return undefined;
-}
-
-// ─── Result envelope ─────────────────────────────────────────────────────────
-
-function ok(data: unknown): ToolResult {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-  };
-}
-
-/**
- * The structured `{"error": {code, message, hint?}}` envelope. The JSON matters
- * beyond readability: `registerTool` parses `error.code` out of it to classify
- * the `tool.call` analytics event.
- */
-function fail(err: unknown): ToolResult {
-  const structured =
-    err instanceof PreviewOperationError
-      ? err.toStructured()
-      : {
-          code: "UNEXPECTED",
-          message: err instanceof Error ? err.message : String(err),
-        };
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ error: structured }, null, 2),
-      },
-    ],
-    isError: true,
-  };
-}
-
-const NOT_AUTHED = fail(
-  new PreviewOperationError({
-    code: "NOT_AUTHENTICATED",
-    message: "Not authenticated. Run sapiom_authenticate first.",
-  }),
-);
