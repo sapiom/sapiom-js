@@ -180,12 +180,13 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.9 (App Link management tools + webhook receiver, SAP-3178).
+    // Current release: 2.11 (App Link management tools + webhook receiver, SAP-3178, on
+    // top of 2.10 trigger kinds, SAP-3174).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "31da1821424850487a975153d3b9da38c2bdc5e3d0a9d7f2c76e055600a9679e",
+      "3346267ab58f593170758c11b4fd4654da06ef01a28cba478ddd4d6ffeda0d80",
     );
   });
 });
