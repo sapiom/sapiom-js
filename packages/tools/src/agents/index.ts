@@ -52,24 +52,47 @@ export type ExecutionStatus =
 const TERMINAL = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
 
 /**
+ * How many CONSECUTIVE failed status reads `wait()` rides out before giving up
+ * with `status: "unknown"`. Enough to survive a blip or a single bad node; far
+ * short of spending a full `timeoutMs` (60 min / 3 s ≈ 1200 requests) on a
+ * platform that is simply down.
+ */
+const MAX_CONSECUTIVE_POLL_FAULTS = 5;
+
+/**
  * Every status an {@link AgentRunResult} can carry: a run's own lifecycle, plus
- * the two outcomes where no child lifecycle exists to report.
+ * the three outcomes where no child lifecycle could be reported.
  *
- *   - `"rejected"`  — the DISPATCH was refused, so no run was ever created
+ *   - `"rejected"`  — the DISPATCH was refused, so NO RUN WAS EVER CREATED
  *                     (unknown slug, input the engine's pre-gate refuses, a
  *                     transport fault, a credential the platform declined).
+ *                     `executionId` is `null`. This is the only status on which
+ *                     re-dispatching is safe: nothing is running.
  *   - `"timed_out"` — the run was created and is likely still going; `wait()`
- *                     stopped polling at its `timeoutMs`. `executionId` is set,
- *                     so you can keep checking it later.
+ *                     stopped polling at its `timeoutMs`. `executionId` is set.
+ *   - `"unknown"`   — the run was created, but its status could not be read:
+ *                     the read was refused (execution gone, credential
+ *                     declined) or kept faulting. `executionId` is set and the
+ *                     child MAY STILL BE RUNNING — check on it rather than
+ *                     dispatching a second copy.
  *
- * Both are NON-completed statuses, which is all an author has to know:
- * `if (result.status !== "completed")` covers them alongside `failed`.
+ * All three are NON-completed statuses, which is all an author needs for the
+ * common branch: `if (result.status !== "completed")` covers them alongside
+ * `failed`. Only re-dispatch logic has to tell `"rejected"` from the other two.
  */
-export type AgentRunStatus = ExecutionStatus | "rejected" | "timed_out";
+export type AgentRunStatus =
+  | ExecutionStatus
+  | "rejected"
+  | "timed_out"
+  | "unknown";
 
-/** Why an {@link AgentRunResult} carries `status: "rejected"` or `"timed_out"`. */
+/**
+ * Why an {@link AgentRunResult} carries `status: "rejected"`, `"unknown"` or
+ * `"timed_out"`. The first four describe the HTTP call that failed — the
+ * dispatch on `"rejected"`, the status read on `"unknown"`.
+ */
 export type AgentRunErrorCode =
-  /** 404 — no deployed orchestration answers to that slug. */
+  /** 404 — no deployed orchestration answers to that slug (or the run is gone). */
   | "not_found"
   /** 400/422 — the engine's input pre-gate refused `input`. */
   | "invalid_input"
@@ -77,14 +100,18 @@ export type AgentRunErrorCode =
   | "http"
   /** The request never got an answer: DNS, socket, abort, missing credential. */
   | "transport"
-  /** `wait()` hit its `timeoutMs` before the run reached a terminal state. */
+  /**
+   * `wait()` hit its `timeoutMs` while the run was still going. Paired only
+   * with `status: "timed_out"` — a poll that kept faulting resolves
+   * `status: "unknown"` and keeps the underlying `http`/`transport` code.
+   */
   | "timeout";
 
 /**
- * A dispatch rejection (or a `wait()` timeout) as data. `details` is the parsed
- * platform response body when there was one — it carries the platform's own
- * stable `code` (e.g. `"step_input_invalid"`) and validation issues — and `null`
- * for a transport fault or a timeout.
+ * A dispatch rejection, an unreadable status, or a `wait()` timeout as data.
+ * `details` is the parsed platform response body when there was one — it
+ * carries the platform's own stable `code` (e.g. `"step_input_invalid"`) and
+ * validation issues — and `null` for a transport fault or a timeout.
  */
 export interface AgentRunError {
   code: AgentRunErrorCode;
@@ -119,14 +146,19 @@ export interface AgentRunSpec {
  * always data to branch on and never a thrown exception.
  */
 export interface AgentRunResult {
-  /** The child run's id, or `null` when the dispatch was rejected (no run exists). */
+  /**
+   * The child run's id. `null` only when no run exists to name: a rejected
+   * dispatch (`status: "rejected"`). Set on every other status, `"unknown"` and
+   * `"timed_out"` included — the run is out there and can be checked on.
+   */
   executionId: string | null;
   status: AgentRunStatus;
   /** The run's output on `"completed"`; `null` otherwise. */
   output: unknown;
   /**
    * The child's own error on `"failed"` (whatever shape it reported), or an
-   * {@link AgentRunError} on `"rejected"` / `"timed_out"`. `null` on success.
+   * {@link AgentRunError} on `"rejected"` / `"unknown"` / `"timed_out"`.
+   * `null` on success.
    */
   error: unknown;
 }
@@ -211,7 +243,11 @@ export const agentResultSchema = {
  * carries no `dispatch` and cannot be paused on (see `dispatch`/`rejection`).
  */
 export interface RunHandle {
-  /** The child run's id, or `null` when the dispatch was rejected. */
+  /**
+   * The child run's id. `null` when there is no run to name: a rejected
+   * dispatch, or a delayed dispatch (`spec.at`) whose child doesn't exist until
+   * the scheduled time.
+   */
   executionId: string | null;
   /**
    * @internal Framework plumbing consumed by `pauseUntilSignal`.
@@ -239,8 +275,9 @@ export interface RunHandle {
   status(): Promise<AgentRunStatus>;
   /**
    * Poll to a terminal state and resolve the run result. Never throws: a
-   * rejected dispatch, a status read the platform refuses, and hitting
-   * `timeoutMs` all resolve a non-completed {@link AgentRunResult}.
+   * rejected dispatch (`"rejected"`), a status read that fails or keeps
+   * faulting (`"unknown"`), and hitting `timeoutMs` (`"timed_out"`) all resolve
+   * a non-completed {@link AgentRunResult}.
    */
   wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<AgentRunResult>;
 }
@@ -362,7 +399,7 @@ async function launchScheduled(
     );
   };
   return {
-    executionId: "", // no child execution exists until the schedule fires
+    executionId: null, // no child execution exists until the schedule fires
     dispatch: {
       correlationId: `trigger-${res.id}`,
       resultSignal: AGENTS_RESULT_SIGNAL,
@@ -422,13 +459,13 @@ export async function launch(
     async wait({ timeoutMs = 60 * 60_000, pollMs = 3_000 } = {}) {
       const deadline = Date.now() + timeoutMs;
       let lastStatus = "unknown";
-      let lastPollError: AgentRunError | null = null;
+      let consecutiveFaults = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
         try {
           const d = await fetchDoc();
+          consecutiveFaults = 0;
           lastStatus = d.status;
-          lastPollError = null;
           if (TERMINAL.has(d.status)) {
             return {
               executionId,
@@ -439,19 +476,26 @@ export async function launch(
           }
         } catch (error) {
           const pollError = asRunError(error);
-          // A 4xx on the status read won't cure itself (execution gone, key
-          // refused) — resolve it now instead of polling to the deadline.
-          // 5xx / transport faults are transient: keep polling, and only
-          // surface the last one if we run out of time.
-          if (pollError.status !== null && pollError.status < 500) {
+          consecutiveFaults += 1;
+          // The run EXISTS — only reading its status failed — so this is never
+          // `"rejected"`: an author who read that as "nothing was dispatched"
+          // would start a second copy of a live child.
+          //
+          // A 4xx won't cure itself (execution gone, credential declined), so
+          // give up at once. A 5xx or transport fault may be a blip, so ride a
+          // few out — but bounded, because a real outage would otherwise burn
+          // the whole `timeoutMs` on doomed requests.
+          const hopeless =
+            (pollError.status !== null && pollError.status < 500) ||
+            consecutiveFaults >= MAX_CONSECUTIVE_POLL_FAULTS;
+          if (hopeless) {
             return {
               executionId,
-              status: "rejected",
+              status: "unknown",
               output: null,
               error: pollError,
             };
           }
-          lastPollError = pollError;
         }
         if (Date.now() > deadline) {
           // Not a throw: the run is still out there, and `executionId` lets the
@@ -461,7 +505,7 @@ export async function launch(
             executionId,
             status: "timed_out",
             output: null,
-            error: lastPollError ?? {
+            error: {
               code: "timeout",
               message: `orchestration ${executionId} timed out after ${timeoutMs}ms (last status: ${lastStatus})`,
               status: null,

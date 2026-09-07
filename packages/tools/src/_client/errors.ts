@@ -6,6 +6,12 @@
  * platform refused this input" — instead of scraping a message string. The
  * message text is byte-identical to the plain `Error` this replaced, so
  * anything matching on it keeps working.
+ *
+ * @internal Not part of the package's public surface: it is deliberately absent
+ * from the root barrel, and `@sapiom/tools` publishes no `./_client` subpath.
+ * A capability translates it into ITS own author-facing error before the value
+ * reaches a caller (see `agents`' `AgentRunError`). Consumers who want a typed
+ * HTTP failure use the per-capability classes (`SearchHttpError`, …).
  */
 export class TransportHttpError extends Error {
   /** HTTP status the platform answered with. */

@@ -258,6 +258,29 @@ describe("orchestrations dispatch rejection — resolves, never throws", () => {
     expect(handle.dispatch).toBeUndefined();
     expect(handle.rejection).toMatchObject({ code: "not_found" });
   });
+
+  it("a SUCCESSFUL delayed dispatch is pausable and names no run yet", async () => {
+    const fetch = (async () => ({
+      ok: true,
+      status: 201,
+      json: async () => ({ id: "trig-1" }),
+      text: async () => "",
+    })) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch });
+
+    const handle = await sapiom.agents.launch({
+      definition: "enrich-lead",
+      at: "2099-01-01T00:00:00.000Z",
+    });
+
+    expect(handle.rejection).toBeUndefined();
+    expect(handle.dispatch).toEqual({
+      correlationId: "trigger-trig-1",
+      resultSignal: AGENTS_RESULT_SIGNAL,
+    });
+    // `null`, not `""` — there is genuinely no execution until the schedule fires.
+    expect(handle.executionId).toBeNull();
+  });
 });
 
 describe("orchestrations wait() — non-terminal outcomes are data too", () => {
@@ -307,7 +330,7 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
     });
   });
 
-  it("resolves a 4xx on the status read as 'rejected' rather than polling to the deadline", async () => {
+  it("resolves a 4xx on the status read as 'unknown' — the run may still be live", async () => {
     const sapiom = createClient({
       apiKey: "k",
       fetch: launchThenStatus(async () => ({
@@ -321,14 +344,70 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
 
     const result = await handle.wait({ timeoutMs: 60_000, pollMs: 1 });
 
+    // NOT "rejected": a rejection means nothing was dispatched and is safe to
+    // re-dispatch. Here the child exists and may still be running, so the
+    // executionId is kept and the status says only "we could not read it".
     expect(result).toMatchObject({
       executionId: "exec-9",
-      status: "rejected",
+      status: "unknown",
       error: { code: "not_found", status: 404 },
     });
   });
 
-  it("keeps polling through a transient 5xx and resolves the terminal status", async () => {
+  it("gives up with 'unknown' after a bounded run of consecutive 5xx polls", async () => {
+    let reads = 0;
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: launchThenStatus(async () => {
+        reads += 1;
+        return {
+          ok: false,
+          status: 503,
+          text: async () => "upstream unavailable",
+        };
+      }),
+    });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    // A one-hour budget would otherwise mean ~1200 doomed requests.
+    const result = await handle.wait({ timeoutMs: 60 * 60_000, pollMs: 1 });
+
+    expect(result).toMatchObject({
+      executionId: "exec-9",
+      status: "unknown",
+      error: { code: "http", status: 503 },
+    });
+    expect(reads).toBe(5);
+  });
+
+  it("a 'timed_out' result always carries code 'timeout', even after earlier poll faults", async () => {
+    let reads = 0;
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: launchThenStatus(async () => {
+        reads += 1;
+        // One fault, then slow "running" reads that outlast the budget.
+        if (reads === 1) {
+          return { ok: false, status: 503, text: async () => "blip" };
+        }
+        await new Promise((r) => setTimeout(r, 5));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: "running" }),
+          text: async () => "",
+        };
+      }),
+    });
+    const handle = await sapiom.agents.launch({ definition: "slow-child" });
+
+    const result = await handle.wait({ timeoutMs: 1, pollMs: 1 });
+
+    expect(result.status).toBe("timed_out");
+    expect(result.error).toMatchObject({ code: "timeout", status: null });
+  });
+
+  it("rides out a transient 5xx and resolves the terminal status", async () => {
     let reads = 0;
     const sapiom = createClient({
       apiKey: "k",

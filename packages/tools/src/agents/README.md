@@ -49,17 +49,20 @@ const useResult = defineStep({
 
 - **`run` blocks; `launch` returns a pausable handle.** `run` polls until the run reaches a terminal state and returns its result — use it for standalone, inline calls. `launch` returns immediately with a handle you hand to `pauseUntilSignal(handle, { resumeStep })` to suspend the step until the run finishes. Don't use `run` to pause a step — it returns a result, not a handle.
 
-- **Failure is data, not an exception — including a rejected dispatch.** Branch on `status`; `if (result.status !== "completed")` is the only check you need. `run` resolves on every outcome and never throws:
+- **Failure is data, not an exception — including a rejected dispatch.** Branch on `status`; `if (result.status !== "completed")` is the only check you need for the common case. `run` resolves on every outcome and never throws:
 
-  | `status`      | What happened                                                                                                                                                                                    |
-  | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `"completed"` | The run finished; read `output`.                                                                                                                                                                 |
-  | `"failed"`    | The run itself failed; `error` is what the child reported.                                                                                                                                       |
-  | `"cancelled"` | The run was cancelled.                                                                                                                                                                           |
-  | `"rejected"`  | The **dispatch** was refused, so no run was ever created — unknown slug, `input` the engine's pre-gate refused, or a transport fault. `executionId` is `null` and `error` is an `AgentRunError`. |
-  | `"timed_out"` | `wait` hit its `timeoutMs` while the run was still going. `executionId` is set, so you can check on it later.                                                                                    |
+  | `status`      | What happened                                                                                                                             | `executionId` |
+  | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+  | `"completed"` | The run finished; read `output`.                                                                                                          | set           |
+  | `"failed"`    | The run itself failed; `error` is what the child reported.                                                                                | set           |
+  | `"cancelled"` | The run was cancelled.                                                                                                                    | set           |
+  | `"rejected"`  | The **dispatch** was refused, so **no run was ever created** — unknown slug, `input` the engine's pre-gate refused, or a transport fault. | `null`        |
+  | `"unknown"`   | The run WAS created but its status couldn't be read — the read was refused, or kept faulting. **The child may still be running.**         | set           |
+  | `"timed_out"` | `wait` hit its `timeoutMs` while the run was still going.                                                                                 | set           |
 
-  On `"rejected"`/`"timed_out"`, `error` is an `AgentRunError`: `{ code, message, status, details }`. `code` is the coarse bucket (`"not_found"` for an unknown slug, `"invalid_input"` for refused input, `"http"`, `"transport"`, `"timeout"`), and `details` keeps the platform's own response body — its stable code and any validation issues. Validate an incoming resume payload with `agents.agentResultSchema.parse(value)` if you want a runtime check.
+  On `"rejected"`, `"unknown"` and `"timed_out"`, `error` is an `AgentRunError`: `{ code, message, status, details }`. `code` is the coarse bucket (`"not_found"` for an unknown slug or a missing run, `"invalid_input"` for refused input, `"http"`, `"transport"`, and `"timeout"` — which pairs only with `"timed_out"`), and `details` keeps the platform's own response body, so its stable code and any validation issues survive. Validate an incoming resume payload with `agents.agentResultSchema.parse(value)` if you want a runtime check.
+
+- **Only `"rejected"` is safe to re-dispatch.** It is the one status that guarantees nothing is running. `"unknown"` and `"timed_out"` both carry a real `executionId` for a child that may still be working — re-running the slug there gives you two copies. If you retry on those, pass an `idempotencyKey`.
 
 - **A rejected `launch` isn't pausable.** `launch` doesn't throw either, but a dispatch that was refused produced no child, so nothing can ever fire the resume signal. That handle carries no `dispatch` and exposes the rejection as `handle.rejection` instead — check it before pausing, as the example above does. Pausing on it anyway throws from `pauseUntilSignal` rather than parking the step on a signal that never arrives.
 
