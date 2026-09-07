@@ -15,6 +15,7 @@ import type { MacroDef, WorkflowInfo } from "@shared/types";
 import { macroDisabledReason } from "./macro-gating";
 import {
   isWorkflowRunnable,
+  prodRunBlockedToast,
   prodRunDisabledReason,
   workflowDeploymentState,
 } from "./workflow-deployment";
@@ -211,13 +212,7 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
       const state = workflow
         ? workflowDeploymentState(workflow, lastDeployError)
         : "draft";
-      return state === "failed"
-        ? "Last deploy failed — retry Deploy."
-        : state === "building"
-          ? "The cloud build is still in progress."
-          : state === "linked"
-            ? "No ready deployment yet — deploy it first."
-            : "This agent isn't deployed yet — deploy it first.";
+      return prodRunBlockedToast(state);
     }
     if (kind === "run-local") {
       return workflow ? null : "Select an agent first.";
@@ -270,6 +265,18 @@ describe("Fix 1 — blocked direct actions produce a specific toast reason", () 
     const wf = makeWorkflow({ definitionId: 42 });
     expect(directActionToastReason("prod-run", wf, null)).toBe(
       "No ready deployment yet — deploy it first.",
+    );
+  });
+
+  it("prod-run on a definition this account cannot see toasts 'not available', even with a remembered ready build", () => {
+    const wf = makeWorkflow({
+      definitionId: 42,
+      activeBuildRunId: "build-1",
+      activeBuildRunStatus: "ready",
+      definitionAccess: "unavailable",
+    });
+    expect(directActionToastReason("prod-run", wf, null)).toBe(
+      "This agent isn't available on the signed-in account.",
     );
   });
 

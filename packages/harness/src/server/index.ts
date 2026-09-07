@@ -759,11 +759,8 @@ export const startServer = async (
    *  place the create route may write (see `listProjectDirs` below). */
   const defaultProjectRoot = options.projectRoot ?? launchDir;
 
-  // Serve-time slug enrichment: resolves each workflow's definitionSlug from
-  // the Sapiom Agents API when it's absent (deployed sapiom.json files carry
-  // only { "definitionId": "188" }, not the slug). Constructed once per server
-  // boot; caches successful id→slug resolutions in-memory (ids are stable).
-  // Never throws — a failed resolution leaves definitionSlug as-is.
+  // Serve-time definition enrichment (slug + build status) for linked
+  // workflows. One resolver per boot; never throws.
   const slugResolver = createDefinitionSlugResolver({
     apiKey: () => apiKeyProvider.getKey(),
     baseUrl: resolveAgentsBaseUrl(),
@@ -781,40 +778,73 @@ export const startServer = async (
       unavailable: workflow.definitionId != null,
     },
   });
-  // Auth guards cover individual lookups AND the complete async projection.
-  // Neither raw build fields nor retained display bits are written to disk.
+  /** A definition the account's list does not contain: never requested,
+   *  confirmed not deployed for this account. */
+  const notVisible = (
+    workflow: RegistryWorkflowInfo,
+  ): RegistryWorkflowInfo => ({
+    ...clearDeployment(workflow),
+    definitionAccess: "unavailable",
+    deploymentLookup: { lastConfirmedDeployed: false, unavailable: false },
+  });
+  /** Fill slug + build status for linked workflows from ONE tenant-scoped
+   *  list per pass (SAP-3214). Ids absent from the list are never requested
+   *  (the engine 404s them permanently) and are marked `definitionAccess:
+   *  "unavailable"`. Detail lookup only for a visible definition with no
+   *  ready build: only the detail shows a first deploy's in-flight build (a
+   *  rebuild of a ready definition reports `ready` in both). Signed out or
+   *  list unavailable: build fields cleared, retained display bit kept, no
+   *  per-id fallback. Auth guards cover the list, each lookup AND the complete
+   *  async projection. Neither raw build fields nor retained display bits are
+   *  written to disk. */
   const enrichWorkflows = async (
     workflows: RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
     const scope = deploymentGeneration;
-    const enriched = await Promise.all(
-      workflows.map(async (workflow) => {
-        const cleared = clearDeployment(workflow);
-        if (workflow.definitionId == null) return cleared;
-        const result = await slugResolver.resolveMetadata(
-          String(workflow.definitionId),
-        );
-        if (scope !== deploymentGeneration) return cleared;
-        if (result.status === "available")
-          return {
-            ...workflow,
-            definitionSlug: result.metadata.slug ?? workflow.definitionSlug,
-            activeBuildRunId: result.metadata.activeBuildRunId,
-            activeBuildRunStatus: result.metadata.activeBuildRunStatus,
-            deploymentLookup: {
-              lastConfirmedDeployed:
-                result.metadata.activeBuildRunStatus === "ready",
-              unavailable: false,
-            },
-          };
+    const cleared = (): RegistryWorkflowInfo[] =>
+      workflows.map(clearDeployment);
+    if (!workflows.some((workflow) => workflow.definitionId != null))
+      return cleared();
+    const list = await slugResolver.listVisible();
+    if (scope !== deploymentGeneration) return cleared();
+    if (list.status === "unavailable")
+      return workflows.map((workflow) => {
+        const row = clearDeployment(workflow);
+        if (workflow.definitionId == null) return row;
         return {
-          ...cleared,
+          ...row,
           deploymentLookup: {
             lastConfirmedDeployed:
-              result.status === "not-found"
-                ? false
-                : result.lastConfirmedDeployed,
-            unavailable: result.status === "unavailable",
+              list.lastConfirmedDeployed.get(String(workflow.definitionId)) ??
+              null,
+            unavailable: true,
+          },
+        };
+      });
+    const enriched = await Promise.all(
+      workflows.map(async (workflow) => {
+        if (workflow.definitionId == null) return clearDeployment(workflow);
+        const definitionId = String(workflow.definitionId);
+        const listed = list.visible.get(definitionId);
+        if (listed === undefined) return notVisible(workflow);
+        let metadata = listed;
+        if (listed.activeBuildRunStatus === null) {
+          const detail = await slugResolver.resolveMetadata(definitionId);
+          if (scope !== deploymentGeneration) return clearDeployment(workflow);
+          if (detail.status === "not-found") return notVisible(workflow);
+          // An unavailable detail changes nothing: the list already proved
+          // visibility and the absence of a ready build.
+          if (detail.status === "available") metadata = detail.metadata;
+        }
+        return {
+          ...workflow,
+          definitionAccess: "visible" as const,
+          definitionSlug: metadata.slug ?? workflow.definitionSlug,
+          activeBuildRunId: metadata.activeBuildRunId,
+          activeBuildRunStatus: metadata.activeBuildRunStatus,
+          deploymentLookup: {
+            lastConfirmedDeployed: metadata.activeBuildRunStatus === "ready",
+            unavailable: false,
           },
         };
       }),
@@ -2897,8 +2927,8 @@ export const startServer = async (
   /** Enrich only the bound workflow before a Canvas render. Canvas extraction
    *  needs the registry snapshot to resolve the binding, but its cloud badge
    *  needs the same mutable build projection exposed by /api/state. Limiting
-   *  the lookup to the bound workflow avoids one remote request per linked
-   *  agent on every source-triggered auto-render. */
+   *  the pass to the bound workflow avoids extra detail lookups on every
+   *  source-triggered auto-render. */
   const canvasWorkflowsForSession = async (
     session: Pick<HarnessSession, "boundWorkflowPath">,
   ): Promise<WorkflowInfo[]> => {

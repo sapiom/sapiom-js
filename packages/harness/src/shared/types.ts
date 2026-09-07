@@ -1704,6 +1704,12 @@ export interface WorkflowInfo {
     unavailable: boolean;
   };
   /**
+   * Visibility of the linked definition for the signed-in account, from the
+   * tenant-scoped list at serve time. "unavailable" = another account or
+   * deleted. Absent = unknown. Never persisted to workflows.json.
+   */
+  definitionAccess?: "visible" | "unavailable";
+  /**
    * Provenance from sapiom.json: the gallery template this project was cloned
    * from. Distinct from `source` below, which records how the REGISTRY learned
    * of the path. Optional for compatibility with older harness servers; null
