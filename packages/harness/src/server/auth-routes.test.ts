@@ -97,11 +97,11 @@ function startApp(
     createMutableAuthState({ authenticated: false, organizationName: null });
   const apiKeyProvider = opts.apiKeyProvider ?? makeProvider();
   const app = express();
+  app.use(express.json());
   app.use((req, _res, next) => {
     opts.onRequest?.(req.method, req.path);
     next();
   });
-  app.use(express.json());
   app.use(
     "/api",
     createAuthRouter({
@@ -748,7 +748,14 @@ describe("POST /api/auth/disconnect", () => {
   it("orders disconnect after an in-progress credential write", async () => {
     const write = deferred<void>();
     const disconnectObserved = deferred<void>();
-    vi.mocked(writeCredentials).mockImplementationOnce(() => write.promise);
+    let writeDone = false;
+    vi.mocked(writeCredentials).mockImplementationOnce(async () => {
+      await write.promise;
+      writeDone = true;
+    });
+    vi.mocked(clearCredentials).mockImplementationOnce(async () => {
+      expect(writeDone).toBe(true);
+    });
     const provider = makeProvider("key-old");
     const result = startApp({
       bus,
@@ -774,15 +781,11 @@ describe("POST /api/auth/disconnect", () => {
       method: "POST",
     });
     await disconnectObserved.promise;
-    expect(clearCredentials).not.toHaveBeenCalled();
 
     write.resolve();
     expect((await disconnect).status).toBe(200);
 
     expect(clearCredentials).toHaveBeenCalledOnce();
-    expect(
-      vi.mocked(writeCredentials).mock.invocationCallOrder[0],
-    ).toBeLessThan(vi.mocked(clearCredentials).mock.invocationCallOrder[0]!);
     expect(provider.calls.refresh).toBe(0);
     expect(result.authState.get().authenticated).toBe(false);
     expect(
@@ -795,8 +798,16 @@ describe("POST /api/auth/disconnect", () => {
   it("orders disconnect after an in-progress provider refresh", async () => {
     const refresh = deferred<string | null>();
     const disconnectObserved = deferred<void>();
+    let refreshDone = false;
     const provider = makeProvider();
-    provider.refresh = vi.fn(() => refresh.promise);
+    provider.refresh = vi.fn(async () => {
+      const key = await refresh.promise;
+      refreshDone = true;
+      return key;
+    });
+    vi.mocked(clearCredentials).mockImplementationOnce(async () => {
+      expect(refreshDone).toBe(true);
+    });
     const result = startApp({
       bus,
       apiKeyProvider: provider,
@@ -821,15 +832,11 @@ describe("POST /api/auth/disconnect", () => {
       method: "POST",
     });
     await disconnectObserved.promise;
-    expect(clearCredentials).not.toHaveBeenCalled();
 
     refresh.resolve("key-old");
     expect((await disconnect).status).toBe(200);
 
     expect(clearCredentials).toHaveBeenCalledOnce();
-    expect(
-      vi.mocked(provider.refresh).mock.invocationCallOrder[0],
-    ).toBeLessThan(vi.mocked(clearCredentials).mock.invocationCallOrder[0]!);
     expect(result.authState.get().authenticated).toBe(false);
     expect(
       busEvents.filter(
