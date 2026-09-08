@@ -196,9 +196,10 @@ Things to know:
   });
   ```
 
-  `run_local` does not enforce any of this: the in-memory host records the deadline
-  but never sweeps for it, so a local run parks on a pause whatever `timeoutMs` says.
-  The expiry path only fires against the hosted engine.
+  `run_local` neither applies nor enforces any of this: it auto-resumes every pause
+  immediately, with the registered capability result or an empty payload. A local run
+  never sits at a gate and never times out, so the deadline is only observable against
+  the hosted engine.
 
 ### Compatible capabilities
 
