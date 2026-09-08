@@ -243,6 +243,23 @@ describe("Agent Studio MCP authentication wiring", () => {
     expect(injectedKey(captures[0])).toBe("browser-key");
   });
 
+  it("marks a live signed-out Claude session restart-required after login", async () => {
+    await boot();
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    expect(session.mcpAuthState).toBe("current");
+
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)).toMatchObject({
+        status: "running",
+        mcpAuthState: "restart-required",
+      }),
+    );
+  });
+
   it("adopts a credential written externally after boot", async () => {
     await boot();
     authFixture.credential = credential("external-key");

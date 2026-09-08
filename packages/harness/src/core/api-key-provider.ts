@@ -42,6 +42,8 @@ export interface ApiKeyProvider {
   getKey(): string | null;
   /** Atomically read the key and the generation that owns it. */
   snapshot(): ApiKeySnapshot;
+  /** Observe effective key changes. The key-bearing snapshot stays in-process. */
+  subscribe(listener: ApiKeyChangeListener): () => void;
   /**
    * Re-read the shared credential store. A successful read is authoritative;
    * a failed read preserves and returns the last-known key. Never throws.
@@ -59,6 +61,8 @@ export interface ApiKeySnapshot {
   apiKey: string | null;
   generation: number;
 }
+
+export type ApiKeyChangeListener = (snapshot: ApiKeySnapshot) => void;
 
 /** Overridable reads for the credential store — a test seam. Defaults hit the
  *  real `@sapiom/mcp/auth` store the CLI login writes to. */
@@ -99,6 +103,7 @@ export function createApiKeyProvider(
 ): ApiKeyProvider {
   let current = initialKey;
   let generation = 0;
+  const listeners = new Set<ApiKeyChangeListener>();
   // `clear()` is synchronous so disconnect removes the in-memory key
   // immediately. Advancing this barrier also prevents a refresh whose store
   // read is already in flight from adopting its now-stale result afterward.
@@ -113,6 +118,15 @@ export function createApiKeyProvider(
     if (next === current) return;
     current = next;
     generation++;
+    const snapshot = { apiKey: current, generation };
+    for (const listener of listeners) {
+      try {
+        listener({ ...snapshot });
+      } catch {
+        // Observation cannot make the provider's documented refresh() path
+        // throw or prevent another independent lifecycle observer from running.
+      }
+    }
   };
 
   const refreshFromStore = async (
@@ -139,6 +153,10 @@ export function createApiKeyProvider(
     },
     snapshot(): ApiKeySnapshot {
       return { apiKey: current, generation };
+    },
+    subscribe(listener: ApiKeyChangeListener): () => void {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     refresh(): Promise<string | null> {
       // Queue the whole resolve+read+adopt transaction. Without this, a slower
@@ -168,6 +186,7 @@ export function staticApiKeyProvider(key: string | null): ApiKeyProvider {
   return {
     getKey: () => key,
     snapshot: () => ({ apiKey: key, generation: 0 }),
+    subscribe: () => () => {},
     refresh: () => Promise.resolve(key),
     clear: () => {
       /* static key — clear is a no-op */

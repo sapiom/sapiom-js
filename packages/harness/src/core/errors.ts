@@ -143,6 +143,16 @@ export class SpawnTargetError extends HarnessError {
   }
 }
 
+/** Generated MCP configuration lost its credential identity before spawn. */
+export class McpCredentialGenerationChangedError extends HarnessError {
+  constructor() {
+    super(
+      "MCP_CREDENTIAL_GENERATION_CHANGED",
+      "The Sapiom credential changed while preparing this process",
+    );
+  }
+}
+
 /**
  * Thrown when a spawn or send operation is attempted on an external-mode
  * harness adapter (e.g. Conductor) whose sessions are managed by its own

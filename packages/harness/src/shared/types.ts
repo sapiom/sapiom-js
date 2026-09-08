@@ -151,6 +151,13 @@ export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
+/** Browser-safe projection of a live session's private MCP credential stamp. */
+export type McpAuthState =
+  | "current"
+  | "restart-required"
+  | "restarting"
+  | "not-applicable";
+
 /** A harness session = one pty running one agent process in one directory. */
 export interface HarnessSession {
   /** Our id (uuid). */
@@ -163,6 +170,13 @@ export interface HarnessSession {
   /** Display title (first prompt, or directory basename until known). */
   title: string;
   status: SessionStatus;
+  /**
+   * Whether this live process was launched against the current Sapiom MCP
+   * credential. The underlying generation and key remain server-private.
+   * Absent on records written by older versions and never persisted by the
+   * current SessionManager.
+   */
+  mcpAuthState?: McpAuthState;
   createdAt: string;
   lastActiveAt: string;
   /**

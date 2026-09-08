@@ -601,7 +601,8 @@ function createDefaultBuildLaunchOpts(
 
     // Reconcile with the shared credential store at the common launch
     // boundary. Create, resume, and background tasks all await this builder.
-    const apiKey = await apiKeyProvider.refresh();
+    await apiKeyProvider.refresh();
+    const { apiKey, generation } = apiKeyProvider.snapshot();
 
     // The served prompt (SAP-2810): loaded per session start, so a backend deploy
     // reaches an install that never upgraded @sapiom/harness. The default loader
@@ -659,6 +660,14 @@ function createDefaultBuildLaunchOpts(
       systemPromptFile,
       ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
+      ...(req.harness === "claude-code"
+        ? {
+            mcpCredentialLaunch: {
+              generation,
+              credentialBearing: apiKey !== null,
+            },
+          }
+        : {}),
       // Set on BOTH channels: the post-ready path hasn't delivered yet, but a
       // brief exists and will, and this is the flag that tells it to.
       ...(brief !== null && rehydrateFrom
@@ -1487,6 +1496,8 @@ export const startServer = async (
       await closeCoordinatorOwnedSubsession.current?.(marker);
     },
     buildLaunchOpts,
+    currentCredentialGeneration: () =>
+      apiKeyProvider.snapshot().generation,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
       const userId = localProjectPrincipal(projectUserId, machineId);
       return serializeProjectScopeResolution(async () => {
@@ -1769,6 +1780,8 @@ export const startServer = async (
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
+    currentCredentialGeneration: () =>
+      apiKeyProvider.snapshot().generation,
     onCleanup: (taskId) => {
       void removeGeneratedSessionDir(taskId, { generatedRoot }).catch(
         (err: unknown) => {
@@ -1780,6 +1793,11 @@ export const startServer = async (
   taskManager.onStatusChange((task) => {
     bus.publish({ type: "task.status", task });
   });
+  const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
+    ({ generation }) => {
+      sessionManager.reconcileMcpCredentialGeneration(generation);
+    },
+  );
 
   // Rolling summary (opt-in, `HarnessSettings.rollingSummary`): folds a live
   // session's record into a ≤500-word summary.md that a later portable
@@ -4561,6 +4579,7 @@ export const startServer = async (
         }
       };
 
+      unsubscribeCredentialChanges();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
