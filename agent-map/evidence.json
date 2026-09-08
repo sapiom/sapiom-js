@@ -1,0 +1,170 @@
+{
+  "fixture": "Anonymous layout comparison: 34 nodes, 13 relationships, 21 components, 17 singletons",
+  "viewport": {
+    "width": 1500,
+    "height": 1100
+  },
+  "beforeCommit": "68ac0774fd761a4c26cbbd3f199103ce7d6163a3",
+  "afterCommit": "9da6b4c35183f0901f3e6026f40e3df60b718bcd",
+  "capture": "Actual locally built SPA and real harness server; canonical saved graph imported into isolated state",
+  "measurements": {
+    "3264": {
+      "viewport": {
+        "width": 1500,
+        "height": 1100
+      },
+      "measurements": [
+        {
+          "mode": "Classic",
+          "expanded": false,
+          "pane": {
+            "width": 590,
+            "height": 980
+          },
+          "bounds": {
+            "width": 1488,
+            "height": 1136
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.321)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "32%"
+        },
+        {
+          "mode": "Vertical",
+          "expanded": false,
+          "pane": {
+            "width": 590,
+            "height": 980
+          },
+          "bounds": {
+            "width": 1908,
+            "height": 1256
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.25)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "25%"
+        },
+        {
+          "mode": "Classic",
+          "expanded": true,
+          "pane": {
+            "width": 1500,
+            "height": 1036
+          },
+          "bounds": {
+            "width": 1488,
+            "height": 1136
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.813)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "81%"
+        },
+        {
+          "mode": "Vertical",
+          "expanded": true,
+          "pane": {
+            "width": 1500,
+            "height": 1036
+          },
+          "bounds": {
+            "width": 1908,
+            "height": 1256
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.727)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "73%"
+        }
+      ],
+      "errors": []
+    },
+    "3265": {
+      "viewport": {
+        "width": 1500,
+        "height": 1100
+      },
+      "measurements": [
+        {
+          "mode": "Classic",
+          "expanded": false,
+          "pane": {
+            "width": 590,
+            "height": 980
+          },
+          "bounds": {
+            "width": 1488,
+            "height": 1136
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.321)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "32%",
+          "clippedNodes": 0,
+          "clippedLabels": 0,
+          "overlappingLabels": 3
+        },
+        {
+          "mode": "Vertical",
+          "expanded": false,
+          "pane": {
+            "width": 590,
+            "height": 980
+          },
+          "bounds": {
+            "width": 1120,
+            "height": 1844
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.426)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "43%",
+          "clippedNodes": 0,
+          "clippedLabels": 0,
+          "overlappingLabels": 0
+        },
+        {
+          "mode": "Classic",
+          "expanded": true,
+          "pane": {
+            "width": 1500,
+            "height": 1036
+          },
+          "bounds": {
+            "width": 1488,
+            "height": 1136
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.813)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "81%",
+          "clippedNodes": 0,
+          "clippedLabels": 0,
+          "overlappingLabels": 3
+        },
+        {
+          "mode": "Vertical",
+          "expanded": true,
+          "pane": {
+            "width": 1500,
+            "height": 1036
+          },
+          "bounds": {
+            "width": 1642,
+            "height": 1090
+          },
+          "transform": "translate(-50%, -50%) translate(0px, 0px) scale(0.845)",
+          "nodes": 34,
+          "edges": 13,
+          "zoomLabel": "85%",
+          "clippedNodes": 0,
+          "clippedLabels": 0,
+          "overlappingLabels": 0
+        }
+      ],
+      "errors": []
+    }
+  }
+}
