@@ -7,7 +7,13 @@ import { TaskManager } from "../core/task-manager.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import { importStudioComparisonProfile } from "../core/studio-comparison-profile.js";
-import type { HarnessKind } from "../shared/types.js";
+import { SessionManager } from "../core/session-manager.js";
+import {
+  parseComparisonArgs,
+  prepareComparisonProfile,
+} from "../cli/elk-preview.js";
+import { recordRecentDir } from "../cli/settings.js";
+import type { AppState, HarnessKind } from "../shared/types.js";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string | undefined;
@@ -127,6 +133,14 @@ async function verifyInitialization(providerMissing: boolean) {
     projectIds: projects.map((entry) => entry.projectId),
   });
   expect(manifest.published).toBe(true);
+  const comparison = await prepareComparisonProfile(
+    parseComparisonArgs(["--state-root", stateRoot]),
+  );
+  await recordRecentDir(
+    comparison.launchDir,
+    path.join(stateRoot, "settings.json"),
+  );
+  const createSession = vi.spyOn(SessionManager.prototype, "create");
   const infer = vi
     .spyOn(TaskManager.prototype, "runStructuredInference")
     .mockImplementation(async ({ prompt }) => {
@@ -154,8 +168,7 @@ async function verifyInitialization(providerMissing: boolean) {
       adapters: {},
       availableHarnesses,
       stateRoot,
-      launchDir: stateRoot,
-      projectRoot: path.join(stateRoot, "projects"),
+      launchDir: comparison.launchDir,
       autoCreateSession: false,
       loadSystemPrompt: async () => "",
     });
@@ -167,7 +180,34 @@ async function verifyInitialization(providerMissing: boolean) {
       )
     ).json();
   server = await boot(providerMissing ? [] : ["claude-code"]);
+  const state = (await (
+    await fetch(`http://127.0.0.1:${server.port}/api/state`, {
+      headers: { "X-Harness-Token": "test-token" },
+    })
+  ).json()) as AppState;
+  expect(state.studioProjects?.map((entry) => entry.projectId).sort()).toEqual(
+    projects.map((entry) => entry.projectId).sort(),
+  );
   if (providerMissing) {
+    const session = await fetch(
+      `http://127.0.0.1:${server.port}/api/sessions`,
+      {
+        method: "POST",
+        headers: {
+          "X-Harness-Token": "test-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          cwd: comparison.launchDir,
+          harness: "claude-code",
+        }),
+      },
+    );
+    expect(session.status).toBe(503);
+    expect(await session.json()).toMatchObject({
+      code: "provider_unavailable",
+      error: expect.stringContaining("Install and authenticate"),
+    });
     await vi.waitFor(
       async () =>
         expect(await status()).toMatchObject({
@@ -200,6 +240,7 @@ async function verifyInitialization(providerMissing: boolean) {
     { timeout: 10000 },
   );
   expect(infer).toHaveBeenCalledOnce();
+  expect(createSession).not.toHaveBeenCalled();
   expect(server.sessionManager.list()).toHaveLength(0);
   for (const saved of manifest.projects.filter(
     (entry) => entry.map?.authored,
@@ -234,6 +275,7 @@ async function verifyInitialization(providerMissing: boolean) {
   await server.close();
   server = undefined;
   expect(infer).toHaveBeenCalledOnce();
+  expect(createSession).not.toHaveBeenCalled();
 }
 
 it.each([false, true])(

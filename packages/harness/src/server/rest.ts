@@ -481,6 +481,14 @@ export function createRestRouter(options: RestRouterOptions): Router {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
+    if (options.availableHarnesses?.length === 0) {
+      res.status(503).json({
+        error:
+          "Install and authenticate Claude Code or Codex on PATH, then restart Agent Studio to create a session.",
+        code: "provider_unavailable",
+      });
+      return;
+    }
     // Collapse whatever separators the client sent (see cwd-normalize.ts) so a
     // mixed-separator path can never reach the pty spawn or sessions.json.
     const request = { ...parsed.data, cwd: normalizeCwd(parsed.data.cwd) };

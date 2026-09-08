@@ -11,6 +11,7 @@ import {
 } from "../core/studio-project-catalog.js";
 import { isWithinDir, samePath } from "../shared/paths.js";
 import { runCli } from "./bin.js";
+import { loadSettings } from "./settings.js";
 
 export function parseComparisonArgs(argv: string[]) {
   let sourceStateRoot: string | undefined;
@@ -112,9 +113,7 @@ export async function prepareComparisonProfile(
       );
   }
   if (!(await fs.lstat(destination)).isDirectory())
-    throw new Error(
-      "Comparison destination must be a directory, not a symlink.",
-    );
+    throw new Error("Comparison destination must be a directory.");
   const canonical = await fs.realpath(destination);
   // Cover writable runtime metadata, including local events with telemetry off.
   // Do not walk the root or catalog's shared agent source directories.
@@ -139,7 +138,9 @@ export async function prepareComparisonProfile(
         withFileTypes: true,
       }))
         if (child.isSymbolicLink())
-          throw new Error(`Comparison state contains a symlink: ${child.name}`);
+          throw new Error(
+            `Comparison state contains a symlink: ${path.relative(canonical, path.join(child.parentPath, child.name))}`,
+          );
   }
   let manifest: z.infer<typeof manifestSchema>;
   try {
@@ -175,15 +176,21 @@ export async function prepareComparisonProfile(
     throw new Error(
       "Source differs from the saved snapshot; use a new destination.",
     );
-  const selected = [...manifest.projects, ...manifest.excluded]
-    .map((project) => project.projectId)
-    .sort();
+  const imported = manifest.projects.map((project) => project.projectId);
+  const selected = [
+    ...imported,
+    ...manifest.excluded.map((entry) => entry.projectId),
+  ];
   if (
     options.projectIds.length &&
-    JSON.stringify([...options.projectIds].sort()) !== JSON.stringify(selected)
+    ![imported, selected].some(
+      (ids) =>
+        JSON.stringify([...options.projectIds].sort()) ===
+        JSON.stringify([...ids].sort()),
+    )
   )
     throw new Error(
-      "Projects differ from the saved snapshot; use a new destination.",
+      "Projects differ from the saved snapshot; omit --project to reopen it, or use a new destination.",
     );
   const catalog = parseStudioProjectCatalog(
     JSON.parse(
@@ -201,7 +208,31 @@ export async function prepareComparisonProfile(
     throw new Error(
       "Comparison profile is missing an imported project registration.",
     );
-  return manifest;
+  const roots = catalog.projects
+    .filter((project) => imported.includes(project.projectId))
+    .flatMap((project) => project.rootBindings)
+    .filter((binding) => binding.status === "active")
+    .map((binding) => binding.localRootRef);
+  const settings = await loadSettings(path.join(canonical, "settings.json"));
+  // Keep the imported recent-dir order: a new entry would evict the eighth root.
+  const candidates = [
+    ...settings.recentDirs.filter((dir) =>
+      roots.some((root) => samePath(root, dir)),
+    ),
+    ...roots,
+  ];
+  for (const launchDir of new Set(candidates)) {
+    const resolved = await fs.realpath(launchDir).catch(() => null);
+    if (
+      resolved &&
+      !isWithinDir(canonical, resolved) &&
+      (await fs.stat(resolved).catch(() => null))?.isDirectory()
+    )
+      return { ...manifest, launchDir };
+  }
+  throw new Error(
+    "Reconnect an imported project directory before launching this comparison; none of its active roots is available.",
+  );
 }
 
 export async function requireAvailablePort(port: number): Promise<void> {
@@ -248,7 +279,7 @@ export async function launchComparison(argv: string[]): Promise<void> {
     for (const project of manifest.projects)
       console.log(`Project: ${project.projectId} (${project.displayName})`);
     await runCli([
-      manifest.destinationStateRoot,
+      manifest.launchDir,
       "--state-root",
       manifest.destinationStateRoot,
       "--port",

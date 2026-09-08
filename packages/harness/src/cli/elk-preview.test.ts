@@ -13,6 +13,7 @@ import {
 import { runCli } from "./bin.js";
 import { canStartCli, parseArgs } from "./args.js";
 import { cliBrowserUrl } from "./banner.js";
+import { loadSettings, recordRecentDir } from "./settings.js";
 
 vi.mock("./bin.js", () => ({ runCli: vi.fn() }));
 let root = "";
@@ -21,7 +22,7 @@ afterEach(async () => {
   vi.mocked(runCli).mockReset();
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
-async function fixture() {
+async function fixture(count = 1) {
   root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "elk-launch-")),
   );
@@ -30,18 +31,24 @@ async function fixture() {
   const catalog = new StudioProjectCatalog(
     path.join(source, "studio-projects.json"),
   );
-  const project = (
-    await catalog.reconcile([
-      { workspaceKey: "existing", cwd: path.join(root, "agents") },
-    ])
-  ).projects[0]!;
+  const roots = Array.from({ length: count }, (_, i) =>
+    path.join(root, `agents-${i}`),
+  );
+  for (const cwd of roots) await fs.mkdir(cwd);
+  const { projects } = await catalog.reconcile(
+    roots.map((cwd) => ({ workspaceKey: cwd, cwd })),
+  );
+  await fs.writeFile(
+    path.join(source, "settings.json"),
+    JSON.stringify({ recentDirs: roots }),
+  );
+  const project = projects[0]!;
   const argv = [
     "--source-state-root",
     source,
     "--state-root",
     destination,
-    "--project",
-    project.projectId,
+    ...projects.flatMap((entry) => ["--project", entry.projectId]),
     "--port",
     "0",
     "--no-open",
@@ -50,6 +57,7 @@ async function fixture() {
     source,
     destination,
     project,
+    roots,
     argv,
     options: parseComparisonArgs(argv),
   };
@@ -58,8 +66,7 @@ async function fixture() {
 it("reopens without resetting destination edits or initialization attempts", async () => {
   const f = await fixture();
   const manifest = await prepareComparisonProfile(f.options);
-  const sharedAgentRoot = path.join(root, "agents");
-  await fs.mkdir(sharedAgentRoot);
+  const sharedAgentRoot = f.roots[0]!;
   await fs.symlink(
     f.source,
     path.join(sharedAgentRoot, "unrelated-source-link"),
@@ -135,6 +142,13 @@ it("rejects symlinked state before boot and does not claim an empty selection", 
   await expect(fs.stat(f.destination)).rejects.toMatchObject({
     code: "ENOENT",
   });
+  await prepareComparisonProfile({
+    ...f.options,
+    projectIds: [
+      ...f.options.projectIds,
+      "project_00000000-0000-4000-8000-000000000099",
+    ],
+  });
   await prepareComparisonProfile(f.options);
   const file = path.join(f.destination, "comparison-profile.json");
   await fs.rename(file, path.join(root, "manifest.json"));
@@ -142,12 +156,21 @@ it("rejects symlinked state before boot and does not claim an empty selection", 
   await expect(prepareComparisonProfile(f.options)).rejects.toThrow("symlink");
 });
 
-it("retains the normal CLI auth boundary and releases its profile claim when boot fails", async () => {
-  const f = await fixture();
-  vi.mocked(runCli).mockRejectedValue(new Error("boot failed"));
+it("launches an imported root without evicting recent projects and releases its claim when boot fails", async () => {
+  const f = await fixture(8);
+  vi.mocked(runCli).mockImplementation(async (argv) => {
+    await recordRecentDir(
+      parseArgs(argv).dir,
+      path.join(f.destination, "settings.json"),
+    );
+    throw new Error("boot failed");
+  });
   await expect(launchComparison(f.argv)).rejects.toThrow("boot failed");
+  expect(
+    (await loadSettings(path.join(f.destination, "settings.json"))).recentDirs,
+  ).toEqual(f.roots);
   expect(runCli).toHaveBeenCalledWith([
-    f.destination,
+    f.roots[0],
     "--state-root",
     f.destination,
     "--port",
@@ -169,6 +192,16 @@ it("retains the normal CLI auth boundary and releases its profile claim when boo
   expect(runCli).toHaveBeenCalledOnce();
 });
 
+it("requires reconnecting an imported root instead of registering an unrelated directory", async () => {
+  const f = await fixture();
+  await prepareComparisonProfile(f.options);
+  await fs.rm(f.roots[0]!, { recursive: true });
+  await expect(launchComparison(f.argv)).rejects.toThrow(
+    "Reconnect an imported project directory",
+  );
+  expect(runCli).not.toHaveBeenCalled();
+});
+
 it.each([
   "events.ndjson",
   "records/session/events.ndjson",
@@ -182,7 +215,9 @@ it.each([
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.symlink(sourceLog, target);
   vi.mocked(runCli).mockRejectedValue(new Error("server boot reached"));
-  await expect(launchComparison(f.argv)).rejects.toThrow("symlink");
+  await expect(launchComparison(f.argv)).rejects.toThrow(
+    `symlink: ${path.normalize(relative)}`,
+  );
   expect(runCli).not.toHaveBeenCalled();
   expect(await fs.readFile(sourceLog, "utf8")).toBe("desktop event bytes\n");
 });
