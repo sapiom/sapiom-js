@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -152,6 +158,19 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
       },
     },
   ]);
+  // Hydrate both roots when the SPA loads. Settings written outside the UI
+  // are not reflected in its cached settings until a reload.
+  const otherRoot = await realpath(
+    await mkdtemp(join(dirname(cwd), "map-disposal-")),
+  );
+  await api("/settings", "PATCH", {
+    recentDirs: [...(await api("/settings")).recentDirs, otherRoot],
+  });
+  const otherSession = await api("/sessions", "POST", {
+    cwd: otherRoot,
+    harness: "claude-code",
+  });
+  await api(`/sessions/${otherSession.id}`, "DELETE");
   const snapshot = () =>
     readFile(
       join(
@@ -195,8 +214,6 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
   });
   try {
     await boot.mainWindow.loadURL(boot.url);
-    await evaluate(`window.__elkTerminations = 0; const NativeWorker = window.Worker;
-      window.Worker = class extends NativeWorker { terminate() { window.__elkTerminations++; super.terminate(); } }; void 0;`);
     if ((await api("/settings")).helpSeen !== true) {
       await click(selector("help-overlay-close"));
       await until(
@@ -226,6 +243,8 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     );
     await click('[aria-label="Fit Agent Map to view"]');
     await click(selector("canvas-expand"));
+    // Let the 150ms viewport debounce submit the expanded layout before capture.
+    await delay(250);
     await ready("elk");
     if (process.env.SAPIOM_SMOKE_OUT)
       await writeFile(
@@ -272,28 +291,19 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     await until("live map update", async () => (await count()) === 7);
     await ready("elk");
     const updated = await snapshot();
-    await evaluate(`window.__elkTerminations = 0; const NativeWorker = window.Worker;
-      window.Worker = class extends NativeWorker { terminate() { window.__elkTerminations++; super.terminate(); } }; void 0;`);
-    // Keep a second fixture root present so the rail can navigate away; the
-    // earlier session-create check deletes its own project directory.
-    const otherRoot = await mkdtemp(join(dirname(cwd), "map-disposal-"));
-    await api("/settings", "PATCH", {
-      recentDirs: [...(await api("/settings")).recentDirs, otherRoot],
-    });
-    const otherSession = await api("/sessions", "POST", {
-      cwd: otherRoot,
-      harness: "claude-code",
-    });
-    await api(`/sessions/${otherSession.id}`, "DELETE");
-    await mode("Classic");
-    await ready("classic");
+    await evaluate(`(() => {
+      const terminate = Worker.prototype.terminate;
+      Worker.prototype.terminate = function() { window.__elkTerminations++; return terminate.call(this); };
+    })()`);
     const otherProject = selector(`project-select-${basename(otherRoot)}`);
-    await click(otherProject);
-    await click(project);
-    await mode("Vertical");
     await ready("elk");
     await evaluate("window.__elkTerminations = 0");
     await click(otherProject);
+    await until("left saved map", () =>
+      evaluate(
+        `document.querySelector('[data-testid=agent-map-live]')?.dataset.projectId !== ${JSON.stringify(projectId)}`,
+      ),
+    );
     await until("worker disposal", () =>
       evaluate("window.__elkTerminations > 0"),
     );
