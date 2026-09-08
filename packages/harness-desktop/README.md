@@ -2,6 +2,16 @@
 
 The Electron host for `@sapiom/harness`. See [CLAUDE.md](CLAUDE.md) for packaging.
 
+## Agent Map release verification
+
+After building the harness and packaging desktop, run `scripts/smoke.sh` from
+this package. Its `agent-map` check renders a saved fixture through the shipped
+SPA and local ELK worker, checks Classic persistence across browser origins,
+failure/recovery, live updates, and worker disposal. Viewing must leave saved
+map/history bytes unchanged. The report includes raw/gzip worker size and cold/
+warm UI readiness timings; a screenshot is saved beside the smoke report.
+Run with `CI` unset on a developer machine to use the runner's temporary profile.
+
 ## Coding-agent updates
 
 On each normal launch, Studio checks installed Claude Code and Codex against npm

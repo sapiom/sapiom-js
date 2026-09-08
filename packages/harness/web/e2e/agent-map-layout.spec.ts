@@ -38,7 +38,7 @@ test("switches the same saved map through a lazy local worker with measured card
       }
     };
   });
-  await open(page);
+  await open(page, "&mapLayout=classic");
   expect(workers).toHaveLength(0);
   const before = await identities(page);
   const selected = page.locator(".agent-map-node").first();
@@ -91,7 +91,7 @@ test("switches the same saved map through a lazy local worker with measured card
 test("shows an identified Classic fallback after worker failure and recovers on the next selection", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "&mapLayout=classic");
   await page.route("**/*elk-worker.min*", (route) => route.abort());
   await page.getByRole("button", { name: "Vertical", exact: true }).click();
   await expect(map(page)).toHaveAttribute("data-layout-state", "fallback");

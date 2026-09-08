@@ -231,6 +231,25 @@ credentials, and raw model output are never included.
 While generation is active, the selected project also polls its durable status
 so completion by another Studio process is visible without reloading the page.
 
+### Agent Map layout
+
+Agent Maps open in **Vertical** by default in both the CLI host and desktop.
+ELK 0.12.0 runs in a bundled local worker and arranges the saved nodes and
+relationships; it does not change the map, its history, or the inference pass.
+Disconnected components pack to the available pane; Fit restores automatic
+framing after a manual pan or zoom. Per-agent Canvas views keep their own layout.
+
+Choose **Classic** or **Vertical** in the map controls. The choice is saved in
+Studio settings and survives desktop launches, including changes to its local
+port. An explicit browser preference from the comparison build migrates once
+when there is no saved setting. `?mapLayout=classic` or `?mapLayout=elk` overrides
+the current view without saving a choice until a control is clicked.
+
+A worker failure shows **Classic fallback** and keeps the map usable. Switch
+Classic → Vertical to retry. Selecting Classic is also the immediate per-user
+rollback. Existing maps open directly; only agents without a map use the normal
+initialization path. No comparison profile, import, or setup flag is needed.
+
 ### Agent Map implementation links
 
 Agent Map nodes resolve to exact same-project Studio implementations. Existing

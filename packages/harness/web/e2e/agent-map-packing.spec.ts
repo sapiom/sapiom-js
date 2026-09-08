@@ -64,7 +64,7 @@ async function delta(page: Page, operations: unknown[], fromVersion: number) {
 }
 async function openPacking(page: Page) {
   await page.goto(
-    "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+    "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1&mapLayout=classic",
   );
   await page
     .getByTestId("workspace-group-acme-app")

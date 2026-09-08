@@ -26,6 +26,7 @@
             { id: "map", style: { width: 600, height: 900, display: "flex" } },
             h(AgentMapCanvas, {
               proposal,
+              layoutPreference: { mode: "elk", setMode() {}, error: null },
               selectedNodeId: null,
               onSelectNode() {},
               onInspectNode() {},

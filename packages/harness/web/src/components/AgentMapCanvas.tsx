@@ -35,7 +35,10 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { Icon, type IconName } from "./Icon";
 
+import type { AgentMapLayoutPreference } from "../lib/use-agent-map-preference";
+
 interface AgentMapCanvasProps {
+  layoutPreference: AgentMapLayoutPreference;
   proposal: MapChangeProposal;
   selectedNodeId: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
@@ -62,6 +65,7 @@ interface DragState {
 const AGENT_MAP_MIN_ZOOM = 0.001;
 
 export function AgentMapCanvas({
+  layoutPreference,
   proposal,
   selectedNodeId,
   onSelectNode,
@@ -73,7 +77,7 @@ export function AgentMapCanvas({
   const [panning, setPanning] = useState(false);
   const [visible, setVisible] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const computed = useAgentMapLayout(proposal, viewportRef, visible);
+  const computed = useAgentMapLayout(proposal, viewportRef, visible, layoutPreference);
   const dragRef = useRef<DragState | null>(null);
   const fittedProjectRef = useRef<string | null>(null);
   const followsUpdates = useRef(true);
@@ -359,6 +363,11 @@ export function AgentMapCanvas({
           role="group"
           aria-label="Agent Map view controls"
         >
+          {layoutPreference.error && (
+            <span className="system-graph-node-meta" role="status">
+              {layoutPreference.error}
+            </span>
+          )}
           {(["classic", "elk"] as const).map((mode) => (
             <button
               key={mode}

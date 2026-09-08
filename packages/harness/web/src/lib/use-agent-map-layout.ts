@@ -15,18 +15,7 @@ import {
 } from "./directed-graph-layout";
 import type { ElkLayoutEdge } from "./elk-graph-layout";
 import { ElkLayoutWorker } from "./elk-layout-worker";
-
-type MapLayout = "classic" | "elk";
-const PREFERENCE = "sapiom-agent-map-layout";
-function initialLayout(): MapLayout {
-  const query = new URLSearchParams(window.location.search).get("mapLayout");
-  if (query === "classic" || query === "elk") return query;
-  try {
-    return localStorage.getItem(PREFERENCE) === "elk" ? "elk" : "classic";
-  } catch {
-    return "classic";
-  }
-}
+import type { AgentMapLayoutPreference } from "./use-agent-map-preference";
 
 async function measureLabels(
   edges: readonly DirectedGraphEdge[],
@@ -97,8 +86,9 @@ export function useAgentMapLayout(
   proposal: MapChangeProposal,
   viewport: RefObject<HTMLDivElement | null>,
   visible: boolean,
+  preference: AgentMapLayoutPreference,
 ) {
-  const [mode, setMode] = useState<MapLayout>(initialLayout);
+  const { mode } = preference;
   const [worker] = useState(() => new ElkLayoutWorker());
   const [aspect, setAspect] = useState<number | null>(null);
   const geometry = agentMapGeometry(proposal);
@@ -197,18 +187,6 @@ export function useAgentMapLayout(
           ? "fallback"
           : "loading",
     engine: vertical?.layout ? "elk" : "classic",
-    setMode: (next: MapLayout) => {
-      setMode(next);
-      try {
-        localStorage.setItem(PREFERENCE, next);
-      } catch {
-        /* browser storage may be disabled */
-      }
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("mapLayout")) {
-        url.searchParams.set("mapLayout", next);
-        window.history.replaceState(window.history.state, "", url);
-      }
-    },
+    setMode: preference.setMode,
   };
 }

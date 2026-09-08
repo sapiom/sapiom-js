@@ -1321,6 +1321,14 @@ const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
  * component stopped using.
  */
 const MOCK_HELP_SEEN_KEY = "sapiom-mock-help-seen";
+const MOCK_MAP_LAYOUT_KEY = "sapiom-mock-agent-map-layout";
+
+function readMockMapLayout(): HarnessSettings["agentMapLayout"] {
+  try {
+    const value = localStorage.getItem(MOCK_MAP_LAYOUT_KEY);
+    return value === "classic" || value === "elk" ? value : undefined;
+  } catch { return undefined; }
+}
 
 function readMockHelpSeen(): boolean {
   try {
@@ -2193,6 +2201,7 @@ export class MockApi implements HarnessApi {
     // see MOCK_HELP_SEEN_KEY, which the `fresh` fixture has already emptied by
     // the time any instance is built.
     helpSeen: readMockHelpSeen(),
+    agentMapLayout: readMockMapLayout(),
   };
 
   private workspaceKey(cwd: string): WorkspaceKey {
@@ -3560,6 +3569,10 @@ export class MockApi implements HarnessApi {
     // reload can (and in the spec does) start before this delay resolves. A
     // write behind the delay would lose the dismiss to its own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
+    if (patch.agentMapLayout !== undefined) {
+      try { localStorage.setItem(MOCK_MAP_LAYOUT_KEY, patch.agentMapLayout); }
+      catch { /* The in-memory fixture remains usable with storage blocked. */ }
+    }
     const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
     this.settings = { ...this.settings, ...patch };
