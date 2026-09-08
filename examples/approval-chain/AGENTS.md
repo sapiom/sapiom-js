@@ -11,13 +11,15 @@ went silent). Inside a step's `run`, Sapiom capabilities are pre-auth'd on
 ## The sign-off spine
 
 - **`present`** records the current gate as `pending`, emails the approver, then
-  returns `pauseUntilSignal({ signal: "approval.decision", resumeStep: "decide", correlationId: ctx.executionId })`.
-  It carries a static `pause: { signal, resumeStep: "decide" }` annotation — the
-  build-time graph edge that must match the directive. **No `timeoutMs`:** the
-  engine's paused-run reaper *terminates* a lapsed pause (`PauseTimeoutError`)
-  instead of resuming it, so a gate deadline would hard-fail a slow approval and
-  skip `escalate`. The gates wait indefinitely; the reminder/escalation cadence
-  comes from the signal (see below), never the engine deadline.
+  returns `pauseUntilSignal({ signal: "approval.decision", resumeStep: "decide", correlationId: ctx.executionId, timeoutMs: GATE_PAUSE_TIMEOUT_MS })`.
+  It carries a static `pause: { signal, resumeStep: "decide" }` annotation, the
+  build-time graph edge that must match the directive. **A one-year `timeoutMs`
+  (`GATE_PAUSE_TIMEOUT_MS`):** the engine's paused-run reaper *terminates* a lapsed
+  pause (`PauseTimeoutError`) instead of resuming it, so a short gate deadline would
+  hard-fail a slow approval and skip `escalate`. Omitting `timeoutMs` does not avoid
+  that: a pause with no deadline inherits the engine's 7-day default. The year is an
+  explicit backstop; the reminder/escalation cadence comes from the signal (see
+  below), never from the deadline.
 - **`decide`** reads the approval payload **directly as its `run` input**. Safe
   default: only an explicit `{ decision: "approve" }` advances; `reject`
   compensates; `timeout` escalates; anything else (including a `run_local` resume

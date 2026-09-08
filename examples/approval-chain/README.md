@@ -52,13 +52,19 @@ The canonical chain state lives in `ctx.shared` (it survives every pause). When 
 Postgres table (`approval_chain_ledger`) via `ctx.sapiom.database` — a best-effort
 external audit copy that never blocks the chain.
 
-## Reminders, escalation, and why the gates wait forever
+## Reminders, escalation, and why the gates wait a year
 
-Each gate pauses **indefinitely** at $0 — it carries no pause `timeoutMs`. That is
-deliberate: the engine has a paused-run reaper that *terminates* a lapsed pause
-with a `PauseTimeoutError` (it does not resume the step), so a deadline here would
-silently fail any approval slower than the deadline and never run the graceful
-`escalate` step. A legitimately slow approver must not lose the run.
+Each gate pauses at $0 under a deliberately long deadline: `GATE_PAUSE_TIMEOUT_MS`,
+one year. The engine has a paused-run reaper that *terminates* a lapsed pause with a
+`PauseTimeoutError` (it does not resume the step), so a short deadline here would
+silently fail any approval slower than it and never run the graceful `escalate` step.
+A legitimately slow approver must not lose the run.
+
+Omitting `timeoutMs` is not the way to get that. A pause with no deadline inherits the
+engine's 7-day default, which hard-fails a two-week approval exactly the same way. One
+year is the explicit opt-out: long enough that no realistic approver loses the run,
+finite enough that an abandoned chain still reaches a terminal state instead of parking
+in the paused table forever.
 
 Reminders and escalation are therefore driven entirely by the `approval.decision`
 signal, not by an engine deadline:
@@ -70,9 +76,10 @@ signal, not by an engine deadline:
   walks `remind` → … → `escalate` for free.
 
 `maxReminders` (default 2) bounds how many reminder ticks a gate takes before it
-escalates. (The mirror template `wait-for-webhook` *wants* the terminal timeout and
-so opts into `timeoutMs`; this chain wants a reminder, so it must not — don't add a
-gate `timeoutMs` back without switching to that terminal model.)
+escalates. (The mirror template `wait-for-webhook` *wants* a short terminal timeout and
+sizes `timeoutMs` to the callback window; this chain wants a reminder loop, so its
+deadline is a backstop, not a cadence. Don't shorten the gate `timeoutMs` toward the
+reminder interval without switching to that terminal model.)
 
 Input:
 
