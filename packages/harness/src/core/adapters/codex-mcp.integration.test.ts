@@ -258,20 +258,41 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
             : []),
         ].join("\n");
         await writeFile(join(codexHome, "config.toml"), globalConfig);
+        // Observe the actual authoring process before its normal entrypoint.
+        // Fresh config has only local settings; the conflict case also forwards
+        // a synthetic secret. Both must augment the inherited child environment.
+        const stdioEnvFile = join(root, "stdio-env.json");
+        const observer = join(root, "observe-stdio.cjs");
+        await writeFile(
+          observer,
+          `require("node:fs").writeFileSync(${JSON.stringify(stdioEnvFile)}, JSON.stringify({
+          electron: process.env.ELECTRON_RUN_AS_NODE,
+          environment: process.env.SAPIOM_ENVIRONMENT,
+          version: process.env.SAPIOM_HARNESS_VERSION,
+          forwarded: process.env.SAPIOM_REVIEW_STDIO_SECRET ?? null,
+          home: process.env.HOME,
+          hasPath: Boolean(process.env.PATH),
+        }), { mode: 0o600 });`,
+        );
         const mcpConfigFile = await generateMcpConfig("integration-session", {
           generatedRoot: join(root, "generated"),
           apiKey: fixtureKey,
           environment: "integration",
+          harnessVersion: "integration-version",
           devServer: {
             command: process.execPath,
             args: [
+              "--require",
+              observer,
               fileURLToPath(
                 new URL("../../../../mcp/dist/index.js", import.meta.url),
               ),
             ],
             env: {
               ELECTRON_RUN_AS_NODE: "1",
-              SAPIOM_REVIEW_STDIO_SECRET: "synthetic-stdio-secret",
+              ...(existingRegistrations
+                ? { SAPIOM_REVIEW_STDIO_SECRET: "synthetic-stdio-secret" }
+                : {}),
             },
           },
         });
@@ -285,6 +306,14 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
         authenticated = false;
         expect(spec.args.join(" ").includes(fixtureKey)).toBe(false);
         const { servers, commandEnv } = await discover(spec, root);
+        expect(JSON.parse(await readFile(stdioEnvFile, "utf8"))).toEqual({
+          electron: "1",
+          environment: "integration",
+          version: "integration-version",
+          forwarded: existingRegistrations ? "synthetic-stdio-secret" : null,
+          home: root,
+          hasPath: true,
+        });
         expect(commandEnv.ELECTRON_RUN_AS_NODE).toBeNull();
         for (const name of Object.keys(spec.env))
           expect(commandEnv[name]).toBe("");
