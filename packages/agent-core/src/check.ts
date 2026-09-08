@@ -187,8 +187,17 @@ export async function check(opts: CheckOptions): Promise<CheckResult> {
         // esbuild's ESM shim that throws "Dynamic require not supported". This
         // banner gives the shim a real `require` so those resolve at runtime
         // (the documented esbuild workaround). Inert for bundles that do none.
+        //
+        // esbuild does not parse this banner, so a top-level `const require` /
+        // `createRequire` here collides with the same names a bundled dep emits
+        // (a prebuilt ESM dist shipping the standard `import { createRequire } …
+        // const require = …` banner, or any dep importing `createRequire` from
+        // `node:module`) → `SyntaxError: Identifier '…' has already been declared`
+        // at load. Alias the import and assign the global with `??=`, declaring
+        // nothing collidable; the shim resolves the undeclared `require` via the
+        // global scope, and `??=` never clobbers a `require` already present.
         banner: {
-          js: "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);",
+          js: "import { createRequire as __sapiomCreateRequire } from 'node:module';\nglobalThis.require ??= __sapiomCreateRequire(import.meta.url);",
         },
         logLevel: "silent",
       });
