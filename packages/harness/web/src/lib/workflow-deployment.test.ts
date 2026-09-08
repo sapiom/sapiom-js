@@ -96,7 +96,7 @@ it("retains display evidence through list failures but forgets it on auth change
     indicator: "deployed",
     unavailable: true,
   });
-  expect(workflowDeploymentTitle(retained)).toContain("last confirmed status");
+  expect(workflowDeploymentTitle(retained)).toBe(workflowDeploymentTitle(ready));
   expect(retained.activeBuildRunId).toBeNull();
   expect(isWorkflowRunnable(retained)).toBe(false);
   expect(prodRunDisabledReason(retained)).not.toBeNull();
