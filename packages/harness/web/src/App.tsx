@@ -1449,7 +1449,10 @@ export const App = (): JSX.Element => {
     : activeSession;
   const conversationSession = projectMapSelected
     ? activeProjectTab
-    : activeSession;
+    : planFirstSelection &&
+        activeSession?.agentMapIdentity?.projectId !== planFirstSelection.projectId
+      ? null
+      : activeSession;
   const showReview = reviewSummary != null;
   const showDead = !showReview && conversationSession?.status === "exited";
   // An agent selected with no session that can WORK on it: honest absence, and
@@ -1554,7 +1557,7 @@ export const App = (): JSX.Element => {
   const canvasSource = canvasSourceFor({
     subjectPath: rightPaneWorkflow?.path ?? null,
     bindingPath: boundWorkflowPath,
-    sessionId: harness.activeSessionId,
+    sessionId: activeSession?.status === "exited" ? null : harness.activeSessionId,
   });
   // Identity of the board the auto-collapse reasons about (see
   // emptyCollapsedKeyRef). Carries the subject, so selecting another agent is a
@@ -3549,7 +3552,19 @@ export const App = (): JSX.Element => {
                   fresh load rather than a mutation of the one on screen. */}
               {studioView?.altitude === "map" ? (
                 <AgentMapPane
-                  key={studioView.projectId}
+                  key={`${studioView.projectId}:${harness.authRevision}`}
+                  visible={!rightCollapsed && shownTab === "canvas"}
+                  api={harness.api}
+                  workflows={state.workflows}
+                  refreshWorkflows={harness.refreshWorkflows}
+                  onOpenAgent={(workflow, target) => {
+                    selectStudioAgent(workflow, target);
+                    setSelectedProject(null);
+                    setFocusedAgentPath(workflow.path);
+                    setRightTab("canvas");
+                    expandRightPane();
+                    closeMobileDrawer();
+                  }}
                   state={agentMapEntry.state.workspace}
                   unavailable={agentMapEntry.state.unavailable}
                   onRetry={agentMapEntry.retryWorkspace}

@@ -240,8 +240,12 @@ implementations remain unresolved, preserving the planned node and map history.
 The boot-token-protected `GET /api/projects/:projectId/agent-map/implementations`
 returns a path-free projection. `GET .../nodes/:nodeId/implementation` resolves
 the current exact local target for navigation. Both are uncached reads and do
-not start sessions, scans or another model pass. Node click navigation and
-Draft/Deployed indicators are separate UI features.
+not start sessions, scans or another model pass.
+
+Click an agent or subagent node to open its linked agent’s step graph on Canvas,
+keeping the current conversation. Use the node’s Info button to inspect its plan.
+Other node kinds open the inspector directly. Unlinked, missing or ambiguous
+implementations keep the map open and show a recovery message in the inspector.
 
 ### Agent Map MCP
 
