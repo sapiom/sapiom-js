@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startServer, type HarnessServer } from "./index.js";
+import * as recordArchive from "../core/record-archive.js";
+import * as retention from "../core/collector/store-retention.js";
 import type {
   AnalyticsEvent,
   HarnessAdapter,
@@ -79,6 +81,7 @@ describe("session record archive wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -232,11 +235,12 @@ describe("session record archive wiring", () => {
   it("archives conversations that ended before the archive existed", async () => {
     // An events file from an install that predates this feature: a complete
     // conversation, no archive, and no registry entry for it.
+    const expiredAt = Date.now() - retention.DEFAULT_MAX_AGE_MS - 60_000;
     const events: AnalyticsEvent[] = [
       {
         eventId: "evt-1",
         seq: 1,
-        ts: "2026-06-01T10:00:00.000Z",
+        ts: new Date(expiredAt).toISOString(),
         userId: null,
         tenantId: null,
         machineId: "machine-1",
@@ -249,7 +253,7 @@ describe("session record archive wiring", () => {
       {
         eventId: "evt-2",
         seq: 2,
-        ts: "2026-06-01T10:00:01.000Z",
+        ts: new Date(expiredAt + 1000).toISOString(),
         userId: null,
         tenantId: null,
         machineId: "machine-1",
@@ -262,14 +266,39 @@ describe("session record archive wiring", () => {
     ];
     await writeFile(eventStorePath, events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
 
-    server = await boot();
+    // Hold the backfill to prove retention cannot delete its source events,
+    // even when startup finishes before the archive work does.
+    let releaseBackfill!: () => void;
+    const backfillGate = new Promise<void>((resolve) => { releaseBackfill = resolve; });
+    const backfill = recordArchive.backfillSessionRecords;
+    const backfillSpy = vi.spyOn(recordArchive, "backfillSessionRecords")
+      .mockImplementation(async (options) => {
+        await backfillGate;
+        return backfill(options);
+      });
+    const sweepSpy = vi.spyOn(retention, "sweepNdjson");
+    try {
+      server = await boot();
+      expect(backfillSpy).toHaveBeenCalledOnce();
+      expect(sweepSpy).not.toHaveBeenCalled();
+    } finally {
+      releaseBackfill();
+    }
 
     await vi.waitFor(
       async () => {
         const archived = await readArchived("sess-legacy");
         expect(archived?.turns[0].prompt).toBe("from before the archive existed");
+        expect(archived?.turns[0].assistantText).toBe("done");
       },
       { timeout: 10_000, interval: 100 },
     );
+    await vi.waitFor(async () => {
+      expect(await readFile(eventStorePath, "utf8")).not.toContain("sess-legacy");
+    });
+    const archived = await fetchRecord("agent-legacy");
+    expect(archived.status).toBe(200);
+    expect(archived.body?.turns[0].prompt).toBe("from before the archive existed");
+    expect(archived.body?.turns[0].assistantText).toBe("done");
   }, 20_000);
 });
