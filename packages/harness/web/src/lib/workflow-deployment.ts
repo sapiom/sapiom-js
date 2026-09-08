@@ -78,8 +78,6 @@ export function prodRunDisabledReason(
 }
 
 export const DEPLOYMENT_UNAVAILABLE = "Deployment status unavailable";
-export const DEPLOYMENT_RETAINED =
-  "Couldn't refresh deployment status; showing the last confirmed status.";
 
 /** Display evidence is deliberately separate from the action gates above. */
 export function workflowDeploymentIndicator(workflow: DeployableWorkflow): {
@@ -102,11 +100,11 @@ export function workflowDeploymentIndicator(workflow: DeployableWorkflow): {
 
 export function workflowDeploymentTitle(workflow: DeployableWorkflow): string {
   const display = workflowDeploymentIndicator(workflow);
+  if (display.indicator === null) return DEPLOYMENT_UNAVAILABLE;
+  let state = workflowDeploymentState(workflow);
   if (display.unavailable)
-    return display.indicator === null
-      ? DEPLOYMENT_UNAVAILABLE
-      : DEPLOYMENT_RETAINED;
-  switch (workflowDeploymentState(workflow)) {
+    state = display.indicator === "deployed" ? "ready" : "draft";
+  switch (state) {
     case "ready":
       return "Deployed to Sapiom with a ready build.";
     case "building":

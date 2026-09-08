@@ -8,7 +8,7 @@ import {
   screenshot,
 } from "./workflow-deployment.fixture";
 
-test("list outages retain the cloud badge and background refreshes recover it", async ({
+test("list outages silently retain the cloud badge and background refreshes recover it", async ({
   page,
 }) => {
   await openDeploymentStudio(page);
@@ -21,15 +21,17 @@ test("list outages retain the cloud badge and background refreshes recover it", 
   await expect(cloud).toHaveAttribute("data-deployed", "true");
   await expect(cloud).toHaveAttribute("data-deployment-unavailable", "true");
   await expect(cloud).toHaveAttribute("data-deployment-state", "linked");
-  await expect(cloud).toHaveAttribute("title", /last confirmed status/);
+  const title = "Deployed to Sapiom with a ready build.";
+  await expect(cloud).toHaveAttribute("title", title);
   await cloud.hover();
-  await expect(page.locator(".app-tooltip")).toContainText(
-    "last confirmed status",
-  );
+  await expect(page.locator(".app-tooltip")).toHaveText(title);
   await screenshot(page, "rail-retained");
   await patch(page, { failure: "none", ready: false });
   await expect(cloud).toHaveAttribute("data-deployed", "false");
   await expect(cloud).toHaveAttribute("data-deployment-unavailable", "false");
+  await patch(page, { failure: "list" });
+  await expect(cloud).toHaveAttribute("data-deployed", "false");
+  await expect(cloud).toHaveAttribute("title", "Draft. Not deployed to Sapiom yet.");
 });
 
 test("auth invalidation clears evidence before replacement lookup and rejects an old success", async ({
