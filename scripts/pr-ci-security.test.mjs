@@ -23,6 +23,11 @@ test("pull request CI uses unprivileged fork-safe triggers", () => {
     const workflow = readWorkflow(relativePath);
 
     assert.match(workflow, /^  pull_request:\s*$/m, relativePath);
+    assert.match(
+      workflow,
+      /pull_request:\n    types: \[opened, synchronize, reopened, stacked\]\n    branches: \[main\]/,
+      `${relativePath}: run existing PR events and native stack changes`,
+    );
     assert.doesNotMatch(workflow, /pull_request_target:/, relativePath);
     assert.match(
       workflow,

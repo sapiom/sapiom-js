@@ -95,12 +95,19 @@ for the current package list rather than relying on a static catalog.
 
 ## Development workflow
 
-Create a descriptive branch from the latest `main`:
+For standalone work, create a descriptive branch from the latest `main`:
 
 ```bash
 git fetch upstream
 git checkout -b fix/short-description upstream/main
 ```
+
+For dependent changes, use a [native GitHub stack](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)
+with `main` as its target. Create each branch from the preceding branch. The
+first PR targets `main`; each later PR targets the preceding branch. All stack
+branches must be in the same repository. GitHub applies the stack target's
+branch rules and CI to each PR. The labeler also uses the stack target, so each
+PR must follow the contribution policy and template.
 
 While iterating, you can run commands for one package with pnpm filters:
 
@@ -222,10 +229,13 @@ fix(core): preserve transaction errors during polling
 
 ## Pull request process
 
-1. Rebase or merge the latest `upstream/main` into your branch.
+1. Rebase or merge the latest `upstream/main` into your branch. For a native
+   stack, rebase the stack in dependency order.
 2. Run the checks relevant to your change.
-3. Push the branch to your fork.
-4. Open a pull request against `sapiom/sapiom-js:main`.
+3. Push the branch to your fork. For a native stack, push all branches to the
+   target repository.
+4. Open a pull request against `sapiom/sapiom-js:main`. For later PRs in a native
+   stack with `main` as its target, use the preceding branch as the PR base.
 5. Complete every applicable section of the pull request template. Use `N/A`
    with a short explanation instead of silently deleting a section.
 6. Respond to review feedback and keep the branch focused as it evolves.
