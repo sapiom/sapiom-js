@@ -230,10 +230,11 @@ for (const failure of ["bulk", "list", "nested"] as const) {
       "data-deployment-unavailable",
       "true",
     );
-    await expect(page.getByTestId("agent-map-deployment-error")).toContainText(
-      "last confirmed status",
-    );
-    await expect(inspector(page)).toContainText("last confirmed status");
+    await expect(page.getByTestId("agent-map-deployment-error")).toHaveText("Retry status");
+    await expect(node(page)).toHaveAttribute("title", "Deployed to Sapiom with a ready build.");
+    await expect(node(page)).toHaveAccessibleName(/Research, agent, Deployed$/);
+    await expect(inspector(page).locator(".status-tag")).toHaveText("Deployed");
+    await expect(inspector(page).getByRole("status")).toHaveCount(0);
     expect(
       await page.getByTestId("agent-map-subject").getAttribute("style"),
     ).toBe(transform);
@@ -251,6 +252,7 @@ for (const failure of ["bulk", "list", "nested"] as const) {
         "data-deployment-state",
         "draft",
       );
+      await expect(inspector(page).getByRole("status")).toHaveCount(0);
     }
     await patch(
       page,
@@ -292,6 +294,11 @@ test("an older bulk result cannot undo a rebind or a live map edit", async ({
   await expect(node(page)).toHaveAccessibleName(
     /Deployment status unavailable/,
   );
+  await expect(page.getByTestId("agent-map-deployment-error"))
+    .toContainText("Deployment status unavailable");
+  await patch(page, { resolution: "bound" }, null);
+  await page.getByRole("button", { name: "Retry status", exact: true }).click();
+  await expect(node(page)).toHaveAttribute("data-deployment-state", "deployed");
 });
 
 test("auth changes discard held ready responses and old display evidence", async ({

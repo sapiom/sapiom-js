@@ -7,7 +7,6 @@ import type {
 import { AGENT_MAP_UUID_V7_PATTERN } from "@shared/agent-map-codec";
 import type { WorkflowInfo } from "@shared/types";
 import {
-  DEPLOYMENT_RETAINED,
   DEPLOYMENT_UNAVAILABLE,
   workflowDeploymentIndicator,
   workflowDeploymentTitle,
@@ -150,7 +149,5 @@ export function agentMapDeploymentLabel(
       : DEPLOYMENT_UNAVAILABLE;
 }
 export function agentMapDeploymentTitle(status: AgentMapDeployment): string {
-  return status.indicator && status.unavailable
-    ? DEPLOYMENT_RETAINED
-    : (status.title ?? agentMapDeploymentLabel(status));
+  return status.title ?? agentMapDeploymentLabel(status);
 }

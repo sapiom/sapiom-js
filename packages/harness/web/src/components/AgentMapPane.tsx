@@ -18,10 +18,7 @@ import {
   agentMapDeployments,
   type AgentMapDeployments,
 } from "../lib/agent-map-deployment";
-import {
-  DEPLOYMENT_RETAINED,
-  DEPLOYMENT_UNAVAILABLE,
-} from "../lib/workflow-deployment";
+import { DEPLOYMENT_UNAVAILABLE } from "../lib/workflow-deployment";
 import {
   agentMapNavigationError,
   agentMapTargetWorkflow,
@@ -408,17 +405,10 @@ function PopulatedAgentMap({
             className="agent-map-deployment-message"
             role="status"
             data-testid="agent-map-deployment-error"
-            title={
-              failed.some((status) => status.indicator !== null)
-                ? DEPLOYMENT_RETAINED
-                : DEPLOYMENT_UNAVAILABLE
-            }
           >
-            <span>
-              {failed.some((status) => status.indicator !== null)
-                ? DEPLOYMENT_RETAINED
-                : DEPLOYMENT_UNAVAILABLE}
-            </span>
+            {failed.some((status) => status.indicator === null) && (
+              <span>{DEPLOYMENT_UNAVAILABLE}</span>
+            )}
             <button
               type="button"
               className="status-tag status-tag-action"

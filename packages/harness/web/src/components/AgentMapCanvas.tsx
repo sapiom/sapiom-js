@@ -322,7 +322,7 @@ export function AgentMapCanvas({
                   }
                   {...trackingAttrs({ object: "agent" })}
                   aria-pressed={selectedNodeId === node.id}
-                  aria-label={`${node.name}, ${node.kind}${deployment ? `, ${agentMapDeploymentLabel(deployment)}${deployment.indicator && deployment.unavailable ? `, ${agentMapDeploymentTitle(deployment)}` : ""}` : ""}`}
+                  aria-label={`${node.name}, ${node.kind}${deployment ? `, ${agentMapDeploymentLabel(deployment)}` : ""}`}
                   aria-busy={pendingNodeId === node.id}
                   onClick={(event) =>
                     onSelectNode(node.id, event.currentTarget)

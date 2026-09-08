@@ -72,11 +72,13 @@ export function AgentMapInspector({
           </button>
         </div>
       </div>
-      {deployment?.unavailable && !deployment.loading && (
-        <section role="status">
-          <p>{agentMapDeploymentTitle(deployment)}</p>
-        </section>
-      )}
+      {deployment?.unavailable &&
+        !deployment.loading &&
+        deployment.indicator === null && (
+          <section role="status">
+            <p>{agentMapDeploymentTitle(deployment)}</p>
+          </section>
+        )}
       {openError && (
         <section role="status">
           <p>{openError}</p>
