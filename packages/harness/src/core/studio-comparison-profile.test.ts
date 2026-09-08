@@ -22,16 +22,15 @@ vi.mock("node:fs/promises", async (original) => ({
 const temporary: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(
-    temporary
-      .splice(0)
-      .map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
+  for (const root of temporary.splice(0))
+    await fs.rm(root, { recursive: true, force: true });
 });
 const hash = (bytes: Buffer) =>
   `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const readJson = async (file: string) =>
   JSON.parse(await fs.readFile(file, "utf8"));
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 async function write(file: string, value: unknown) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -120,8 +119,8 @@ async function fixture() {
     "agent-map/project-bootstrap/job.json",
   ])
     await write(path.join(source, file), { excluded: true });
-  const mapFile = (id = ids[0]!) =>
-    path.join(source, "agent-map/projects", id, "workspace.json");
+  const mapFile = (id = ids[0]!, state = source) =>
+    path.join(state, "agent-map/projects", id, "workspace.json");
   const store = new AgentMapWorkspaceStore(path.join(source, "agent-map"));
   const service = new AgentMapProposalService(store);
   const actor = {
@@ -196,6 +195,7 @@ async function fixture() {
     mapFile,
     journal,
     run,
+    readTarget: (file: string) => readJson(path.join(destination, file)),
   };
 }
 
@@ -254,11 +254,7 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
       { projectId: f.ids[1], map: null },
     ],
   });
-  const targetMap = path.join(
-    f.destination,
-    path.relative(f.source, f.mapFile()),
-  );
-  const copied = await fs.readFile(targetMap);
+  const copied = await fs.readFile(f.mapFile(undefined, f.destination));
   expect(copied).toEqual(await fs.readFile(f.mapFile()));
   expect(result.projects[0]!.map!.byteDigest).toBe(hash(copied));
   const parsed = JSON.parse(copied.toString());
@@ -267,9 +263,7 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
   expect(parsed.buildPlanVersions).toHaveLength(1);
   expect(Object.keys(parsed.briefVersionsById)).not.toHaveLength(0);
   const catalog = await readJson(path.join(f.source, "studio-projects.json"));
-  expect(
-    await readJson(path.join(f.destination, "studio-projects.json")),
-  ).toEqual({
+  expect(await f.readTarget("studio-projects.json")).toEqual({
     schemaVersion: catalog.schemaVersion,
     projects: catalog.projects.filter((project: { projectId: string }) =>
       f.ids.slice(0, 2).includes(project.projectId),
@@ -277,7 +271,7 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
   });
   const prefsFile = "agent-map/studio-workspace-preferences.json";
   const sourcePrefs = await readJson(path.join(f.source, prefsFile));
-  expect(await readJson(path.join(f.destination, prefsFile))).toEqual({
+  expect(await f.readTarget(prefsFile)).toEqual({
     schemaVersion: 1,
     preferences: [],
     agentBindings: sourcePrefs.agentBindings.filter(
@@ -285,9 +279,7 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
         f.ids.slice(0, 2).includes(binding.projectId),
     ),
   });
-  const copiedInventory = await readJson(
-    path.join(f.destination, "workflows.json"),
-  );
+  const copiedInventory = await f.readTarget("workflows.json");
   expect(copiedInventory.map((row: { path: string }) => row.path)).toEqual([
     f.inventory[0]!.path,
     f.inventory[1]!.path,
@@ -296,12 +288,11 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
   expect(copiedInventory.some((row: object) => "activeBuildRunId" in row)).toBe(
     false,
   );
-  expect(
-    await readJson(path.join(f.destination, "settings.json")),
-  ).toMatchObject({ recentDirs: f.roots.slice(0, 2), telemetryOptIn: false });
-  expect(
-    await readJson(path.join(f.destination, "comparison-profile.json")),
-  ).toEqual(result);
+  expect(await f.readTarget("settings.json")).toMatchObject({
+    recentDirs: f.roots.slice(0, 2),
+    telemetryOptIn: false,
+  });
+  expect(await f.readTarget("comparison-profile.json")).toEqual(result);
   expect(
     Object.keys(await hashes(f.destination)).some((name) =>
       /initialization|bootstrap|\.lock|machine-id|sessions|pending-secrets|credentials/.test(
@@ -331,9 +322,7 @@ it("retains deliberately empty authored maps and un-authored empty containers di
     true,
     false,
   ]);
-  const copied = await new AgentMapWorkspaceStore(
-    path.join(f.destination, "agent-map"),
-  ).readAggregate(f.ids[0]!);
+  const copied = await readJson(f.mapFile(undefined, f.destination));
   expect(copied.mapVersions.at(-1)!.graph.nodes).toEqual([]);
   expect(copied.mapVersions).toHaveLength(3);
   expect(hasAuthoredAgentMap(copied)).toBe(true);
@@ -359,25 +348,26 @@ it.each(["queued", "running"])(
         { projectId: absent, reason: "project_not_found" },
       ],
     });
-    await expect(fs.stat(f.destination)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissing(f.destination);
     expect((await f.run()).projects.map(({ projectId }) => projectId)).toEqual([
       f.ids[0],
     ]);
-    await expect(
-      fs.stat(
-        path.join(
-          f.destination,
-          "agent-map/projects",
-          f.ids[1]!,
-          "workspace.json",
-        ),
-      ),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(f.mapFile(f.ids[1], f.destination));
     expect(await hashes(f.source)).toEqual(before);
   },
 );
+
+it.each(["ESRCH", "EPERM"])("imports only dead owners: %s", async (code) => {
+  const f = await fixture();
+  await f.journal(f.ids[1]!, "running");
+  const before = await hashes(f.source);
+  const probe = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error(code), { code });
+  });
+  expect((await f.run([f.ids[1]!])).published).toBe(code === "ESRCH");
+  expect(probe).toHaveBeenCalledWith(process.pid, 0);
+  expect(await hashes(f.source)).toEqual(before);
+});
 
 it.each([
   "malformed",
@@ -435,9 +425,7 @@ it.each([
     });
     failure?.mockRestore();
     expect(await hashes(f.source)).toEqual(before);
-    await expect(fs.stat(f.destination)).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissing(f.destination);
   },
 );
 
@@ -458,9 +446,7 @@ it("rejects a source mutation during staging and cleans the unpublished stage", 
       name.startsWith(".studio-comparison-"),
     ),
   ).toEqual([]);
-  await expect(fs.stat(f.destination)).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectMissing(f.destination);
 });
 
 it("rejects a map removed between stat and read instead of importing it as mapless", async () => {
@@ -474,9 +460,7 @@ it("rejects a map removed between stat and read instead of importing it as maple
     return actualRead(...args);
   });
   await expect(f.run()).rejects.toMatchObject({ code: "source_changed" });
-  await expect(fs.stat(f.destination)).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectMissing(f.destination);
 });
 
 it("rejects aliasing, overlapping, populated and symlinked destinations; accepts a fresh empty directory", async () => {
@@ -503,7 +487,7 @@ it("rejects aliasing, overlapping, populated and symlinked destinations; accepts
   await fs.rm(path.join(f.destination, "keep.json"));
   const rename = fs.rename;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-    await expect(fs.stat(to)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(String(to));
     await rename(from, to);
   });
   expect((await f.run()).published).toBe(true);
@@ -519,10 +503,9 @@ it("cleans staging after a publish failure without leaving a partial destination
   );
   await expect(f.run()).rejects.toMatchObject({
     code: "destination_unavailable",
+    cause: { code: "ENOSPC" },
   });
-  await expect(fs.stat(f.destination)).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectMissing(f.destination);
   expect(
     (await fs.readdir(f.root)).some((name) =>
       name.startsWith(".studio-comparison-"),
