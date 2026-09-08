@@ -33,11 +33,10 @@ test("switches the same saved map through a lazy local worker with measured card
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
-      postMessage(message: unknown) {
-        const request = message as { cmd?: string; graph?: unknown };
-        if (request.cmd === "layout")
+      postMessage(message: { cmd?: string; graph?: ElkNode }) {
+        if (message.cmd === "layout")
           (window as unknown as { layoutInput: unknown }).layoutInput =
-            request.graph;
+            message.graph;
         super.postMessage(message);
       }
     };
@@ -66,12 +65,10 @@ test("switches the same saved map through a lazy local worker with measured card
       ...document.querySelectorAll<SVGTextElement>(".agent-map-edge-label"),
     ];
     return {
-      cardsMatch: input.children!.every((node) =>
-        cards.every(
-          (card) =>
-            card.offsetWidth === node.width &&
-            card.offsetHeight === node.height,
-        ),
+      cardsMatch: input.children!.every(
+        (node, index) =>
+          cards[index]!.offsetWidth === node.width &&
+          cards[index]!.offsetHeight === node.height,
       ),
       labels: input.edges!.map((edge) => {
         const label = edge.labels![0]!,
@@ -122,10 +119,13 @@ test("fences layout selection and graph changes while the worker is pending", as
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
-      postMessage(message: unknown) {
-        if ((message as { cmd?: string }).cmd === "layout")
+      postMessage(message: { cmd?: string; graph?: ElkNode }) {
+        if (message.cmd === "layout") {
+          document.documentElement.dataset.labelWidth = String(
+            message.graph!.edges![0]!.labels![0]!.width,
+          );
           setTimeout(() => super.postMessage(message), 200);
-        else super.postMessage(message);
+        } else super.postMessage(message);
       }
     };
   });
@@ -134,6 +134,8 @@ test("fences layout selection and graph changes while the worker is pending", as
   await expect(map(page)).toHaveAttribute("data-layout-engine", "classic");
   await page.getByRole("button", { name: "Vertical", exact: true }).click();
   const nodeId = "node_00000000-0000-7000-8000-000000001999";
+  const viewport = page.getByTestId("agent-map-viewport");
+  await viewport.evaluate((el) => ((el as HTMLElement).style.display = "none"));
   await page.evaluate((nodeId) => {
     const projectId = document
       .querySelector("[data-testid='agent-map-live']")!
@@ -169,7 +171,12 @@ test("fences layout selection and graph changes while the worker is pending", as
       },
     });
   }, nodeId);
-  await expect(page.getByTestId(`agent-map-node-${nodeId}`)).toBeVisible();
+  await expect(page.getByTestId(`agent-map-node-${nodeId}`)).toHaveCount(1);
+  await page.waitForTimeout(250);
+  await viewport.evaluate((el) => ((el as HTMLElement).style.display = ""));
   await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
   await expect(page.getByTestId(`agent-map-node-${nodeId}`)).toBeVisible();
+  expect(
+    Number(await page.locator("html").getAttribute("data-label-width")),
+  ).toBeGreaterThan(100);
 });

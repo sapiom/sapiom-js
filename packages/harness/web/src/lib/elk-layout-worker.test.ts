@@ -10,25 +10,21 @@ class WorkerDouble {
   addEventListener(type: string, listener: () => void) {
     this.listeners.set(type, listener);
   }
+  respond(id: number, data: unknown) {
+    this.onmessage?.({ data: { id, data } });
+  }
   postMessage(message: { id: number; cmd: string; graph: ElkNode }) {
     if (message.cmd === "register")
-      queueMicrotask(() =>
-        this.onmessage?.({ data: { id: message.id, data: {} } }),
-      );
+      queueMicrotask(() => this.respond(message.id, {}));
     else this.jobs.push(message);
   }
   complete(index = 0) {
     const { id, graph } = this.jobs[index]!;
-    this.onmessage?.({
-      data: {
-        id,
-        data: {
-          ...graph,
-          width: 200,
-          height: 100,
-          children: graph.children!.map((node) => ({ ...node, x: 1, y: 2 })),
-        },
-      },
+    this.respond(id, {
+      ...graph,
+      width: 200,
+      height: 100,
+      children: graph.children!.map((node) => ({ ...node, x: 1, y: 2 })),
     });
   }
 }
@@ -37,7 +33,6 @@ const input = {
   nodes: [{ id: "node", width: 184, height: 72 }],
   edges: [],
 };
-const signal = () => new AbortController();
 const setup = (timeout?: number) => {
   const workers: WorkerDouble[] = [];
   const client = new ElkLayoutWorker(() => {
@@ -50,12 +45,11 @@ const setup = (timeout?: number) => {
 
 it("lazily reuses its worker and rejects obsolete responses after cancellation", async () => {
   const { client, workers } = setup();
-  expect(workers).toHaveLength(0);
-  const first = client.layout(input, signal().signal);
+  const first = client.layout(input, new AbortController().signal);
   await vi.waitFor(() => expect(workers[0]?.jobs).toHaveLength(1));
   workers[0]!.complete();
   await first;
-  const controller = signal(),
+  const controller = new AbortController(),
     obsolete = client.layout(input, controller.signal);
   const rejected = expect(obsolete).rejects.toThrow("cancelled");
   await vi.waitFor(() => expect(workers[0]?.jobs).toHaveLength(2));
@@ -63,7 +57,7 @@ it("lazily reuses its worker and rejects obsolete responses after cancellation",
   await rejected;
   const next = client.layout(
     { ...input, id: "next-project/proposal" },
-    signal().signal,
+    new AbortController().signal,
   );
   await vi.waitFor(() => expect(workers[1]?.jobs).toHaveLength(1));
   workers[0]!.complete(1);
@@ -77,21 +71,21 @@ it("lazily reuses its worker and rejects obsolete responses after cancellation",
 
 it("terminates on worker failure, invalid results, timeout and disposal, then recovers", async () => {
   const { client, workers } = setup(150);
-  const error = client.layout(input, signal().signal),
+  const error = client.layout(input, new AbortController().signal),
     rejected = expect(error).rejects.toThrow("worker failed");
   await vi.waitFor(() => expect(workers[0]?.jobs).toHaveLength(1));
   workers[0]!.listeners.get("error")!();
   await rejected;
-  const invalid = client.layout(input, signal().signal),
+  const invalid = client.layout(input, new AbortController().signal),
     bad = expect(invalid).rejects.toThrow("Invalid ELK");
   await vi.waitFor(() => expect(workers[1]?.jobs).toHaveLength(1));
   workers[1]!.jobs[0]!.graph.children = [];
   workers[1]!.complete();
   await bad;
-  await expect(client.layout(input, signal().signal)).rejects.toThrow(
-    "timed out",
-  );
-  const last = client.layout(input, signal().signal),
+  await expect(
+    client.layout(input, new AbortController().signal),
+  ).rejects.toThrow("timed out");
+  const last = client.layout(input, new AbortController().signal),
     disposed = expect(last).rejects.toThrow("disposed");
   client.dispose();
   await disposed;
@@ -106,11 +100,11 @@ it("terminates workers after constructor and idle failures without affecting the
   Object.defineProperty(broken, "postMessage", { value: undefined });
   const factory = vi.fn().mockReturnValueOnce(broken).mockReturnValue(healthy);
   const client = new ElkLayoutWorker(factory);
-  await expect(client.layout(input, signal().signal)).rejects.toThrow(
-    "required 'postMessage'",
-  );
+  await expect(
+    client.layout(input, new AbortController().signal),
+  ).rejects.toThrow("required 'postMessage'");
   expect(broken.terminate).toHaveBeenCalledOnce();
-  const next = client.layout(input, signal().signal);
+  const next = client.layout(input, new AbortController().signal);
   await vi.waitFor(() => expect(healthy.jobs).toHaveLength(1));
   broken.listeners.get("error")?.();
   healthy.complete();

@@ -58,6 +58,7 @@ async function measureLabels(
 export function useAgentMapLayout(
   proposal: MapChangeProposal,
   viewport: RefObject<HTMLDivElement | null>,
+  visible: boolean,
 ) {
   const [mode, setMode] = useState<MapLayout>(initialLayout);
   const [worker] = useState(() => new ElkLayoutWorker());
@@ -99,7 +100,7 @@ export function useAgentMapLayout(
   } | null>(null);
   useEffect(() => () => worker.dispose(), [worker]);
   useEffect(() => {
-    if (mode !== "elk" || !viewport.current) return;
+    if (mode !== "elk" || !viewport.current || !visible) return;
     const controller = new AbortController();
     const element = viewport.current;
     void measureLabels(input.edges, element)
@@ -111,11 +112,19 @@ export function useAgentMapLayout(
         );
         if (!controller.signal.aborted) setResult({ input, layout });
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setResult({ input, layout: null });
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        const reason = error instanceof Error ? error.message : "";
+        console.warn(
+          "Agent Map layout fallback:",
+          /^(Invalid ELK layout|Layout (worker failed|timed out))$/.test(reason)
+            ? reason
+            : "Startup or measurement failed",
+        );
+        setResult({ input, layout: null });
       });
     return () => controller.abort();
-  }, [input, mode, viewport, worker]);
+  }, [input, mode, viewport, visible, worker]);
   const vertical = mode === "elk" && result?.input === input ? result : null;
   return {
     layout: vertical?.layout ?? classic,

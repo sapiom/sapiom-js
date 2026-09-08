@@ -55,15 +55,11 @@ describe("vertical ELK geometry", () => {
       expect(layout.nodes.map(({ id }) => id).sort()).toEqual(
         input.nodes.map(({ id }) => id).sort(),
       );
-      expect(
-        layout.edges
-          .map(({ id, from, to, label }) => ({ id, from, to, label }))
-          .sort((a, b) => a.id.localeCompare(b.id)),
-      ).toEqual(
-        input.edges
-          .map(({ id, from, to, label }) => ({ id, from, to, label }))
-          .sort((a, b) => a.id.localeCompare(b.id)),
-      );
+      expect(layout.edges).toHaveLength(input.edges.length);
+      for (const { id, from, to, label } of input.edges)
+        expect(layout.edges).toContainEqual(
+          expect.objectContaining({ id, from, to, label }),
+        );
       expect(layout.bounds.width).toBeGreaterThan(0);
       for (const node of layout.nodes) {
         expect([node.width, node.height]).toEqual([NODE_WIDTH, NODE_HEIGHT]);

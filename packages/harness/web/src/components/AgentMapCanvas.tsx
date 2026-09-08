@@ -65,8 +65,9 @@ export function AgentMapCanvas({
   const [view, setView] = useState<GraphView>(resetGraphView);
   const [minZoom, setMinZoom] = useState(GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
+  const [visible, setVisible] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const computed = useAgentMapLayout(proposal, viewportRef);
+  const computed = useAgentMapLayout(proposal, viewportRef, visible);
   const dragRef = useRef<DragState | null>(null);
   const fittedProposalRef = useRef<string | null>(null);
   const followsUpdates = useRef(true);
@@ -101,11 +102,9 @@ export function AgentMapCanvas({
     if (fittedProposalRef.current !== proposal.id)
       followsUpdates.current = true;
     const measure = (): void => {
-      if (
-        !followsUpdates.current ||
-        viewport.getBoundingClientRect().width <= 0
-      )
-        return;
+      const visible = viewport.getBoundingClientRect().width > 0;
+      setVisible(visible);
+      if (!followsUpdates.current || !visible) return;
       fittedProposalRef.current = proposal.id;
       fit();
     };
