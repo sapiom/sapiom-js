@@ -181,14 +181,16 @@ Things to know:
 - **A hosted pause has a deadline.** `timeoutMs` sets it; omitted, the hosted engine
   applies its default of 7 days. A pause that receives no signal by then is finalized
   as failed with `PauseTimeoutError`, so a dropped result surfaces as an error rather
-  than a run that parks forever. For a *capability* pause the default is the right
-  size and raising it buys nothing: the resume token expires on the same horizon, so
-  a result arriving later could not be accepted anyway. Pass an explicit `timeoutMs`
-  on a plain signal pause that no capability backs, such as a human gate you expect
-  to outlive a week:
+  than a run that parks forever. The default matches the sandboxed capability's
+  resume-token TTL, so for a coding pause a later result could not be accepted
+  anyway. It does **not** bound a dispatched child agent: a child's result comes
+  back through stored parent linkage with no token check, so it can land long after
+  seven days. Size `timeoutMs` to whatever you are waiting on, on any pause that can
+  outlive a week: a child run's worst case (otherwise the parent fails while the
+  child is still working), or a human gate:
 
   ```ts
-  // A human gate, not a capability pause: nothing but this deadline bounds the wait.
+  // A human gate: nothing but this deadline bounds the wait.
   return pauseUntilSignal({
     signal: "approval.decision",
     resumeStep: "decide",
