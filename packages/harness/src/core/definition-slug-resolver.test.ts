@@ -250,8 +250,8 @@ describe("createDefinitionSlugResolver", () => {
     expect(slug).toBeNull();
   });
 
-  it("logs a resolution failure once per definitionId, not on every poll", async () => {
-    const fetchImpl = makeFetch(404, { error: "not found" });
+  it("logs an actionable sanitized failure once per definitionId, not on every poll", async () => {
+    const fetchImpl = makeFetch(403, { error: "private upstream error" });
     const resolver = createDefinitionSlugResolver({
       apiKey: "test-key",
       fetchImpl,
@@ -267,6 +267,11 @@ describe("createDefinitionSlugResolver", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0][0])).toContain("definitionId=777");
     expect(String(errorSpy.mock.calls[0][0])).toContain("metadata unavailable");
+    expect(String(errorSpy.mock.calls[0][0])).toContain("HTTP 403");
+    expect(String(errorSpy.mock.calls[0][0])).toContain("account that owns this agent");
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(
+      /test-key|private upstream error/,
+    );
   });
 
   it("does not log when there is no api key (a harness without auth is expected)", async () => {
@@ -304,6 +309,10 @@ describe("authenticated deployment evidence", () => {
     [503, {}],
     [404, {}],
     [404, { ...absent, message: "wrong definition" }],
+    [404, {
+      statusCode: 404, code: "not_found",
+      message: "Cannot GET /agents/v1/definitions/188",
+    }],
   ])(
     "retains confirmed evidence for unavailable %s %j",
     async (status, body) => {
@@ -327,11 +336,13 @@ describe("authenticated deployment evidence", () => {
     },
   );
   it.each([
-    reply(absent, 404),
-    reply({ activeBuildRunId: null, activeBuildRunStatus: null }),
+    [reply(ready), reply(absent, 404)],
+    [reply(ready), reply({ activeBuildRunId: null, activeBuildRunStatus: null })],
+    [reply(ready), reply({ ...ready, activeBuildRunId: "new-build" })],
+    [reply(absent, 404), reply(ready)],
   ])(
-    "accepts confirmed absence over an older ready response",
-    async (newer) => {
+    "reconciles healthy overlaps without caching runnable fields on failure",
+    async (older, newer) => {
       let release!: (response: Response) => void;
       const fetchImpl = vi
         .fn()
@@ -348,17 +359,17 @@ describe("authenticated deployment evidence", () => {
         fetchImpl,
       });
       const pending = resolver.resolveMetadata("188");
-      await resolver.resolveMetadata("188");
-      release(reply(ready));
-      await expect(pending).resolves.toEqual({
-        status: "unavailable",
-        lastConfirmedDeployed: false,
-      });
+      const latest = await resolver.resolveMetadata("188");
+      release(older);
+      await expect(pending).resolves.toEqual(latest);
       await expect(resolver.resolveMetadata("188")).resolves.toEqual({
         status: "unavailable",
-        lastConfirmedDeployed: false,
+        lastConfirmedDeployed: latest.status === "available" &&
+          latest.metadata.activeBuildRunStatus === "ready",
       });
-      await expect(resolver.resolve("188")).resolves.toBeNull();
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      const slug = latest.status === "available" ? latest.metadata.slug : null;
+      await expect(resolver.resolve("188")).resolves.toBe(slug);
     },
   );
   it("forgets cached slugs, retained flags and pending responses across A → B → A", async () => {
