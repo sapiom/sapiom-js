@@ -18,12 +18,14 @@ import {
 } from "./studio-project-catalog.js";
 import { parseStudioWorkspacePreferences } from "./studio-workspace-preferences.js";
 
+/** Source, isolated destination, and selected durable Studio project IDs. */
 export interface StudioComparisonImportOptions {
   sourceStateRoot: string;
   destinationStateRoot: string;
   projectIds: readonly string[];
 }
 
+/** Snapshot identities and map references, including publication and exclusions. */
 export interface StudioComparisonManifest {
   schemaVersion: 1;
   sourceStateRoot: string;
@@ -48,6 +50,7 @@ export interface StudioComparisonManifest {
   }>;
 }
 
+/** Bounded import failure with an optional file reference and underlying cause. */
 export class StudioComparisonImportError extends Error {
   constructor(
     readonly code:
@@ -430,6 +433,7 @@ async function importProfile(
  * all excluded returns published:false without publishing a destination.
  * Throws StudioComparisonImportError for unsafe, invalid, changing or unavailable state.
  * Trial journals and machine identity start independently at boot.
+ * A failed final publish may consume a pre-existing empty destination directory.
  */
 export async function importStudioComparisonProfile(
   options: StudioComparisonImportOptions,
