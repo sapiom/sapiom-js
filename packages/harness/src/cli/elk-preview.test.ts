@@ -58,6 +58,12 @@ async function fixture() {
 it("reopens without resetting destination edits or initialization attempts", async () => {
   const f = await fixture();
   const manifest = await prepareComparisonProfile(f.options);
+  const sharedAgentRoot = path.join(root, "agents");
+  await fs.mkdir(sharedAgentRoot);
+  await fs.symlink(
+    f.source,
+    path.join(sharedAgentRoot, "unrelated-source-link"),
+  );
   const sentinel = path.join(
     f.destination,
     "agent-map",
@@ -161,6 +167,24 @@ it("retains the normal CLI auth boundary and releases its profile claim when boo
   );
   await expect(launchComparison(f.argv)).rejects.toThrow("already claimed");
   expect(runCli).toHaveBeenCalledOnce();
+});
+
+it.each([
+  "events.ndjson",
+  "records/session/events.ndjson",
+  "generated/session/context.json",
+])("rejects writable metadata links before boot: %s", async (relative) => {
+  const f = await fixture();
+  await prepareComparisonProfile(f.options);
+  const sourceLog = path.join(f.source, "events.ndjson");
+  await fs.writeFile(sourceLog, "desktop event bytes\n");
+  const target = path.join(f.destination, relative);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.symlink(sourceLog, target);
+  vi.mocked(runCli).mockRejectedValue(new Error("server boot reached"));
+  await expect(launchComparison(f.argv)).rejects.toThrow("symlink");
+  expect(runCli).not.toHaveBeenCalled();
+  expect(await fs.readFile(sourceLog, "utf8")).toBe("desktop event bytes\n");
 });
 
 it("reports a port collision without closing the existing listener", async () => {

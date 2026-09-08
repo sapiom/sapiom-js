@@ -1,12 +1,5 @@
 [
   {
-    "id": "studio-comparison-launcher-registry-filename",
-    "path": "packages/harness/src/cli/elk-preview.ts",
-    "pattern": "^workflows\\.json$",
-    "occurrences": 1,
-    "reason": "Comparison reopening checks the existing on-disk agent registry filename."
-  },
-  {
     "id": "studio-comparison-registry-filename",
     "path": "packages/harness/src/core/studio-comparison-profile.ts",
     "pattern": "^workflows\\.json$",

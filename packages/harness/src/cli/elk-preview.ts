@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import * as path from "node:path";
 import { createServer } from "node:net";
 import { z } from "zod";
-import { expandHome } from "../core/paths.js";
+import { expandHome, resolveStatePaths } from "../core/paths.js";
 import { importStudioComparisonProfile } from "../core/studio-comparison-profile.js";
 import {
   isStudioProjectId,
@@ -116,22 +116,23 @@ export async function prepareComparisonProfile(
       "Comparison destination must be a directory, not a symlink.",
     );
   const canonical = await fs.realpath(destination);
-  // Harness stores may write while reading; reject links back into desktop state.
-  for (const name of [
-    "comparison-profile.json",
-    "studio-projects.json",
-    "settings.json",
-    "workflows.json",
-    "machine-id",
-    "agent-map",
+  // Cover writable runtime metadata, including local events with telemetry off.
+  // Do not walk the root or catalog's shared agent source directories.
+  for (const file of [
+    path.join(canonical, "comparison-profile.json"),
+    path.join(canonical, "comparison-profile.lock"),
+    ...Object.values(resolveStatePaths(canonical)).filter(
+      (file) => file !== canonical,
+    ),
   ]) {
-    const file = path.join(canonical, name);
     const entry = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null;
       throw error;
     });
     if (entry?.isSymbolicLink())
-      throw new Error(`Comparison state contains a symlink: ${name}`);
+      throw new Error(
+        `Comparison state contains a symlink: ${path.relative(canonical, file)}`,
+      );
     if (entry?.isDirectory())
       for (const child of await fs.readdir(file, {
         recursive: true,

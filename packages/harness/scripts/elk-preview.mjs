@@ -45,7 +45,7 @@ try {
         {
           cwd,
           stdio: "inherit",
-          env: { ...process.env, VITE_MOCK: "0" },
+          env: { ...process.env, VITE_MOCK: "" },
         },
       );
       child.once("error", reject);
