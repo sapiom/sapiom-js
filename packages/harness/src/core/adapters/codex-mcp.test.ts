@@ -115,6 +115,36 @@ describe("Codex per-session MCP configuration", () => {
     expect(process.env.SAPIOM_API_KEY).toBe(parentApiKey);
   });
 
+  it("keeps managed runtime arguments and places MCP options before the initial prompt", async () => {
+    await writeConfig({
+      sapiom: {
+        type: "http",
+        url: "https://api.sapiom.ai/v1/mcp",
+        headers: { "x-api-key": "private-managed-key" },
+      },
+    });
+    const managed = new CodexAdapter({
+      binary: "/Applications/Agent Studio.app/Contents/MacOS/Agent Studio",
+      binaryArgs: ["/managed/codex/launcher.cjs"],
+      binaryEnv: { ELECTRON_RUN_AS_NODE: "1" },
+    });
+    const opts = { ...options(), initialPrompt: "Create an agent" };
+    const launch = managed.launch(opts);
+    const resume = managed.resume("rollout-1", opts);
+    for (const spec of [launch, resume]) {
+      expect(spec.args[0]).toBe("/managed/codex/launcher.cjs");
+      expect(spec.env.ELECTRON_RUN_AS_NODE).toBe("1");
+      expect(spec.env.SAPIOM_CODEX_MCP_0_HEADER_0).toBe("private-managed-key");
+      expect(serverArg(spec, "sapiom")).toBeDefined();
+    }
+    expect(launch.args.slice(-2)).toEqual(["--", opts.initialPrompt]);
+    expect(launch.args.indexOf(serverArg(launch, "sapiom")!)).toBeLessThan(
+      launch.args.indexOf("--"),
+    );
+    expect(resume.args.slice(1, 3)).toEqual(["resume", "rollout-1"]);
+    expect(resume.args).not.toContain(opts.initialPrompt);
+  });
+
   it("supports signed-out sessions and the default npx launcher", async () => {
     await writeConfig({
       sapiom: { type: "http", url: "https://api.sapiom.ai/v1/mcp" },

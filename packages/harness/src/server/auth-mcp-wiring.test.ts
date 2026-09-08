@@ -187,6 +187,7 @@ describe("Agent Studio MCP authentication wiring", () => {
   let projectRoot: string;
   let server: HarnessServer | undefined;
   let captures: CapturedLaunch[];
+  let identityWorkspaces: string[];
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "harness-auth-mcp-wiring-"));
@@ -204,6 +205,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     authFixture.credential = null;
     authFixture.readError = null;
     captures = [];
+    identityWorkspaces = [];
     vi.clearAllMocks();
   });
 
@@ -212,6 +214,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    for (const cwd of identityWorkspaces) await rm(cwd, { recursive: true, force: true });
     await rm(root, {
       recursive: true,
       force: true,
@@ -276,8 +279,9 @@ describe("Agent Studio MCP authentication wiring", () => {
   it("wires fresh Codex sessions after UI login, refreshes resume/create credentials, and clears auth after logout", async () => {
     process.env.SAPIOM_ENVIRONMENT = "staging";
     await boot({ adapters: { codex: capturingCodexAdapter(captures) }, codexHomeDir: root });
-    const create = async () => {
-      const response = await post("/api/sessions", { cwd: projectRoot, harness: "codex" });
+    const create = async (cwd = projectRoot) => {
+      await mkdir(cwd, { recursive: true });
+      const response = await post("/api/sessions", { cwd, harness: "codex" });
       expect(response.status).toBe(201);
       return response.json() as Promise<{ id: string; harness: string }>;
     };
@@ -296,13 +300,17 @@ describe("Agent Studio MCP authentication wiring", () => {
     expectWiring();
     expect((await post("/api/auth/start")).status).toBe(200);
     await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalledOnce());
-    const signedIn = await create();
+    // Project bootstrap belongs to the principal that discovered it. Use a
+    // fresh workspace after identity changes, as a new Studio user would.
+    const signedInRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-in-"));
+    identityWorkspaces.push(signedInRoot);
+    const signedIn = await create(signedInRoot);
     expect(signedIn.harness).toBe("codex");
     expectWiring("browser-key");
     const launchArgs = captures.at(-1)!.spec!.args;
     await server!.sessionManager.setAgentSessionId(signedIn.id, "codex-rollout-fixture");
 
-    authFixture.credential = credential("rotated-key");
+    authFixture.credential = { ...authFixture.browserResult, apiKey: "rotated-key" };
     await server!.sessionManager.kill(signedIn.id);
     expect((await post(`/api/sessions/${signedIn.id}/resume`)).status).toBe(200);
     expect(captures.at(-1)!.kind).toBe("resume");
@@ -310,10 +318,12 @@ describe("Agent Studio MCP authentication wiring", () => {
     expect(captures.at(-1)!.spec!.args.filter((arg) => arg.startsWith("mcp_servers.")))
       .toEqual(launchArgs.filter((arg) => arg.startsWith("mcp_servers.")));
 
-    await create();
+    await create(signedInRoot);
     expectWiring("rotated-key");
     expect((await post("/api/auth/disconnect")).status).toBe(200);
-    await create();
+    const signedOutRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-out-"));
+    identityWorkspaces.push(signedOutRoot);
+    await create(signedOutRoot);
     expectWiring();
     expect(clearCredentials).toHaveBeenCalled();
   }, 20_000);
