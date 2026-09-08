@@ -14,6 +14,8 @@
  * --no-open, --no-session, --dev, --state-root <dir>.
  */
 import * as crypto from "node:crypto";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import open from "open";
 import {
   runDoctor,
@@ -23,30 +25,34 @@ import {
   CODEX_INSTALL_COMMAND,
 } from "./doctor.js";
 import { ensureAuthenticated } from "./auth.js";
-import { printBanner } from "./banner.js";
+import { cliBrowserUrl, printBanner } from "./banner.js";
 import { ensureConsent } from "./consent.js";
 import { loadSettings, recordRecentDir } from "./settings.js";
 import { getOrCreateMachineId } from "./machine-id.js";
 import { resolveStatePaths } from "../core/paths.js";
-import { parseArgs, resolveCliAuthMode } from "./args.js";
+import { canStartCli, parseArgs, resolveCliAuthMode } from "./args.js";
 import { startServer, type HarnessServer } from "../server/index.js";
 
-const main = async (): Promise<void> => {
-  const options = parseArgs(process.argv.slice(2));
+export const runCli = async (argv: string[]): Promise<void> => {
+  const options = parseArgs(argv);
 
   const doctorReport = await runDoctor();
   printDoctorReport(doctorReport);
-  if (!doctorReport.ok) {
+  if (!canStartCli(doctorReport, options.noSession)) {
     console.error(
       "\nAgent Studio (`sapiom-harness`) requires Node >= 20 and at least one coding agent on PATH:\n" +
         `  Claude Code:  ${CLAUDE_INSTALL_COMMAND}\n` +
         `  Codex:        ${CODEX_INSTALL_COMMAND}\n` +
         "Fix the checks above and try again.",
     );
-    process.exit(1);
+    throw new Error("Agent Studio prerequisites failed");
   }
   const defaultHarnessKind = pickDefaultHarness(doctorReport);
-  if (!doctorReport.availableHarnesses.includes("claude-code")) {
+  if (doctorReport.availableHarnesses.length === 0) {
+    console.log(
+      "\nOpening saved maps without a coding provider. Map initialization needs an authenticated Claude Code or Codex on PATH; restart after setup, then use Retry.",
+    );
+  } else if (!doctorReport.availableHarnesses.includes("claude-code")) {
     console.log(
       `\n⚠ Claude Code not found — install with: ${CLAUDE_INSTALL_COMMAND}\n` +
         "  Continuing with the Codex coding agent.",
@@ -126,10 +132,11 @@ const main = async (): Promise<void> => {
     identity,
     telemetryOptIn: consentResult.telemetryOptIn,
     serverStarted: server !== null,
+    ...(options.mapLayout ? { mapLayout: options.mapLayout } : {}),
   });
 
   if (server && !options.noOpen) {
-    await open(`http://localhost:${server.port}/?uiToken=${server.uiToken}`);
+    await open(cliBrowserUrl(server.port, server.uiToken, options.mapLayout));
   }
 
   if (server) {
@@ -154,7 +161,12 @@ const main = async (): Promise<void> => {
   }
 };
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  runCli(process.argv.slice(2)).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

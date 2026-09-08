@@ -1,5 +1,17 @@
 import type { HarnessIdentity } from "./auth.js";
 import { AGENT_STUDIO_PRODUCT_NAME } from "../shared/branding.js";
+import type { CliOptions } from "./args.js";
+
+export function cliBrowserUrl(
+  port: number,
+  uiToken: string,
+  mapLayout?: CliOptions["mapLayout"],
+): string {
+  const url = new URL(`http://localhost:${port}/`);
+  url.searchParams.set("uiToken", uiToken);
+  if (mapLayout) url.searchParams.set("mapLayout", mapLayout);
+  return url.href;
+}
 
 export interface PrintBannerOptions {
   dir: string;
@@ -11,6 +23,7 @@ export interface PrintBannerOptions {
   > | null;
   telemetryOptIn: boolean;
   serverStarted: boolean;
+  mapLayout?: CliOptions["mapLayout"];
 }
 
 /** Print the real CLI host banner after the Studio server boot attempt. */
@@ -33,7 +46,7 @@ export function printBanner(opts: PrintBannerOptions): void {
   console.log(
     `  url         ${
       opts.serverStarted
-        ? `http://localhost:${opts.port}/?uiToken=${opts.uiToken}`
+        ? cliBrowserUrl(opts.port, opts.uiToken, opts.mapLayout)
         : "(server not started)"
     }`,
   );

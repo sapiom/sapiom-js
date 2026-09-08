@@ -9,6 +9,7 @@
  */
 import * as path from "node:path";
 import { DEFAULT_PORT } from "../shared/types.js";
+import type { DoctorReport } from "./doctor.js";
 
 export interface CliOptions {
   dir: string;
@@ -23,6 +24,16 @@ export interface CliOptions {
    *  root stand in for a fresh install — the first-run flow becomes testable
    *  without moving, renaming, or losing the real one. */
   stateRoot?: string;
+  mapLayout?: "classic" | "elk";
+}
+
+/** Viewing a saved map needs Node, but does not need a coding-agent process. */
+export function canStartCli(report: DoctorReport, noSession: boolean): boolean {
+  return (
+    report.ok ||
+    (noSession &&
+      report.checks.some((check) => check.name === "node" && check.ok))
+  );
 }
 
 /** Translate the CLI flag into the server's explicit process-wide policy. */
@@ -42,6 +53,7 @@ export function parseArgs(argv: string[]): CliOptions {
   let noSession = false;
   let dev = false;
   let stateRoot: string | undefined;
+  let mapLayout: CliOptions["mapLayout"];
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -72,6 +84,13 @@ export function parseArgs(argv: string[]): CliOptions {
       case "--no-open":
         noOpen = true;
         break;
+      case "--map-layout": {
+        const value = argv[++i];
+        if (value !== "classic" && value !== "elk")
+          throw new Error("--map-layout requires classic or elk");
+        mapLayout = value;
+        break;
+      }
       case "--no-session":
         noSession = true;
         break;
@@ -99,5 +118,6 @@ export function parseArgs(argv: string[]): CliOptions {
     noSession,
     dev,
     ...(stateRoot ? { stateRoot } : {}),
+    ...(mapLayout ? { mapLayout } : {}),
   };
 }

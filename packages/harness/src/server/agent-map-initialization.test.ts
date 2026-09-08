@@ -5,6 +5,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { TaskManager } from "../core/task-manager.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import { importStudioComparisonProfile } from "../core/studio-comparison-profile.js";
+import type { HarnessKind } from "../shared/types.js";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string | undefined;
@@ -16,12 +19,31 @@ afterEach(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
-it("discovers restored projects outside the desktop launch directory and initializes once without navigation", async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "startup-map-projects-"));
+async function snapshot(directory: string) {
+  const result: Record<string, string> = {};
+  for (const entry of await fs.readdir(directory, {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (entry.isFile()) {
+      const file = path.join(entry.parentPath, entry.name);
+      result[path.relative(directory, file)] = (
+        await fs.readFile(file)
+      ).toString("base64");
+    }
+  }
+  return result;
+}
+
+async function verifyInitialization(providerMissing: boolean) {
+  root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "startup-map-projects-")),
+  );
   const stateRoot = path.join(root, "profile");
+  const sourceStateRoot = path.join(root, "desktop");
   const projectRoot = path.join(root, "existing-project");
   const agentRoot = path.join(projectRoot, "research");
-  await fs.mkdir(stateRoot);
+  await fs.mkdir(sourceStateRoot);
   await fs.mkdir(agentRoot, { recursive: true });
   await fs.writeFile(
     path.join(agentRoot, "sapiom.json"),
@@ -35,15 +57,76 @@ it("discovers restored projects outside the desktop launch directory and initial
     'throw new Error("Never execute discovery evidence"); export const agent = defineAgent({ name: "research", description: "Research topics" });';
   await fs.writeFile(path.join(agentRoot, "index.ts"), source);
   await fs.writeFile(
-    path.join(stateRoot, "settings.json"),
+    path.join(sourceStateRoot, "settings.json"),
     JSON.stringify({ recentDirs: [projectRoot] }),
   );
   const catalog = new StudioProjectCatalog(
-    path.join(stateRoot, "studio-projects.json"),
+    path.join(sourceStateRoot, "studio-projects.json"),
   );
-  const project = (
-    await catalog.reconcile([{ workspaceKey: "existing", cwd: projectRoot }])
-  ).projects[0]!;
+  const savedRoots = [path.join(root, "saved"), path.join(root, "historical")];
+  for (const cwd of savedRoots)
+    await fs.cp(agentRoot, path.join(cwd, "research"), { recursive: true });
+  const projects = (
+    await catalog.reconcile(
+      [projectRoot, ...savedRoots].map((cwd) => ({ workspaceKey: cwd, cwd })),
+    )
+  ).projects;
+  const project = projects.find(
+    (entry) => entry.displayName === "existing-project",
+  )!;
+  const sourceStore = new AgentMapWorkspaceStore(
+    path.join(sourceStateRoot, "agent-map"),
+  );
+  const proposals = new AgentMapProposalService(sourceStore);
+  for (const saved of projects.filter(
+    (entry) => entry.projectId !== project.projectId,
+  )) {
+    const actor = {
+      projectId: saved.projectId,
+      userId: "author",
+      sessionId: "source-session",
+    };
+    const first = await proposals.propose(actor, {
+      schemaVersion: 1,
+      proposalId: null,
+      expectedVersion: 0,
+      requestId: "author",
+      operations: [
+        {
+          kind: "add-node",
+          draftRef: "authored",
+          node: {
+            kind: "agent",
+            name: "Authored",
+            purpose: "Preserve this map",
+            ownerAgent: null,
+            contractRefs: [],
+          },
+        },
+      ],
+    });
+    if (saved.displayName === "historical")
+      await proposals.propose(actor, {
+        schemaVersion: 1,
+        proposalId: first.proposalId,
+        expectedVersion: 1,
+        requestId: "delete",
+        operations: [
+          {
+            kind: "remove-node",
+            nodeId: Object.values(first.allocatedNodeIds)[0]!,
+          },
+        ],
+      });
+  }
+  const before = await snapshot(sourceStateRoot);
+  const sourceFiles = await snapshot(projectRoot);
+  const manifest = await importStudioComparisonProfile({
+    sourceStateRoot,
+    destinationStateRoot: stateRoot,
+    projectIds: projects.map((entry) => entry.projectId),
+  });
+  expect(manifest.published).toBe(true);
   const infer = vi
     .spyOn(TaskManager.prototype, "runStructuredInference")
     .mockImplementation(async ({ prompt }) => {
@@ -63,20 +146,51 @@ it("discovers restored projects outside the desktop launch directory and initial
         relationships: [],
       };
     });
-  const boot = () =>
+  const boot = (availableHarnesses: HarnessKind[] = ["claude-code"]) =>
     startServer({
       port: 0,
       bootToken: "test-token",
       telemetryOptIn: false,
       adapters: {},
-      availableHarnesses: ["claude-code"],
+      availableHarnesses,
       stateRoot,
       launchDir: stateRoot,
       projectRoot: path.join(stateRoot, "projects"),
       autoCreateSession: false,
       loadSystemPrompt: async () => "",
     });
-  server = await boot();
+  const status = async () =>
+    (
+      await fetch(
+        `http://127.0.0.1:${server!.port}/api/projects/${project.projectId}/agent-map/initialization`,
+        { headers: { "X-Harness-Token": "test-token" } },
+      )
+    ).json();
+  server = await boot(providerMissing ? [] : ["claude-code"]);
+  if (providerMissing) {
+    await vi.waitFor(
+      async () =>
+        expect(await status()).toMatchObject({
+          status: "failed",
+          errorCode: "provider_unavailable",
+          retryable: true,
+        }),
+      { timeout: 10000 },
+    );
+    expect(infer).not.toHaveBeenCalled();
+    await server.close();
+    server = await boot();
+    expect(await status()).toMatchObject({
+      status: "failed",
+      retryable: true,
+    });
+    expect(infer).not.toHaveBeenCalled();
+    const retry = await fetch(
+      `http://127.0.0.1:${server.port}/api/projects/${project.projectId}/agent-map/initialization/retry`,
+      { method: "POST", headers: { "X-Harness-Token": "test-token" } },
+    );
+    expect(retry.status).toBe(202);
+  }
   const store = new AgentMapWorkspaceStore(path.join(stateRoot, "agent-map"));
   await vi.waitFor(
     async () => {
@@ -87,6 +201,21 @@ it("discovers restored projects outside the desktop launch directory and initial
   );
   expect(infer).toHaveBeenCalledOnce();
   expect(server.sessionManager.list()).toHaveLength(0);
+  for (const saved of manifest.projects.filter(
+    (entry) => entry.map?.authored,
+  )) {
+    const file = path.join(
+      "agent-map",
+      "projects",
+      saved.projectId,
+      "workspace.json",
+    );
+    expect(
+      (await fs.readFile(path.join(stateRoot, file))).toString("base64"),
+    ).toBe(before[file]);
+  }
+  expect(await snapshot(sourceStateRoot)).toEqual(before);
+  expect(await snapshot(projectRoot)).toEqual(sourceFiles);
   expect(await fs.readFile(path.join(agentRoot, "index.ts"), "utf8")).toBe(
     source,
   );
@@ -105,4 +234,10 @@ it("discovers restored projects outside the desktop launch directory and initial
   await server.close();
   server = undefined;
   expect(infer).toHaveBeenCalledOnce();
-}, 20000);
+}
+
+it.each([false, true])(
+  "preserves imported authored maps and initializes only mapless projects without sessions (provider missing: %s)",
+  verifyInitialization,
+  30000,
+);

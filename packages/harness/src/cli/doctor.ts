@@ -68,7 +68,8 @@ export const CODEX_INSTALL_COMMAND = "npm i -g @openai/codex";
 /**
  * Node is a hard requirement. Neither coding agent is individually required —
  * the harness runs with whichever of claude/codex is on PATH — but at least
- * one of them must be, or there's nothing to launch.
+ * one is required to launch a coding session. Session-free CLI viewing can
+ * proceed without a provider; initialization reports provider_unavailable.
  */
 export interface DoctorReport {
   checks: DoctorCheck[];
@@ -110,9 +111,8 @@ export async function runDoctor(): Promise<DoctorReport> {
 
 /** First available harness in preference order, for callers that need a
  *  single default (e.g. the auto-created boot session). Only falls back to
- *  "claude-code" when the report itself is empty — main() already refuses to
- *  proceed past a report with no available harnesses, so real callers never
- *  hit that fallback. */
+ *  "claude-code" when the report itself is empty. Session-free viewing can
+ *  reach that fallback, but availableHarnesses remains empty for initialization. */
 export function pickDefaultHarness(report: DoctorReport): HarnessKind {
   return report.availableHarnesses[0] ?? "claude-code";
 }
