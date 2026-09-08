@@ -8,6 +8,7 @@ import {
 import type { DirectedGraphLayout } from "./directed-graph-layout";
 
 export class ElkLayoutWorker {
+  stage = "Module import";
   private engine: ELK | null = null;
   private worker: Worker | null = null;
   private pending: ((error: Error) => void) | null = null;
@@ -58,9 +59,11 @@ export class ElkLayoutWorker {
         abort();
         return;
       }
+      this.stage = "Module import";
       void import("elkjs/lib/elk-api")
         .then(async ({ default: ELK }) => {
           if (settled || request !== this.request) return;
+          this.stage = "Worker construction";
           this.engine ??= new ELK({
             algorithms: ["layered"],
             workerFactory: () => {
@@ -77,8 +80,10 @@ export class ElkLayoutWorker {
               return worker;
             },
           });
+          this.stage = "Layout computation";
           const graph = await this.engine.layout(createElkGraph(input));
           if (settled || request !== this.request) return;
+          this.stage = "Layout validation";
           const layout = readElkGraph(input, graph);
           cleanup();
           resolve(layout);
