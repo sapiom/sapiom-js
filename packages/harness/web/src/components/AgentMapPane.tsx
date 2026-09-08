@@ -87,6 +87,14 @@ export function AgentMapPane({
   }>({ value: null, response: null, phase: "loading" });
   const previousDeployments = useRef<AgentMapDeployments>(new Map());
   const projectId = value?.project.projectId;
+  // Discovery/moves can change binding resolution; cloud status alone cannot.
+  const inventoryKey = JSON.stringify(
+    workflows.flatMap((workflow) =>
+      (workflow.studioBindings ?? [])
+        .filter((binding) => binding.projectId === projectId)
+        .map((binding) => JSON.stringify([binding.agentId, workflow.path])),
+    ).sort(),
+  );
   useEffect(() => {
     if (visible && projectId) void refreshWorkflows().catch(() => undefined);
   }, [visible, projectId, refreshWorkflows, retryStatus]);
@@ -121,7 +129,7 @@ export function AgentMapPane({
     return () => {
       bindingGeneration.current += 1;
     };
-  }, [api, visible, value, workflows, retryStatus]);
+  }, [api, visible, value, inventoryKey, retryStatus]);
   const deployments = useMemo(
     () =>
       value

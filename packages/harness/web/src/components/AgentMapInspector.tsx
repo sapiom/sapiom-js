@@ -53,6 +53,7 @@ export function AgentMapInspector({
             <span
               className="status-tag agent-map-deployment"
               data-deployment-state={deployment.indicator ?? undefined}
+              title={agentMapDeploymentTitle(deployment)}
             >
               {agentMapDeploymentLabel(deployment)}
             </span>

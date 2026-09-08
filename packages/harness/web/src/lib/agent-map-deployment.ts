@@ -10,6 +10,7 @@ import {
   DEPLOYMENT_RETAINED,
   DEPLOYMENT_UNAVAILABLE,
   workflowDeploymentIndicator,
+  workflowDeploymentTitle,
 } from "./workflow-deployment";
 
 const UUID_V4 =
@@ -70,6 +71,7 @@ export interface AgentMapDeployment {
   indicator: "draft" | "deployed" | null;
   loading: boolean;
   unavailable: boolean;
+  title: string | null;
 }
 export type AgentMapDeployments = ReadonlyMap<PlanNodeId, AgentMapDeployment>;
 
@@ -93,12 +95,15 @@ export function agentMapDeployments(
       ? `${response!.projectId}:${node.id}:${binding.agentId}:${binding.revision}`
       : null;
     let matched = false;
+    let title: string | null = null;
     let display: ReturnType<typeof workflowDeploymentIndicator> = {
       indicator: null,
       unavailable: true,
     };
-    if (binding?.resolution === "unbound")
+    if (binding?.resolution === "unbound") {
       display = { indicator: "draft", unavailable: false };
+      title = workflowDeploymentTitle({ definitionId: null });
+    }
     if (binding?.resolution === "bound") {
       const matches = workflows.filter((workflow) =>
         workflow.studioBindings?.some(
@@ -110,6 +115,7 @@ export function agentMapDeployments(
       if (matches.length === 1) {
         matched = true;
         display = workflowDeploymentIndicator(matches[0]);
+        title = workflowDeploymentTitle(matches[0]);
       }
     }
     // Retain only the same binding, or the last projection when the entire
@@ -123,6 +129,7 @@ export function agentMapDeployments(
         display.indicator ?? (retain ? (old?.indicator ?? null) : null),
       loading: phase === "loading",
       unavailable: phase === "unavailable" || display.unavailable,
+      title,
     });
   }
   return result;
@@ -145,5 +152,5 @@ export function agentMapDeploymentLabel(
 export function agentMapDeploymentTitle(status: AgentMapDeployment): string {
   return status.indicator && status.unavailable
     ? DEPLOYMENT_RETAINED
-    : agentMapDeploymentLabel(status);
+    : (status.title ?? agentMapDeploymentLabel(status));
 }

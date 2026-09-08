@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 ---
 
-Show Draft and Deployed indicators on Agent Map nodes and their inspector using the same deployment evidence as the rail cloud icon, with status recovery that preserves the map and conversation.
+Replace Proposed with Draft and Deployed on Agent Map agent/subagent nodes and their inspector, using the same deployment evidence and tooltips as the rail cloud icon. Status recovery preserves the map and conversation. Non-agent nodes no longer display proposal status. Accessible node names follow these label changes, and the `data-proposal-state` DOM attribute is removed.

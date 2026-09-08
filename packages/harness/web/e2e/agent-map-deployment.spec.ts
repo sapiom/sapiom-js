@@ -18,6 +18,8 @@ type Probe = DeploymentProbe & {
   targets: number;
   bulks: number;
   delayBulk: boolean;
+  discover: boolean;
+  mapVersion: number;
 };
 type TestWindow = DeploymentWindow & { __deployment: Probe };
 const id = (n = 101) =>
@@ -25,6 +27,36 @@ const id = (n = 101) =>
 const node = (page: Page, n = 101) =>
   page.getByTestId(`agent-map-node-${id(n)}`);
 const inspector = (page: Page) => page.getByTestId("agent-map-inspector");
+const bulks = (page: Page) =>
+  page.evaluate(() => (window as TestWindow).__deployment.bulks);
+async function mapChange(page: Page, changes: Partial<Probe>) {
+  const projectId = await page.getByTestId("agent-map-live")
+    .getAttribute("data-project-id");
+  await page.evaluate(({ changes, projectId }) => {
+    const state = (window as TestWindow).__deployment;
+    Object.assign(state, changes);
+    const fromVersion = state.mapVersion++;
+    const operationSuffix = String(9000 + fromVersion).padStart(12, "0");
+    (window as TestWindow).__HARNESS_TEST__.publish({
+      type: "agent-map.proposal.changed",
+      delta: {
+        schemaVersion: 1,
+        projectId,
+        proposalId: "proposal_00000000-0000-7000-8000-000000000101",
+        fromVersion,
+        version: state.mapVersion,
+        operationIds: [`operation_00000000-0000-7000-8000-${operationSuffix}`],
+        operations: [{
+          kind: "update-node",
+          nodeId: "node_00000000-0000-7000-8000-000000000101",
+          changes: { name: "Updated Research" },
+        }],
+        actor: { userId: "user_mock", sessionId: "planner_mock" },
+        acceptedAt: new Date().toISOString(),
+      },
+    });
+  }, { changes, projectId });
+}
 async function open(page: Page) {
   const modulePath = await openDeploymentStudio(page, "&mockAgentMapGolden=1");
   await page.evaluate(async (modulePath) => {
@@ -33,6 +65,7 @@ async function open(page: Page) {
     const workflows = (await new MockApi().getState()).workflows;
     const bulk = prototype.getAgentMapImplementations;
     const target = prototype.getAgentMapNodeImplementation;
+    const list = prototype.listWorkflows;
     const state = (window as TestWindow).__deployment;
     Object.assign(state, {
       resolution: "bound",
@@ -40,7 +73,21 @@ async function open(page: Page) {
       targets: 0,
       bulks: 0,
       delayBulk: false,
+      discover: false,
+      mapVersion: 1,
     });
+    prototype.listWorkflows = async function () {
+      const rows = await list.call(this);
+      if (!state.discover) return rows;
+      return [...rows, {
+        ...rows[0],
+        path: `${rows[0].path}/new-agent`,
+        studioBindings: rows[0].studioBindings?.map((binding) => ({
+          ...binding,
+          agentId: "agent_00000000-0000-4000-8000-000000000999",
+        })),
+      }];
+    };
     prototype.getAgentMapImplementations = async function (projectId) {
       state.bulks++;
       if (state.failure === "bulk") throw new Error("offline");
@@ -81,7 +128,14 @@ async function open(page: Page) {
   }, modulePath);
   const expand = page.getByTestId("rail-expand");
   if (await expand.isVisible()) await expand.click();
+  // Boot can already select acme-app before interception. Enter it afresh.
+  await page.getByTestId("project-select-dashboard-keeper").click();
+  await expect(node(page)).toHaveAttribute("data-deployment-unavailable", "false");
+  await page.evaluate(() => {
+    (window as TestWindow).__deployment.bulks = 0;
+  });
   await page.getByTestId("project-select-acme-app").click();
+  await expect.poll(() => bulks(page)).toBe(1);
   await expect(node(page)).toHaveAttribute("data-deployment-state", "deployed");
   await expect(node(page)).toHaveAttribute(
     "data-deployment-unavailable",
@@ -119,6 +173,11 @@ test("mixed badges agree with the rail and inspector and refresh without changin
   }
   await page.getByTestId(`agent-map-info-${id()}`).click();
   await expect(inspector(page).locator(".status-tag")).toHaveText("Deployed");
+  const deployedTitle = "Deployed to Sapiom with a ready build.";
+  await expect(node(page)).toHaveAttribute("title", deployedTitle);
+  await expect(inspector(page).locator(".status-tag"))
+    .toHaveAttribute("title", deployedTitle);
+  await expect(await rail(page)).toHaveAttribute("title", deployedTitle);
   await expect(await rail(page)).toHaveAttribute("data-deployed", "true");
   await page.getByTestId("canvas-expand").click();
   await screenshot(page, "desktop");
@@ -130,8 +189,12 @@ test("mixed badges agree with the rail and inspector and refresh without changin
   await expect(node(page)).toHaveAttribute("data-deployment-state", "draft");
   await expect(inspector(page).locator(".status-tag")).toHaveText("Draft");
   await expect(await rail(page)).toHaveAttribute("data-deployed", "false");
+  await expect(node(page)).toHaveAttribute("title", "Cloud build in progress.");
   await patch(page, { ready: true });
   await expect(node(page)).toHaveAttribute("data-deployment-state", "deployed");
+  expect(await bulks(page)).toBe(1); // Mount and status-only refreshes share bindings.
+  await patch(page, { discover: true });
+  await expect.poll(() => bulks(page)).toBe(2); // New inventory must re-resolve bindings.
   expect(
     await page.getByTestId("agent-map-subject").getAttribute("style"),
   ).toBe(transform);
@@ -157,7 +220,8 @@ for (const failure of ["bulk", "list", "nested"] as const) {
     const transform = await page
       .getByTestId("agent-map-subject")
       .getAttribute("style");
-    await patch(page, { failure });
+    if (failure === "bulk") await mapChange(page, { failure });
+    else await patch(page, { failure });
     await expect(node(page)).toHaveAttribute(
       "data-deployment-state",
       "deployed",
@@ -193,6 +257,7 @@ for (const failure of ["bulk", "list", "nested"] as const) {
       { failure: "none", ready: true },
       failure === "nested" ? { type: "workflows.changed" } : null,
     );
+    const beforeRetry = await bulks(page);
     if (failure !== "nested")
       await page
         .getByRole("button", { name: "Retry status", exact: true })
@@ -202,6 +267,7 @@ for (const failure of ["bulk", "list", "nested"] as const) {
       "false",
     );
     await expect(page.getByTestId("agent-map-deployment-error")).toHaveCount(0);
+    expect(await bulks(page)).toBe(beforeRetry + (failure === "nested" ? 0 : 1));
     expect(
       await page.getByTestId("agent-map-subject").getAttribute("style"),
     ).toBe(transform);
@@ -213,40 +279,15 @@ test("an older bulk result cannot undo a rebind or a live map edit", async ({
   page,
 }) => {
   await open(page);
-  await patch(page, { delayBulk: true, resolution: "missing" });
+  await mapChange(page, { delayBulk: true, resolution: "missing" });
   await held(page);
-  await patch(
-    page,
-    { resolution: "unbound", revision: 2 },
-    {
-      type: "agent-map.proposal.changed",
-      delta: {
-        schemaVersion: 1,
-        projectId: await page
-          .getByTestId("agent-map-live")
-          .getAttribute("data-project-id"),
-        proposalId: "proposal_00000000-0000-7000-8000-000000000101",
-        fromVersion: 1,
-        version: 2,
-        operationIds: ["operation_00000000-0000-7000-8000-000000009999"],
-        operations: [
-          {
-            kind: "update-node",
-            nodeId: id(),
-            changes: { name: "Updated Research" },
-          },
-        ],
-        actor: { userId: "user_mock", sessionId: "planner_mock" },
-        acceptedAt: new Date().toISOString(),
-      },
-    },
-  );
+  await mapChange(page, { resolution: "unbound", revision: 2 });
   await expect(node(page)).toHaveAttribute("data-deployment-state", "draft");
   await release(page);
   await expect(node(page)).toHaveAccessibleName(
     /Updated Research, agent, Draft/,
   );
-  await patch(page, { resolution: "missing", revision: 3 });
+  await mapChange(page, { resolution: "missing", revision: 3 });
   await expect(node(page)).not.toHaveAttribute("data-deployment-state");
   await expect(node(page)).toHaveAccessibleName(
     /Deployment status unavailable/,
@@ -276,7 +317,7 @@ test("a held binding reply cannot carry a badge into another project", async ({
   page,
 }) => {
   await open(page);
-  await patch(page, { delayBulk: true });
+  await mapChange(page, { delayBulk: true });
   await held(page);
   const previousProject = await page
     .getByTestId("agent-map-live")
