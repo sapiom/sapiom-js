@@ -689,9 +689,16 @@ export const startServer = async (
   // gates the local /api surface. Seeded from the boot-time identity; its
   // refresh() re-reads the shared credential store so a rotated/re-logged-in key
   // recovers a 401 in place instead of locking the Studio.
+  let deploymentGeneration = 0;
+  let invalidateDeployment = (): void => {};
+  const deploymentAuthChanged = (): void => {
+    deploymentGeneration += 1;
+    invalidateDeployment();
+  };
   const apiKeyProvider = authEnabled
     ? createApiKeyProvider(identity?.apiKey ?? null, {
         environment: process.env.SAPIOM_ENVIRONMENT,
+        onKeyChanged: deploymentAuthChanged,
       })
     : staticApiKeyProvider(null);
 
@@ -762,27 +769,73 @@ export const startServer = async (
     baseUrl: resolveAgentsBaseUrl(),
   });
 
-  /** Returns a copy of the workflow list with definition metadata filled in
-   *  from the Agents API for every linked workflow. Build status is mutable,
-   *  so it is refreshed even when the stable slug is already present.
-   *  Resolves all lookups in parallel. Never mutates the registry. */
+  invalidateDeployment = () => slugResolver.invalidate();
+  const clearDeployment = (
+    workflow: RegistryWorkflowInfo,
+  ): RegistryWorkflowInfo => ({
+    ...workflow,
+    activeBuildRunId: null,
+    activeBuildRunStatus: null,
+    deploymentLookup: {
+      lastConfirmedDeployed: workflow.definitionId == null ? false : null,
+      unavailable: workflow.definitionId != null,
+    },
+  });
+  // Auth guards cover individual lookups AND the complete async projection.
+  // Neither raw build fields nor retained display bits are written to disk.
   const enrichWorkflows = async (
     workflows: RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
-    return Promise.all(
+    const scope = deploymentGeneration;
+    const enriched = await Promise.all(
       workflows.map(async (workflow) => {
-        if (workflow.definitionId == null) return workflow;
-        const metadata = await slugResolver.resolveMetadata(
+        const cleared = clearDeployment(workflow);
+        if (workflow.definitionId == null) return cleared;
+        const result = await slugResolver.resolveMetadata(
           String(workflow.definitionId),
         );
-        if (metadata == null) return workflow;
+        if (scope !== deploymentGeneration) return cleared;
+        if (result.status === "available")
+          return {
+            ...workflow,
+            definitionSlug: result.metadata.slug ?? workflow.definitionSlug,
+            activeBuildRunId: result.metadata.activeBuildRunId,
+            activeBuildRunStatus: result.metadata.activeBuildRunStatus,
+            deploymentLookup: {
+              lastConfirmedDeployed:
+                result.metadata.activeBuildRunStatus === "ready",
+              unavailable: false,
+            },
+          };
         return {
-          ...workflow,
-          definitionSlug: metadata.slug ?? workflow.definitionSlug,
-          activeBuildRunId: metadata.activeBuildRunId,
-          activeBuildRunStatus: metadata.activeBuildRunStatus,
+          ...cleared,
+          deploymentLookup: {
+            lastConfirmedDeployed:
+              result.status === "not-found"
+                ? false
+                : result.lastConfirmedDeployed,
+            unavailable: result.status === "unavailable",
+          },
         };
       }),
+    );
+    return scope === deploymentGeneration
+      ? enriched
+      : workflows.map(clearDeployment);
+  };
+  const readPublicWorkflows = async (): Promise<WorkflowInfo[]> => {
+    const scope = deploymentGeneration;
+    const raw = workflowsCache;
+    let rows = raw;
+    try {
+      rows = await enrichWorkflows(raw);
+      if (scope === deploymentGeneration)
+        rows = await annotateStudioSelections(rows);
+    } catch (error) {
+      if (scope === deploymentGeneration) throw error;
+    }
+    return publicWorkflowInfos(
+      scope === deploymentGeneration ? rows : raw.map(clearDeployment),
     );
   };
 
@@ -3815,10 +3868,7 @@ export const startServer = async (
             organizationName: identity.organizationName,
           }
         : null,
-      listWorkflows: async () =>
-        publicWorkflowInfos(
-          await annotateStudioSelections(await enrichWorkflows(workflowsCache)),
-        ),
+      listWorkflows: readPublicWorkflows,
       listWorkspaceScopes: listWorkspaceScopesAndRetain,
       listStudioProjects: async () => {
         try {
@@ -3987,10 +4037,7 @@ export const startServer = async (
   // wrapped; scan/connect write through to the real registry untouched. Typed
   // as WorkflowRegistryLike so this wrapper needs no unsafe cast.
   const enrichedWorkflowRegistry: WorkflowRegistryLike = {
-    list: async () =>
-      publicWorkflowInfos(
-        await annotateStudioSelections(await enrichWorkflows(workflowsCache)),
-      ),
+    list: readPublicWorkflows,
     scan: (root: string) =>
       scanWorkflowsAndBroadcast(root, "requested", { dirty: true }).then(
         (outcome) => publicWorkflowInfos(outcome.found),
@@ -4261,6 +4308,7 @@ export const startServer = async (
       authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
       onProjectUserChanged: (userId) => {
+        deploymentAuthChanged();
         projectUserId = userId;
         for (const session of sessionManager.list()) {
           agentMapCapabilities.revokeSession(session.id);

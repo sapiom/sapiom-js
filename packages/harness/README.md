@@ -34,6 +34,10 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+The rail's cloud icon marks an agent as deployed once Studio confirms a ready
+hosted build. Failed checks retain the last confirmed indicator, and changing
+accounts clears this evidence. Retained indicators do not enable cloud runs.
+
 ## Telemetry
 
 With explicit opt-in, Agent Studio collects usage events (prompts, tool calls,

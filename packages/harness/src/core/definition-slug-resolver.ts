@@ -56,19 +56,25 @@ export interface DefinitionMetadata {
   activeBuildRunStatus: string | null;
 }
 
+export type DefinitionMetadataResult =
+  | { status: "available"; metadata: DefinitionMetadata }
+  | { status: "not-found" }
+  | { status: "unavailable"; lastConfirmedDeployed: boolean | null };
+
 export interface DefinitionSlugResolver {
   resolve(definitionId: string): Promise<string | null>;
   /** Fetch mutable definition metadata. Unlike the stable slug lookup, build
    *  state is deliberately not cached so a completed build becomes visible. */
-  resolveMetadata(definitionId: string): Promise<DefinitionMetadata | null>;
+  resolveMetadata(definitionId: string): Promise<DefinitionMetadataResult>;
+  invalidate(): void;
 }
 
 /**
  * Creates a resolver that fetches `GET /agents/v1/definitions/<id>` with the
  * caller's API key and returns the `slug` field from the response.
  *
- * Safe to call from any request handler: never throws, returns null on any
- * failure (network, 4xx, missing field, unparseable body).
+ * Never throws. Failed metadata checks retain only a scoped display bit;
+ * they never return cached runnable build fields.
  */
 export function createDefinitionSlugResolver(opts: {
   /** A getter keeps enrichment working when the user signs in after boot. */
@@ -80,72 +86,111 @@ export function createDefinitionSlugResolver(opts: {
   const { apiKey, baseUrl = resolveAgentsBaseUrl(), fetchImpl = fetch } = opts;
   const getApiKey = typeof apiKey === "function" ? apiKey : () => apiKey;
   const cache = new Map<string, string>();
-  // Each id's resolution failure is logged at most once. resolve() runs on
-  // every /api/state and /api/workflows poll and null results are deliberately
-  // not cached (so a transient failure stays retryable), so without this a
-  // persistent failure — e.g. the harness signed into an account that can't
-  // see this agent — would reprint on every poll. One line per id is enough to
-  // diagnose why the snippet panel fell back to the project name.
+  const confirmed = new Map<string, { request: number; deployed: boolean }>();
   const loggedFailures = new Set<string>();
-  const warnOnce = (definitionId: string, reason: string): void => {
+  let key = getApiKey();
+  let generation = 0;
+  let sequence = 0;
+  const invalidate = (): void => {
+    generation += 1;
+    key = getApiKey();
+    cache.clear();
+    confirmed.clear();
+    loggedFailures.clear();
+  };
+  const syncKey = (): void => {
+    if (key !== getApiKey()) invalidate();
+  };
+  const warnOnce = (definitionId: string): void => {
     if (loggedFailures.has(definitionId)) return;
     loggedFailures.add(definitionId);
     console.error(
-      `[harness] could not resolve deployed-agent slug for definitionId=${definitionId} ` +
-        `at ${baseUrl} (${reason}); the snippet panel will fall back to the project name — ` +
-        `check the harness is signed into the account that owns this agent`,
+      `[harness] definition metadata unavailable for definitionId=${definitionId}`,
     );
   };
 
   const resolveMetadata = async (
     definitionId: string,
-  ): Promise<DefinitionMetadata | null> => {
-    const currentApiKey = getApiKey();
-    // Not signed in is expected, not a failure worth logging. Because this is
-    // a getter, a later sign-in is picked up without restarting Studio.
-    if (!currentApiKey) return null;
-
+  ): Promise<DefinitionMetadataResult> => {
+    syncKey();
+    const scope = generation;
+    const request = ++sequence;
+    const unavailable = (): DefinitionMetadataResult => ({
+      status: "unavailable",
+      lastConfirmedDeployed:
+        scope === generation
+          ? (confirmed.get(definitionId)?.deployed ?? null)
+          : null,
+    });
+    const isCurrent = (): boolean => {
+      syncKey();
+      return (
+        scope === generation &&
+        request >= (confirmed.get(definitionId)?.request ?? 0)
+      );
+    };
+    if (!key) return unavailable();
     try {
-      const url = `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definitionId)}`;
-      const response = await fetchImpl(url, {
-        headers: { "x-sapiom-api-key": currentApiKey },
+      const response = await fetchImpl(
+        `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definitionId)}`,
+        {
+          headers: { "x-sapiom-api-key": key },
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      const body: unknown = await response.json();
+      if (!isCurrent()) return unavailable();
+      if (body === null || typeof body !== "object" || Array.isArray(body))
+        throw new Error("Invalid metadata");
+      const fields = body as Record<string, unknown>;
+      if (
+        response.status === 404 &&
+        fields.statusCode === 404 &&
+        fields.message === `Agent definition not found: ${definitionId}`
+      ) {
+        cache.delete(definitionId);
+        confirmed.set(definitionId, { request, deployed: false });
+        return { status: "not-found" };
+      }
+      if (!response.ok) throw new Error("Metadata request failed");
+      // Slugs are stable and remain usable for legacy slug-only responses.
+      const slug = typeof fields.slug === "string" ? fields.slug : null;
+      if (slug !== null) cache.set(definitionId, slug);
+      const nullableString = (value: unknown): value is string | null =>
+        value === null ||
+        (typeof value === "string" && value.trim().length > 0);
+      const { activeBuildRunId, activeBuildRunStatus } = fields;
+      if (
+        !Object.prototype.hasOwnProperty.call(fields, "activeBuildRunId") ||
+        !Object.prototype.hasOwnProperty.call(fields, "activeBuildRunStatus") ||
+        !nullableString(activeBuildRunId) ||
+        !nullableString(activeBuildRunStatus) ||
+        (activeBuildRunStatus === "ready" && activeBuildRunId === null)
+      )
+        throw new Error("Invalid build metadata");
+      confirmed.set(definitionId, {
+        request,
+        deployed: activeBuildRunStatus === "ready",
       });
-
-      if (!response.ok) {
-        warnOnce(definitionId, `HTTP ${response.status}`);
-        return null;
-      }
-
-      const body = (await response.json()) as Record<string, unknown>;
-      const slug = typeof body.slug === "string" ? body.slug : null;
-      const activeBuildRunId =
-        typeof body.activeBuildRunId === "string"
-          ? body.activeBuildRunId
-          : null;
-      const activeBuildRunStatus =
-        typeof body.activeBuildRunStatus === "string"
-          ? body.activeBuildRunStatus
-          : null;
-      if (slug !== null) {
-        cache.set(definitionId, slug);
-      } else {
-        warnOnce(definitionId, "response had no string `slug` field");
-      }
-      return { slug, activeBuildRunId, activeBuildRunStatus };
-    } catch (err) {
-      warnOnce(definitionId, err instanceof Error ? err.message : String(err));
-      return null;
+      return {
+        status: "available",
+        metadata: { slug, activeBuildRunId, activeBuildRunStatus },
+      };
+    } catch {
+      if (isCurrent()) warnOnce(definitionId);
+      return unavailable();
     }
   };
 
   return {
     resolveMetadata,
+    invalidate,
     async resolve(definitionId: string): Promise<string | null> {
-      // Keep the old stable-slug cache contract for existing callers.
-      if (!getApiKey()) return null;
-      const cached = cache.get(definitionId);
-      if (cached !== undefined) return cached;
-      return (await resolveMetadata(definitionId))?.slug ?? null;
+      syncKey();
+      if (!key) return null;
+      const scope = generation;
+      if (!cache.has(definitionId)) await resolveMetadata(definitionId);
+      return scope === generation ? (cache.get(definitionId) ?? null) : null;
     },
   };
 }

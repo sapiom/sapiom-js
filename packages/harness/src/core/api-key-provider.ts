@@ -55,6 +55,8 @@ export interface ApiKeyProvider {
 /** Overridable reads for the credential store — a test seam. Defaults hit the
  *  real `@sapiom/mcp/auth` store the CLI login writes to. */
 export interface ApiKeyProviderDeps {
+  /** Invalidates authenticated projections on every adopted key change. */
+  onKeyChanged?: () => void;
   /** Resolve the active environment name (governs which cached entry to read). */
   resolveEnvironmentName?: () => Promise<string>;
   /** Strictly read the cached API key for an environment, or null if absent. */
@@ -90,6 +92,11 @@ export function createApiKeyProvider(
   deps: ApiKeyProviderDeps = {},
 ): ApiKeyProvider {
   let current = initialKey;
+  const adopt = (next: string | null): void => {
+    if (next === current) return;
+    current = next;
+    deps.onKeyChanged?.();
+  };
   const resolveEnvName =
     deps.resolveEnvironmentName ??
     (() => defaultResolveEnvironmentName(deps.environment));
@@ -103,7 +110,7 @@ export function createApiKeyProvider(
       // A completed strict read is authoritative. Null/empty means the
       // credential was deliberately removed; only a thrown read preserves the
       // last-known key.
-      current = latest?.trim() ? latest : null;
+      adopt(latest?.trim() ? latest : null);
     } catch {
       // Store unreadable (permissions, malformed JSON, transient I/O) or an
       // invalid environment — preserve the last-known key.
@@ -126,7 +133,7 @@ export function createApiKeyProvider(
       return result;
     },
     clear(): void {
-      current = null;
+      adopt(null);
     },
   };
 }
