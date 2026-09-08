@@ -1812,8 +1812,8 @@ export const startServer = async (
       .catch(() => {})
       .then(() =>
         Promise.all([
-          sessionManager.terminateCredentialBearingSessions(),
-          taskManager.terminateCredentialBearingTasks(),
+          sessionManager.terminateCredentialBearingSessions(generation),
+          taskManager.terminateCredentialBearingTasks(generation),
         ]).then(() => {}),
       );
     const tracked = operation.finally(() => {
@@ -1838,6 +1838,8 @@ export const startServer = async (
           }
         },
         onUnavailable: () => {
+          // A later key transition re-arms this. Avoid adding an unbounded
+          // watcher retry/fallback loop to the credential lifecycle.
           credentialStoreObserver = null;
         },
       },

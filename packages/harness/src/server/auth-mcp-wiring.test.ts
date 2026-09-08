@@ -422,6 +422,9 @@ describe("Agent Studio MCP authentication wiring", () => {
     firstSweep.resolve();
     expect((await disconnect).status).toBe(200);
     expect(terminate).toHaveBeenCalledTimes(2);
+    expect(terminate.mock.calls[1]![0]).toBeGreaterThan(
+      terminate.mock.calls[0]![0],
+    );
     expect(server!.sessionManager.get(newerSession.id)?.status).toBe("exited");
   }, 20_000);
 

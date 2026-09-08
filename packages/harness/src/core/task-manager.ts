@@ -491,14 +491,20 @@ export class TaskManager {
     }
   }
 
-  /** Stop ordinary task processes whose generated MCP config carried a key. */
-  async terminateCredentialBearingTasks(): Promise<void> {
+  /** Stop credential-bearing tasks launched no later than the removed generation. */
+  async terminateCredentialBearingTasks(
+    throughGeneration: number,
+  ): Promise<void> {
     // Structured inference never enters mcpCredentialLaunches: it skips
     // buildLaunchOpts and strips Studio capabilities from its environment.
     // Keep the private-task check as defense in depth for that boundary.
     const ids = [...this.mcpCredentialLaunches.entries()].flatMap(
       ([id, launch]) =>
-        launch.credentialBearing && !this.privateTasks.has(id) ? [id] : [],
+        launch.credentialBearing &&
+        launch.generation <= throughGeneration &&
+        !this.privateTasks.has(id)
+          ? [id]
+          : [],
     );
     await Promise.all(ids.map((id) => this.kill(id)));
   }

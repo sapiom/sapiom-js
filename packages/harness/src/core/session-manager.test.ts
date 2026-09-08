@@ -4120,14 +4120,15 @@ describe("SessionManager", () => {
     });
   });
 
-  it("terminates only credential-bearing MCP runtimes", async () => {
+  it("terminates only credential-bearing MCP runtimes at or before the removal generation", async () => {
     let launchCount = 0;
+    let generation = 1;
     const { manager, spawns } = makeManager({
-      currentCredentialGeneration: () => 1,
+      currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
         mcpCredentialLaunch: {
-          generation: 1,
-          credentialBearing: launchCount++ === 0,
+          generation,
+          credentialBearing: launchCount++ !== 1,
         },
       }),
     });
@@ -4139,15 +4140,22 @@ describe("SessionManager", () => {
       cwd: "/tmp/without-key",
       harness: "claude-code",
     });
+    generation = 2;
+    const newer = await manager.create({
+      cwd: "/tmp/newer-key",
+      harness: "claude-code",
+    });
 
-    const terminating = manager.terminateCredentialBearingSessions();
+    const terminating = manager.terminateCredentialBearingSessions(1);
     await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
     expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+    expect(spawns[2]!.pty.kill).not.toHaveBeenCalled();
 
     spawns[0]!.emitExit(0);
     await terminating;
     expect(manager.get(credentialBearing.id)?.status).toBe("exited");
     expect(manager.get(signedOut.id)?.status).toBe("running");
+    expect(manager.get(newer.id)?.status).toBe("running");
   });
 
 

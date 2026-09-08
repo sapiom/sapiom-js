@@ -898,10 +898,13 @@ export class SessionManager {
     return this.kill(id);
   }
 
-  /** Stop the exact live PTY generations whose MCP config carried a key. */
-  async terminateCredentialBearingSessions(): Promise<void> {
+  /** Stop credential-bearing PTYs launched no later than the removed generation. */
+  async terminateCredentialBearingSessions(
+    throughGeneration: number,
+  ): Promise<void> {
     const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
-      handle.mcpCredentialLaunch?.credentialBearing
+      handle.mcpCredentialLaunch?.credentialBearing &&
+      handle.mcpCredentialLaunch.generation <= throughGeneration
         ? [{ id, runtimeEpoch: handle.runtimeEpoch }]
         : [],
     );

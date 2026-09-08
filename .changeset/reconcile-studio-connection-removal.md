@@ -1,6 +1,6 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 "@sapiom/mcp": minor
 ---
 
-Expose the shared credential-store path to authenticated local integrations and keep Studio-managed processes aligned when the current Sapiom connection is removed.
+Expose the shared credential-store path to authenticated local integrations and stop affected Studio-managed Claude sessions and background tasks when the current Sapiom connection is removed.
