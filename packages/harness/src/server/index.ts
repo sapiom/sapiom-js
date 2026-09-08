@@ -666,6 +666,7 @@ function createDefaultBuildLaunchOpts(
         ? {
             mcpCredentialLaunch: {
               generation,
+              credentialBearing: apiKey !== null,
             },
           }
         : {}),
@@ -1794,32 +1795,68 @@ export const startServer = async (
   taskManager.onStatusChange((task) => {
     bus.publish({ type: "task.status", task });
   });
-  let credentialRemovalInFlight: Promise<void> | null = null;
+  let credentialRemovalTail: Promise<void> = Promise.resolve();
+  let credentialRemovalInFlight: {
+    generation: number;
+    operation: Promise<void>;
+  } | null = null;
   const reconcileCredentialRemoval = (): Promise<void> => {
-    if (credentialRemovalInFlight) return credentialRemovalInFlight;
-    const operation = Promise.all([
-      sessionManager.terminateCredentialBearingSessions(),
-      taskManager.terminateCredentialBearingTasks(),
-    ]).then(() => {});
+    const generation = apiKeyProvider.snapshot().generation;
+    if (credentialRemovalInFlight?.generation === generation) {
+      return credentialRemovalInFlight.operation;
+    }
+    // Each distinct removal generation receives a fresh sweep after the prior
+    // one. A newer sign-in can launch work while an older sweep is waiting for
+    // exits, so sharing that older target snapshot would make disconnect lie.
+    const operation = credentialRemovalTail
+      .catch(() => {})
+      .then(() =>
+        Promise.all([
+          sessionManager.terminateCredentialBearingSessions(),
+          taskManager.terminateCredentialBearingTasks(),
+        ]).then(() => {}),
+      );
     const tracked = operation.finally(() => {
-      if (credentialRemovalInFlight === tracked)
+      if (credentialRemovalInFlight?.operation === tracked) {
         credentialRemovalInFlight = null;
+      }
     });
-    credentialRemovalInFlight = tracked;
+    credentialRemovalTail = tracked;
+    credentialRemovalInFlight = { generation, operation: tracked };
     return tracked;
+  };
+  let credentialStoreObserver: ReturnType<typeof observeCredentialStore> = null;
+  const ensureCredentialStoreObserver = (): void => {
+    if (!authEnabled || credentialStoreObserver) return;
+    credentialStoreObserver = observeCredentialStore(
+      credentialsFilePath(),
+      () => apiKeyProvider.refresh().then(() => {}),
+      {
+        onError: (error) => {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            console.error("[harness] credential store observation failed");
+          }
+        },
+        onUnavailable: () => {
+          credentialStoreObserver = null;
+        },
+      },
+    );
   };
   const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
     ({ apiKey, generation }) => {
       sessionManager.reconcileMcpCredentialGeneration(generation);
-      if (apiKey === null) {
+      if (apiKey !== null) {
+        // First-run sign-in creates the directory after the boot-time watch
+        // attempt. Re-arm on that known transition without a polling fallback.
+        ensureCredentialStoreObserver();
+      } else {
         void reconcileCredentialRemoval().catch(() => {
           console.error("[harness] credential removal reconciliation failed");
         });
       }
     },
   );
-  let credentialStoreObserver: ReturnType<typeof observeCredentialStore> | null =
-    null;
 
   // Rolling summary (opt-in, `HarnessSettings.rollingSummary`): folds a live
   // session's record into a ≤500-word summary.md that a later portable
@@ -4587,18 +4624,7 @@ export const startServer = async (
   ]);
 
   if (authEnabled) {
-    const credentialPath = credentialsFilePath();
-    credentialStoreObserver = observeCredentialStore(
-      credentialPath,
-      () => apiKeyProvider.refresh().then(() => {}),
-      {
-        onError: (error) => {
-          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-            console.error("[harness] credential store observation failed");
-          }
-        },
-      },
-    );
+    ensureCredentialStoreObserver();
   }
 
   let serverClose: Promise<void> | null = null;

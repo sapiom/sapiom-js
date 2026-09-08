@@ -118,7 +118,7 @@ export interface AuthRoutesOptions {
   /** Server-private identity projection for authorization consumers. It is
    * intentionally not added to AuthState or any browser response. */
   onProjectUserChanged?: (userId: string | null) => void;
-  /** Awaited after the key is cleared and before disconnect reports success. */
+  /** Awaited after local auth is cleared and before disconnect reports success. */
   onCredentialRemoved?: () => Promise<void>;
   /** @deprecated Use onProjectUserChanged; remove in SAP-3152. */
   onPlanningUserChanged?: (userId: string | null) => void;
@@ -295,8 +295,6 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
 
         await clearCredentials(env.name);
         apiKeyProvider.clear();
-        await onCredentialRemoved?.();
-
         authState.set({ authenticated: false, organizationName: null });
         notifyProjectUserChanged?.(null);
         bus.publish({
@@ -304,6 +302,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
           authenticated: false,
           organizationName: null,
         });
+        await onCredentialRemoved?.();
       });
 
       res.json({ ok: true });

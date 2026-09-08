@@ -15,17 +15,14 @@ export interface CredentialStoreObserver {
   close(): void;
 }
 
-const defaultWatchDirectory: CredentialDirectoryWatch = (
-  directory,
-  listener,
-) => watch(directory, listener);
+const defaultWatchDirectory: CredentialDirectoryWatch = (directory, listener) =>
+  watch(directory, listener);
 
 /**
  * Observe the shared credential file through its directory so an in-place
  * write or replacement produces the same refresh signal. This deliberately
- * has no polling/retry fallback: external logout is the one cross-process
- * transition in scope, and a missing directory means there is no credential
- * file another process can remove yet.
+ * has no polling/retry fallback. A missing directory returns no observer so
+ * the caller can arm it after a known in-process credential write.
  */
 export function observeCredentialStore(
   filePath: string,
@@ -34,8 +31,9 @@ export function observeCredentialStore(
     watchDirectory?: CredentialDirectoryWatch;
     debounceMs?: number;
     onError?: (error: unknown) => void;
+    onUnavailable?: () => void;
   } = {},
-): CredentialStoreObserver {
+): CredentialStoreObserver | null {
   const watchDirectory = options.watchDirectory ?? defaultWatchDirectory;
   const debounceMs = options.debounceMs ?? 50;
   const watchedName = basename(filePath);
@@ -60,16 +58,26 @@ export function observeCredentialStore(
     });
   } catch (error) {
     options.onError?.(error);
-    return { close: () => {} };
+    options.onUnavailable?.();
+    return null;
   }
 
-  watcher.on("error", (error) => options.onError?.(error));
-  return {
-    close(): void {
-      if (closed) return;
-      closed = true;
-      if (timer) clearTimeout(timer);
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    if (timer) clearTimeout(timer);
+    try {
       watcher.close();
-    },
+    } catch {
+      // A watcher that emitted an error may already be closed by Node.
+    }
+  };
+  watcher.on("error", (error) => {
+    close();
+    options.onError?.(error);
+    options.onUnavailable?.();
+  });
+  return {
+    close,
   };
 }

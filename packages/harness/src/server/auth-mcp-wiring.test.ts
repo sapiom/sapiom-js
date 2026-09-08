@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const authFixture = vi.hoisted(() => ({
@@ -72,6 +72,8 @@ vi.mock("@sapiom/mcp/auth", () => {
         credential: NonNullable<typeof authFixture.credential>,
       ) => {
         authFixture.credential = { ...credential };
+        await mkdir(dirname(authFixture.credentialsPath), { recursive: true });
+        await writeFile(authFixture.credentialsPath, "studio login signal");
       },
     ),
     clearCredentials: vi.fn(async () => {
@@ -153,6 +155,14 @@ function injectedKey(capture: CapturedLaunch): string | undefined {
   return capture.remote.headers?.["x-api-key"];
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("Agent Studio MCP authentication wiring", () => {
   const originalEnvironment = process.env.SAPIOM_ENVIRONMENT;
   let root: string;
@@ -176,6 +186,12 @@ describe("Agent Studio MCP authentication wiring", () => {
     delete process.env.SAPIOM_ENVIRONMENT;
     authFixture.credential = null;
     authFixture.readError = null;
+    authFixture.browserResult = {
+      apiKey: "browser-key",
+      tenantId: "browser-tenant",
+      organizationName: "Browser Org",
+      apiKeyId: "browser-key-id",
+    };
     captures = [];
     vi.clearAllMocks();
   });
@@ -229,12 +245,27 @@ describe("Agent Studio MCP authentication wiring", () => {
     });
   }
 
+  async function waitForAuthenticated(): Promise<void> {
+    await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalled());
+    await Promise.resolve(
+      vi.mocked(writeCredentials).mock.results.at(-1)?.value,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await vi.waitFor(async () => {
+      const response = await fetch(
+        `http://127.0.0.1:${server!.port}/api/auth/status`,
+        { headers: { "x-harness-token": "test-token" } },
+      );
+      expect(await response.json()).toMatchObject({ authenticated: true });
+    });
+  }
+
   it("injects a credential obtained through Studio login into the next session", async () => {
     await boot();
 
     const login = await post("/api/auth/start");
     expect(login.status).toBe(200);
-    await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalledOnce());
+    await waitForAuthenticated();
 
     await server!.sessionManager.create({
       cwd: projectRoot,
@@ -305,9 +336,93 @@ describe("Agent Studio MCP authentication wiring", () => {
     await writeFile(authFixture.credentialsPath, "external logout signal");
 
     await vi.waitFor(
-      () => expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
+      () =>
+        expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
       { timeout: 5_000 },
     );
+  }, 20_000);
+
+  it("arms external-logout observation after first sign-in creates the store", async () => {
+    authFixture.credentialsPath = join(
+      root,
+      "new-home",
+      ".sapiom",
+      "credentials.json",
+    );
+    await boot();
+
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+
+    authFixture.credential = null;
+    await writeFile(authFixture.credentialsPath, "external logout signal");
+
+    await vi.waitFor(
+      () =>
+        expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
+      { timeout: 5_000 },
+    );
+  }, 20_000);
+
+  it("runs a fresh removal sweep when disconnect follows an older cleanup", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    const firstSweep = deferred();
+    const terminateCredentialBearingSessions =
+      server!.sessionManager.terminateCredentialBearingSessions.bind(
+        server!.sessionManager,
+      );
+    const terminate = vi
+      .spyOn(server!.sessionManager, "terminateCredentialBearingSessions")
+      .mockImplementationOnce(() => firstSweep.promise)
+      .mockImplementation(terminateCredentialBearingSessions);
+
+    authFixture.credential = null;
+    await writeFile(authFixture.credentialsPath, "first logout signal");
+    await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
+
+    authFixture.browserResult = {
+      apiKey: "key-b",
+      tenantId: "test-tenant",
+      organizationName: "Test Org",
+      apiKeyId: "key-b-id",
+    };
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    const newerSession = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+
+    let disconnectSettled = false;
+    const disconnect = post("/api/auth/disconnect").then((response) => {
+      disconnectSettled = true;
+      return response;
+    });
+    await vi.waitFor(() => expect(clearCredentials).toHaveBeenCalledOnce());
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(disconnectSettled).toBe(false);
+
+    firstSweep.resolve();
+    expect((await disconnect).status).toBe(200);
+    expect(terminate).toHaveBeenCalledTimes(2);
+    expect(server!.sessionManager.get(newerSession.id)?.status).toBe("exited");
   }, 20_000);
 
   it("adopts a credential written externally after boot", async () => {

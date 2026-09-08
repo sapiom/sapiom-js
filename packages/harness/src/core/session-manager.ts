@@ -392,6 +392,7 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
 /** Server-private identity of the credential used to generate one MCP config. */
 export interface McpCredentialLaunch {
   generation: number;
+  credentialBearing: boolean;
 }
 
 export type LaunchOptsBuildResult = Omit<

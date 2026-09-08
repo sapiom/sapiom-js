@@ -29,30 +29,65 @@ describe("observeCredentialStore", () => {
       "/users/test/.sapiom",
       expect.any(Function),
     );
+    expect(observer).not.toBeNull();
     notify("change", "settings.json");
     notify("change", "credentials.json");
     notify("rename", "credentials.json");
     await vi.advanceTimersByTimeAsync(25);
     expect(onChange).toHaveBeenCalledOnce();
 
-    observer.close();
+    observer!.close();
     notify("change", "credentials.json");
     await vi.advanceTimersByTimeAsync(25);
     expect(onChange).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("degrades to a closed observer when the credentials directory is absent", () => {
+  it("returns no observer when the credentials directory is absent", () => {
     const error = new Error("ENOENT");
     const onError = vi.fn();
-    const observer = observeCredentialStore("/missing/credentials.json", vi.fn(), {
-      watchDirectory: () => {
-        throw error;
+    const observer = observeCredentialStore(
+      "/missing/credentials.json",
+      vi.fn(),
+      {
+        watchDirectory: () => {
+          throw error;
+        },
+        onError,
       },
-      onError,
-    });
+    );
 
     expect(onError).toHaveBeenCalledWith(error);
-    expect(() => observer.close()).not.toThrow();
+    expect(observer).toBeNull();
+  });
+
+  it("closes a failed watcher so a caller can arm a replacement", () => {
+    let fail!: (error: Error) => void;
+    const close = vi.fn();
+    const onError = vi.fn();
+    const onUnavailable = vi.fn();
+    const observer = observeCredentialStore(
+      "/users/test/.sapiom/credentials.json",
+      vi.fn(),
+      {
+        watchDirectory: (_directory, _listener) => ({
+          close,
+          on: (_event, listener) => {
+            fail = listener;
+          },
+        }),
+        onError,
+        onUnavailable,
+      },
+    );
+
+    const error = new Error("watch failed");
+    fail(error);
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(onUnavailable).toHaveBeenCalledOnce();
+    expect(() => observer!.close()).not.toThrow();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

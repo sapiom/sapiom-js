@@ -619,6 +619,35 @@ describe("POST /api/auth/disconnect", () => {
     expect((await response).status).toBe(200);
   });
 
+  it("publishes signed-out state even when process reconciliation fails", async () => {
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
+    const result = startApp({
+      bus,
+      authState,
+      apiKeyProvider: makeProvider(null, "sk-live-key"),
+      onCredentialRemoved: vi.fn().mockRejectedValue(new Error("stop failed")),
+    });
+    server = result.server;
+
+    const response = await fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(500);
+    expect(authState.get()).toEqual({
+      authenticated: false,
+      organizationName: null,
+    });
+    expect(busEvents).toContainEqual({
+      type: "auth.changed",
+      authenticated: false,
+      organizationName: null,
+    });
+  });
+
   it("cancels an in-flight sign-in so a late browser-auth resolve cannot re-authenticate", async () => {
     type AuthResult = {
       apiKey: string;

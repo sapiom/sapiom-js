@@ -4306,7 +4306,7 @@ describe("SessionManager", () => {
       loadSpawnPty: () => loader.promise,
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation: 1 },
+        mcpCredentialLaunch: { generation: 1, credentialBearing: true },
       }),
     });
 
@@ -4332,7 +4332,7 @@ describe("SessionManager", () => {
     const { manager, spawns } = makeManager({
       currentCredentialGeneration: () => 3,
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation: 3 },
+        mcpCredentialLaunch: { generation: 3, credentialBearing: true },
       }),
     });
     const session = await manager.create({
@@ -4371,7 +4371,7 @@ describe("SessionManager", () => {
   it("does not call a stamped runtime current without a generation provider", async () => {
     const { manager } = makeManager({
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation: 3 },
+        mcpCredentialLaunch: { generation: 3, credentialBearing: true },
       }),
     });
 
@@ -4389,7 +4389,7 @@ describe("SessionManager", () => {
     const { manager, spawns } = makeManager({
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation },
+        mcpCredentialLaunch: { generation, credentialBearing: true },
       }),
       onRuntimeEpochTransition: async (_session, runtimeEpoch) => {
         if (runtimeEpoch && ++runtimeTransitions === 2) generation = 2;
