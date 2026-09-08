@@ -103,9 +103,11 @@ export function useAgentMapLayout(
     if (mode !== "elk" || !viewport.current || !visible) return;
     const controller = new AbortController();
     const element = viewport.current;
+    let measuring = true;
     void measureLabels(input.edges, element)
       .then(async (edges) => {
         controller.signal.throwIfAborted();
+        measuring = false;
         const layout = await worker.layout(
           { ...input, edges },
           controller.signal,
@@ -119,7 +121,7 @@ export function useAgentMapLayout(
           "Agent Map layout fallback:",
           /^(Invalid ELK layout|Layout (worker failed|timed out))$/.test(reason)
             ? reason
-            : "Startup or measurement failed",
+            : `${measuring ? "Label measurement" : worker.stage} failed`,
         );
         setResult({ input, layout: null });
       });

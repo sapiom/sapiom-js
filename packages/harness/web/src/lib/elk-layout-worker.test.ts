@@ -33,6 +33,8 @@ const input = {
   nodes: [{ id: "node", width: 184, height: 72 }],
   edges: [],
 };
+const run = (client: ElkLayoutWorker, id = input.id) =>
+  client.layout({ ...input, id }, new AbortController().signal);
 const setup = (timeout?: number) => {
   const workers: WorkerDouble[] = [];
   const client = new ElkLayoutWorker(() => {
@@ -55,10 +57,7 @@ it("lazily reuses its worker and rejects obsolete responses after cancellation",
   await vi.waitFor(() => expect(workers[0]?.jobs).toHaveLength(2));
   controller.abort();
   await rejected;
-  const next = client.layout(
-    { ...input, id: "next-project/proposal" },
-    new AbortController().signal,
-  );
+  const next = run(client, "next-project/proposal");
   await vi.waitFor(() => expect(workers[1]?.jobs).toHaveLength(1));
   workers[0]!.complete(1);
   workers[0]!.listeners.get("error")?.();
@@ -82,9 +81,7 @@ it("terminates on worker failure, invalid results, timeout and disposal, then re
   workers[1]!.jobs[0]!.graph.children = [];
   workers[1]!.complete();
   await bad;
-  await expect(
-    client.layout(input, new AbortController().signal),
-  ).rejects.toThrow("timed out");
+  await expect(run(client)).rejects.toThrow("timed out");
   const last = client.layout(input, new AbortController().signal),
     disposed = expect(last).rejects.toThrow("disposed");
   client.dispose();
@@ -100,9 +97,8 @@ it("terminates workers after constructor and idle failures without affecting the
   Object.defineProperty(broken, "postMessage", { value: undefined });
   const factory = vi.fn().mockReturnValueOnce(broken).mockReturnValue(healthy);
   const client = new ElkLayoutWorker(factory);
-  await expect(
-    client.layout(input, new AbortController().signal),
-  ).rejects.toThrow("required 'postMessage'");
+  await expect(run(client)).rejects.toThrow("required 'postMessage'");
+  expect(client.stage).toBe("Worker construction");
   expect(broken.terminate).toHaveBeenCalledOnce();
   const next = client.layout(input, new AbortController().signal);
   await vi.waitFor(() => expect(healthy.jobs).toHaveLength(1));

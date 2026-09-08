@@ -17,10 +17,7 @@ async function identities(page: Page) {
     .locator(".agent-map-node, [data-testid^='agent-map-edge-']")
     .evaluateAll((elements) =>
       elements
-        .map((element) => [
-          element.getAttribute("data-testid"),
-          element.textContent,
-        ])
+        .map((el) => [el.getAttribute("data-testid"), el.textContent])
         .sort(),
     );
 }
