@@ -86,12 +86,21 @@ function deferred<T>(): {
 }
 
 /** Build and start a minimal express app mounting the auth router. */
-function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
+function startApp(
+  opts: Partial<AuthRoutesOptions> & {
+    bus: EventBus;
+    onRequest?: (method: string, path: string) => void;
+  },
+) {
   const authState =
     opts.authState ??
     createMutableAuthState({ authenticated: false, organizationName: null });
   const apiKeyProvider = opts.apiKeyProvider ?? makeProvider();
   const app = express();
+  app.use((req, _res, next) => {
+    opts.onRequest?.(req.method, req.path);
+    next();
+  });
   app.use(express.json());
   app.use(
     "/api",
@@ -622,9 +631,7 @@ describe("POST /api/auth/disconnect", () => {
     });
     expect(startRes.status).toBe(200);
 
-    // Give the async chain time to reach performBrowserAuthImpl.
-    await new Promise((r) => setTimeout(r, 10));
-    expect(capturedResolve).toBeDefined();
+    await vi.waitFor(() => expect(capturedResolve).toBeDefined());
 
     // Disconnect while the browser flow is still pending.
     const disconnectRes = await fetch(`${baseUrl}/api/auth/disconnect`, {
@@ -644,8 +651,10 @@ describe("POST /api/auth/disconnect", () => {
       apiKeyId: "key-late",
     });
 
-    // Give the async chain time to (not) write credentials.
-    await new Promise((r) => setTimeout(r, 20));
+    // Cross one event-loop turn after resolving the browser result. Promise
+    // continuations drain before setImmediate, so the stale-attempt guard has
+    // deterministically run before the negative assertions below.
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     // The late resolve must NOT have re-authenticated.
     expect(authState.get().authenticated).toBe(false);
@@ -721,7 +730,7 @@ describe("POST /api/auth/disconnect", () => {
       organizationName: "Old Org",
       apiKeyId: "key-old-id",
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(result.authState.get()).toEqual({
       authenticated: true,
@@ -738,6 +747,7 @@ describe("POST /api/auth/disconnect", () => {
 
   it("orders disconnect after an in-progress credential write", async () => {
     const write = deferred<void>();
+    const disconnectObserved = deferred<void>();
     vi.mocked(writeCredentials).mockImplementationOnce(() => write.promise);
     const provider = makeProvider("key-old");
     const result = startApp({
@@ -749,6 +759,11 @@ describe("POST /api/auth/disconnect", () => {
         organizationName: "Old Org",
         apiKeyId: "key-old-id",
       }),
+      onRequest: (method, path) => {
+        if (method === "POST" && path === "/api/auth/disconnect") {
+          disconnectObserved.resolve();
+        }
+      },
     });
     server = result.server;
 
@@ -758,13 +773,16 @@ describe("POST /api/auth/disconnect", () => {
     const disconnect = fetch(`${result.baseUrl}/api/auth/disconnect`, {
       method: "POST",
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await disconnectObserved.promise;
     expect(clearCredentials).not.toHaveBeenCalled();
 
     write.resolve();
     expect((await disconnect).status).toBe(200);
 
     expect(clearCredentials).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(writeCredentials).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(clearCredentials).mock.invocationCallOrder[0]!);
     expect(provider.calls.refresh).toBe(0);
     expect(result.authState.get().authenticated).toBe(false);
     expect(
@@ -776,6 +794,7 @@ describe("POST /api/auth/disconnect", () => {
 
   it("orders disconnect after an in-progress provider refresh", async () => {
     const refresh = deferred<string | null>();
+    const disconnectObserved = deferred<void>();
     const provider = makeProvider();
     provider.refresh = vi.fn(() => refresh.promise);
     const result = startApp({
@@ -787,6 +806,11 @@ describe("POST /api/auth/disconnect", () => {
         organizationName: "Old Org",
         apiKeyId: "key-old-id",
       }),
+      onRequest: (method, path) => {
+        if (method === "POST" && path === "/api/auth/disconnect") {
+          disconnectObserved.resolve();
+        }
+      },
     });
     server = result.server;
 
@@ -796,13 +820,16 @@ describe("POST /api/auth/disconnect", () => {
     const disconnect = fetch(`${result.baseUrl}/api/auth/disconnect`, {
       method: "POST",
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await disconnectObserved.promise;
     expect(clearCredentials).not.toHaveBeenCalled();
 
     refresh.resolve("key-old");
     expect((await disconnect).status).toBe(200);
 
     expect(clearCredentials).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(provider.refresh).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(clearCredentials).mock.invocationCallOrder[0]!);
     expect(result.authState.get().authenticated).toBe(false);
     expect(
       busEvents.filter(

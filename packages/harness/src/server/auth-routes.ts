@@ -209,7 +209,11 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
         if (!isCurrentAttempt()) return;
 
         const result = await performBrowserAuthImpl(env.appURL, env.apiURL);
-        if (!isCurrentAttempt()) return;
+        if (!isCurrentAttempt()) {
+          // This coordinator only prevents local adoption. Cancelling a
+          // superseded browser flow or its result needs separate OAuth support.
+          return;
+        }
 
         await serializeTransition(async () => {
           if (!isCurrentAttempt()) return;
