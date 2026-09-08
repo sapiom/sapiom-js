@@ -158,6 +158,7 @@ import type { PaletteAction } from "./lib/palette";
 import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import {
+  DEFAULT_HARNESS,
   FALLBACK_HARNESSES,
   isHarnessSelectable,
   orderHarnesses,
@@ -282,7 +283,7 @@ const shellApi = createApi();
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
   const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
-    () => loadUiPrefs().preferredHarness ?? "claude-code",
+    () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
   );
   const [harnessEntries, setHarnessEntries] = useState<HarnessEntry[] | null>(
     null,
