@@ -694,12 +694,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   /**
-   * Maps a resume/restart failure onto its status code. Shared by all routes
-   * that resume a conversation so a
-   * transcript-only row that turns out not to be resumable answers with the
-   * same 409 + `code` the UI already knows how to surface. Returns false when
-   * the error isn't a resume-shaped one, so the caller falls through to
-   * `next(err)`.
+   * Map failures shared by direct resume, transcript adoption, and the scoped
+   * MCP restart. A conversation that cannot be resumed answers with the same
+   * 409 + `code` on every path. Unknown errors still fall through to next().
    */
   const sendResumeError = (res: express.Response, err: unknown): boolean => {
     if (err instanceof UnknownSessionError) {

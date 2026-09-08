@@ -29,7 +29,7 @@ export function McpAuthRestartNotice({
 
   return (
     <div
-      className="connectivity-banner mcp-auth-restart-notice"
+      className="connectivity-banner"
       role="status"
       aria-live="polite"
       data-testid="mcp-auth-restart-notice"
@@ -40,7 +40,7 @@ export function McpAuthRestartNotice({
       <span className="connectivity-banner-text">
         {pending
           ? "Restarting this session with the current Sapiom connection…"
-          : "The Sapiom connection changed. Restart this session to use the current connection."}
+          : "The Sapiom connection changed. Restart to reconnect; in-progress work will stop."}
       </span>
       <button
         type="button"

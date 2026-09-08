@@ -4461,6 +4461,66 @@ describe("SessionManager", () => {
     });
   });
 
+  it("rejects current, unstamped, Codex, and already-stopping runtimes", async () => {
+    let generation = 1;
+    const claude = createFakeAdapter();
+    const { manager, spawns } = makeManager({
+      adapter: claude,
+      adapters: { "claude-code": claude, codex: createFakeAdapter() },
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async (_id, request) =>
+        request.cwd.endsWith("unstamped")
+          ? {}
+          : {
+              mcpCredentialLaunch: {
+                generation,
+                credentialBearing: true,
+              },
+            },
+    });
+    const current = await manager.create({
+      cwd: "/tmp/current",
+      harness: "claude-code",
+    });
+    await expect(
+      manager.restartForMcpCredentials(current.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    const unstamped = await manager.create({
+      cwd: "/tmp/unstamped",
+      harness: "claude-code",
+    });
+    unstamped.mcpAuthState = "restart-required";
+    await expect(
+      manager.restartForMcpCredentials(unstamped.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+
+    const codex = await manager.create({
+      cwd: "/tmp/codex",
+      harness: "codex",
+    });
+    const stopping = await manager.create({
+      cwd: "/tmp/stopping",
+      harness: "claude-code",
+    });
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+    await expect(
+      manager.restartForMcpCredentials(codex.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[2]!.pty.kill).not.toHaveBeenCalled();
+
+    const termination = manager.kill(stopping.id);
+    await expect(
+      manager.restartForMcpCredentials(stopping.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[3]!.pty.kill).toHaveBeenCalledOnce();
+    spawns[3]!.emitExit(0);
+    await termination;
+  });
+
   it("never kills a session whose runtime changed during restart preparation", async () => {
     const resumable = deferred<boolean>();
     let generation = 1;
