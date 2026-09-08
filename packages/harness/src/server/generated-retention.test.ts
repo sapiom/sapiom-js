@@ -10,10 +10,7 @@ import { access, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-vi.mock("../core/inject/retention.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../core/inject/retention.js")>();
-  return { ...actual, removeGeneratedSessionDir: vi.fn(actual.removeGeneratedSessionDir) };
-});
+vi.mock("../core/inject/retention.js", { spy: true });
 
 import { startServer, type HarnessServer } from "./index.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
@@ -70,6 +67,7 @@ describe("generated-dir retention wiring", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  /** Starts an isolated server with optional launch and adapter overrides. */
   async function boot(options: Pick<Parameters<typeof startServer>[0], "buildLaunchOpts" | "adapters"> = {}): Promise<HarnessServer> {
     return startServer({
       port: 0,
@@ -80,6 +78,15 @@ describe("generated-dir retention wiring", () => {
       stateRoot: dir,
       ...options,
     });
+  }
+
+  /** Writes a real MCP configuration file so tests can verify its deletion. */
+  async function writeMcpConfig(id: string): Promise<string> {
+    const sessionDir = join(generatedRoot, id);
+    await mkdir(sessionDir, { recursive: true });
+    const mcpConfigFile = join(sessionDir, "mcp-config.json");
+    await writeFile(mcpConfigFile, '{"mcpServers":{}}');
+    return mcpConfigFile;
   }
 
   it("sweeps stale orphaned dirs at boot and keeps fresh ones", async () => {
@@ -126,10 +133,7 @@ describe("generated-dir retention wiring", () => {
     let builds = 0;
     server = await boot({
       buildLaunchOpts: async (id) => {
-        const sessionDir = join(generatedRoot, id);
-        await mkdir(sessionDir, { recursive: true });
-        const mcpConfigFile = join(sessionDir, "mcp-config.json");
-        await writeFile(mcpConfigFile, '{"mcpServers":{}}');
+        const mcpConfigFile = await writeMcpConfig(id);
         if (++builds === 2) {
           // Resume has awaited the prior exit's cleanup. A workspace scan
           // may publish metadata while the new configuration is being built.
@@ -144,10 +148,16 @@ describe("generated-dir retention wiring", () => {
     const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
     await server.sessionManager.setAgentSessionId(session.id, "retention-rollout");
     await server.sessionManager.kill(session.id);
+    await vi.waitFor(async () => {
+      expect(await exists(join(generatedRoot, session.id))).toBe(false);
+    });
+    // A completed removal still guards later metadata from the same lifetime.
+    server.sessionManager.setBoundWorkflowPath(session.id, cwd);
+    expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(1);
     await server.sessionManager.resume(session.id);
     expect(await exists(join(generatedRoot, session.id, "mcp-config.json"))).toBe(true);
 
-    // Starting the next lifetime resets the guard, so its exit still cleans
+    // Regenerating configuration resets the guard, so its next exit still cleans
     // up normally rather than retaining credentials indefinitely.
     await server.sessionManager.kill(session.id);
     expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(2);
@@ -158,10 +168,7 @@ describe("generated-dir retention wiring", () => {
 
   it.each(["restart", "adopted history"])("protects regenerated configuration when resuming after %s", async (source) => {
     const buildLaunchOpts = async (id: string) => {
-      const sessionDir = join(generatedRoot, id);
-      await mkdir(sessionDir, { recursive: true });
-      const mcpConfigFile = join(sessionDir, "mcp-config.json");
-      await writeFile(mcpConfigFile, '{"mcpServers":{}}');
+      const mcpConfigFile = await writeMcpConfig(id);
       if (server!.sessionManager.get(id)) {
         // Restored/imported history also enters its new lifetime before
         // generation, so metadata broadcasts cannot remove these files.
@@ -215,10 +222,7 @@ describe("generated-dir retention wiring", () => {
     server = await boot({
       adapters: { "claude-code": adapter },
       buildLaunchOpts: async (id) => {
-        const sessionDir = join(generatedRoot, id);
-        await mkdir(sessionDir, { recursive: true });
-        const mcpConfigFile = join(sessionDir, "mcp-config.json");
-        await writeFile(mcpConfigFile, '{"mcpServers":{}}');
+        const mcpConfigFile = await writeMcpConfig(id);
         if (fail && failure === "configuration") throw new Error("resume preparation failed");
         return { mcpConfigFile };
       },

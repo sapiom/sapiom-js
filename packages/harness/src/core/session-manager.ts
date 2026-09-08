@@ -1427,6 +1427,11 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Resumes a stored conversation after the adapter confirms it can reopen it.
+   * Claims the starting state before preparation. Setup failures run normal
+   * exit cleanup and preserve the previous last-activity timestamp.
+   */
   async resume(
     id: string,
     trusted: TrustedSessionResumeOptions = {},

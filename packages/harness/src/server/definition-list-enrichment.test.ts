@@ -29,8 +29,10 @@ vi.mock("@sapiom/mcp/auth", () => ({
   }),
   writeCredentials: vi.fn(async () => {}),
   clearCredentials: vi.fn(async () => {}),
+  credentialsFilePath: vi.fn(),
 }));
 
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 import type {
   HarnessAdapter,
   LaunchOpts,
@@ -89,6 +91,9 @@ describe("definition list enrichment wiring (SAP-3214)", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "harness-definition-list-enrichment-"),
+    );
+    vi.mocked(credentialsFilePath).mockReturnValue(
+      path.join(tempDir, "credentials.json"),
     );
     previousAgentsUrl = process.env.SAPIOM_AGENTS_URL;
     api = {
