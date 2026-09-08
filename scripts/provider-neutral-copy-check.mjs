@@ -60,6 +60,9 @@ const REQUIRED_CONTRACT_PATTERNS_BY_PATH = {
     /`shape:\s*"openai"`/g,
     /opts\.shape\s*===\s*"openai"/g,
     /\{\s*anthropic:\s*string;\s*openai:\s*string\s*\}/g,
+    // The base-URL keys `llmSessionReadySchema` validates on a ready session —
+    // the same two wire shapes, named once as a const tuple.
+    /\["anthropic", "openai"\] as const/g,
   ],
   "packages/tools/src/sandboxes/index.ts": [/"blaxel"/giu],
   // `@sapiom/langchain-classic` binds LangChain's provider-specific chat models, so the provider
