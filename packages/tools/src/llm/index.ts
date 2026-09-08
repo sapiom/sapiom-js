@@ -708,8 +708,27 @@ export const llmSessionReadySchema = {
       fail("model must be a string when present");
     if (v.expiresAtMs !== undefined && typeof v.expiresAtMs !== "number")
       fail("expiresAtMs must be a number when present");
-    if (v.state === "failed" && (typeof v.error !== "string" || !v.error)) {
-      fail("error must be a non-empty string when failed");
+    if (v.state === "failed") {
+      if (typeof v.error !== "string" || !v.error)
+        fail("error must be a non-empty string when failed");
+    } else if (v.error !== undefined && typeof v.error !== "string") {
+      fail("error must be a string when present");
+    }
+    if (v.budget !== undefined) {
+      const budget = v.budget as Record<string, unknown> | null;
+      if (!budget || typeof budget !== "object")
+        fail("budget must be an object");
+      const b = budget as Record<string, unknown>;
+      if (b.maxTokens !== null && typeof b.maxTokens !== "number")
+        fail("budget.maxTokens must be a number or null");
+      if (b.usedTokens !== undefined && typeof b.usedTokens !== "number")
+        fail("budget.usedTokens must be a number when present");
+      if (
+        b.ttlMinutes !== undefined &&
+        b.ttlMinutes !== null &&
+        typeof b.ttlMinutes !== "number"
+      )
+        fail("budget.ttlMinutes must be a number or null when present");
     }
     // Optional on the payload (as on `LlmSession`) — `callSession` needs only
     // `sessionId` — but when present it must be the complete, well-typed pair.

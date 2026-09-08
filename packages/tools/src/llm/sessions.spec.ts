@@ -327,4 +327,53 @@ describe("llmSessionReadySchema", () => {
       }),
     ).toThrow(/expiresAtMs/);
   });
+
+  it("rejects mistyped budget / error on a ready payload (the type is enforced, not asserted)", () => {
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        budget: "invalid",
+        error: 123,
+      }),
+    ).toThrow(LlmSessionReadySchemaError);
+    expect(() =>
+      llmSessionReadySchema.parse({ sessionId: "s", state: "ready", error: 123 }),
+    ).toThrow(/error must be a string when present/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        budget: "invalid",
+      }),
+    ).toThrow(/budget must be an object/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        budget: { maxTokens: "lots" },
+      }),
+    ).toThrow(/budget\.maxTokens/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        budget: { maxTokens: null, usedTokens: "0" },
+      }),
+    ).toThrow(/budget\.usedTokens/);
+    expect(() =>
+      llmSessionReadySchema.parse({
+        sessionId: "s",
+        state: "ready",
+        budget: { maxTokens: null, ttlMinutes: "60" },
+      }),
+    ).toThrow(/budget\.ttlMinutes/);
+    // A well-formed budget, including the nullable/optional members, passes.
+    const ok = {
+      sessionId: "s",
+      state: "ready",
+      budget: { maxTokens: null, usedTokens: 0, ttlMinutes: null },
+    };
+    expect(llmSessionReadySchema.parse(ok)).toBe(ok);
+  });
 });
