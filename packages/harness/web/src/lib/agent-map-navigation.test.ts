@@ -47,6 +47,7 @@ describe("Agent Map navigation target", () => {
     null,
     [],
     { ...target, extra: true },
+    { projectId, nodeId, agentId: target.agentId, extra: true },
     { ...target, projectId: projectId.replace(/1$/, "2") },
     { ...target, nodeId: nodeId.replace(/1$/, "2") },
     { ...target, agentId: "same-name" },

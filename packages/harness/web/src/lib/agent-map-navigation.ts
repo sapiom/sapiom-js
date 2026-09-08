@@ -21,8 +21,7 @@ export function parseAgentMapNodeTarget(
   if (
     !value ||
     typeof value !== "object" ||
-    Object.keys(value).sort().join(",") !==
-      "agentId,nodeId,projectId,workflowPath" ||
+    Object.keys(value).length !== 4 ||
     value.projectId !== projectId ||
     !new RegExp(`^project_${UUID_V4}$`).test(projectId) ||
     value.nodeId !== nodeId ||
