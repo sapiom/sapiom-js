@@ -4526,6 +4526,14 @@ button.system-graph-node.is-navigable:focus-visible {
 
 .agent-map-edge-label {
   pointer-events: none;
+  /* Keep measured SVG ink consistent at fit zoom instead of snapping glyphs. */
+  text-rendering: geometricPrecision;
+}
+
+.agent-map-controls {
+  max-width: calc(100% - var(--sp3) * 2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .agent-map-node {

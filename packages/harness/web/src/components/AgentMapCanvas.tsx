@@ -16,7 +16,7 @@ import type {
   PlanNodeKind,
 } from "@shared/agent-map";
 
-import { layoutDirectedGraph } from "../lib/directed-graph-layout";
+import { useAgentMapLayout } from "../lib/use-agent-map-layout";
 import {
   GRAPH_DEFAULT_MIN_ZOOM,
   GRAPH_MAX_ZOOM,
@@ -25,9 +25,11 @@ import {
   fitGraphView,
   panGraphViewWithKeyboard,
   resetGraphView,
+  revealGraphRect,
   wheelGraphView,
   type GraphArrowKey,
   type GraphView,
+  type GraphRect,
 } from "../lib/graph-viewport";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
@@ -62,30 +64,14 @@ export function AgentMapCanvas({
   selectedNodeId,
   onSelectNode,
 }: AgentMapCanvasProps): JSX.Element {
-  const computed = useMemo(() => {
-    try {
-      return {
-        failed: false,
-        layout: layoutDirectedGraph(
-          proposal.nodes,
-          proposal.relationships.map((relationship) => ({
-            id: relationship.id,
-            from: relationship.fromNodeId,
-            to: relationship.toNodeId,
-            label: `${relationship.kind}${relationship.executionMode ? ` · ${relationship.executionMode}` : ""}`,
-          })),
-        ),
-      } as const;
-    } catch {
-      return { failed: true, layout: null } as const;
-    }
-  }, [proposal.nodes, proposal.relationships]);
   const [view, setView] = useState<GraphView>(resetGraphView);
   const [minZoom, setMinZoom] = useState(GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
+  const [visible, setVisible] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const computed = useAgentMapLayout(proposal, viewportRef, visible);
   const dragRef = useRef<DragState | null>(null);
-  const fittedProposalRef = useRef<string | null>(null);
+  const fittedProjectRef = useRef<string | null>(null);
   const followsUpdates = useRef(true);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
@@ -115,15 +101,13 @@ export function AgentMapCanvas({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
-    if (fittedProposalRef.current !== proposal.id)
+    if (fittedProjectRef.current !== proposal.projectId)
       followsUpdates.current = true;
     const measure = (): void => {
-      if (
-        !followsUpdates.current ||
-        viewport.getBoundingClientRect().width <= 0
-      )
-        return;
-      fittedProposalRef.current = proposal.id;
+      const visible = viewport.getBoundingClientRect().width > 0;
+      setVisible(visible);
+      if (!followsUpdates.current || !visible) return;
+      fittedProjectRef.current = proposal.projectId;
       fit();
     };
     measure();
@@ -131,7 +115,7 @@ export function AgentMapCanvas({
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [fit, layout, proposal.id]);
+  }, [fit, layout, proposal.projectId]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -186,7 +170,24 @@ export function AgentMapCanvas({
     setPanning(false);
   };
 
-  if (computed.failed || !layout) {
+  const revealNode = (node: GraphRect): void => {
+    const viewport = viewportRef.current;
+    if (!viewport || !layout) return;
+    followsUpdates.current = false;
+    setView((current) =>
+      revealGraphRect(
+        current,
+        layout.bounds,
+        {
+          width: viewport.clientWidth,
+          height: viewport.clientHeight,
+        },
+        node,
+      ),
+    );
+  };
+
+  if (!layout) {
     return (
       <EmptyState
         className="system-graph-state"
@@ -199,7 +200,12 @@ export function AgentMapCanvas({
   }
 
   return (
-    <div className="agent-map-canvas" data-testid="agent-map-canvas">
+    <div
+      className="agent-map-canvas"
+      data-testid="agent-map-canvas"
+      data-layout-engine={computed.engine}
+      data-layout-state={computed.state}
+    >
       <div
         ref={viewportRef}
         className={`agent-map-viewport${panning ? " is-panning" : ""}`}
@@ -303,6 +309,7 @@ export function AgentMapCanvas({
                 aria-pressed={selectedNodeId === node.id}
                 aria-label={`${node.name}, ${node.kind}, Proposed`}
                 onClick={() => onSelectNode(node.id)}
+                onFocus={() => revealNode(placed)}
               >
                 <span className="agent-map-node-heading">
                   <Icon name={KIND_ICON[node.kind]} size={14} />
@@ -321,6 +328,27 @@ export function AgentMapCanvas({
           role="group"
           aria-label="Agent Map view controls"
         >
+          {(["classic", "elk"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={`right-pane-tab${computed.mode === mode ? " is-active" : ""}`}
+              aria-pressed={computed.mode === mode}
+              onClick={() => {
+                followsUpdates.current = true;
+                computed.setMode(mode);
+              }}
+            >
+              {mode === "classic" ? "Classic" : "Vertical"}
+            </button>
+          ))}
+          {computed.state !== "ready" && (
+            <span className="system-graph-node-meta" role="status">
+              {computed.state === "fallback"
+                ? "Classic fallback"
+                : "Arranging…"}
+            </span>
+          )}
           <button
             type="button"
             className="theme-toggle"

@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 ---
 
-Add a validated comparison-profile importer that preserves selected Studio maps and agent identities without modifying the source profile.
+Export importStudioComparisonProfile to copy selected Studio project identities, inventory, and complete map histories into an isolated comparison profile without modifying the source.
