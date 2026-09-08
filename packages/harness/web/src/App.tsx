@@ -291,7 +291,8 @@ export const App = (): JSX.Element => {
   // automatic corrections and choices that could not be saved to preferences.
   useEffect(() => {
     let cancelled = false;
-    harness.listHarnesses()
+    harness
+      .listHarnesses()
       .then((registry) => {
         if (cancelled || registry.length === 0) return;
         setHarnessEntries(orderHarnesses(registry));
@@ -307,10 +308,9 @@ export const App = (): JSX.Element => {
       cancelled = true;
     };
   }, [harness.listHarnesses]);
-  const pickHarness = useCallback((kind: HarnessKind) => {
-    setSelectedHarness(kind);
-    saveUiPrefs({ preferredHarness: kind === "codex" ? "codex" : "claude-code" });
-  }, []);
+  useEffect(() => {
+    saveUiPrefs({ preferredHarness: selectedHarness });
+  }, [selectedHarness]);
   // Live browser connectivity (navigator.onLine + online/offline events).
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
@@ -648,17 +648,9 @@ export const App = (): JSX.Element => {
   const [reviewSummary, setReviewSummary] = useState<SessionSummary | null>(
     null,
   );
-  // A gallery visit retains its selection when replayed through Back/Forward.
-  const [templatesView, setTemplatesView] = useState<{
-    harness?: HarnessKind;
-  } | null>(null);
-  const templatesOpen = templatesView !== null;
-  const setTemplatesOpen = useCallback(
-    (open: boolean, agentHarness?: HarnessKind) => {
-      setTemplatesView(open ? { harness: agentHarness ?? selectedHarness } : null);
-    },
-    [selectedHarness],
-  );
+  // Template gallery opened from the command palette (browse is reachable
+  // from anywhere, not only the add dialog / welcome panel entries).
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   // The Overview: an introduction to the app, opened from the account menu's
   // "Overview" item. A full-width destination like Templates (never the
   // composer it used to alias), cleared by any navigation the same way.
@@ -1156,7 +1148,7 @@ export const App = (): JSX.Element => {
         label: selectedProject.label,
       });
     } else if (templatesOpen) {
-      recordVisit({ kind: "templates", harness: templatesView?.harness });
+      recordVisit({ kind: "templates" });
     } else if (reviewSummary) {
       recordVisit({ kind: "review", summary: reviewSummary });
     } else if (composing) {
@@ -1178,7 +1170,6 @@ export const App = (): JSX.Element => {
     selectedProject,
     effectiveStudioSelection,
     templatesOpen,
-    templatesView,
     reviewSummary,
     composing,
     activeSessionIdForNav,
@@ -1196,10 +1187,7 @@ export const App = (): JSX.Element => {
       // would truncate the forward stack). See applyingVisitRef above.
       applyingVisitRef.current = true;
       setOverviewOpen(false);
-      setTemplatesOpen(
-        visit.kind === "templates",
-        visit.kind === "templates" ? visit.harness : undefined,
-      );
+      setTemplatesOpen(visit.kind === "templates");
       setComposing(visit.kind === "composer");
       setReviewSummary(visit.kind === "review" ? visit.summary : null);
       if (
@@ -1267,7 +1255,7 @@ export const App = (): JSX.Element => {
         );
       }
     },
-    [harness.state, isMobile, setActiveSessionId, setTemplatesOpen],
+    [harness.state, isMobile, setActiveSessionId],
   );
 
   // The dead pane's Resume button has to be as honest as a history row's tag,
@@ -1752,7 +1740,7 @@ export const App = (): JSX.Element => {
         harness.setActiveSessionId(decision.to.id);
       return;
     }
-    void startProjectSession(root, label, preferredHarness());
+    void startProjectSession(root, label, selectedHarness);
   };
   selectProjectRef.current = handleSelectWorkspace;
 
@@ -1789,21 +1777,12 @@ export const App = (): JSX.Element => {
   };
 
   const handleStartProjectSession = async (root: string, label: string): Promise<void> => {
-    const started = await startProjectSession(root, label, preferredHarness());
+    const started = await startProjectSession(root, label, selectedHarness);
     if (!started) return;
     studioRestoreGenerationRef.current += 1;
     setStudioSelection(null);
     setSelectedProject(null);
   };
-
-  /**
-   * The provider a create-initiated session boots with — the same stored
-   * preference the rail used to read before it dispatched. It moved here with
-   * the create itself; the rail no longer starts sessions.
-   */
-  function preferredHarness(): HarnessKind {
-    return loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
-  }
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -2043,7 +2022,7 @@ export const App = (): JSX.Element => {
         : null;
       const session =
         existing ??
-        (await createSessionAt(request.root, preferredHarness(), {
+        (await createSessionAt(request.root, selectedHarness, {
           initialUserInputPending: input.instruction.trim().length > 0,
         }));
       await harness.bindWorkflow(session.id, created.path);
@@ -2194,16 +2173,21 @@ export const App = (): JSX.Element => {
       | "welcome"
       | "template_gallery"
       | "template_detail" = "template_gallery",
-    // The gallery has no picker; the composer passes its current selection.
-    agentHarness: HarnessKind = selectedHarness,
   ): Promise<void> => {
+    // Capture the current choice for this launch, including async scaffolding.
+    let agentHarness = selectedHarness;
     // A deep link can open before registry loading finishes. Resolve its
     // selection before creating a session on an unavailable default adapter.
-    const registry = harnessEntries ?? (await harness.listHarnesses());
+    const registry =
+      harnessEntries ??
+      (await harness.listHarnesses().catch(() => FALLBACK_HARNESSES));
     const selectable = registry.filter(isHarnessSelectable);
     if (!selectable.some((entry) => entry.id === agentHarness)) {
       agentHarness =
         (selectable[0]?.id as HarnessKind | undefined) ?? agentHarness;
+      setSelectedHarness((current) =>
+        current === selectedHarness ? agentHarness : current,
+      );
     }
     // Product metric — "templates used". Fires at the choke point every
     // template surface funnels through; `agent.created` fires later when the
@@ -2271,7 +2255,6 @@ export const App = (): JSX.Element => {
 
   const handleComposerSubmitIdea = async (
     idea: string,
-    agentHarness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ): Promise<void> => {
     const cwd = uniqueProjectDir(
@@ -2282,7 +2265,7 @@ export const App = (): JSX.Element => {
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
-    await createSessionAt(cwd, agentHarness, {
+    await createSessionAt(cwd, selectedHarness, {
       keepComposerOpen: true,
       standaloneBuilder: true,
       scaffold: { template: "default" },
@@ -2298,17 +2281,14 @@ export const App = (): JSX.Element => {
     setComposing(false);
   };
 
-  const handleComposerUseTemplate = (
-    template: GalleryTemplate,
-    agentHarness: HarnessKind,
-  ): void => {
+  const handleComposerUseTemplate = (template: GalleryTemplate): void => {
     const cwd = uniqueProjectDir(template.id);
     if (!cwd) {
       harness.showToast("Set a project folder first — use the + to open one.");
       return;
     }
     setRightCollapsed(true);
-    void handleUseTemplate(cwd, template, "welcome", agentHarness);
+    void handleUseTemplate(cwd, template, "welcome");
   };
 
   // Bulk discovery from the add dialog.
@@ -3122,14 +3102,7 @@ export const App = (): JSX.Element => {
               recentDirs={harness.settings?.recentDirs ?? []}
               listDir={harness.listDir}
               onExit={() => setTemplatesOpen(false)}
-              onUse={(cwd, template) =>
-                handleUseTemplate(
-                  cwd,
-                  template,
-                  "template_gallery",
-                  templatesView?.harness,
-                )
-              }
+              onUse={handleUseTemplate}
               listTemplates={harness.listTemplates}
               getTemplate={harness.getTemplate}
               openTemplateId={deepLinkTemplateId}
@@ -3376,16 +3349,16 @@ export const App = (): JSX.Element => {
                 <NewSessionComposer
                   harness={selectedHarness}
                   entries={harnessEntries ?? FALLBACK_HARNESSES}
-                  onHarnessChange={pickHarness}
+                  onHarnessChange={setSelectedHarness}
                   firstRun={state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
                   onUseTemplate={handleComposerUseTemplate}
-                  onBrowseTemplates={(agentHarness) => {
+                  onBrowseTemplates={() => {
                     studioRestoreGenerationRef.current += 1;
                     setStudioSelection(null);
                     setSelectedProject(null);
-                    setTemplatesOpen(true, agentHarness);
+                    setTemplatesOpen(true);
                   }}
                   listTemplates={harness.listTemplates}
                   telemetryOptIn={

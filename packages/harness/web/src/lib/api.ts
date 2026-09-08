@@ -3465,6 +3465,10 @@ export class MockApi implements HarnessApi {
   }
 
   async listHarnesses(): Promise<HarnessEntry[]> {
+    if ((window as unknown as { __MOCK_HARNESS_REGISTRY_FAIL__?: boolean })
+      .__MOCK_HARNESS_REGISTRY_FAIL__) {
+      throw new Error("mock: harness registry unavailable");
+    }
     await delay(120);
     const uninstalled =
       (window as unknown as { __MOCK_UNINSTALLED_HARNESSES__?: string[] })

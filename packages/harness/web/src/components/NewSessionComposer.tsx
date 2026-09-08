@@ -83,15 +83,14 @@ interface NewSessionComposerProps {
    *  App derives the folder and runs the scaffold+inject path. */
   onSubmitIdea: (
     idea: string,
-    harness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ) => Promise<void>;
   /** Surface a file-resolution or submit failure in the app's existing toast. */
   onAttachmentError: (message: string) => void;
   /** Start a session from a catalog template (clone + first run). */
-  onUseTemplate: (template: GalleryTemplate, harness: HarnessKind) => void;
+  onUseTemplate: (template: GalleryTemplate) => void;
   /** Navigate to the full templates catalog. */
-  onBrowseTemplates: (harness: HarnessKind) => void;
+  onBrowseTemplates: () => void;
   /** Template catalog fetch. */
   listTemplates: () => Promise<TemplateListResponse>;
   /** First-run telemetry opt-in (SAP-1988): off by default, folded in from the
@@ -190,7 +189,7 @@ export function NewSessionComposer({
     setLeaving(true);
     const queuedAttachments = attachmentsRef.current;
     window.setTimeout(() => {
-      void onSubmitIdea(idea.trim(), harness, queuedAttachments).catch(
+      void onSubmitIdea(idea.trim(), queuedAttachments).catch(
         (err: unknown) => {
           submittingRef.current = false;
           setLeaving(false);
@@ -517,7 +516,7 @@ export function NewSessionComposer({
               type="button"
               className="composer-templates-all"
               data-testid="composer-browse-templates"
-              onClick={() => onBrowseTemplates(harness)}
+              onClick={onBrowseTemplates}
             >
               Browse all templates <Icon name="ChevronRight" size={13} />
             </button>
@@ -529,7 +528,7 @@ export function NewSessionComposer({
                 type="button"
                 className="composer-template-card"
                 data-testid={`composer-template-${template.id}`}
-                onClick={() => leaveThen(() => onUseTemplate(template, harness))}
+                onClick={() => leaveThen(() => onUseTemplate(template))}
               >
                 <span className="composer-template-cardhead">
                   <span className="composer-template-name">{template.name}</span>

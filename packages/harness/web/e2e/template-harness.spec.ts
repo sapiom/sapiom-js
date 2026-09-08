@@ -68,7 +68,13 @@ async function expectTemplateSession(
       ),
     )
     .toEqual([
-      { req: { cwd: starter ? root : `${root}/hello-agent`, harness } },
+      {
+        req: {
+          cwd: starter ? root : `${root}/hello-agent`,
+          harness,
+          ...(!starter ? { initialUserInputPending: true } : {}),
+        },
+      },
     ]);
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("templates-panel")).toHaveCount(0);
@@ -202,7 +208,7 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
   });
 }
 
-test("a direct gallery visit uses the saved preference after leaving a composer visit", async ({
+test("a direct gallery visit uses the current selection after leaving the composer", async ({
   page,
 }) => {
   await page.goto("/?mockState=fresh");
@@ -254,7 +260,7 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
 }
 
 for (const navigation of ["exit-back", "back-forward"] as const) {
-  test(`gallery selection survives ${navigation} when preference writes fail`, async ({
+  test(`gallery uses the current selection after ${navigation} when preference writes fail`, async ({
     page,
   }) => {
     await page.addInitScript(() => {
@@ -277,7 +283,7 @@ for (const navigation of ["exit-back", "back-forward"] as const) {
     await expect(page.getByTestId("templates-panel")).toBeVisible();
     if (navigation === "exit-back") {
       await page.getByTestId("templates-exit").click();
-      // A later choice must not change the original gallery visit.
+      // Returning to the gallery uses the new choice, even without storage.
       await page.getByTestId("composer-harness-select").click();
       await page.getByTestId("composer-harness-option-claude-code").click();
       await page.getByRole("button", { name: "Go back", exact: true }).click();
@@ -289,6 +295,23 @@ for (const navigation of ["exit-back", "back-forward"] as const) {
     }
     await expect(page.getByTestId("templates-panel")).toBeVisible();
     await confirmTemplate(page, "hello-agent");
-    await expectTemplateSession(page, "codex");
+    await expectTemplateSession(
+      page,
+      navigation === "exit-back" ? "claude-code" : "codex",
+    );
   });
 }
+
+test("a registry failure still launches the selected harness from the composer", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    (
+      window as unknown as { __MOCK_HARNESS_REGISTRY_FAIL__: boolean }
+    ).__MOCK_HARNESS_REGISTRY_FAIL__ = true;
+  });
+  await page.goto("/?mockState=fresh");
+  await chooseCodex(page);
+  await launchTemplate(page, "composer");
+  await expectTemplateSession(page, "codex");
+});
