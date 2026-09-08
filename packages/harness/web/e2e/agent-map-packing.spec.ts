@@ -321,7 +321,7 @@ for (const mode of ["Classic", "Vertical"]) {
     const fixture = await openPacking(page);
     await page.getByRole("button", { name: mode, exact: true }).click();
     if (mode === "Vertical") await arranged(page, "0.5");
-    await page.getByTestId(`agent-map-node-${fixture.nodes[0]!.id}`).click();
+    await page.getByTestId(`agent-map-info-${fixture.nodes[0]!.id}`).click();
     const larger = agentMapPackingFixture(undefined, 2);
     await delta(
       page,

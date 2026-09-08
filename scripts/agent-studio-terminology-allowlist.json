@@ -1,12 +1,5 @@
 [
   {
-    "id": "studio-comparison-registry-filename",
-    "path": "packages/harness/src/core/studio-comparison-profile.ts",
-    "pattern": "^workflows\\.json$",
-    "occurrences": 3,
-    "reason": "The importer preserves the existing on-disk agent registry filename."
-  },
-  {
     "id": "desktop-release-manual-trigger-key",
     "path": ".github/workflows/desktop-release.yml",
     "pattern": "(?:^|\\n)\\s*workflow_dispatch:\\s*(?:\\n|$)",

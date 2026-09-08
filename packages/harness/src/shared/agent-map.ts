@@ -24,6 +24,19 @@ export type PlanRelationshipId = AgentMapBrand<"PlanRelationshipId">;
 export type MapProposalId = AgentMapBrand<"MapProposalId">;
 export type ProposalOperationId = AgentMapBrand<"ProposalOperationId">;
 export type AgentMapVersionId = AgentMapBrand<"AgentMapVersionId">;
+
+export type ImplementationResolution = "bound" | "unbound" | "missing" | "ambiguous" | "unavailable";
+export interface AgentMapImplementation {
+  nodeId: PlanNodeId;
+  agentId: string | null;
+  revision: number;
+  resolution: ImplementationResolution;
+}
+export interface AgentMapImplementationsResponse {
+  projectId: StudioProjectId;
+  mapVersionId: AgentMapVersionId | null;
+  bindings: AgentMapImplementation[];
+}
 /** Identity of normalized graph meaning. It is deliberately project-neutral. */
 export type GraphContentDigest = AgentMapBrand<"GraphContentDigest">;
 /** Integrity identity for a complete immutable record or aggregate. */

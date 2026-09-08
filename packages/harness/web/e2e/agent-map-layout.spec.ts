@@ -42,7 +42,7 @@ test("switches the same saved map through a lazy local worker with measured card
   expect(workers).toHaveLength(0);
   const before = await identities(page);
   const selected = page.locator(".agent-map-node").first();
-  await selected.click();
+  await page.locator(".agent-map-node-info").first().click();
   await page.getByRole("button", { name: "Vertical", exact: true }).click();
   await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
   expect(await identities(page)).toEqual(before);

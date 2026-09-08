@@ -38,7 +38,9 @@ import { Icon, type IconName } from "./Icon";
 interface AgentMapCanvasProps {
   proposal: MapChangeProposal;
   selectedNodeId: PlanNodeId | null;
-  onSelectNode: (nodeId: PlanNodeId) => void;
+  onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  pendingNodeId: PlanNodeId | null;
 }
 
 const KIND_ICON: Record<PlanNodeKind, IconName> = {
@@ -63,6 +65,8 @@ export function AgentMapCanvas({
   proposal,
   selectedNodeId,
   onSelectNode,
+  onInspectNode,
+  pendingNodeId,
 }: AgentMapCanvasProps): JSX.Element {
   const [view, setView] = useState<GraphView>(resetGraphView);
   const [minZoom, setMinZoom] = useState(GRAPH_DEFAULT_MIN_ZOOM);
@@ -289,17 +293,14 @@ export function AgentMapCanvas({
             const owner = node.ownerAgentId
               ? nodesById.get(node.ownerAgentId)
               : null;
+            const opensAgent =
+              node.kind === "agent" || node.kind === "subagent";
             // Every map-node name is user-authored. Keep the privacy marker
             // on a USER_NAMED_OBJECTS value even when node.kind is not agent.
             return (
-              <button
+              <div
                 key={node.id}
-                type="button"
-                className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
-                data-testid={`agent-map-node-${node.id}`}
-                data-node-kind={node.kind}
-                data-proposal-state="proposed"
-                {...trackingAttrs({ object: "agent" })}
+                className={`agent-map-node-wrap${opensAgent ? " has-info" : ""}`}
                 style={
                   {
                     left: placed.x,
@@ -308,20 +309,48 @@ export function AgentMapCanvas({
                     height: placed.height,
                   } satisfies CSSProperties
                 }
-                aria-pressed={selectedNodeId === node.id}
-                aria-label={`${node.name}, ${node.kind}, Proposed`}
-                onClick={() => onSelectNode(node.id)}
                 onFocus={() => revealNode(placed)}
               >
-                <span className="agent-map-node-heading">
-                  <Icon name={KIND_ICON[node.kind]} size={14} />
-                  <span className="system-graph-node-label">{node.name}</span>
-                </span>
-                <span className="system-graph-node-meta">
-                  {node.kind} · Proposed
-                  {owner ? ` · owned by ${owner.name}` : ""}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
+                  data-testid={`agent-map-node-${node.id}`}
+                  data-node-kind={node.kind}
+                  data-proposal-state="proposed"
+                  {...trackingAttrs({ object: "agent" })}
+                  aria-pressed={selectedNodeId === node.id}
+                  aria-label={`${node.name}, ${node.kind}, Proposed`}
+                  aria-busy={pendingNodeId === node.id}
+                  onClick={(event) =>
+                    onSelectNode(node.id, event.currentTarget)
+                  }
+                >
+                  <span className="agent-map-node-heading">
+                    <Icon name={KIND_ICON[node.kind]} size={14} />
+                    <span className="system-graph-node-label">{node.name}</span>
+                  </span>
+                  <span className="system-graph-node-meta">
+                    {node.kind} ·{" "}
+                    {pendingNodeId === node.id ? "Opening…" : "Proposed"}
+                    {owner ? ` · owned by ${owner.name}` : ""}
+                  </span>
+                </button>
+                {opensAgent && (
+                  <button
+                    type="button"
+                    className="theme-toggle agent-map-node-info"
+                    data-testid={`agent-map-info-${node.id}`}
+                    aria-label={`Inspect ${node.name}`}
+                    aria-expanded={selectedNodeId === node.id}
+                    {...trackingAttrs({ object: "agent" })}
+                    onClick={(event) =>
+                      onInspectNode(node.id, event.currentTarget)
+                    }
+                  >
+                    <Icon name="Info" size={14} />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
