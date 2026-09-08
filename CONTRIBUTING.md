@@ -102,12 +102,16 @@ git fetch upstream
 git checkout -b fix/short-description upstream/main
 ```
 
-For dependent changes, use a [native GitHub stack](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)
-with `main` as its target. Create each branch from the preceding branch. The
-first PR targets `main`; each later PR targets the preceding branch. All stack
-branches must be in the same repository. GitHub applies the stack target's
-branch rules and CI to each PR. The labeler also uses the stack target, so each
-PR must follow the contribution policy and template.
+If you have write access to `sapiom/sapiom-js`, use a
+[native GitHub stack](https://docs.github.com/en/pull-requests/reference/stacked-pull-requests)
+for dependent changes, with `main` as its target. Create each branch from the
+preceding branch. The first PR targets `main`; each later PR targets the
+preceding branch. All stack branches must be in `sapiom/sapiom-js`. GitHub
+applies the stack target's branch rules and CI to each PR. The labeler also uses
+the stack target, so each PR must follow the contribution policy and template.
+
+Contributors without write access must submit standalone PRs from a fork,
+with `main` as the target.
 
 While iterating, you can run commands for one package with pnpm filters:
 

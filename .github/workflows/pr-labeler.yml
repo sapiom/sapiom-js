@@ -38,6 +38,7 @@ jobs:
     steps:
       # A stack's immediate base can contain unreviewed code. Load the
       # privileged classifier and label configuration only from trusted main.
+      # Never fetch or execute contributor-controlled PR head code.
       - name: Check out trusted classifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,6 +66,7 @@ jobs:
             ).href;
             const {
               classifyPullRequest,
+              getPullRequestTargetBranch,
               reconcilePullRequestLabels,
             } = await import(classifierUrl);
 
@@ -80,8 +82,7 @@ jobs:
               repo,
               pull_number: pullNumber,
             });
-            const targetBranch =
-              pullRequest.stack?.base?.ref ?? pullRequest.base.ref;
+            const targetBranch = getPullRequestTargetBranch(pullRequest);
             if (targetBranch !== "main") {
               core.setFailed(
                 `PR #${pullNumber} targets ${targetBranch}, not main`,
