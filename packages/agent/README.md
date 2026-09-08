@@ -178,19 +178,27 @@ Things to know:
   ```
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
-- **Every pause has a deadline.** `timeoutMs` sets it; omitted, the engine applies
-  its default of 7 days (the capability resume-token TTL). A pause that receives no
-  signal by then is finalized as failed with `PauseTimeoutError`, so a lost result
-  surfaces as an error instead of a run that waits forever. Pass an explicit
-  `timeoutMs` when a human gate needs longer, or when the wait should give up sooner:
+- **A hosted pause has a deadline.** `timeoutMs` sets it; omitted, the hosted engine
+  applies its default of 7 days. A pause that receives no signal by then is finalized
+  as failed with `PauseTimeoutError`, so a dropped result surfaces as an error rather
+  than a run that parks forever. For a *capability* pause the default is the right
+  size and raising it buys nothing: the resume token expires on the same horizon, so
+  a result arriving later could not be accepted anyway. Pass an explicit `timeoutMs`
+  on a plain signal pause that no capability backs, such as a human gate you expect
+  to outlive a week:
 
   ```ts
+  // A human gate, not a capability pause: nothing but this deadline bounds the wait.
   return pauseUntilSignal({
-    signal: "demo.approval",
-    resumeStep: "finalize",
-    timeoutMs: 30 * 24 * 60 * 60 * 1000, // 30 days
+    signal: "approval.decision",
+    resumeStep: "decide",
+    timeoutMs: 365 * 24 * 60 * 60 * 1000, // one year
   });
   ```
+
+  `run_local` does not enforce any of this: the in-memory host records the deadline
+  but never sweeps for it, so a local run parks on a pause whatever `timeoutMs` says.
+  The expiry path only fires against the hosted engine.
 
 ### Compatible capabilities
 

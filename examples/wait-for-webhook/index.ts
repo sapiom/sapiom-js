@@ -14,7 +14,7 @@ import { z } from "zod/v4";
  * The sharpest showcase of the platform's durability differentiator, and the
  * direct counter to "agents are too expensive to run": `kickoff` starts a slow
  * external async job and registers a resume contract, then the run **suspends
- * indefinitely at $0** via `pauseUntilSignal` — no polling loop, no held worker,
+ * at $0** via `pauseUntilSignal` — no polling loop, no held worker,
  * no billed idle time. It resumes only when the external world fires the signal
  * (a webhook/callback), delivering a result payload that becomes the resumed
  * step's input. `decide` summarizes that payload with a model and branches to
@@ -34,13 +34,13 @@ import { z } from "zod/v4";
  * run does NOT pause. It goes straight to `decide` on an empty payload and says
  * so in its output. The durable pause is what a configured run does.
  *
- * Deadline: the pause waits **indefinitely** by default — the $0-forever
- * guarantee. A callback that never arrives would otherwise park the run for
- * good, so set `config.CALLBACK_TIMEOUT_MS` to a positive number of
- * milliseconds to cap the wait. If no callback fires within that window, the
- * engine's deadline sweep ends the run with a pause-timeout failure — an honest
- * terminal state ("no callback within N") instead of a permanently parked run.
- * Unset/blank keeps the indefinite wait.
+ * Deadline: the pause is $0 for as long as it lasts, but it is not unbounded.
+ * With no `timeoutMs` it inherits the engine's 7-day default deadline, so set
+ * `config.CALLBACK_TIMEOUT_MS` to a positive number of milliseconds to size the
+ * wait to your own callback window. Either way, if no callback fires inside the
+ * deadline the engine's sweep ends the run with a pause-timeout failure: an
+ * honest terminal state ("no callback within N") instead of a permanently
+ * parked run. Unset/blank falls back on the 7-day default.
  */
 
 /** String-only config bag (matches how templates receive their `config`). */
@@ -53,8 +53,8 @@ interface WaitForWebhookInput {
   /**
    * Config bag. `CALLBACK_REGISTER_URL` (+ optional `CALLBACK_REGISTER_KEY`)
    * points at the external job — absent (or `DRY_RUN`) ⇒ offline. Optional
-   * `CALLBACK_TIMEOUT_MS` caps the wait (see `parseTimeoutMs`); absent ⇒ waits
-   * indefinitely at $0.
+   * `CALLBACK_TIMEOUT_MS` sizes the wait (see `parseTimeoutMs`); absent ⇒ the
+   * engine's 7-day default deadline.
    */
   config?: Config;
 }
@@ -108,12 +108,13 @@ function isDryRun(config: Config): boolean {
 
 /**
  * Optional deadline for the pause, in milliseconds, from
- * `config.CALLBACK_TIMEOUT_MS`. Absent/blank ⇒ `undefined` (wait indefinitely at
- * $0, the default). A positive integer caps the wait: with no callback inside it,
- * the engine's deadline sweep terminates the run with a pause-timeout failure
- * rather than parking it forever. A non-positive or unparseable value is
- * rejected — silently ignoring a cap would reintroduce the forever-park bug it's
- * meant to prevent, so a misconfigured deadline fails loudly at `kickoff`.
+ * `config.CALLBACK_TIMEOUT_MS`. Absent/blank ⇒ `undefined`, which leaves the
+ * directive without a `timeoutMs` and so inherits the engine's 7-day default.
+ * A positive integer sizes the wait instead: with no callback inside it, the
+ * engine's deadline sweep terminates the run with a pause-timeout failure
+ * rather than parking it. A non-positive or unparseable value is rejected —
+ * silently ignoring a cap would reintroduce the forever-park bug it's meant to
+ * prevent, so a misconfigured deadline fails loudly at `kickoff`.
  */
 function parseTimeoutMs(config: Config): number | undefined {
   const raw = (config.CALLBACK_TIMEOUT_MS ?? "").trim();
@@ -226,8 +227,8 @@ const kickoff = defineStep({
 
     // Suspend at $0 until the external world fires SIGNAL for this correlationId.
     // With `timeoutMs` set, the engine's deadline sweep instead fails the run if
-    // no callback arrives in time — an honest terminal state, not a forever park.
-    // Omitted ⇒ the default indefinite wait.
+    // no callback arrives in time: an honest terminal state, not a forever park.
+    // Omitted ⇒ the engine's 7-day default deadline, same outcome, slower.
     return pauseUntilSignal({
       signal: SIGNAL,
       resumeStep: "decide",

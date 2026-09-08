@@ -1,7 +1,7 @@
 # Wait-for-Webhook
 
 Durable pause/resume around any slow external callback. The run starts a slow
-external async job, then **suspends indefinitely at $0** until a webhook/callback
+external async job, then **suspends at $0** until a webhook/callback
 fires — no polling loop, no held worker, no billed idle time — and resumes
 exactly where it left off when the external world is ready.
 
@@ -31,8 +31,9 @@ With no `CALLBACK_REGISTER_URL` (or `DRY_RUN` set), `kickoff` runs offline via i
 
 ## Capping the wait (optional deadline)
 
-By default the pause waits **indefinitely** at $0 — that's the whole point. But a
-callback that never arrives would park the run forever. To bound it, set
+The pause costs $0 for as long as it lasts, which is the whole point, but it is not
+unbounded: a pause with no `timeoutMs` inherits the engine's **7-day default**
+deadline. To size the wait to your callback window instead, set
 `config.CALLBACK_TIMEOUT_MS` to a positive number of milliseconds:
 
 ```json
@@ -41,10 +42,11 @@ callback that never arrives would park the run forever. To bound it, set
 
 If no callback fires within that window, the engine's deadline sweep ends the run
 with a pause-timeout failure — an honest terminal state ("no callback within N")
-instead of a run parked forever. Leave `CALLBACK_TIMEOUT_MS` unset to keep the
-default indefinite wait. A non-numeric or non-positive value is rejected at
-`kickoff` (a silently-ignored cap would just reintroduce the forever-park it's
-meant to prevent).
+instead of a run parked forever. Leave `CALLBACK_TIMEOUT_MS` unset to fall back on
+the engine's 7-day default, which produces the same terminal state on a slower
+horizon. A non-numeric or non-positive value is rejected at `kickoff` (a
+silently-ignored cap would just reintroduce the forever-park it's meant to
+prevent).
 
 ## Run it with Claude + the Sapiom MCP
 

@@ -75,11 +75,14 @@ export interface PauseUntilSignalDirective {
   };
   /**
    * Deadline for the signal, in ms from the moment the pause is recorded.
-   * Omitted, the engine applies its default pause deadline of 7 days (the
-   * capability resume-token TTL, so no dispatched result can land after it).
-   * A pause that receives no signal by its deadline is finalized as failed
-   * with `PauseTimeoutError` rather than waiting forever. Pass an explicit
-   * value for a wait that must run longer or give up sooner.
+   * Omitted, the hosted engine applies its default pause deadline of 7 days
+   * (the capability resume-token TTL, so no dispatched result can land after
+   * it). A pause that receives no signal by its deadline is finalized as
+   * failed with `PauseTimeoutError` rather than parking forever. Pass an
+   * explicit value for a wait that must run longer or give up sooner.
+   *
+   * `run_local` records the deadline but never sweeps for it, so the expiry
+   * only fires against the hosted engine.
    */
   readonly timeoutMs?: number;
   /** Step to run when the signal arrives. Defaults to the paused step. */
@@ -197,7 +200,7 @@ export interface Pause<Resume extends string> {
   readonly kind: typeof DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL;
   readonly signal: { readonly name: string; readonly correlationId?: string };
   readonly resumeStep?: Resume;
-  /** Deadline for the signal, in ms. Omitted, the engine applies its 7-day default (see `pauseUntilSignal`). */
+  /** Deadline for the signal, in ms. Omitted, the hosted engine applies its 7-day default (see `pauseUntilSignal`). */
   readonly timeoutMs?: number;
   /** Optional audit output recorded for the pausing step. */
   readonly output?: unknown;
@@ -247,12 +250,16 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * async-return flattening makes the sync/async distinction invisible at the call
  * site.
  *
- * **Every pause has a deadline.** `timeoutMs` sets it; omitted, the engine
- * applies its default of 7 days (the capability resume-token TTL). If no signal
- * arrives by then the run is finalized as failed with `PauseTimeoutError`, so a
- * lost webhook or a dropped capability result surfaces as an error instead of a
- * run that waits forever. Pass an explicit `timeoutMs` for a human gate that
- * legitimately needs longer, or for a wait that should give up sooner.
+ * **A hosted pause has a deadline.** `timeoutMs` sets it; omitted, the hosted
+ * engine applies its default of 7 days (the capability resume-token TTL). If no
+ * signal arrives by then the run is finalized as failed with `PauseTimeoutError`,
+ * so a lost webhook or a dropped capability result surfaces as an error rather
+ * than a run that parks forever. Raising it past the default buys nothing on a
+ * capability pause (the resume token expires on the same horizon); pass an
+ * explicit `timeoutMs` on a plain signal pause that no capability backs, such as
+ * a human gate expected to outlive a week, or on any wait that should give up
+ * sooner. `run_local` records the deadline but never sweeps for it, so the
+ * expiry only fires against the hosted engine.
  */
 export function pauseUntilSignal<const Resume extends string>(args: {
   signal: string;
