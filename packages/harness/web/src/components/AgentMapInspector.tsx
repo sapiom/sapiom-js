@@ -9,12 +9,14 @@ interface AgentMapInspectorProps {
   snapshot: AgentMapWorkspaceResponse;
   nodeId: PlanNodeId;
   onClose: () => void;
+  openError?: string | null;
 }
 
 export function AgentMapInspector({
   snapshot,
   nodeId,
   onClose,
+  openError,
 }: AgentMapInspectorProps): JSX.Element | null {
   const proposal = snapshot.proposal;
   const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
@@ -55,6 +57,11 @@ export function AgentMapInspector({
           </button>
         </div>
       </div>
+      {openError && (
+        <section role="status">
+          <p>{openError}</p>
+        </section>
+      )}
       <section>
         <h4>Purpose</h4>
         <p>{node.purpose}</p>

@@ -1,6 +1,13 @@
 import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
+import type { WorkflowInfo } from "@shared/types";
+import type { HarnessApi } from "../lib/api";
+import {
+  agentMapNavigationError,
+  agentMapTargetWorkflow,
+  type AgentMapNodeTarget,
+} from "../lib/agent-map-navigation";
 
 import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
@@ -10,6 +17,11 @@ import { AgentMapInspector } from "./AgentMapInspector";
 import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
+  visible: boolean;
+  api: Pick<HarnessApi, "getAgentMapNodeImplementation">;
+  workflows: readonly WorkflowInfo[];
+  refreshWorkflows: () => Promise<WorkflowInfo[]>;
+  onOpenAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
   state: AgentMapWorkspacePaneState;
   initialization?: AgentMapInitializationStatus | null;
   onRetryGeneration?: () => void;
@@ -19,8 +31,12 @@ interface AgentMapPaneProps {
   onToggleExpanded: () => void;
 }
 
-/** The honest E1 map: durable state around the existing neutral canvas empty. */
 export function AgentMapPane({
+  visible,
+  api,
+  workflows,
+  refreshWorkflows,
+  onOpenAgent,
   state,
   initialization,
   onRetryGeneration,
@@ -32,7 +48,71 @@ export function AgentMapPane({
   const value = state.status === "ready" ? state.value : null;
   const proposal = value?.proposal ?? null;
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
-  const mapRef = useRef<HTMLDivElement | null>(null);
+  const [pending, setPending] = useState<PlanNodeId | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const returnFocus = useRef<HTMLButtonElement | null>(null);
+  const generation = useRef(0);
+  const current = useRef({ value, workflows, onOpenAgent, visible });
+  current.current = { value, workflows, onOpenAgent, visible };
+
+  useEffect(() => {
+    generation.current += 1;
+    setPending(null);
+    setOpenError(null);
+    return () => {
+      generation.current += 1;
+    };
+  }, [value, visible]);
+
+  const inspect = (nodeId: PlanNodeId, control: HTMLButtonElement): void => {
+    generation.current += 1;
+    returnFocus.current = control;
+    setPending(null);
+    setOpenError(null);
+    setSelected(nodeId);
+  };
+
+  const activate = async (
+    nodeId: PlanNodeId,
+    control: HTMLButtonElement,
+  ): Promise<void> => {
+    const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
+    if (!visible || !value || !node) return;
+    if (node.kind !== "agent" && node.kind !== "subagent")
+      return inspect(nodeId, control);
+    const request = ++generation.current;
+    const isCurrent = () =>
+      generation.current === request &&
+      current.current.value === value &&
+      current.current.visible;
+    returnFocus.current = control;
+    setSelected(null);
+    setOpenError(null);
+    setPending(nodeId);
+    try {
+      const target = await api.getAgentMapNodeImplementation(
+        value.project.projectId,
+        nodeId,
+      );
+      if (!isCurrent()) return;
+      let workflow = agentMapTargetWorkflow(target, current.current.workflows);
+      if (!workflow) {
+        const refreshed = await refreshWorkflows();
+        if (!isCurrent()) return;
+        workflow = agentMapTargetWorkflow(target, refreshed);
+      }
+      if (!workflow)
+        throw Object.assign(new Error(), { code: "target_not_found" });
+      generation.current += 1;
+      setPending(null);
+      current.current.onOpenAgent(workflow, target);
+    } catch (error) {
+      if (!isCurrent()) return;
+      setPending(null);
+      setOpenError(agentMapNavigationError(error));
+      setSelected(nodeId);
+    }
+  };
 
   useEffect(() => {
     if (
@@ -44,11 +124,11 @@ export function AgentMapPane({
   }, [proposal, selected]);
 
   const closeInspector = useCallback((): void => {
-    const selectedNode = mapRef.current?.querySelector<HTMLButtonElement>(
-      ".agent-map-node.is-selected",
-    );
+    generation.current += 1;
     setSelected(null);
-    selectedNode?.focus();
+    setPending(null);
+    setOpenError(null);
+    returnFocus.current?.focus();
   }, []);
 
   // Match the per-agent graph's full-view contract: Escape unwinds one layer
@@ -113,7 +193,10 @@ export function AgentMapPane({
       <PopulatedAgentMap
         value={value}
         selected={selected}
-        onSelectNode={setSelected}
+        onSelectNode={activate}
+        onInspectNode={inspect}
+        pending={pending}
+        openError={openError}
         onCloseInspector={closeInspector}
       />
     );
@@ -164,7 +247,6 @@ export function AgentMapPane({
 
   return (
     <div
-      ref={mapRef}
       className={`canvas-frame-wrap${expanded ? " is-expanded" : ""}`}
       data-testid="agent-map-frame"
     >
@@ -189,11 +271,17 @@ function PopulatedAgentMap({
   value,
   selected,
   onSelectNode,
+  onInspectNode,
+  pending,
+  openError,
   onCloseInspector,
 }: {
   value: AgentMapWorkspaceResponse;
   selected: PlanNodeId | null;
-  onSelectNode: (nodeId: PlanNodeId) => void;
+  onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  pending: PlanNodeId | null;
+  openError: string | null;
   onCloseInspector: () => void;
 }): JSX.Element {
   const proposal = value.proposal!;
@@ -221,19 +309,24 @@ function PopulatedAgentMap({
           proposal={proposal}
           selectedNodeId={selected}
           onSelectNode={onSelectNode}
+          onInspectNode={onInspectNode}
+          pendingNodeId={pending}
         />
         {selected && (
           <AgentMapInspector
             snapshot={value}
             nodeId={selected}
             onClose={onCloseInspector}
+            openError={openError}
           />
         )}
       </div>
       <p className="sr-only" aria-live="polite">
-        {selected
-          ? `Selected ${proposal.nodes.find((node) => node.id === selected)?.name ?? "node"}`
-          : ""}
+        {pending
+          ? "Opening agent…"
+          : selected
+            ? `Selected ${proposal.nodes.find((node) => node.id === selected)?.name ?? "node"}`
+            : ""}
       </p>
     </div>
   );

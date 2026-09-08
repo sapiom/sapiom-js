@@ -4534,6 +4534,26 @@ button.system-graph-node.is-navigable:focus-visible {
   justify-content: flex-end;
 }
 
+.agent-map-node-wrap {
+  position: absolute;
+}
+
+.agent-map-node-wrap > .agent-map-node {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.agent-map-node-wrap.has-info > .agent-map-node {
+  padding-right: calc(var(--control-h-xs) + var(--sp2));
+}
+
+.agent-map-node-info {
+  position: absolute;
+  top: var(--sp1);
+  right: var(--sp1);
+}
+
 .agent-map-node {
   position: absolute;
   display: flex;
