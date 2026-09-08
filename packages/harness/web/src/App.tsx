@@ -113,6 +113,7 @@ import {
   selectedRunForSubject,
   sessionForFocus,
   sessionReachesFocus,
+  sessionSharesFocusProject,
   shownRunForSubject,
 } from "./lib/session-scope";
 import {
@@ -1449,7 +1450,16 @@ export const App = (): JSX.Element => {
     : activeSession;
   const conversationSession = projectMapSelected
     ? activeProjectTab
-    : activeSession;
+    : planFirstSelection &&
+        !sessionSharesFocusProject(
+          activeSession,
+          effectiveFocusedAgentPath,
+          knownProjectRoots(),
+          planFirstSelection.projectId,
+          selectedStudioScope?.cwd,
+        )
+      ? null
+      : activeSession;
   const showReview = reviewSummary != null;
   const showDead = !showReview && conversationSession?.status === "exited";
   // An agent selected with no session that can WORK on it: honest absence, and
@@ -3549,7 +3559,19 @@ export const App = (): JSX.Element => {
                   fresh load rather than a mutation of the one on screen. */}
               {studioView?.altitude === "map" ? (
                 <AgentMapPane
-                  key={studioView.projectId}
+                  key={`${studioView.projectId}:${harness.authRevision}`}
+                  visible={!rightCollapsed && shownTab === "canvas"}
+                  api={harness.api}
+                  workflows={state.workflows}
+                  refreshWorkflows={harness.refreshWorkflows}
+                  onOpenAgent={(workflow, target) => {
+                    selectStudioAgent(workflow, target);
+                    setSelectedProject(null);
+                    setFocusedAgentPath(workflow.path);
+                    setRightTab("canvas");
+                    expandRightPane();
+                    closeMobileDrawer();
+                  }}
                   state={agentMapEntry.state.workspace}
                   unavailable={agentMapEntry.state.unavailable}
                   onRetry={agentMapEntry.retryWorkspace}
