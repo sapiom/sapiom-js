@@ -22,7 +22,7 @@ async function identities(page: Page) {
     );
 }
 
-test("switches the same saved map through a lazy local worker with measured cards/labels and retained selection", async ({
+test("renders the saved map through a lazy local worker with measured cards/labels and retained selection", async ({
   page,
 }) => {
   const workers: string[] = [];
@@ -38,12 +38,14 @@ test("switches the same saved map through a lazy local worker with measured card
       }
     };
   });
-  await open(page, "&mapLayout=classic");
+  await page.goto(url);
   expect(workers).toHaveLength(0);
+  await page.getByTestId("project-select-acme-app").click();
+  await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
   const before = await identities(page);
   const selected = page.locator(".agent-map-node").first();
   await page.locator(".agent-map-node-info").first().click();
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
+  await page.getByTestId("canvas-expand").click();
   await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
   expect(await identities(page)).toEqual(before);
   expect(workers).toHaveLength(1);
@@ -82,33 +84,34 @@ test("switches the same saved map through a lazy local worker with measured card
     expect(measured.width).toBeCloseTo(actual.width, 2);
     expect(measured.height).toBeCloseTo(actual.height, 2);
   }
-  await page.getByRole("button", { name: "Classic", exact: true }).click();
-  await expect(map(page)).toHaveAttribute("data-layout-engine", "classic");
+  await page.getByTestId("canvas-expand-exit").click();
+  await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
   expect(await identities(page)).toEqual(before);
   await expect(selected).toHaveAttribute("aria-pressed", "true");
 });
 
-test("shows an identified Classic fallback after worker failure and recovers on the next selection", async ({
+test("shows a retryable layout error after worker failure and recovers without changing the saved map", async ({
   page,
 }) => {
-  await open(page, "&mapLayout=classic");
+  await page.goto(url);
+  const project = page.getByTestId("project-select-acme-app");
+  await expect(project).toBeVisible();
   await page.route("**/*elk-worker.min*", (route) => route.abort());
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
-  await expect(map(page)).toHaveAttribute("data-layout-state", "fallback");
-  await expect(
-    page.getByRole("status").filter({ hasText: "Classic fallback" }),
-  ).toBeVisible();
-  const before = await identities(page);
+  await project.click();
+  await expect(map(page)).toHaveAttribute("data-layout-state", "error");
+  await expect(page.getByTestId("agent-map-layout-error")).toBeVisible();
+  await expect(page.locator(".agent-map-node")).toHaveCount(0);
   await page.unroute("**/*elk-worker.min*");
-  await page.getByRole("button", { name: "Classic", exact: true }).click();
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
-  await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
-  expect(await identities(page)).toEqual(before);
+  await page.getByRole("button", { name: "Retry layout", exact: true }).click();
+  await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
+  const before = await identities(page);
+  expect(before.length).toBeGreaterThan(0);
   await page.reload();
-  await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
+  await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
+  expect(await identities(page)).toEqual(before);
 });
 
-test("fences layout selection and graph changes while the worker is pending", async ({
+test("fences graph changes while the worker is pending and waits for a visible viewport", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -124,10 +127,8 @@ test("fences layout selection and graph changes while the worker is pending", as
       }
     };
   });
-  await open(page, "&mapLayout=elk");
-  await page.getByRole("button", { name: "Classic", exact: true }).click();
-  await expect(map(page)).toHaveAttribute("data-layout-engine", "classic");
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
+  await open(page);
+  await expect(page.locator("html")).toHaveAttribute("data-label-width", /\d+/);
   const nodeId = "node_00000000-0000-7000-8000-000000001999";
   const viewport = page.getByTestId("agent-map-viewport");
   await viewport.evaluate((el) => ((el as HTMLElement).style.display = "none"));
@@ -166,10 +167,12 @@ test("fences layout selection and graph changes while the worker is pending", as
       },
     });
   }, nodeId);
-  await expect(page.getByTestId(`agent-map-node-${nodeId}`)).toHaveCount(1);
+  await expect(page.locator(".agent-map-live-header")).toContainText(
+    "Version 2",
+  );
   await page.waitForTimeout(250);
   await viewport.evaluate((el) => ((el as HTMLElement).style.display = ""));
-  await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
+  await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
   await expect(page.getByTestId(`agent-map-node-${nodeId}`)).toBeVisible();
   expect(
     Number(await page.locator("html").getAttribute("data-label-width")),

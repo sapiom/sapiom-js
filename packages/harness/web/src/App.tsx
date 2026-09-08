@@ -65,7 +65,6 @@ import type {
 } from "@shared/agent-map";
 
 import { CanvasPane } from "./components/CanvasPane";
-import { useAgentMapPreference } from "./lib/use-agent-map-preference";
 import { AgentMapPane } from "./components/AgentMapPane";
 import { CommandPalette } from "./components/CommandPalette";
 import {
@@ -276,7 +275,6 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
-  const mapLayoutPreference = useAgentMapPreference(harness.settings, harness.updateSettings);
   // Live browser connectivity (navigator.onLine + online/offline events).
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
@@ -3561,7 +3559,6 @@ export const App = (): JSX.Element => {
                   fresh load rather than a mutation of the one on screen. */}
               {studioView?.altitude === "map" ? (
                 <AgentMapPane
-                  layoutPreference={mapLayoutPreference}
                   key={`${studioView.projectId}:${harness.authRevision}`}
                   visible={!rightCollapsed && shownTab === "canvas"}
                   api={harness.api}

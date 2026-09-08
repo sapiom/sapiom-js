@@ -1304,8 +1304,8 @@ const MOCK_RAIL_STATE_PREFIX = "sapiom-mock-studio-rail:";
 const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
 
 /**
- * Mock mode's stand-in for settings whose contract includes surviving a
- * reload: `helpSeen` (SAP-2991) and `agentMapLayout` (SAP-3267).
+ * Mock mode's stand-in for the ONE settings field whose whole contract is
+ * "survives a reload": `helpSeen` (SAP-2991).
  *
  * The rest of `MockApi`'s settings are per-instance and reset on reload, which
  * is right — a fixture that remembered `telemetryOptIn` or `recentDirs` across
@@ -1321,14 +1321,6 @@ const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
  * component stopped using.
  */
 const MOCK_HELP_SEEN_KEY = "sapiom-mock-help-seen";
-const MOCK_MAP_LAYOUT_KEY = "sapiom-mock-agent-map-layout";
-
-function readMockMapLayout(): HarnessSettings["agentMapLayout"] {
-  try {
-    const value = localStorage.getItem(MOCK_MAP_LAYOUT_KEY);
-    return value === "classic" || value === "elk" ? value : undefined;
-  } catch { return undefined; }
-}
 
 function readMockHelpSeen(): boolean {
   try {
@@ -2201,7 +2193,6 @@ export class MockApi implements HarnessApi {
     // see MOCK_HELP_SEEN_KEY, which the `fresh` fixture has already emptied by
     // the time any instance is built.
     helpSeen: readMockHelpSeen(),
-    agentMapLayout: readMockMapLayout(),
   };
 
   private workspaceKey(cwd: string): WorkspaceKey {
@@ -3564,24 +3555,11 @@ export class MockApi implements HarnessApi {
   async updateSettings(
     patch: Partial<HarnessSettings>,
   ): Promise<HarnessSettings> {
-    if (mockErrorTargets().has("updateSettings")) {
-      await delay();
-      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
-      win.__HARNESS_TEST__ = {
-        ...win.__HARNESS_TEST__,
-        settingsWriteFailures: Number(win.__HARNESS_TEST__?.settingsWriteFailures ?? 0) + 1,
-      };
-      throw new Error("Mock settings write failed");
-    }
     // Persisted BEFORE the simulated latency, for the same reason
     // `saveRailState` is: dismissing the card hides it immediately, so a
     // reload can (and in the spec does) start before this delay resolves. A
     // write behind the delay would lose the dismiss to its own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
-    if (patch.agentMapLayout !== undefined) {
-      try { localStorage.setItem(MOCK_MAP_LAYOUT_KEY, patch.agentMapLayout); }
-      catch { /* The in-memory fixture remains usable with storage blocked. */ }
-    }
     const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
     this.settings = { ...this.settings, ...patch };

@@ -16,10 +16,7 @@ import { AgentMapCanvas } from "./AgentMapCanvas";
 import { AgentMapInspector } from "./AgentMapInspector";
 import { Icon } from "./Icon";
 
-import type { AgentMapLayoutPreference } from "../lib/use-agent-map-preference";
-
 interface AgentMapPaneProps {
-  layoutPreference: AgentMapLayoutPreference;
   visible: boolean;
   api: Pick<HarnessApi, "getAgentMapNodeImplementation">;
   workflows: readonly WorkflowInfo[];
@@ -35,7 +32,6 @@ interface AgentMapPaneProps {
 }
 
 export function AgentMapPane({
-  layoutPreference,
   visible,
   api,
   workflows,
@@ -195,7 +191,6 @@ export function AgentMapPane({
   } else if (proposal && proposal.nodes.length > 0) {
     content = (
       <PopulatedAgentMap
-        layoutPreference={layoutPreference}
         value={value}
         selected={selected}
         onSelectNode={activate}
@@ -273,7 +268,6 @@ export function AgentMapPane({
 }
 
 function PopulatedAgentMap({
-  layoutPreference,
   value,
   selected,
   onSelectNode,
@@ -282,7 +276,6 @@ function PopulatedAgentMap({
   openError,
   onCloseInspector,
 }: {
-  layoutPreference: AgentMapLayoutPreference;
   value: AgentMapWorkspaceResponse;
   selected: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
@@ -313,7 +306,6 @@ function PopulatedAgentMap({
       </div>
       <div className="agent-map-live-body">
         <AgentMapCanvas
-          layoutPreference={layoutPreference}
           proposal={proposal}
           selectedNodeId={selected}
           onSelectNode={onSelectNode}

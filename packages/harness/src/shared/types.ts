@@ -1541,8 +1541,6 @@ export interface AccountPlanView {
 }
 
 export interface HarnessSettings {
-  /** Agent Map view preference; absent means Vertical. Shared by CLI and desktop. */
-  agentMapLayout?: "classic" | "elk";
   /**
    * Opt-in to sending the *invasive* usage telemetry to Sapiom → BigQuery
    * (prompts, tool calls, session detail). OFF by default (SAP-1988): a desktop

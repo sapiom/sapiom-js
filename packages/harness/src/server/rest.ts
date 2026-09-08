@@ -110,7 +110,6 @@ const bindWorkflowSchema = z.object({
  * launch despite being written on every dismiss (found alongside SAP-2991).
  */
 const settingsPatchSchema = z.object({
-  agentMapLayout: z.enum(["classic", "elk"]).optional(),
   telemetryOptIn: z.boolean().optional(),
   productAnalyticsOptIn: z.boolean().optional(),
   recentDirs: z.array(z.string()).optional(),

@@ -523,22 +523,6 @@ describe("createRestRouter", () => {
       });
     });
 
-    it("persists valid map layouts and rejects an invalid layout without replacing it", async () => {
-      start();
-      for (const agentMapLayout of ["classic", "elk", "horizontal"]) {
-        const res = await fetch(`${baseUrl}/settings`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ agentMapLayout }),
-        });
-        expect(res.status).toBe(agentMapLayout === "horizontal" ? 400 : 200);
-        const reread = await fetch(`${baseUrl}/settings`);
-        expect(await reread.json()).toMatchObject({
-          agentMapLayout: agentMapLayout === "horizontal" ? "elk" : agentMapLayout,
-        });
-      }
-    });
-
     it("rejects a malformed patch body", async () => {
       start();
       const res = await fetch(`${baseUrl}/settings`, {

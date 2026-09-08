@@ -199,10 +199,6 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     return map?.dataset.layoutEngine === ${JSON.stringify(engine)} && map.dataset.layoutState === ${JSON.stringify(state)};
   })()`),
     );
-  const mode = (name: string) =>
-    evaluate<void>(
-      `[...document.querySelectorAll('.agent-map-controls button')].find(b => b.textContent === ${JSON.stringify(name)}).click()`,
-    );
   let blockWorker = false;
   const workerUrls = new Set<string>();
   const filter = { urls: ["*://*/*elk-worker.min-*.js*"] };
@@ -252,38 +248,45 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
         (await web.capturePage()).toPNG(),
       );
     await click(selector("canvas-expand-exit"));
-    await mode("Classic");
-    await ready("classic");
-    await until(
-      "saved Classic",
-      async () => (await api("/settings")).agentMapLayout === "classic",
+    assert.equal(
+      await evaluate<number>(
+        `[...document.querySelectorAll('.agent-map-controls button')].filter(b => /^(Classic|Vertical)$/.test(b.textContent)).length`,
+      ),
+      0,
+      "Obsolete layout selector is still present",
     );
-    await boot.mainWindow.loadURL(boot.url);
+    await evaluate(
+      `localStorage.setItem('sapiom-agent-map-layout', 'classic')`,
+    );
+    const oldLink = new URL(boot.url);
+    oldLink.searchParams.set("mapLayout", "classic");
+    await boot.mainWindow.loadURL(oldLink.toString());
     await click(project);
-    await ready("classic");
-    // A different origin reproduces desktop's changing port without faking the
-    // settings API or launching another copy of the user's desktop app.
-    const otherOrigin = new URL(boot.url);
+    await ready("elk");
+    // Desktop changes its origin between launches; neither old links nor
+    // origin-scoped preferences may restore the previous layout.
+    const otherOrigin = new URL(oldLink);
     otherOrigin.hostname = "localhost";
     await boot.mainWindow.loadURL(otherOrigin.toString());
     await click(project);
-    await ready("classic");
+    await ready("elk");
+    blockWorker = true;
     await boot.mainWindow.loadURL(boot.url);
     await click(project);
-    await ready("classic");
-    blockWorker = true;
-    await mode("Vertical");
-    await ready("classic", "fallback");
-    assert(
-      await evaluate<boolean>(
-        "document.querySelector('.agent-map-controls').textContent.includes('Classic fallback')",
+    await ready("elk", "error");
+    await until("retryable layout error", () =>
+      evaluate(
+        `Boolean(document.querySelector('[data-testid=agent-map-layout-error]'))`,
       ),
     );
+    assert.equal(
+      await count(),
+      0,
+      "A failed worker rendered a substitute layout",
+    );
     blockWorker = false;
-    await mode("Classic");
-    await ready("classic");
     const warmStart = performance.now();
-    await mode("Vertical");
+    await click("[data-testid=agent-map-layout-error] button");
     await ready("elk");
     const warmMs = Math.round(performance.now() - warmStart);
     assert.equal(await snapshot(), before, "Viewing changed saved map/history");
@@ -319,7 +322,7 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     assert(workerFile, "No worker asset in package");
     const bytes = await readFile(join(assets, workerFile));
     return (
-      `Vertical default, durable Classic across origins, fallback/recovery, live update and disposal; ` +
+      `Vertical only across origins, ignored old preferences/links, retry/recovery, live update and disposal; ` +
       `map/history unchanged by views; worker ${bytes.length}B (${gzipSync(bytes).length}B gzip); UI ready cold ${coldMs}ms, warm ${warmMs}ms`
     );
   } finally {

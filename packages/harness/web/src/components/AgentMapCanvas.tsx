@@ -35,10 +35,7 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { Icon, type IconName } from "./Icon";
 
-import type { AgentMapLayoutPreference } from "../lib/use-agent-map-preference";
-
 interface AgentMapCanvasProps {
-  layoutPreference: AgentMapLayoutPreference;
   proposal: MapChangeProposal;
   selectedNodeId: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
@@ -65,7 +62,6 @@ interface DragState {
 const AGENT_MAP_MIN_ZOOM = 0.001;
 
 export function AgentMapCanvas({
-  layoutPreference,
   proposal,
   selectedNodeId,
   onSelectNode,
@@ -75,9 +71,8 @@ export function AgentMapCanvas({
   const [view, setView] = useState<GraphView>(resetGraphView);
   const [minZoom, setMinZoom] = useState(GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
-  const [visible, setVisible] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const computed = useAgentMapLayout(proposal, viewportRef, visible, layoutPreference);
+  const computed = useAgentMapLayout(proposal, viewportRef);
   const dragRef = useRef<DragState | null>(null);
   const fittedProjectRef = useRef<string | null>(null);
   const followsUpdates = useRef(true);
@@ -113,7 +108,6 @@ export function AgentMapCanvas({
       followsUpdates.current = true;
     const measure = (): void => {
       const visible = viewport.getBoundingClientRect().width > 0;
-      setVisible(visible);
       if (!followsUpdates.current || !visible) return;
       fittedProjectRef.current = proposal.projectId;
       fit();
@@ -197,23 +191,11 @@ export function AgentMapCanvas({
     });
   };
 
-  if (!layout) {
-    return (
-      <EmptyState
-        className="system-graph-state"
-        testId="agent-map-layout-error"
-        icon="TriangleAlert"
-        title="Agent Map couldn't be arranged"
-        body="The proposal is safe. Retry after the next update."
-      />
-    );
-  }
-
   return (
     <div
       className="agent-map-canvas"
       data-testid="agent-map-canvas"
-      data-layout-engine={computed.engine}
+      data-layout-engine="elk"
       data-layout-state={computed.state}
     >
       <div
@@ -244,22 +226,55 @@ export function AgentMapCanvas({
           if (!(event.target as Element).closest("button")) fit();
         }}
       >
+        {!layout && (
+          <EmptyState
+            className="system-graph-state"
+            testId={
+              computed.state === "error"
+                ? "agent-map-layout-error"
+                : "agent-map-layout-loading"
+            }
+            icon={computed.state === "error" ? "TriangleAlert" : "Workflow"}
+            title={
+              computed.state === "error"
+                ? "Agent Map couldn't be arranged"
+                : "Arranging Agent Map…"
+            }
+            body={
+              computed.state === "error"
+                ? "Your map is safe. Try arranging it again."
+                : undefined
+            }
+            cta={
+              computed.state === "error" ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={computed.retry}
+                >
+                  Retry layout
+                </button>
+              ) : undefined
+            }
+          />
+        )}
         <div
           className="agent-map-subject"
           data-testid="agent-map-subject"
           style={{
-            width: layout.bounds.width,
-            height: layout.bounds.height,
+            width: layout?.bounds.width ?? 0,
+            height: layout?.bounds.height ?? 0,
             transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
           }}
           role="group"
+          aria-hidden={!layout}
           aria-label="Proposed architecture"
         >
           <svg
             className="agent-map-edges"
-            width={layout.bounds.width}
-            height={layout.bounds.height}
-            viewBox={`0 0 ${layout.bounds.width} ${layout.bounds.height}`}
+            width={layout?.bounds.width ?? 0}
+            height={layout?.bounds.height ?? 0}
+            viewBox={`0 0 ${layout?.bounds.width ?? 0} ${layout?.bounds.height ?? 0}`}
             aria-hidden="true"
           >
             <defs>
@@ -274,7 +289,7 @@ export function AgentMapCanvas({
                 <path d="M 0 0 L 8 4 L 0 8 z" className="agent-map-arrow" />
               </marker>
             </defs>
-            {layout.edges.map((edge) => (
+            {layout?.edges.map((edge) => (
               <g key={edge.id} data-testid={`agent-map-edge-${edge.id}`}>
                 <path
                   className="agent-map-edge"
@@ -292,7 +307,7 @@ export function AgentMapCanvas({
               </g>
             ))}
           </svg>
-          {layout.nodes.map((placed) => {
+          {layout?.nodes.map((placed) => {
             const node = nodesById.get(placed.id as PlanNodeId)!;
             const owner = node.ownerAgentId
               ? nodesById.get(node.ownerAgentId)
@@ -360,33 +375,13 @@ export function AgentMapCanvas({
         </div>
         <div
           className="system-graph-controls agent-map-controls"
+          style={!layout ? { display: "none" } : undefined}
           role="group"
           aria-label="Agent Map view controls"
         >
-          {layoutPreference.error && (
-            <span className="system-graph-node-meta" role="status">
-              {layoutPreference.error}
-            </span>
-          )}
-          {(["classic", "elk"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`right-pane-tab${computed.mode === mode ? " is-active" : ""}`}
-              aria-pressed={computed.mode === mode}
-              onClick={() => {
-                followsUpdates.current = true;
-                computed.setMode(mode);
-              }}
-            >
-              {mode === "classic" ? "Classic" : "Vertical"}
-            </button>
-          ))}
           {computed.state !== "ready" && (
             <span className="system-graph-node-meta" role="status">
-              {computed.state === "fallback"
-                ? "Classic fallback"
-                : "Arranging…"}
+              Arranging…
             </span>
           )}
           <button
