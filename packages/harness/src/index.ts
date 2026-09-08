@@ -4,8 +4,6 @@
  */
 
 export * from "./shared/types.js";
-export { importStudioComparisonProfile, StudioComparisonImportError } from "./core/studio-comparison-profile.js";
-export type { StudioComparisonImportOptions, StudioComparisonManifest } from "./core/studio-comparison-profile.js";
 export type {
   AgentMapInitializationError,
   AgentMapInitializationState,
