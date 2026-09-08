@@ -664,7 +664,6 @@ function createDefaultBuildLaunchOpts(
         ? {
             mcpCredentialLaunch: {
               generation,
-              credentialBearing: apiKey !== null,
             },
           }
         : {}),

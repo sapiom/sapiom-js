@@ -361,7 +361,7 @@ describe("TaskManager", () => {
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => {
         const launch = {
-          mcpCredentialLaunch: { generation, credentialBearing: true },
+          mcpCredentialLaunch: { generation },
         };
         generation = 2;
         return launch;

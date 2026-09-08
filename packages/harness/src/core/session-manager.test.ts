@@ -123,6 +123,7 @@ describe("SessionManager", () => {
   function makeManager(
     opts: {
       adapter?: HarnessAdapter;
+      adapters?: Partial<Record<HarnessKind, HarnessAdapter>>;
       spawnPty?: PtySpawnFn;
       loadSpawnPty?: SessionManagerOptions["loadSpawnPty"];
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
@@ -161,7 +162,7 @@ describe("SessionManager", () => {
           return fake.pty as unknown as ReturnType<PtySpawnFn>;
         }));
     const manager = new SessionManager({
-      adapters: { "claude-code": adapter },
+      adapters: opts.adapters ?? { "claude-code": adapter },
       ingestUrl: "http://127.0.0.1:4100",
       ingestCredentials:
         opts.ingestCredentials ??
@@ -4275,7 +4276,7 @@ describe("SessionManager", () => {
       loadSpawnPty: () => loader.promise,
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation: 1, credentialBearing: true },
+        mcpCredentialLaunch: { generation: 1 },
       }),
     });
 
@@ -4301,7 +4302,7 @@ describe("SessionManager", () => {
     const { manager, spawns } = makeManager({
       currentCredentialGeneration: () => 3,
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation: 3, credentialBearing: true },
+        mcpCredentialLaunch: { generation: 3 },
       }),
     });
     const session = await manager.create({
@@ -4319,13 +4320,46 @@ describe("SessionManager", () => {
     expect(persisted).not.toContain("generation");
   });
 
+  it("leaves an unstamped Codex runtime not-applicable without rebroadcasting it", async () => {
+    const { manager } = makeManager({
+      adapters: { codex: createFakeAdapter() },
+      currentCredentialGeneration: () => 3,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "codex",
+    });
+    const states: HarnessSession[] = [];
+    manager.onStatusChange((updated) => states.push(updated));
+
+    manager.reconcileMcpCredentialGeneration(4);
+
+    expect(manager.get(session.id)?.mcpAuthState).toBe("not-applicable");
+    expect(states).toHaveLength(0);
+  });
+
+  it("does not call a stamped runtime current without a generation provider", async () => {
+    const { manager } = makeManager({
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 3 },
+      }),
+    });
+
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+
+    expect(session.mcpAuthState).toBe("not-applicable");
+  });
+
   it("rechecks the MCP credential after resume runtime bookkeeping and before PTY admission", async () => {
     let generation = 1;
     let runtimeTransitions = 0;
     const { manager, spawns } = makeManager({
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
-        mcpCredentialLaunch: { generation, credentialBearing: true },
+        mcpCredentialLaunch: { generation },
       }),
       onRuntimeEpochTransition: async (_session, runtimeEpoch) => {
         if (runtimeEpoch && ++runtimeTransitions === 2) generation = 2;

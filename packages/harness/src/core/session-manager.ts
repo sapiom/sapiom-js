@@ -392,7 +392,6 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
 /** Server-private identity of the credential used to generate one MCP config. */
 export interface McpCredentialLaunch {
   generation: number;
-  credentialBearing: boolean;
 }
 
 export type LaunchOptsBuildResult = Omit<
@@ -2838,9 +2837,10 @@ export class SessionManager {
     this.ptys.set(session.id, handle);
 
     session.status = "running";
-    session.mcpAuthState = mcpCredentialLaunch
-      ? "current"
-      : "not-applicable";
+    session.mcpAuthState =
+      mcpCredentialLaunch && this.currentCredentialGeneration
+        ? "current"
+        : "not-applicable";
     // A resumed session may carry `ready: true` from its previous life —
     // this is a fresh pty that hasn't proven itself interactive yet either
     // way (trust dialogs can reappear, e.g. under different sandbox flags).
