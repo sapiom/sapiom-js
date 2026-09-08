@@ -75,11 +75,11 @@ export interface PauseUntilSignalDirective {
   };
   /**
    * Deadline for the signal, in ms from the moment the pause is recorded.
-   * Omitted, the hosted engine applies its default pause deadline of 7 days
-   * (the capability resume-token TTL, so no dispatched result can land after
-   * it). A pause that receives no signal by its deadline is finalized as
-   * failed with `PauseTimeoutError` rather than parking forever. Pass an
-   * explicit value for a wait that must run longer or give up sooner.
+   * Omitted, the hosted engine applies its default pause deadline of 7 days.
+   * A pause that receives no signal by its deadline is finalized as failed
+   * with `PauseTimeoutError` rather than parking forever. Pass an explicit
+   * value for a wait that must run longer or give up sooner: a dispatched
+   * child agent is not bounded by the default (see `pauseUntilSignal`).
    *
    * `run_local` neither applies nor enforces this: it auto-resumes every pause
    * immediately, so the deadline is only observable against the hosted engine.
@@ -254,11 +254,14 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * engine applies its default of 7 days (the capability resume-token TTL). If no
  * signal arrives by then the run is finalized as failed with `PauseTimeoutError`,
  * so a lost webhook or a dropped capability result surfaces as an error rather
- * than a run that parks forever. Raising it past the default buys nothing on a
- * capability pause (the resume token expires on the same horizon); pass an
- * explicit `timeoutMs` on a plain signal pause that no capability backs, such as
- * a human gate expected to outlive a week, or on any wait that should give up
- * sooner. `run_local` neither applies nor enforces this: it auto-resumes every
+ * than a run that parks forever. The default matches the sandboxed capability's
+ * resume-token TTL, so for a coding pause a later result could not be accepted
+ * anyway. It does NOT bound a dispatched child agent: a child's result returns
+ * through stored parent linkage with no token check, so it can land long after
+ * seven days, and the default would fail the parent while the child is still
+ * working. Size `timeoutMs` to what you are waiting on whenever it can outlive a
+ * week, a child run's worst case or a human gate, or shorten it on any wait that
+ * should give up sooner. `run_local` neither applies nor enforces this: it auto-resumes every
  * pause immediately, with the registered capability result or an empty payload,
  * so a local run never sits at a gate and never times out.
  */
