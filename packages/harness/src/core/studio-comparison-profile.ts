@@ -154,7 +154,7 @@ async function destinationPath(input: string, source: string): Promise<string> {
   const destination = expandHome(input);
   let ancestor = destination;
   const suffix: string[] = [];
-  while (true) {
+  for (;;) {
     try {
       const stat = await fs.lstat(ancestor);
       if (

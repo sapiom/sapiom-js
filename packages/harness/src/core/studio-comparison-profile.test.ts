@@ -53,7 +53,9 @@ async function hashes(root: string): Promise<Record<string, string>> {
   return result;
 }
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "studio-comparison-"));
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "studio-comparison-")),
+  );
   temporary.push(root);
   const source = path.join(root, "desktop");
   const destination = path.join(root, "trial");
