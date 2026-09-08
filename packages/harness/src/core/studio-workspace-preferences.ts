@@ -87,7 +87,7 @@ function validSelection(
   );
 }
 
-function parseState(value: unknown): PersistedPreferences {
+export function parseStudioWorkspacePreferences(value: unknown): PersistedPreferences {
   if (!isRecord(value))
     throw new StudioWorkspacePreferenceStoreError("malformed_state");
   if (
@@ -161,7 +161,7 @@ export class StudioWorkspacePreferenceStore {
   private async load(): Promise<PersistedPreferences> {
     if (this.state) return this.state;
     try {
-      this.state = parseState(
+      this.state = parseStudioWorkspacePreferences(
         JSON.parse(await fs.readFile(this.filePath, "utf8")) as unknown,
       );
     } catch (error) {

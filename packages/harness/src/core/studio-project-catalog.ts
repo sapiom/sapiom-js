@@ -217,7 +217,7 @@ function parseProject(value: unknown): StudioProjectIdentity | null {
   };
 }
 
-function parseCatalog(value: unknown): PersistedStudioProjectCatalog & { migrated: boolean } {
+export function parseStudioProjectCatalog(value: unknown): PersistedStudioProjectCatalog & { migrated: boolean } {
   if (
     isRecord(value) &&
     Number.isSafeInteger(value.schemaVersion) &&
@@ -425,7 +425,7 @@ export class StudioProjectCatalog {
       } catch {
         throw new StudioProjectCatalogError("malformed_state");
       }
-      const parsed = parseCatalog(decoded);
+      const parsed = parseStudioProjectCatalog(decoded);
       this.projects = parsed.projects;
       this.migrationPending = parsed.migrated;
     })().finally(() => {
