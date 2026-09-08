@@ -101,6 +101,23 @@ export function useAgentMapLayout(
   const [mode, setMode] = useState<MapLayout>(initialLayout);
   const [worker] = useState(() => new ElkLayoutWorker());
   const [aspect, setAspect] = useState<number | null>(null);
+  const geometry = agentMapGeometry(proposal);
+  const input = useMemo(
+    () =>
+      JSON.parse(geometry) as {
+        id: string;
+        nodes: { id: string; width: number; height: number }[];
+        edges: DirectedGraphEdge[];
+      },
+    [geometry],
+  );
+  const classic = useMemo(() => {
+    try {
+      return layoutDirectedGraph(input.nodes, input.edges);
+    } catch {
+      return null;
+    }
+  }, [input]);
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
@@ -123,24 +140,7 @@ export function useAgentMapLayout(
       clearTimeout(timer);
       observer.disconnect();
     };
-  }, [viewport]);
-  const geometry = agentMapGeometry(proposal);
-  const input = useMemo(
-    () =>
-      JSON.parse(geometry) as {
-        id: string;
-        nodes: { id: string; width: number; height: number }[];
-        edges: DirectedGraphEdge[];
-      },
-    [geometry],
-  );
-  const classic = useMemo(() => {
-    try {
-      return layoutDirectedGraph(input.nodes, input.edges);
-    } catch {
-      return null;
-    }
-  }, [input]);
+  }, [viewport, classic]);
   const [result, setResult] = useState<{
     input: typeof input;
     aspect: number;
