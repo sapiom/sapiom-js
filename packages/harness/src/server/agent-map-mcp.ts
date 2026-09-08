@@ -17,7 +17,6 @@ import type { BuildPlanService } from "../core/build-plan-service.js";
 import type { AgentBriefService } from "../core/agent-brief-service.js";
 import type { SubsessionCoordinator } from "../core/subsession-coordinator.js";
 import { createAgentMapToolServer, type AgentMapMcpToolsOptions } from "./agent-map-mcp-tools.js";
-import { AgentMapBindingError } from "../core/agent-map-implementation-bindings.js";
 
 interface BoundTransport {
   transport: StreamableHTTPServerTransport;
@@ -27,8 +26,7 @@ interface BoundTransport {
 }
 
 export interface AgentMapMcpRouterOptions
-  extends Omit<AgentMapMcpToolsOptions, "readSnapshot" | "assertAuthorized"> {
-  assertAuthorizedFor?: (identity: ResolvedAgentMapCapability["identity"]) => void;
+  extends Omit<AgentMapMcpToolsOptions, "readSnapshot"> {
   capabilities: AgentMapCapabilityRegistry;
   service: AgentMapProposalService;
   buildPlanService: BuildPlanService;
@@ -162,12 +160,6 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
     const server = createToolServer(capability.identity, options.service, options.buildPlanService,
       options.agentBriefService, options.subsessionCoordinator, {
       onEvent: options.onEvent,
-      implementations: options.implementations,
-      assertAuthorized: () => {
-        if (!options.capabilities.isGenerationLive(capability.identity.sessionId, capability.generation))
-          throw new AgentMapBindingError("unauthorized");
-        options.assertAuthorizedFor?.(capability.identity);
-      },
       ...(options.readSnapshotFor
         ? {
             readSnapshot: () => options.readSnapshotFor!(capability.identity),

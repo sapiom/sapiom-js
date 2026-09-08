@@ -180,7 +180,6 @@ import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
-import { AgentMapBindingError } from "../core/agent-map-implementation-bindings.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import {
@@ -3381,15 +3380,6 @@ export const startServer = async (
     buildPlanService,
     agentBriefService,
     subsessionCoordinator,
-    implementations: implementationBindings,
-    assertAuthorizedFor: expected => {
-      const session = sessionManager.get(expected.sessionId);
-      const current = session?.agentMapIdentity;
-      if (!session || !sessionManager.isLive(expected.sessionId) ||
-        localProjectPrincipal(projectUserId, machineId) !== expected.userId ||
-        current?.projectId !== expected.projectId || current.userId !== expected.userId || current.sessionId !== expected.sessionId)
-        throw new AgentMapBindingError("unauthorized");
-    },
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
