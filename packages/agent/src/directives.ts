@@ -81,8 +81,8 @@ export interface PauseUntilSignalDirective {
    * failed with `PauseTimeoutError` rather than parking forever. Pass an
    * explicit value for a wait that must run longer or give up sooner.
    *
-   * `run_local` records the deadline but never sweeps for it, so the expiry
-   * only fires against the hosted engine.
+   * `run_local` neither applies nor enforces this: it auto-resumes every pause
+   * immediately, so the deadline is only observable against the hosted engine.
    */
   readonly timeoutMs?: number;
   /** Step to run when the signal arrives. Defaults to the paused step. */
@@ -258,8 +258,9 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * capability pause (the resume token expires on the same horizon); pass an
  * explicit `timeoutMs` on a plain signal pause that no capability backs, such as
  * a human gate expected to outlive a week, or on any wait that should give up
- * sooner. `run_local` records the deadline but never sweeps for it, so the
- * expiry only fires against the hosted engine.
+ * sooner. `run_local` neither applies nor enforces this: it auto-resumes every
+ * pause immediately, with the registered capability result or an empty payload,
+ * so a local run never sits at a gate and never times out.
  */
 export function pauseUntilSignal<const Resume extends string>(args: {
   signal: string;
