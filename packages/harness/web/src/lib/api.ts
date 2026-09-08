@@ -3564,6 +3564,15 @@ export class MockApi implements HarnessApi {
   async updateSettings(
     patch: Partial<HarnessSettings>,
   ): Promise<HarnessSettings> {
+    if (mockErrorTargets().has("updateSettings")) {
+      await delay();
+      const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
+      win.__HARNESS_TEST__ = {
+        ...win.__HARNESS_TEST__,
+        settingsWriteFailures: Number(win.__HARNESS_TEST__?.settingsWriteFailures ?? 0) + 1,
+      };
+      throw new Error("Mock settings write failed");
+    }
     // Persisted BEFORE the simulated latency, for the same reason
     // `saveRailState` is: dismissing the card hides it immediately, so a
     // reload can (and in the spec does) start before this delay resolves. A

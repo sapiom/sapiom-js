@@ -241,14 +241,13 @@ framing after a manual pan or zoom. Per-agent Canvas views keep their own layout
 
 Choose **Classic** or **Vertical** in the map controls. The choice is saved in
 Studio settings and survives desktop launches, including changes to its local
-port. An explicit browser preference from the comparison build migrates once
-when there is no saved setting. `?mapLayout=classic` or `?mapLayout=elk` overrides
+port. `?mapLayout=classic` or `?mapLayout=elk` overrides
 the current view without saving a choice until a control is clicked.
 
 A worker failure shows **Classic fallback** and keeps the map usable. Switch
 Classic → Vertical to retry. Selecting Classic is also the immediate per-user
 rollback. Existing maps open directly; only agents without a map use the normal
-initialization path. No comparison profile, import, or setup flag is needed.
+initialization path.
 
 ### Agent Map implementation links
 

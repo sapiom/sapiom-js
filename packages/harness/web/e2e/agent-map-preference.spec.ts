@@ -4,6 +4,100 @@ const url =
   "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1";
 const legacyKey = "sapiom-agent-map-layout";
 const settingsKey = "sapiom-mock-agent-map-layout";
+const saveError = "Couldn't save layout preference";
+
+test("failed saves keep the selected view usable and recover on retry", async ({
+  page,
+}) => {
+  await page.goto(url + "&mockError=updateSettings");
+  await page.getByTestId("project-select-acme-app").click();
+  await page.getByRole("button", { name: "Classic", exact: true }).click();
+  await expect(page.getByText(saveError, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-engine",
+    "classic",
+  );
+  await page.evaluate(() => {
+    const url = new URL(location.href);
+    url.searchParams.delete("mockError");
+    history.replaceState(null, "", url);
+  });
+  await page.getByRole("button", { name: "Vertical", exact: true }).click();
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-engine",
+    "elk",
+  );
+  await expect(page.getByText(saveError, { exact: true })).toHaveCount(0);
+});
+
+test("an older rejected save cannot show an error after a newer choice", async ({
+  page,
+}) => {
+  await page.goto(url + "&mockError=updateSettings");
+  await page.getByTestId("project-select-acme-app").click();
+  await expect(page.getByRole("button", { name: "Classic", exact: true })).toBeVisible();
+  await page.evaluate(async () => {
+    const buttons = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".agent-map-controls button",
+      ),
+    ];
+    buttons.find((button) => button.textContent === "Classic")!.click();
+    // Start the queued failing request before changing the fixture's response.
+    await Promise.resolve();
+    const url = new URL(location.href);
+    url.searchParams.delete("mockError");
+    history.replaceState(null, "", url);
+    buttons.find((button) => button.textContent === "Vertical")!.click();
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: { settingsWriteFailures?: number };
+            }
+          ).__HARNESS_TEST__?.settingsWriteFailures ?? 0,
+      ),
+    )
+    .toBe(1);
+  await expect
+    .poll(() => page.evaluate((key) => localStorage.getItem(key), settingsKey))
+    .toBe("elk");
+  await expect(page.getByText(saveError, { exact: true })).toHaveCount(0);
+});
+
+test("failed background migration stays quiet and retains the earlier preference", async ({
+  page,
+}) => {
+  await page.addInitScript(
+    (key) => localStorage.setItem(key, "classic"),
+    legacyKey,
+  );
+  await page.goto(url + "&mockError=updateSettings");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: { settingsWriteFailures?: number };
+            }
+          ).__HARNESS_TEST__?.settingsWriteFailures ?? 0,
+      ),
+    )
+    .toBe(1);
+  await page.getByTestId("project-select-acme-app").click();
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-engine",
+    "classic",
+  );
+  await expect(page.getByText(saveError, { exact: true })).toHaveCount(0);
+  expect(
+    await page.evaluate((key) => localStorage.getItem(key), legacyKey),
+  ).toBe("classic");
+});
 
 for (const scenario of [
   { name: "fresh install", expected: "elk" },

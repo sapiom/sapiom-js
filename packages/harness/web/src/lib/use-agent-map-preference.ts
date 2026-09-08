@@ -13,7 +13,7 @@ export interface AgentMapLayoutPreference {
 }
 
 // Settings survive desktop's changing localhost port. Browser storage is only
-// read to migrate an explicit choice from the comparison release.
+// read to migrate an earlier pre-release browser preference.
 export function useAgentMapPreference(
   settings: HarnessSettings | null,
   update: (patch: Partial<HarnessSettings>) => Promise<HarnessSettings>,
@@ -37,7 +37,7 @@ export function useAgentMapPreference(
   const writes = useRef(Promise.resolve());
   const revision = useRef(0);
   const save = useCallback(
-    (mode: MapLayout): void => {
+    (mode: MapLayout, reportError = true): void => {
       const current = ++revision.current;
       setError(null);
       // Serialize rapid toggles so an older response cannot win on disk.
@@ -50,7 +50,7 @@ export function useAgentMapPreference(
             /* optional migration */
           }
         } catch {
-          if (current === revision.current)
+          if (reportError && current === revision.current)
             setError("Couldn't save layout preference");
         }
       });
@@ -61,7 +61,7 @@ export function useAgentMapPreference(
     if (!settings || migrated.current) return;
     migrated.current = true;
     if (!valid(settings.agentMapLayout) && initial.legacy && choice === null)
-      save(initial.legacy);
+      save(initial.legacy, false);
   }, [settings, initial, choice, save]);
 
   return {
