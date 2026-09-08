@@ -60,6 +60,7 @@ export type DefinitionMetadataResult =
   | { status: "available"; metadata: DefinitionMetadata }
   | { status: "not-found" }
   | { status: "unavailable"; lastConfirmedDeployed: boolean | null };
+type ConfirmedMetadata = Exclude<DefinitionMetadataResult, { status: "unavailable" }>;
 
 export interface DefinitionSlugResolver {
   resolve(definitionId: string): Promise<string | null>;
@@ -86,7 +87,12 @@ export function createDefinitionSlugResolver(opts: {
   const { apiKey, baseUrl = resolveAgentsBaseUrl(), fetchImpl = fetch } = opts;
   const getApiKey = typeof apiKey === "function" ? apiKey : () => apiKey;
   const cache = new Map<string, string>();
-  const confirmed = new Map<string, { request: number; deployed: boolean }>();
+  const confirmed = new Map<string, {
+    request: number;
+    deployed: boolean | null;
+    pending: number;
+    result?: ConfirmedMetadata;
+  }>();
   const loggedFailures = new Set<string>();
   let key = getApiKey();
   let generation = 0;
@@ -101,11 +107,12 @@ export function createDefinitionSlugResolver(opts: {
   const syncKey = (): void => {
     if (key !== getApiKey()) invalidate();
   };
-  const warnOnce = (definitionId: string): void => {
+  const warnOnce = (definitionId: string, reason: string): void => {
+    // Polling must not repeat the same diagnostic until the auth scope changes.
     if (loggedFailures.has(definitionId)) return;
     loggedFailures.add(definitionId);
     console.error(
-      `[harness] definition metadata unavailable for definitionId=${definitionId}`,
+      `[harness] definition metadata unavailable for definitionId=${definitionId}: ${reason}`,
     );
   };
 
@@ -124,12 +131,23 @@ export function createDefinitionSlugResolver(opts: {
     });
     const isCurrent = (): boolean => {
       syncKey();
-      return (
-        scope === generation &&
-        request >= (confirmed.get(definitionId)?.request ?? 0)
-      );
+      return scope === generation;
     };
     if (!key) return unavailable();
+    const latest = confirmed.get(definitionId) ??
+      { request: 0, deployed: null, pending: 0 };
+    confirmed.set(definitionId, latest);
+    latest.pending += 1;
+    const confirm = (result: ConfirmedMetadata): DefinitionMetadataResult => {
+      if (request < latest.request) return latest.result ?? unavailable();
+      latest.request = request;
+      latest.deployed = result.status === "available" &&
+        result.metadata.activeBuildRunStatus === "ready";
+      latest.result = result;
+      if (result.status === "not-found") cache.delete(definitionId);
+      return result;
+    };
+    let failure = "network error or timeout";
     try {
       const response = await fetchImpl(
         `${baseUrl}/agents/v1/definitions/${encodeURIComponent(definitionId)}`,
@@ -138,24 +156,27 @@ export function createDefinitionSlugResolver(opts: {
           signal: AbortSignal.timeout(5_000),
         },
       );
+      failure = response.ok ? "invalid response" : `HTTP ${response.status}`;
+      if (response.status === 401 || response.status === 403)
+        failure += "; check Studio is signed into the account that owns this agent";
       const body: unknown = await response.json();
       if (!isCurrent()) return unavailable();
       if (body === null || typeof body !== "object" || Array.isArray(body))
         throw new Error("Invalid metadata");
       const fields = body as Record<string, unknown>;
+      // Nest route misses also return JSON statusCode: 404 / code: not_found.
+      // Only the definition endpoint's scoped not-found response proves absence.
       if (
         response.status === 404 &&
         fields.statusCode === 404 &&
         fields.message === `Agent definition not found: ${definitionId}`
-      ) {
-        cache.delete(definitionId);
-        confirmed.set(definitionId, { request, deployed: false });
-        return { status: "not-found" };
-      }
+      )
+        return confirm({ status: "not-found" });
       if (!response.ok) throw new Error("Metadata request failed");
       // Slugs are stable and remain usable for legacy slug-only responses.
       const slug = typeof fields.slug === "string" ? fields.slug : null;
-      if (slug !== null) cache.set(definitionId, slug);
+      if (slug !== null && request >= latest.request)
+        cache.set(definitionId, slug);
       const nullableString = (value: unknown): value is string | null =>
         value === null ||
         (typeof value === "string" && value.trim().length > 0);
@@ -168,17 +189,17 @@ export function createDefinitionSlugResolver(opts: {
         (activeBuildRunStatus === "ready" && activeBuildRunId === null)
       )
         throw new Error("Invalid build metadata");
-      confirmed.set(definitionId, {
-        request,
-        deployed: activeBuildRunStatus === "ready",
-      });
-      return {
+      return confirm({
         status: "available",
         metadata: { slug, activeBuildRunId, activeBuildRunStatus },
-      };
+      });
     } catch {
-      if (isCurrent()) warnOnce(definitionId);
+      if (isCurrent()) warnOnce(definitionId, failure);
       return unavailable();
+    } finally {
+      // Share validated results only across overlapping successful reads. Every
+      // refresh fetches anew; failures retain only the display bit, never builds.
+      if (--latest.pending === 0) delete latest.result;
     }
   };
 
