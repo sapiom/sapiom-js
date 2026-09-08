@@ -365,6 +365,23 @@ function nextPollMs(
   return Math.min(currentMs * 2, DEFERRED_POLL_CAP_MS);
 }
 
+/**
+ * How long to actually sleep before the next poll: the backoff interval from
+ * {@link nextPollMs}, clamped so the loop never sleeps past its budget.
+ *
+ * Without the clamp a backed-off interval (up to a minute) overshoots
+ * `timeoutMs` before the loop gets to recheck, so `wait()` would wait up to a
+ * minute longer than asked and then throw an error understating how long it
+ * really waited. Clamping also puts the last poll right at the budget's edge,
+ * giving the run its best chance to be seen finishing before we give up.
+ *
+ * Kept separate from the backoff state so a clamped final sleep doesn't reset
+ * the escalation.
+ */
+function sleepMs(intervalMs: number, deadline: number): number {
+  return Math.max(0, Math.min(intervalMs, deadline - Date.now() + 1));
+}
+
 // --- wire shapes (snake_case, as served by the gateway serializer) ---
 
 interface WireResult {
@@ -504,6 +521,10 @@ export async function codingLaunch(
       while (true) {
         const d = await fetchDoc();
         const status = d.data.attributes.status;
+        // Terminal beats the budget on purpose: a result already in hand is
+        // never discarded for a timeout, even if the clock ran out while this
+        // poll was in flight. Runs are billed — throwing away a finished run's
+        // result would charge the caller for nothing.
         if (TERMINAL.has(status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
@@ -511,7 +532,7 @@ export async function codingLaunch(
           );
         }
         intervalMs = nextPollMs(status, intervalMs, pollMs);
-        await new Promise((r) => setTimeout(r, intervalMs));
+        await new Promise((r) => setTimeout(r, sleepMs(intervalMs, deadline)));
       }
     },
   };
@@ -849,6 +870,7 @@ export async function launch(
       while (true) {
         const d = await fetchDoc();
         const status = d.data.attributes.status;
+        // Terminal beats the budget — same rule as the coding loop above.
         if (MODEL_TERMINAL.has(status)) return toResult(d);
         if (Date.now() > deadline) {
           throw new Error(
@@ -856,7 +878,7 @@ export async function launch(
           );
         }
         intervalMs = nextPollMs(status, intervalMs, pollMs);
-        await new Promise((r) => setTimeout(r, intervalMs));
+        await new Promise((r) => setTimeout(r, sleepMs(intervalMs, deadline)));
       }
     },
   };
