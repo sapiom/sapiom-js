@@ -261,20 +261,6 @@ async function importProfile(
       continue;
     }
     const directory = `agent-map/projects/${projectId}`;
-    const journalFile = `${directory}/initialization.json`;
-    const journalBytes = await snapshot.read(journalFile);
-    if (journalBytes !== null) {
-      const journal = validate(journalFile, () =>
-        initializationRecordSchema.parse(
-          JSON.parse(journalBytes.toString("utf8")),
-        ),
-      );
-      if (journal.projectId !== projectId) fail("invalid_state", journalFile);
-      if (journal.status === "running" || journal.status === "queued") {
-        manifest.excluded.push({ projectId, reason: "initialization_busy" });
-        continue;
-      }
-    }
     const file = `${directory}/workspace.json`;
     const bytes = await snapshot.read(file);
     let map: StudioComparisonManifest["projects"][number]["map"] = null;
@@ -285,7 +271,6 @@ async function importProfile(
           projectId,
         ),
       );
-      maps.set(file, bytes);
       map = {
         byteDigest: digest(bytes),
         aggregateDigest: aggregate.aggregateDigest,
@@ -294,6 +279,24 @@ async function importProfile(
         authored: hasAuthoredAgentMap(aggregate),
       };
     }
+    const journalFile = `${directory}/initialization.json`;
+    const journalBytes = await snapshot.read(journalFile);
+    if (journalBytes !== null) {
+      const journal = validate(journalFile, () =>
+        initializationRecordSchema.parse(
+          JSON.parse(journalBytes.toString("utf8")),
+        ),
+      );
+      if (journal.projectId !== projectId) fail("invalid_state", journalFile);
+      if (
+        !map?.authored &&
+        (journal.status === "running" || journal.status === "queued")
+      ) {
+        manifest.excluded.push({ projectId, reason: "initialization_busy" });
+        continue;
+      }
+    }
+    if (bytes !== null) maps.set(file, bytes);
     manifest.projects.push({
       projectId,
       displayName: project.displayName,
@@ -404,6 +407,9 @@ async function importProfile(
     if (!samePath(await destinationPath(destination, source), destination))
       fail("unsafe_destination");
     await requireEmpty(destination);
+    await fs.rmdir(destination).catch((error) => {
+      if (!missing(error)) throw error;
+    });
     await fs.rename(stage, destination);
     return manifest;
   } finally {
