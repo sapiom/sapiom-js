@@ -9,6 +9,7 @@
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
  *   AgentSessionIdentityReservedError → 409
+ *   McpCredentialGenerationChangedError → 409
  *   AdapterNotFoundError      → 400
  *   SpawnTargetError          → 400
  *   ExternalHarnessError      → 409
@@ -143,7 +144,10 @@ export class SpawnTargetError extends HarnessError {
   }
 }
 
-/** Generated MCP configuration lost its credential identity before spawn. */
+/**
+ * Generated MCP configuration lost its credential identity before spawn.
+ * Maps to HTTP 409.
+ */
 export class McpCredentialGenerationChangedError extends HarnessError {
   constructor() {
     super(

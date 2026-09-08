@@ -42,6 +42,7 @@ import {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -509,6 +510,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       }
       if (
         err instanceof ExternalHarnessError ||
+        err instanceof McpCredentialGenerationChangedError ||
         err instanceof ProjectSessionScopeUnavailableError ||
         err instanceof SessionManagerClosingError
       ) {
@@ -718,6 +720,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
     if (
       err instanceof ExternalHarnessError ||
       err instanceof AgentSessionIdentityReservedError ||
+      err instanceof McpCredentialGenerationChangedError ||
       err instanceof ProjectSessionScopeUnavailableError ||
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionNotResumeableError
