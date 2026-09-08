@@ -113,6 +113,7 @@ import {
   selectedRunForSubject,
   sessionForFocus,
   sessionReachesFocus,
+  sessionSharesFocusProject,
   shownRunForSubject,
 } from "./lib/session-scope";
 import {
@@ -1450,7 +1451,13 @@ export const App = (): JSX.Element => {
   const conversationSession = projectMapSelected
     ? activeProjectTab
     : planFirstSelection &&
-        activeSession?.agentMapIdentity?.projectId !== planFirstSelection.projectId
+        !sessionSharesFocusProject(
+          activeSession,
+          effectiveFocusedAgentPath,
+          knownProjectRoots(),
+          planFirstSelection.projectId,
+          selectedStudioScope?.cwd,
+        )
       ? null
       : activeSession;
   const showReview = reviewSummary != null;
@@ -1557,7 +1564,7 @@ export const App = (): JSX.Element => {
   const canvasSource = canvasSourceFor({
     subjectPath: rightPaneWorkflow?.path ?? null,
     bindingPath: boundWorkflowPath,
-    sessionId: activeSession?.status === "exited" ? null : harness.activeSessionId,
+    sessionId: harness.activeSessionId,
   });
   // Identity of the board the auto-collapse reasons about (see
   // emptyCollapsedKeyRef). Carries the subject, so selecting another agent is a

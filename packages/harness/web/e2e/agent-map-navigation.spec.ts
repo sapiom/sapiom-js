@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { HarnessApi } from "../src/lib/api";
+import type { HarnessSession } from "../../src/shared/types";
 
 const nodeId = (n = 101) =>
   `node_00000000-0000-7000-8000-${String(n).padStart(12, "0")}`;
@@ -17,7 +18,9 @@ type Probe = {
 };
 type TestWindow = Window & {
   __navigation: Probe;
-  __HARNESS_TEST__?: Record<string, unknown>;
+  __HARNESS_TEST__?: Record<string, unknown> & {
+    publish: (message: unknown) => void;
+  };
 };
 
 async function openMap(page: Page, project = "acme-app") {
@@ -137,21 +140,42 @@ const calls = (page: Page) =>
   });
 async function publish(page: Page, message: unknown) {
   await page.evaluate(
-    (message) =>
-      (
-        (window as TestWindow).__HARNESS_TEST__?.publish as (
-          message: unknown,
-        ) => void
-      )(message),
+    (message) => (window as TestWindow).__HARNESS_TEST__!.publish(message),
     message,
   );
 }
-async function expectBoard(page: Page) {
+async function updateSession(
+  page: Page,
+  id: string,
+  patch: Partial<HarnessSession>,
+) {
+  await page.evaluate(
+    async ({ id, patch }) => {
+      const modulePath = performance
+        .getEntriesByType("resource")
+        .find(
+          (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+        )!.name;
+      const { MockApi } = await import(modulePath);
+      const session = (await new MockApi().getState()).sessions.find(
+        (session: HarnessSession) => session.id === id,
+      );
+      (window as TestWindow).__HARNESS_TEST__!.publish({
+        type: "session.status",
+        session: { ...session, ...patch },
+      });
+    },
+    { id, patch },
+  );
+}
+async function expectCanvas(page: Page, hasBoard = true) {
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  await expect(
-    page.locator('.canvas-frame-wrap[data-view="board"]'),
-  ).toBeVisible();
-  await expect(page.locator(".canvas-iframe")).toBeVisible();
+  if (hasBoard) {
+    await expect(
+      page.locator('.canvas-frame-wrap[data-view="board"]'),
+    ).toBeVisible();
+    await expect(page.locator(".canvas-iframe")).toBeVisible();
+  } else await expect(page.getByTestId("canvas-empty-exited")).toBeVisible();
   await expect(page.getByTestId("right-tab-canvas")).toHaveAttribute(
     "aria-selected",
     "true",
@@ -188,25 +212,7 @@ for (const mode of [
       await openMap(page);
     } else if (mode === "Codex") {
       await page.getByTestId("session-tab-main-sess-leasing-2").click();
-      await page.evaluate(async () => {
-        const modulePath = performance
-          .getEntriesByType("resource")
-          .find(
-            (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
-          )!.name;
-        const { MockApi } = await import(modulePath);
-        const session = (await new MockApi().getState()).sessions.find(
-          (session: { id: string }) => session.id === "sess-leasing-2",
-        );
-        (
-          (window as TestWindow).__HARNESS_TEST__!.publish as (
-            message: unknown,
-          ) => void
-        )({
-          type: "session.status",
-          session: { ...session, boundWorkflowPath: null },
-        });
-      });
+      await updateSession(page, "sess-leasing-2", { boundWorkflowPath: null });
       await openMap(page);
     }
     await probe(page);
@@ -214,7 +220,8 @@ for (const mode of [
     if (archivedSession) before.session = archivedSession;
     if (mode === "Claude") await page.getByTestId("canvas-expand").click();
     await node(page).click();
-    await expectBoard(page);
+    // This archived fixture has no saved Canvas document; keep its existing empty state.
+    await expectCanvas(page, mode !== "archived Codex");
     await expect(
       page.locator('[data-agent-path="/Users/demo/acme-app/leasing"]'),
     ).toHaveClass(/is-focused/);
@@ -228,7 +235,7 @@ for (const mode of [
       ).toHaveClass(/is-expanded/);
       await page.getByTestId("canvas-expand-exit").click();
       await page.reload();
-      await expectBoard(page);
+      await expectCanvas(page);
     }
     await openMap(page);
     expect(await evidence(page)).toEqual({
@@ -238,11 +245,11 @@ for (const mode of [
     if (mode.startsWith("archived")) {
       await openMap(page, "polsia");
       await node(page).click();
-      await expectBoard(page);
+      await expectCanvas(page);
       await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
       await openMap(page);
       await node(page).click();
-      await expectBoard(page);
+      await expectCanvas(page, mode !== "archived Codex");
       expect(await evidence(page)).toEqual(before);
     }
   });
@@ -257,7 +264,7 @@ test("same-name agents use the exact ID and path; one refresh finds a newly disc
   await publish(page, { type: "workflows.changed" });
   await expect(page.locator(`[data-agent-path="${path}"]`)).toHaveCount(0);
   await node(page).click();
-  await expectBoard(page);
+  await expectCanvas(page);
   await expect(page.locator(`[data-agent-path="${path}"]`)).toHaveClass(
     /is-focused/,
   );
@@ -300,9 +307,9 @@ for (const [code, message] of [
     await open(page);
     await probe(page, { error: code });
     await node(page).click();
-    await expect(page.getByTestId("agent-map-inspector")).toContainText(
-      message,
-    );
+    const inspector = page.getByTestId("agent-map-inspector");
+    await expect(inspector).toContainText(message);
+    await expect(inspector).not.toContainText("private server detail");
     expect((await calls(page)).writes).toBe(0);
   });
 }
@@ -344,7 +351,7 @@ for (const action of [
     if (action === "another project") await openMap(page, "acme-app");
     if (action === "another node") {
       await node(page, 102).click();
-      await expectBoard(page);
+      await expectCanvas(page);
     }
     if (action === "auth change")
       await publish(page, {
@@ -398,11 +405,41 @@ test("mobile keyboard activation opens Canvas and closes the rail", async ({
   await open(page, "mockNoLiveSessions=1");
   const before = await evidence(page);
   await node(page).press("Space");
-  await expectBoard(page);
+  await expectCanvas(page);
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
   expect(await evidence(page)).toEqual(before);
-  await page
-    .locator(".right-pane")
-    .evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
-  await page.screenshot({ path: test.info().outputPath("mobile-canvas.png") });
 });
+
+test("a live session without a project ID keeps its conversation on rail selection", async ({
+  page,
+}) => {
+  await open(page);
+  const before = await evidence(page);
+  await updateSession(page, "sess-boot", { agentMapIdentity: undefined });
+  await page.getByTestId("workflow-leasing").click();
+  await expectCanvas(page);
+  expect(await evidence(page)).toEqual(before);
+});
+
+for (const boundWorkflowPath of ["/Users/demo/acme-app/leasing", null]) {
+  test(`ending a session retains its own Canvas with binding ${boundWorkflowPath}`, async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=absent");
+    await expect(page.getByTestId("session-context")).toBeVisible();
+    await updateSession(page, "sess-boot", { boundWorkflowPath });
+    await page.getByTestId("session-tab-main-sess-boot").click();
+    await expectCanvas(page);
+    const source = await page.locator(".canvas-iframe").getAttribute("src");
+    await updateSession(page, "sess-boot", {
+      boundWorkflowPath,
+      status: "exited",
+    });
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+    await expectCanvas(page);
+    await expect(page.locator(".canvas-iframe")).toHaveAttribute(
+      "src",
+      source!,
+    );
+  });
+}

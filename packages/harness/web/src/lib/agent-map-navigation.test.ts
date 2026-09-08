@@ -3,7 +3,6 @@ import type { PlanNodeId, StudioProjectId } from "@shared/agent-map";
 import type { WorkflowInfo } from "@shared/types";
 import { createApi } from "./api";
 import {
-  agentMapNavigationError,
   agentMapTargetWorkflow,
   parseAgentMapNodeTarget,
 } from "./agent-map-navigation";
@@ -17,13 +16,14 @@ const target = {
   agentId: "agent_00000000-0000-4000-8000-000000000001",
   workflowPath: "/workspace/second",
 };
+const binding = { projectId, agentId: target.agentId };
 const workflow = (patch: Partial<WorkflowInfo> = {}): WorkflowInfo => ({
   name: "Same name",
   path: target.workflowPath,
   source: "scan",
   definitionId: 42,
   definitionSlug: "same",
-  studioBindings: [{ projectId, agentId: target.agentId }],
+  studioBindings: [binding],
   ...patch,
 });
 
@@ -61,9 +61,7 @@ describe("Agent Map navigation target", () => {
   it("joins exact project/agent identity and path despite duplicate names and cloud definitions", () => {
     const other = workflow({
       path: "/workspace/first",
-      studioBindings: [
-        { projectId, agentId: target.agentId.replace(/1$/, "2") },
-      ],
+      studioBindings: [{ ...binding, agentId: "another-agent" }],
     });
     const exact = workflow();
     expect(agentMapTargetWorkflow(target, [other, exact])).toBe(exact);
@@ -74,12 +72,7 @@ describe("Agent Map navigation target", () => {
     expect(
       agentMapTargetWorkflow(target, [
         workflow({
-          studioBindings: [
-            {
-              projectId: projectId.replace(/1$/, "2"),
-              agentId: target.agentId,
-            },
-          ],
+          studioBindings: [{ ...binding, projectId: "another-project" }],
         }),
       ]),
     ).toBeNull();
@@ -112,20 +105,5 @@ describe("Agent Map navigation target", () => {
     await expect(
       createApi().getAgentMapNodeImplementation(projectId, nodeId),
     ).rejects.toThrow();
-  });
-
-  it("shows bounded recovery copy without echoing paths or backend errors", () => {
-    expect(agentMapNavigationError({ code: "unbound" })).toBe(
-      "No implementation is linked yet.",
-    );
-    expect(agentMapNavigationError({ code: "target_not_found" })).toBe(
-      "This agent isn't available locally.",
-    );
-    expect(agentMapNavigationError({ code: "target_ambiguous" })).toContain(
-      "one implementation",
-    );
-    expect(agentMapNavigationError(new Error("/private/secret"))).toBe(
-      "Couldn't open this agent. Try again.",
-    );
   });
 });

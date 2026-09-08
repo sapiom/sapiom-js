@@ -4539,7 +4539,7 @@ button.system-graph-node.is-navigable:focus-visible {
 }
 
 .agent-map-node-wrap.has-info > .agent-map-node {
-  padding-right: calc(var(--control-h-sm) + var(--sp2));
+  padding-right: calc(var(--control-h-xs) + var(--sp2));
 }
 
 .agent-map-node-info {
