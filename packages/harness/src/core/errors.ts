@@ -8,6 +8,7 @@
  *   SessionNotReadyError      → 409
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
+ *   McpSessionRestartUnavailableError → 409
  *   AgentSessionIdentityReservedError → 409
  *   McpCredentialGenerationChangedError → 409
  *   AdapterNotFoundError      → 400
@@ -80,6 +81,15 @@ export class SessionNotResumeableError extends HarnessError {
 export class SessionAlreadyLiveError extends HarnessError {
   constructor(id: string) {
     super("SESSION_ALREADY_LIVE", `Session "${id}" already has a live pty`);
+  }
+}
+
+/** A live session is not eligible for the credential-scoped restart action. */
+export class McpSessionRestartUnavailableError extends HarnessError {
+  constructor(
+    reason = "This session is not waiting for a Sapiom connection restart",
+  ) {
+    super("MCP_SESSION_RESTART_UNAVAILABLE", reason);
   }
 }
 

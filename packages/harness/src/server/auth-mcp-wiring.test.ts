@@ -294,6 +294,45 @@ describe("Agent Studio MCP authentication wiring", () => {
     );
   });
 
+  it("explicitly restarts a stale session with a rotated key", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    await server!.sessionManager.setAgentSessionId(
+      session.id,
+      "agent-session-1",
+    );
+
+    authFixture.credential = credential("key-b");
+    await writeFile(authFixture.credentialsPath, "external rotation signal");
+    await vi.waitFor(() =>
+      expect(server!.sessionManager.get(session.id)?.mcpAuthState).toBe(
+        "restart-required",
+      ),
+    );
+
+    const restart = await post(`/api/sessions/${session.id}/restart-mcp`);
+    const restartBody = (await restart.json()) as Record<string, unknown>;
+    expect(restart.status, JSON.stringify(restartBody)).toBe(200);
+    expect(server!.sessionManager.get(session.id)).toMatchObject({
+      status: "running",
+      mcpAuthState: "current",
+    });
+    expect(captures.at(-1)).toMatchObject({ kind: "resume" });
+    expect(injectedKey(captures.at(-1)!)).toBe("key-b");
+  });
+
   it("waits for a credential-bearing session to exit before disconnect succeeds", async () => {
     authFixture.credential = credential("key-a");
     await boot({
