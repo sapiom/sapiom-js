@@ -54,8 +54,6 @@ test("switches the same saved map through a lazy local worker with measured card
   expect(workers[0]).toContain("elk-worker.min");
   await expect(selected).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
-  // Compare layout units at 100%; Chromium snaps tiny scaled SVG glyphs to pixels.
-  await page.getByRole("button", { name: "Reset Agent Map view" }).click();
   const dimensions = await page.evaluate(() => {
     const input = (window as unknown as { layoutInput: ElkNode }).layoutInput;
     const cards = [
