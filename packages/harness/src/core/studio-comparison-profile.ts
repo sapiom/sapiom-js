@@ -18,12 +18,14 @@ import {
 } from "./studio-project-catalog.js";
 import { parseStudioWorkspacePreferences } from "./studio-workspace-preferences.js";
 
+/** Source, isolated destination, and selected durable Studio project IDs. */
 export interface StudioComparisonImportOptions {
   sourceStateRoot: string;
   destinationStateRoot: string;
   projectIds: readonly string[];
 }
 
+/** Snapshot identities and map references, including publication and exclusions. */
 export interface StudioComparisonManifest {
   schemaVersion: 1;
   sourceStateRoot: string;
@@ -48,6 +50,7 @@ export interface StudioComparisonManifest {
   }>;
 }
 
+/** Bounded import failure with an optional file reference and underlying cause. */
 export class StudioComparisonImportError extends Error {
   constructor(
     readonly code:
@@ -61,6 +64,7 @@ export class StudioComparisonImportError extends Error {
       | "destination_not_empty"
       | "destination_unavailable",
     readonly file?: string,
+    readonly cause?: unknown,
   ) {
     super(`Studio comparison import: ${code}${file ? ` (${file})` : ""}`);
     this.name = "StudioComparisonImportError";
@@ -76,8 +80,9 @@ const missing = (error: unknown) =>
 const fail = (
   code: StudioComparisonImportError["code"],
   file?: string,
+  cause?: unknown,
 ): never => {
-  throw new StudioComparisonImportError(code, file);
+  throw new StudioComparisonImportError(code, file, cause);
 };
 
 function validate<T>(file: string, operation: () => T): T {
@@ -187,7 +192,6 @@ async function requireEmpty(destination: string): Promise<void> {
   }
 }
 
-/** Copies selected metadata into a new profile; trial jobs and identity are created at boot. */
 async function importProfile(
   options: StudioComparisonImportOptions,
 ): Promise<StudioComparisonManifest> {
@@ -288,10 +292,16 @@ async function importProfile(
         ),
       );
       if (journal.projectId !== projectId) fail("invalid_state", journalFile);
-      if (
-        !map?.authored &&
-        (journal.status === "running" || journal.status === "queued")
-      ) {
+      let busy = journal.status === "queued";
+      if (journal.status === "running" && journal.ownerPid !== null) {
+        try {
+          process.kill(journal.ownerPid, 0);
+          busy = true;
+        } catch (error) {
+          busy = (error as NodeJS.ErrnoException).code !== "ESRCH";
+        }
+      }
+      if (!map?.authored && busy) {
         manifest.excluded.push({ projectId, reason: "initialization_busy" });
         continue;
       }
@@ -417,6 +427,14 @@ async function importProfile(
   }
 }
 
+/**
+ * Copy selected identities, inventory and full map histories into a new/empty profile.
+ * The source is read-only. Missing or busy unauthored projects are excluded;
+ * all excluded returns published:false without publishing a destination.
+ * Throws StudioComparisonImportError for unsafe, invalid, changing or unavailable state.
+ * Trial journals and machine identity start independently at boot.
+ * A failed final publish may consume a pre-existing empty destination directory.
+ */
 export async function importStudioComparisonProfile(
   options: StudioComparisonImportOptions,
 ): Promise<StudioComparisonManifest> {
@@ -424,6 +442,6 @@ export async function importStudioComparisonProfile(
     return await importProfile(options);
   } catch (error) {
     if (error instanceof StudioComparisonImportError) throw error;
-    return fail("destination_unavailable");
+    return fail("destination_unavailable", undefined, error);
   }
 }
