@@ -1304,8 +1304,8 @@ const MOCK_RAIL_STATE_PREFIX = "sapiom-mock-studio-rail:";
 const MOCK_WORKSPACE_PREFERENCE_PREFIX = "sapiom-mock-studio-workspace:";
 
 /**
- * Mock mode's stand-in for the ONE settings field whose whole contract is
- * "survives a reload": `helpSeen` (SAP-2991).
+ * Mock mode's stand-in for settings whose contract includes surviving a
+ * reload: `helpSeen` (SAP-2991) and `agentMapLayout` (SAP-3267).
  *
  * The rest of `MockApi`'s settings are per-instance and reset on reload, which
  * is right — a fixture that remembered `telemetryOptIn` or `recentDirs` across

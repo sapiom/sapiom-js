@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { HARNESS_PATHS } from "@sapiom/harness";
@@ -110,7 +110,7 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
         name: "agent_map_propose",
         arguments: {
           schemaVersion: 1,
-          proposalId: current.proposal?.proposalId ?? null,
+          proposalId: current.proposal?.id ?? null,
           expectedVersion: current.proposal?.version ?? 0,
           requestId: session.id,
           operations,
@@ -196,7 +196,14 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
   try {
     await boot.mainWindow.loadURL(boot.url);
     await evaluate(`window.__elkTerminations = 0; const NativeWorker = window.Worker;
-      window.Worker = class extends NativeWorker { terminate() { window.__elkTerminations++; super.terminate(); } };`);
+      window.Worker = class extends NativeWorker { terminate() { window.__elkTerminations++; super.terminate(); } }; void 0;`);
+    if ((await api("/settings")).helpSeen !== true) {
+      await click(selector("help-overlay-close"));
+      await until(
+        "dismissed welcome",
+        async () => (await api("/settings")).helpSeen === true,
+      );
+    }
     const coldStart = performance.now();
     await click(project);
     await ready("elk");
@@ -266,16 +273,26 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     await ready("elk");
     const updated = await snapshot();
     await evaluate(`window.__elkTerminations = 0; const NativeWorker = window.Worker;
-      window.Worker = class extends NativeWorker { terminate() { window.__elkTerminations++; super.terminate(); } };`);
-    // Remount so the instrumentation owns this canvas's worker, then navigate
-    // to the other project created by the existing session-create smoke check.
+      window.Worker = class extends NativeWorker { terminate() { window.__elkTerminations++; super.terminate(); } }; void 0;`);
+    // Keep a second fixture root present so the rail can navigate away; the
+    // earlier session-create check deletes its own project directory.
+    const otherRoot = await mkdtemp(join(dirname(cwd), "map-disposal-"));
+    await api("/settings", "PATCH", {
+      recentDirs: [...(await api("/settings")).recentDirs, otherRoot],
+    });
+    const otherSession = await api("/sessions", "POST", {
+      cwd: otherRoot,
+      harness: "claude-code",
+    });
+    await api(`/sessions/${otherSession.id}`, "DELETE");
     await mode("Classic");
     await ready("classic");
-    const otherProject = `[data-testid^="project-select-"]:not(${project})`;
+    const otherProject = selector(`project-select-${basename(otherRoot)}`);
     await click(otherProject);
     await click(project);
     await mode("Vertical");
     await ready("elk");
+    await evaluate("window.__elkTerminations = 0");
     await click(otherProject);
     await until("worker disposal", () =>
       evaluate("window.__elkTerminations > 0"),
