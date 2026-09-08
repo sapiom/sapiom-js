@@ -43,7 +43,7 @@ the same name. Credentials are passed through Codex's environment and cleared fr
 shell-tool environments; they never appear in command arguments. Authoring-process
 settings stay on the MCP server. Studio does not write to your Codex `config.toml`. If a generated MCP
 file cannot be read or parsed, the session reports an error so you can start a
-new session to regenerate it. Codex background tasks remain unsupported.
+new session to regenerate it.
 
 ## Telemetry
 
