@@ -2971,35 +2971,14 @@ export const startServer = async (
     };
   });
 
-  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
-  // caps even on long-lived installs. Runs through the store's exclusive queue
-  // so the sweep's read→filter→rename window never races a concurrent append.
-  // Fire-and-forget — a slow FS is no reason to delay server startup.
-  const runNdjsonSweep = (): void => {
-    void eventStore
-      .runExclusive(() => sweepNdjson(eventStorePath))
-      .catch((err: unknown) => {
-        console.error("[harness] events.ndjson retention sweep failed:", err);
-      });
-  };
-  runNdjsonSweep();
-  const ndjsonRetentionTimer = setInterval(
-    runNdjsonSweep,
-    NDJSON_RETENTION_SWEEP_MS,
-  );
-  ndjsonRetentionTimer.unref?.();
-
   // One boot-time pass that archives conversations the log still holds but the
   // archive doesn't, then sweeps the archive's own caps. This is what covers the
   // two cases archiving-at-exit can't: a harness that was force-killed (no exit
   // transition, no session.end), and every session that ended before this
   // existed — whose history would otherwise vanish at its 30-day mark.
   //
-  // It races the ndjson sweep queued above, and deliberately doesn't wait for
-  // it: reads run outside the store's exclusive queue by design (see store.ts),
-  // and either order is correct here — win the race and the record is archived
-  // from bytes retention was about to delete, lose it and the record is archived
-  // from what survived. Both beat not archiving it.
+  // Retention must wait for this pass: reads run outside the store's exclusive
+  // queue, so a sweep could otherwise delete old events before we archive them.
   //
   // Fire-and-forget: boot must not wait on it. The cost is one full index build
   // (~130 ms against a 50 MB log), which the first history open would have paid
@@ -3022,6 +3001,25 @@ export const startServer = async (
     .catch((err: unknown) => {
       console.error("[harness] session record backfill failed:", err);
     });
+
+  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
+  // caps even on long-lived installs. Runs through the store's exclusive queue
+  // so the sweep's read→filter→rename window never races a concurrent append.
+  // Wait for backfill before every sweep, including a timer tick during a slow
+  // boot pass. Server startup stays independent of both maintenance tasks.
+  const runNdjsonSweep = (): void => {
+    void recordBackfill
+      .then(() => eventStore.runExclusive(() => sweepNdjson(eventStorePath)))
+      .catch((err: unknown) => {
+        console.error("[harness] events.ndjson retention sweep failed:", err);
+      });
+  };
+  runNdjsonSweep();
+  const ndjsonRetentionTimer = setInterval(
+    runNdjsonSweep,
+    NDJSON_RETENTION_SWEEP_MS,
+  );
+  ndjsonRetentionTimer.unref?.();
 
   const harnessVersion = readVersion();
   const batcher = createHarnessEmitter({
