@@ -231,6 +231,18 @@ credentials, and raw model output are never included.
 While generation is active, the selected project also polls its durable status
 so completion by another Studio process is visible without reloading the page.
 
+### Agent Map implementation links
+
+Agent Map nodes resolve to exact same-project Studio implementations. Existing
+generated maps inherit uniquely proven initialization links. Missing or ambiguous
+implementations remain unresolved, preserving the planned node and map history.
+
+The boot-token-protected `GET /api/projects/:projectId/agent-map/implementations`
+returns a path-free projection. `GET .../nodes/:nodeId/implementation` resolves
+the current exact local target for navigation. Both are uncached reads and do
+not start sessions, scans or another model pass. Node click navigation and
+Draft/Deployed indicators are separate UI features.
+
 ### Agent Map MCP
 
 Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for

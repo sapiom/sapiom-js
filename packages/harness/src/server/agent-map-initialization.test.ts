@@ -29,7 +29,7 @@ it("discovers restored projects outside the desktop launch directory and initial
   );
   await fs.writeFile(
     path.join(agentRoot, "package.json"),
-    JSON.stringify({ name: "research" }),
+    JSON.stringify({ name: "research-checkout" }),
   );
   const source =
     'throw new Error("Never execute discovery evidence"); export const agent = defineAgent({ name: "research", description: "Research topics" });';
@@ -86,6 +86,20 @@ it("discovers restored projects outside the desktop launch directory and initial
     { timeout: 10000 },
   );
   expect(infer).toHaveBeenCalledOnce();
+  const node = (await store.readSnapshot(project.projectId)).proposal!
+    .nodes[0]!;
+  expect(node.name).toBe("research-checkout");
+  const implementation = await fetch(
+    `http://127.0.0.1:${server.port}/api/projects/${project.projectId}/agent-map/nodes/${node.id}/implementation`,
+    { headers: { "X-Harness-Token": "test-token" } },
+  );
+  expect(implementation.status).toBe(200);
+  expect(await implementation.json()).toMatchObject({
+    projectId: project.projectId,
+    nodeId: node.id,
+    agentId: node.contractRefs[0]!.slice("studio-agent:".length),
+    workflowPath: agentRoot,
+  });
   expect(server.sessionManager.list()).toHaveLength(0);
   expect(await fs.readFile(path.join(agentRoot, "index.ts"), "utf8")).toBe(
     source,

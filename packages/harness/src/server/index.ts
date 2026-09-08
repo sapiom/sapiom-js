@@ -179,6 +179,7 @@ import {
 import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
+import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import {
@@ -3367,6 +3368,12 @@ export const startServer = async (
     void eventStore.append(analyticsEvent).catch(() => {});
     batcher.enqueue(analyticsEvent);
   };
+  const implementationOptions = {
+    catalog: studioProjectCatalog, store: agentMapWorkspaceStore, preferences: studioWorkspacePreferences,
+    listWorkflows: () => workflowsCache, isWorkflowScanComplete: (roots: readonly string[]) => isWorkflowScanComplete(roots),
+    listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
+  };
+  const implementationBindings = createAgentMapImplementations(implementationOptions);
   agentMapMcp = createAgentMapMcpRouter({
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
@@ -3454,24 +3461,17 @@ export const startServer = async (
   };
 
   const initializationProject = async (projectId: string) => {
-    const project = await studioProjectCatalog.resolveIdentity(projectId);
-    if (!project) return null;
-    const scopes = await studioWorkspaceScopeCatalog.list();
-    const roots = project.rootBindings.filter((binding) => binding.status === "active" &&
-      scopes.some((scope) => samePath(scope.cwd, binding.localRootRef))).map((binding) => binding.localRootRef);
-    const complete = await isWorkflowScanComplete(roots);
-    const ids = await studioWorkspacePreferences.agentIds(projectId, roots, workflowsCache, complete);
-    const agents = [...ids].flatMap(([workflowPath, agentId]) => {
-      const workflow = workflowsCache.find((entry) => entry.path === workflowPath);
-      return workflow ? [{ agentId, path: workflow.path, name: workflow.sourceDefinitionName ?? workflow.name }] : [];
-    });
+    const implementations = await readProjectImplementations(implementationOptions, projectId);
+    if (!implementations) return null;
+    const { roots, inventory } = implementations;
+    const agents = inventory.candidates.map(({ agentId, path, name }) => ({ agentId, path, name }));
     const available = options.availableHarnesses ?? Object.keys(adapters);
     const recent = sessionManager.list().filter((session) => session.agentMapIdentity?.projectId === projectId &&
       available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
       .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
     const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
     return { userId: localProjectPrincipal(projectUserId, machineId), available: roots.length > 0,
-      discoveryComplete: complete, agents, provider: available.includes(preferred) ? preferred : null };
+      discoveryComplete: inventory.discoveryComplete, agents, provider: available.includes(preferred) ? preferred : null };
   };
   agentMapInitialization = new AgentMapInitializationCoordinator({
     store: agentMapWorkspaceStore, proposals: agentMapProposalService, project: initializationProject,
@@ -3877,6 +3877,7 @@ export const startServer = async (
   app.use(
     "/api",
     createAgentMapRouter({
+      implementations: implementationBindings,
       catalog: studioProjectCatalog,
       initialization: agentMapInitialization,
       store: agentMapWorkspaceStore,
