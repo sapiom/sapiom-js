@@ -16,6 +16,11 @@ import type {
   PlanNodeKind,
 } from "@shared/agent-map";
 
+import {
+  agentMapDeploymentLabel,
+  agentMapDeploymentTitle,
+  type AgentMapDeployments,
+} from "../lib/agent-map-deployment";
 import { layoutDirectedGraph } from "../lib/directed-graph-layout";
 import {
   GRAPH_DEFAULT_MIN_ZOOM,
@@ -35,6 +40,7 @@ import { Icon, type IconName } from "./Icon";
 
 interface AgentMapCanvasProps {
   proposal: MapChangeProposal;
+  deployments: AgentMapDeployments;
   selectedNodeId: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
@@ -61,6 +67,7 @@ const AGENT_MAP_MIN_ZOOM = 0.001;
 
 export function AgentMapCanvas({
   proposal,
+  deployments,
   selectedNodeId,
   onSelectNode,
   onInspectNode,
@@ -209,7 +216,7 @@ export function AgentMapCanvas({
         className={`agent-map-viewport${panning ? " is-panning" : ""}`}
         data-testid="agent-map-viewport"
         role="region"
-        aria-label="Proposed Agent Map. Use arrow keys to pan and Tab to inspect nodes."
+        aria-label="Agent Map. Use arrow keys to pan and Tab to inspect nodes."
         tabIndex={0}
         onKeyDown={(event) => {
           if (
@@ -241,7 +248,7 @@ export function AgentMapCanvas({
             transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
           }}
           role="group"
-          aria-label="Proposed architecture"
+          aria-label="Agent architecture"
         >
           <svg
             className="agent-map-edges"
@@ -287,6 +294,7 @@ export function AgentMapCanvas({
               : null;
             const opensAgent =
               node.kind === "agent" || node.kind === "subagent";
+            const deployment = deployments.get(node.id);
             // Every map-node name is user-authored. Keep the privacy marker
             // on a USER_NAMED_OBJECTS value even when node.kind is not agent.
             return (
@@ -307,10 +315,14 @@ export function AgentMapCanvas({
                   className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
                   data-testid={`agent-map-node-${node.id}`}
                   data-node-kind={node.kind}
-                  data-proposal-state="proposed"
+                  data-deployment-state={deployment?.indicator ?? undefined}
+                  data-deployment-unavailable={deployment?.unavailable}
+                  title={
+                    deployment ? agentMapDeploymentTitle(deployment) : undefined
+                  }
                   {...trackingAttrs({ object: "agent" })}
                   aria-pressed={selectedNodeId === node.id}
-                  aria-label={`${node.name}, ${node.kind}, Proposed`}
+                  aria-label={`${node.name}, ${node.kind}${deployment ? `, ${agentMapDeploymentLabel(deployment)}${deployment.indicator && deployment.unavailable ? `, ${agentMapDeploymentTitle(deployment)}` : ""}` : ""}`}
                   aria-busy={pendingNodeId === node.id}
                   onClick={(event) =>
                     onSelectNode(node.id, event.currentTarget)
@@ -321,8 +333,21 @@ export function AgentMapCanvas({
                     <span className="system-graph-node-label">{node.name}</span>
                   </span>
                   <span className="system-graph-node-meta">
-                    {node.kind} ·{" "}
-                    {pendingNodeId === node.id ? "Opening…" : "Proposed"}
+                    {deployment && (
+                      <>
+                        <span
+                          className="agent-map-deployment"
+                          data-deployment-state={
+                            deployment.indicator ?? undefined
+                          }
+                        >
+                          {agentMapDeploymentLabel(deployment, true)}
+                        </span>{" "}
+                        ·{" "}
+                      </>
+                    )}
+                    {node.kind}
+                    {pendingNodeId === node.id ? " · Opening…" : ""}
                     {owner ? ` · owned by ${owner.name}` : ""}
                   </span>
                 </button>

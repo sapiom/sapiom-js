@@ -1,3 +1,5 @@
+import type { AgentMapImplementationsResponse } from "@shared/agent-map";
+import { parseAgentMapImplementations } from "./agent-map-deployment";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
@@ -379,6 +381,7 @@ export interface HarnessApi {
   getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
+  getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse>;
   getAgentMapNodeImplementation(
     projectId: StudioProjectId,
     nodeId: PlanNodeId,
@@ -659,6 +662,12 @@ class RealApi implements HarnessApi {
   }
   async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
     return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization/retry`, { method: "POST" }), projectId);
+  }
+
+  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
+    return parseAgentMapImplementations(await this.request<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/agent-map/implementations`,
+    ), projectId);
   }
 
   async getAgentMapNodeImplementation(
@@ -2451,6 +2460,18 @@ export class MockApi implements HarnessApi {
   }
   async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
     return { projectId, status: "queued", errorCode: null, retryable: false };
+  }
+
+  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
+    const snapshot = this.agentMapSnapshots.get(projectId);
+    return { projectId, mapVersionId: null, bindings: (snapshot?.proposal?.nodes ?? [])
+      .filter((node) => node.kind === "agent" || node.kind === "subagent")
+      .map((node) => {
+        const target = this.agentMapTargets.get(`${projectId}:${node.id}`);
+        return { nodeId: node.id, agentId: target?.agentId ?? null, revision: 0,
+          resolution: target ? "bound" : "unbound" };
+      }),
+    };
   }
 
   async getAgentMapNodeImplementation(
