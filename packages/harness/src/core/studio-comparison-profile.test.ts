@@ -9,10 +9,7 @@ import { StudioWorkspacePreferenceStore } from "./studio-workspace-preferences.j
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import { hasAuthoredAgentMap } from "./agent-map-initialization-record.js";
-import {
-  parseProjectPlanningAggregate,
-  createEmptyProjectPlanningAggregate,
-} from "./agent-map-aggregate-migration.js";
+import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
 import { emptyProjectBuildPlanContent } from "../shared/build-plan.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import { BuildPlanService } from "./build-plan-service.js";
@@ -264,10 +261,7 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
   const copied = await fs.readFile(targetMap);
   expect(copied).toEqual(await fs.readFile(f.mapFile()));
   expect(result.projects[0]!.map!.byteDigest).toBe(hash(copied));
-  const parsed = parseProjectPlanningAggregate(
-    JSON.parse(copied.toString()),
-    f.ids[0]!,
-  );
+  const parsed = JSON.parse(copied.toString());
   expect(parsed.mapVersions).toHaveLength(2);
   expect(parsed.mapOperationHistory).toHaveLength(2);
   expect(parsed.buildPlanVersions).toHaveLength(1);
@@ -308,16 +302,11 @@ it("preserves complete map bytes, plans, briefs, identities and cross-root agent
   expect(
     await readJson(path.join(f.destination, "comparison-profile.json")),
   ).toEqual(result);
-  for (const forbidden of [
-    "machine-id",
-    "sessions.json",
-    "pending-secrets.json",
-    "credentials.json",
-  ])
-    expect(Object.keys(await hashes(f.destination))).not.toContain(forbidden);
   expect(
     Object.keys(await hashes(f.destination)).some((name) =>
-      /initialization|bootstrap|\.lock/.test(name),
+      /initialization|bootstrap|\.lock|machine-id|sessions|pending-secrets|credentials/.test(
+        name,
+      ),
     ),
   ).toBe(false);
   expect(await hashes(f.source)).toEqual(before);
@@ -354,6 +343,11 @@ it.each(["queued", "running"])(
   "defers %s source initialization and returns exclusions without an empty trial",
   async (status) => {
     const f = await fixture();
+    await f.journal(f.ids[0]!, status);
+    await write(
+      f.mapFile(f.ids[1]),
+      createEmptyProjectPlanningAggregate(f.ids[1]!, new Date().toISOString()),
+    );
     await f.journal(f.ids[1]!, status);
     const before = await hashes(f.source);
     const absent = `project_${randomUUID()}`;
@@ -371,6 +365,16 @@ it.each(["queued", "running"])(
     expect((await f.run()).projects.map(({ projectId }) => projectId)).toEqual([
       f.ids[0],
     ]);
+    await expect(
+      fs.stat(
+        path.join(
+          f.destination,
+          "agent-map/projects",
+          f.ids[1]!,
+          "workspace.json",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     expect(await hashes(f.source)).toEqual(before);
   },
 );
@@ -497,11 +501,16 @@ it("rejects aliasing, overlapping, populated and symlinked destinations; accepts
     preserve: true,
   });
   await fs.rm(path.join(f.destination, "keep.json"));
+  const rename = fs.rename;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    await expect(fs.stat(to)).rejects.toMatchObject({ code: "ENOENT" });
+    await rename(from, to);
+  });
   expect((await f.run()).published).toBe(true);
   expect(await hashes(f.source)).toEqual(before);
 });
 
-it("cleans staging after a write failure without replacing an existing empty destination", async () => {
+it("cleans staging after a publish failure without leaving a partial destination", async () => {
   const f = await fixture();
   await fs.mkdir(f.destination);
   const before = await hashes(f.source);
@@ -511,7 +520,9 @@ it("cleans staging after a write failure without replacing an existing empty des
   await expect(f.run()).rejects.toMatchObject({
     code: "destination_unavailable",
   });
-  expect(await fs.readdir(f.destination)).toEqual([]);
+  await expect(fs.stat(f.destination)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
   expect(
     (await fs.readdir(f.root)).some((name) =>
       name.startsWith(".studio-comparison-"),
