@@ -211,7 +211,6 @@ export async function prepareComparisonProfile(
   const roots = catalog.projects
     .filter((project) => imported.includes(project.projectId))
     .flatMap((project) => project.rootBindings)
-    .filter((binding) => binding.status === "active")
     .map((binding) => binding.localRootRef);
   const settings = await loadSettings(path.join(canonical, "settings.json"));
   // Keep the imported recent-dir order: a new entry would evict the eighth root.
@@ -231,7 +230,7 @@ export async function prepareComparisonProfile(
       return { ...manifest, launchDir };
   }
   throw new Error(
-    "Reconnect an imported project directory before launching this comparison; none of its active roots is available.",
+    "Reconnect an imported project directory before launching this comparison; none of its registered roots is available.",
   );
 }
 

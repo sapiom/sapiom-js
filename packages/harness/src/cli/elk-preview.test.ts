@@ -192,14 +192,19 @@ it("launches an imported root without evicting recent projects and releases its 
   expect(runCli).toHaveBeenCalledOnce();
 });
 
-it("requires reconnecting an imported root instead of registering an unrelated directory", async () => {
-  const f = await fixture();
-  await prepareComparisonProfile(f.options);
-  await fs.rm(f.roots[0]!, { recursive: true });
-  await expect(launchComparison(f.argv)).rejects.toThrow(
+it("requires a reconnect and recovers from stale missing-root status", async () => {
+  const { options, roots, argv, destination } = await fixture();
+  await prepareComparisonProfile(options);
+  await fs.rm(roots[0]!, { recursive: true });
+  await expect(launchComparison(argv)).rejects.toThrow(
     "Reconnect an imported project directory",
   );
   expect(runCli).not.toHaveBeenCalled();
+  await new StudioProjectCatalog(
+    path.join(destination, "studio-projects.json"),
+  ).reconcile([]);
+  await fs.mkdir(roots[0]!);
+  expect((await prepareComparisonProfile(options)).launchDir).toBe(roots[0]);
 });
 
 it.each([
