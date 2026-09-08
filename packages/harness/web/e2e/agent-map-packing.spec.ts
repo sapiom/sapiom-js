@@ -313,3 +313,46 @@ test("keeps manual view and selection through unrelated updates and topology cha
   await page.getByTestId("canvas-expand-exit").click();
   await arranged(page, "0.5");
 });
+
+for (const mode of ["Classic", "Vertical"]) {
+  test(`${mode} keeps auto-fit after selecting a visible node`, async ({
+    page,
+  }) => {
+    const fixture = await openPacking(page);
+    await page.getByRole("button", { name: mode, exact: true }).click();
+    if (mode === "Vertical") await arranged(page, "0.5");
+    await page.getByTestId(`agent-map-node-${fixture.nodes[0]!.id}`).click();
+    const larger = agentMapPackingFixture(undefined, 2);
+    await delta(
+      page,
+      [
+        ...larger.nodes.slice(34).map((node) => ({ kind: "add-node", node })),
+        ...larger.relationships
+          .slice(13)
+          .map((relationship) => ({ kind: "add-relationship", relationship })),
+      ],
+      2,
+    );
+    if (mode === "Vertical") await arranged(page, "0.25");
+    await expect(page.locator(".agent-map-node")).toHaveCount(68);
+    const automatic = await metrics(page);
+    await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
+    expect((await metrics(page)).fit).toBe(automatic.fit);
+  });
+}
+
+test("attaches aspect observation after a malformed map recovers", async ({
+  page,
+}) => {
+  await page.goto("/e2e/agent-map-recovery.html?mapLayout=elk");
+  for (const width of [600, 900]) {
+    await expect(page.getByTestId("agent-map-layout-error")).toBeVisible();
+    await page.getByRole("button", { name: "Repair map" }).click();
+    await page.locator("#map").evaluate((el, width) => {
+      el.style.width = `${width}px`;
+    }, width);
+    await arranged(page, width === 600 ? "0.75" : "1");
+    await expect(page.locator(".agent-map-node")).toHaveCount(34);
+    await page.getByRole("button", { name: "Break map" }).click();
+  }
+});

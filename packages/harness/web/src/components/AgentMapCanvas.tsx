@@ -173,9 +173,8 @@ export function AgentMapCanvas({
   const revealNode = (node: GraphRect): void => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
-    followsUpdates.current = false;
-    setView((current) =>
-      revealGraphRect(
+    setView((current) => {
+      const next = revealGraphRect(
         current,
         layout.bounds,
         {
@@ -183,8 +182,11 @@ export function AgentMapCanvas({
           height: viewport.clientHeight,
         },
         node,
-      ),
-    );
+      );
+      if (next.x === current.x && next.y === current.y) return current;
+      followsUpdates.current = false;
+      return next;
+    });
   };
 
   if (!layout) {

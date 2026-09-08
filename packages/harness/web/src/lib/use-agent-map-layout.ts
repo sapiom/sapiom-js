@@ -101,6 +101,23 @@ export function useAgentMapLayout(
   const [mode, setMode] = useState<MapLayout>(initialLayout);
   const [worker] = useState(() => new ElkLayoutWorker());
   const [aspect, setAspect] = useState<number | null>(null);
+  const geometry = agentMapGeometry(proposal);
+  const input = useMemo(
+    () =>
+      JSON.parse(geometry) as {
+        id: string;
+        nodes: { id: string; width: number; height: number }[];
+        edges: DirectedGraphEdge[];
+      },
+    [geometry],
+  );
+  const classic = useMemo(() => {
+    try {
+      return layoutDirectedGraph(input.nodes, input.edges);
+    } catch {
+      return null;
+    }
+  }, [input]);
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
@@ -123,24 +140,7 @@ export function useAgentMapLayout(
       clearTimeout(timer);
       observer.disconnect();
     };
-  }, [viewport]);
-  const geometry = agentMapGeometry(proposal);
-  const input = useMemo(
-    () =>
-      JSON.parse(geometry) as {
-        id: string;
-        nodes: { id: string; width: number; height: number }[];
-        edges: DirectedGraphEdge[];
-      },
-    [geometry],
-  );
-  const classic = useMemo(() => {
-    try {
-      return layoutDirectedGraph(input.nodes, input.edges);
-    } catch {
-      return null;
-    }
-  }, [input]);
+  }, [viewport, classic]);
   const [result, setResult] = useState<{
     input: typeof input;
     aspect: number;
@@ -161,9 +161,11 @@ export function useAgentMapLayout(
       return;
     }
     const controller = new AbortController();
+    let measuring = true;
     void measureLabels(input.edges, element)
       .then(async (edges) => {
         controller.signal.throwIfAborted();
+        measuring = false;
         const layout = await worker.layout(
           { ...input, edges, options: { "elk.aspectRatio": String(aspect) } },
           controller.signal,
@@ -177,7 +179,7 @@ export function useAgentMapLayout(
           "Agent Map layout fallback:",
           /^(Invalid ELK layout|Layout (worker failed|timed out))$/.test(reason)
             ? reason
-            : "Startup or measurement failed",
+            : `${measuring ? "Label measurement" : worker.stage} failed`,
         );
         setResult({ input, aspect, layout: null });
       });
