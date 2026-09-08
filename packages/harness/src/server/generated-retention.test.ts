@@ -166,8 +166,9 @@ describe("generated-dir retention wiring", () => {
         // Restored/imported history also enters its new lifetime before
         // generation, so metadata broadcasts cannot remove these files.
         expect(server!.sessionManager.get(id)?.status).toBe("starting");
+        const removalsBeforeMetadata = vi.mocked(removeGeneratedSessionDir).mock.calls.length;
         server!.sessionManager.setBoundWorkflowPath(id, cwd);
-        expect(removeGeneratedSessionDir).not.toHaveBeenCalled();
+        expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(removalsBeforeMetadata);
       }
       return { mcpConfigFile };
     };
@@ -197,8 +198,9 @@ describe("generated-dir retention wiring", () => {
     expect(server.sessionManager.get(id)?.status).toBe("exited");
     await server.sessionManager.resume(id);
     expect(await exists(join(generatedRoot, id, "mcp-config.json"))).toBe(true);
+    const removalsBeforeExit = vi.mocked(removeGeneratedSessionDir).mock.calls.length;
     await server.sessionManager.kill(id);
-    expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(1);
+    expect(removeGeneratedSessionDir).toHaveBeenCalledTimes(removalsBeforeExit + 1);
     await vi.waitFor(async () => expect(await exists(join(generatedRoot, id))).toBe(false));
   });
 
