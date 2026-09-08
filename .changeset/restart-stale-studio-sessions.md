@@ -2,4 +2,4 @@
 "@sapiom/harness": minor
 ---
 
-Offer an explicit restart when a session was opened before the current Sapiom connection changed.
+Offer an explicit MCP session restart API and UI action when the Sapiom connection changes, and export `McpSessionRestartUnavailableError` for programmatic handling.
