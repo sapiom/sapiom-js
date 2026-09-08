@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const authFixture = vi.hoisted(() => ({
+  credentialsPath: "/tmp/sapiom-test-credentials.json",
   credential: null as null | {
     apiKey: string;
     tenantId: string;
@@ -76,6 +77,7 @@ vi.mock("@sapiom/mcp/auth", () => {
     clearCredentials: vi.fn(async () => {
       authFixture.credential = null;
     }),
+    credentialsFilePath: vi.fn(() => authFixture.credentialsPath),
   };
 });
 
@@ -160,6 +162,7 @@ describe("Agent Studio MCP authentication wiring", () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "harness-auth-mcp-wiring-"));
+    authFixture.credentialsPath = join(root, "credentials.json");
     projectRoot = join(root, "project");
     await mkdir(projectRoot, { recursive: true });
     await writeFile(
@@ -259,6 +262,53 @@ describe("Agent Studio MCP authentication wiring", () => {
       }),
     );
   });
+
+  it("waits for a credential-bearing session to exit before disconnect succeeds", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+
+    const disconnect = await post("/api/auth/disconnect");
+
+    expect(disconnect.status).toBe(200);
+    expect(server!.sessionManager.get(session.id)?.status).toBe("exited");
+  }, 20_000);
+
+  it("terminates a credential-bearing session when an external logout changes the shared store", async () => {
+    authFixture.credential = credential("key-a");
+    await boot({
+      identity: {
+        userId: "test-tenant",
+        tenantId: "test-tenant",
+        organizationName: "Test Org",
+        apiKey: "key-a",
+        source: "cached",
+      },
+    });
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+
+    authFixture.credential = null;
+    await writeFile(authFixture.credentialsPath, "external logout signal");
+
+    await vi.waitFor(
+      () => expect(server!.sessionManager.get(session.id)?.status).toBe("exited"),
+      { timeout: 5_000 },
+    );
+  }, 20_000);
 
   it("adopts a credential written externally after boot", async () => {
     await boot();

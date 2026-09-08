@@ -4120,6 +4120,36 @@ describe("SessionManager", () => {
     });
   });
 
+  it("terminates only credential-bearing MCP runtimes", async () => {
+    let launchCount = 0;
+    const { manager, spawns } = makeManager({
+      currentCredentialGeneration: () => 1,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation: 1,
+          credentialBearing: launchCount++ === 0,
+        },
+      }),
+    });
+    const credentialBearing = await manager.create({
+      cwd: "/tmp/with-key",
+      harness: "claude-code",
+    });
+    const signedOut = await manager.create({
+      cwd: "/tmp/without-key",
+      harness: "claude-code",
+    });
+
+    const terminating = manager.terminateCredentialBearingSessions();
+    await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+
+    spawns[0]!.emitExit(0);
+    await terminating;
+    expect(manager.get(credentialBearing.id)?.status).toBe("exited");
+    expect(manager.get(signedOut.id)?.status).toBe("running");
+  });
+
 
   it("closes PTY admission before shutdown and rejects creates and resumes", async () => {
     let releaseLaunchOptions!: () => void;

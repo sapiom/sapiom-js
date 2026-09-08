@@ -191,6 +191,10 @@ export class TaskManager {
    *  same target both pass the check and both spawn. */
   private readonly pendingRuns: Array<{ macroId: string; harnessSessionId: string; workflowPath: string | null }> = [];
   private readonly processes = new Map<string, TaskProcess>();
+  private readonly mcpCredentialLaunches = new Map<
+    string,
+    McpCredentialLaunch
+  >();
   private readonly stderrTails = new Map<string, string>();
   /** The final result event's error text, when the stream produced one —
    *  preferred over a raw stderr tail for failure display. */
@@ -388,6 +392,8 @@ export class TaskManager {
     // Registered — the running-task check owns dedupe from here.
     releasePending();
     this.processes.set(id, child);
+    if (mcpCredentialLaunch)
+      this.mcpCredentialLaunches.set(id, mcpCredentialLaunch);
     // Set up the per-task exit promise so killAll() can await actual death.
     const exited = new Promise<void>((resolve) => {
       this.resolveExited.set(id, resolve);
@@ -483,6 +489,15 @@ export class TaskManager {
       await wait(TASK_KILL_CONFIRM_MS);
       this.finish(id, null);
     }
+  }
+
+  /** Stop ordinary task processes whose generated MCP config carried a key. */
+  async terminateCredentialBearingTasks(): Promise<void> {
+    const ids = [...this.mcpCredentialLaunches.entries()].flatMap(
+      ([id, launch]) =>
+        launch.credentialBearing && !this.privateTasks.has(id) ? [id] : [],
+    );
+    await Promise.all(ids.map((id) => this.kill(id)));
   }
 
   /**
@@ -604,6 +619,7 @@ export class TaskManager {
       task.resultText = this.resultTexts.get(id) ?? null;
     }
     this.processes.delete(id);
+    this.mcpCredentialLaunches.delete(id);
     this.stderrTails.delete(id);
     this.resultErrors.delete(id);
     this.resultTexts.delete(id);

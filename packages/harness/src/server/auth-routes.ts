@@ -118,6 +118,8 @@ export interface AuthRoutesOptions {
   /** Server-private identity projection for authorization consumers. It is
    * intentionally not added to AuthState or any browser response. */
   onProjectUserChanged?: (userId: string | null) => void;
+  /** Awaited after the key is cleared and before disconnect reports success. */
+  onCredentialRemoved?: () => Promise<void>;
   /** @deprecated Use onProjectUserChanged; remove in SAP-3152. */
   onPlanningUserChanged?: (userId: string | null) => void;
 }
@@ -139,6 +141,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     performBrowserAuthImpl = performBrowserAuth,
     onProjectUserChanged,
     onPlanningUserChanged,
+    onCredentialRemoved,
   } = opts;
   const notifyProjectUserChanged =
     onProjectUserChanged ?? onPlanningUserChanged;
@@ -292,6 +295,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
 
         await clearCredentials(env.name);
         apiKeyProvider.clear();
+        await onCredentialRemoved?.();
 
         authState.set({ authenticated: false, organizationName: null });
         notifyProjectUserChanged?.(null);

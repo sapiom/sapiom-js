@@ -376,6 +376,30 @@ describe("TaskManager", () => {
     expect(manager.list()).toHaveLength(0);
   });
 
+  it("terminates only credential-bearing ordinary tasks", async () => {
+    let launchCount = 0;
+    const { manager, spawned } = makeManager({
+      currentCredentialGeneration: () => 1,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation: 1,
+          credentialBearing: launchCount++ === 0,
+        },
+      }),
+    });
+    const first = await manager.run(runRequest);
+    const second = await manager.run({ ...runRequest, macroId: "describe" });
+
+    const terminating = manager.terminateCredentialBearingTasks();
+    await vi.waitFor(() => expect(spawned[0]!.proc.killed).toBe("SIGTERM"));
+    expect(spawned[1]!.proc.killed).toBeUndefined();
+
+    spawned[0]!.proc.emit("exit", 0);
+    await terminating;
+    expect(manager.get(first.id)?.status).toBe("completed");
+    expect(manager.get(second.id)?.status).toBe("running");
+  });
+
   it("killAll signals every still-running task process with SIGTERM", async () => {
     const { manager, spawned } = makeManager();
     await manager.run(runRequest);

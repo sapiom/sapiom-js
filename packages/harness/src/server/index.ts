@@ -27,6 +27,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { scaffold } from "@sapiom/agent-core";
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 import { WebSocketServer } from "ws";
 import open from "open";
 
@@ -125,6 +126,7 @@ import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
+import { observeCredentialStore } from "../core/credential-store-observer.js";
 import {
   sourceObservationsWithinScope,
   WorkspaceWatcherManager,
@@ -1792,11 +1794,32 @@ export const startServer = async (
   taskManager.onStatusChange((task) => {
     bus.publish({ type: "task.status", task });
   });
+  let credentialRemovalInFlight: Promise<void> | null = null;
+  const reconcileCredentialRemoval = (): Promise<void> => {
+    if (credentialRemovalInFlight) return credentialRemovalInFlight;
+    const operation = Promise.all([
+      sessionManager.terminateCredentialBearingSessions(),
+      taskManager.terminateCredentialBearingTasks(),
+    ]).then(() => {});
+    const tracked = operation.finally(() => {
+      if (credentialRemovalInFlight === tracked)
+        credentialRemovalInFlight = null;
+    });
+    credentialRemovalInFlight = tracked;
+    return tracked;
+  };
   const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
-    ({ generation }) => {
+    ({ apiKey, generation }) => {
       sessionManager.reconcileMcpCredentialGeneration(generation);
+      if (apiKey === null) {
+        void reconcileCredentialRemoval().catch(() => {
+          console.error("[harness] credential removal reconciliation failed");
+        });
+      }
     },
   );
+  let credentialStoreObserver: ReturnType<typeof observeCredentialStore> | null =
+    null;
 
   // Rolling summary (opt-in, `HarnessSettings.rollingSummary`): folds a live
   // session's record into a ≤500-word summary.md that a later portable
@@ -4283,6 +4306,7 @@ export const startServer = async (
           void agentMapMcp?.revokeSession(session.id);
         }
       },
+      onCredentialRemoved: reconcileCredentialRemoval,
     }),
   );
 
@@ -4562,6 +4586,21 @@ export const startServer = async (
     },
   ]);
 
+  if (authEnabled) {
+    const credentialPath = credentialsFilePath();
+    credentialStoreObserver = observeCredentialStore(
+      credentialPath,
+      () => apiKeyProvider.refresh().then(() => {}),
+      {
+        onError: (error) => {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            console.error("[harness] credential store observation failed");
+          }
+        },
+      },
+    );
+  }
+
   let serverClose: Promise<void> | null = null;
   const closeServer = (): Promise<void> => {
     if (serverClose) return serverClose;
@@ -4578,6 +4617,7 @@ export const startServer = async (
         }
       };
 
+      credentialStoreObserver?.close();
       unsubscribeCredentialChanges();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());

@@ -10,6 +10,7 @@ export {
   readCredentialsOrThrow,
   writeCredentials,
   clearCredentials,
+  credentialsFilePath,
   type CredentialEntry,
   type EnvironmentConfig,
   type CredentialsFile,

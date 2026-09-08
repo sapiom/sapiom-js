@@ -897,6 +897,20 @@ export class SessionManager {
     return this.kill(id);
   }
 
+  /** Stop the exact live PTY generations whose MCP config carried a key. */
+  async terminateCredentialBearingSessions(): Promise<void> {
+    const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
+      handle.mcpCredentialLaunch?.credentialBearing
+        ? [{ id, runtimeEpoch: handle.runtimeEpoch }]
+        : [],
+    );
+    await Promise.all(
+      targets.map(({ id, runtimeEpoch }) =>
+        this.killIfRuntime(id, runtimeEpoch),
+      ),
+    );
+  }
+
 
   /**
    * Fail-closed admission for already-authenticated ingest work. A terminal
