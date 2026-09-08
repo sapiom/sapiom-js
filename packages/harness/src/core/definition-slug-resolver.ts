@@ -108,9 +108,10 @@ export function createDefinitionSlugResolver(opts: {
     if (key !== getApiKey()) invalidate();
   };
   const warnOnce = (definitionId: string, reason: string): void => {
-    // Polling must not repeat the same diagnostic until the auth scope changes.
-    if (loggedFailures.has(definitionId)) return;
-    loggedFailures.add(definitionId);
+    // Throttle repeated polls without hiding a changed failure reason.
+    const diagnostic = `${definitionId}:${reason}`;
+    if (loggedFailures.has(diagnostic)) return;
+    loggedFailures.add(diagnostic);
     console.error(
       `[harness] definition metadata unavailable for definitionId=${definitionId}: ${reason}`,
     );

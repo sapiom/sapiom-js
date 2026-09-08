@@ -272,6 +272,9 @@ describe("createDefinitionSlugResolver", () => {
     expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(
       /test-key|private upstream error/,
     );
+    vi.mocked(fetchImpl).mockResolvedValue(reply({}, 503));
+    await resolver.resolve("777");
+    expect(errorSpy).toHaveBeenCalledTimes(2);
   });
 
   it("does not log when there is no api key (a harness without auth is expected)", async () => {
@@ -294,6 +297,11 @@ const ready = {
 const absent = { statusCode: 404, message: "Agent definition not found: 188" };
 const reply = (body: unknown, status = 200) =>
   ({ ok: status === 200, status, json: async () => body }) as Response;
+const delayedReply = () => {
+  let release!: (value: Response) => void;
+  const response = new Promise<Response>((resolve) => { release = resolve; });
+  return { response, release };
+};
 
 describe("authenticated deployment evidence", () => {
   it.each([
@@ -343,15 +351,10 @@ describe("authenticated deployment evidence", () => {
   ])(
     "reconciles healthy overlaps without caching runnable fields on failure",
     async (older, newer) => {
-      let release!: (response: Response) => void;
+      const { response, release } = delayedReply();
       const fetchImpl = vi
         .fn()
-        .mockImplementationOnce(
-          () =>
-            new Promise<Response>((resolve) => {
-              release = resolve;
-            }),
-        )
+        .mockReturnValueOnce(response)
         .mockResolvedValueOnce(newer)
         .mockRejectedValue(new Error("offline"));
       const resolver = createDefinitionSlugResolver({
@@ -374,16 +377,11 @@ describe("authenticated deployment evidence", () => {
   );
   it("forgets cached slugs, retained flags and pending responses across A → B → A", async () => {
     let key: string | null = "a";
-    let release!: (response: Response) => void;
+    const { response, release } = delayedReply();
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(reply(ready))
-      .mockImplementationOnce(
-        () =>
-          new Promise<Response>((resolve) => {
-            release = resolve;
-          }),
-      )
+      .mockReturnValueOnce(response)
       .mockRejectedValue(new Error("offline"));
     const resolver = createDefinitionSlugResolver({
       apiKey: () => key,
