@@ -16,6 +16,7 @@ import {
 } from "@assistant-ui/react-opencode";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
+import { EmptyState } from "./EmptyState";
 
 interface Props {
   harnessSessionId: string;
@@ -257,9 +258,10 @@ function ChatSurface({
       >
         <div className="studio-chat-feed">
           <ThreadPrimitive.Empty>
-            <p className="studio-chat-meta">
-              Describe the change you want to make in this project.
-            </p>
+            <EmptyState
+              title="Start a conversation"
+              body="Describe the change you want to make in this project."
+            />
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages>
             {({ message }) => (

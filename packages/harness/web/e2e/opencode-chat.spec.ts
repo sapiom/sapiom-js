@@ -20,6 +20,9 @@ let failAttach: boolean;
 let failMetadata: boolean;
 let holdHistory: boolean;
 let failEvents: boolean;
+let failPrompt: boolean;
+let failAccess: boolean;
+let accessCalls: number;
 const historyReplies: Array<() => void> = [];
 let routeCalls: number;
 const conversations = new Map<string, Conversation>();
@@ -50,6 +53,9 @@ test.beforeEach(async ({ page }) => {
   failMetadata = false;
   holdHistory = false;
   failEvents = false;
+  failPrompt = false;
+  failAccess = false;
+  accessCalls = 0;
   historyReplies.length = 0;
   routeCalls = 0;
   const app = express();
@@ -120,6 +126,10 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === `session/${id}/prompt_async`) {
+      if (failPrompt) {
+        res.status(502).json({ error: "Controlled send failure" });
+        return;
+      }
       c.prompts.push(req.body.parts[0].text);
       const userId = `msg_user_${c.prompts.length}`,
         assistantId = `msg_assistant_${c.prompts.length}`;
@@ -185,9 +195,10 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     (window as any).__HARNESS__ = { token: "chat-test-boot" };
   });
-  await page.route("**/api/assistant/access", (route) =>
-    route.fulfill({ json: { enabled } }),
-  );
+  await page.route("**/api/assistant/access", (route) => {
+    accessCalls++;
+    return route.fulfill({ status: failAccess ? 503 : 200, json: { enabled } });
+  });
   await page.route("**/opencode/**", (route) =>
     route.continue({
       url: `${origin}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}`,
@@ -357,4 +368,110 @@ test("shows stream loss and reconnects without replaying an accepted prompt", as
   );
   await expect(input).toBeEnabled();
   expect(c.prompts).toEqual(["A single request"]);
+});
+
+test("surfaces a rejected prompt POST and reconnects without replaying it", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  failPrompt = true;
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("A rejected request");
+  await input.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("Could not load or send");
+  await expect(input).toBeDisabled();
+  failPrompt = false;
+  await page.getByRole("button", { name: "Reconnect" }).click();
+  await expect(input).toBeEnabled();
+  expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
+});
+
+test("retains the draft during a failed access poll but applies explicit revocation", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("An unsent draft");
+  const before = accessCalls;
+  failAccess = true;
+  await page.clock.fastForward(16000);
+  await expect.poll(() => accessCalls).toBeGreaterThan(before);
+  await expect(input).toHaveValue("An unsent draft");
+  expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
+  failAccess = false;
+  enabled = false;
+  await page.clock.fastForward(16000);
+  await expect(
+    page.getByRole("group", { name: "Conversation view" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+test("expires the cached UI capability after sixty seconds without a successful poll", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await openAssistant(page);
+  failAccess = true;
+  await page.clock.fastForward(61000);
+  await expect(
+    page.getByRole("group", { name: "Conversation view" }),
+  ).toHaveCount(0);
+  await expect
+    .poll(() => conversations.get("ses_sess_boot")!.streams.size)
+    .toBe(0);
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+test("reveals foreground Terminal input and preserves Assistant for background actions", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page.evaluate(() => {
+    (window as any).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
+    "data-view",
+    "board",
+  );
+  page.on("dialog", (dialog) => void dialog.accept());
+  await page.getByTestId("canvas-describe-ai").click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__HARNESS_TEST__?.lastMacroRun?.id),
+    )
+    .toBe("describe");
+  const assistant = page.getByRole("button", {
+    name: "Assistant",
+    exact: true,
+  });
+  await expect(assistant).toHaveAttribute("aria-pressed", "true");
+  expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
+  await page.getByTestId("canvas-chat-toggle").click();
+  await page.getByTestId("canvas-freeform-input").fill("Explain this agent");
+  await expect(assistant).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("canvas-freeform-ask").click();
+  await expect(
+    page.getByRole("button", { name: "Terminal", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__HARNESS_TEST__?.lastInjectInput?.req.text ?? "",
+      ),
+    )
+    .toContain("Explain this agent");
+  await expect
+    .poll(() => conversations.get("ses_sess_boot")!.streams.size)
+    .toBe(0);
+  await assistant.click();
+  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  await tabs.nth(1).click();
+  await tabs.nth(0).click();
+  await expect(assistant).toHaveAttribute("aria-pressed", "true");
 });
