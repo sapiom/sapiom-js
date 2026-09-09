@@ -164,6 +164,7 @@ export class OpenCodeBridge {
       const upstream = assistantUpstreams(grant.environment)[service];
       const key = grant.environment.credentials!.apiKey;
       const headers = new Headers({
+        "Accept-Encoding": "identity",
         Accept: req.header("Accept") ?? "application/json",
         "Content-Type": "application/json",
         ...(service === "llm"

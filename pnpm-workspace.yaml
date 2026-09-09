@@ -11,6 +11,7 @@ onlyBuiltDependencies:
   - electron
   - esbuild
   - "@electron/rebuild"
+  - opencode-ai
 
 # Upgrade the @electron/rebuild that electron-builder bundles (app-builder-lib
 # pins 3.6.1, which drags node-gyp@9.4.1 — its VS detection can't parse recent
