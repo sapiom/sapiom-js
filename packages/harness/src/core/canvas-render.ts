@@ -51,6 +51,9 @@ export interface RenderableWorkflow {
   name: string;
   definitionId: number | null;
   activeBuildRunStatus?: string | null;
+  /** "unavailable" = the signed-in account can't see the linked definition.
+   *  Absent = unknown. */
+  definitionAccess?: "visible" | "unavailable";
 }
 
 /**
@@ -138,6 +141,13 @@ export interface RenderCanvasOptions {
 }
 
 function badgesFor(workflow: RenderableWorkflow): string[] {
+  // First: a remembered build status is no evidence for an invisible definition.
+  if (
+    workflow.definitionId != null &&
+    workflow.definitionAccess === "unavailable"
+  ) {
+    return ["unavailable"];
+  }
   if (workflow.activeBuildRunStatus === "ready") return ["deployed"];
   if (
     ["pending", "queued", "building"].includes(
