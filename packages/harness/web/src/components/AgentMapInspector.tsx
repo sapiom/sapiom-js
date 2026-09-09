@@ -1,6 +1,11 @@
 import type { JSX } from "react";
 import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
 
+import {
+  agentMapDeploymentLabel,
+  agentMapDeploymentTitle,
+  type AgentMapDeployment,
+} from "../lib/agent-map-deployment";
 import { latestNodeAttribution } from "../lib/agent-map-projector";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { Icon } from "./Icon";
@@ -9,12 +14,16 @@ interface AgentMapInspectorProps {
   snapshot: AgentMapWorkspaceResponse;
   nodeId: PlanNodeId;
   onClose: () => void;
+  openError?: string | null;
+  deployment?: AgentMapDeployment;
 }
 
 export function AgentMapInspector({
   snapshot,
   nodeId,
   onClose,
+  openError,
+  deployment,
 }: AgentMapInspectorProps): JSX.Element | null {
   const proposal = snapshot.proposal;
   const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
@@ -40,9 +49,17 @@ export function AgentMapInspector({
         <div>
           <p className="system-graph-node-meta">{node.kind}</p>
           <h3>{node.name}</h3>
+          {deployment && (
+            <span
+              className="status-tag agent-map-deployment"
+              data-deployment-state={deployment.indicator ?? undefined}
+              title={agentMapDeploymentTitle(deployment)}
+            >
+              {agentMapDeploymentLabel(deployment)}
+            </span>
+          )}
         </div>
         <div className="agent-map-inspector-actions">
-          <span className="status-tag">Proposed</span>
           <button
             type="button"
             className="theme-toggle"
@@ -55,6 +72,18 @@ export function AgentMapInspector({
           </button>
         </div>
       </div>
+      {deployment?.unavailable &&
+        !deployment.loading &&
+        deployment.indicator === null && (
+          <section role="status">
+            <p>{agentMapDeploymentTitle(deployment)}</p>
+          </section>
+        )}
+      {openError && (
+        <section role="status">
+          <p>{openError}</p>
+        </section>
+      )}
       <section>
         <h4>Purpose</h4>
         <p>{node.purpose}</p>

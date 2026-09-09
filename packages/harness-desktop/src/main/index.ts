@@ -11,8 +11,8 @@
 // so anything ahead of this line makes a packaged deploy fail with
 // `spawn ENOTDIR`. See esbuild-binary.ts.
 import "./esbuild-binary.js";
-import { writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { app, dialog, Menu } from "electron";
 import { initFileLog } from "./log-file.js";
 import { resolveInstanceLockAction } from "./single-instance.js";
@@ -32,6 +32,16 @@ import { loadUpdatePrefs, saveUpdatePrefs, updatePrefsPathIn } from "./update-pr
 const devMode = process.argv.includes("--dev");
 /** `--smoke`: boot, verify the packaged bundle, print results, exit. See smoke.ts. */
 const smokeMode = process.argv.includes("--smoke");
+
+// macOS can derive Electron's profile from the login account despite smoke.sh's
+// temporary HOME. Isolate it before taking the lock so the normal app stays open.
+if (smokeMode && process.env.SAPIOM_SMOKE_OUT) {
+  const profile = join(dirname(process.env.SAPIOM_SMOKE_OUT), "electron-profile");
+  mkdirSync(profile, { recursive: true });
+  app.setPath("userData", profile);
+  app.setPath("sessionData", profile);
+  app.setAppLogsPath(join(profile, "logs"));
+}
 
 // Use overlay scrollbars (like the browser) instead of Chromium's classic
 // scrollbars. Classic scrollbars reserve layout width, which pushes the

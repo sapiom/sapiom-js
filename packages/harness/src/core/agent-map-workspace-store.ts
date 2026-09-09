@@ -479,6 +479,27 @@ export class AgentMapWorkspaceStore {
     return this.locked(projectId, async (aggregate, journal) => ({ value: await operation(aggregate, journal) }), false);
   }
 
+  inspectImplementationBindings<T>(projectId: StudioProjectId, operation: (
+    aggregate: AgentMapProjectAggregate,
+    journal: AgentMapInitializationTransaction,
+    bindings: { read(): Promise<unknown>; write(value: unknown): Promise<void> },
+  ) => Promise<T>): Promise<T> {
+    const file = path.join(path.dirname(this.workspacePath(projectId)), "implementation-bindings.json");
+    return this.locked(projectId, async (aggregate, journal) => ({
+      value: await operation(aggregate, journal, {
+        read: async () => {
+          try { return JSON.parse(await fs.readFile(file, "utf8")) as unknown; }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+            if (error instanceof SyntaxError) throw new AgentMapWorkspaceStoreError("malformed_state");
+            throw storageError();
+          }
+        },
+        write: (value) => this.writeSidecar(file, value),
+      }),
+    }), false);
+  }
+
   /** Reserved exact-source, idempotent append seam. SAP-3149 has no caller. */
   appendBriefVersions(projectId: StudioProjectId, request: AppendBriefVersionsRequest): Promise<AppendBriefVersionsResult> {
     let actor: AppendBriefVersionsRequest["actor"];

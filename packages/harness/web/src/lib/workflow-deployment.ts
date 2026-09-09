@@ -1,3 +1,5 @@
+import type { WorkflowInfo } from "@shared/types";
+
 /**
  * The linkage + build fields every deployment decision reads. Structural on
  * purpose: `WorkflowInfo` satisfies it, and widening the parameters lets the
@@ -9,6 +11,7 @@
 export interface DeployableWorkflow {
   definitionId: number | null;
   activeBuildRunStatus?: string | null;
+  deploymentLookup?: WorkflowInfo["deploymentLookup"];
 }
 
 /** The five states Studio can prove from local linkage plus cloud build data. */
@@ -49,7 +52,9 @@ export function workflowDeploymentState(
 }
 
 /** Only the backend's ready build projection proves a production run can start. */
-export function isWorkflowRunnable(workflow: DeployableWorkflow | null): boolean {
+export function isWorkflowRunnable(
+  workflow: DeployableWorkflow | null,
+): boolean {
   return workflow?.activeBuildRunStatus === "ready";
 }
 
@@ -70,4 +75,67 @@ export function prodRunDisabledReason(
     case "draft":
       return "Not deployed yet";
   }
+}
+
+export const DEPLOYMENT_UNAVAILABLE = "Deployment status unavailable";
+
+/** Display evidence is deliberately separate from the action gates above. */
+export function workflowDeploymentIndicator(workflow: DeployableWorkflow): {
+  indicator: "draft" | "deployed" | null;
+  unavailable: boolean;
+} {
+  const lookup = workflow.deploymentLookup;
+  const deployed = lookup
+    ? lookup.lastConfirmedDeployed
+    : workflow.definitionId == null
+      ? false
+      : workflow.activeBuildRunStatus
+        ? workflow.activeBuildRunStatus === "ready"
+        : null;
+  return {
+    indicator: deployed === null ? null : deployed ? "deployed" : "draft",
+    unavailable: lookup?.unavailable ?? deployed === null,
+  };
+}
+
+export function workflowDeploymentTitle(workflow: DeployableWorkflow): string {
+  const display = workflowDeploymentIndicator(workflow);
+  if (display.indicator === null) return DEPLOYMENT_UNAVAILABLE;
+  let state = workflowDeploymentState(workflow);
+  if (display.unavailable)
+    state = display.indicator === "deployed" ? "ready" : "draft";
+  switch (state) {
+    case "ready":
+      return "Deployed to Sapiom with a ready build.";
+    case "building":
+      return "Cloud build in progress.";
+    case "failed":
+      return "Cloud build failed.";
+    case "linked":
+      return "Linked to Sapiom; no ready build confirmed.";
+    case "draft":
+      return "Draft. Not deployed to Sapiom yet.";
+  }
+}
+
+export function unavailableWorkflowDeployment(
+  workflow: WorkflowInfo,
+  forget = false,
+): WorkflowInfo {
+  const indicator = workflowDeploymentIndicator(workflow).indicator;
+  return {
+    ...workflow,
+    definitionSlug: forget ? null : workflow.definitionSlug,
+    activeBuildRunId: null,
+    activeBuildRunStatus: null,
+    deploymentLookup: {
+      lastConfirmedDeployed:
+        workflow.definitionId == null
+          ? false
+          : forget || indicator === null
+            ? null
+            : indicator === "deployed",
+      unavailable: workflow.definitionId != null,
+    },
+  };
 }

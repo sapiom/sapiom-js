@@ -38,6 +38,7 @@ import {
   type RunLocalLine,
   type WorkflowScanOutcome,
 } from "./api";
+import { unavailableWorkflowDeployment } from "./workflow-deployment";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
 import { projectToOpen } from "./project-tree";
@@ -140,6 +141,7 @@ export interface PendingWorkspace {
 }
 
 export interface HarnessStateHook {
+  authRevision: number;
   state: AppState | null;
   loading: boolean;
   error: string | null;
@@ -206,6 +208,7 @@ export interface HarnessStateHook {
   /** Bulk discovery: POST /api/workflows/scan under a root, then
    *  refreshes the registry list so found agents join the rail at once. */
   scanWorkflows: (root: string) => Promise<WorkflowScanOutcome>;
+  refreshWorkflows: () => Promise<WorkflowInfo[]>;
   /**
    * Creates an agent in a project — the create flow's one mechanism
    * (SAP-2981). Rejects with the server's own sentence when it refuses.
@@ -486,6 +489,7 @@ export function useHarnessState(): HarnessStateHook {
   const workflowProjectionOrder = useRef(
     new WorkflowProjectionOrder<WorkflowInfo>(),
   ).current;
+  const [authRevision, setAuthRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -1202,10 +1206,23 @@ export function useHarnessState(): HarnessStateHook {
 
   const refreshWorkflows = useCallback(async () => {
     const request = workflowProjectionOrder.begin();
-    const workflows = await api.listWorkflows();
-    if (workflowProjectionOrder.accept(request, workflows)) {
-      setState((prev) => (prev ? { ...prev, workflows } : prev));
-      return workflows;
+    try {
+      const workflows = await api.listWorkflows();
+      if (workflowProjectionOrder.accept(request, workflows)) {
+        workflowsRef.current = workflows;
+        setState((prev) => (prev ? { ...prev, workflows } : prev));
+        return workflows;
+      }
+    } catch (error) {
+      const current = workflowProjectionOrder.current();
+      if (current !== null) {
+        const workflows = current.map((row) => unavailableWorkflowDeployment(row));
+        if (workflowProjectionOrder.accept(request, workflows)) {
+          workflowsRef.current = workflows;
+          setState((prev) => (prev ? { ...prev, workflows } : prev));
+        }
+      }
+      throw error;
     }
     // A stale caller still receives the current accepted projection. This
     // matters for analytics/import callers: processing the stale HTTP payload
@@ -1347,6 +1364,13 @@ export function useHarnessState(): HarnessStateHook {
             }, BUSY_WINDOW_MS),
           );
         } else if (message.type === "auth.changed") {
+          // Accept a barrier synchronously: merely issuing the refresh cannot
+          // stop an older in-flight success from restoring another account.
+          const workflows = (workflowProjectionOrder.current() ?? workflowsRef.current)
+            .map((row) => unavailableWorkflowDeployment(row, true));
+          workflowProjectionOrder.accept(workflowProjectionOrder.begin(), workflows);
+          workflowsRef.current = workflows;
+          setAuthRevision((revision) => revision + 1);
           // Real-time auth state update from the server — update AppState in
           // place so SettingsPopover, WorkflowsRail, and deploy gating all
           // react without a full reload or polling.
@@ -1354,6 +1378,7 @@ export function useHarnessState(): HarnessStateHook {
             prev
               ? {
                   ...prev,
+                  workflows,
                   authenticated: message.authenticated,
                   organizationName: message.organizationName,
                 }
@@ -1367,6 +1392,7 @@ export function useHarnessState(): HarnessStateHook {
       },
       () => {
         eventReconnectListeners.current.forEach((listener) => listener());
+        void refreshWorkflows().catch(() => undefined);
       },
     );
   }, [refreshWorkflows, startRunPolling]);
@@ -2346,6 +2372,7 @@ export function useHarnessState(): HarnessStateHook {
 
   return {
     state,
+    authRevision,
     loading,
     error,
     errorKind,
@@ -2373,6 +2400,7 @@ export function useHarnessState(): HarnessStateHook {
     closeSession,
     connectWorkflow,
     scanWorkflows,
+    refreshWorkflows,
     scaffoldAgent,
     closedProjects,
     unsearchedCheckouts,

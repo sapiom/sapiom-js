@@ -1,5 +1,26 @@
 # @sapiom/harness-desktop
 
+## 0.4.6
+
+### Patch Changes
+
+- 908b72c: The canvas Render-failed state shows one message instead of two drawn on top of each other. The app's card and the rendered document both painted the failure reason, and the card is a transparent layer over the document, so the short reason and the long one overlapped and neither was readable. The document now stands its prose down while it is embedded, the same way it already hides its title, badge and legend as chrome the app draws instead. Opened on its own, or embedded somewhere that never takes the message over, the document keeps its prose and is still the only message, so a failure never ends as an empty board.
+- f6dd638: Pack disconnected vertical Agent Maps to the viewport while retaining manual pan, zoom, and selection across map updates. Focusing an off-screen node reveals it; relationship labels render consistently at fit scale.
+- fd9ec19: A project row in the rail now shows a green dot when the project has live coding-agent sessions, so which projects are active reads at a glance without opening them. The dot names its own count, "1 live session" or "3 live sessions", in its tooltip and to a screen reader, and it disappears when the last of those sessions ends. Group headers carry the same dot for the agents filed under them. Project and group counts use the same durable project identity as the session tabs, keeping nested projects separate and including a project's sessions across roots. Older servers without Studio project identities retain folder-based membership. Agent rows are unchanged, and the rail still lists no sessions.
+- 6707366: Add a vertical Agent Map layout using a bundled ELK worker. The renderer bundles a 1.6 MB worker and pins ELK for repeatable output.
+- Updated dependencies [b4d6067]
+- Updated dependencies [3d96d32]
+- Updated dependencies [908b72c]
+- Updated dependencies [f6dd638]
+- Updated dependencies [fd9ec19]
+- Updated dependencies [674ba1d]
+- Updated dependencies [6468ead]
+- Updated dependencies [e690f7c]
+- Updated dependencies [55630a9]
+- Updated dependencies [ff414ff]
+- Updated dependencies [6707366]
+  - @sapiom/harness@0.16.0
+
 ## 0.4.5
 
 ### Patch Changes
