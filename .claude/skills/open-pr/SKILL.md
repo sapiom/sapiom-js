@@ -5,7 +5,8 @@ description: How to open (or fix) a pull request in this repo so the determinist
 
 # Opening a pull request that passes the labeler
 
-Every PR to `main` is classified by `.github/workflows/pr-labeler.yml` running
+Every PR to `main`, including each layer of a native GitHub stack targeting
+`main`, is classified by `.github/workflows/pr-labeler.yml` running
 `scripts/pr-label-classifier.mjs` against the PR **body**. A body that doesn't
 follow `.github/pull_request_template.md` gets the **`contribution: incomplete`**
 label (the workflow logs say which check failed). The classifier re-runs on
@@ -68,6 +69,10 @@ import('./scripts/pr-label-classifier.mjs').then(async (m) => {
 gh pr create --base main --title "type(scope): imperative summary" --body-file /tmp/pr-body.md
 gh pr edit <num> --body-file /tmp/pr-body.md    # fixing a flagged PR — labeler re-runs on edit
 ```
+
+For a native stack targeting `main`, later PRs use the preceding branch as
+their base. Keep that base when you create or edit the PR. Each PR still needs
+its own complete description.
 
 ## Reading the labels it applies
 
