@@ -227,9 +227,64 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     const error = await runTruncated(256).catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
     expect(error.outputName).toBe("classify_ticket");
     expect(error.maxTokens).toBe(256);
+    expect(error.reason).toBe("no-tool-call");
     expect(error.response).toEqual(truncated);
     expect(error.message).toContain("max_tokens (256)");
     expect(error.message).toContain("Thinking tokens count against max_tokens");
+  });
+
+  it("throws when the cap landed mid-input, leaving a required field unwritten", async () => {
+    // The same failure one token later: the block is there, so a presence check reads it as
+    // success, and the caller destructures `undefined` out of a partial object.
+    const cutMidInput = {
+      stop_reason: "max_tokens",
+      content: [{ type: "tool_use", name: "classify_ticket", input: {} }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, cutMidInput) });
+    const error = await sapiom.llm
+      .run({
+        request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
+        output: { name: "classify_ticket", schema: SCHEMA },
+      })
+      .catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+
+    expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+    expect(error.reason).toBe("incomplete-input");
+    expect(error.message).toContain("is incomplete");
+  });
+
+  it("does not read an omitted OPTIONAL field as truncation", async () => {
+    // Only the schema's `required` fields are evidence; the rest are the model's to omit.
+    const completion = {
+      stop_reason: "max_tokens",
+      content: [{ type: "tool_use", name: "classify_ticket", input: { priority: "high" } }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+      output: {
+        name: "classify_ticket",
+        schema: { ...SCHEMA, properties: { priority: { type: "string" }, note: { type: "string" } } },
+      },
+    });
+
+    expect(structuredOf(res, "classify_ticket")).toEqual({ priority: "high" });
+  });
+
+  it("leaves a partial result alone when the turn did not end at the cap", async () => {
+    // A missing required field with any other stop_reason is the model's answer, not a
+    // truncation — judging it would make this a schema validator, which it is not.
+    const completion = {
+      stop_reason: "end_turn",
+      content: [{ type: "tool_use", name: "classify_ticket", input: {} }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+      output: { name: "classify_ticket", schema: SCHEMA },
+    });
+
+    expect(structuredOf(res, "classify_ticket")).toEqual({});
   });
 
   it("still throws when the request declared no cap of its own", async () => {

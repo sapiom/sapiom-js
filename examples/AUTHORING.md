@@ -620,7 +620,8 @@ const res = await ctx.sapiom.llm.run({
   request: {
     system,
     messages: [{ role: "user", content: prompt }],
-    max_tokens: 500,
+    // Thinking is spent from this budget too — size it for thinking + output.
+    max_tokens: 4096,
   },
   output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
 });
@@ -631,6 +632,15 @@ const review = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
 reply comes back as a typed `tool_use` block. `structuredOf` reads it, and returns
 `undefined` rather than guessing when there is no such block. For a plain text reply,
 `textOf` — never `content[0]`, which can be a `thinking` block.
+
+**`max_tokens` covers thinking, not just output.** A routed label may emit a `thinking`
+block before the forced tool call, out of the same budget. If it runs out mid-deliberation
+the turn ends before the tool call is emitted and there is nothing to read — on the hardest
+inputs only, so a starved cap passes every easy case first. `llm.run` throws
+`LlmStructuredOutputTruncatedError` when that happens rather than handing back an
+unreadable response, and `pnpm examples:check` rejects a structured call capped under 2048.
+Size for thinking plus output; the cap is a ceiling, not a reservation, so headroom on a
+short reply costs nothing.
 
 - **Don't ask for "ONLY minified JSON" and parse the reply.** The pattern this replaced
   took `output.indexOf("{")` to `output.lastIndexOf("}")` and `JSON.parse`'d it. Any

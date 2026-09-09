@@ -145,10 +145,10 @@ export interface LlmRunSpec {
    * `tool_choice` yourself for anything this convenience doesn't cover (e.g.
    * more than one candidate tool).
    *
-   * Because the tool call is forced, the model has to reach it inside
-   * `request.max_tokens` — thinking included. When it doesn't, {@link run} throws
-   * {@link LlmStructuredOutputTruncatedError} instead of handing back a response
-   * whose `tool_use` block never arrived.
+   * Because the tool call is forced, the model has to reach it — and finish it — inside
+   * `request.max_tokens`, thinking included. When the cap cuts it off, {@link run} throws
+   * {@link LlmStructuredOutputTruncatedError} instead of handing back a response whose
+   * `tool_use` block never arrived or stopped mid-input.
    */
   output?: LlmStructuredOutputSpec;
 }
@@ -470,13 +470,27 @@ export class LlmStructuredOutputTruncatedError extends Error {
   readonly outputName: string;
   /** The cap the request carried, when it declared one. */
   readonly maxTokens: number | undefined;
+  /**
+   * Where the cap cut the turn off: before the tool call was emitted at all
+   * (`"no-tool-call"`), or partway through its input (`"incomplete-input"` — the block
+   * is present but its `input` is missing fields the schema requires). Same cause, same
+   * fix; branch on it only if you want to tell them apart.
+   */
+  readonly reason: "no-tool-call" | "incomplete-input";
   /** The verbatim response, for programmatic inspection (it still carries usage/disclosure). */
   readonly response: unknown;
 
-  constructor(outputName: string, maxTokens: number | undefined, response: unknown) {
+  constructor(
+    outputName: string,
+    maxTokens: number | undefined,
+    reason: "no-tool-call" | "incomplete-input",
+    response: unknown,
+  ) {
+    const cap = maxTokens === undefined ? "" : ` (${maxTokens})`;
     super(
-      `Structured output "${outputName}" was never emitted: the model hit max_tokens` +
-        `${maxTokens === undefined ? "" : ` (${maxTokens})`} before the forced tool call. ` +
+      (reason === "no-tool-call"
+        ? `Structured output "${outputName}" was never emitted: the model hit max_tokens${cap} before the forced tool call. `
+        : `Structured output "${outputName}" is incomplete: the model hit max_tokens${cap} partway through the forced tool call, so its input is missing required fields. `) +
         `Thinking tokens count against max_tokens, so raise the cap to cover thinking plus output ` +
         `— a few thousand tokens, not a few hundred. The cap is a ceiling, not a reservation: ` +
         `billing settles on the tokens actually produced.`,
@@ -484,6 +498,7 @@ export class LlmStructuredOutputTruncatedError extends Error {
     this.name = "LlmStructuredOutputTruncatedError";
     this.outputName = outputName;
     this.maxTokens = maxTokens;
+    this.reason = reason;
     this.response = response;
   }
 }
@@ -494,16 +509,39 @@ function declaredMaxTokens(request: Record<string, unknown>): number | undefined
   return typeof value === "number" ? value : undefined;
 }
 
+/** The `required` field names an `output.schema` declares, when it declares any. */
+function requiredKeysOf(schema: Record<string, unknown>): string[] {
+  const required = schema.required;
+  return Array.isArray(required) ? required.filter((key): key is string => typeof key === "string") : [];
+}
+
 /**
- * The one unambiguous truncation: the caller forced a tool call, the turn stopped on
- * the cap, and no matching `tool_use` block came back. Anything else — a tool call
- * that did arrive, a turn that ended for any other reason — is left alone, because
- * only this combination proves the structured result cannot exist.
+ * How the cap cut a forced tool call short, or `undefined` when it did not.
+ *
+ * Gated on `stop_reason === "max_tokens"` throughout: only a turn that ended AT the ceiling
+ * can be judged this way, so a complete result, an empty one that ended for any other reason,
+ * and a caller's own partial-result handling are all left exactly as they were.
+ *
+ * Two shapes, because the cap can land on either side of the tool call. No block at all is the
+ * common one. A block whose `input` is missing a field the schema requires is the same failure
+ * one token later — the model was cut off mid-input, `structuredOf` hands back `{}` or a partial
+ * object, and the caller destructures `undefined` out of it. Fields the schema does not require
+ * are the model's to omit and are not read as truncation.
  */
-function isTruncatedBeforeToolCall(response: unknown, outputName: string): boolean {
+function truncationOf(
+  response: unknown,
+  output: LlmStructuredOutputSpec,
+): "no-tool-call" | "incomplete-input" | undefined {
   const stopReason = (response as { stop_reason?: unknown } | null | undefined)?.stop_reason;
-  if (stopReason !== "max_tokens") return false;
-  return structuredOf(response, outputName) === undefined;
+  if (stopReason !== "max_tokens") return undefined;
+
+  const structured = structuredOf(response, output.name);
+  if (structured === undefined) return "no-tool-call";
+  if (typeof structured !== "object" || structured === null) return "incomplete-input";
+
+  const present = structured as Record<string, unknown>;
+  const missing = requiredKeysOf(output.schema).some((key) => !(key in present));
+  return missing ? "incomplete-input" : undefined;
 }
 
 /**
@@ -538,8 +576,8 @@ function withStructuredOutput(request: Record<string, unknown>, output: LlmStruc
  * (forces a tool call) and read the result with {@link structuredOf}.
  *
  * @throws {LlmStructuredOutputTruncatedError} when `spec.output` was set and the
- * turn hit `max_tokens` before emitting the forced tool call — the cap has to cover
- * thinking as well as output.
+ * turn hit `max_tokens` before the forced tool call was emitted, or partway through
+ * its input — the cap has to cover thinking as well as output.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,
@@ -561,10 +599,12 @@ export async function run<T = Record<string, unknown>>(
   });
   // Only when the caller forced a tool call: a plain-text turn that hit the cap is
   // truncated but still readable, and it is the caller's to judge.
-  if (spec.output && isTruncatedBeforeToolCall(response, spec.output.name)) {
+  const truncation = spec.output ? truncationOf(response, spec.output) : undefined;
+  if (spec.output && truncation !== undefined) {
     throw new LlmStructuredOutputTruncatedError(
       spec.output.name,
       declaredMaxTokens(spec.request),
+      truncation,
       response,
     );
   }
