@@ -179,6 +179,7 @@ import {
 import { createRestRouter } from "./rest.js";
 import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
+import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
 import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
 import {
@@ -696,9 +697,16 @@ export const startServer = async (
   // gates the local /api surface. Seeded from the boot-time identity; its
   // refresh() re-reads the shared credential store so a rotated/re-logged-in key
   // recovers a 401 in place instead of locking the Studio.
+  let deploymentGeneration = 0;
+  let invalidateDeployment = (): void => {};
+  const deploymentAuthChanged = (): void => {
+    deploymentGeneration += 1;
+    invalidateDeployment();
+  };
   const apiKeyProvider = authEnabled
     ? createApiKeyProvider(identity?.apiKey ?? null, {
         environment: process.env.SAPIOM_ENVIRONMENT,
+        onKeyChanged: deploymentAuthChanged,
       })
     : staticApiKeyProvider(null);
 
@@ -769,27 +777,73 @@ export const startServer = async (
     baseUrl: resolveAgentsBaseUrl(),
   });
 
-  /** Returns a copy of the workflow list with definition metadata filled in
-   *  from the Agents API for every linked workflow. Build status is mutable,
-   *  so it is refreshed even when the stable slug is already present.
-   *  Resolves all lookups in parallel. Never mutates the registry. */
+  invalidateDeployment = () => slugResolver.invalidate();
+  const clearDeployment = (
+    workflow: RegistryWorkflowInfo,
+  ): RegistryWorkflowInfo => ({
+    ...workflow,
+    activeBuildRunId: null,
+    activeBuildRunStatus: null,
+    deploymentLookup: {
+      lastConfirmedDeployed: workflow.definitionId == null ? false : null,
+      unavailable: workflow.definitionId != null,
+    },
+  });
+  // Auth guards cover individual lookups AND the complete async projection.
+  // Neither raw build fields nor retained display bits are written to disk.
   const enrichWorkflows = async (
     workflows: RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
-    return Promise.all(
+    const scope = deploymentGeneration;
+    const enriched = await Promise.all(
       workflows.map(async (workflow) => {
-        if (workflow.definitionId == null) return workflow;
-        const metadata = await slugResolver.resolveMetadata(
+        const cleared = clearDeployment(workflow);
+        if (workflow.definitionId == null) return cleared;
+        const result = await slugResolver.resolveMetadata(
           String(workflow.definitionId),
         );
-        if (metadata == null) return workflow;
+        if (scope !== deploymentGeneration) return cleared;
+        if (result.status === "available")
+          return {
+            ...workflow,
+            definitionSlug: result.metadata.slug ?? workflow.definitionSlug,
+            activeBuildRunId: result.metadata.activeBuildRunId,
+            activeBuildRunStatus: result.metadata.activeBuildRunStatus,
+            deploymentLookup: {
+              lastConfirmedDeployed:
+                result.metadata.activeBuildRunStatus === "ready",
+              unavailable: false,
+            },
+          };
         return {
-          ...workflow,
-          definitionSlug: metadata.slug ?? workflow.definitionSlug,
-          activeBuildRunId: metadata.activeBuildRunId,
-          activeBuildRunStatus: metadata.activeBuildRunStatus,
+          ...cleared,
+          deploymentLookup: {
+            lastConfirmedDeployed:
+              result.status === "not-found"
+                ? false
+                : result.lastConfirmedDeployed,
+            unavailable: result.status === "unavailable",
+          },
         };
       }),
+    );
+    return scope === deploymentGeneration
+      ? enriched
+      : workflows.map(clearDeployment);
+  };
+  const readPublicWorkflows = async (): Promise<WorkflowInfo[]> => {
+    const scope = deploymentGeneration;
+    const raw = workflowsCache;
+    let rows = raw;
+    try {
+      rows = await enrichWorkflows(raw);
+      if (scope === deploymentGeneration)
+        rows = await annotateStudioSelections(rows);
+    } catch (error) {
+      if (scope === deploymentGeneration) throw error;
+    }
+    return publicWorkflowInfos(
+      scope === deploymentGeneration ? rows : raw.map(clearDeployment),
     );
   };
 
@@ -2987,57 +3041,43 @@ export const startServer = async (
     };
   });
 
-  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
-  // caps even on long-lived installs. Runs through the store's exclusive queue
-  // so the sweep's read→filter→rename window never races a concurrent append.
-  // Fire-and-forget — a slow FS is no reason to delay server startup.
-  const runNdjsonSweep = (): void => {
-    void eventStore
-      .runExclusive(() => sweepNdjson(eventStorePath))
-      .catch((err: unknown) => {
-        console.error("[harness] events.ndjson retention sweep failed:", err);
+  // Bound archive work per pass and run passes one at a time. Remaining work
+  // or a read/write failure skips cleanup; the next timer tick retries the
+  // conversations that are not yet archived.
+  let recordMaintenance = Promise.resolve();
+  // Session-exit sweeps can evict archives between passes. Remember completed
+  // writes until event cleanup succeeds, so a large backfill makes progress.
+  const archivedDuringBackfill = new Set<string>();
+  const runRecordMaintenance = (): Promise<void> => {
+    recordMaintenance = recordMaintenance.then(async () => {
+      const { archived, complete } = await backfillSessionRecords({
+        conversationIds: async () => (await sessionRecordReader.conversationIds())
+          .filter((id) => !archivedDuringBackfill.has(id)),
+        readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
+        archive: recordArchive,
+        isLiveSession: (id) => {
+          const session = sessionManager.get(id);
+          return session !== undefined && session.status !== "exited";
+        },
       });
-  };
-  runNdjsonSweep();
-  const ndjsonRetentionTimer = setInterval(
-    runNdjsonSweep,
-    NDJSON_RETENTION_SWEEP_MS,
-  );
-  ndjsonRetentionTimer.unref?.();
-
-  // One boot-time pass that archives conversations the log still holds but the
-  // archive doesn't, then sweeps the archive's own caps. This is what covers the
-  // two cases archiving-at-exit can't: a harness that was force-killed (no exit
-  // transition, no session.end), and every session that ended before this
-  // existed — whose history would otherwise vanish at its 30-day mark.
-  //
-  // It races the ndjson sweep queued above, and deliberately doesn't wait for
-  // it: reads run outside the store's exclusive queue by design (see store.ts),
-  // and either order is correct here — win the race and the record is archived
-  // from bytes retention was about to delete, lose it and the record is archived
-  // from what survived. Both beat not archiving it.
-  //
-  // Fire-and-forget: boot must not wait on it. The cost is one full index build
-  // (~130 ms against a 50 MB log), which the first history open would have paid
-  // anyway.
-  const recordBackfill = backfillSessionRecords({
-    conversationIds: () => sessionRecordReader.conversationIds(),
-    readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
-    archive: recordArchive,
-    isLiveSession: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      return session !== undefined && session.status !== "exited";
-    },
-    onCapped: (remaining) => {
-      console.error(
-        `[harness] session record backfill hit its per-boot cap; ${remaining} conversation(s) left for the next boot`,
-      );
-    },
-  })
-    .then(() => recordArchive.sweep())
-    .catch((err: unknown) => {
-      console.error("[harness] session record backfill failed:", err);
+      for (const id of archived) archivedDuringBackfill.add(id);
+      if (!complete) {
+        console.warn("[harness] archive backfill reached its limit; keeping source events until the next pass");
+        return;
+      }
+      await recordArchive.sweep();
+      // The exclusive queue also protects retention's read/filter/rename from
+      // concurrent event appends.
+      await eventStore.runExclusive(() => sweepNdjson(eventStorePath));
+      archivedDuringBackfill.clear();
+    }).catch((err: unknown) => {
+      console.error("[harness] session record maintenance failed:", err);
     });
+    return recordMaintenance;
+  };
+  void runRecordMaintenance();
+  const ndjsonRetentionTimer = setInterval(runRecordMaintenance, NDJSON_RETENTION_SWEEP_MS);
+  ndjsonRetentionTimer.unref?.();
 
   const harnessVersion = readVersion();
   const batcher = createHarnessEmitter({
@@ -3384,6 +3424,12 @@ export const startServer = async (
     void eventStore.append(analyticsEvent).catch(() => {});
     batcher.enqueue(analyticsEvent);
   };
+  const implementationOptions = {
+    catalog: studioProjectCatalog, store: agentMapWorkspaceStore, preferences: studioWorkspacePreferences,
+    listWorkflows: () => workflowsCache, isWorkflowScanComplete: (roots: readonly string[]) => isWorkflowScanComplete(roots),
+    listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
+  };
+  const implementationBindings = createAgentMapImplementations(implementationOptions);
   agentMapMcp = createAgentMapMcpRouter({
     capabilities: agentMapCapabilities,
     service: agentMapProposalService,
@@ -3471,24 +3517,17 @@ export const startServer = async (
   };
 
   const initializationProject = async (projectId: string) => {
-    const project = await studioProjectCatalog.resolveIdentity(projectId);
-    if (!project) return null;
-    const scopes = await studioWorkspaceScopeCatalog.list();
-    const roots = project.rootBindings.filter((binding) => binding.status === "active" &&
-      scopes.some((scope) => samePath(scope.cwd, binding.localRootRef))).map((binding) => binding.localRootRef);
-    const complete = await isWorkflowScanComplete(roots);
-    const ids = await studioWorkspacePreferences.agentIds(projectId, roots, workflowsCache, complete);
-    const agents = [...ids].flatMap(([workflowPath, agentId]) => {
-      const workflow = workflowsCache.find((entry) => entry.path === workflowPath);
-      return workflow ? [{ agentId, path: workflow.path, name: workflow.sourceDefinitionName ?? workflow.name }] : [];
-    });
+    const implementations = await readProjectImplementations(implementationOptions, projectId);
+    if (!implementations) return null;
+    const { roots, inventory } = implementations;
+    const agents = inventory.candidates.map(({ agentId, path, name }) => ({ agentId, path, name }));
     const available = options.availableHarnesses ?? Object.keys(adapters);
     const recent = sessionManager.list().filter((session) => session.agentMapIdentity?.projectId === projectId &&
       available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
       .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
     const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
     return { userId: localProjectPrincipal(projectUserId, machineId), available: roots.length > 0,
-      discoveryComplete: complete, agents, provider: available.includes(preferred) ? preferred : null };
+      discoveryComplete: inventory.discoveryComplete, agents, provider: available.includes(preferred) ? preferred : null };
   };
   agentMapInitialization = new AgentMapInitializationCoordinator({
     store: agentMapWorkspaceStore, proposals: agentMapProposalService, project: initializationProject,
@@ -3832,10 +3871,7 @@ export const startServer = async (
             organizationName: identity.organizationName,
           }
         : null,
-      listWorkflows: async () =>
-        publicWorkflowInfos(
-          await annotateStudioSelections(await enrichWorkflows(workflowsCache)),
-        ),
+      listWorkflows: readPublicWorkflows,
       listWorkspaceScopes: listWorkspaceScopesAndRetain,
       listStudioProjects: async () => {
         try {
@@ -3894,6 +3930,7 @@ export const startServer = async (
   app.use(
     "/api",
     createAgentMapRouter({
+      implementations: implementationBindings,
       catalog: studioProjectCatalog,
       initialization: agentMapInitialization,
       store: agentMapWorkspaceStore,
@@ -4003,10 +4040,7 @@ export const startServer = async (
   // wrapped; scan/connect write through to the real registry untouched. Typed
   // as WorkflowRegistryLike so this wrapper needs no unsafe cast.
   const enrichedWorkflowRegistry: WorkflowRegistryLike = {
-    list: async () =>
-      publicWorkflowInfos(
-        await annotateStudioSelections(await enrichWorkflows(workflowsCache)),
-      ),
+    list: readPublicWorkflows,
     scan: (root: string) =>
       scanWorkflowsAndBroadcast(root, "requested", { dirty: true }).then(
         (outcome) => publicWorkflowInfos(outcome.found),
@@ -4277,6 +4311,7 @@ export const startServer = async (
       authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
       onProjectUserChanged: (userId) => {
+        deploymentAuthChanged();
         projectUserId = userId;
         for (const session of sessionManager.list()) {
           agentMapCapabilities.revokeSession(session.id);
@@ -4632,7 +4667,7 @@ export const startServer = async (
         await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
-          await recordBackfill;
+          await recordMaintenance;
           while (pendingRecordArchives.size > 0) {
             await Promise.all([...pendingRecordArchives]);
           }

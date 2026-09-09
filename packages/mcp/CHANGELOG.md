@@ -1,5 +1,62 @@
 # @sapiom/mcp
 
+## 0.15.0
+
+### Minor Changes
+
+- 8ae573b: App Link management from `sapiom-dev` (SAP-3178). `sapiom_dev_app_publish` publishes, and
+  only publishes; everything else about a link was REST-only behind an `org.write` key, so a
+  Studio user who published a webhook receiver could not turn webhooks on from Studio. Three new
+  tools close that:
+
+  - **`sapiom_dev_app_list`** — every App Link in the organization: URL, visibility, whether
+    webhooks are on (and the `/hook` URL when they are), spend cap, wake rate limit, wake state.
+  - **`sapiom_dev_app_settings`** — change `webhooksEnabled`, `visibility` (with `confirmPublic`),
+    `dailySpendCapUsd` (or `null` to clear) and `wakeRateLimitPerHour` on a link addressed by
+    slug or id. Sends only the fields given; reports the resulting settings and the webhook URL.
+  - **`sapiom_dev_app_delete`** — delete a link (`confirm: true` required); the URL stops
+    resolving and the slug is freed.
+
+  A refusal is a sentence, not a status: when the credential lacks `org.write` the error names
+  the permission and the fields it was asked to change, so the agent tells the user instead of
+  retrying or reporting a silent success.
+
+  The offline `AUTHORING_INSTRUCTIONS` fallback moves to the 2.9 primer, which names the three
+  tools (version-gated to `@sapiom/mcp` >= 0.15) and teaches that webhooks are off by default
+  and that `/{org}/{slug}/hook/*` is the receiver third-party signature schemes verify against.
+  The `sapiom-sandbox-preview` skill and the README gain the same section.
+
+### Patch Changes
+
+- e690f7c: Re-sync the offline teaching fallbacks with the 2026-09 served-text release (SAP-3180), so a
+  session whose startup fetch fails learns the same four things an online session does:
+
+  - **Vault semantics** — secrets are set in the dashboard per deployed agent; agent code reads
+    `ctx.sapiom.vault.get` and cannot write; a Sapiom-managed resource is used through its
+    handle, never by copying its credentials into Vault.
+  - **`ctx.sapiom.agents.launch`** — fire-and-forget dispatch of a deployed agent for any caller
+    that must return fast (a webhook receiver); `agents.run` waits for the terminal state.
+  - **Receipts and manual replay** of inbound events, pointed at the REST surface until a tool
+    exists.
+  - **App Link webhooks** — `/hook/*` forwarding, off by default behind `webhooksEnabled`, 60 s
+    hold, byte-exact body so third-party signature schemes verify inside the app.
+
+  `@sapiom/mcp`'s `AUTHORING_INSTRUCTIONS` (primer 2.9) and `@sapiom/harness`'s
+  `DEFAULT_SYSTEM_PROMPT` (1.1) move with their digest pins; the 2.9 primer also drops the
+  `deadlineMinutes` clause that offered a knob `llm.run` does not have. The
+  `sapiom-agent-authoring` skill gains a pointer to where these are taught, not a restatement.
+
+  Naming note: the 2.9 primer spells the receipts and replay routes with their real
+  `/v1/workflows/` REST prefix, because no tool or docs page covers them yet and the routes
+  are the only surface that exists. The primer's guard is therefore scoped to the per-step
+  executions path it was written about. The Studio system prompt, which is Agent Studio
+  visible text and subject to the terminology gate, names the same routes without the prefix
+  and defers to the primer for the full paths.
+
+- Updated dependencies [e690f7c]
+  - @sapiom/agent-core@0.13.5
+  - @sapiom/sandbox-preview@0.1.22
+
 ## 0.14.0
 
 ### Minor Changes

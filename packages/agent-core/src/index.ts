@@ -144,12 +144,17 @@ export {
   getSchedule,
   cancelSchedule,
   previewCron,
+  rotateScheduleSecret,
+  completeScheduleSecretRotation,
+  revokeScheduleSecret,
 } from "./schedule.js";
 export type {
   ScheduleKind,
   ScheduleStatus,
   SchedulePolicy,
   CreateScheduleOptions,
+  CreateScheduleResult,
+  WebhookSecretMaterial,
   ListSchedulesOptions,
   CronPreviewOptions,
   CronPreview,

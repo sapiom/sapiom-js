@@ -168,17 +168,9 @@ test.describe("durable Studio project navigation", () => {
   test("the project plus starts a coding session at its root without creating an agent", async ({
     page,
   }) => {
-    await page.evaluate(() => {
-      const key = "sapiom-harness-ui-prefs";
-      const current = JSON.parse(localStorage.getItem(key) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      localStorage.setItem(
-        key,
-        JSON.stringify({ ...current, preferredHarness: "codex" }),
-      );
-    });
+    await page.getByTestId("rail-create-new").click();
+    await page.getByTestId("composer-harness-select").click();
+    await page.getByTestId("composer-harness-option-codex").click();
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const row = group.getByTestId("project-row-dashboard-keeper");
     const start = group.getByTestId("project-start-session-dashboard-keeper");

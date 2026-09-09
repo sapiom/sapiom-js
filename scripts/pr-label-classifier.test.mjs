@@ -8,6 +8,7 @@ import {
   calculateReviewSize,
   classifyContributor,
   classifyPullRequest,
+  getPullRequestTargetBranch,
   isReviewSizeExcluded,
   isSensitivePath,
   reconcilePullRequestLabels,
@@ -600,9 +601,17 @@ test("the privileged workflow stays pinned and never references PR head code or 
     assert.ok(workflow.includes(sha), sha);
   }
   assert.match(workflow, /pull_request_target:/);
+  assert.match(workflow, /^      - stacked$/m);
+  assert.match(workflow, /^          ref: refs\/heads\/main$/m);
+  assert.match(workflow, /^          persist-credentials: false$/m);
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /pull-requests: write/);
   assert.match(workflow, /getCollaboratorPermissionLevel/);
+  assert.match(
+    workflow,
+    /const targetBranch = getPullRequestTargetBranch\(pullRequest\);/,
+  );
+  assert.match(workflow, /if \(targetBranch !== "main"\)/);
   assert.match(workflow, /id: classification/);
   assert.match(workflow, /core\.setOutput\(\s*"trusted"/);
   assert.match(
@@ -615,10 +624,80 @@ test("the privileged workflow stays pinned and never references PR head code or 
   );
   assert.doesNotMatch(workflow, /author_association/);
   assert.doesNotMatch(workflow, /pull_request\.head|head\.sha|secrets\./);
+  assert.doesNotMatch(workflow, /github\.event\.pull_request\.base\.sha/);
 
   const classifier = readFileSync(
     path.join(ROOT, "scripts", "pr-label-classifier.mjs"),
     "utf8",
   );
   assert.doesNotMatch(classifier, /author_association/);
+});
+
+test("the labeler fails before processing a stack that does not target main", async () => {
+  const workflow = readFileSync(
+    path.join(ROOT, ".github", "workflows", "pr-labeler.yml"),
+    "utf8",
+  );
+  const script = workflow
+    .match(/          script: \|\n((?: {12}[^\n]*\n|\n)+)/)[1]
+    .replace(/^ {12}/gm, "");
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const failures = [];
+  const rejectProcessing = () =>
+    assert.fail("Rejected PRs must not be processed");
+
+  await new AsyncFunction("github", "context", "core", "process", script)(
+    {
+      rest: {
+        pulls: {
+          get: async () => ({
+            data: {
+              base: { ref: "main" },
+              stack: { base: { ref: "release" } },
+            },
+          }),
+        },
+      },
+      paginate: rejectProcessing,
+    },
+    { repo: { owner: "sapiom", repo: "sapiom-js" } },
+    {
+      setFailed: (message) => failures.push(message),
+      setOutput: rejectProcessing,
+      warning: () => {},
+    },
+    { env: { GITHUB_WORKSPACE: ROOT, PR_NUMBER: "123" } },
+  );
+
+  assert.deepEqual(failures, ["PR #123 targets release, not main"]);
+});
+
+test("the labeler resolves native stack targets before direct bases", async (t) => {
+  for (const [name, base, stack, expected] of [
+    ["standalone main", "main", undefined, "main"],
+    ["standalone main with null stack", "main", null, "main"],
+    ["bottom layer", "main", { base: { ref: "main" } }, "main"],
+    ["upper layer", "feature/parent", { base: { ref: "main" } }, "main"],
+    ["unlinked branch chain", "feature/parent", undefined, "feature/parent"],
+    [
+      "release stack",
+      "feature/parent",
+      { base: { ref: "release" } },
+      "release",
+    ],
+    [
+      "stack target takes precedence",
+      "main",
+      { base: { ref: "release" } },
+      "release",
+    ],
+    ["missing stack target", "feature/parent", {}, "feature/parent"],
+  ]) {
+    await t.test(name, () => {
+      assert.equal(
+        getPullRequestTargetBranch({ base: { ref: base }, stack }),
+        expected,
+      );
+    });
+  }
 });

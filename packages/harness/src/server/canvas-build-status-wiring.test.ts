@@ -15,7 +15,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { renderFileFor } from "../core/canvas-render.js";
-import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
+import type {
+  HarnessAdapter,
+  LaunchOpts,
+  SpawnSpec,
+  WorkflowInfo,
+} from "../shared/types.js";
 import { startServer, type HarnessServer } from "./index.js";
 
 const BOOT_TOKEN = "test-token";
@@ -49,6 +54,9 @@ describe("Canvas build-status wiring", () => {
   let definitionsApi: HttpServer | undefined;
   let previousAgentsUrl: string | undefined;
   let definitionRequests: number;
+  let definitionStatus = 200;
+  let definitionBody: unknown;
+  let holdDefinition: ((url: string) => Promise<void>) | null = null;
   let definitionApiKeys: Array<string | undefined>;
 
   beforeEach(async () => {
@@ -57,10 +65,17 @@ describe("Canvas build-status wiring", () => {
     );
     previousAgentsUrl = process.env.SAPIOM_AGENTS_URL;
     definitionRequests = 0;
+    definitionStatus = 200;
+    definitionBody = {
+      slug: "order-triage",
+      activeBuildRunId: "build-ready-1",
+      activeBuildRunStatus: "ready",
+    };
+    holdDefinition = null;
     definitionApiKeys = [];
 
-    definitionsApi = createHttpServer((req, res) => {
-      if (req.url !== "/agents/v1/definitions/4821") {
+    definitionsApi = createHttpServer(async (req, res) => {
+      if (!/^\/agents\/v1\/definitions\/482[12]$/.test(req.url ?? "")) {
         res.writeHead(404).end();
         return;
       }
@@ -68,14 +83,11 @@ describe("Canvas build-status wiring", () => {
       definitionApiKeys.push(
         req.headers["x-sapiom-api-key"] as string | undefined,
       );
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          slug: "order-triage",
-          activeBuildRunId: "build-ready-1",
-          activeBuildRunStatus: "ready",
-        }),
-      );
+      const status = definitionStatus;
+      const body = definitionBody;
+      await holdDefinition?.(req.url!);
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
     });
     await new Promise<void>((resolve) => {
       definitionsApi!.listen(0, "127.0.0.1", resolve);
@@ -105,6 +117,8 @@ describe("Canvas build-status wiring", () => {
     const sessionDir = path.join(tempDir, "session");
     await fs.mkdir(stateRoot, { recursive: true });
     await fs.mkdir(sessionDir, { recursive: true });
+    const secondAgent = path.join(tempDir, "other-agent");
+    await fs.mkdir(secondAgent);
     await fs.writeFile(
       path.join(stateRoot, "workflows.json"),
       JSON.stringify([
@@ -112,6 +126,13 @@ describe("Canvas build-status wiring", () => {
           name: "order-triage",
           path: ORDER_TRIAGE,
           definitionId: 4821,
+          definitionSlug: null,
+          source: "connect",
+        },
+        {
+          name: "other-agent",
+          path: secondAgent,
+          definitionId: 4822,
           definitionSlug: null,
           source: "connect",
         },
@@ -159,5 +180,83 @@ describe("Canvas build-status wiring", () => {
     await expect(
       fs.readFile(renderFileFor(sessionDir, ORDER_TRIAGE), "utf8"),
     ).resolves.toContain(">deployed<");
+
+    const request = (route: string, method = "GET") =>
+      fetch(`http://127.0.0.1:${harness!.port}/api/${route}`, {
+        method,
+        headers: { "X-Harness-Token": BOOT_TOKEN },
+      });
+    const rows = async (route: string): Promise<WorkflowInfo[]> => {
+      const response = await request(route);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      return route === "state" ? body.workflows : body;
+    };
+    const readyRows = await rows("state");
+    expect(readyRows[0].deploymentLookup).toEqual({
+      lastConfirmedDeployed: true,
+      unavailable: false,
+    });
+    definitionStatus = 503;
+    definitionBody = { message: "private upstream diagnostic" };
+    for (const route of ["state", "workflows"]) {
+      const unavailable = await rows(route);
+      expect(unavailable[0]).toMatchObject({
+        activeBuildRunId: null,
+        activeBuildRunStatus: null,
+        deploymentLookup: { lastConfirmedDeployed: true, unavailable: true },
+      });
+      expect(JSON.stringify(unavailable)).not.toContain(
+        "private upstream diagnostic",
+      );
+    }
+    definitionStatus = 404;
+    definitionBody = {
+      statusCode: 404,
+      message: "Agent definition not found: 4821",
+    };
+    expect(
+      (await rows("workflows")).find((row) => row.definitionId === 4821)
+        ?.deploymentLookup,
+    ).toEqual({
+      lastConfirmedDeployed: false,
+      unavailable: false,
+    });
+    expect(
+      await fs.readFile(path.join(stateRoot, "workflows.json"), "utf8"),
+    ).not.toContain("deploymentLookup");
+
+    // A request started under the old identity must not return ready after logout.
+    definitionStatus = 200;
+    definitionBody = {
+      slug: "old-account-agent",
+      activeBuildRunId: "late-build",
+      activeBuildRunStatus: "ready",
+    };
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    holdDefinition = (url) =>
+      url.endsWith("4821")
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            release = resolve;
+            entered();
+          });
+    const pending = rows("state");
+    await started;
+    expect((await request("auth/disconnect", "POST")).status).toBe(200);
+    release();
+    const afterAuth = await pending;
+    expect(afterAuth).toHaveLength(2);
+    for (const row of afterAuth)
+      expect(row).toMatchObject({
+        activeBuildRunId: null,
+        activeBuildRunStatus: null,
+        definitionSlug: null,
+        deploymentLookup: { lastConfirmedDeployed: null, unavailable: true },
+      });
   });
 });

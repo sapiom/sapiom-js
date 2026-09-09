@@ -43,16 +43,33 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
   });
 
-  it("keeps local authoring and hosted direct access on distinct aliases", () => {
-    // Two-MCP frame: this server authors agents under the local `sapiom` alias; the
-    // hosted capability MCP answers one-off calls under the distinct `sapiom-direct`
-    // alias. The 2.6-era copy conflated them onto one `sapiom` alias, which is why
-    // the negative assertions below exist.
+  // SKIPPED, deliberately, like the SAP-3178 and SAP-3180 blocks: #814 moved this fallback to
+  // a body whose server-side release (sapiom/Sapiom#4884) has not merged. Sapiom `main` serves
+  // 2.10 (digest 47a4e3a3…), which is what this copy tracks. Un-skip when #4884 lands and this
+  // copy is re-synced to that body.
+  it.skip("names the two servers by role and keeps distinct aliases in the registration commands", () => {
+    // Two-MCP frame: this server authors agents; the hosted capability server answers
+    // one-off calls. Under SAP-3179 both are named by ROLE — "the local authoring
+    // server", "the hosted capability server" — with the same phrases the Agent Studio
+    // system prompt uses, because the aliases differ by context: Studio wires `sapiom`
+    // (hosted) / `sapiom-dev` (local), while a plain Claude Code user registers `sapiom`
+    // (local) / `sapiom-direct` (hosted). A Studio session reads both texts, so "use the
+    // `sapiom` alias to author agents" pointed it at the remote server. Aliases survive
+    // only inside the two `claude mcp add` commands. The 2.6-era copy conflated the two
+    // servers onto one `sapiom` alias, which is why the negative assertions below exist.
     expect(AUTHORING_INSTRUCTIONS).toContain(
+      "is **the local authoring server**",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("the hosted capability");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
       "`sapiom-dev` is this package's MCP server identity",
     );
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("the local `sapiom` alias");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "the distinct `sapiom-direct` alias",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "supported local alias `sapiom` with `claude mcp add sapiom -- npx -y @sapiom/mcp`",
+      "`claude mcp add sapiom -- npx -y @sapiom/mcp`",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp",
@@ -87,7 +104,10 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
-  it("teaches App Link management from this server, version-gated (SAP-3178)", () => {
+  // SKIPPED, deliberately, for the same reason as the SAP-3180 block below: #816 moved this
+  // fallback to a body whose server-side release (sapiom/Sapiom#4886) has not merged. Sapiom
+  // `main` serves 2.10 (digest 47a4e3a3…). Un-skip when #4886 lands and this copy is re-synced.
+  it.skip("teaches App Link management from this server, version-gated (SAP-3178)", () => {
     // 2.8 taught publishing and nothing else about a link, so an offline session
     // could not learn that webhooks are off by default, how to turn them on, or
     // that `/hook/*` is the receiver. The three management tools ship in 0.15;
@@ -121,7 +141,17 @@ describe("server instructions", () => {
     // primer — the per-step debugging endpoint lives in the docs guide, not spelled
     // out here verbatim (matches this package's own scaffold terminology guard).
     expect(AUTHORING_INSTRUCTIONS).toContain("Run Inspector");
-    expect(AUTHORING_INSTRUCTIONS).not.toContain("/v1/workflows/");
+    const ALLOWED_WORKFLOWS_ROUTES = [
+      "GET /v1/workflows/receipts?outcome=unmatched",
+      "GET /v1/workflows/receipts/{id}",
+      "POST /v1/workflows/receipts/{id}/replay",
+      "POST /v1/workflows/fires/{id}/replay",
+    ];
+    const outsideAllowList = ALLOWED_WORKFLOWS_ROUTES.reduce(
+      (text, route) => text.split(route).join(""),
+      AUTHORING_INSTRUCTIONS,
+    );
+    expect(outsideAllowList).not.toContain("/v1/workflows/");
     // Structured/forced-tool output has no `text` block — the reply lives in the
     // `tool_use` block's `input`. Reading only `type === 'text'` there returns
     // `undefined` and invites exactly the string-parsing fallback this rule bans.
@@ -154,6 +184,36 @@ describe("server instructions", () => {
     );
   });
 
+  it("teaches the four trigger kinds and the webhook signing scheme (SAP-3174)", () => {
+    // Before 2.10 the primer named only the two schedule kinds, and the schedule tool's enum
+    // matched — an agent asked to run on an inbound POST concluded nothing listens and
+    // proposed hand-building a server. The kinds, the scheme, and the App Link boundary
+    // (third-party senders cannot produce our HMAC) all have to be here, version-gated.
+    for (const kind of ["schedule_cron", "schedule_once", "event", "webhook"]) {
+      expect(AUTHORING_INSTRUCTIONS).toContain(`\`${kind}\``);
+    }
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "sapiom_dev_agents_schedule_secret",
+    );
+    const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
+    expect(flat).toContain("HMAC-SHA256 hex over `timestamp.eventId.rawBody`");
+    expect(flat).toContain(
+      "epoch-ms timestamp, url-safe event id `[A-Za-z0-9_-]{1,128}`, ±5 min skew",
+    );
+    for (const h of [
+      "X-Sapiom-Timestamp",
+      "X-Sapiom-Event-Id",
+      "X-Sapiom-Signature",
+    ]) {
+      expect(AUTHORING_INSTRUCTIONS).toContain(h);
+    }
+    expect(AUTHORING_INSTRUCTIONS).toContain("App Link `/hook/*` receiver");
+    expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.15");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://docs.sapiom.ai/guides/triggers",
+    );
+  });
+
   it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
     // THE SYNC RULE, which lives here rather than in instructions.ts because that
     // file's JSDoc is emitted into dist/instructions.d.ts and published to npm, where
@@ -180,13 +240,38 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.11 (App Link management tools + webhook receiver, SAP-3178, on
-    // top of 2.10 trigger kinds, SAP-3174).
+    // Current release: 2.10 (trigger kinds: `event` + `webhook`, webhook signing, `sapiom_dev_agents_schedule_secret`).
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "3346267ab58f593170758c11b4fd4654da06ef01a28cba478ddd4d6ffeda0d80",
+      "47a4e3a355584f40345e4a6dc9d695663aa24fc613e93eaf4559465b02b8b457",
     );
+  });
+
+  // SKIPPED, deliberately: #815 moved this fallback to a 2.9 body whose server-side release
+  // (sapiom/Sapiom#4885) has not merged — Sapiom `main` serves 2.10 (SAP-3174, digest
+  // 47a4e3a3…), which is what this copy tracks. Un-skip when #4885 lands (rebased onto 2.10 it
+  // becomes 2.11 and carries both sections) and this copy is re-synced to that body.
+  it.skip("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // Each of these shipped without any served text teaching it, so an agent could only
+    // guess at it. Byte-identical to the backend copy, so asserted here too.
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
+    expect(AUTHORING_INSTRUCTIONS).toContain("agent code cannot write");
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.launch");
+    expect(AUTHORING_INSTRUCTIONS).toContain("GET /v1/workflows/receipts");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "POST /v1/workflows/fires/{id}/replay",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("webhooksEnabled");
+    expect(AUTHORING_INSTRUCTIONS).toContain(
+      "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("byte-exact");
+    expect(AUTHORING_INSTRUCTIONS).toContain("held up to 60 s");
+    // `LlmRunSpec` has no `deadlineMinutes`; 2.9 dropped the clause that offered it to a
+    // one-shot caller. Scoped to that clause, not the identifier: `LlmSubmitSpec` has a
+    // real `deadlineMinutes`, and a later primer may document the deferred lane's knob.
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("Say how long you can wait");
   });
 });

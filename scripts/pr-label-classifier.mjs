@@ -384,6 +384,10 @@ function shouldInitializeTriage(eventAction, initializeTriage) {
   );
 }
 
+export function getPullRequestTargetBranch(pullRequest) {
+  return pullRequest.stack?.base?.ref ?? pullRequest.base.ref;
+}
+
 export function classifyPullRequest({
   pullRequest,
   repositoryPermission,

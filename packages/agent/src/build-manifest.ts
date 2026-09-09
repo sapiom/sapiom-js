@@ -13,9 +13,10 @@ import type { AgentDefinition } from "./agent.js";
  * - Walks def.steps; for each step:
  *   - timeoutMs: step.timeoutMs if declared, null otherwise.
  *   - inputSchema: the step's Zod schema converted to JSON Schema if declared,
- *     null otherwise. The generated schema is normalized so it accepts the same
- *     inputs the Zod schema parses: defaulted fields are not forced as required,
- *     and objects are not closed to extra fields.
+ *     null otherwise. Conversion goes through `zodToJsonSchema`, which emits
+ *     the caller-facing (`io: "input"`) schema and normalizes it so it accepts
+ *     the same inputs the Zod schema parses: a defaulted field is not forced as
+ *     required at ANY depth, and objects are not closed to extra fields.
  *   - transitions: the tagged edge list, read from the step's declared
  *     `next`/`terminal`/`canFail`/`pause` runtime properties (set by
  *     `defineStep`). This is a runtime-value read, exactly like inputSchema —
@@ -41,13 +42,11 @@ export function buildManifest(
   > = {};
 
   for (const [stepName, step] of Object.entries(def.steps)) {
-    let inputSchema: Record<string, unknown> | null = null;
-    if (step.inputSchema) {
-      const raw = zodToJsonSchema(step.inputSchema);
-      inputSchema = relaxAdditionalProperties(
-        dropDefaultedFromRequired(raw),
-      ) as Record<string, unknown>;
-    }
+    // `zodToJsonSchema` already emits the caller-facing (`io: "input"`)
+    // schema, normalized so it accepts exactly what the Zod schema parses.
+    const inputSchema = step.inputSchema
+      ? zodToJsonSchema(step.inputSchema)
+      : null;
     steps[stepName] = {
       timeoutMs: step.timeoutMs ?? null,
       inputSchema,
@@ -240,65 +239,4 @@ function bfs(
       if (!seen.has(next)) queue.push(next);
   }
   return seen;
-}
-
-/**
- * Recursively remove `additionalProperties: false` from a generated JSON Schema.
- *
- * `z.toJSONSchema()` (Zod v4) marks every converted object as closed
- * (`additionalProperties: false`), top-level and nested. A plain `z.object()`
- * ignores keys it doesn't name when it parses, rather than rejecting them, so a
- * step input that carries extra fields should still be accepted. Removing the
- * closed-object marker keeps the generated schema forward-compatible with inputs
- * that gain fields over time.
- *
- * Only the closed form (`additionalProperties: false`) is removed; a typed
- * catchall (`additionalProperties: { ... }`) is preserved. A property literally
- * named `additionalProperties` is never the boolean `false`, so it is untouched.
- */
-function relaxAdditionalProperties(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(relaxAdditionalProperties);
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      if (key === "additionalProperties" && v === false) {
-        continue;
-      }
-      out[key] = relaxAdditionalProperties(v);
-    }
-    return out;
-  }
-  return value;
-}
-
-/**
- * Remove from the JSON Schema's top-level `required` array any key whose
- * `properties` entry declares a `default`. A caller may omit such a field — Zod
- * supplies the default on parse — so it should not be reported as missing.
- * Operates only on the top level; nested objects are out of scope.
- */
-function dropDefaultedFromRequired(
-  schema: Record<string, unknown>,
-): Record<string, unknown> {
-  const required = schema.required;
-  const properties = schema.properties;
-  if (
-    !Array.isArray(required) ||
-    !properties ||
-    typeof properties !== "object"
-  ) {
-    return schema;
-  }
-  const props = properties as Record<string, unknown>;
-  const filtered = required.filter((key) => {
-    if (typeof key !== "string") return true;
-    const prop = props[key];
-    return !(prop && typeof prop === "object" && "default" in prop);
-  });
-  if (filtered.length === required.length) {
-    return schema;
-  }
-  return { ...schema, required: filtered };
 }

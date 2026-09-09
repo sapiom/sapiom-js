@@ -15,11 +15,13 @@
  *     disappearing at its 30-day mark.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startServer, type HarnessServer } from "./index.js";
+import * as recordArchive from "../core/record-archive.js";
+import * as retention from "../core/collector/store-retention.js";
 import type {
   AnalyticsEvent,
   HarnessAdapter,
@@ -79,6 +81,7 @@ describe("session record archive wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -229,14 +232,15 @@ describe("session record archive wiring", () => {
     );
   }, 20_000);
 
-  it("archives conversations that ended before the archive existed", async () => {
+  it.each([1, 200, 201, 401])("archives historical conversations before cleanup (count=%i)", async (count) => {
     // An events file from an install that predates this feature: a complete
     // conversation, no archive, and no registry entry for it.
+    const expiredAt = Date.now() - retention.DEFAULT_MAX_AGE_MS - 60_000;
     const events: AnalyticsEvent[] = [
       {
         eventId: "evt-1",
         seq: 1,
-        ts: "2026-06-01T10:00:00.000Z",
+        ts: new Date(expiredAt).toISOString(),
         userId: null,
         tenantId: null,
         machineId: "machine-1",
@@ -249,7 +253,7 @@ describe("session record archive wiring", () => {
       {
         eventId: "evt-2",
         seq: 2,
-        ts: "2026-06-01T10:00:01.000Z",
+        ts: new Date(expiredAt + 1000).toISOString(),
         userId: null,
         tenantId: null,
         machineId: "machine-1",
@@ -260,16 +264,96 @@ describe("session record archive wiring", () => {
         payload: { assistantText: "done" },
       },
     ];
-    await writeFile(eventStorePath, events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+    const history = Array.from({ length: count }, (_, index) => events.map((event) => ({
+      ...event,
+      eventId: `${event.eventId}-${index}`,
+      seq: event.seq + index * events.length,
+      ts: new Date(Date.parse(event.ts) + index).toISOString(),
+      harnessSessionId: index === 0 ? event.harnessSessionId : `${event.harnessSessionId}-${index}`,
+      agentSessionId: index === 0 ? event.agentSessionId : `${event.agentSessionId}-${index}`,
+    }))).flat();
+    await writeFile(eventStorePath, history.map((event) => `${JSON.stringify(event)}\n`).join(""), "utf8");
 
-    server = await boot();
+    // Hold the backfill to prove retention cannot delete its source events,
+    // even when startup finishes before the archive work does.
+    let releaseBackfill!: () => void;
+    const backfillGate = new Promise<void>((resolve) => { releaseBackfill = resolve; });
+    const backfill = recordArchive.backfillSessionRecords;
+    const backfillSpy = vi.spyOn(recordArchive, "backfillSessionRecords")
+      .mockImplementation(async (options) => {
+        await backfillGate;
+        return backfill(options);
+      });
+    const sweepSpy = vi.spyOn(retention, "sweepNdjson");
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    try {
+      server = await boot();
+      expect(backfillSpy).toHaveBeenCalledOnce();
+      expect(sweepSpy).not.toHaveBeenCalled();
+    } finally {
+      releaseBackfill();
+    }
 
-    await vi.waitFor(
-      async () => {
-        const archived = await readArchived("sess-legacy");
-        expect(archived?.turns[0].prompt).toBe("from before the archive existed");
-      },
-      { timeout: 10_000, interval: 100 },
-    );
+    await backfillSpy.mock.results[0].value;
+    if (count > 200) {
+      expect((await readdir(recordsRoot)).filter((file) => file.endsWith(".json"))).toHaveLength(200);
+      expect(await readArchived("sess-legacy")).toBeNull();
+      expect(sweepSpy).not.toHaveBeenCalled();
+      expect(await readFile(eventStorePath, "utf8")).toContain("sess-legacy");
+      // Finish the remaining work on the next scheduled pass, not at boot.
+      const tick = intervals.mock.calls.find(([, ms]) => ms === 6 * 60 * 60 * 1_000)?.[0];
+      expect(tick).toBeTypeOf("function");
+      for (let pass = 1; pass * 200 < count; pass += 1) {
+        // Session-exit archive sweeps can evict completed files between passes.
+        // Force that eviction to prove a large backfill still makes progress.
+        if (count > 400) {
+          await recordArchive.createRecordArchive({ root: recordsRoot, maxTotalBytes: 0 }).sweep();
+        }
+        expect(sweepSpy).not.toHaveBeenCalled();
+        expect(await readFile(eventStorePath, "utf8")).toContain("sess-legacy");
+        await (tick as () => Promise<void>)();
+      }
+      expect(sweepSpy).toHaveBeenCalledOnce();
+    }
+
+    await vi.waitFor(async () => {
+      expect(await readFile(eventStorePath, "utf8")).not.toContain("sess-legacy");
+    }, { timeout: 10_000, interval: 100 });
+    // The oldest conversation must survive even when it needs a later pass.
+    const archived = await fetchRecord("agent-legacy");
+    expect(archived.status).toBe(200);
+    expect(archived.body?.turns[0].prompt).toBe("from before the archive existed");
+    expect(archived.body?.turns[0].assistantText).toBe("done");
   }, 20_000);
+
+  it.each(["write", "read"])("keeps source events when archive %s fails", async (failure) => {
+    const prompt = "keep this conversation until it is archived";
+    const event: AnalyticsEvent = {
+      eventId: "evt-unarchived", seq: 1,
+      ts: new Date(Date.now() - retention.DEFAULT_MAX_AGE_MS - 60_000).toISOString(),
+      userId: null, tenantId: null, machineId: "machine-1",
+      harnessSessionId: "sess-unarchived", agentSessionId: "agent-unarchived",
+      harness: "claude-code", type: "prompt.submitted", payload: { prompt },
+    };
+    await writeFile(eventStorePath, `${JSON.stringify(event)}\n`, "utf8");
+    const backfill = recordArchive.backfillSessionRecords;
+    const backfillSpy = vi.spyOn(recordArchive, "backfillSessionRecords");
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    if (failure === "write") await writeFile(recordsRoot, "blocks archive directory creation");
+    else backfillSpy.mockRejectedValue(new Error("archive source unavailable"));
+    const sweepSpy = vi.spyOn(retention, "sweepNdjson");
+    server = await boot();
+    const tick = intervals.mock.calls.find(([, ms]) => ms === 6 * 60 * 60 * 1_000)?.[0];
+    expect(tick).toBeTypeOf("function");
+    const runMaintenance = tick as () => Promise<void>;
+    // Another scheduled attempt must also preserve the source while it fails.
+    await runMaintenance();
+    expect(sweepSpy).not.toHaveBeenCalled();
+    expect(await readFile(eventStorePath, "utf8")).toContain(prompt);
+    if (failure === "write") await rm(recordsRoot);
+    else backfillSpy.mockImplementation(backfill);
+    await runMaintenance();
+    expect(await readFile(eventStorePath, "utf8")).not.toContain(prompt);
+    expect((await fetchRecord("agent-unarchived")).body?.turns[0].prompt).toBe(prompt);
+  });
 });

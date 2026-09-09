@@ -421,7 +421,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       timeout: 1_000,
     });
 
-    const nodes = page.locator("[data-proposal-state='proposed']");
+    const nodes = page.locator(".agent-map-node");
     await expect(nodes).toHaveCount(6);
     for (const kind of [
       "agent",
@@ -451,7 +451,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     ).toHaveCount(0);
 
     const researchReport = page.getByRole("button", {
-      name: "ResearchReport, artifact, Proposed",
+      name: "ResearchReport, artifact",
     });
     await researchReport.click();
     const inspector = page.getByTestId("agent-map-inspector");
@@ -557,7 +557,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       .toBe(adjustedView);
 
     await page
-      .getByRole("button", { name: "ResearchReport, artifact, Proposed" })
+      .getByRole("button", { name: "ResearchReport, artifact" })
       .click();
     await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
     await page.keyboard.press("Escape");

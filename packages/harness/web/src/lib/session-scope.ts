@@ -304,7 +304,27 @@ export function sessionReachesFocus(
   targetProjectId: string | null = null,
   targetProjectRoot: string | null = null,
 ): boolean {
-  if (!active || active.status === "exited" || focusPath == null) return false;
+  return (
+    active?.status !== "exited" &&
+    sessionSharesFocusProject(
+      active,
+      focusPath,
+      roots,
+      targetProjectId,
+      targetProjectRoot,
+    )
+  );
+}
+
+/** Shared project containment for live work and archived conversation views. */
+export function sessionSharesFocusProject(
+  active: ScopedSession | null,
+  focusPath: string | null,
+  roots: readonly string[],
+  targetProjectId: string | null = null,
+  targetProjectRoot: string | null = null,
+): boolean {
+  if (!active || focusPath == null) return false;
   if (targetProjectId) {
     const activeProjectId = active.agentMapIdentity?.projectId;
     if (activeProjectId) return activeProjectId === targetProjectId;
@@ -505,6 +525,7 @@ export function canvasSourceFor({
     subjectPath == null
       ? bindingPath == null
       : bindingPath != null && samePath(bindingPath, subjectPath);
+  // Ended sessions can still serve their saved Canvas; liveness does not choose the source.
   if (sessionId != null && agrees) return { kind: "session", sessionId };
   if (subjectPath == null) return { kind: "none" };
   return { kind: "agent", path: subjectPath };

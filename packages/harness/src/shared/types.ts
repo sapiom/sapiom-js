@@ -1708,6 +1708,11 @@ export interface WorkflowInfo {
    */
   activeBuildRunId?: string | null;
   activeBuildRunStatus?: string | null;
+  /** Serve-time display evidence; retained values never authorize a cloud run. */
+  deploymentLookup?: {
+    lastConfirmedDeployed: boolean | null;
+    unavailable: boolean;
+  };
   /**
    * Provenance from sapiom.json: the gallery template this project was cloned
    * from. Distinct from `source` below, which records how the REGISTRY learned

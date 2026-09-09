@@ -5,6 +5,9 @@ import {
   isWorkflowRunnable,
   prodRunDisabledReason,
   workflowDeploymentState,
+  workflowDeploymentIndicator,
+  unavailableWorkflowDeployment,
+  workflowDeploymentTitle,
 } from "./workflow-deployment";
 
 function workflow(overrides: Partial<WorkflowInfo> = {}): WorkflowInfo {
@@ -65,4 +68,50 @@ describe("workflowDeploymentState", () => {
     expect(isWorkflowRunnable(ready)).toBe(true);
     expect(prodRunDisabledReason(ready, "old error")).toBeNull();
   });
+});
+
+it.each([null, "ready", "building", "failed"])(
+  "uses conservative legacy display evidence for %s",
+  (activeBuildRunStatus) => {
+    const value = workflow({ definitionId: 42, activeBuildRunStatus });
+    expect(workflowDeploymentIndicator(value)).toEqual({
+      indicator:
+        activeBuildRunStatus === null
+          ? null
+          : activeBuildRunStatus === "ready"
+            ? "deployed"
+            : "draft",
+      unavailable: activeBuildRunStatus === null,
+    });
+  },
+);
+it("retains display evidence through list failures but forgets it on auth change", () => {
+  const ready = workflow({
+    definitionId: 42,
+    activeBuildRunId: "build-1",
+    activeBuildRunStatus: "ready",
+  });
+  const retained = unavailableWorkflowDeployment(ready);
+  expect(workflowDeploymentIndicator(retained)).toEqual({
+    indicator: "deployed",
+    unavailable: true,
+  });
+  expect(workflowDeploymentTitle(retained)).toBe(workflowDeploymentTitle(ready));
+  expect(retained.activeBuildRunId).toBeNull();
+  expect(isWorkflowRunnable(retained)).toBe(false);
+  expect(prodRunDisabledReason(retained)).not.toBeNull();
+  expect(
+    unavailableWorkflowDeployment(
+      { ...retained, definitionSlug: "private" },
+      true,
+    ).definitionSlug,
+  ).toBeNull();
+  expect(
+    workflowDeploymentIndicator(unavailableWorkflowDeployment(retained, true)),
+  ).toEqual({ indicator: null, unavailable: true });
+  expect(
+    workflowDeploymentIndicator(
+      unavailableWorkflowDeployment(workflow(), true),
+    ),
+  ).toEqual({ indicator: "draft", unavailable: false });
 });
