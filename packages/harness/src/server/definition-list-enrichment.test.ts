@@ -2,9 +2,9 @@
  * Wiring regression for SAP-3214: one tenant-scoped list request per pass,
  * never a by-id request for a definition the account can't see. Fake Agents
  * API counting list and detail requests. `@sapiom/mcp/auth` is a PARTIAL
- * mock: the credential store, the browser flow and `credentialsFilePath` are
- * replaced so the disconnect route and the credential observer never touch
- * ~/.sapiom; every other export runs for real.
+ * mock: the credential store and the browser flow are replaced, every other
+ * export runs for real, and the home directory is redirected to a temp dir
+ * so nothing real can reach ~/.sapiom.
  */
 import {
   createServer as createHttpServer,
@@ -16,15 +16,19 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const authFixture = vi.hoisted(() => ({
-  // A store that does not exist: the credential observer sees ENOENT and
-  // stays quiet, and nothing under ~/.sapiom is ever watched or written.
-  credentialsPath: "/tmp/sap3214-enrichment-missing/credentials.json",
+// The real module resolves every path through `os.homedir()` internally, so
+// a mocked `credentialsFilePath` export alone would not contain a new real
+// export. Redirect the home directory instead: the credential store then
+// lives under a temp dir that does not exist, the observer sees ENOENT and
+// stays quiet, and nothing under the real ~/.sapiom is watched or written.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  homedir: () => "/tmp/sap3214-enrichment-home",
 }));
 
 // Every other export stays real so a new import in the server cannot turn
-// this fake into a missing-export failure. A new real export would resolve
-// paths through the mocked `credentialsFilePath`, so it stays contained.
+// this fake into a missing-export failure; with the home redirected above,
+// whatever runs for real stays inside the temp home.
 vi.mock("@sapiom/mcp/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@sapiom/mcp/auth")>()),
   resolveEnvironment: vi.fn(async (environment?: string) => ({
@@ -41,7 +45,6 @@ vi.mock("@sapiom/mcp/auth", async (importOriginal) => ({
   }),
   writeCredentials: vi.fn(async () => {}),
   clearCredentials: vi.fn(async () => {}),
-  credentialsFilePath: vi.fn(() => authFixture.credentialsPath),
 }));
 
 import type {
