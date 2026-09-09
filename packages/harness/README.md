@@ -48,6 +48,13 @@ offline startup, unsupported backends, and unavailable flags leave it off.
 These access checks are independent of optional telemetry and never prevent
 ordinary Terminal startup. Only the resolved boolean is exposed to the browser.
 
+The Assistant's model and remote MCP requests use a Studio-owned local bridge.
+Its short-lived runtime credential is separate from browser authentication;
+Studio adds the Sapiom key only when forwarding to the configured services.
+Production uses the Sapiom LLM gateway. Other environments must explicitly set
+`services.llm` to their gateway origin in the matching credentials-file environment
+entry; Studio never falls back from a custom environment to production.
+
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
 accounts clears this evidence. Retained indicators do not enable cloud runs.
