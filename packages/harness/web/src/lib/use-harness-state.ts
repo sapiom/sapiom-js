@@ -155,6 +155,8 @@ export interface HarnessStateHook {
    *  refreshed the held key, this re-hydrates the shell in place — no reload,
    *  no lockout. Safe to call repeatedly; a success clears the error. */
   reload: () => void;
+  /** Refresh project identities without hydrating or selecting a session. */
+  refreshWorkspaceScopes: () => Promise<void>;
   settings: HarnessSettings | null;
   bootToken: string;
   selectedWorkflowPath: string | null;
@@ -422,11 +424,18 @@ export function useHarnessState(): HarnessStateHook {
   const [systemGraphAnnouncements, setSystemGraphAnnouncements] = useState<
     Map<WorkspaceKey, SystemGraphAnnouncement>
   >(new Map());
+  // Compatibility lasts only for a confirmed older-server protocol. Unknown
+  // boot state and current-server catalog errors must never enable old graphs.
+  const legacyGraphProtocol = useRef(false);
+  legacyGraphProtocol.current =
+    state !== null && state.studioProjects === undefined;
 
   useEffect(() => {
     if (!state) return;
     const workspaceKeys = new Set(
-      (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey),
+      state.studioProjects === undefined
+        ? (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey)
+        : [],
     );
     const projectIds = new Set(
       (state.studioProjects ?? []).map((project) => project.projectId),
@@ -1233,6 +1242,11 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     return subscribeEvents(
       (message) => {
+        if (
+          message.type === "system-graph.changed" &&
+          !legacyGraphProtocol.current
+        )
+          return;
         // SessionRecord invalidations have a targeted listener below. Keeping
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.
@@ -1454,8 +1468,11 @@ export function useHarnessState(): HarnessStateHook {
    * Replacing the full AppState here could overwrite newer session/workflow bus
    * updates with a slower HTTP snapshot; the scope catalog is the only field
    * the mutation made stale. */
+  const workspaceScopesRefreshOrder = useRef(0);
   const refreshWorkspaceScopes = useCallback(async (): Promise<void> => {
+    const request = ++workspaceScopesRefreshOrder.current;
     const refreshed = await api.getState();
+    if (request !== workspaceScopesRefreshOrder.current) return;
     setState((prev) =>
       prev
         ? {
@@ -2430,6 +2447,7 @@ export function useHarnessState(): HarnessStateHook {
     subscribeAgentMapInitializationChanges,
     subscribeEventReconnects,
     systemGraphAnnouncements,
+    refreshWorkspaceScopes,
     runsBySession,
     runsByExecution,
     runIdsBySession,
