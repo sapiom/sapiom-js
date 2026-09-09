@@ -525,7 +525,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     await create();
     expectWiring();
     expect((await post("/api/auth/start")).status).toBe(200);
-    await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalledOnce());
+    await waitForAuthenticated();
     // Project bootstrap belongs to the principal that discovered it. Use a
     // fresh workspace after identity changes, as a new Studio user would.
     const signedInRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-in-"));
