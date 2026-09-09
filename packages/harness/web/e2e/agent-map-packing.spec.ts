@@ -70,7 +70,10 @@ async function openPacking(page: Page) {
     .getByTestId("workspace-group-acme-app")
     .getByTestId("project-select-acme-app")
     .click();
-  await expect(page.getByTestId("agent-map-live")).toBeVisible();
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-state",
+    "ready",
+  );
   const removals = await page.evaluate(() => {
     const remove = (
       selector: string,
@@ -169,31 +172,24 @@ test("packs every disconnected node in normal and expanded panes", async ({
   page,
 }, info) => {
   await openPacking(page);
-  const normalClassic = await metrics(page);
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
   await arranged(page, "0.5");
   const normalVertical = await metrics(page);
   await page.getByTestId("canvas-expand").click();
   await arranged(page, "1.5");
   const expandedVertical = await metrics(page);
-  await page.getByRole("button", { name: "Classic", exact: true }).click();
-  const expandedClassic = await metrics(page);
-  expect(normalVertical.fit).toBeGreaterThan(Math.max(0.28, normalClassic.fit));
-  expect(expandedVertical.fit).toBeGreaterThanOrEqual(expandedClassic.fit);
+  expect(normalVertical.fit).toBeGreaterThan(0.4);
+  expect(expandedVertical.fit).toBeGreaterThan(0.8);
   for (const result of [normalVertical, expandedVertical]) {
     expect(result.clippedLabels).toBe(0);
     expect(result.overlappingLabels).toBe(0);
   }
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
   await arranged(page, "1.5");
   await expect
     .poll(() => page.evaluate(() => window.layoutJobs.at(-1)?.ms ?? 0))
     .toBeGreaterThan(0);
   const jobs = await page.evaluate(() => window.layoutJobs);
   const measurements = {
-    normalClassic,
     normalVertical,
-    expandedClassic,
     expandedVertical,
     workerMs: jobs.map((job) => job.ms),
   };
@@ -212,7 +208,6 @@ test("keeps manual view and selection through unrelated updates and topology cha
   page,
 }) => {
   const fixture = await openPacking(page);
-  await page.getByRole("button", { name: "Vertical", exact: true }).click();
   await arranged(page, "0.5");
   const selected = fixture.nodes[33]!;
   await page.getByTestId(`agent-map-node-${selected.id}`).click();
@@ -314,37 +309,32 @@ test("keeps manual view and selection through unrelated updates and topology cha
   await arranged(page, "0.5");
 });
 
-for (const mode of ["Classic", "Vertical"]) {
-  test(`${mode} keeps auto-fit after selecting a visible node`, async ({
+test("keeps auto-fit after selecting a visible node", async ({ page }) => {
+  const fixture = await openPacking(page);
+  await arranged(page, "0.5");
+  await page.getByTestId(`agent-map-info-${fixture.nodes[0]!.id}`).click();
+  const larger = agentMapPackingFixture(undefined, 2);
+  await delta(
     page,
-  }) => {
-    const fixture = await openPacking(page);
-    await page.getByRole("button", { name: mode, exact: true }).click();
-    if (mode === "Vertical") await arranged(page, "0.5");
-    await page.getByTestId(`agent-map-info-${fixture.nodes[0]!.id}`).click();
-    const larger = agentMapPackingFixture(undefined, 2);
-    await delta(
-      page,
-      [
-        ...larger.nodes.slice(34).map((node) => ({ kind: "add-node", node })),
-        ...larger.relationships
-          .slice(13)
-          .map((relationship) => ({ kind: "add-relationship", relationship })),
-      ],
-      2,
-    );
-    if (mode === "Vertical") await arranged(page, "0.25");
-    await expect(page.locator(".agent-map-node")).toHaveCount(68);
-    const automatic = await metrics(page);
-    await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
-    expect((await metrics(page)).fit).toBe(automatic.fit);
-  });
-}
+    [
+      ...larger.nodes.slice(34).map((node) => ({ kind: "add-node", node })),
+      ...larger.relationships
+        .slice(13)
+        .map((relationship) => ({ kind: "add-relationship", relationship })),
+    ],
+    2,
+  );
+  await arranged(page, "0.25");
+  await expect(page.locator(".agent-map-node")).toHaveCount(68);
+  const automatic = await metrics(page);
+  await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
+  expect((await metrics(page)).fit).toBe(automatic.fit);
+});
 
-test("attaches aspect observation after a malformed map recovers", async ({
+test("keeps aspect observation when a malformed map recovers", async ({
   page,
 }) => {
-  await page.goto("/e2e/agent-map-recovery.html?mapLayout=elk");
+  await page.goto("/e2e/agent-map-recovery.html");
   for (const width of [600, 900]) {
     await expect(page.getByTestId("agent-map-layout-error")).toBeVisible();
     await page.getByRole("button", { name: "Repair map" }).click();

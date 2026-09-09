@@ -246,6 +246,21 @@ credentials, and raw model output are never included.
 While generation is active, the selected project also polls its durable status
 so completion by another Studio process is visible without reloading the page.
 
+### Agent Map layout
+
+Agent Maps use the **Vertical ELK** layout in both the CLI host and desktop.
+ELK 0.12.0 runs in a bundled local worker and arranges the saved nodes and
+relationships; it does not change the map, its history, or the inference pass.
+Disconnected components pack to the available pane; Fit restores automatic
+framing after a manual pan or zoom. Per-agent Canvas views keep their own layout.
+
+Vertical replaces the previous project map layout for everyone. Existing maps
+open directly, including maps with an older layout preference. Only agents
+without a map use the normal initialization path.
+
+If arrangement fails, **Retry layout** tries again without modifying the saved
+map. Opening a map loads the bundled worker (about 1.6 MB raw / 467 kB gzip).
+
 ### Agent Map implementation links
 
 Agent Map nodes resolve to exact same-project Studio implementations. Existing

@@ -7,7 +7,6 @@ import {
 } from "react";
 import type { MapChangeProposal } from "@shared/agent-map";
 import {
-  layoutDirectedGraph,
   NODE_HEIGHT,
   NODE_WIDTH,
   type DirectedGraphLayout,
@@ -15,18 +14,6 @@ import {
 } from "./directed-graph-layout";
 import type { ElkLayoutEdge } from "./elk-graph-layout";
 import { ElkLayoutWorker } from "./elk-layout-worker";
-
-type MapLayout = "classic" | "elk";
-const PREFERENCE = "sapiom-agent-map-layout";
-function initialLayout(): MapLayout {
-  const query = new URLSearchParams(window.location.search).get("mapLayout");
-  if (query === "classic" || query === "elk") return query;
-  try {
-    return localStorage.getItem(PREFERENCE) === "elk" ? "elk" : "classic";
-  } catch {
-    return "classic";
-  }
-}
 
 async function measureLabels(
   edges: readonly DirectedGraphEdge[],
@@ -96,10 +83,9 @@ export function quantizedMapAspect(
 export function useAgentMapLayout(
   proposal: MapChangeProposal,
   viewport: RefObject<HTMLDivElement | null>,
-  visible: boolean,
 ) {
-  const [mode, setMode] = useState<MapLayout>(initialLayout);
   const [worker] = useState(() => new ElkLayoutWorker());
+  const [attempt, setAttempt] = useState(0);
   const [aspect, setAspect] = useState<number | null>(null);
   const geometry = agentMapGeometry(proposal);
   const input = useMemo(
@@ -111,13 +97,6 @@ export function useAgentMapLayout(
       },
     [geometry],
   );
-  const classic = useMemo(() => {
-    try {
-      return layoutDirectedGraph(input.nodes, input.edges);
-    } catch {
-      return null;
-    }
-  }, [input]);
   useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
@@ -126,7 +105,7 @@ export function useAgentMapLayout(
         element.clientWidth,
         element.clientHeight,
       );
-      if (next !== null) setAspect(next);
+      setAspect(next);
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
@@ -140,16 +119,16 @@ export function useAgentMapLayout(
       clearTimeout(timer);
       observer.disconnect();
     };
-  }, [viewport, classic]);
+  }, [viewport]);
   const [result, setResult] = useState<{
     input: typeof input;
     aspect: number;
+    attempt: number;
     layout: DirectedGraphLayout | null;
   } | null>(null);
   useEffect(() => () => worker.dispose(), [worker]);
   useEffect(() => {
-    if (mode !== "elk" || !viewport.current || !visible || aspect === null)
-      return;
+    if (!viewport.current || aspect === null) return;
     const element = viewport.current;
     // An explicit layout request may precede the pending resize debounce.
     const measuredAspect = quantizedMapAspect(
@@ -170,45 +149,29 @@ export function useAgentMapLayout(
           { ...input, edges, options: { "elk.aspectRatio": String(aspect) } },
           controller.signal,
         );
-        if (!controller.signal.aborted) setResult({ input, aspect, layout });
+        if (!controller.signal.aborted)
+          setResult({ input, aspect, attempt, layout });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         const reason = error instanceof Error ? error.message : "";
         console.warn(
-          "Agent Map layout fallback:",
+          "Agent Map layout failed:",
           /^(Invalid ELK layout|Layout (worker failed|timed out))$/.test(reason)
             ? reason
             : `${measuring ? "Label measurement" : worker.stage} failed`,
         );
-        setResult({ input, aspect, layout: null });
+        setResult({ input, aspect, attempt, layout: null });
       });
     return () => controller.abort();
-  }, [input, aspect, mode, viewport, visible, worker]);
-  const vertical = mode === "elk" && result?.input === input ? result : null;
+  }, [input, aspect, attempt, viewport, worker]);
+  const vertical =
+    result?.input === input && result.attempt === attempt ? result : null;
   const current = vertical?.aspect === aspect;
   return {
-    layout: vertical?.layout ?? classic,
-    mode,
+    layout: vertical?.layout ?? null,
     state:
-      mode === "classic" || (current && vertical?.layout)
-        ? "ready"
-        : current
-          ? "fallback"
-          : "loading",
-    engine: vertical?.layout ? "elk" : "classic",
-    setMode: (next: MapLayout) => {
-      setMode(next);
-      try {
-        localStorage.setItem(PREFERENCE, next);
-      } catch {
-        /* browser storage may be disabled */
-      }
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("mapLayout")) {
-        url.searchParams.set("mapLayout", next);
-        window.history.replaceState(window.history.state, "", url);
-      }
-    },
+      current && vertical?.layout ? "ready" : current ? "error" : "loading",
+    retry: () => setAttempt((value) => value + 1),
   };
 }
