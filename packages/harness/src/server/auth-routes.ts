@@ -34,6 +34,10 @@ import {
 } from "@sapiom/mcp/auth";
 
 import type { EventBus } from "../core/event-bus.js";
+import {
+  withStudioCredentialLock,
+  revokeStudioCredentials,
+} from "../core/studio-credentials.js";
 
 // ---------------------------------------------------------------------------
 // Mutable auth state
@@ -211,7 +215,9 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
         );
         if (!isCurrentAttempt()) return;
 
-        const result = await performBrowserAuthImpl(env.appURL, env.apiURL);
+        const result = await performBrowserAuthImpl(env.appURL, env.apiURL, {
+          studioIdentity: true,
+        });
         if (!isCurrentAttempt()) {
           // This coordinator only prevents local adoption. Cancelling a
           // superseded browser flow or its result needs separate OAuth support.
@@ -222,12 +228,17 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
           if (!isCurrentAttempt()) return;
           // Write credentials.json — same as cli/auth.ts's ensureAuthenticated,
           // reusing the same file and format so the CLI and Studio share one store.
-          await writeCredentials(env.name, env.appURL, env.apiURL, {
-            apiKey: result.apiKey,
-            tenantId: result.tenantId,
-            organizationName: result.organizationName,
-            apiKeyId: result.apiKeyId,
-          });
+          await withStudioCredentialLock(() =>
+            writeCredentials(env.name, env.appURL, env.apiURL, {
+              apiKey: result.apiKey,
+              tenantId: result.tenantId,
+              organizationName: result.organizationName,
+              apiKeyId: result.apiKeyId,
+              ...(result.studioCredentials && {
+                studioCredentials: result.studioCredentials,
+              }),
+            }),
+          );
           // Disconnect may have invalidated this attempt while the write was in
           // flight. Its queued clear follows us, so do not adopt or publish.
           if (!isCurrentAttempt()) return;
@@ -293,7 +304,8 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
           environment ?? process.env.SAPIOM_ENVIRONMENT,
         );
 
-        await clearCredentials(env.name);
+        await withStudioCredentialLock(() => clearCredentials(env.name));
+        void revokeStudioCredentials(env);
         apiKeyProvider.clear();
         authState.set({ authenticated: false, organizationName: null });
         notifyProjectUserChanged?.(null);

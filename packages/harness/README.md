@@ -36,6 +36,12 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+Studio browser sign-in also stores a renewable user credential for internal
+Assistant eligibility checks. Existing organization-only logins keep working for
+Terminal; sign out and sign in again to obtain the user credential. It stays in
+the shared local credential store and is never returned by Studio's browser auth
+API. Sign-out clears it locally and attempts to revoke its token family remotely.
+
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
 accounts clears this evidence. Retained indicators do not enable cloud runs.
