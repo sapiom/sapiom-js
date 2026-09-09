@@ -36,6 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check release readiness
+        run: node scripts/assert-release-ready.mjs
+
       - uses: pnpm/action-setup@v4
         # pnpm version comes from package.json `packageManager` (pnpm 10+ for OIDC).
         # Keep all workflows in sync with it.
