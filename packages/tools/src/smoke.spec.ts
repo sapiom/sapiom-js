@@ -26,6 +26,19 @@ import {
   BrowserAutomationHttpError,
   KeysHttpError,
   CodingRunHttpError,
+  LLM_ROUTE_RESULT_SIGNAL,
+  LLM_SESSION_READY_SIGNAL,
+  llmRouteResultSchema,
+  LlmRouteResultSchemaError,
+  llmSessionReadySchema,
+  LlmSessionReadySchemaError,
+  readDisclosure,
+} from "./index.js";
+import type {
+  LlmRouteResultPayload,
+  LlmSessionReadyPayload,
+  RoutingLabel,
+  ModelLabel,
 } from "./index.js";
 
 describe("@sapiom/tools public surface", () => {
@@ -108,6 +121,36 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof models.CodingRunHttpError).toBe("function");
     expect(typeof Sandbox).toBe("function"); // class constructor
     expect(typeof Repository).toBe("function");
+  });
+
+  it("barrel exports both llm deferred lanes' resume contracts symmetrically", () => {
+    // SAP-3184: the async lane (route result) and the session lane (session
+    // ready) each export signal + payload type + schema + error from the root,
+    // so a resumed step needs no subpath import for either.
+    expect(LLM_ROUTE_RESULT_SIGNAL).toBe("llm.route.result");
+    expect(LLM_SESSION_READY_SIGNAL).toBe("llm.session.ready");
+    expect(typeof llmRouteResultSchema.parse).toBe("function");
+    expect(typeof LlmRouteResultSchemaError).toBe("function");
+    expect(typeof llmSessionReadySchema.parse).toBe("function");
+    expect(typeof LlmSessionReadySchemaError).toBe("function");
+    expect(typeof readDisclosure).toBe("function");
+
+    const granted: LlmRouteResultPayload = {
+      executionId: "e",
+      status: "failed",
+      link: null,
+      error: "deadline_exhausted",
+    };
+    const failed: LlmSessionReadyPayload = {
+      sessionId: "s",
+      state: "failed",
+      error: "session_unsupported",
+    };
+    const label: RoutingLabel = "smart";
+    const modelLabel: ModelLabel = "smart";
+    expect(llmRouteResultSchema.parse(granted)).toBe(granted);
+    expect(llmSessionReadySchema.parse(failed)).toBe(failed);
+    expect(label).toBe(modelLabel);
   });
 
   it("the search namespace has no self-named nested key", () => {
