@@ -34,6 +34,10 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+The rail's cloud icon marks an agent as deployed once Studio confirms a ready
+hosted build. Failed checks silently retain the last confirmed indicator, and changing
+accounts clears this evidence. Retained indicators do not enable cloud runs.
+
 Codex receives the generated remote Sapiom, local `sapiom-dev`, and optional
 Agent Map MCP configuration on every session launch and resume. Studio uses session-specific
 server names such as `sapiom-dev-<session suffix>` and identifies them in the
