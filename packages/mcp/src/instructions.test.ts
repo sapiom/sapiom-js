@@ -104,14 +104,13 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
-  // SKIPPED, deliberately, for the same reason as the SAP-3180 block below: #816 moved this
-  // fallback to a body whose server-side release (sapiom/Sapiom#4886) has not merged. Sapiom
-  // `main` serves 2.10 (digest 47a4e3a3…). Un-skip when #4886 lands and this copy is re-synced.
-  it.skip("teaches App Link management from this server, version-gated (SAP-3178)", () => {
+  it("teaches App Link management from this server, version-gated (SAP-3178)", () => {
     // 2.8 taught publishing and nothing else about a link, so an offline session
     // could not learn that webhooks are off by default, how to turn them on, or
-    // that `/hook/*` is the receiver. The three management tools ship in 0.15;
-    // the gate is the same one `_publish` carries, for the same reason.
+    // that `/hook/*` is the receiver. The three management tools shipped in 0.15;
+    // the gate is the same one `_publish` carries, for the same reason. Served since
+    // the 2.12 release (sapiom/Sapiom#4886), which folded them into 2.11's webhook
+    // paragraph and retired its "no `sapiom_dev_*` tool sets it yet" clause.
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_list");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_settings");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_delete");
@@ -121,6 +120,9 @@ describe("server instructions", () => {
       "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain("settings need `org.write`");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "no `sapiom_dev_*` tool sets it yet",
+    );
   });
 
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
@@ -240,20 +242,21 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.10 (trigger kinds: `event` + `webhook`, webhook signing, `sapiom_dev_agents_schedule_secret`).
+    // Current release: 2.12 (App Link management tools folded into the webhook paragraph,
+    // SAP-3178) on top of 2.11 (Vault, `agents.launch`, receipts/replay, App Link webhooks,
+    // SAP-3180) and 2.10 (trigger kinds, SAP-3174). SAP-3179's alias wording is NOT in this
+    // body: its server-side release (sapiom/Sapiom#4884) is still open, so that block stays
+    // skipped until it lands and re-syncs this copy.
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "47a4e3a355584f40345e4a6dc9d695663aa24fc613e93eaf4559465b02b8b457",
+      "ab310467f24b5b5fad94f030dfe9341544144a3c6842a25a1bfda13a5d008cba",
     );
   });
 
-  // SKIPPED, deliberately: #815 moved this fallback to a 2.9 body whose server-side release
-  // (sapiom/Sapiom#4885) has not merged — Sapiom `main` serves 2.10 (SAP-3174, digest
-  // 47a4e3a3…), which is what this copy tracks. Un-skip when #4885 lands (rebased onto 2.10 it
-  // becomes 2.11 and carries both sections) and this copy is re-synced to that body.
-  it.skip("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+  it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // Served since 2.11 (sapiom/Sapiom#4885); this copy carries it from 2.12 on.
     // Each of these shipped without any served text teaching it, so an agent could only
     // guess at it. Byte-identical to the backend copy, so asserted here too.
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
