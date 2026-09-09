@@ -4,7 +4,7 @@
  * tool-calling pattern for a single routed call.
  */
 import { createClient } from "../index.js";
-import { structuredOf, textOf } from "./index.js";
+import { LlmStructuredOutputTruncatedError, structuredOf, textOf } from "./index.js";
 
 interface Captured {
   url?: string;
@@ -187,5 +187,92 @@ describe("ctx.sapiom.llm.{structuredOf,textOf,readDisclosure} — reachable from
       request: { messages: [{ role: "user", content: "hi" }], max_tokens: 64 },
     });
     expect(sapiom.llm.readDisclosure(res)).toEqual({ servedClass: "medium", lane: "run_now" });
+  });
+});
+
+/**
+ * The silent failure this error exists to end (SAP-3280): a routed label emits a
+ * `thinking` block before the forced tool call, thinking is spent out of `max_tokens`,
+ * and a cap sized for the answer alone ends the turn before the tool call is emitted.
+ * `structuredOf` then correctly returns `undefined` and the author sees a `TypeError`
+ * from destructuring it — indistinguishable from a genuinely empty result.
+ */
+describe("llm.run — a structured call truncated before its tool call", () => {
+  const SCHEMA = {
+    type: "object",
+    properties: { priority: { type: "string" } },
+    required: ["priority"],
+  };
+  const truncated = {
+    id: "msg_1",
+    type: "message",
+    stop_reason: "max_tokens",
+    content: [{ type: "thinking", thinking: "weighing an ambiguous ticket…" }],
+  };
+
+  const runTruncated = (max_tokens?: number) => {
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, truncated) });
+    return sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], ...(max_tokens === undefined ? {} : { max_tokens }) },
+      output: { name: "classify_ticket", schema: SCHEMA },
+    });
+  };
+
+  it("throws instead of returning a response whose tool call never arrived", async () => {
+    await expect(runTruncated(256)).rejects.toBeInstanceOf(LlmStructuredOutputTruncatedError);
+  });
+
+  it("names the cap, the tool, and the fix, and carries the raw response", async () => {
+    // The message is the whole point: the author's next move is to raise the cap.
+    const error = await runTruncated(256).catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+    expect(error.outputName).toBe("classify_ticket");
+    expect(error.maxTokens).toBe(256);
+    expect(error.response).toEqual(truncated);
+    expect(error.message).toContain("max_tokens (256)");
+    expect(error.message).toContain("Thinking tokens count against max_tokens");
+  });
+
+  it("still throws when the request declared no cap of its own", async () => {
+    const error = await runTruncated().catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+    expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+    expect(error.maxTokens).toBeUndefined();
+  });
+
+  it("does not throw when the tool call DID arrive, cap or no cap", async () => {
+    // `stop_reason: "max_tokens"` with the tool call present is a complete structured
+    // result that happened to end at the ceiling — nothing to report.
+    const completion = {
+      stop_reason: "max_tokens",
+      content: [{ type: "tool_use", name: "classify_ticket", input: { priority: "high" } }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+      output: { name: "classify_ticket", schema: SCHEMA },
+    });
+    expect(structuredOf(res, "classify_ticket")).toEqual({ priority: "high" });
+  });
+
+  it("does not throw for an empty structured result that was not truncated", async () => {
+    // The other half of the distinction the error draws: a turn that ended for any
+    // other reason is the caller's to judge, exactly as before.
+    const completion = { stop_reason: "end_turn", content: [{ type: "text", text: "I could not classify it" }] };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+      output: { name: "classify_ticket", schema: SCHEMA },
+    });
+    expect(structuredOf(res, "classify_ticket")).toBeUndefined();
+  });
+
+  it("leaves a truncated PLAIN-TEXT call alone — no `output`, nothing forced", async () => {
+    // A text turn that hit the cap is truncated but still readable, so it stays the
+    // caller's call. Throwing there would break every deliberately-bounded reply.
+    const completion = { stop_reason: "max_tokens", content: [{ type: "text", text: "partial…" }] };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "write" }], max_tokens: 64 },
+    });
+    expect(textOf(res)).toBe("partial…");
   });
 });

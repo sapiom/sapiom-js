@@ -113,6 +113,10 @@ export {
 // raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
 export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
+// Thrown by `llm.run` when a forced structured-output tool call never arrived
+// because the turn hit `max_tokens` first — top-level so a step can catch it by
+// name without reaching into the `llm` namespace.
+export { LlmStructuredOutputTruncatedError } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";

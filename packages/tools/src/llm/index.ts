@@ -11,7 +11,7 @@
  * caller's Sapiom API key (identity mode — no x402 payment handshake needed).
  *
  *   const reply = await ctx.sapiom.llm.run({
- *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 512 },
+ *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 4096 },
  *     model: "large", // a label (smart | small | medium | large); omit → default label
  *   });
  *
@@ -25,7 +25,7 @@
  * plane; payment happens at redemption.
  *
  *   const handle = await ctx.sapiom.llm.submit({
- *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 512 },
+ *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 4096 },
  *     model: "large", // a label; omit → default label
  *     deadlineMinutes: 30,
  *   });
@@ -51,8 +51,17 @@
  *     budget: { maxTokens: 2_000_000, ttlMinutes: 120 },
  *   });
  *   const ready = await s.wait();                       // or pauseUntilSignal(s, …)
- *   const reply = await ctx.sapiom.llm.callSession(s, { max_tokens: 512, messages: […] });
+ *   const reply = await ctx.sapiom.llm.callSession(s, { max_tokens: 4096, messages: […] });
  *   await ctx.sapiom.llm.releaseSession(s);             // or let TTL/budget end it
+ *
+ * `max_tokens` on every one of these covers THINKING as well as output. A routed
+ * label may emit a `thinking` block before its answer, and those tokens are spent
+ * out of the same budget — so a cap sized for the answer alone can be exhausted
+ * mid-deliberation, ending the turn before the answer (or, with `output`, before
+ * the forced tool call) is ever emitted. Size it for thinking plus output: a few
+ * thousand tokens, not a few hundred. It is a ceiling, not a reservation — billing
+ * settles on the tokens actually produced, so headroom on a short reply costs
+ * nothing (SAP-3280).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -100,6 +109,12 @@ export interface LlmRunSpec {
    * The verbatim LLM request (Anthropic messages shape) — forwarded as-is and
    * executed immediately on the routed deployment. Any `model` inside the body
    * is superseded by the routing decision (set the route label via `model` below).
+   *
+   * `request.max_tokens` budgets THINKING plus output, not output alone — see this
+   * module's header. Under-size it and the turn ends mid-thinking; with
+   * {@link LlmRunSpec.output} set, {@link run} throws
+   * {@link LlmStructuredOutputTruncatedError} rather than returning a response no
+   * structured reader can make sense of.
    */
   request: Record<string, unknown>;
   /**
@@ -129,6 +144,11 @@ export interface LlmRunSpec {
    * parsed value with {@link structuredOf}. Omit and build `request.tools` /
    * `tool_choice` yourself for anything this convenience doesn't cover (e.g.
    * more than one candidate tool).
+   *
+   * Because the tool call is forced, the model has to reach it inside
+   * `request.max_tokens` — thinking included. When it doesn't, {@link run} throws
+   * {@link LlmStructuredOutputTruncatedError} instead of handing back a response
+   * whose `tool_use` block never arrived.
    */
   output?: LlmStructuredOutputSpec;
 }
@@ -432,6 +452,61 @@ export function structuredOf<TSchema = unknown>(response: unknown, name?: string
 }
 
 /**
+ * {@link run} asked for structured output, and the model ran out of `max_tokens`
+ * before it emitted the forced tool call — so there is no `tool_use` block to read
+ * and never will be.
+ *
+ * This exists because the two failures are indistinguishable downstream: a truncated
+ * turn and a genuinely empty structured result both leave {@link structuredOf}
+ * returning `undefined`, and what an author actually saw was a `TypeError` from
+ * destructuring it. Thinking tokens are spent out of the same budget, and a routed
+ * label thinks longest on the hardest, most ambiguous inputs — so an under-sized cap
+ * passes every test and every easy case, then fails on exactly the item that was
+ * worth the most (SAP-3280). The fix is always to raise the cap; saying so at the
+ * moment it happens is the difference between a five-minute fix and a lost run.
+ */
+export class LlmStructuredOutputTruncatedError extends Error {
+  /** The tool name the request forced (`output.name`). */
+  readonly outputName: string;
+  /** The cap the request carried, when it declared one. */
+  readonly maxTokens: number | undefined;
+  /** The verbatim response, for programmatic inspection (it still carries usage/disclosure). */
+  readonly response: unknown;
+
+  constructor(outputName: string, maxTokens: number | undefined, response: unknown) {
+    super(
+      `Structured output "${outputName}" was never emitted: the model hit max_tokens` +
+        `${maxTokens === undefined ? "" : ` (${maxTokens})`} before the forced tool call. ` +
+        `Thinking tokens count against max_tokens, so raise the cap to cover thinking plus output ` +
+        `— a few thousand tokens, not a few hundred. The cap is a ceiling, not a reservation: ` +
+        `billing settles on the tokens actually produced.`,
+    );
+    this.name = "LlmStructuredOutputTruncatedError";
+    this.outputName = outputName;
+    this.maxTokens = maxTokens;
+    this.response = response;
+  }
+}
+
+/** `max_tokens` off a caller's verbatim request body, when it declared a numeric one. */
+function declaredMaxTokens(request: Record<string, unknown>): number | undefined {
+  const value = request.max_tokens;
+  return typeof value === "number" ? value : undefined;
+}
+
+/**
+ * The one unambiguous truncation: the caller forced a tool call, the turn stopped on
+ * the cap, and no matching `tool_use` block came back. Anything else — a tool call
+ * that did arrive, a turn that ended for any other reason — is left alone, because
+ * only this combination proves the structured result cannot exist.
+ */
+function isTruncatedBeforeToolCall(response: unknown, outputName: string): boolean {
+  const stopReason = (response as { stop_reason?: unknown } | null | undefined)?.stop_reason;
+  if (stopReason !== "max_tokens") return false;
+  return structuredOf(response, outputName) === undefined;
+}
+
+/**
  * Build the wire request `run` sends when {@link LlmRunSpec.output} is set:
  * appends a tool named `output.name` (schema `output.schema`) to any
  * caller-declared tools, and forces `tool_choice` onto it — the blessed
@@ -461,6 +536,10 @@ function withStructuredOutput(request: Record<string, unknown>, output: LlmStruc
  * it with {@link textOf} rather than indexing `content[0]` (a `thinking`
  * block can precede the text). For structured output, set `spec.output`
  * (forces a tool call) and read the result with {@link structuredOf}.
+ *
+ * @throws {LlmStructuredOutputTruncatedError} when `spec.output` was set and the
+ * turn hit `max_tokens` before emitting the forced tool call — the cap has to cover
+ * thinking as well as output.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,
@@ -475,11 +554,21 @@ export async function run<T = Record<string, unknown>>(
   if (spec.complexity !== undefined)
     headers["x-sapiom-complexity"] = String(spec.complexity);
   const request = spec.output ? withStructuredOutput(spec.request, spec.output) : spec.request;
-  return transport.request<T>(`${baseUrl}/v2/anthropic/v1/messages`, {
+  const response = await transport.request<T>(`${baseUrl}/v2/anthropic/v1/messages`, {
     method: "POST",
     body: JSON.stringify(request),
     headers,
   });
+  // Only when the caller forced a tool call: a plain-text turn that hit the cap is
+  // truncated but still readable, and it is the caller's to judge.
+  if (spec.output && isTruncatedBeforeToolCall(response, spec.output.name)) {
+    throw new LlmStructuredOutputTruncatedError(
+      spec.output.name,
+      declaredMaxTokens(spec.request),
+      response,
+    );
+  }
+  return response;
 }
 
 export async function submit(

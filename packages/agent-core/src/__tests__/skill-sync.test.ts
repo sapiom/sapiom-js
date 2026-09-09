@@ -56,6 +56,22 @@ describe("sapiom-agent-authoring content guards", () => {
     expect(canonical.toLowerCase()).not.toContain("if you must pin");
   });
 
+  it("says thinking counts against the token cap, next to the cap it shows", () => {
+    // SAP-3280: both facts were already on this page — a `thinking` block precedes
+    // the output, and here is a `max_tokens` — and nothing connected them, so every
+    // agent that copied the example inherited a truncation bug that fires only on
+    // the hardest inputs.
+    expect(canonical).toContain("Thinking tokens count against `max_tokens`");
+  });
+
+  it("shows no token cap small enough for thinking to exhaust", () => {
+    const caps = [...canonical.matchAll(/max_tokens:\s*(\d[\d_]*)/g)].map((match) =>
+      Number(match[1].replace(/_/g, "")),
+    );
+    expect(caps.length).toBeGreaterThan(0);
+    expect(caps.filter((cap) => cap < 2048)).toEqual([]);
+  });
+
   it("teaches composition for multi-stage systems, with failure branching", () => {
     expect(canonical).toContain("Composing Deployed Agents");
     // agents.run resolves on any terminal status and does not throw — the

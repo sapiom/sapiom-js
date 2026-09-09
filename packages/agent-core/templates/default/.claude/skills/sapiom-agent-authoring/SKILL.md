@@ -365,7 +365,8 @@ const parsed = JSON.parse(run.output ?? "{}"); // brittle, and pays for a reason
 const response = await ctx.sapiom.llm.run({
   request: {
     messages: [{ role: "user", content: `Classify this support ticket: ${input.text}` }],
-    max_tokens: 256,
+    // Thinking tokens come out of this budget too — size it for thinking + output.
+    max_tokens: 4096,
   },
   // No `model` — omit it and let the platform choose (recommended; passing
   // "smart" would be a no-op — it already is the default — and a raw provider
@@ -393,6 +394,18 @@ const { priority, category } = ctx.sapiom.llm.structuredOf<{
 the result back out. For a **plain-text** reply instead, use
 `ctx.sapiom.llm.textOf(response)` — it reads only the `type === 'text'` block, skipping a
 `thinking` block that may precede it.
+
+**Thinking tokens count against `max_tokens`.** The same `thinking` block you must not parse
+is also spent out of the cap. If deliberation exhausts the budget, the turn ends before the
+forced tool call is ever emitted: the response carries no `tool_use` block, `structuredOf`
+correctly returns `undefined`, and the step throws. Deliberation is longest on the hardest,
+most ambiguous inputs, so a starved cap passes every test and every easy case and then drops
+exactly the item that was worth the most (SAP-3280).
+
+So size the cap for thinking **plus** output — a few thousand tokens, not a few hundred; the
+example above uses `4096`. The cap is a ceiling, not a reservation: billing settles on the
+tokens actually produced, so headroom on a short reply costs nothing, while a call that
+truncates mid-thinking costs its thinking and returns nothing you can use.
 
 ### The label rule
 
