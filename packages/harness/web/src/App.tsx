@@ -3385,6 +3385,7 @@ export const App = (): JSX.Element => {
                       sessionId={conversationSession.id}
                       bootToken={harness.bootToken}
                       authRevision={harness.authRevision}
+                      terminalRevision={harness.terminalRevealBySession.get(conversationSession.id) ?? 0}
                     >
                       <Terminal
                         sessionId={conversationSession.id}

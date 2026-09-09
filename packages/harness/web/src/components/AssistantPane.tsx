@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { OpenCodeChat } from "./OpenCodeChat";
 
 /** The server owns eligibility; this is only its short-lived UI projection. */
@@ -6,22 +6,36 @@ export function AssistantPane({
   sessionId,
   bootToken,
   authRevision,
+  terminalRevision,
   children,
 }: {
   sessionId: string;
   bootToken: string;
   authRevision: number;
+  terminalRevision: number;
   children: ReactNode;
 }) {
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<"Terminal" | "Assistant">("Terminal");
+  const revealed = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (terminalRevision > (revealed.current.get(sessionId) ?? 0)) {
+      revealed.current.set(sessionId, terminalRevision);
+      setMode("Terminal");
+    }
+  }, [sessionId, terminalRevision]);
   useEffect(() => {
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
+    let expiry: ReturnType<typeof setTimeout>;
+    const disable = () => {
+      clearTimeout(expiry);
+      setEnabled(false);
+      setMode("Terminal");
+    };
     setEnabled(false);
     setMode("Terminal");
     const refresh = async () => {
-      let allowed = false;
       try {
         const response = await fetch("/api/assistant/access", {
           headers: { "X-Harness-Token": bootToken },
@@ -29,13 +43,22 @@ export function AssistantPane({
           cache: "no-store",
           signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5000)]),
         });
-        allowed = response.ok && (await response.json()).enabled === true;
+        if (abort.signal.aborted) return;
+        if (response.status === 401 || response.status === 403) disable();
+        if (!response.ok) throw new Error("Access check unavailable");
+        const { enabled: allowed } = await response.json();
+        if (abort.signal.aborted) return;
+        if (typeof allowed !== "boolean")
+          throw new Error("Invalid access check");
+        clearTimeout(expiry);
+        setEnabled(allowed);
+        if (allowed) expiry = setTimeout(disable, 60000);
+        else setMode("Terminal");
       } catch {
-        /* Missing identity or host access stays off. */
+        // A transient poll failure must not discard an open draft. This UI
+        // projection expires within 60s; the host enforces its own grant.
       }
       if (abort.signal.aborted) return;
-      setEnabled(allowed);
-      if (!allowed) setMode("Terminal");
       timer = setTimeout(() => {
         void refresh();
       }, 15000);
@@ -44,6 +67,7 @@ export function AssistantPane({
     return () => {
       abort.abort();
       clearTimeout(timer);
+      clearTimeout(expiry);
     };
   }, [bootToken, authRevision]);
 

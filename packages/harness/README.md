@@ -71,6 +71,11 @@ selected project. Returning to a session reopens its OpenCode conversation;
 switching views detaches the display while execution continues. Connection errors
 offer **Reconnect**, which reloads history without resending accepted prompts.
 This first slice includes basic tool status; richer controls arrive separately.
+Studio actions that send a foreground prompt to the CLI reveal Terminal so its
+response stays visible. Background actions keep the selected view. A failed UI
+access poll retains the open draft for at most 60 seconds after the last success;
+explicit revocation/sign-out takes effect immediately when observed. The host
+continues enforcing its own capability expiry independently.
 
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
