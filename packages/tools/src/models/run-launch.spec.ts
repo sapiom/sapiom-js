@@ -7,7 +7,11 @@ import { createClient } from "../index.js";
 import { MODEL_RUN_RESULT_SIGNAL, modelRunResultSchema } from "./index.js";
 
 function fakeFetch(opts: {
-  capture?: { headers?: Record<string, string>; url?: string };
+  capture?: {
+    headers?: Record<string, string>;
+    url?: string;
+    body?: Record<string, unknown>;
+  };
   terminal?: boolean;
   wireResult?: Record<string, unknown>;
 }): typeof globalThis.fetch {
@@ -15,6 +19,11 @@ function fakeFetch(opts: {
     if (opts.capture) {
       opts.capture.headers = init.headers as Record<string, string>;
       opts.capture.url = url;
+      if (init.body)
+        opts.capture.body = JSON.parse(init.body as string) as Record<
+          string,
+          unknown
+        >;
     }
     const isPost = (init.method ?? "GET") === "POST";
     const attributes = isPost
@@ -62,6 +71,96 @@ describe("agent.launch — dispatch handle", () => {
     const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
     await sapiom.models.launch({ prompt: "say OK" });
     expect(capture.url).toContain("/models/v1/runs");
+  });
+});
+
+describe("agent.launch — deadlineMinutes", () => {
+  it("sends the deadline as snake_case deadline_minutes", async () => {
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK", deadlineMinutes: 30 });
+
+    expect(capture.body).toMatchObject({ deadline_minutes: 30 });
+    expect(capture.body).not.toHaveProperty("deadlineMinutes");
+  });
+
+  it("omits the key entirely when no deadline is given — not null, not 0", async () => {
+    // Same contract as the coding surface: the server has to tell "no
+    // deadline" from "zero minutes", so an unset deadline never hits the wire.
+    const capture: { body?: Record<string, unknown> } = {};
+    const sapiom = createClient({ apiKey: "k", fetch: fakeFetch({ capture }) });
+
+    await sapiom.models.launch({ prompt: "say OK" });
+
+    expect(capture.body).not.toHaveProperty("deadline_minutes");
+  });
+});
+
+describe("agent.run — awaiting_capacity is not terminal here either", () => {
+  /** Parks the run for one poll, jumping the clock past the 10-minute default. */
+  function deferredPastDefault(): typeof globalThis.fetch {
+    const realNow = Date.now();
+    let offsetMs = 0;
+    let polls = 0;
+    jest.spyOn(Date, "now").mockImplementation(() => realNow + offsetMs);
+    return (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const deferred = !isPost && polls++ === 0;
+      if (deferred) offsetMs = 15 * 60_000;
+      const attributes = isPost
+        ? { status: "pending" }
+        : deferred
+          ? { status: "awaiting_capacity", output: null, result: null, error: null }
+          : { status: "completed", output: "OK", result: null, error: null };
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({ data: { id: "run-slow", attributes } }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("keeps polling a deferred run, within a budget widened by the deadline", async () => {
+    // This surface accepts deadlineMinutes, so it has to survive being
+    // deferred: awaiting_capacity is out of MODEL_TERMINAL and a 30-minute
+    // deadline lifts wait()'s default past the 10-minute one.
+    const sapiom = createClient({ apiKey: "k", fetch: deferredPastDefault() });
+
+    const result = await sapiom.models.run({
+      prompt: "say OK",
+      deadlineMinutes: 30,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.output).toBe("OK");
+  }, 10_000); // one real 2s poll sleep — run() takes no pollMs
+
+  it("still times out at the surface default when no deadline was asked for", async () => {
+    const sapiom = createClient({ apiKey: "k", fetch: deferredPastDefault() });
+
+    await expect(sapiom.models.run({ prompt: "say OK" })).rejects.toThrow(
+      /timed out after 600000ms \(last status: awaiting_capacity\)/,
+    );
+  });
+
+  it("modelRunResultSchema accepts the deferred status", () => {
+    // A union too narrow to hold a status the server can send would make the
+    // resumed-step validator reject a real payload.
+    expect(
+      modelRunResultSchema.parse({
+        runId: "run-abc",
+        status: "awaiting_capacity",
+        output: null,
+        result: null,
+        error: null,
+      }).status,
+    ).toBe("awaiting_capacity");
   });
 });
 

@@ -13,6 +13,7 @@ name: Harness
 #              sandbox-preview, tools
 on:
   pull_request:
+    types: [opened, synchronize, reopened, stacked]
     branches: [main]
     paths:
       - "packages/harness/**"
