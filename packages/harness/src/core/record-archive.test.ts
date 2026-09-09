@@ -384,11 +384,13 @@ describe("backfillSessionRecords", () => {
     expect(capped).toEqual([2]);
   });
 
-  it("skips a conversation the fold has nothing for, without failing the pass", async () => {
+  it.each(["missing", "empty"])("skips a %s conversation without failing the pass", async (kind) => {
     const archived = await backfillSessionRecords({
       conversationIds: async () => ["gone", "here"],
       readFromEvents: async (id) =>
-        id === "gone" ? null : record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null }),
+        id === "gone"
+          ? (kind === "missing" ? null : record({ turns: [], turnCount: 0 }))
+          : record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null }),
       archive,
     });
     expect(archived).toEqual(["here"]);

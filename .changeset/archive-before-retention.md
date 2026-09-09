@@ -2,4 +2,4 @@
 "@sapiom/harness": patch
 ---
 
-Archive historical conversations before event retention can remove their source events during startup.
+Archive all historical conversation batches before event retention removes their source events. Keep source events if archiving fails, and retry at the next scheduled cleanup.

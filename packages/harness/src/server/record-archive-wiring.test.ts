@@ -232,7 +232,7 @@ describe("session record archive wiring", () => {
     );
   }, 20_000);
 
-  it("archives conversations that ended before the archive existed", async () => {
+  it.each([1, recordArchive.RECORDS_BACKFILL_MAX + 1])("archives historical conversations before cleanup (count=%i)", async (count) => {
     // An events file from an install that predates this feature: a complete
     // conversation, no archive, and no registry entry for it.
     const expiredAt = Date.now() - retention.DEFAULT_MAX_AGE_MS - 60_000;
@@ -264,7 +264,15 @@ describe("session record archive wiring", () => {
         payload: { assistantText: "done" },
       },
     ];
-    await writeFile(eventStorePath, events.map((e) => `${JSON.stringify(e)}\n`).join(""), "utf8");
+    const history = Array.from({ length: count }, (_, index) => events.map((event) => ({
+      ...event,
+      eventId: `${event.eventId}-${index}`,
+      seq: event.seq + index * events.length,
+      ts: new Date(Date.parse(event.ts) + index).toISOString(),
+      harnessSessionId: index === 0 ? event.harnessSessionId : `${event.harnessSessionId}-${index}`,
+      agentSessionId: index === 0 ? event.agentSessionId : `${event.agentSessionId}-${index}`,
+    }))).flat();
+    await writeFile(eventStorePath, history.map((event) => `${JSON.stringify(event)}\n`).join(""), "utf8");
 
     // Hold the backfill to prove retention cannot delete its source events,
     // even when startup finishes before the archive work does.
@@ -285,20 +293,44 @@ describe("session record archive wiring", () => {
       releaseBackfill();
     }
 
-    await vi.waitFor(
-      async () => {
-        const archived = await readArchived("sess-legacy");
-        expect(archived?.turns[0].prompt).toBe("from before the archive existed");
-        expect(archived?.turns[0].assistantText).toBe("done");
-      },
-      { timeout: 10_000, interval: 100 },
-    );
     await vi.waitFor(async () => {
       expect(await readFile(eventStorePath, "utf8")).not.toContain("sess-legacy");
-    });
+    }, { timeout: 10_000, interval: 100 });
+    // This is the oldest conversation, beyond the first batch when count > 200.
     const archived = await fetchRecord("agent-legacy");
     expect(archived.status).toBe(200);
     expect(archived.body?.turns[0].prompt).toBe("from before the archive existed");
     expect(archived.body?.turns[0].assistantText).toBe("done");
   }, 20_000);
+
+  it.each(["write", "read"])("keeps source events when archive %s fails", async (failure) => {
+    const prompt = "keep this conversation until it is archived";
+    const event: AnalyticsEvent = {
+      eventId: "evt-unarchived", seq: 1,
+      ts: new Date(Date.now() - retention.DEFAULT_MAX_AGE_MS - 60_000).toISOString(),
+      userId: null, tenantId: null, machineId: "machine-1",
+      harnessSessionId: "sess-unarchived", agentSessionId: "agent-unarchived",
+      harness: "claude-code", type: "prompt.submitted", payload: { prompt },
+    };
+    await writeFile(eventStorePath, `${JSON.stringify(event)}\n`, "utf8");
+    const backfill = recordArchive.backfillSessionRecords;
+    const backfillSpy = vi.spyOn(recordArchive, "backfillSessionRecords");
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    if (failure === "write") await writeFile(recordsRoot, "blocks archive directory creation");
+    else backfillSpy.mockRejectedValue(new Error("archive source unavailable"));
+    const sweepSpy = vi.spyOn(retention, "sweepNdjson");
+    server = await boot();
+    const tick = intervals.mock.calls.find(([, ms]) => ms === 6 * 60 * 60 * 1_000)?.[0];
+    expect(tick).toBeTypeOf("function");
+    const runMaintenance = tick as () => Promise<void>;
+    // Another scheduled attempt must also preserve the source while it fails.
+    await runMaintenance();
+    expect(sweepSpy).not.toHaveBeenCalled();
+    expect(await readFile(eventStorePath, "utf8")).toContain(prompt);
+    if (failure === "write") await rm(recordsRoot);
+    else backfillSpy.mockImplementation(backfill);
+    await runMaintenance();
+    expect(await readFile(eventStorePath, "utf8")).not.toContain(prompt);
+    expect((await fetchRecord("agent-unarchived")).body?.turns[0].prompt).toBe(prompt);
+  });
 });

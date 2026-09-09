@@ -534,10 +534,8 @@ export interface BackfillOptions {
   onCapped?: (remaining: number) => void;
 }
 
-/** Default ceiling for one backfill pass. High enough to cover a typical
- *  install's whole history on the first boot after this shipped, low enough
- *  that a pathological log doesn't turn boot into a write storm. Whatever is
- *  left is archived by the next boot's pass. */
+/** Maximum writes per batch. Callers must process the remaining batches before
+ *  retention can remove their source events. */
 export const RECORDS_BACKFILL_MAX = 200;
 
 /**
@@ -550,7 +548,8 @@ export const RECORDS_BACKFILL_MAX = 200;
  * on. Idempotent: a conversation already archived is skipped, so the steady
  * state after the first pass is "nothing to do".
  *
- * Never throws. Returns the ids it archived.
+ * Returns the ids it archived. Read/write failures propagate so callers can
+ * preserve the source events rather than continuing with retention.
  */
 export async function backfillSessionRecords(options: BackfillOptions): Promise<string[]> {
   const maxRecords = options.maxRecords ?? RECORDS_BACKFILL_MAX;
@@ -565,9 +564,10 @@ export async function backfillSessionRecords(options: BackfillOptions): Promise<
       continue;
     }
     const record = await options.readFromEvents(id);
-    if (!record) continue;
+    if (!record || record.turns.length === 0) continue;
     const written = await options.archive.write(record);
-    if (written) archived.push(id);
+    if (!written) throw new Error(`Could not archive conversation ${id}; keeping source events`);
+    archived.push(id);
   }
   if (remaining > 0) options.onCapped?.(remaining);
   return archived;

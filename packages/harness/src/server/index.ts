@@ -99,6 +99,7 @@ import {
 import {
   backfillSessionRecords,
   createRecordArchive,
+  RECORDS_BACKFILL_MAX,
 } from "../core/record-archive.js";
 import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
 import { migrateHarnessIdentity } from "../core/collector/identity-migration.js";
@@ -3024,54 +3025,35 @@ export const startServer = async (
     };
   });
 
-  // One boot-time pass that archives conversations the log still holds but the
-  // archive doesn't, then sweeps the archive's own caps. This is what covers the
-  // two cases archiving-at-exit can't: a harness that was force-killed (no exit
-  // transition, no session.end), and every session that ended before this
-  // existed — whose history would otherwise vanish at its 30-day mark.
-  //
-  // Retention must wait for this pass: reads run outside the store's exclusive
-  // queue, so a sweep could otherwise delete old events before we archive them.
-  //
-  // Fire-and-forget: boot must not wait on it. The cost is one full index build
-  // (~130 ms against a 50 MB log), which the first history open would have paid
-  // anyway.
-  const recordBackfill = backfillSessionRecords({
-    conversationIds: () => sessionRecordReader.conversationIds(),
-    readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
-    archive: recordArchive,
-    isLiveSession: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      return session !== undefined && session.status !== "exited";
-    },
-    onCapped: (remaining) => {
-      console.error(
-        `[harness] session record backfill hit its per-boot cap; ${remaining} conversation(s) left for the next boot`,
-      );
-    },
-  })
-    .then(() => recordArchive.sweep())
-    .catch((err: unknown) => {
-      console.error("[harness] session record backfill failed:", err);
+  // Archive every batch before retention can delete source events. Keep these
+  // background cycles serial: startup stays responsive, and a read/write failure
+  // skips cleanup while the next timer tick retries the unarchived conversations.
+  let recordMaintenance = Promise.resolve();
+  const runRecordMaintenance = (): Promise<void> => {
+    recordMaintenance = recordMaintenance.then(async () => {
+      const ids = await sessionRecordReader.conversationIds();
+      for (let offset = 0; offset < ids.length; offset += RECORDS_BACKFILL_MAX) {
+        await backfillSessionRecords({
+          conversationIds: async () => ids.slice(offset, offset + RECORDS_BACKFILL_MAX),
+          readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
+          archive: recordArchive,
+          isLiveSession: (id) => {
+            const session = sessionManager.get(id);
+            return session !== undefined && session.status !== "exited";
+          },
+        });
+      }
+      await recordArchive.sweep();
+      // The exclusive queue also protects retention's read/filter/rename from
+      // concurrent event appends.
+      await eventStore.runExclusive(() => sweepNdjson(eventStorePath));
+    }).catch((err: unknown) => {
+      console.error("[harness] session record maintenance failed:", err);
     });
-
-  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
-  // caps even on long-lived installs. Runs through the store's exclusive queue
-  // so the sweep's read→filter→rename window never races a concurrent append.
-  // Wait for backfill before every sweep, including a timer tick during a slow
-  // boot pass. Server startup stays independent of both maintenance tasks.
-  const runNdjsonSweep = (): void => {
-    void recordBackfill
-      .then(() => eventStore.runExclusive(() => sweepNdjson(eventStorePath)))
-      .catch((err: unknown) => {
-        console.error("[harness] events.ndjson retention sweep failed:", err);
-      });
+    return recordMaintenance;
   };
-  runNdjsonSweep();
-  const ndjsonRetentionTimer = setInterval(
-    runNdjsonSweep,
-    NDJSON_RETENTION_SWEEP_MS,
-  );
+  void runRecordMaintenance();
+  const ndjsonRetentionTimer = setInterval(runRecordMaintenance, NDJSON_RETENTION_SWEEP_MS);
   ndjsonRetentionTimer.unref?.();
 
   const harnessVersion = readVersion();
@@ -4661,7 +4643,7 @@ export const startServer = async (
         await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
-          await recordBackfill;
+          await recordMaintenance;
           while (pendingRecordArchives.size > 0) {
             await Promise.all([...pendingRecordArchives]);
           }
