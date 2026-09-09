@@ -1944,8 +1944,10 @@ export const startServer = async (
       // the next lease's normal background scan will reconcile the interval.
       supersedePublication();
       coordinatorEpoch += 1;
-      systemGraphInventory.invalidateScope(root);
-      systemGraphInvocations.invalidateScope(root);
+      if (activeSystemGraphScopes.size > 0) {
+        systemGraphInventory.invalidateScope(root);
+        systemGraphInvocations.invalidateScope(root);
+      }
       workflowRegistry.markDiscoveryDirty(root);
       markAcceptedInventoryDirty(root);
     },
@@ -2270,8 +2272,10 @@ export const startServer = async (
     const token = tokenOverride ?? `inventory:${canonicalRoot}`;
     supersedePublication();
     coordinatorEpoch += 1;
-    systemGraphInventory.invalidateScope(lexicalRoot);
-    systemGraphInvocations.invalidateScope(lexicalRoot);
+    if (activeSystemGraphScopes.size > 0) {
+      systemGraphInventory.invalidateScope(lexicalRoot);
+      systemGraphInvocations.invalidateScope(lexicalRoot);
+    }
     workflowRegistry.markDiscoveryDirty(lexicalRoot);
     markAcceptedInventoryDirty(lexicalRoot);
     outstandingDirtyPrerequisites.set(token, canonicalRoot);
@@ -2879,11 +2883,13 @@ export const startServer = async (
         left.cwd.localeCompare(right.cwd),
       );
     } catch {
-      // Agent Map is additive in E1. A bad/unavailable new catalog cannot
-      // strand the legacy rail or System Graph during coexistence.
+      // Keep folders/sessions reachable when identity storage is unavailable.
+      // Missing or ambiguous identity never establishes a legacy map owner.
       console.error("[harness] Studio project catalog is unavailable");
     }
-    const retained = new Set(scopes.map((scope) => scope.workspaceKey));
+    // This host has one map authority, including on identity/storage failure.
+    // Keep the legacy implementation until SAP-3091, with no live owners.
+    const retained = new Set<string>();
     systemGraphWatcher.retain(retained);
     systemGraphStore.retain(retained);
     for (const workspaceKey of activeSystemGraphScopes.keys()) {
@@ -3956,6 +3962,14 @@ export const startServer = async (
       },
     }),
   );
+  // Old tabs must reload into Agent Map before they can select a topology.
+  // The common boot-token gate runs first; no scope lookup/watch/refresh runs.
+  app.use("/api/workspaces/:workspaceKey/system-graph", (_req, res) => {
+    res.status(410).json({
+      error: "legacy_graph_retired",
+      message: "Reload Studio to use Agent Map.",
+    });
+  });
   app.use(
     "/api",
     createSystemGraphRouter({
