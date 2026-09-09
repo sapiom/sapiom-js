@@ -1,0 +1,100 @@
+{
+  "revision": "cab477b541b0485f22a4948075d2921ba1a3434c",
+  "harnessVersion": "0.16.0",
+  "desktopVersion": "0.4.6",
+  "electronVersion": "33.4.11",
+  "platform": "linux-x64",
+  "appImage": "sapiom-0.4.6-x86_64.AppImage",
+  "appImageSha256": "e63fb39419b54edc828814a7195faca6814edfe99b1f7f6c675c89752a3293ad",
+  "checks": [
+    {
+      "file": "dist/server/index.js",
+      "sha256": "de6c34771a6fb703f96e1a03c19983b7e5f192398232fbc7f23f3d92334d872d"
+    },
+    {
+      "file": "dist/web/index.html",
+      "sha256": "c4da1b63ffaddaf29781f6857d1a0c865c7565523898edfd40a13028fce07d8f"
+    },
+    {
+      "file": "dist/web/assets/index-BZtXtN0s.js",
+      "sha256": "304ecd5579eebacac3db002ac524c27fd4f06bc981e9b42a1b16a7edbeab8719"
+    }
+  ],
+  "retiredGraphFilesInPackagedDist": 0,
+  "byteMatchedRuntimeFiles": 195,
+  "nativeWorkspaceBinariesUnchanged": true,
+  "date": "2026-09-09",
+  "validation": {
+    "build": "passed after cleaning Harness dist",
+    "typecheck": "passed",
+    "lint": "passed with existing unrelated warnings",
+    "rootTest": {
+      "result": "failed",
+      "test": "agent-core/src/bundle-error.spec.ts: unreadable project directory",
+      "baseline": "same failure on unchanged prior code in the Node 24 VM"
+    },
+    "harnessUnit": {
+      "passed": 3840,
+      "skipped": 2,
+      "filesPassed": 239,
+      "filesSkipped": 1
+    },
+    "harnessPerformance": {
+      "passed": 10
+    },
+    "browser": {
+      "uniqueCases": 627,
+      "fullRunPassed": 625,
+      "fullRunCrashed": 2,
+      "focusedFilePassed": 23,
+      "focusedFile": "web/e2e/template-harness.spec.ts",
+      "note": "Two Chrome target crashes; the full affected file passed unchanged with two workers."
+    },
+    "canvas": {
+      "passed": 15
+    },
+    "remainingPackages": {
+      "mcpPassed": 179,
+      "mcpSkipped": 3,
+      "cliPassed": 73,
+      "desktopPassed": 205
+    },
+    "rootScriptTests": {
+      "passed": 178
+    },
+    "terminology": "passed",
+    "providerCopy": "passed",
+    "prTemplateAndSecurityChecks": "passed",
+    "linuxUnpackedSmoke": {
+      "passed": 16,
+      "skipped": 1,
+      "skippedCheck": "Windows-only agent-shim"
+    },
+    "appImageSmoke": {
+      "initialPassed": 15,
+      "initialFailed": 1,
+      "initialSkipped": 1,
+      "initialFailure": "session-create: HTTP 409 PROJECT_SESSION_SCOPE_UNAVAILABLE",
+      "isolatedPassed": 16,
+      "isolatedSkipped": 1,
+      "artifactChanged": false,
+      "smokeCoverageChanged": false
+    },
+    "agentMapSmoke": {
+      "legacyReadRequests": 0,
+      "legacyRefreshRequests": 0,
+      "legacyNavigationRequests": 0,
+      "directRetiredRouteStatuses": [
+        404,
+        404,
+        404
+      ],
+      "savedMapAndHistoryUnchanged": true
+    }
+  },
+  "limitations": [
+    "Initial AppImage run exposed a preexisting session-scope retention gap between pendingProjectCwds and pendingCreates. It predates this cleanup; no admission checks or smoke coverage were weakened. A clean rerun does not fix the race.",
+    "Node 24 VM root test failure is recorded separately from successful retained package tests.",
+    "Linux evidence does not validate a signed/notarized macOS installer or installed-version upgrade. SAP-3086 retains those release gates."
+  ]
+}
