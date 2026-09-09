@@ -56,9 +56,12 @@ describe("createDefinitionSlugResolver", () => {
     });
 
     await expect(resolver.resolveMetadata("188")).resolves.toEqual({
-      slug: "lease-abstractor",
-      activeBuildRunId: "build-17",
-      activeBuildRunStatus: "ready",
+      status: "available",
+      metadata: {
+        slug: "lease-abstractor",
+        activeBuildRunId: "build-17",
+        activeBuildRunStatus: "ready",
+      },
     });
   });
 
@@ -76,6 +79,7 @@ describe("createDefinitionSlugResolver", () => {
       "https://tools.sapiom.ai/agents/v1/definitions/42",
       {
         headers: { "x-sapiom-api-key": "my-api-key" },
+        signal: expect.any(AbortSignal),
       },
     );
   });
@@ -129,16 +133,20 @@ describe("createDefinitionSlugResolver", () => {
       fetchImpl,
     });
 
-    await expect(resolver.resolveMetadata("188")).resolves.toBeNull();
+    await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+      status: "unavailable",
+      lastConfirmedDeployed: null,
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
 
     currentKey = "sk-after-login";
     await expect(resolver.resolveMetadata("188")).resolves.toMatchObject({
-      slug: "signed-in-agent",
-      activeBuildRunStatus: "ready",
+      status: "available",
+      metadata: { slug: "signed-in-agent", activeBuildRunStatus: "ready" },
     });
     expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), {
       headers: { "x-sapiom-api-key": "sk-after-login" },
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -168,12 +176,14 @@ describe("createDefinitionSlugResolver", () => {
       fetchImpl,
     });
 
-    expect((await resolver.resolveMetadata("188"))?.activeBuildRunStatus).toBe(
-      "building",
-    );
-    expect((await resolver.resolveMetadata("188"))?.activeBuildRunStatus).toBe(
-      "ready",
-    );
+    await expect(resolver.resolveMetadata("188")).resolves.toMatchObject({
+      status: "available",
+      metadata: { activeBuildRunStatus: "building" },
+    });
+    await expect(resolver.resolveMetadata("188")).resolves.toMatchObject({
+      status: "available",
+      metadata: { activeBuildRunStatus: "ready" },
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
@@ -240,8 +250,8 @@ describe("createDefinitionSlugResolver", () => {
     expect(slug).toBeNull();
   });
 
-  it("logs a resolution failure once per definitionId, not on every poll", async () => {
-    const fetchImpl = makeFetch(404, { error: "not found" });
+  it("logs an actionable sanitized failure once per definitionId, not on every poll", async () => {
+    const fetchImpl = makeFetch(403, { error: "private upstream error" });
     const resolver = createDefinitionSlugResolver({
       apiKey: "test-key",
       fetchImpl,
@@ -256,7 +266,15 @@ describe("createDefinitionSlugResolver", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0][0])).toContain("definitionId=777");
-    expect(String(errorSpy.mock.calls[0][0])).toContain("HTTP 404");
+    expect(String(errorSpy.mock.calls[0][0])).toContain("metadata unavailable");
+    expect(String(errorSpy.mock.calls[0][0])).toContain("HTTP 403");
+    expect(String(errorSpy.mock.calls[0][0])).toContain("account that owns this agent");
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(
+      /test-key|private upstream error/,
+    );
+    vi.mocked(fetchImpl).mockResolvedValue(reply({}, 503));
+    await resolver.resolve("777");
+    expect(errorSpy).toHaveBeenCalledTimes(2);
   });
 
   it("does not log when there is no api key (a harness without auth is expected)", async () => {
@@ -268,5 +286,153 @@ describe("createDefinitionSlugResolver", () => {
     await resolver.resolve("188");
 
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+const ready = {
+  slug: "agent",
+  activeBuildRunId: "build-1",
+  activeBuildRunStatus: "ready",
+};
+const absent = { statusCode: 404, message: "Agent definition not found: 188" };
+const reply = (body: unknown, status = 200) =>
+  ({ ok: status === 200, status, json: async () => body }) as Response;
+const delayedReply = () => {
+  let release!: (value: Response) => void;
+  const response = new Promise<Response>((resolve) => { release = resolve; });
+  return { response, release };
+};
+
+describe("authenticated deployment evidence", () => {
+  it.each([
+    [200, {}],
+    [200, null],
+    [200, []],
+    [200, { ...ready, activeBuildRunId: null }],
+    [200, { ...ready, activeBuildRunStatus: "" }],
+    [200, { ...ready, activeBuildRunId: 1 }],
+    [401, {}],
+    [403, {}],
+    [429, {}],
+    [503, {}],
+    [404, {}],
+    [404, { ...absent, message: "wrong definition" }],
+    [404, {
+      statusCode: 404, code: "not_found",
+      message: "Cannot GET /agents/v1/definitions/188",
+    }],
+  ])(
+    "retains confirmed evidence for unavailable %s %j",
+    async (status, body) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(reply(ready))
+        .mockResolvedValue(reply(body, status));
+      const resolver = createDefinitionSlugResolver({
+        apiKey: "key",
+        fetchImpl,
+      });
+      await resolver.resolveMetadata("188");
+      await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+        status: "unavailable",
+        lastConfirmedDeployed: true,
+      });
+      await expect(resolver.resolveMetadata("other")).resolves.toEqual({
+        status: "unavailable",
+        lastConfirmedDeployed: null,
+      });
+    },
+  );
+  it.each([
+    [reply(ready), reply(absent, 404)],
+    [reply(ready), reply({ activeBuildRunId: null, activeBuildRunStatus: null })],
+    [reply(ready), reply({ ...ready, activeBuildRunId: "new-build" })],
+    [reply(absent, 404), reply(ready)],
+  ])(
+    "reconciles healthy overlaps without caching runnable fields on failure",
+    async (older, newer) => {
+      const { response, release } = delayedReply();
+      const fetchImpl = vi
+        .fn()
+        .mockReturnValueOnce(response)
+        .mockResolvedValueOnce(newer)
+        .mockRejectedValue(new Error("offline"));
+      const resolver = createDefinitionSlugResolver({
+        apiKey: "key",
+        fetchImpl,
+      });
+      const pending = resolver.resolveMetadata("188");
+      const latest = await resolver.resolveMetadata("188");
+      release(older);
+      await expect(pending).resolves.toEqual(latest);
+      await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+        status: "unavailable",
+        lastConfirmedDeployed: latest.status === "available" &&
+          latest.metadata.activeBuildRunStatus === "ready",
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+      const slug = latest.status === "available" ? latest.metadata.slug : null;
+      await expect(resolver.resolve("188")).resolves.toBe(slug);
+    },
+  );
+  it("forgets cached slugs, retained flags and pending responses across A → B → A", async () => {
+    let key: string | null = "a";
+    const { response, release } = delayedReply();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(reply(ready))
+      .mockReturnValueOnce(response)
+      .mockRejectedValue(new Error("offline"));
+    const resolver = createDefinitionSlugResolver({
+      apiKey: () => key,
+      fetchImpl,
+    });
+    await resolver.resolveMetadata("188");
+    const pending = resolver.resolveMetadata("188");
+    key = "b";
+    resolver.invalidate();
+    key = "a";
+    resolver.invalidate();
+    release(reply(ready));
+    await expect(pending).resolves.toEqual({
+      status: "unavailable",
+      lastConfirmedDeployed: null,
+    });
+    await expect(resolver.resolve("188")).resolves.toBeNull();
+    key = null;
+    await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+      status: "unavailable",
+      lastConfirmedDeployed: null,
+    });
+  });
+  it("bounds network waits and treats timeout as unavailable", async () => {
+    let signal!: AbortSignal;
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController();
+      signal = controller.signal;
+      queueMicrotask(() => controller.abort());
+      return signal;
+    });
+    const resolver = createDefinitionSlugResolver({
+      apiKey: "key",
+      fetchImpl: vi.fn(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) =>
+            init!.signal!.addEventListener("abort", () =>
+              reject(new Error("timeout")),
+            ),
+          ),
+      ),
+    });
+    try {
+      await expect(resolver.resolveMetadata("188")).resolves.toEqual({
+        status: "unavailable",
+        lastConfirmedDeployed: null,
+      });
+      expect(timeout).toHaveBeenCalledWith(5_000);
+      expect(signal.aborted).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 });

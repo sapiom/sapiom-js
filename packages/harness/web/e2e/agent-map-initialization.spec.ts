@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function expectAllNodesToFit(page: Page) {
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-state",
+    "ready",
+  );
   await expect
     .poll(async () => {
       const box = await page.getByTestId("agent-map-viewport").boundingBox();
@@ -19,6 +23,7 @@ async function expectAllNodesToFit(page: Page) {
         );
       return (
         box !== null &&
+        nodes.length > 0 &&
         nodes.every(
           (node) =>
             node.x >= box.x - 2 &&
@@ -117,6 +122,10 @@ async function publish(page: Page, message: unknown) {
 const id = (prefix: string, i: number) =>
   `${prefix}_00000000-0000-7000-8000-${String(i).padStart(12, "0")}`;
 async function graph(page: Page, count: number) {
+  await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+    "data-layout-state",
+    "ready",
+  );
   const projectId = await page
     .getByTestId("agent-map-live")
     .getAttribute("data-project-id");
@@ -331,6 +340,10 @@ for (const count of [1, 10, 50, 100])
         .getByTestId("agent-map-live")
         .getByText("Version 3", { exact: true }),
     ).toBeVisible();
+    await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
+      "data-layout-state",
+      "ready",
+    );
     expect(
       await subject.evaluate(
         (element) => (element as HTMLElement).style.transform,

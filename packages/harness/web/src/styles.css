@@ -4436,7 +4436,7 @@ button.system-graph-node.is-navigable:focus-visible {
 }
 
 /* Plan-first Agent Map: the existing graph plane and controls, projected from
-   durable proposal state. Proposed is deliberately one neutral treatment. */
+   durable proposal state and shared deployment evidence. */
 .agent-map-live,
 .agent-map-live-body,
 .agent-map-canvas,
@@ -4526,6 +4526,46 @@ button.system-graph-node.is-navigable:focus-visible {
 
 .agent-map-edge-label {
   pointer-events: none;
+  /* Keep measured SVG ink consistent at fit zoom instead of snapping glyphs. */
+  text-rendering: geometricPrecision;
+}
+
+.agent-map-live-header > .system-graph-node-meta {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.agent-map-deployment-message {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+}
+
+.agent-map-deployment-message > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-map-deployment-message > button {
+  flex-shrink: 0;
+}
+
+.agent-map-inspector .agent-map-deployment {
+  white-space: normal;
+}
+
+.agent-map-deployment[data-deployment-state="deployed"] {
+  color: var(--green);
+}
+
+.agent-map-controls {
+  max-width: calc(100% - var(--sp3) * 2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .agent-map-node-wrap {
