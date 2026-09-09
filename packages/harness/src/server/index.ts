@@ -663,10 +663,14 @@ function createDefaultBuildLaunchOpts(
       systemPromptFile,
       ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
-      mcpCredentialLaunch: {
-        generation,
-        credentialBearing: apiKey !== null,
-      },
+      ...(req.harness === "claude-code" || req.harness === "codex"
+        ? {
+            mcpCredentialLaunch: {
+              generation,
+              credentialBearing: apiKey !== null,
+            },
+          }
+        : {}),
       // Set on BOTH channels: the post-ready path hasn't delivered yet, but a
       // brief exists and will, and this is the flag that tells it to.
       ...(brief !== null && rehydrateFrom

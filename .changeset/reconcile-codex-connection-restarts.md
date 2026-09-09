@@ -1,5 +1,5 @@
 ---
-"@sapiom/harness": patch
+"@sapiom/harness": minor
 ---
 
-Reconcile and restart Codex sessions when their launch-time Sapiom MCP credential becomes stale.
+Bring Codex into Studio's Sapiom connection lifecycle: report stale credentials, explicitly restart resumable sessions with the current credential, and stop credential-bearing sessions and background tasks on disconnect.
