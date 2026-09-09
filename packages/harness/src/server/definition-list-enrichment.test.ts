@@ -13,8 +13,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 
 vi.mock("@sapiom/mcp/auth", () => ({
+  credentialsFilePath: vi.fn(),
   resolveEnvironment: vi.fn(async (environment?: string) => ({
     name: environment === "dev" ? "staging" : "production",
     appURL: "https://app.example.test",
@@ -89,6 +91,9 @@ describe("definition list enrichment wiring (SAP-3214)", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "harness-definition-list-enrichment-"),
+    );
+    vi.mocked(credentialsFilePath).mockReturnValue(
+      path.join(tempDir, "credentials.json"),
     );
     previousAgentsUrl = process.env.SAPIOM_AGENTS_URL;
     api = {
