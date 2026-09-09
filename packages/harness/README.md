@@ -42,6 +42,12 @@ Terminal; sign out and sign in again to obtain the user credential. It stays in
 the shared local credential store and is never returned by Studio's browser auth
 API. Sign-out clears it locally and attempts to revoke its token family remotely.
 
+The Studio host refreshes the internal Assistant capability at most every 30
+seconds and expires an enabled decision within 60 seconds. Missing identity,
+offline startup, unsupported backends, and unavailable flags leave it off.
+These access checks are independent of optional telemetry and never prevent
+ordinary Terminal startup. Only the resolved boolean is exposed to the browser.
+
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
 accounts clears this evidence. Retained indicators do not enable cloud runs.
