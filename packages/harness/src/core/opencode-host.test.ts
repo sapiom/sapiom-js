@@ -16,6 +16,7 @@ const start = vi.fn();
 const revoke = vi.fn();
 const close = vi.fn();
 const issue = vi.fn();
+const neverExited = new Promise<void>(() => {});
 beforeEach(async () => {
   expectShutdownFailure = false;
   root = await mkdtemp(join(tmpdir(), "studio-opencode-host-"));
@@ -47,7 +48,13 @@ beforeEach(async () => {
   issue.mockReset().mockReturnValue({ id: "runtime", token: "scoped", revoke });
   start
     .mockReset()
-    .mockResolvedValue({ pid: 123, fetch: vi.fn(), fetchJson: vi.fn(), close });
+    .mockResolvedValue({
+      pid: 123,
+      exited: neverExited,
+      fetch: vi.fn(),
+      fetchJson: vi.fn(),
+      close,
+    });
   host = new OpenCodeHost({
     access: {
       get: () => grant,
@@ -137,7 +144,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
-      return { pid: 123, close };
+      return { pid: 123, exited: neverExited, close };
     });
     const pending = host.ensure("studio-one");
     const rejected = expect(pending).rejects.toThrow("access changed");
@@ -179,7 +186,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
     grant = null;
     changed();
     close.mockRejectedValue(new Error("still alive"));
-    finish({ pid: 123, close });
+    finish({ pid: 123, exited: neverExited, close });
     await rejected;
     await expect(
       access(join(start.mock.calls[0][0].stateRoot, "..", "runtime.lock")),
@@ -213,7 +220,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
     authorize.mockImplementation(async (id) => ({ harnessSessionId: id, cwd }));
     start.mockImplementationOnce(async () => {
       authorize.mockResolvedValue(null);
-      return { pid: 456, close };
+      return { pid: 456, exited: neverExited, close };
     });
     await expect(host.ensure("studio-two")).rejects.toThrow("workspace");
     expect(close).toHaveBeenCalledTimes(2);
@@ -240,5 +247,20 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(settled).toBe(false);
     finish();
     await rejected;
+  });
+
+  it("retires a confirmed exited process so retry can reopen the same persistent state", async () => {
+    let exit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      exit = resolve;
+    });
+    start.mockResolvedValueOnce({ pid: 123, exited, close });
+    const first = await host.ensure("studio-one");
+    exit();
+    await vi.waitFor(() => expect(first.signal.aborted).toBe(true));
+    const restored = await host.ensure("studio-one");
+    expect(restored.stateRoot).toBe(first.stateRoot);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledOnce();
   });
 });

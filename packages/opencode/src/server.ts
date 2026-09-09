@@ -18,6 +18,7 @@ export interface StartOpenCodeServerOptions {
 }
 export interface OpenCodeServer {
   pid: number;
+  exited: Promise<void>;
   fetch(path: string, init?: RequestInit): Promise<Response>;
   fetchJson<T>(path: string, init?: RequestInit): Promise<T>;
   close(): Promise<void>;
@@ -177,6 +178,7 @@ export async function startOpenCodeServer(
     if (!child.pid || exited) throw new Error("OpenCode exited during startup");
     return {
       pid: child.pid,
+      exited: exit,
       fetch: authenticatedFetch,
       close,
       async fetchJson<T>(path: string, init?: RequestInit): Promise<T> {

@@ -40,6 +40,7 @@ interface Options {
   authorize: (id: string) => Promise<OpenCodeWorkspace | null>;
   start?: typeof startOpenCodeServer;
 }
+export class OpenCodeAccessError extends Error {}
 const authority = (grant: AssistantGrant) =>
   createHash("sha256")
     .update(
@@ -86,7 +87,7 @@ export class OpenCodeHost {
   async ensure(id: string): Promise<HostedOpenCode> {
     const grant = this.options.access.get();
     if (this.closed || !grant)
-      throw new Error("Assistant access is unavailable");
+      throw new OpenCodeAccessError("Assistant access is unavailable");
     const workspace = await this.workspace(id).catch(async (error) => {
       await this.retire(id);
       throw error;
@@ -94,7 +95,7 @@ export class OpenCodeHost {
     const { cwd } = workspace;
     const current = this.options.access.get();
     if (this.closed || !current || authority(current) !== authority(grant))
-      throw new Error("Assistant access changed. Please retry.");
+      throw new OpenCodeAccessError("Assistant access changed. Please retry.");
     const existing = this.entries.get(id);
     if (
       existing &&
@@ -162,14 +163,16 @@ export class OpenCodeHost {
   private async workspace(id: string): Promise<OpenCodeWorkspace> {
     const workspace = await this.options.authorize(id);
     if (!workspace || workspace.harnessSessionId !== id)
-      throw new Error("This Studio workspace is unavailable");
+      throw new OpenCodeAccessError("This Studio workspace is unavailable");
     return { harnessSessionId: id, cwd: await realpath(workspace.cwd) };
   }
 
   private async validate(entry: Managed): Promise<void> {
     const workspace = await this.workspace(entry.workspace.harnessSessionId);
     if (workspace.cwd !== entry.workspace.cwd)
-      throw new Error("This Studio workspace changed. Please retry.");
+      throw new OpenCodeAccessError(
+        "This Studio workspace changed. Please retry.",
+      );
     const grant = this.options.access.get();
     if (
       this.closed ||
@@ -177,7 +180,7 @@ export class OpenCodeHost {
       !grant ||
       authority(grant) !== entry.authority
     )
-      throw new Error("Assistant access changed. Please retry.");
+      throw new OpenCodeAccessError("Assistant access changed. Please retry.");
   }
 
   private async unlock(entry: Managed): Promise<void> {
@@ -226,6 +229,12 @@ export class OpenCodeHost {
         config,
         signal: entry.abort.signal,
       });
+      void server.exited
+        .then(() => {
+          if (this.entries.get(entry.workspace.harnessSessionId) === entry)
+            return this.retire(entry.workspace.harnessSessionId);
+        })
+        .catch(() => {});
       await this.validate(entry);
       return {
         ...entry.workspace,
