@@ -1,9 +1,8 @@
 /**
  * Opt-in vendor compatibility test: a real Codex process discovers the built
  * sapiom-dev server through Studio's generated config, without a model or login.
- * Run after building workspace dependencies with RUN_CODEX_MCP_INTEGRATION=1.
- * CODEX_TEST_BINARY can select an installed CLI version. All auth is synthetic,
- * all HTTP endpoints are loopback, and both homes are temporary.
+ * See "Codex MCP validation" in the harness README for how to run it. All auth
+ * is synthetic, all HTTP endpoints are loopback, and both homes are temporary.
  */
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
@@ -23,6 +22,7 @@ interface McpStatus {
   name: string;
   serverInfo?: { name: string } | null;
   tools: Record<string, unknown>;
+  toolsError?: string | null;
 }
 
 async function discover(
@@ -60,25 +60,42 @@ async function discover(
   const pending = new Map<
     number,
     {
+      method: string;
       resolve: (result: unknown) => void;
       reject: (error: Error) => void;
     }
   >();
   let id = 0;
-  const fail = (): void => {
-    for (const request of pending.values()) {
-      request.reject(
-        new Error("Codex MCP probe failed; check CLI compatibility."),
-      );
-    }
-    pending.clear();
-  };
-  // Drain diagnostics, but never include subprocess output/config in failures.
+  // Settles once with the first failure. Every request races it, so a dead
+  // CLI rejects immediately instead of stalling until the timeout. Failures
+  // name their cause and the CLI's JSON-RPC error, never raw stderr or
+  // credentials, which reach Codex only through the environment.
+  let terminate: (error: Error) => void = () => {};
+  const closed = new Promise<never>((_, reject) => {
+    terminate = reject;
+  });
+  // Insurance only: the first request subscribes before anything can reject.
+  void closed.catch(() => {});
+  const fail = (cause: string): void =>
+    terminate(new Error(`Codex MCP probe failed: ${cause}.`));
+  // Drain stderr so the CLI never blocks on it; it is never quoted, so nothing
+  // is captured.
   child.stderr.resume();
-  child.on("error", fail);
-  child.on("exit", fail);
+  child.stdin.on("error", () => {
+    // A failed write means the CLI is gone; "close" reports why.
+  });
+  child.once("error", (error) =>
+    fail(`could not start the CLI (${error.message})`),
+  );
+  child.once("close", (code, signal) =>
+    fail(`the CLI exited with ${signal ?? `code ${code}`}`),
+  );
   lines.on("line", (line) => {
-    let response: { id?: number; error?: unknown; result?: unknown };
+    let response: {
+      id?: number;
+      error?: { code?: number; message?: string };
+      result?: unknown;
+    };
     try {
       response = JSON.parse(line);
     } catch {
@@ -88,22 +105,34 @@ async function discover(
     const request = pending.get(response.id);
     if (!request) return;
     pending.delete(response.id);
-    if (response.error) request.reject(new Error("Codex MCP RPC failed."));
-    else request.resolve(response.result);
-  });
-  const request = (method: string, params: unknown): Promise<unknown> => {
-    const requestId = ++id;
-    return new Promise((resolve, reject) => {
-      pending.set(requestId, { resolve, reject });
-      child.stdin.write(
-        JSON.stringify({ id: requestId, method, params }) + "\n",
+    if (response.error) {
+      const { code, message } = response.error;
+      request.reject(
+        new Error(`Codex ${request.method} failed (${code}): ${message}`),
       );
-    });
-  };
+      return;
+    }
+    request.resolve(response.result);
+  });
+  const request = (method: string, params: unknown): Promise<unknown> =>
+    Promise.race([
+      closed,
+      new Promise<unknown>((resolve, reject) => {
+        const requestId = ++id;
+        pending.set(requestId, { method, resolve, reject });
+        child.stdin.write(
+          JSON.stringify({ id: requestId, method, params }) + "\n",
+        );
+      }),
+    ]);
+  const timeoutMs = 25_000;
   const timeout = setTimeout(() => {
-    fail();
+    const inFlight = [...pending.values()].map((r) => r.method).join(", ");
+    fail(
+      `no response to ${inFlight || "any request"} within ${timeoutMs / 1000}s`,
+    );
     child.kill("SIGKILL");
-  }, 25_000);
+  }, timeoutMs);
   try {
     await request("initialize", {
       clientInfo: { name: "sapiom_mcp_test", version: "0.0.0" },
@@ -131,7 +160,9 @@ async function discover(
       timeoutMs: 5_000,
     })) as { exitCode: number; stdout: string };
     if (command.exitCode !== 0)
-      throw new Error("Codex command environment probe failed.");
+      throw new Error(
+        `Codex command environment probe exited with code ${command.exitCode}.`,
+      );
     return { servers: result.data, commandEnv: JSON.parse(command.stdout) };
   } finally {
     clearTimeout(timeout);
@@ -322,7 +353,15 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
         const authoring = servers.find(
           (server) => server.serverInfo?.name === "sapiom-dev",
         );
-        expect(Object.keys(authoring?.tools ?? {})).toContain(
+        // A server that failed to start is listed without serverInfo. Surface
+        // Codex's reason, usually an unbuilt workspace dependency.
+        if (!authoring)
+          throw new Error(
+            `sapiom-dev did not start: ${servers
+              .map((server) => `${server.name}: ${server.toolsError ?? "ok"}`)
+              .join("; ")}`,
+          );
+        expect(Object.keys(authoring.tools ?? {})).toContain(
           "sapiom_dev_agents_check",
         );
         const remote = servers.find(
