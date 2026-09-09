@@ -48,6 +48,12 @@ export interface ExecutionState {
   readonly pausedSignalName: string | null;
   readonly pausedSignalCorrelationId: string | null;
   readonly pausedUntil: Date | null;
+  /**
+   * The step to resume at if `pausedUntil` elapses with no signal, carried from
+   * the pause directive's `timeoutStep`. Null when the pause declared none, in
+   * which case a timeout fails the execution with `PauseTimeoutError`.
+   */
+  readonly pausedTimeoutStep: string | null;
   /** Non-null exactly while a step body is dispatched and in flight. */
   readonly dispatchedStepRowId: string | null;
   readonly dispatchDeadlineAt: Date | null;
