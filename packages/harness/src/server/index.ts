@@ -99,7 +99,6 @@ import {
 import {
   backfillSessionRecords,
   createRecordArchive,
-  RECORDS_BACKFILL_MAX,
 } from "../core/record-archive.js";
 import { createHarnessEmitter } from "../core/collector/analytics-emitter.js";
 import { migrateHarnessIdentity } from "../core/collector/identity-migration.js";
@@ -3025,28 +3024,35 @@ export const startServer = async (
     };
   });
 
-  // Archive every batch before retention can delete source events. Keep these
-  // background cycles serial: startup stays responsive, and a read/write failure
-  // skips cleanup while the next timer tick retries the unarchived conversations.
+  // Bound archive work per pass and run passes one at a time. Remaining work
+  // or a read/write failure skips cleanup; the next timer tick retries the
+  // conversations that are not yet archived.
   let recordMaintenance = Promise.resolve();
+  // Session-exit sweeps can evict archives between passes. Remember completed
+  // writes until event cleanup succeeds, so a large backfill makes progress.
+  const archivedDuringBackfill = new Set<string>();
   const runRecordMaintenance = (): Promise<void> => {
     recordMaintenance = recordMaintenance.then(async () => {
-      const ids = await sessionRecordReader.conversationIds();
-      for (let offset = 0; offset < ids.length; offset += RECORDS_BACKFILL_MAX) {
-        await backfillSessionRecords({
-          conversationIds: async () => ids.slice(offset, offset + RECORDS_BACKFILL_MAX),
-          readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
-          archive: recordArchive,
-          isLiveSession: (id) => {
-            const session = sessionManager.get(id);
-            return session !== undefined && session.status !== "exited";
-          },
-        });
+      const { archived, complete } = await backfillSessionRecords({
+        conversationIds: async () => (await sessionRecordReader.conversationIds())
+          .filter((id) => !archivedDuringBackfill.has(id)),
+        readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
+        archive: recordArchive,
+        isLiveSession: (id) => {
+          const session = sessionManager.get(id);
+          return session !== undefined && session.status !== "exited";
+        },
+      });
+      for (const id of archived) archivedDuringBackfill.add(id);
+      if (!complete) {
+        console.warn("[harness] archive backfill reached its limit; keeping source events until the next pass");
+        return;
       }
       await recordArchive.sweep();
       // The exclusive queue also protects retention's read/filter/rename from
       // concurrent event appends.
       await eventStore.runExclusive(() => sweepNdjson(eventStorePath));
+      archivedDuringBackfill.clear();
     }).catch((err: unknown) => {
       console.error("[harness] session record maintenance failed:", err);
     });

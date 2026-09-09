@@ -15,7 +15,7 @@
  *     disappearing at its 30-day mark.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -232,7 +232,7 @@ describe("session record archive wiring", () => {
     );
   }, 20_000);
 
-  it.each([1, recordArchive.RECORDS_BACKFILL_MAX + 1])("archives historical conversations before cleanup (count=%i)", async (count) => {
+  it.each([1, 200, 201, 401])("archives historical conversations before cleanup (count=%i)", async (count) => {
     // An events file from an install that predates this feature: a complete
     // conversation, no archive, and no registry entry for it.
     const expiredAt = Date.now() - retention.DEFAULT_MAX_AGE_MS - 60_000;
@@ -285,6 +285,7 @@ describe("session record archive wiring", () => {
         return backfill(options);
       });
     const sweepSpy = vi.spyOn(retention, "sweepNdjson");
+    const intervals = vi.spyOn(globalThis, "setInterval");
     try {
       server = await boot();
       expect(backfillSpy).toHaveBeenCalledOnce();
@@ -293,10 +294,32 @@ describe("session record archive wiring", () => {
       releaseBackfill();
     }
 
+    await backfillSpy.mock.results[0].value;
+    if (count > 200) {
+      expect((await readdir(recordsRoot)).filter((file) => file.endsWith(".json"))).toHaveLength(200);
+      expect(await readArchived("sess-legacy")).toBeNull();
+      expect(sweepSpy).not.toHaveBeenCalled();
+      expect(await readFile(eventStorePath, "utf8")).toContain("sess-legacy");
+      // Finish the remaining work on the next scheduled pass, not at boot.
+      const tick = intervals.mock.calls.find(([, ms]) => ms === 6 * 60 * 60 * 1_000)?.[0];
+      expect(tick).toBeTypeOf("function");
+      for (let pass = 1; pass * 200 < count; pass += 1) {
+        // Session-exit archive sweeps can evict completed files between passes.
+        // Force that eviction to prove a large backfill still makes progress.
+        if (count > 400) {
+          await recordArchive.createRecordArchive({ root: recordsRoot, maxTotalBytes: 0 }).sweep();
+        }
+        expect(sweepSpy).not.toHaveBeenCalled();
+        expect(await readFile(eventStorePath, "utf8")).toContain("sess-legacy");
+        await (tick as () => Promise<void>)();
+      }
+      expect(sweepSpy).toHaveBeenCalledOnce();
+    }
+
     await vi.waitFor(async () => {
       expect(await readFile(eventStorePath, "utf8")).not.toContain("sess-legacy");
     }, { timeout: 10_000, interval: 100 });
-    // This is the oldest conversation, beyond the first batch when count > 200.
+    // The oldest conversation must survive even when it needs a later pass.
     const archived = await fetchRecord("agent-legacy");
     expect(archived.status).toBe(200);
     expect(archived.body?.turns[0].prompt).toBe("from before the archive existed");

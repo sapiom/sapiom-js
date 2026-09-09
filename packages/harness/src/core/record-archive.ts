@@ -529,13 +529,10 @@ export interface BackfillOptions {
   isLiveSession?: (harnessSessionId: string) => boolean;
   /** Ceiling on how many conversations one pass archives. */
   maxRecords?: number;
-  /** Called with the number of eligible conversations left unarchived when the
-   *  cap cut the pass short — a bounded pass must say what it didn't do. */
-  onCapped?: (remaining: number) => void;
 }
 
-/** Maximum writes per batch. Callers must process the remaining batches before
- *  retention can remove their source events. */
+/** Limit startup disk writes. Any remainder waits for a later maintenance
+ *  pass; retention must preserve the source events until backfill completes. */
 export const RECORDS_BACKFILL_MAX = 200;
 
 /**
@@ -548,27 +545,24 @@ export const RECORDS_BACKFILL_MAX = 200;
  * on. Idempotent: a conversation already archived is skipped, so the steady
  * state after the first pass is "nothing to do".
  *
- * Returns the ids it archived. Read/write failures propagate so callers can
- * preserve the source events rather than continuing with retention.
+ * Returns the ids it archived and whether the pass finished. An incomplete
+ * pass or a read/write failure must prevent retention from deleting sources.
  */
-export async function backfillSessionRecords(options: BackfillOptions): Promise<string[]> {
+export async function backfillSessionRecords(
+  options: BackfillOptions,
+): Promise<{ archived: string[]; complete: boolean }> {
   const maxRecords = options.maxRecords ?? RECORDS_BACKFILL_MAX;
   const ids = await options.conversationIds();
   const archived: string[] = [];
-  let remaining = 0;
   for (const id of ids) {
     if (options.isLiveSession?.(id)) continue;
     if (await options.archive.has(id)) continue;
-    if (archived.length >= maxRecords) {
-      remaining += 1;
-      continue;
-    }
+    if (archived.length >= maxRecords) return { archived, complete: false };
     const record = await options.readFromEvents(id);
     if (!record || record.turns.length === 0) continue;
     const written = await options.archive.write(record);
     if (!written) throw new Error(`Could not archive conversation ${id}; keeping source events`);
     archived.push(id);
   }
-  if (remaining > 0) options.onCapped?.(remaining);
-  return archived;
+  return { archived, complete: true };
 }
