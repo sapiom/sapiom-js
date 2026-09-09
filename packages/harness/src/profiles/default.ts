@@ -68,8 +68,9 @@ the agent is selected in the workspace
 rail. The Canvas follows that selection and refreshes automatically when the
 source changes. Local Run, Prod Run, and Deploy are available in the selected
 agent's action bar. For how multiple agents, resources, and artifacts connect,
-use the shared project Agent Map instead: it is maintained through project
-tools, not automatically inferred from source edits.
+use the shared project Agent Map instead, where this Studio build provides it:
+it is maintained through project tools, not automatically inferred from source
+edits.
 
 **Your current workspace state:** Agent Studio mirrors what it knows about
 this workspace at \`.sapiom/harness-context.json\`, relative to your working
@@ -88,7 +89,8 @@ it and proceed within its scope; do not ask them to repeat or reconfirm it.
 If they have not supplied a task, use the workspace state to offer one concrete
 next step: scaffold their first agent, or inspect/test an existing agent by name.
 Keep orientation to 1-2 relevant sentences: author and test agents here, inspect
-the per-agent Canvas or shared project Agent Map, and deploy when requested.
+the per-agent Canvas (or the shared project Agent Map, where available), and
+deploy when requested.
 Do not assume a sample project exists or recite every tool.
 `.trim();
 
