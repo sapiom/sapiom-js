@@ -36,13 +36,23 @@ import {
   type SpawnSpec,
   type StructuredInferenceOptions,
 } from "../shared/types.js";
-import type { LaunchOptsBuilder } from "./session-manager.js";
+import {
+  type LaunchOptsBuilder,
+  type LaunchOptsBuildResult,
+  type McpCredentialLaunch,
+} from "./session-manager.js";
 import { HOST_ESBUILD_PIN } from "./asar-path.js";
 import { resolveSpawnTarget } from "./spawn-target.js";
 import { parseTaskStreamLine } from "./task-stream.js";
-import { AdapterNotFoundError, ExternalHarnessError } from "./errors.js";
+import {
+  AdapterNotFoundError,
+  ExternalHarnessError,
+  McpCredentialGenerationChangedError,
+} from "./errors.js";
 import { listHarnessAdapters } from "./adapters/registry.js";
 import type { IngestCredentialProvider } from "./ingest-credentials.js";
+
+export { McpCredentialGenerationChangedError } from "./errors.js";
 
 /** Rolling status-line window kept per task — enough for the activity view's
  *  recent-history list without unbounded growth on a chatty run. */
@@ -144,6 +154,8 @@ export interface TaskManagerOptions {
   /** Same builder real sessions use — generates the task's own --settings /
    *  --mcp-config / system-prompt files under generated/<taskId>. */
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Live credential generation checked synchronously immediately before spawn. */
+  currentCredentialGeneration?: () => number;
   /** Injectable for tests. Defaults to node:child_process.spawn. */
   spawnProcess?: TaskSpawnFn;
   /** Called once the task's process has exited (either outcome) — the server
@@ -162,6 +174,9 @@ export class TaskManager {
   private readonly revokeIngestToken: (sessionId: string) => void;
   private readonly collectorUrl: string | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
+  private readonly currentCredentialGeneration:
+    | (() => number)
+    | undefined;
   private readonly spawnProcess: TaskSpawnFn;
   private readonly onCleanup: (taskId: string) => void;
   private readonly now: () => string;
@@ -201,6 +216,7 @@ export class TaskManager {
       options.ingestCredentials.revoke(sessionId);
     this.collectorUrl = options.collectorUrl;
     this.buildLaunchOpts = options.buildLaunchOpts ?? (() => ({}));
+    this.currentCredentialGeneration = options.currentCredentialGeneration;
     this.spawnProcess = options.spawnProcess ?? defaultSpawn;
     this.onCleanup = options.onCleanup ?? (() => {});
     this.now = options.now ?? (() => new Date().toISOString());
@@ -278,15 +294,25 @@ export class TaskManager {
 
     const id = this.generateId();
     let spec: SpawnSpec;
+    let mcpCredentialLaunch: McpCredentialLaunch | undefined;
     try {
+      let launchOptions: LaunchOptsBuildResult = {};
+      if (!req.structuredInference) {
+        const built = await this.buildLaunchOpts(id, {
+          cwd: req.cwd,
+          harness: req.harness,
+        });
+        ({ mcpCredentialLaunch, ...launchOptions } = built);
+      }
       const opts: LaunchOpts = {
         harnessSessionId: id,
         cwd: req.cwd,
         prompt: req.prompt,
         ...(req.model !== undefined ? { model: req.model } : {}),
         ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
-        ...(req.structuredInference ? { structuredInference: req.structuredInference } :
-          await this.buildLaunchOpts(id, { cwd: req.cwd, harness: req.harness })),
+        ...(req.structuredInference
+          ? { structuredInference: req.structuredInference }
+          : launchOptions),
       };
       spec = adapter.launchTask(opts);
     } catch (err) {
@@ -332,6 +358,14 @@ export class TaskManager {
 
     let child: TaskProcess;
     try {
+      if (
+        mcpCredentialLaunch &&
+        this.currentCredentialGeneration &&
+        mcpCredentialLaunch.generation !==
+          this.currentCredentialGeneration()
+      ) {
+        throw new McpCredentialGenerationChangedError();
+      }
       // Same Windows resolution as the interactive path (SessionManager.spawn):
       // libuv's process lookup appends only .com/.exe, never .cmd, and since
       // CVE-2024-27980 Node refuses an explicit .cmd/.bat without `shell: true`.

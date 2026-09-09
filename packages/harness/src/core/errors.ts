@@ -9,6 +9,7 @@
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
  *   AgentSessionIdentityReservedError → 409
+ *   McpCredentialGenerationChangedError → 409
  *   AdapterNotFoundError      → 400
  *   SpawnTargetError          → 400
  *   ExternalHarnessError      → 409
@@ -140,6 +141,19 @@ export class AdapterNotFoundError extends HarnessError {
 export class SpawnTargetError extends HarnessError {
   constructor(message: string) {
     super("SPAWN_TARGET", message);
+  }
+}
+
+/**
+ * Generated MCP configuration lost its credential identity before spawn.
+ * Maps to HTTP 409.
+ */
+export class McpCredentialGenerationChangedError extends HarnessError {
+  constructor() {
+    super(
+      "MCP_CREDENTIAL_GENERATION_CHANGED",
+      "The Sapiom credential changed while preparing this process",
+    );
   }
 }
 

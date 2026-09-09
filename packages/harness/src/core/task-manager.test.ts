@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { BackgroundTask, HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 import {
   TaskAlreadyRunningError,
+  McpCredentialGenerationChangedError,
   TaskManager,
+  type TaskManagerOptions,
   TaskNotSupportedError,
   type TaskProcess,
   type TaskSpawnFn,
@@ -52,7 +54,8 @@ function makeAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
 function makeManager(options: {
   adapter?: HarnessAdapter;
   onCleanup?: (taskId: string) => void;
-  buildLaunchOpts?: () => Record<string, never>;
+  buildLaunchOpts?: TaskManagerOptions["buildLaunchOpts"];
+  currentCredentialGeneration?: TaskManagerOptions["currentCredentialGeneration"];
 } = {}): { manager: TaskManager; spawned: Spawned[]; statuses: BackgroundTask[] } {
   const spawned: Spawned[] = [];
   const spawnProcess: TaskSpawnFn = (command, args, opts) => {
@@ -67,6 +70,7 @@ function makeManager(options: {
     spawnProcess,
     onCleanup: options.onCleanup,
     buildLaunchOpts: options.buildLaunchOpts,
+    currentCredentialGeneration: options.currentCredentialGeneration,
     now: () => "2026-01-01T00:00:00.000Z",
     generateId: (() => {
       let n = 0;
@@ -346,6 +350,29 @@ describe("TaskManager", () => {
     });
     await expect(manager.run(runRequest)).rejects.toThrow("no fork for you");
     expect(onCleanup).toHaveBeenCalledWith("task-x");
+    expect(manager.list()).toHaveLength(0);
+  });
+
+  it("rejects an ordinary task whose MCP credential changes before child-process admission", async () => {
+    const onCleanup = vi.fn();
+    let generation = 1;
+    const { manager, spawned } = makeManager({
+      onCleanup,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => {
+        const launch = {
+          mcpCredentialLaunch: { generation },
+        };
+        generation = 2;
+        return launch;
+      },
+    });
+
+    await expect(manager.run(runRequest)).rejects.toBeInstanceOf(
+      McpCredentialGenerationChangedError,
+    );
+    expect(spawned).toHaveLength(0);
+    expect(onCleanup).toHaveBeenCalledWith("task-1");
     expect(manager.list()).toHaveLength(0);
   });
 

@@ -36,6 +36,7 @@ import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import {
   AdapterNotFoundError,
   ExternalHarnessError,
+  McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -542,6 +543,25 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions", () => {
+    it("409s when the Sapiom connection changes before process admission", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.create).mockRejectedValue(
+        new McpCredentialGenerationChangedError(),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+      });
+    });
+
     it("preserves the initial task and scaffold request without an input-route round trip", async () => {
       const sessionManager = fakeSessionManager();
       vi.mocked(sessionManager.create).mockResolvedValue(exitedSession());
@@ -1425,6 +1445,24 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("SESSION_ALREADY_LIVE");
+    });
+
+    it("409s when the Sapiom connection changes before resumed process admission", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.resume).mockRejectedValue(
+        new McpCredentialGenerationChangedError(),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-stale/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+      });
     });
 
     it("409s when resume() throws SessionNotResumeableError (no agentSessionId to resume from)", async () => {
