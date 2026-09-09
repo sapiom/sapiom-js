@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type RefObject,
+} from "react";
 import type { MapChangeProposal } from "@shared/agent-map";
 import {
   layoutDirectedGraph,
@@ -55,6 +61,38 @@ async function measureLabels(
   }
 }
 
+export function agentMapGeometry(proposal: MapChangeProposal): string {
+  const byId = (a: { id: string }, b: { id: string }) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  return JSON.stringify({
+    id: proposal.projectId,
+    nodes: proposal.nodes
+      .map(({ id }) => ({
+        id,
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
+      }))
+      .sort(byId),
+    edges: proposal.relationships
+      .map((edge) => ({
+        id: edge.id,
+        from: edge.fromNodeId,
+        to: edge.toNodeId,
+        label: `${edge.kind}${edge.executionMode ? ` · ${edge.executionMode}` : ""}`,
+      }))
+      .sort(byId),
+  });
+}
+
+export function quantizedMapAspect(
+  width: number,
+  height: number,
+): number | null {
+  return width > 0 && height > 0 && Number.isFinite(width / height)
+    ? Math.max(0.25, Math.round((width / height) * 4) / 4)
+    : null;
+}
+
 export function useAgentMapLayout(
   proposal: MapChangeProposal,
   viewport: RefObject<HTMLDivElement | null>,
@@ -62,30 +100,16 @@ export function useAgentMapLayout(
 ) {
   const [mode, setMode] = useState<MapLayout>(initialLayout);
   const [worker] = useState(() => new ElkLayoutWorker());
-  const geometry = JSON.stringify({
-    nodes: proposal.nodes.map(({ id }) => ({
-      id,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
-    })),
-    edges: proposal.relationships.map((edge) => ({
-      id: edge.id,
-      from: edge.fromNodeId,
-      to: edge.toNodeId,
-      label: `${edge.kind}${edge.executionMode ? ` · ${edge.executionMode}` : ""}`,
-    })),
-  });
+  const [aspect, setAspect] = useState<number | null>(null);
+  const geometry = agentMapGeometry(proposal);
   const input = useMemo(
     () =>
-      ({
-        id: `${proposal.projectId}/${proposal.id}`,
-        ...JSON.parse(geometry),
-      }) as {
+      JSON.parse(geometry) as {
         id: string;
         nodes: { id: string; width: number; height: number }[];
         edges: DirectedGraphEdge[];
       },
-    [proposal.projectId, proposal.id, geometry],
+    [geometry],
   );
   const classic = useMemo(() => {
     try {
@@ -94,25 +118,59 @@ export function useAgentMapLayout(
       return null;
     }
   }, [input]);
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const measure = () => {
+      const next = quantizedMapAspect(
+        element.clientWidth,
+        element.clientHeight,
+      );
+      if (next !== null) setAspect(next);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    let timer: ReturnType<typeof setTimeout>;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, 150);
+    });
+    observer.observe(element);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [viewport, classic]);
   const [result, setResult] = useState<{
     input: typeof input;
+    aspect: number;
     layout: DirectedGraphLayout | null;
   } | null>(null);
   useEffect(() => () => worker.dispose(), [worker]);
   useEffect(() => {
-    if (mode !== "elk" || !viewport.current || !visible) return;
-    const controller = new AbortController();
+    if (mode !== "elk" || !viewport.current || !visible || aspect === null)
+      return;
     const element = viewport.current;
+    // An explicit layout request may precede the pending resize debounce.
+    const measuredAspect = quantizedMapAspect(
+      element.clientWidth,
+      element.clientHeight,
+    );
+    if (measuredAspect !== aspect) {
+      setAspect(measuredAspect);
+      return;
+    }
+    const controller = new AbortController();
     let measuring = true;
     void measureLabels(input.edges, element)
       .then(async (edges) => {
         controller.signal.throwIfAborted();
         measuring = false;
         const layout = await worker.layout(
-          { ...input, edges },
+          { ...input, edges, options: { "elk.aspectRatio": String(aspect) } },
           controller.signal,
         );
-        if (!controller.signal.aborted) setResult({ input, layout });
+        if (!controller.signal.aborted) setResult({ input, aspect, layout });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -123,18 +181,19 @@ export function useAgentMapLayout(
             ? reason
             : `${measuring ? "Label measurement" : worker.stage} failed`,
         );
-        setResult({ input, layout: null });
+        setResult({ input, aspect, layout: null });
       });
     return () => controller.abort();
-  }, [input, mode, viewport, visible, worker]);
+  }, [input, aspect, mode, viewport, visible, worker]);
   const vertical = mode === "elk" && result?.input === input ? result : null;
+  const current = vertical?.aspect === aspect;
   return {
     layout: vertical?.layout ?? classic,
     mode,
     state:
-      mode === "classic" || vertical?.layout
+      mode === "classic" || (current && vertical?.layout)
         ? "ready"
-        : vertical
+        : current
           ? "fallback"
           : "loading",
     engine: vertical?.layout ? "elk" : "classic",

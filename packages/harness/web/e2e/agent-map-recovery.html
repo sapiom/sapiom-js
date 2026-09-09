@@ -1,0 +1,40 @@
+<!doctype html>
+<html data-product="sapiom-studio" data-theme="light">
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { createElement as h, useState } from "react";
+      import { createRoot } from "react-dom/client";
+      import { AgentMapCanvas } from "../src/components/AgentMapCanvas.tsx";
+      import { agentMapPackingFixture } from "./agent-map-packing-fixture.ts";
+      import "../src/styles.css";
+      function Fixture() {
+        const [broken, setBroken] = useState(true);
+        const proposal = agentMapPackingFixture();
+        // Direct component props exercise recovery beyond the API's codec guard.
+        if (broken) proposal.nodes.push(proposal.nodes[0]);
+        return h(
+          "div",
+          null,
+          h(
+            "button",
+            { onClick: () => setBroken(!broken) },
+            broken ? "Repair map" : "Break map",
+          ),
+          h(
+            "div",
+            { id: "map", style: { width: 600, height: 900, display: "flex" } },
+            h(AgentMapCanvas, {
+              proposal,
+              selectedNodeId: null,
+              onSelectNode() {},
+              onInspectNode() {},
+              pendingNodeId: null,
+            }),
+          ),
+        );
+      }
+      createRoot(document.getElementById("root")).render(h(Fixture));
+    </script>
+  </body>
+</html>

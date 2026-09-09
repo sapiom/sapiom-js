@@ -30,9 +30,11 @@ import {
   fitGraphView,
   panGraphViewWithKeyboard,
   resetGraphView,
+  revealGraphRect,
   wheelGraphView,
   type GraphArrowKey,
   type GraphView,
+  type GraphRect,
 } from "../lib/graph-viewport";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
@@ -80,7 +82,7 @@ export function AgentMapCanvas({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const computed = useAgentMapLayout(proposal, viewportRef, visible);
   const dragRef = useRef<DragState | null>(null);
-  const fittedProposalRef = useRef<string | null>(null);
+  const fittedProjectRef = useRef<string | null>(null);
   const followsUpdates = useRef(true);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
@@ -110,13 +112,13 @@ export function AgentMapCanvas({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
-    if (fittedProposalRef.current !== proposal.id)
+    if (fittedProjectRef.current !== proposal.projectId)
       followsUpdates.current = true;
     const measure = (): void => {
       const visible = viewport.getBoundingClientRect().width > 0;
       setVisible(visible);
       if (!followsUpdates.current || !visible) return;
-      fittedProposalRef.current = proposal.id;
+      fittedProjectRef.current = proposal.projectId;
       fit();
     };
     measure();
@@ -124,7 +126,7 @@ export function AgentMapCanvas({
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [fit, layout, proposal.id]);
+  }, [fit, layout, proposal.projectId]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -177,6 +179,25 @@ export function AgentMapCanvas({
   const finishPan = (): void => {
     dragRef.current = null;
     setPanning(false);
+  };
+
+  const revealNode = (node: GraphRect): void => {
+    const viewport = viewportRef.current;
+    if (!viewport || !layout) return;
+    setView((current) => {
+      const next = revealGraphRect(
+        current,
+        layout.bounds,
+        {
+          width: viewport.clientWidth,
+          height: viewport.clientHeight,
+        },
+        node,
+      );
+      if (next.x === current.x && next.y === current.y) return current;
+      followsUpdates.current = false;
+      return next;
+    });
   };
 
   if (!layout) {
@@ -296,6 +317,7 @@ export function AgentMapCanvas({
                     height: placed.height,
                   } satisfies CSSProperties
                 }
+                onFocus={() => revealNode(placed)}
               >
                 <button
                   type="button"
