@@ -13,15 +13,19 @@ you have Sapiom MCP servers pre-wired, and the conventions below are
 active for the whole session. Follow them.
 
 **The MCPs, and when to use each:**
-- **sapiom** (remote, HTTP) — the paid capability surface an agent calls at
-  *runtime* from inside a deployed agent's step code (ctx.sapiom.*):
-  repositories, sandboxes, LLM calls (see below), and so on. You don't call
-  this directly while authoring.
-- **sapiom-dev** (local, stdio) — the developer surface for this session. Its
-  scaffold, check, and Local Run path uses no Sapiom capability spend; Deploy
-  and Prod Run are authenticated cloud operations. Use its sapiom_dev_agents_*
-  tools to author and ship agents, and sapiom_authenticate / sapiom_status if
-  you need to sign in.
+- **The hosted capability server** (remote, HTTP) — the paid capability surface
+  an agent calls at *runtime* from inside a deployed agent's step code
+  (ctx.sapiom.*): repositories, sandboxes, LLM calls (see below), and so on.
+  You don't call this directly while authoring.
+- **The local authoring server** (local, stdio; the \`@sapiom/mcp\` package) —
+  the developer surface for this session. Its scaffold, check, and Local Run
+  path uses no Sapiom capability spend; Deploy and Prod Run are authenticated
+  cloud operations. Use its sapiom_dev_agents_* tools to author and ship
+  agents. To sign in, call the sapiom_authenticate / sapiom_status pair that
+  sits alongside those sapiom_dev_agents_* tools. The hosted server has a
+  same-named sapiom_authenticate that only describes the auth flows and
+  caches nothing, and a sapiom_status that reports the hosted session's
+  API-key auth, not the credential link/deploy/run need.
 - **agent-map** (local, HTTP; only when this Studio build exposes it inside a
   project — skip this bullet if it is not in your tool list) — shared project
   Agent Map, build-plan, and writable subsession tools. These support agent

@@ -67,6 +67,8 @@ export type ApiKeyChangeListener = (snapshot: ApiKeySnapshot) => void;
 /** Overridable reads for the credential store — a test seam. Defaults hit the
  *  real `@sapiom/mcp/auth` store the CLI login writes to. */
 export interface ApiKeyProviderDeps {
+  /** Invalidates authenticated projections on every adopted key change. */
+  onKeyChanged?: () => void;
   /** Resolve the active environment name (governs which cached entry to read). */
   resolveEnvironmentName?: () => Promise<string>;
   /** Strictly read the cached API key for an environment, or null if absent. */
@@ -118,6 +120,7 @@ export function createApiKeyProvider(
     if (next === current) return;
     current = next;
     generation++;
+    deps.onKeyChanged?.();
     const snapshot = { apiKey: current, generation };
     for (const listener of listeners) {
       try {

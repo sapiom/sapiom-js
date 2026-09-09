@@ -18,6 +18,7 @@ import {
   cancelSchedule,
   check,
   clone,
+  completeScheduleSecretRotation,
   createSchedule,
   deploy,
   getSchedule,
@@ -31,12 +32,15 @@ import {
   parseStubFile,
   previewCron,
   requireConfig,
+  revokeScheduleSecret,
+  rotateScheduleSecret,
   run,
   runLocalFromDir,
   scaffold,
   signal,
   waitForExecution,
   writeConfig,
+  type CreateScheduleResult,
   type ScheduleDetail,
   type SchedulePolicy,
   type StubFile,
@@ -93,9 +97,65 @@ function scheduleHint(schedule: ScheduleDetail): string | undefined {
   }
   if (schedule.status === "active" && schedule.nextFireAt)
     return `Active — next fire at ${schedule.nextFireAt}.`;
+  if (schedule.status === "active" && schedule.kind === "webhook")
+    return `Armed — fires on every signed POST to the hook URL (publicId ${schedule.publicId}, secret v${schedule.secretVersion}). The secret was shown once at create/rotate time; rotate with sapiom_dev_agents_schedule_secret if it is lost.`;
+  if (schedule.status === "active" && schedule.kind === "event")
+    return `Armed — fires on every '${schedule.eventType}' event this tenant emits (POST /v1/workflows/events with { type, payload }).`;
   if (schedule.status === "completed") return "Completed — no further fires.";
-  if (schedule.status === "disabled") return "Cancelled — no further fires.";
+  if (schedule.status === "disabled")
+    return schedule.revokedAt
+      ? "Revoked — the hook rejects every request; create a new webhook trigger to hand the sender a fresh URL + secret."
+      : "Cancelled — no further fires.";
   return undefined;
+}
+
+/**
+ * How a sender must sign a POST to a webhook trigger. Stated in the tool result rather than
+ * left to memory: the secret is shown once, and the sender the agent is about to configure has
+ * to compute exactly this or every delivery 401s. Mirrors the engine's `hook-signature.ts`.
+ */
+const WEBHOOK_SIGNING_SCHEME = {
+  algorithm: "HMAC-SHA256, lowercase hex",
+  signedString:
+    "<X-Sapiom-Timestamp>.<X-Sapiom-Event-Id>.<raw request body bytes>",
+  headers: {
+    "X-Sapiom-Timestamp":
+      "Unix epoch MILLISECONDS, digits only; rejected outside a ±5 minute window",
+    "X-Sapiom-Event-Id":
+      "sender-chosen delivery id, [A-Za-z0-9_-]{1,128}; the same id is deduplicated, so retries are safe",
+    "X-Sapiom-Signature": "the HMAC hex digest",
+  },
+  body: "a JSON object (up to 1 MiB) — it becomes the run input, folded over the trigger's stored `input`",
+  response:
+    "202 { receiptId, duplicate } on accept; 401 for a bad or stale signature, revoked hook, or unknown URL",
+  example:
+    "const ts = String(Date.now()); const id = crypto.randomUUID(); const sig = crypto.createHmac('sha256', secret).update(`${ts}.${id}.${body}`).digest('hex');",
+  thirdPartySenders:
+    "Slack, Meta, Stripe, GitHub and similar sign with THEIR scheme and cannot produce this HMAC. Point them at an App Link `/hook/*` receiver (webhooksEnabled) that verifies their signature, or at a small translator that re-signs and forwards here.",
+} as const;
+
+/**
+ * Shape the create result for the agent: a webhook create is the one response carrying the
+ * secret, and it must leave with the URL, the scheme, and the shown-once warning attached.
+ */
+function scheduleCreateResult(
+  schedule: CreateScheduleResult,
+): Record<string, unknown> {
+  const { secret, url, ...detail } = schedule;
+  const hint = scheduleHint(detail);
+  if (schedule.kind !== "webhook" || !secret || !url) {
+    return { schedule: detail, ...(hint ? { hint } : {}) };
+  }
+  return {
+    schedule: detail,
+    webhook: {
+      url,
+      secret,
+      secretVersion: detail.secretVersion,
+      signing: WEBHOOK_SIGNING_SCHEME,
+    },
+    hint: `Webhook trigger armed at ${url}. The secret above is shown ONCE — it is derived, never stored, and cannot be read back; hand it to the sender now, or rotate later with sapiom_dev_agents_schedule_secret. Every POST must carry X-Sapiom-Timestamp / X-Sapiom-Event-Id / X-Sapiom-Signature computed as described in \`webhook.signing\`.`,
+  };
 }
 
 export function register(server: McpServer, env: ResolvedEnvironment): void {
@@ -574,12 +634,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
   );
 
-  // ── Schedules (triggers) ──────────────────────────────────────────────────
+  // ── Triggers: schedules, events, webhooks ────────────────────────────────
 
   registerTool(
     server,
     "sapiom_dev_agents_schedule",
-    "Create a schedule for a deployed agent: a recurring cron schedule (kind 'schedule_cron' + cron + timezone) or a one-off delayed run (kind 'schedule_once' + at). Returns the schedule with its next fire time. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
+    "Create a trigger for a deployed agent — one of four kinds. 'schedule_cron' (+ cron, optional timezone) runs it on a recurring schedule; 'schedule_once' (+ at) runs it once at a future time; 'event' (+ eventType) runs it every time this tenant emits that event type via POST /v1/workflows/events; 'webhook' runs it every time an external system POSTs to a public hook URL — the result returns that URL plus a shown-once signing secret and the HMAC-SHA256 scheme the sender must use. Use 'webhook' when an external system should start the agent (\"run when X POSTs to us\") instead of hand-building an HTTP server; third-party senders with their own signature scheme (Slack, Meta, Stripe, GitHub) cannot produce our HMAC, so route those through an App Link /hook/* receiver or a translator. Returns the trigger with its next fire time where it has one. Tip: validate a cron with sapiom_dev_agents_cron_preview first.",
     {
       definition: z
         .string()
@@ -587,9 +647,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           "The agent's tenant-unique slug (the handle it was deployed under).",
         ),
       kind: z
-        .enum(["schedule_cron", "schedule_once"])
+        .enum(["schedule_cron", "schedule_once", "event", "webhook"])
         .describe(
-          "'schedule_cron' = recurring; 'schedule_once' = a single delayed run.",
+          "'schedule_cron' = recurring; 'schedule_once' = a single delayed run; 'event' = fires on a tenant-emitted event type; 'webhook' = fires on a signed POST to a public URL minted for this trigger.",
         ),
       cron: z
         .string()
@@ -609,10 +669,18 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "ISO 8601 fire time — required for 'schedule_once'. E.g. '2026-07-01T17:00:00Z'.",
         ),
+      eventType: z
+        .string()
+        .optional()
+        .describe(
+          "Event type to match — required for 'event'. Lowercase dot-separated segments, e.g. 'lead.created'; the 'sapiom.*' namespace is reserved. Emit it with POST /v1/workflows/events { type, payload }.",
+        ),
       input: z
         .unknown()
         .optional()
-        .describe("Execution input passed to each run (any JSON value)."),
+        .describe(
+          "Execution input passed to each run (any JSON value). For 'event' and 'webhook' the inbound payload is folded over this (payload wins on key conflicts).",
+        ),
       startAt: z
         .string()
         .optional()
@@ -634,6 +702,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       cron,
       timezone,
       at,
+      eventType,
       input,
       startAt,
       endAt,
@@ -649,6 +718,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
             cron,
             timezone,
             at,
+            eventType,
             input: coerceJson(input),
             startAt,
             endAt,
@@ -656,8 +726,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           },
           client,
         );
-        const hint = scheduleHint(schedule);
-        return ok({ schedule, ...(hint ? { hint } : {}) });
+        return ok(scheduleCreateResult(schedule));
       } catch (err) {
         return fail(err);
       }
@@ -667,19 +736,19 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_schedule_inspect",
-    "Inspect schedules. With scheduleId: returns one schedule's config, next fire time, and recent fire history (each with the run's executionId) — use this to debug a misbehaving schedule, then inspect a failed run's executionId with sapiom_dev_agents_inspect. With definition (slug) and no scheduleId: lists that agent's schedules.",
+    "Inspect triggers of any kind (cron, one-off, event, webhook). With scheduleId: returns one trigger's config, next fire time (schedules), eventType (event), publicId / secretVersion / graceUntil / revokedAt (webhook — never the secret, which is shown only at create/rotate), and recent fire history (each with the run's executionId, and the inbound receiptId for event/webhook fires) — use this to debug a misbehaving trigger, then inspect a failed run's executionId with sapiom_dev_agents_inspect. With definition (slug) and no scheduleId: lists that agent's triggers.",
     {
       scheduleId: z
         .string()
         .optional()
         .describe(
-          "Inspect one schedule (detail + recent fires + a health hint).",
+          "Inspect one trigger (detail + recent fires + a health hint).",
         ),
       definition: z
         .string()
         .optional()
         .describe(
-          "List schedules for this agent slug (used when scheduleId is omitted).",
+          "List triggers for this agent slug (used when scheduleId is omitted).",
         ),
       status: z
         .enum(["active", "paused", "completed", "disabled"])
@@ -702,7 +771,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           new AgentOperationError({
             code: "BAD_INPUT",
             message:
-              "Provide scheduleId (to inspect one) or definition (to list an agent's schedules).",
+              "Provide scheduleId (to inspect one) or definition (to list an agent's triggers).",
           }),
         );
       } catch (err) {
@@ -714,15 +783,80 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_schedule_cancel",
-    "Cancel a schedule by id. Stops all future fires (a recurring schedule won't re-arm; a pending one-off won't run). Irreversible — recreate to reschedule.",
+    "Cancel a trigger of any kind by id. Stops all future fires: a recurring schedule won't re-arm, a pending one-off won't run, an event trigger stops matching, a webhook stops accepting POSTs (401 from then on). Irreversible — recreate to re-arm (a recreated webhook gets a new URL + secret). For a webhook whose secret leaked but whose URL should keep working, rotate with sapiom_dev_agents_schedule_secret instead.",
     {
-      scheduleId: z.string().describe("The schedule to cancel."),
+      scheduleId: z.string().describe("The trigger to cancel."),
     },
     async ({ scheduleId }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
         return ok(await cancelSchedule(scheduleId, client));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    server,
+    "sapiom_dev_agents_schedule_secret",
+    "Webhook-trigger secret lifecycle. 'rotate' = planned hygiene: mints a new secret (returned ONCE, with the hook URL beside it so the sender can be reconfigured in one step) while the previous secret keeps verifying for a 24h grace. 'complete_rotation' = the sender has moved; end the grace now so the old secret stops verifying immediately. 'revoke' = compromise: the hook rejects every request from now on and any open grace dies with it — irreversible, create a new webhook trigger to hand the sender a fresh URL + secret. Only valid on kind 'webhook'.",
+    {
+      scheduleId: z.string().describe("The webhook trigger."),
+      action: z
+        .enum(["rotate", "complete_rotation", "revoke"])
+        .describe(
+          "'rotate' (new secret, old one verifies for 24h) | 'complete_rotation' (end that grace now) | 'revoke' (kill the hook).",
+        ),
+    },
+    async ({ scheduleId, action }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        if (action === "rotate") {
+          // While a rotation grace is open the engine REPLAYS the live rotation instead of
+          // minting another secret (idempotent by design) — the response carries the same
+          // version and the same secret. Read the version first so the hint can say which
+          // happened; otherwise an agent reconfigures the sender for nothing.
+          const before = await getSchedule(scheduleId, client);
+          const { secret, url, ...schedule } = await rotateScheduleSecret(
+            scheduleId,
+            client,
+          );
+          const replayed =
+            before.secretVersion !== null &&
+            schedule.secretVersion === before.secretVersion;
+          const grace = schedule.graceUntil ?? "the grace ends";
+          return ok({
+            schedule,
+            webhook: {
+              url,
+              secret,
+              secretVersion: schedule.secretVersion,
+              signing: WEBHOOK_SIGNING_SCHEME,
+            },
+            replayed,
+            hint: replayed
+              ? `No new secret: a rotation to v${schedule.secretVersion} is already in progress (grace until ${grace}), so this replayed it and returned the SAME current secret. If the sender already has v${schedule.secretVersion}, nothing to reconfigure; to rotate again, call this tool with action 'complete_rotation' first.`
+              : `Rotated to secret v${schedule.secretVersion}; shown ONCE. The previous secret still verifies until ${grace} — reconfigure the sender, then call this tool with action 'complete_rotation' to close the window early.`,
+          });
+        }
+        if (action === "complete_rotation") {
+          const schedule = await completeScheduleSecretRotation(
+            scheduleId,
+            client,
+          );
+          return ok({
+            schedule,
+            hint: "Rotation complete — only the current secret verifies now.",
+          });
+        }
+        const schedule = await revokeScheduleSecret(scheduleId, client);
+        return ok({
+          schedule,
+          hint: "Revoked — the hook rejects every request from now on. Create a new webhook trigger to hand the sender a fresh URL + secret.",
+        });
       } catch (err) {
         return fail(err);
       }
