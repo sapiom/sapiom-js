@@ -27,6 +27,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { scaffold } from "@sapiom/agent-core";
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 import { WebSocketServer } from "ws";
 import open from "open";
 
@@ -125,6 +126,7 @@ import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
+import { observeCredentialStore } from "../core/credential-store-observer.js";
 import {
   sourceObservationsWithinScope,
   WorkspaceWatcherManager,
@@ -665,6 +667,7 @@ function createDefaultBuildLaunchOpts(
         ? {
             mcpCredentialLaunch: {
               generation,
+              credentialBearing: apiKey !== null,
             },
           }
         : {}),
@@ -1846,9 +1849,68 @@ export const startServer = async (
   taskManager.onStatusChange((task) => {
     bus.publish({ type: "task.status", task });
   });
+  let credentialRemovalTail: Promise<void> = Promise.resolve();
+  let credentialRemovalInFlight: {
+    generation: number;
+    operation: Promise<void>;
+  } | null = null;
+  const reconcileCredentialRemoval = (): Promise<void> => {
+    const generation = apiKeyProvider.snapshot().generation;
+    if (credentialRemovalInFlight?.generation === generation) {
+      return credentialRemovalInFlight.operation;
+    }
+    // Each distinct removal generation receives a fresh sweep after the prior
+    // one. A newer sign-in can launch work while an older sweep is waiting for
+    // exits, so sharing that older target snapshot would make disconnect lie.
+    const operation = credentialRemovalTail
+      .catch(() => {})
+      .then(() =>
+        Promise.all([
+          sessionManager.terminateCredentialBearingSessions(generation),
+          taskManager.terminateCredentialBearingTasks(generation),
+        ]).then(() => {}),
+      );
+    const tracked = operation.finally(() => {
+      if (credentialRemovalInFlight?.operation === tracked) {
+        credentialRemovalInFlight = null;
+      }
+    });
+    credentialRemovalTail = tracked;
+    credentialRemovalInFlight = { generation, operation: tracked };
+    return tracked;
+  };
+  let credentialStoreObserver: ReturnType<typeof observeCredentialStore> = null;
+  const ensureCredentialStoreObserver = (): void => {
+    if (!authEnabled || credentialStoreObserver) return;
+    credentialStoreObserver = observeCredentialStore(
+      credentialsFilePath(),
+      () => apiKeyProvider.refresh().then(() => {}),
+      {
+        onError: (error) => {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            console.error("[harness] credential store observation failed");
+          }
+        },
+        onUnavailable: () => {
+          // A later key transition re-arms this. Avoid adding an unbounded
+          // watcher retry/fallback loop to the credential lifecycle.
+          credentialStoreObserver = null;
+        },
+      },
+    );
+  };
   const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
-    ({ generation }) => {
+    ({ apiKey, generation }) => {
       sessionManager.reconcileMcpCredentialGeneration(generation);
+      if (apiKey !== null) {
+        // First-run sign-in creates the directory after the boot-time watch
+        // attempt. Re-arm on that known transition without a polling fallback.
+        ensureCredentialStoreObserver();
+      } else {
+        void reconcileCredentialRemoval().catch(() => {
+          console.error("[harness] credential removal reconciliation failed");
+        });
+      }
     },
   );
 
@@ -4318,6 +4380,7 @@ export const startServer = async (
           void agentMapMcp?.revokeSession(session.id);
         }
       },
+      onCredentialRemoved: reconcileCredentialRemoval,
     }),
   );
 
@@ -4597,6 +4660,10 @@ export const startServer = async (
     },
   ]);
 
+  if (authEnabled) {
+    ensureCredentialStoreObserver();
+  }
+
   let serverClose: Promise<void> | null = null;
   const closeServer = (): Promise<void> => {
     if (serverClose) return serverClose;
@@ -4613,6 +4680,7 @@ export const startServer = async (
         }
       };
 
+      credentialStoreObserver?.close();
       unsubscribeCredentialChanges();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());

@@ -229,6 +229,7 @@ export {
   SessionNotResumeableError,
   SessionAlreadyLiveError,
   McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SubsessionBindingMismatchError,
   SubsessionFreshRestartForbiddenError,
   AdapterNotFoundError,

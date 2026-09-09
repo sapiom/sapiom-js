@@ -52,6 +52,7 @@ import {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpSessionRestartUnavailableError,
   McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
@@ -70,6 +71,7 @@ export {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpSessionRestartUnavailableError,
   McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
@@ -392,6 +394,7 @@ export type SessionActivityListener = (harnessSessionId: string) => void;
 /** Server-private identity of the credential used to generate one MCP config. */
 export interface McpCredentialLaunch {
   generation: number;
+  credentialBearing: boolean;
 }
 
 export type LaunchOptsBuildResult = Omit<
@@ -897,6 +900,23 @@ export class SessionManager {
     return this.kill(id);
   }
 
+  /** Stop credential-bearing PTYs launched no later than the removed generation. */
+  async terminateCredentialBearingSessions(
+    throughGeneration: number,
+  ): Promise<void> {
+    const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
+      handle.mcpCredentialLaunch?.credentialBearing &&
+      handle.mcpCredentialLaunch.generation <= throughGeneration
+        ? [{ id, runtimeEpoch: handle.runtimeEpoch }]
+        : [],
+    );
+    await Promise.all(
+      targets.map(({ id, runtimeEpoch }) =>
+        this.killIfRuntime(id, runtimeEpoch),
+      ),
+    );
+  }
+
 
   /**
    * Fail-closed admission for already-authenticated ingest work. A terminal
@@ -1208,6 +1228,10 @@ export class SessionManager {
     for (const [id, handle] of this.ptys) {
       const session = this.sessions.get(id);
       if (!session) continue;
+      // The restart action owns this exact runtime until it either restores
+      // restart-required or replaces it. A concurrent credential change is
+      // still enforced by resume's launch-generation fence.
+      if (session.mcpAuthState === "restarting") continue;
       const next = handle.mcpCredentialLaunch
         ? handle.mcpCredentialLaunch.generation === currentGeneration
           ? "current"
@@ -1216,6 +1240,90 @@ export class SessionManager {
       if (session.mcpAuthState === next) continue;
       session.mcpAuthState = next;
       this.emitStatus(session, handle.runtimeEpoch);
+    }
+  }
+
+  /** Replace one stale Claude runtime only when its conversation is resumable. */
+  async restartForMcpCredentials(id: string): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    const handle = this.ptys.get(id);
+    if (
+      session.harness !== "claude-code" ||
+      session.mcpAuthState !== "restart-required" ||
+      !handle?.mcpCredentialLaunch ||
+      handle.killed
+    ) {
+      throw new McpSessionRestartUnavailableError();
+    }
+
+    const runtimeEpoch = handle.runtimeEpoch;
+    const restoreRestartRequired = (): void => {
+      if (this.ptys.get(id) !== handle || this.sessions.get(id) !== session)
+        return;
+      session.mcpAuthState = "restart-required";
+      this.emitStatus(session, runtimeEpoch);
+    };
+    session.mcpAuthState = "restarting";
+    this.emitStatus(session, runtimeEpoch);
+
+    if (!session.agentSessionId) {
+      restoreRestartRequired();
+      throw new SessionNotResumeableError(
+        id,
+        "Claude Code has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.",
+      );
+    }
+    let resumable: boolean;
+    try {
+      resumable = await this.getAdapter(session.harness).canResume(
+        session.agentSessionId,
+        session.cwd,
+      );
+    } catch (error) {
+      restoreRestartRequired();
+      throw error;
+    }
+    if (!resumable) {
+      restoreRestartRequired();
+      throw new SessionNotResumeableError(
+        id,
+        "Claude Code no longer has this conversation, so it cannot be restarted safely. Start a new session instead.",
+      );
+    }
+    if (this.ptys.get(id) !== handle || handle.killed) {
+      restoreRestartRequired();
+      throw new McpSessionRestartUnavailableError(
+        "The session changed while its restart was being prepared. Try again from its current state.",
+      );
+    }
+
+    let killed: boolean;
+    try {
+      killed = await this.killIfRuntime(id, runtimeEpoch);
+    } catch (error) {
+      restoreRestartRequired();
+      throw error;
+    }
+    if (!killed) {
+      throw new McpSessionRestartUnavailableError(
+        "The session changed before it could be restarted. Try again from its current state.",
+      );
+    }
+
+    // markExited() clears runtime-only MCP state. Keep the action observable
+    // while the ordinary resume path performs its own final checks and spawn.
+    session.mcpAuthState = "restarting";
+    this.emitStatus(session);
+    try {
+      return await this.resume(id);
+    } catch (error) {
+      if (!this.ptys.has(id) && session.mcpAuthState === "restarting") {
+        session.mcpAuthState = "not-applicable";
+        this.emitStatus(session);
+      }
+      throw error;
     }
   }
 

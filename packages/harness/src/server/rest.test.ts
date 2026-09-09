@@ -37,6 +37,7 @@ import {
   AdapterNotFoundError,
   ExternalHarnessError,
   McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -62,6 +63,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     ),
     create: vi.fn(),
     resume: vi.fn(),
+    restartForMcpCredentials: vi.fn(),
     kill: vi.fn(() => true),
     write: vi.fn(() => true),
     submitInput: vi.fn(async () => true),
@@ -1362,6 +1364,56 @@ describe("createRestRouter", () => {
         },
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /sessions/:id/restart-mcp", () => {
+    it("returns the replacement session from the credential-scoped restart", async () => {
+      const stale = exitedSession({
+        id: "stale-session",
+        status: "running",
+        mcpAuthState: "restart-required",
+      });
+      const sessionManager = fakeSessionManager([stale]);
+      (
+        sessionManager.restartForMcpCredentials as ReturnType<typeof vi.fn>
+      ).mockResolvedValue({ ...stale, mcpAuthState: "current" });
+      start({ sessionManager });
+
+      const res = await fetch(
+        `${baseUrl}/sessions/stale-session/restart-mcp`,
+        { method: "POST", headers: TOKEN_HEADER },
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        id: "stale-session",
+        status: "running",
+        mcpAuthState: "current",
+      });
+      expect(
+        sessionManager.restartForMcpCredentials,
+      ).toHaveBeenCalledWith("stale-session");
+    });
+
+    it("maps an ineligible restart to a stable 409", async () => {
+      const sessionManager = fakeSessionManager();
+      (
+        sessionManager.restartForMcpCredentials as ReturnType<typeof vi.fn>
+      ).mockRejectedValue(new McpSessionRestartUnavailableError());
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/current/restart-mcp`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error:
+          "This session is not waiting for a Sapiom connection restart",
+        code: "MCP_SESSION_RESTART_UNAVAILABLE",
+      });
     });
   });
 

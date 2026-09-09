@@ -361,7 +361,7 @@ describe("TaskManager", () => {
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => {
         const launch = {
-          mcpCredentialLaunch: { generation },
+          mcpCredentialLaunch: { generation, credentialBearing: true },
         };
         generation = 2;
         return launch;
@@ -374,6 +374,35 @@ describe("TaskManager", () => {
     expect(spawned).toHaveLength(0);
     expect(onCleanup).toHaveBeenCalledWith("task-1");
     expect(manager.list()).toHaveLength(0);
+  });
+
+  it("terminates only credential-bearing ordinary tasks at or before the removal generation", async () => {
+    let launchCount = 0;
+    let generation = 1;
+    const { manager, spawned } = makeManager({
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: launchCount++ !== 1,
+        },
+      }),
+    });
+    const first = await manager.run(runRequest);
+    const second = await manager.run({ ...runRequest, macroId: "describe" });
+    generation = 2;
+    const newer = await manager.run({ ...runRequest, macroId: "newer" });
+
+    const terminating = manager.terminateCredentialBearingTasks(1);
+    await vi.waitFor(() => expect(spawned[0]!.proc.killed).toBe("SIGTERM"));
+    expect(spawned[1]!.proc.killed).toBeUndefined();
+    expect(spawned[2]!.proc.killed).toBeUndefined();
+
+    spawned[0]!.proc.emit("exit", 0);
+    await terminating;
+    expect(manager.get(first.id)?.status).toBe("completed");
+    expect(manager.get(second.id)?.status).toBe("running");
+    expect(manager.get(newer.id)?.status).toBe("running");
   });
 
   it("killAll signals every still-running task process with SIGTERM", async () => {

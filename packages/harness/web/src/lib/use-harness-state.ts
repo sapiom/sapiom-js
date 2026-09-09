@@ -190,6 +190,8 @@ export interface HarnessStateHook {
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
+  /** Explicitly replace one live Claude runtime with stale MCP auth. */
+  restartMcpSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own
    * reconstruction of the session `from` identifies (either id form). For a
@@ -1609,6 +1611,35 @@ export function useHarnessState(): HarnessStateHook {
     [selectSession],
   );
 
+  const restartMcpSession = useCallback(
+    async (harnessSessionId: string): Promise<HarnessSession> => {
+      try {
+        const session = await api.restartMcpSession(harnessSessionId);
+        setState((prev) =>
+          prev
+            ? {
+                ...prev,
+                sessions: prev.sessions.map((candidate) =>
+                  candidate.id === session.id ? session : candidate,
+                ),
+              }
+            : prev,
+        );
+        return session;
+      } catch (err) {
+        setToast(
+          createToastMessage(
+            err instanceof ApiError && err.reason
+              ? err.reason
+              : (err as Error).message,
+          ),
+        );
+        throw err;
+      }
+    },
+    [],
+  );
+
   /**
    * Portable continue. A conversation the agent no longer holds can't be
    * reattached by anyone, so this starts a fresh session and hands it our own
@@ -2395,6 +2426,7 @@ export function useHarnessState(): HarnessStateHook {
     getWorkflowInputContract,
     sessionRecord,
     resumeSession,
+    restartMcpSession,
     rehydrateSession,
     resumeFromHistory,
     closeSession,

@@ -72,6 +72,7 @@ import {
   ConnectivityBanner,
   ConnectivityScreen,
 } from "./components/ConnectivityState";
+import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
@@ -3240,6 +3241,19 @@ export const App = (): JSX.Element => {
                 ) : null
               }
             />
+
+            {sessionBarSession &&
+              (sessionBarSession.mcpAuthState === "restart-required" ||
+                sessionBarSession.mcpAuthState === "restarting") && (
+                <McpAuthRestartNotice
+                  restarting={
+                    sessionBarSession.mcpAuthState === "restarting"
+                  }
+                  onRestart={async () => {
+                    await harness.restartMcpSession(sessionBarSession.id);
+                  }}
+                />
+              )}
 
             <div className="terminal-slot">
               {showReview && reviewSummary ? (
