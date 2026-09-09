@@ -1,5 +1,5 @@
 /**
- * Lifecycle-level regression coverage for SAP-3114 and SAP-3116.
+ * Lifecycle-level regression coverage for SAP-3114, SAP-3116, and SAP-3122.
  *
  * These tests boot the real server and exercise the shared launch builder used
  * by interactive create/resume and headless background tasks. OAuth and the
@@ -7,7 +7,7 @@
  * synchronously before launching local throwaway processes. Nothing opens a
  * browser or contacts a Sapiom environment.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -97,6 +97,7 @@ import type {
   LaunchOpts,
   SpawnSpec,
 } from "../shared/types.js";
+import { CodexAdapter } from "../core/adapters/codex.js";
 
 type LaunchKind = "create" | "resume" | "background";
 
@@ -106,6 +107,36 @@ interface CapturedLaunch {
     type: string;
     url: string;
     headers?: Record<string, string>;
+  };
+  spec?: SpawnSpec;
+}
+
+/** Exercise the real Codex conversion, substituting only the final process.
+ * CLI parsing and actual MCP discovery are covered by the opt-in live test. */
+function capturingCodexAdapter(
+  captures: CapturedLaunch[],
+  beforeLaunch?: (opts: LaunchOpts) => void,
+): HarnessAdapter {
+  const adapter = new CodexAdapter();
+  /** Capture the real Codex arguments and config, then launch local Bash. */
+  const interactiveSpec = (kind: "create" | "resume", opts: LaunchOpts, rolloutId?: string): SpawnSpec => {
+    beforeLaunch?.(opts);
+    const spec = kind === "resume" ? adapter.resume(rolloutId!, opts) : adapter.launch(opts);
+    const config = JSON.parse(readFileSync(opts.mcpConfigFile!, "utf8")) as {
+      mcpServers: { sapiom: CapturedLaunch["remote"] };
+    };
+    captures.push({ kind, remote: config.mcpServers.sapiom, spec });
+    return { ...spec, command: "bash", args: [] };
+  };
+  return {
+    id: "codex",
+    eventSource: "transcript-tail",
+    systemPromptDelivery: "launch-flag",
+    doctor: async () => [],
+    launch: (opts) => interactiveSpec("create", opts),
+    resume: (rolloutId, opts) => interactiveSpec("resume", opts, rolloutId),
+    listPastSessions: async () => [],
+    canResume: async () => true,
   };
 }
 
@@ -177,6 +208,7 @@ describe("Agent Studio MCP authentication wiring", () => {
   let projectRoot: string;
   let server: HarnessServer | undefined;
   let captures: CapturedLaunch[];
+  let identityWorkspaces: string[];
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "harness-auth-mcp-wiring-"));
@@ -201,6 +233,7 @@ describe("Agent Studio MCP authentication wiring", () => {
       apiKeyId: "browser-key-id",
     };
     captures = [];
+    identityWorkspaces = [];
     vi.clearAllMocks();
   });
 
@@ -209,6 +242,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     await server?.close();
     await server?.sessionManager.flush();
     server = undefined;
+    for (const cwd of identityWorkspaces) await rm(cwd, { recursive: true, force: true });
     await rm(root, {
       recursive: true,
       force: true,
@@ -222,10 +256,11 @@ describe("Agent Studio MCP authentication wiring", () => {
     }
   });
 
+  /** Start Studio with isolated state and the test's chosen adapters and identity. */
   async function boot(
     options: Pick<
       Parameters<typeof startServer>[0],
-      "identity" | "authMode"
+      "identity" | "authMode" | "adapters" | "codexHomeDir"
     > = {},
   ): Promise<HarnessServer> {
     server = await startServer({
@@ -487,6 +522,72 @@ describe("Agent Studio MCP authentication wiring", () => {
     );
     expect(server!.sessionManager.get(newerSession.id)?.status).toBe("exited");
   }, 20_000);
+
+  it("wires fresh Codex sessions after UI login, refreshes resume/create credentials, and clears auth after logout", async () => {
+    process.env.SAPIOM_ENVIRONMENT = "staging";
+    await boot({ adapters: { codex: capturingCodexAdapter(captures) }, codexHomeDir: root });
+    const create = async (cwd = projectRoot) => {
+      await mkdir(cwd, { recursive: true });
+      const response = await post("/api/sessions", { cwd, harness: "codex" });
+      expect(response.status).toBe(201);
+      return response.json() as Promise<{ id: string; harness: string }>;
+    };
+    const expectWiring = (key?: string) => {
+      const { spec, remote } = captures.at(-1)!;
+      expect(remote.url).toBe("https://api.staging.example.test/v1/mcp");
+      expect(spec!.args.join(" ")).toContain('"url" = "https://api.staging.example.test/v1/mcp"');
+      expect(spec!.args.join(" ")).toMatch(/mcp_servers\.sapiom-dev-[a-f0-9]{12}=/);
+      expect(spec!.env.SAPIOM_ENVIRONMENT).toBeUndefined();
+      expect(spec!.args.join(" ")).toContain('"env" = { "SAPIOM_ENVIRONMENT" = "staging"');
+      expect(spec!.env.SAPIOM_CODEX_MCP_0_HEADER_0).toBe(key);
+      expect(spec!.args.join(" ")).not.toMatch(/browser-key|rotated-key/);
+    };
+
+    await create();
+    expectWiring();
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+    // Project bootstrap belongs to the principal that discovered it. Use a
+    // fresh workspace after identity changes, as a new Studio user would.
+    const signedInRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-in-"));
+    identityWorkspaces.push(signedInRoot);
+    const signedIn = await create(signedInRoot);
+    expect(signedIn.harness).toBe("codex");
+    expectWiring("browser-key");
+    const launchArgs = captures.at(-1)!.spec!.args;
+    await server!.sessionManager.setAgentSessionId(signedIn.id, "codex-rollout-fixture");
+
+    authFixture.credential = { ...authFixture.browserResult, apiKey: "rotated-key" };
+    await server!.sessionManager.kill(signedIn.id);
+    expect((await post(`/api/sessions/${signedIn.id}/resume`)).status).toBe(200);
+    expect(captures.at(-1)!.kind).toBe("resume");
+    expectWiring("rotated-key");
+    expect(captures.at(-1)!.spec!.args.filter((arg) => arg.startsWith("mcp_servers.")))
+      .toEqual(launchArgs.filter((arg) => arg.startsWith("mcp_servers.")));
+
+    await create(signedInRoot);
+    expectWiring("rotated-key");
+    expect((await post("/api/auth/disconnect")).status).toBe(200);
+    const signedOutRoot = await mkdtemp(join(tmpdir(), "harness-auth-signed-out-"));
+    identityWorkspaces.push(signedOutRoot);
+    await create(signedOutRoot);
+    expectWiring();
+    expect(clearCredentials).toHaveBeenCalled();
+  }, 20_000);
+
+  it("returns a credential-safe error to the UI if Codex's generated MCP file cannot be parsed", async () => {
+    const adapter = capturingCodexAdapter(captures, (opts) => {
+      writeFileSync(opts.mcpConfigFile!, 'private-api-key: "broken JSON"');
+    });
+    await boot({ adapters: { codex: adapter }, codexHomeDir: root });
+    const response = await post("/api/sessions", { cwd: projectRoot, harness: "codex" });
+    expect(response.status).toBe(500);
+    const body = await response.text();
+    expect(body).toContain("Could not load the generated Codex MCP configuration");
+    expect(body).not.toContain("private-api-key");
+    expect(body).not.toContain(root);
+    expect(captures).toHaveLength(0);
+  });
 
   it("adopts a credential written externally after boot", async () => {
     await boot();
