@@ -113,6 +113,7 @@ function capturingCodexAdapter(
   beforeLaunch?: (opts: LaunchOpts) => void,
 ): HarnessAdapter {
   const adapter = new CodexAdapter();
+  /** Capture the real Codex arguments and config, then launch local Bash. */
   const interactiveSpec = (kind: "create" | "resume", opts: LaunchOpts, rolloutId?: string): SpawnSpec => {
     beforeLaunch?.(opts);
     const spec = kind === "resume" ? adapter.resume(rolloutId!, opts) : adapter.launch(opts);
@@ -247,6 +248,7 @@ describe("Agent Studio MCP authentication wiring", () => {
     }
   });
 
+  /** Start Studio with isolated state and the test's chosen adapters and identity. */
   async function boot(
     options: Pick<
       Parameters<typeof startServer>[0],

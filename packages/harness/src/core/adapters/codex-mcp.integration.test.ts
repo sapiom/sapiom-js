@@ -25,6 +25,8 @@ interface McpStatus {
   toolsError?: string | null;
 }
 
+/** Discover MCP tools and inspect shell settings through an isolated Codex
+ * process. Always stop the child, including after a failed request. */
 async function discover(
   spec: SpawnSpec,
   home: string,
@@ -211,39 +213,46 @@ describe.skipIf(process.env.RUN_CODEX_MCP_INTEGRATION !== "1")(
         const fixtureKey = "synthetic-integration-credential";
         let authenticated = false;
         http = createServer(async (req, res) => {
-          if (req.url === "/v1/mcp/instructions") {
-            res.end("Local authoring integration test.");
-            return;
-          }
-          if (req.url !== "/v1/mcp" && req.url !== "/user-mcp") {
-            res.writeHead(404).end();
-            return;
-          }
-          if (req.url === "/v1/mcp") {
-            if (req.headers["x-api-key"] !== fixtureKey) {
-              res.writeHead(401).end();
+          try {
+            if (req.url === "/v1/mcp/instructions") {
+              res.end("Local authoring integration test.");
               return;
             }
-            authenticated = true;
+            if (req.url !== "/v1/mcp" && req.url !== "/user-mcp") {
+              res.writeHead(404).end();
+              return;
+            }
+            if (req.url === "/v1/mcp") {
+              if (req.headers["x-api-key"] !== fixtureKey) {
+                res.writeHead(401).end();
+                return;
+              }
+              authenticated = true;
+            }
+            const mcp = new McpServer({
+              name: "loopback-capabilities",
+              version: "1.0.0",
+            });
+            mcp.registerTool(
+              "local_capability_probe",
+              { inputSchema: {} },
+              async () => ({
+                content: [{ type: "text", text: "local" }],
+              }),
+            );
+            const transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: undefined,
+              enableJsonResponse: true,
+            });
+            mcpConnections.push(mcp);
+            await mcp.connect(transport);
+            await transport.handleRequest(req, res);
+          } catch {
+            // Node does not await this callback. End failed requests without
+            // exposing credentials through an unhandled rejection or response.
+            if (!res.headersSent) res.writeHead(500);
+            res.end();
           }
-          const mcp = new McpServer({
-            name: "loopback-capabilities",
-            version: "1.0.0",
-          });
-          mcp.registerTool(
-            "local_capability_probe",
-            { inputSchema: {} },
-            async () => ({
-              content: [{ type: "text", text: "local" }],
-            }),
-          );
-          const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: undefined,
-            enableJsonResponse: true,
-          });
-          mcpConnections.push(mcp);
-          await mcp.connect(transport);
-          await transport.handleRequest(req, res);
         });
         await new Promise<void>((resolve) =>
           http!.listen(0, "127.0.0.1", resolve),
