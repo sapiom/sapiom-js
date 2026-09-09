@@ -203,7 +203,7 @@ export interface RestRouterOptions {
     organizationName: string;
   } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
-  /** Workspace identities backing the folder projection and system-graph route. */
+  /** Scope identities joining visible folders to durable Studio projects. */
   listWorkspaceScopes?: () =>
     | WorkspaceScopeSummary[]
     | Promise<WorkspaceScopeSummary[]>;

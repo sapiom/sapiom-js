@@ -9,8 +9,6 @@ import type {
 } from "../shared/agent-map.js";
 import type { AppState, HarnessAdapter } from "../shared/types.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
-import { SystemGraphStore } from "../core/system-graph-store.js";
-import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
 import { startServer, type HarnessServer } from "./index.js";
 
 describe("real Studio workspace wiring", () => {
@@ -77,14 +75,6 @@ describe("real Studio workspace wiring", () => {
       path.join(root, "settings.json"),
       JSON.stringify({ recentDirs: [] }),
     );
-    const watcherRetain = vi.spyOn(
-      SystemGraphWatcherManager.prototype,
-      "retain",
-    );
-    const storeRetain = vi.spyOn(SystemGraphStore.prototype, "retain");
-    const graphWatch = vi.spyOn(SystemGraphWatcherManager.prototype, "start");
-    const graphRead = vi.spyOn(SystemGraphStore.prototype, "get");
-    const graphRefresh = vi.spyOn(SystemGraphStore.prototype, "refresh");
     const headers = { "X-Harness-Token": "test-token" };
     const baseUrl = `http://127.0.0.1:${server.port}`;
     const state = (await (
@@ -106,19 +96,11 @@ describe("real Studio workspace wiring", () => {
         const url = `${baseUrl}/api/workspaces/${key}/system-graph${suffix}`;
         expect((await fetch(url, { method })).status).toBe(401);
         const response = await fetch(url, { method, headers });
-        expect(response.status).toBe(410);
-        expect(await response.json()).toEqual({
-          error: "legacy_graph_retired",
-          message: "Reload Studio to use Agent Map.",
-        });
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "API route not found" });
       }
     }
-    expect(graphWatch).not.toHaveBeenCalled();
-    expect(graphRead).not.toHaveBeenCalled();
-    expect(graphRefresh).not.toHaveBeenCalled();
     await fetch(`${baseUrl}/api/state`, { headers });
-    expect(watcherRetain.mock.calls.at(-1)?.[0].size).toBe(0);
-    expect(storeRetain.mock.calls.at(-1)?.[0].size).toBe(0);
     expect(
       server.sessionManager.get(session.id)?.agentMapIdentity?.projectId,
     ).toBe(project.projectId);

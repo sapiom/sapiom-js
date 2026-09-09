@@ -1,8 +1,8 @@
 # Retired Project system graph HTTP contract
 
 **Breaking for HTTP clients:** current Studio servers retire the following
-routes. Authenticated requests return `410` with `error: "legacy_graph_retired"`
-before any scope lookup, graph read, refresh, navigation or watcher activation:
+routes. The route handlers and server graph composition have been removed.
+Authenticated requests return `404` with `error: "API route not found"`:
 
 ```http
 GET  /api/workspaces/:workspaceKey/system-graph
@@ -12,7 +12,7 @@ GET  /api/workspaces/:workspaceKey/system-graph/navigation
 
 The boot-token gate still runs first: send `X-Harness-Token`; missing or invalid
 tokens return `401`. Authenticated unknown workspace keys also receive the
-retirement response. Current servers do not emit `system-graph.changed` events
+not-found response. Current servers do not emit `system-graph.changed` events
 or return the historical snapshots/cache headers described below.
 
 ## Migration to Agent Map

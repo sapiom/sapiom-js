@@ -1,4 +1,4 @@
-import { LocalWorkspaceScopeCatalog, type WorkspaceScope } from "../core/workspace-scope-catalog.js";
+import { LocalWorkspaceScopeCatalog } from "../core/workspace-scope-catalog.js";
 import { canonicalGraphPath } from "../core/canonical-graph-path.js";
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
@@ -149,17 +149,6 @@ import {
 import { ensureCanvasTemplate } from "../core/canvas-template.js";
 import { renderCanvasForSession } from "../core/canvas-render.js";
 import { invalidateExtractionCache } from "../core/canvas-cache.js";
-import {
-  CachedAgentInvocationProvider,
-  HarnessRegistryInventoryProvider,
-  SourceAgentInvocationProvider,
-  StaticSystemGraphBuilder,
-} from "../core/system-graph.js";
-import {
-  dirtyGraphSourceRoots,
-} from "../core/system-graph-inventory.js";
-import { SystemGraphStore } from "../core/system-graph-store.js";
-import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
 import { SharedWorkspaceWatchBroker } from "../core/workspace-watch-broker.js";
 import { sweepNdjson } from "../core/collector/store-retention.js";
 import {
@@ -167,7 +156,6 @@ import {
   resolveAgentsBaseUrl,
 } from "../core/definition-slug-resolver.js";
 import {
-  inspectManifestName,
   resolveManifestName,
 } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
@@ -177,7 +165,6 @@ import {
   type ApiKeyProvider,
 } from "../core/api-key-provider.js";
 import { createRestRouter } from "./rest.js";
-import { createSystemGraphRouter } from "./system-graph.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
 import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
@@ -427,7 +414,6 @@ function packageRoot(): string {
  *   agent-created    a newly scaffolded agent's containing project
  *   agent-connected  one manually connected path, to settle syntax evidence
  *   agent-moved      the destination of a rail drag
- *   graph-refresh    a project graph open or explicit graph refresh
  *   requested        POST /api/workflows/scan — the "Add all" button
  *
  * POST /api/workflows/connect registers one path before its reconciliation
@@ -441,7 +427,6 @@ export type WorkflowScanReason =
   | "agent-created"
   | "agent-connected"
   | "agent-moved"
-  | "graph-refresh"
   | "requested";
 
 /**
@@ -994,10 +979,8 @@ export const startServer = async (
         : []),
     ];
   };
-  // Legacy System Graph routes retain every explicitly known root. Studio's
-  // durable project catalog uses the canonical derivation below; keeping the
-  // two catalogs separate avoids changing the existing graph authority while
-  // project/session identity converges on one server/client contract.
+  // Keep all known folders visible during catalog recovery. Durable projects
+  // use the canonical derivation below, including explicit root associations.
   const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(rawProjectRoots);
   const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
     async () => {
@@ -1122,7 +1105,6 @@ export const startServer = async (
     canonicalRoot: string;
     identityEvidence: WorkflowIdentityEvidence;
   };
-  let acceptedInventoryGeneration = initialInventorySnapshot.generation;
   let acceptedCanonicalWorkflowRoots: AcceptedCanonicalWorkflowRoot[] =
     initialInventorySnapshot.canonicalWorkflowRoots.map((entry) => ({
       ...entry,
@@ -1132,15 +1114,6 @@ export const startServer = async (
       ...entry,
       paths: [...entry.paths],
     }));
-  const acceptedScopeStatusByCanonicalRoot = new Map<
-    string,
-    "complete" | "degraded"
-  >([
-    [
-      initialInventorySnapshot.canonicalScopeRoot,
-      initialInventorySnapshot.status,
-    ],
-  ]);
   const acceptedCanonicalScopeByLexicalRoot = new Map<string, string>([
     [
       resolve(expandHome(launchDir)),
@@ -1159,20 +1132,6 @@ export const startServer = async (
       canonicalGraphPath(lexicalRoot)
     );
   };
-  const acceptedInventorySnapshot = (scope: WorkspaceScope) => {
-    const canonicalScopeRoot = acceptedCanonicalScopeRoot(scope.root);
-    return {
-      workflows: workflowsCache,
-      status:
-        acceptedScopeStatusByCanonicalRoot.get(canonicalScopeRoot) ??
-        ("degraded" as const),
-      generation: acceptedInventoryGeneration,
-      canonicalScopeRoot,
-      canonicalWorkflowRoots: acceptedCanonicalWorkflowRoots,
-      sourceObservations: acceptedSourceObservations,
-    };
-  };
-
   const discoveryObservationsForRoot = (
     root: string,
   ): WorkflowSourceObservation[] =>
@@ -1183,39 +1142,18 @@ export const startServer = async (
 
   const markAcceptedInventoryDirty = (root: string): void => {
     const canonicalRoot = acceptedCanonicalScopeRoot(root);
-    let changed = false;
-    let sawIntersectingStatus = false;
-    for (const [scopeRoot, status] of acceptedScopeStatusByCanonicalRoot) {
-      if (
-        isWithinWorkspacePath(scopeRoot, canonicalRoot) ||
-        isWithinWorkspacePath(canonicalRoot, scopeRoot)
-      ) {
-        sawIntersectingStatus = true;
-        if (status !== "degraded") {
-          acceptedScopeStatusByCanonicalRoot.set(scopeRoot, "degraded");
-          changed = true;
+    acceptedCanonicalWorkflowRoots = acceptedCanonicalWorkflowRoots.map(
+      (entry) => {
+        if (
+          entry.identityEvidence === "unknown" ||
+          (!isWithinWorkspacePath(canonicalRoot, entry.canonicalRoot) &&
+            !isWithinWorkspacePath(entry.canonicalRoot, canonicalRoot))
+        ) {
+          return entry;
         }
-      }
-    }
-    if (!sawIntersectingStatus) {
-      acceptedScopeStatusByCanonicalRoot.set(canonicalRoot, "degraded");
-      changed = true;
-    }
-    const nextRoots = acceptedCanonicalWorkflowRoots.map((entry) => {
-      if (
-        entry.identityEvidence === "unknown" ||
-        (!isWithinWorkspacePath(canonicalRoot, entry.canonicalRoot) &&
-          !isWithinWorkspacePath(entry.canonicalRoot, canonicalRoot))
-      ) {
-        return entry;
-      }
-      changed = true;
-      return { ...entry, identityEvidence: "unknown" as const };
-    });
-    if (changed) {
-      acceptedCanonicalWorkflowRoots = nextRoots;
-      acceptedInventoryGeneration += 1;
-    }
+        return { ...entry, identityEvidence: "unknown" as const };
+      },
+    );
   };
 
   const boundWorkflowForSession = (
@@ -1720,98 +1658,6 @@ export const startServer = async (
     ensureCanvasTemplate,
   });
   await sessionManager.init();
-  // Always empty on this host: the retired HTTP routes cannot reach
-  // onScopeAccess. The legacy plumbing remains only until SAP-3091 deletion.
-  const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
-  const systemGraphInvocations = new CachedAgentInvocationProvider(
-    new SourceAgentInvocationProvider(),
-    undefined,
-    {
-      onChange: (sourceRoots) => {
-        const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
-        for (const scope of activeSystemGraphScopes.values()) {
-          const canonicalScope = {
-            workspaceKey: scope.workspaceKey,
-            root: canonicalGraphPath(scope.root),
-          };
-          if (
-            systemGraphStore.peek(canonicalScope.workspaceKey) &&
-            canonicalSourceRoots.some((sourceRoot) =>
-              isWithinWorkspacePath(canonicalScope.root, sourceRoot),
-            )
-          ) {
-            systemGraphStore.requestRefresh(canonicalScope);
-          }
-        }
-      },
-    },
-  );
-  const legacyGraphObservationsForRoot = (
-    root: string,
-  ): WorkflowSourceObservation[] =>
-    sourceObservationsWithinScope(acceptedCanonicalScopeRoot(root), [
-      ...acceptedSourceObservations,
-      ...systemGraphInvocations.invocationObservations(),
-    ]);
-  const systemGraphInventory = new HarnessRegistryInventoryProvider({
-    listWorkflows: () => workflowsCache,
-    inventorySnapshot: acceptedInventorySnapshot,
-    inspectManifestName: (sourceRoot, extractionOptions) =>
-      inspectManifestName(sourceRoot, undefined, extractionOptions),
-    onIdentityChange: (sourceRoots) => {
-      const canonicalSourceRoots = sourceRoots.map(canonicalGraphPath);
-      for (const scope of activeSystemGraphScopes.values()) {
-        const canonicalScope = {
-          workspaceKey: scope.workspaceKey,
-          root: canonicalGraphPath(scope.root),
-        };
-        if (
-          systemGraphStore.peek(canonicalScope.workspaceKey) &&
-          canonicalSourceRoots.some((sourceRoot) =>
-            isWithinWorkspacePath(canonicalScope.root, sourceRoot),
-          )
-        ) {
-          systemGraphStore.requestRefresh(canonicalScope);
-        }
-      }
-    },
-  });
-  const systemGraphStore = new SystemGraphStore(
-    new StaticSystemGraphBuilder(systemGraphInventory, systemGraphInvocations),
-    {
-      onChange: ({ workspaceKey, revision, state }) => {
-        bus.publish({
-          type: "system-graph.changed",
-          workspaceKey,
-          revision,
-          state,
-        });
-      },
-    },
-  );
-
-  const refreshSystemGraphScopesForRoot = (
-    changedRoot: string,
-    excludedWorkspaceKey?: string,
-  ): void => {
-    const canonicalChangedRoot = canonicalGraphPath(changedRoot);
-    for (const scope of activeSystemGraphScopes.values()) {
-      if (scope.workspaceKey === excludedWorkspaceKey) continue;
-      if (!systemGraphStore.peek(scope.workspaceKey)) continue;
-      const scopeRoot = canonicalGraphPath(scope.root);
-      if (
-        !isWithinWorkspacePath(scopeRoot, canonicalChangedRoot) &&
-        !isWithinWorkspacePath(canonicalChangedRoot, scopeRoot)
-      ) {
-        continue;
-      }
-      systemGraphStore.requestRefresh({
-        workspaceKey: scope.workspaceKey,
-        root: scopeRoot,
-      });
-    }
-  };
-
   const sessionSweepTimer = setInterval(
     () => sessionManager.sweepDeadSessions(),
     SESSION_LIVENESS_SWEEP_MS,
@@ -2053,10 +1899,6 @@ export const startServer = async (
       // the next lease's normal background scan will reconcile the interval.
       supersedePublication();
       coordinatorEpoch += 1;
-      if (activeSystemGraphScopes.size > 0) {
-        systemGraphInventory.invalidateScope(root);
-        systemGraphInvocations.invalidateScope(root);
-      }
       workflowRegistry.markDiscoveryDirty(root);
       markAcceptedInventoryDirty(root);
     },
@@ -2068,8 +1910,7 @@ export const startServer = async (
         cwd,
         workflowsCache.map((workflow) => workflow.path),
       ),
-    // Session and rail discovery own accepted registry evidence only. Legacy
-    // invocation observations must remain removable with the System Graph.
+    // Session and rail watchers consume accepted registry evidence only.
     listSourceObservations: (_harnessSessionId, cwd) =>
       discoveryObservationsForRoot(cwd),
     onPotentialChange: (harnessSessionId) => {
@@ -2077,8 +1918,7 @@ export const startServer = async (
       if (session && session.status !== "exited") {
         prepareDirtyWorkflowRoot(
           session.cwd,
-          undefined,
-          workspaceDiscoveryBudget(session.cwd),
+          { discoveryBudget: workspaceDiscoveryBudget(session.cwd) },
         );
       }
     },
@@ -2225,14 +2065,10 @@ export const startServer = async (
     repositoryBoundaries: string[];
   }
   interface ScanFlight {
-    canonicalRoot: string;
     lexicalRoot: string;
-    token: string;
     generation: number;
     acceptedGeneration: number;
-    acceptedChanged: boolean;
     pending: boolean;
-    dirty: boolean;
     reason: WorkflowScanReason;
     discoveryBudget: WorkspaceDiscoveryBudget;
     promise: Promise<CoordinatedScanResult>;
@@ -2247,15 +2083,13 @@ export const startServer = async (
     reject: (error: unknown) => void;
   }
   const scanFlights = new Map<string, ScanFlight>();
-  const outstandingDirtyPrerequisites = new Map<string, string>();
   let coordinatorEpoch = 0;
-  let mutationTokenSequence = 0;
   let coordinatorActive = true;
   let publicationWaiter: PublicationWaiter | null = null;
   let publicationQueue: Promise<void> = Promise.resolve();
   const sameTurnDirtyPreparations = new Map<
     string,
-    { canonicalRoot: string; lexicalRoot: string; token: string }
+    { canonicalRoot: string; lexicalRoot: string }
   >();
   const sameTurnDiscoveryBudgets = new Map<string, WorkspaceDiscoveryBudget>();
   const workspaceDiscoveryBudget = (root: string): WorkspaceDiscoveryBudget => {
@@ -2275,70 +2109,6 @@ export const startServer = async (
     return created;
   };
 
-  const intersectingGraphScopes = (changedRoot: string): WorkspaceScope[] => {
-    const canonicalChangedRoot = canonicalGraphPath(changedRoot);
-    const scopes: WorkspaceScope[] = [];
-    for (const scope of activeSystemGraphScopes.values()) {
-      const canonicalScope = {
-        workspaceKey: scope.workspaceKey,
-        root: canonicalGraphPath(scope.root),
-      };
-      if (
-        isWithinWorkspacePath(canonicalScope.root, canonicalChangedRoot) ||
-        isWithinWorkspacePath(canonicalChangedRoot, canonicalScope.root)
-      ) {
-        scopes.push(canonicalScope);
-      }
-    }
-    return scopes;
-  };
-  const staleSystemGraphScopesForRoot = (
-    changedRoot: string,
-    token: string,
-  ): void => {
-    for (const scope of intersectingGraphScopes(changedRoot)) {
-      systemGraphStore.markStale(scope, token);
-    }
-  };
-  const releaseSystemGraphPrerequisite = (token: string): void => {
-    // A symlink scope can be retargeted by the accepted scan, so release by
-    // token rather than recomputing containment against its former target.
-    for (const scope of activeSystemGraphScopes.values()) {
-      systemGraphStore.releasePrerequisite(
-        {
-          workspaceKey: scope.workspaceKey,
-          root: canonicalGraphPath(scope.root),
-        },
-        token,
-      );
-    }
-    outstandingDirtyPrerequisites.delete(token);
-  };
-  const cancelSystemGraphPrerequisite = (token: string): void => {
-    for (const scope of activeSystemGraphScopes.values()) {
-      systemGraphStore.cancelPrerequisite(scope.workspaceKey, token);
-    }
-    outstandingDirtyPrerequisites.delete(token);
-  };
-  const attachOutstandingPrerequisites = (scope: WorkspaceScope): void => {
-    const canonicalScope = {
-      workspaceKey: scope.workspaceKey,
-      root: canonicalGraphPath(scope.root),
-    };
-    for (const [token, dirtyRoot] of outstandingDirtyPrerequisites) {
-      if (
-        isWithinWorkspacePath(canonicalScope.root, dirtyRoot) ||
-        isWithinWorkspacePath(dirtyRoot, canonicalScope.root)
-      ) {
-        systemGraphStore.markStale(canonicalScope, token);
-      }
-    }
-  };
-  const reportSystemGraphRefreshFailure = (changedRoot: string): void => {
-    for (const scope of intersectingGraphScopes(changedRoot)) {
-      systemGraphStore.reportRefreshFailure(scope);
-    }
-  };
   const allFlightsAccepted = (): boolean =>
     [...scanFlights.values()].every(
       (flight) =>
@@ -2369,42 +2139,35 @@ export const startServer = async (
   };
   const prepareDirtyWorkflowRoot = (
     root: string,
-    tokenOverride?: string,
-    discoveryBudget?: WorkspaceDiscoveryBudget,
-  ): { canonicalRoot: string; lexicalRoot: string; token: string } => {
+    options: {
+      discoveryBudget?: WorkspaceDiscoveryBudget;
+      coalesce?: boolean;
+    } = {},
+  ): { canonicalRoot: string; lexicalRoot: string } => {
     const lexicalRoot = resolve(expandHome(root));
     const canonicalRoot = canonicalGraphPath(lexicalRoot);
-    if (!tokenOverride) {
+    if (options.coalesce !== false) {
       const existingPreparation = sameTurnDirtyPreparations.get(canonicalRoot);
       if (existingPreparation) return existingPreparation;
     }
-    const token = tokenOverride ?? `inventory:${canonicalRoot}`;
     supersedePublication();
     coordinatorEpoch += 1;
-    if (activeSystemGraphScopes.size > 0) {
-      systemGraphInventory.invalidateScope(lexicalRoot);
-      systemGraphInvocations.invalidateScope(lexicalRoot);
-    }
     workflowRegistry.markDiscoveryDirty(lexicalRoot);
     markAcceptedInventoryDirty(lexicalRoot);
-    outstandingDirtyPrerequisites.set(token, canonicalRoot);
-    staleSystemGraphScopesForRoot(lexicalRoot, token);
     const currentFlight = scanFlights.get(canonicalRoot);
     if (currentFlight && !currentFlight.pending) {
       currentFlight.generation += 1;
       currentFlight.acceptedGeneration = 0;
-      currentFlight.acceptedChanged = false;
       currentFlight.pending = true;
-      currentFlight.dirty = true;
       // Every edit generation gets fresh memoization/counters. Reusing the
       // prior AgentSourceScanBudget can return old file promises after a raw
       // save, while an exhausted project allowance makes the trailing proof a
       // permanent false-negative.
       currentFlight.discoveryBudget =
-        discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
+        options.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
     }
-    const prepared = { canonicalRoot, lexicalRoot, token };
-    if (!tokenOverride) {
+    const prepared = { canonicalRoot, lexicalRoot };
+    if (options.coalesce !== false) {
       sameTurnDirtyPreparations.set(canonicalRoot, prepared);
       queueMicrotask(() => {
         if (sameTurnDirtyPreparations.get(canonicalRoot) === prepared) {
@@ -2445,9 +2208,6 @@ export const startServer = async (
             ...new Set([
               launchDir,
               ...[...scanFlights.values()].map((flight) => flight.lexicalRoot),
-              ...[...activeSystemGraphScopes.values()].map(
-                (scope) => scope.root,
-              ),
             ]),
           ];
           const snapshots: Array<{
@@ -2467,13 +2227,11 @@ export const startServer = async (
           const before = workflowsCache;
           const after = [...snapshot.workflows];
           const rowsChanged = !workflowListsEqual(before, after);
-          const acceptedFlights = [...scanFlights.values()];
           const nextCanonicalWorkflowRoots =
             snapshot.canonicalWorkflowRoots.map((entry) => ({ ...entry }));
           const nextSourceObservations = snapshot.sourceObservations.map(
             (entry) => ({ ...entry, paths: [...entry.paths] }),
           );
-          const nextScopeStatuses = new Map(acceptedScopeStatusByCanonicalRoot);
           const nextCanonicalScopeByLexicalRoot = new Map(
             acceptedCanonicalScopeByLexicalRoot,
           );
@@ -2486,20 +2244,7 @@ export const startServer = async (
               entry.snapshot.canonicalScopeRoot,
               entry.snapshot.canonicalScopeRoot,
             );
-            nextScopeStatuses.set(
-              entry.snapshot.canonicalScopeRoot,
-              entry.snapshot.status,
-            );
           }
-          const inventoryProjectionChanged =
-            JSON.stringify(acceptedCanonicalWorkflowRoots) !==
-              JSON.stringify(nextCanonicalWorkflowRoots) ||
-            JSON.stringify(acceptedSourceObservations) !==
-              JSON.stringify(nextSourceObservations) ||
-            JSON.stringify([...acceptedScopeStatusByCanonicalRoot].sort()) !==
-              JSON.stringify([...nextScopeStatuses].sort()) ||
-            JSON.stringify([...acceptedCanonicalScopeByLexicalRoot].sort()) !==
-              JSON.stringify([...nextCanonicalScopeByLexicalRoot].sort());
           let stagedContexts: StagedHarnessContext[] = [];
           if (rowsChanged) {
             let contextsStable = false;
@@ -2591,19 +2336,12 @@ export const startServer = async (
           workflowsCache = after;
           acceptedCanonicalWorkflowRoots = nextCanonicalWorkflowRoots;
           acceptedSourceObservations = nextSourceObservations;
-          acceptedScopeStatusByCanonicalRoot.clear();
-          for (const [scopeRoot, status] of nextScopeStatuses) {
-            acceptedScopeStatusByCanonicalRoot.set(scopeRoot, status);
-          }
           acceptedCanonicalScopeByLexicalRoot.clear();
           for (const [
             lexicalRoot,
             canonicalRoot,
           ] of nextCanonicalScopeByLexicalRoot) {
             acceptedCanonicalScopeByLexicalRoot.set(lexicalRoot, canonicalRoot);
-          }
-          if (rowsChanged || inventoryProjectionChanged) {
-            acceptedInventoryGeneration += 1;
           }
           if (rowsChanged) {
             const registeredPaths = new Set(
@@ -2617,35 +2355,6 @@ export const startServer = async (
               ) {
                 sessionManager.setBoundWorkflowPath(openSession.id, null);
               }
-            }
-          }
-          if (rowsChanged || inventoryProjectionChanged) {
-            // A scan prunes confirmed-missing rows registry-wide, not only below
-            // its requested root. Refresh every active projection so an
-            // unrelated workspace cannot retain a ghost node/navigation target.
-            for (const scope of activeSystemGraphScopes.values()) {
-              systemGraphStore.requestRefresh({
-                workspaceKey: scope.workspaceKey,
-                root: canonicalGraphPath(scope.root),
-              });
-            }
-          } else {
-            for (const flight of acceptedFlights) {
-              if (flight.acceptedChanged && !flight.dirty) {
-                refreshSystemGraphScopesForRoot(flight.lexicalRoot);
-              }
-            }
-          }
-          const acceptedCanonicalRoots = new Set(
-            acceptedFlights.map((flight) => flight.canonicalRoot),
-          );
-          for (const [token, dirtyRoot] of [...outstandingDirtyPrerequisites]) {
-            // A terminal dirty attempt deliberately keeps its token armed. A
-            // later ordinary scan of that exact root inherits the proof by
-            // publication: once its newest generation is in this quiescent
-            // accepted snapshot, release every producer token for that root.
-            if (acceptedCanonicalRoots.has(dirtyRoot)) {
-              releaseSystemGraphPrerequisite(token);
             }
           }
           if (rowsChanged) bus.publish({ type: "workflows.changed" });
@@ -2681,9 +2390,8 @@ export const startServer = async (
       : {
           lexicalRoot: resolve(expandHome(root)),
           canonicalRoot: canonicalGraphPath(resolve(expandHome(root))),
-          token: `inventory:${canonicalGraphPath(resolve(expandHome(root)))}`,
         };
-    const { lexicalRoot, canonicalRoot, token } = prepared;
+    const { lexicalRoot, canonicalRoot } = prepared;
     if (!scanOptions.dirty) {
       supersedePublication();
       coordinatorEpoch += 1;
@@ -2693,12 +2401,10 @@ export const startServer = async (
       if (!existing.pending) {
         existing.generation += 1;
         existing.acceptedGeneration = 0;
-        existing.acceptedChanged = false;
         existing.discoveryBudget =
           scanOptions.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot);
       }
       existing.pending = true;
-      existing.dirty ||= scanOptions.dirty === true;
       if (scanOptions.discoveryBudget) {
         existing.discoveryBudget = scanOptions.discoveryBudget;
       }
@@ -2708,14 +2414,10 @@ export const startServer = async (
     }
 
     const flight: ScanFlight = {
-      canonicalRoot,
       lexicalRoot,
-      token,
       generation: 1,
       acceptedGeneration: 0,
-      acceptedChanged: false,
       pending: false,
-      dirty: scanOptions.dirty === true,
       reason,
       discoveryBudget:
         scanOptions.discoveryBudget ?? workspaceDiscoveryBudget(lexicalRoot),
@@ -2728,7 +2430,7 @@ export const startServer = async (
       let retries = 0;
       let retryGeneration = 0;
       while (coordinatorActive) {
-        // Shared watcher fanout invokes session and graph subscribers in the
+        // Shared watcher fanout invokes session and created-agent subscribers in the
         // same turn. Let every sibling register/coalesce before one pass
         // captures the generation; a genuinely later edit still increments
         // it during the held scan and gets exactly one trailing pass.
@@ -2774,7 +2476,6 @@ export const startServer = async (
             continue;
           }
           flight.acceptedGeneration = generation;
-          flight.acceptedChanged = outcome.changed;
           let published = false;
           while (
             !published &&
@@ -2821,7 +2522,6 @@ export const startServer = async (
           };
         } catch (error) {
           flight.acceptedGeneration = 0;
-          flight.acceptedChanged = false;
           if (!coordinatorActive) throw error;
           if (generation !== flight.generation || flight.pending) {
             continue;
@@ -2837,7 +2537,6 @@ export const startServer = async (
             }
             continue;
           }
-          reportSystemGraphRefreshFailure(flight.lexicalRoot);
           supersedePublication();
           throw error;
         }
@@ -2857,121 +2556,7 @@ export const startServer = async (
     return flight.promise;
   };
 
-  const refreshSystemGraphInventory = async (
-    scope: WorkspaceScope,
-    includeRetainedRoots = true,
-  ) => {
-    const canonicalScope = {
-      workspaceKey: scope.workspaceKey,
-      root: canonicalGraphPath(scope.root),
-    };
-    const roots = includeRetainedRoots
-      ? [
-          ...sourceRootsWithinScope(
-            scope.root,
-            workflowsCache.map((workflow) => workflow.path),
-          ),
-          scope.root,
-        ]
-      : [scope.root];
-    const discoveryBudget = workspaceDiscoveryBudget(scope.root);
-    await Promise.all(
-      [...new Set(roots)].map((root) =>
-        scanWorkflowsAndBroadcast(root, "graph-refresh", {
-          dirty: true,
-          discoveryBudget,
-        }),
-      ),
-    );
-    const refreshed = await systemGraphStore.waitForCurrentRefresh(
-      canonicalScope.workspaceKey,
-    );
-    if (!refreshed) {
-      throw new Error("Workspace graph scope retired during refresh");
-    }
-    return refreshed;
-  };
-
-  const workflowRootsForGraphScope = (scope: WorkspaceScope): string[] =>
-    sourceRootsWithinScope(
-      scope.root,
-      workflowsCache.map((workflow) => workflow.path),
-    );
-
-  const systemGraphWatcher = new SystemGraphWatcherManager(
-    {
-      listSourceRoots: workflowRootsForGraphScope,
-      // Direct-invocation observations are a private legacy graph input during
-      // coexistence; they never participate in session/rail discovery.
-      listSourceObservations: (scope) =>
-        legacyGraphObservationsForRoot(scope.root),
-      onPotentialChange: (scope, sourcePaths) => {
-        const discoveryBudget = workspaceDiscoveryBudget(scope.root);
-        prepareDirtyWorkflowRoot(scope.root, undefined, discoveryBudget);
-        if (sourcePaths === null) {
-          systemGraphInventory.invalidateScope(scope.root);
-          systemGraphInvocations.invalidateScope(scope.root);
-        } else {
-          for (const root of dirtyGraphSourceRoots(
-            scope.root,
-            workflowsCache.map((workflow) => workflow.path),
-            sourcePaths,
-          )) {
-            prepareDirtyWorkflowRoot(root, undefined, discoveryBudget);
-            systemGraphInventory.invalidateSource(root);
-            systemGraphInvocations.invalidateSource(root);
-          }
-        }
-      },
-      onSourceChange: async (scope, sourcePaths) => {
-        const canonicalScope = {
-          workspaceKey: scope.workspaceKey,
-          root: canonicalGraphPath(scope.root),
-        };
-        const dirtyRoots =
-          sourcePaths === null
-            ? workflowRootsForGraphScope(scope)
-            : dirtyGraphSourceRoots(
-                canonicalScope.root,
-                workflowsCache.map((workflow) => workflow.path),
-                sourcePaths,
-              );
-        if (sourcePaths === null) {
-          systemGraphInventory.invalidateScope(canonicalScope.root);
-          systemGraphInvocations.invalidateScope(canonicalScope.root);
-        } else {
-          for (const workflowRoot of dirtyRoots) {
-            systemGraphInventory.invalidateSource(workflowRoot);
-            systemGraphInvocations.invalidateSource(workflowRoot);
-          }
-        }
-        const discoveryBudget = workspaceDiscoveryBudget(scope.root);
-        await Promise.all(
-          [...new Set([...dirtyRoots, scope.root])].map((root) =>
-            scanWorkflowsAndBroadcast(root, "graph-refresh", {
-              dirty: true,
-              discoveryBudget,
-            }),
-          ),
-        );
-      },
-      onInventoryChange: async (scope) => {
-        try {
-          // A structural boundary event (for example `candidate/.git`) must
-          // first be reconciled from the containing scope. Treating every
-          // retained row as an explicit selection here would immediately
-          // direct-scan and resurrect the candidate the parent just retired.
-          await refreshSystemGraphInventory(scope, false);
-        } catch (err) {
-          console.error("[harness] workspace graph inventory refresh failed");
-          throw err;
-        }
-      },
-    },
-    { sharedBroker: sharedWorkspaceWatchBroker },
-  );
-
-  const listWorkspaceScopesAndRetain = async () => {
+  const listReconciledWorkspaceScopes = async () => {
     let scopes = await workspaceScopeCatalog.list();
     try {
       const studioScopes = await studioWorkspaceScopeCatalog.list();
@@ -2993,19 +2578,7 @@ export const startServer = async (
       );
     } catch {
       // Keep folders/sessions reachable when identity storage is unavailable.
-      // Missing or ambiguous identity never establishes a legacy map owner.
       console.error("[harness] Studio project catalog is unavailable");
-    }
-    // This host has one map authority, including on identity/storage failure.
-    // Keep the legacy implementation until SAP-3091, with no live owners.
-    // Both the retained set and activeSystemGraphScopes are always empty.
-    const retained = new Set<string>();
-    systemGraphWatcher.retain(retained);
-    systemGraphStore.retain(retained);
-    for (const workspaceKey of activeSystemGraphScopes.keys()) {
-      if (!retained.has(workspaceKey)) {
-        activeSystemGraphScopes.delete(workspaceKey);
-      }
     }
     return scopes;
   };
@@ -3971,7 +3544,7 @@ export const startServer = async (
           }
         : null,
       listWorkflows: readPublicWorkflows,
-      listWorkspaceScopes: listWorkspaceScopesAndRetain,
+      listWorkspaceScopes: listReconciledWorkspaceScopes,
       listStudioProjects: async () => {
         try {
           return await studioProjectCatalog.list();
@@ -4072,62 +3645,6 @@ export const startServer = async (
       },
     }),
   );
-  // Old tabs must reload into Agent Map before they can select a topology.
-  // The common boot-token gate runs first; no scope lookup/watch/refresh runs.
-  app.use("/api/workspaces/:workspaceKey/system-graph", (_req, res) => {
-    res.status(410).json({
-      error: "legacy_graph_retired",
-      message: "Reload Studio to use Agent Map.",
-    });
-  });
-  app.use(
-    "/api",
-    createSystemGraphRouter({
-      scopeResolver: {
-        resolve: async (workspaceKey) => {
-          const scope = (await listWorkspaceScopesAndRetain()).find(
-            (candidate) => candidate.workspaceKey === workspaceKey,
-          );
-          return scope ? { workspaceKey, root: canonicalGraphPath(scope.cwd) } : null;
-        },
-      },
-      store: systemGraphStore,
-      onScopeAccess: (scope) => {
-        const firstAccess = !activeSystemGraphScopes.has(scope.workspaceKey);
-        activeSystemGraphScopes.set(scope.workspaceKey, scope);
-        // A destructive signal may predate this store entry (or arrive while
-        // the scope was retired). Attach every intersecting producer token
-        // synchronously before store.get can project old clickable inventory.
-        attachOutstandingPrerequisites(scope);
-        if (firstAccess) {
-          // A scope can be reopened after an interval with no continuous
-          // watcher lease. Its accepted rows remain useful for the immediate
-          // cache-backed graph, but pre-lease completeness/identity proof is
-          // no longer fresh enough to report ready or authorize legacy work.
-          markAcceptedInventoryDirty(scope.root);
-          void scanWorkflowsAndBroadcast(scope.root, "graph-refresh").catch(
-            (err: unknown) => {
-              console.error("[harness] workspace graph discovery failed:", err);
-            },
-          );
-        }
-        return systemGraphWatcher.start(scope);
-      },
-      onScopeRefresh: async (scope) => {
-        try {
-          systemGraphInventory.retryFailedInspections(scope);
-          systemGraphInvocations.retryFailed(scope.root);
-          return await refreshSystemGraphInventory(scope);
-        } catch {
-          console.error("[harness] workspace graph manual refresh failed");
-          if (!systemGraphStore.peek(scope.workspaceKey)) {
-            throw new Error("Workspace graph scope is no longer active");
-          }
-          return systemGraphStore.reportRefreshFailure(scope);
-        }
-      },
-    }),
-  );
   app.use(
     "/api",
     createCanvasRenderRouter({
@@ -4153,36 +3670,20 @@ export const startServer = async (
         (outcome) => publicWorkflowInfos(outcome.found),
       ),
     connectPath: async (inputPath: string) => {
-      mutationTokenSequence += 1;
-      const prepared = prepareDirtyWorkflowRoot(
-        inputPath,
-        `connect:${mutationTokenSequence}`,
+      // Each explicit mutation invalidates evidence before awaiting I/O, even
+      // when another preparation for this root happened in the same turn.
+      prepareDirtyWorkflowRoot(inputPath, { coalesce: false });
+      const workflow = await workflowRegistry.connectPath(inputPath);
+      const outcome = await scanWorkflowsAndBroadcast(
+        workflow.path,
+        "agent-connected",
+        { dirty: true },
       );
-      try {
-        const workflow = await workflowRegistry.connectPath(inputPath);
-        const scan = scanWorkflowsAndBroadcast(
-          workflow.path,
-          "agent-connected",
-          { dirty: true },
-        );
-        // scanWorkflowsAndBroadcast synchronously installs its own flight
-        // token before returning. The mutation token no longer owns freshness.
-        cancelSystemGraphPrerequisite(prepared.token);
-        const outcome = await scan;
-        return publicWorkflowInfo(
-          workflowsCache.find(
-            (candidate) => candidate.path === workflow.path,
-          ) ??
-            outcome.found.find(
-              (candidate) => candidate.path === workflow.path,
-            ) ??
-            workflow,
-        );
-      } catch (error) {
-        cancelSystemGraphPrerequisite(prepared.token);
-        reportSystemGraphRefreshFailure(prepared.lexicalRoot);
-        throw error;
-      }
+      return publicWorkflowInfo(
+        workflowsCache.find((candidate) => candidate.path === workflow.path) ??
+          outcome.found.find((candidate) => candidate.path === workflow.path) ??
+          workflow,
+      );
     },
     scanWithBoundaries: async (root: string) => {
       const outcome = await scanWorkflowsAndBroadcast(root, "requested", {
@@ -4676,6 +4177,10 @@ export const startServer = async (
   // Keep it before static/SPA fallback so POST/GET/DELETE remain protocol routes.
   app.use(agentMapMcp.router);
 
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
+  });
+
   // NOTE: mount additional routers above this line — the static/SPA fallback
   // below is a catch-all and must stay last.
   const webDir = options.webDir ?? join(packageRoot(), "dist", "web");
@@ -4744,11 +4249,6 @@ export const startServer = async (
       await settle(() => canvasWatcher.stopAll());
       await settle(() => workspaceWatcher.stopAll());
       await settle(() => createdAgentWatcher.stopAll());
-      await settle(() => systemGraphWatcher.stopAll());
-      activeSystemGraphScopes.clear();
-      await settle(() => systemGraphInvocations.clear());
-      await settle(() => systemGraphInventory.clear());
-      await settle(() => systemGraphStore.clear());
       await settle(() => installWatcher.stopAll());
       for (const tailer of codexTailers.values()) {
         await settle(() => tailer.stop());

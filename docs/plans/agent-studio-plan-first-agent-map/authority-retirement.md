@@ -33,7 +33,7 @@ patch; the combined Harness release takes the higher minor bump.
 | Exact agent move | Preserve the existing private agent ID through the authenticated move operation. Changed, missing, stale, foreign or ambiguous IDs remain unresolved. |
 | Missing project identity, ambiguous scope, unsafe path or unavailable catalog | Show an unavailable Agent Map with a project-catalog retry. Keep ordinary sessions and per-agent Canvas reachable through explicit selection. Retry promotes only an exact server-issued workspace-key/project-ID association. |
 | Selected durable map disappears from the catalog | Keep that selected ID and offer catalog retry. Explicit agent/session selection still opens its ordinary Canvas/Steps. |
-| Current server receives old graph GET, refresh or navigation | Boot token remains required; authenticated requests receive 410 `legacy_graph_retired` before scope resolution, graph reads or watcher activation. No legacy graph owners are retained. |
+| Current server receives old graph GET, refresh or navigation | The handlers and graph runtime are removed. The boot-token gate still returns 401 without valid authentication; authenticated calls receive the generic API 404 instead of the former 410 tombstone or SPA HTML. |
 | Older server omits `studioProjects` entirely | The browser offers the same identity recovery, preserving the selected project and conversation. There is no fallback renderer or implicit session handoff. Ordinary session tabs remain available. |
 
 Old graph events are ignored before browser state, cache invalidation
@@ -72,10 +72,10 @@ this file as evidence that a host or recovery exercise passed.
 | --- | --- |
 | Missing identity, exact recovery, unchanged conversation and no old requests/events | `web/e2e/agent-map-authority.spec.ts`; browser network observation starts before boot and counts old read, refresh and navigation requests. Old event frames must leave catalog/workflow fetch counts, selection and session actions unchanged. |
 | Exact node navigation, error rejection and session parity | `web/e2e/agent-map-navigation.spec.ts`, including Claude, Codex, archived/no sessions, delayed responses, Info/resource inspection and mobile. |
-| Current HTTP authority and retained root/descendant sessions | `src/server/studio-workspace-wiring.test.ts`; protected 410 on all three legacy routes, no graph read/refresh/watch, no retained graph owners. |
-| Shared discovery still works without the legacy API | `src/server/system-graph-freshness.test.ts`, `workspace-rescan.test.ts` and core workspace-watch broker/watcher suites. Preserve cold reads, edits/renames/deletes, superseded scan budgets, repository boundaries, lease retirement and symlink deduplication. |
+| Current HTTP authority and retained root/descendant sessions | `src/server/studio-workspace-wiring.test.ts`; 401 without authentication and API 404 with authentication on all three removed routes, while durable identities and sessions remain intact. |
+| Shared discovery still works without the legacy API | `src/server/workspace-discovery-freshness.test.ts`, `workspace-rescan.test.ts` and core workspace-watch broker/watcher suites. Preserve cold reads, edits/renames/deletes, superseded scan budgets, repository boundaries, lease retirement and symlink deduplication. |
 | Existing-project initialization and restart/storage safety | Existing `agent-map-initialization`, `agent-map-empty-legacy-container`, `studio-project-catalog`, `studio-workspace-preferences` and `agent-map-implementation-bindings` suites. Record fresh runs; SAP-3082/3084 explain their accepted identity/move limits. |
-| Packaged host | Desktop `--smoke` uses the shipped SPA and real saved-map APIs. Its map check records zero legacy reads/refreshes/navigation across entry, inspection, reload/origin changes, failures/retries and project switches; direct old requests must return 410. Record package version, revision, report and artifact. |
+| Packaged host | Desktop `--smoke` uses the shipped SPA and real saved-map APIs. Its map check records zero legacy reads/refreshes/navigation across entry, inspection, reload/origin changes, failures/retries and project switches; direct old requests must return 404. Record package version, revision, report and artifact. |
 
 The Linux packaged run is Linux evidence. The required signed/notarized macOS
 installer and its upgrade journey remain release validation, not an inference
