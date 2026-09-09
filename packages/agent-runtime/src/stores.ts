@@ -100,6 +100,24 @@ export interface ExecutionStore {
     directive: PauseUntilSignalDirective;
     sharedState: Record<string, unknown>;
   }): Promise<boolean>;
+
+  /**
+   * Optional capability: resume a paused execution at its declared
+   * `timeoutStep` when the pause's `timeoutMs` elapsed with no signal, instead
+   * of failing it. Transitions paused→running, points `currentStep` at
+   * `timeoutStep` with `timeoutStepInput` (a branded `PauseTimeoutPayload`), and
+   * clears the pause markers — all under one CAS so it loses cleanly to a signal
+   * that arrives at the same instant. Hosts that don't implement it fall back to
+   * the `PauseTimeoutError` fail path, preserving prior behavior for external
+   * stores across a minor-version upgrade.
+   */
+  resumeAtTimeoutStep?(args: {
+    executionId: string;
+    expectedVersion: number;
+    timeoutStep: string;
+    timeoutStepInput: unknown;
+    sharedState: Record<string, unknown>;
+  }): Promise<boolean>;
   completeExecution(args: {
     executionId: string;
     expectedVersion: number;

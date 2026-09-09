@@ -82,6 +82,9 @@ function transitionsFor(step: StepDefinition): ManifestTransition[] {
       kind: "pause",
       signal: step.pause.signal,
       resumeStep: step.pause.resumeStep,
+      ...(step.pause.timeoutStep !== undefined
+        ? { timeoutStep: step.pause.timeoutStep }
+        : {}),
     });
   }
   if (step.terminal) transitions.push({ kind: "terminate" });
@@ -109,7 +112,8 @@ export interface GraphValidation {
  * Warnings (best-effort):
  *   - steps unreachable from entry;
  *   - steps that cannot reach any `terminate`/`fail` (possible unbounded loop
- *     or a missing terminal). A `pause` counts as a forward edge via resumeStep.
+ *     or a missing terminal). A `pause` counts as forward edges via its
+ *     resumeStep and (if declared) timeoutStep.
  */
 export function validateGraph(manifest: AgentManifest): GraphValidation {
   const errors: string[] = [];
@@ -150,7 +154,8 @@ export function assertValidGraph(manifest: AgentManifest): string[] {
 }
 
 /**
- * Build the forward adjacency map (continue targets + pause resumeStep). Pushes
+ * Build the forward adjacency map (continue targets + pause resumeStep +
+ * pause timeoutStep). Pushes
  * a continue-target-missing error per unknown target and a dead-end error for a
  * step that declares no transitions at all.
  */
@@ -175,6 +180,13 @@ function buildForwardEdges(
           errors.push(
             `step '${name}' has a pause resumeStep '${t.resumeStep}' that is not in the steps map`,
           );
+        if (t.timeoutStep !== undefined) {
+          if (names.has(t.timeoutStep)) targets.add(t.timeoutStep);
+          else
+            errors.push(
+              `step '${name}' has a pause timeoutStep '${t.timeoutStep}' that is not in the steps map`,
+            );
+        }
       }
     }
     if (step.transitions.length === 0) {

@@ -40,6 +40,7 @@ interface MutableExecution {
   pausedSignalName: string | null;
   pausedSignalCorrelationId: string | null;
   pausedUntil: Date | null;
+  pausedTimeoutStep: string | null;
   dispatchedStepRowId: string | null;
   dispatchDeadlineAt: Date | null;
   output: unknown;
@@ -91,6 +92,7 @@ function toReadonly(e: MutableExecution): ExecutionState {
     pausedSignalName: e.pausedSignalName,
     pausedSignalCorrelationId: e.pausedSignalCorrelationId,
     pausedUntil: e.pausedUntil,
+    pausedTimeoutStep: e.pausedTimeoutStep,
     dispatchedStepRowId: e.dispatchedStepRowId,
     dispatchDeadlineAt: e.dispatchDeadlineAt,
     output: e.output,
@@ -156,6 +158,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
       pausedSignalName: null,
       pausedSignalCorrelationId: null,
       pausedUntil: null,
+      pausedTimeoutStep: null,
       dispatchedStepRowId: null,
       dispatchDeadlineAt: null,
       output: undefined,
@@ -185,6 +188,7 @@ export class InMemoryExecutionStore implements ExecutionStore {
     e.pausedSignalName = null;
     e.pausedSignalCorrelationId = null;
     e.pausedUntil = null;
+    e.pausedTimeoutStep = null;
     e.dispatchedStepRowId = null;
     e.dispatchDeadlineAt = null;
     e.error = null;
@@ -363,12 +367,37 @@ export class InMemoryExecutionStore implements ExecutionStore {
     e.pausedSignalName = args.directive.signal.name;
     e.pausedSignalCorrelationId = args.directive.signal.correlationId ?? null;
     e.pausedUntil = args.directive.timeoutMs ? new Date(Date.now() + args.directive.timeoutMs) : null;
+    e.pausedTimeoutStep = args.directive.timeoutStep ?? null;
     e.sharedState = args.sharedState;
     e.dispatchedStepRowId = null;
     e.dispatchDeadlineAt = null;
     if (args.directive.resumeStep) {
       e.currentStep = args.directive.resumeStep;
     }
+    e.version += 1;
+    return true;
+  }
+
+  async resumeAtTimeoutStep(args: {
+    executionId: string;
+    expectedVersion: number;
+    timeoutStep: string;
+    timeoutStepInput: unknown;
+    sharedState: Record<string, unknown>;
+  }): Promise<boolean> {
+    const e = this.executions.get(args.executionId);
+    if (!e || e.version !== args.expectedVersion) return false;
+    e.status = EXECUTION_STATUS.RUNNING;
+    e.currentStep = args.timeoutStep;
+    e.currentStepInput = args.timeoutStepInput;
+    e.currentStepAttempt = 0;
+    e.sharedState = args.sharedState;
+    e.pausedSignalName = null;
+    e.pausedSignalCorrelationId = null;
+    e.pausedUntil = null;
+    e.pausedTimeoutStep = null;
+    e.dispatchedStepRowId = null;
+    e.dispatchDeadlineAt = null;
     e.version += 1;
     return true;
   }

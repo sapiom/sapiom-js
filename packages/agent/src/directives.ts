@@ -73,9 +73,45 @@ export interface PauseUntilSignalDirective {
     readonly name: string;
     readonly correlationId?: string;
   };
+  /**
+   * Wall-clock deadline (ms) for the wait. When it elapses before the signal
+   * arrives, the engine either resumes at `timeoutStep` (if declared) or, with
+   * no `timeoutStep`, fails the execution with `PauseTimeoutError`.
+   */
   readonly timeoutMs?: number;
   /** Step to run when the signal arrives. Defaults to the paused step. */
   readonly resumeStep?: string;
+  /**
+   * Step to run when `timeoutMs` elapses with no signal, instead of failing the
+   * run. It receives a branded {@link PauseTimeoutPayload} as its input (narrow
+   * with {@link isPauseTimeout}), so the workflow can branch on the timeout —
+   * "wait for an event, otherwise proceed / escalate after N". Requires a
+   * matching `pause: { …, timeoutStep }` declaration on the step. When omitted,
+   * a `timeoutMs` timeout is a hard failure (`PauseTimeoutError`).
+   */
+  readonly timeoutStep?: string;
+}
+
+/**
+ * The input handed to a `timeoutStep` when a pause's `timeoutMs` elapses with no
+ * signal. Branded with `__sapiomPauseTimeout` so a resumed step can distinguish
+ * a timeout from a real signal payload; narrow with {@link isPauseTimeout}.
+ */
+export interface PauseTimeoutPayload {
+  readonly __sapiomPauseTimeout: true;
+  /** The signal name the pause was waiting on. */
+  readonly signal: string;
+  /** The elapsed deadline (epoch ms) — when the wait was scheduled to expire. */
+  readonly pausedUntilMs: number;
+}
+
+/** True if `input` is the branded timeout payload a `timeoutStep` receives. */
+export function isPauseTimeout(input: unknown): input is PauseTimeoutPayload {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    (input as { __sapiomPauseTimeout?: unknown }).__sapiomPauseTimeout === true
+  );
 }
 
 /** Finalize the workflow as completed. `output` (already on the StepResult) is the workflow's final output. */
@@ -190,6 +226,8 @@ export interface Pause<Resume extends string> {
   readonly signal: { readonly name: string; readonly correlationId?: string };
   readonly resumeStep?: Resume;
   readonly timeoutMs?: number;
+  /** Step to run when `timeoutMs` elapses with no signal (see {@link PauseUntilSignalDirective.timeoutStep}). */
+  readonly timeoutStep?: string;
   /** Optional audit output recorded for the pausing step. */
   readonly output?: unknown;
 }
@@ -243,18 +281,19 @@ export function pauseUntilSignal<const Resume extends string>(args: {
   resumeStep?: Resume;
   correlationId?: string;
   timeoutMs?: number;
+  timeoutStep?: string;
   output?: unknown;
 }): Pause<Resume>;
 export function pauseUntilSignal<const Resume extends string>(
   handle: DispatchHandle | Promise<DispatchHandle>,
-  opts?: { resumeStep?: Resume; timeoutMs?: number; output?: unknown },
+  opts?: { resumeStep?: Resume; timeoutMs?: number; timeoutStep?: string; output?: unknown },
 ): Promise<Pause<Resume>>;
 export function pauseUntilSignal<const Resume extends string>(
   argOrHandle:
-    | { signal: string; resumeStep?: Resume; correlationId?: string; timeoutMs?: number; output?: unknown }
+    | { signal: string; resumeStep?: Resume; correlationId?: string; timeoutMs?: number; timeoutStep?: string; output?: unknown }
     | DispatchHandle
     | Promise<DispatchHandle>,
-  opts?: { resumeStep?: Resume; timeoutMs?: number; output?: unknown },
+  opts?: { resumeStep?: Resume; timeoutMs?: number; timeoutStep?: string; output?: unknown },
 ): Pause<Resume> | Promise<Pause<Resume>> {
   // The launch promise — await it, then build from the resolved handle.
   if (isThenable(argOrHandle)) {
@@ -270,6 +309,7 @@ export function pauseUntilSignal<const Resume extends string>(
     signal: { name: argOrHandle.signal, correlationId: argOrHandle.correlationId },
     resumeStep: argOrHandle.resumeStep,
     timeoutMs: argOrHandle.timeoutMs,
+    timeoutStep: argOrHandle.timeoutStep,
     output: argOrHandle.output,
   };
 }
@@ -280,13 +320,14 @@ function isThenable(x: unknown): x is Promise<DispatchHandle> {
 
 function pauseFromHandle<Resume extends string>(
   handle: DispatchHandle,
-  opts: { resumeStep?: Resume; timeoutMs?: number; output?: unknown } | undefined,
+  opts: { resumeStep?: Resume; timeoutMs?: number; timeoutStep?: string; output?: unknown } | undefined,
 ): Pause<Resume> {
   return {
     kind: DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL,
     signal: { name: handle.dispatch.resultSignal, correlationId: handle.dispatch.correlationId },
     resumeStep: opts?.resumeStep,
     timeoutMs: opts?.timeoutMs,
+    timeoutStep: opts?.timeoutStep,
     output: opts?.output,
   };
 }
