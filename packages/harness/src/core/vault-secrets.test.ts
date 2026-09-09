@@ -55,6 +55,7 @@ describe("auth contract", () => {
     const client = createVaultSecretsClient({
       apiKey: {
         getKey: () => "sk_stale",
+        snapshot: () => ({ apiKey: "sk_stale", generation: 0 }),
         refresh: async () => {
           refreshed += 1;
           return "sk_fresh";
