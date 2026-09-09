@@ -1679,6 +1679,8 @@ export const startServer = async (
     ensureCanvasTemplate,
   });
   await sessionManager.init();
+  // Always empty on this host: the retired HTTP routes cannot reach
+  // onScopeAccess. The legacy plumbing remains only until SAP-3091 deletion.
   const activeSystemGraphScopes = new Map<string, WorkspaceScope>();
   const systemGraphInvocations = new CachedAgentInvocationProvider(
     new SourceAgentInvocationProvider(),
@@ -2889,6 +2891,7 @@ export const startServer = async (
     }
     // This host has one map authority, including on identity/storage failure.
     // Keep the legacy implementation until SAP-3091, with no live owners.
+    // Both the retained set and activeSystemGraphScopes are always empty.
     const retained = new Set<string>();
     systemGraphWatcher.retain(retained);
     systemGraphStore.retain(retained);
