@@ -16,6 +16,7 @@ interface SessionTestState {
   lastBindWorkflow?: {
     req?: { sessionId?: string; workflowPath?: string | null };
   };
+  restartMcpSessionCalls?: string[];
   publish?: (message: unknown) => void;
 }
 
@@ -55,6 +56,48 @@ test("renders oldest-first accessible tabs with provider tooltips", async ({
     "aria-label",
     "New session on leasing",
   );
+});
+
+test("offers one explicit restart when the active session has stale MCP auth", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    const publish = (
+      window as unknown as {
+        __HARNESS_TEST__?: SessionTestState;
+      }
+    ).__HARNESS_TEST__?.publish;
+    publish?.({
+      type: "session.status",
+      session: {
+        id: "sess-boot",
+        agentSessionId: "agent-session-1",
+        boundWorkflowPath: "/Users/demo/acme-app/leasing",
+        harness: "claude-code",
+        cwd: "/Users/demo/acme-app",
+        title: "acme-app",
+        status: "running",
+        mcpAuthState: "restart-required",
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        exitCode: null,
+        ready: true,
+      },
+    });
+  });
+
+  const notice = page.getByTestId("mcp-auth-restart-notice");
+  await expect(notice).toContainText("The Sapiom connection changed.");
+  const restart = page.getByTestId("mcp-auth-restart");
+  await expect(restart).toHaveText("Restart session");
+
+  await restart.click();
+  await expect(restart).toBeDisabled();
+  await expect(restart).toHaveText("Restarting…");
+  await expect
+    .poll(async () => (await testState(page)).restartMcpSessionCalls)
+    .toEqual(["sess-boot"]);
+  await expect(notice).toHaveCount(0);
 });
 
 test("starts a fresh Claude sibling in the same folder and binding", async ({

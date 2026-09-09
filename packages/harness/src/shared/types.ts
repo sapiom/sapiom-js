@@ -152,7 +152,11 @@ export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 export type SessionStatus = "starting" | "running" | "exited";
 
 /** Browser-safe projection of a live session's private MCP credential stamp. */
-export type McpAuthState = "current" | "restart-required" | "not-applicable";
+export type McpAuthState =
+  | "current"
+  | "restart-required"
+  | "restarting"
+  | "not-applicable";
 
 /** A harness session = one pty running one agent process in one directory. */
 export interface HarnessSession {
@@ -1090,6 +1094,7 @@ export interface SessionRecord {
 // POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
+// POST   /api/sessions/:id/restart-mcp  → HarnessSession (replace exact stale resumable runtime)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)

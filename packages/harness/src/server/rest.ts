@@ -43,6 +43,7 @@ import {
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
   McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -693,12 +694,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
   });
 
   /**
-   * Maps a resume failure onto its status code. Shared by both routes that
-   * resume — `/sessions/:id/resume` and `/sessions/adopt` — so a
-   * transcript-only row that turns out not to be resumable answers with the
-   * same 409 + `code` the UI already knows how to surface. Returns false when
-   * the error isn't a resume-shaped one, so the caller falls through to
-   * `next(err)`.
+   * Map failures shared by direct resume, transcript adoption, and the scoped
+   * MCP restart. A conversation that cannot be resumed answers with the same
+   * 409 + `code` on every path. Unknown errors still fall through to next().
    */
   const sendResumeError = (res: express.Response, err: unknown): boolean => {
     if (err instanceof UnknownSessionError) {
@@ -721,6 +719,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       err instanceof ExternalHarnessError ||
       err instanceof AgentSessionIdentityReservedError ||
       err instanceof McpCredentialGenerationChangedError ||
+      err instanceof McpSessionRestartUnavailableError ||
       err instanceof ProjectSessionScopeUnavailableError ||
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionNotResumeableError
@@ -844,6 +843,15 @@ export function createRestRouter(options: RestRouterOptions): Router {
     try {
       const session = await sessionManager.resume(req.params.id);
       res.json(session);
+    } catch (err) {
+      if (sendResumeError(res, err)) return;
+      next(err);
+    }
+  });
+
+  router.post("/sessions/:id/restart-mcp", async (req, res, next) => {
+    try {
+      res.json(await sessionManager.restartForMcpCredentials(req.params.id));
     } catch (err) {
       if (sendResumeError(res, err)) return;
       next(err);

@@ -12,7 +12,11 @@ import type {
   SpawnSpec,
 } from "../shared/types.js";
 import { CodexAdapter } from "./adapters/codex.js";
-import { ExternalHarnessError, SessionNotResumeableError } from "./errors.js";
+import {
+  ExternalHarnessError,
+  McpSessionRestartUnavailableError,
+  SessionNotResumeableError,
+} from "./errors.js";
 import {
   SessionInputGuardRejectedError,
   SessionBackgroundInputPreemptedError,
@@ -4389,6 +4393,169 @@ describe("SessionManager", () => {
     });
 
     expect(session.mcpAuthState).toBe("not-applicable");
+  });
+
+  it("restarts the exact stale runtime through the existing resume path", async () => {
+    let generation = 1;
+    const { manager, adapter, spawns } = makeManager({
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: true,
+        },
+      }),
+    });
+    const states: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => states.push(updated.mcpAuthState));
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "agent-session-1");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    const restarting = manager.restartForMcpCredentials(session.id);
+    await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce());
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restarting");
+    spawns[0]!.emitExit(0);
+
+    await expect(restarting).resolves.toMatchObject({
+      id: session.id,
+      status: "running",
+      mcpAuthState: "current",
+    });
+    expect(spawns).toHaveLength(2);
+    expect(adapter.resume).toHaveBeenCalledWith(
+      "agent-session-1",
+      expect.objectContaining({ harnessSessionId: session.id }),
+    );
+    expect(states).toContain("restarting");
+  });
+
+  it("keeps an unresumable stale runtime running and restores restart-required", async () => {
+    let generation = 1;
+    const { manager, spawns } = makeManager({
+      adapter: createFakeAdapter({ canResume: vi.fn(async () => false) }),
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "missing-conversation");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    await expect(
+      manager.restartForMcpCredentials(session.id),
+    ).rejects.toBeInstanceOf(SessionNotResumeableError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).toMatchObject({
+      status: "running",
+      mcpAuthState: "restart-required",
+    });
+  });
+
+  it("rejects current, unstamped, Codex, and already-stopping runtimes", async () => {
+    let generation = 1;
+    const claude = createFakeAdapter();
+    const { manager, spawns } = makeManager({
+      adapter: claude,
+      adapters: { "claude-code": claude, codex: createFakeAdapter() },
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async (_id, request) =>
+        request.cwd.endsWith("unstamped")
+          ? {}
+          : {
+              mcpCredentialLaunch: {
+                generation,
+                credentialBearing: true,
+              },
+            },
+    });
+    const current = await manager.create({
+      cwd: "/tmp/current",
+      harness: "claude-code",
+    });
+    await expect(
+      manager.restartForMcpCredentials(current.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+
+    const unstamped = await manager.create({
+      cwd: "/tmp/unstamped",
+      harness: "claude-code",
+    });
+    unstamped.mcpAuthState = "restart-required";
+    await expect(
+      manager.restartForMcpCredentials(unstamped.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+
+    const codex = await manager.create({
+      cwd: "/tmp/codex",
+      harness: "codex",
+    });
+    const stopping = await manager.create({
+      cwd: "/tmp/stopping",
+      harness: "claude-code",
+    });
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+    await expect(
+      manager.restartForMcpCredentials(codex.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[2]!.pty.kill).not.toHaveBeenCalled();
+
+    const termination = manager.kill(stopping.id);
+    await expect(
+      manager.restartForMcpCredentials(stopping.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+    expect(spawns[3]!.pty.kill).toHaveBeenCalledOnce();
+    spawns[3]!.emitExit(0);
+    await termination;
+  });
+
+  it("never kills a session whose runtime changed during restart preparation", async () => {
+    const resumable = deferred<boolean>();
+    let generation = 1;
+    const { manager, spawns } = makeManager({
+      adapter: createFakeAdapter({ canResume: vi.fn(() => resumable.promise) }),
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "agent-session-1");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    const restarting = manager.restartForMcpCredentials(session.id);
+    await vi.waitFor(() =>
+      expect(manager.get(session.id)?.mcpAuthState).toBe("restarting"),
+    );
+    manager.reconcileMcpCredentialGeneration(3);
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restarting");
+    await expect(
+      manager.restartForMcpCredentials(session.id),
+    ).rejects.toBeInstanceOf(McpSessionRestartUnavailableError);
+
+    spawns[0]!.emitExit(0);
+    resumable.resolve(true);
+    await expect(restarting).rejects.toBeInstanceOf(
+      McpSessionRestartUnavailableError,
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(1);
   });
 
   it("rechecks the MCP credential after resume runtime bookkeeping and before PTY admission", async () => {
