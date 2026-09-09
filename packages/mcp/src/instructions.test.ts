@@ -43,16 +43,29 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
   });
 
-  it("keeps local authoring and hosted direct access on distinct aliases", () => {
-    // Two-MCP frame: this server authors agents under the local `sapiom` alias; the
-    // hosted capability MCP answers one-off calls under the distinct `sapiom-direct`
-    // alias. The 2.6-era copy conflated them onto one `sapiom` alias, which is why
-    // the negative assertions below exist.
+  it("names the two servers by role and keeps distinct aliases in the registration commands", () => {
+    // Two-MCP frame: this server authors agents; the hosted capability server answers
+    // one-off calls. Under SAP-3179 both are named by ROLE — "the local authoring
+    // server", "the hosted capability server" — with the same phrases the Agent Studio
+    // system prompt uses, because the aliases differ by context: Studio wires `sapiom`
+    // (hosted) / `sapiom-dev` (local), while a plain Claude Code user registers `sapiom`
+    // (local) / `sapiom-direct` (hosted). A Studio session reads both texts, so "use the
+    // `sapiom` alias to author agents" pointed it at the remote server. Aliases survive
+    // only inside the two `claude mcp add` commands. The 2.6-era copy conflated the two
+    // servers onto one `sapiom` alias, which is why the negative assertions below exist.
     expect(AUTHORING_INSTRUCTIONS).toContain(
+      "is **the local authoring server**",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("the hosted capability");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
       "`sapiom-dev` is this package's MCP server identity",
     );
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("the local `sapiom` alias");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "the distinct `sapiom-direct` alias",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "supported local alias `sapiom` with `claude mcp add sapiom -- npx -y @sapiom/mcp`",
+      "`claude mcp add sapiom -- npx -y @sapiom/mcp`",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp",
@@ -180,13 +193,17 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.11 (App Link management tools + webhook receiver, SAP-3178, on
-    // top of 2.10 trigger kinds, SAP-3174).
+    // Current release: App Link management tools + webhook receiver (SAP-3178) on top of
+    // 2.10's trigger kinds (SAP-3174), plus the two Sapiom servers named by role rather
+    // than by alias (SAP-3179). Both sides of this merge claimed "2.11"; the paired
+    // backend release for SAP-3179 (sapiom/Sapiom#4884) is still open and predates
+    // SAP-3178, so it must adopt this same body and settle the release number before the
+    // two pins can agree.
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "3346267ab58f593170758c11b4fd4654da06ef01a28cba478ddd4d6ffeda0d80",
+      "8a529780d5b85c5408862cd1cc145095ebce1a792875deefc1de3ace8db2170e",
     );
   });
 });

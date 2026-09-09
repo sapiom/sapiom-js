@@ -12,7 +12,7 @@ const sha256 = (content: string) =>
  * the copy it serves, so the two move together — see the drift-guard test below.
  */
 const PINNED_PROMPT_DIGEST =
-  "d83fa57c4a384d682f0e2936dfb4d0be258195d8401b1fe1baceb9487a6f86e4";
+  "e2c9472096e83ea7ec0248fb945268abd1a02866ee7725a868bf8f86831369bd";
 
 const legacy = readFileSync(
   new URL("./fixtures/legacy-system-prompt.md", import.meta.url),
@@ -38,7 +38,15 @@ describe("DEFAULT_SYSTEM_PROMPT", () => {
 
   it("keeps the Studio orientation the prompt exists to deliver", () => {
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Agent Studio");
-    expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom-dev");
+    // The two Sapiom servers are named by ROLE, never by alias (SAP-3179). Studio registers
+    // them as `sapiom` / `sapiom-dev` (mcp-config.ts); the MCP primer the local server
+    // hands the same session tells a plain Claude Code user to register `sapiom-direct`
+    // / `sapiom`. A Studio session reads both, so an alias in either text is wrong for
+    // the reader of the other. The backend's cross-surface guard holds both texts to
+    // the same two role phrases.
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/the local authoring server/i);
+    expect(DEFAULT_SYSTEM_PROMPT).toMatch(/the hosted capability server/i);
+    expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_dev_agents_");
     expect(DEFAULT_SYSTEM_PROMPT).toContain(".sapiom/harness-context.json");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("Local Run, Prod Run, and Deploy");
     expect(DEFAULT_SYSTEM_PROMPT).toContain("sapiom_send_feedback");
