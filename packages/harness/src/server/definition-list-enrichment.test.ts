@@ -1,8 +1,10 @@
 /**
  * Wiring regression for SAP-3214: one tenant-scoped list request per pass,
  * never a by-id request for a definition the account can't see. Fake Agents
- * API counting list and detail requests; `@sapiom/mcp/auth` mocked so the
- * disconnect route never touches ~/.sapiom.
+ * API counting list and detail requests. `@sapiom/mcp/auth` is a PARTIAL
+ * mock: the credential store, the browser flow and `credentialsFilePath` are
+ * replaced so the disconnect route and the credential observer never touch
+ * ~/.sapiom; every other export runs for real.
  */
 import {
   createServer as createHttpServer,
@@ -17,12 +19,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const authFixture = vi.hoisted(() => ({
   // A store that does not exist: the credential observer sees ENOENT and
   // stays quiet, and nothing under ~/.sapiom is ever watched or written.
-  credentialsPath: `${process.env.TMPDIR ?? "/tmp"}/sap3214-enrichment-missing/credentials.json`,
+  credentialsPath: "/tmp/sap3214-enrichment-missing/credentials.json",
 }));
 
 // Every other export stays real so a new import in the server cannot turn
-// this fake into a missing-export failure; only the credential store and the
-// browser flow are replaced.
+// this fake into a missing-export failure. A new real export would resolve
+// paths through the mocked `credentialsFilePath`, so it stays contained.
 vi.mock("@sapiom/mcp/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@sapiom/mcp/auth")>()),
   resolveEnvironment: vi.fn(async (environment?: string) => ({
