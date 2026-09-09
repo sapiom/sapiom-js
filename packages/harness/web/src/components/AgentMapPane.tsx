@@ -1,8 +1,24 @@
 import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
-import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
+import type {
+  AgentMapImplementationsResponse,
+  AgentMapWorkspaceResponse,
+  PlanNodeId,
+} from "@shared/agent-map";
 import type { WorkflowInfo } from "@shared/types";
 import type { HarnessApi } from "../lib/api";
+import {
+  agentMapDeployments,
+  type AgentMapDeployments,
+} from "../lib/agent-map-deployment";
+import { DEPLOYMENT_UNAVAILABLE } from "../lib/workflow-deployment";
 import {
   agentMapNavigationError,
   agentMapTargetWorkflow,
@@ -18,7 +34,10 @@ import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
   visible: boolean;
-  api: Pick<HarnessApi, "getAgentMapNodeImplementation">;
+  api: Pick<
+    HarnessApi,
+    "getAgentMapNodeImplementation" | "getAgentMapImplementations"
+  >;
   workflows: readonly WorkflowInfo[];
   refreshWorkflows: () => Promise<WorkflowInfo[]>;
   onOpenAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
@@ -54,6 +73,76 @@ export function AgentMapPane({
   const generation = useRef(0);
   const current = useRef({ value, workflows, onOpenAgent, visible });
   current.current = { value, workflows, onOpenAgent, visible };
+
+  // Deployment refreshes must not cancel an in-flight node navigation.
+  const bindingGeneration = useRef(0);
+  const [retryStatus, setRetryStatus] = useState(0);
+  const [bindingState, setBindingState] = useState<{
+    value: AgentMapWorkspaceResponse | null;
+    response: AgentMapImplementationsResponse | null;
+    phase: "loading" | "available" | "unavailable";
+  }>({ value: null, response: null, phase: "loading" });
+  const previousDeployments = useRef<AgentMapDeployments>(new Map());
+  const projectId = value?.project.projectId;
+  // Discovery/moves can change binding resolution; cloud status alone cannot.
+  const inventoryKey = JSON.stringify(
+    workflows.flatMap((workflow) =>
+      (workflow.studioBindings ?? [])
+        .filter((binding) => binding.projectId === projectId)
+        .map((binding) => JSON.stringify([binding.agentId, workflow.path])),
+    ).sort(),
+  );
+  useEffect(() => {
+    if (visible && projectId) void refreshWorkflows().catch(() => undefined);
+  }, [visible, projectId, refreshWorkflows, retryStatus]);
+  useEffect(() => {
+    const request = ++bindingGeneration.current;
+    if (
+      !visible ||
+      !value?.proposal?.nodes.some(
+        (node) => node.kind === "agent" || node.kind === "subagent",
+      )
+    )
+      return;
+    setBindingState((old) => ({
+      value,
+      response: old.response,
+      phase: "loading",
+    }));
+    void api.getAgentMapImplementations(value.project.projectId).then(
+      (response) => {
+        if (request === bindingGeneration.current)
+          setBindingState({ value, response, phase: "available" });
+      },
+      () => {
+        if (request === bindingGeneration.current)
+          setBindingState((old) => ({
+            value,
+            response: old.response,
+            phase: "unavailable",
+          }));
+      },
+    );
+    return () => {
+      bindingGeneration.current += 1;
+    };
+  }, [api, visible, value, inventoryKey, retryStatus]);
+  const deployments = useMemo(
+    () =>
+      value
+        ? agentMapDeployments(
+            value,
+            bindingState.response,
+            workflows,
+            previousDeployments.current,
+            bindingState.value === value ? bindingState.phase : "loading",
+          )
+        : new Map(),
+    [value, bindingState, workflows],
+  );
+  useEffect(() => {
+    previousDeployments.current = deployments;
+  }, [deployments]);
 
   useEffect(() => {
     generation.current += 1;
@@ -193,6 +282,8 @@ export function AgentMapPane({
       <PopulatedAgentMap
         value={value}
         selected={selected}
+        deployments={deployments}
+        onRetryStatus={() => setRetryStatus((revision) => revision + 1)}
         onSelectNode={activate}
         onInspectNode={inspect}
         pending={pending}
@@ -269,6 +360,8 @@ export function AgentMapPane({
 
 function PopulatedAgentMap({
   value,
+  deployments,
+  onRetryStatus,
   selected,
   onSelectNode,
   onInspectNode,
@@ -277,6 +370,8 @@ function PopulatedAgentMap({
   onCloseInspector,
 }: {
   value: AgentMapWorkspaceResponse;
+  deployments: AgentMapDeployments;
+  onRetryStatus: () => void;
   selected: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
@@ -285,6 +380,9 @@ function PopulatedAgentMap({
   onCloseInspector: () => void;
 }): JSX.Element {
   const proposal = value.proposal!;
+  const failed = [...deployments.values()].filter(
+    (status) => status.unavailable && !status.loading,
+  );
   return (
     <div
       className="agent-map-live"
@@ -299,14 +397,32 @@ function PopulatedAgentMap({
       }}
     >
       <div className="agent-map-live-header">
-        <span className="status-tag">Proposed</span>
         <span className="system-graph-node-meta">
           Version {proposal.version}
         </span>
+        {failed.length > 0 && (
+          <div
+            className="agent-map-deployment-message"
+            role="status"
+            data-testid="agent-map-deployment-error"
+          >
+            {failed.some((status) => status.indicator === null) && (
+              <span>{DEPLOYMENT_UNAVAILABLE}</span>
+            )}
+            <button
+              type="button"
+              className="status-tag status-tag-action"
+              onClick={onRetryStatus}
+            >
+              Retry status
+            </button>
+          </div>
+        )}
       </div>
       <div className="agent-map-live-body">
         <AgentMapCanvas
           proposal={proposal}
+          deployments={deployments}
           selectedNodeId={selected}
           onSelectNode={onSelectNode}
           onInspectNode={onInspectNode}
@@ -316,6 +432,7 @@ function PopulatedAgentMap({
           <AgentMapInspector
             snapshot={value}
             nodeId={selected}
+            deployment={deployments.get(selected)}
             onClose={onCloseInspector}
             openError={openError}
           />

@@ -262,6 +262,11 @@ keeping the current conversation. Use the node’s Info button to inspect its pl
 Other node kinds open the inspector directly. Unlinked, missing or ambiguous
 implementations keep the map open and show a recovery message in the inspector.
 
+Agent and subagent nodes show **Draft** until a ready hosted build is confirmed,
+then **Deployed**, including while idle or after local edits. Badges share the
+rail's deployment evidence. Unavailable lookups offer **Retry status** to check
+again without reloading the map. Other node kinds have no deployment badge.
+
 ### Agent Map MCP
 
 Studio exposes a stateful Streamable HTTP MCP endpoint at `/mcp/agent-map` for
