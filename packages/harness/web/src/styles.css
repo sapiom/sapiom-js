@@ -4528,6 +4528,12 @@ button.system-graph-node.is-navigable:focus-visible {
   pointer-events: none;
 }
 
+.agent-map-controls {
+  max-width: calc(100% - var(--sp3) * 2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .agent-map-node-wrap {
   position: absolute;
 }
