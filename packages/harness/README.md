@@ -34,6 +34,10 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+The rail's cloud icon marks an agent as deployed once Studio confirms a ready
+hosted build. Failed checks silently retain the last confirmed indicator, and changing
+accounts clears this evidence. Retained indicators do not enable cloud runs.
+
 Codex receives the generated remote Sapiom, local `sapiom-dev`, and optional
 Agent Map MCP configuration on every session launch and resume. Studio uses session-specific
 server names such as `sapiom-dev-<session suffix>` and identifies them in the
@@ -272,6 +276,11 @@ Click an agent or subagent node to open its linked agent’s step graph on Canva
 keeping the current conversation. Use the node’s Info button to inspect its plan.
 Other node kinds open the inspector directly. Unlinked, missing or ambiguous
 implementations keep the map open and show a recovery message in the inspector.
+
+Agent and subagent nodes show **Draft** until a ready hosted build is confirmed,
+then **Deployed**, including while idle or after local edits. Badges share the
+rail's deployment evidence. Unavailable lookups offer **Retry status** to check
+again without reloading the map. Other node kinds have no deployment badge.
 
 ### Agent Map MCP
 

@@ -443,3 +443,16 @@ for (const boundWorkflowPath of ["/Users/demo/acme-app/leasing", null]) {
     );
   });
 }
+
+test("deployment refresh preserves a pending node navigation", async ({ page }) => {
+  await open(page);
+  await probe(page, { delay: true });
+  const before = await evidence(page);
+  await node(page).click();
+  await expect(node(page)).toHaveAttribute("aria-busy", "true");
+  await publish(page, { type: "workflows.changed" });
+  await expect.poll(async () => (await calls(page)).refreshes).toBe(1);
+  await page.evaluate(() => (window as TestWindow).__navigation.release!());
+  await expectCanvas(page);
+  expect(await evidence(page)).toEqual(before);
+});

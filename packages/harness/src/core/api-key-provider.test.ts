@@ -196,3 +196,28 @@ describe("staticApiKeyProvider", () => {
     expect(provider.getKey()).toBe("sk-fixed");
   });
 });
+
+it("invalidates projections only on adopted key changes, including clear and re-login", async () => {
+  const onKeyChanged = vi.fn();
+  const readApiKeyForEnv = vi
+    .fn()
+    .mockResolvedValueOnce("a")
+    .mockResolvedValueOnce("b")
+    .mockRejectedValueOnce(new Error("store unavailable"))
+    .mockResolvedValueOnce("a");
+  const provider = createApiKeyProvider("a", {
+    onKeyChanged,
+    readApiKeyForEnv,
+    resolveEnvironmentName: async () => "test",
+  });
+  await provider.refresh();
+  expect(onKeyChanged).toHaveBeenCalledTimes(0);
+  await provider.refresh();
+  await provider.refresh();
+  expect(onKeyChanged).toHaveBeenCalledTimes(1);
+  provider.clear();
+  provider.clear();
+  await provider.refresh();
+  expect(provider.getKey()).toBe("a");
+  expect(onKeyChanged).toHaveBeenCalledTimes(3);
+});
