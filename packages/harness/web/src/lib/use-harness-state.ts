@@ -55,14 +55,7 @@ import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
 import { agentMapLoader } from "./agent-map-loader";
-import { systemGraphLoader } from "./system-graph-loader";
 import { WorkflowProjectionOrder } from "./workflow-projection-order";
-import {
-  retainSystemGraphAnnouncements,
-  systemGraphAnnouncementsAfterMessage,
-  type SystemGraphAnnouncement,
-} from "./system-graph-announcements";
-import type { WorkspaceKey } from "@shared/system-graph";
 import { track as trackProduct } from "./analytics/events";
 import {
   agentProvenance,
@@ -372,8 +365,6 @@ export interface HarnessStateHook {
   ) => () => void;
   /** Signals that the shared event socket reconnected after an interruption. */
   subscribeEventReconnects: (listener: () => void) => () => void;
-  /** Latest monotonic graph invalidation per retained Project scope. */
-  systemGraphAnnouncements: ReadonlyMap<WorkspaceKey, SystemGraphAnnouncement>;
   /** The run each session's Steps tab is showing (the latest observed by
    *  default, or a past run picked via selectRun), with its target. */
   runsBySession: Map<string, ObservedRun>;
@@ -423,21 +414,13 @@ export interface HarnessStateHook {
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
-  const [systemGraphAnnouncements, setSystemGraphAnnouncements] = useState<
-    Map<WorkspaceKey, SystemGraphAnnouncement>
-  >(new Map());
   useEffect(() => {
     if (!state) return;
-    const workspaceKeys = new Set<WorkspaceKey>();
     const projectIds = new Set(
       (state.studioProjects ?? []).map((project) => project.projectId),
     );
-    systemGraphLoader.retain(workspaceKeys);
     agentMapLoader.retain(projectIds);
-    setSystemGraphAnnouncements((current) =>
-      retainSystemGraphAnnouncements(current, workspaceKeys),
-    );
-  }, [state?.studioProjects, state?.workspaceScopes]);
+  }, [state?.studioProjects]);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   /**
    * Mirror of `settings` for the one reader that cannot wait for a re-render:
@@ -1239,9 +1222,6 @@ export function useHarnessState(): HarnessStateHook {
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.
         if (message.type !== "session.record.changed") setLastMessage(message);
-        setSystemGraphAnnouncements((current) =>
-          systemGraphAnnouncementsAfterMessage(current, message),
-        );
         if (message.type === "session.status") {
           sessionStatusRevisions.current.set(
             message.session.id,
@@ -2460,7 +2440,6 @@ export function useHarnessState(): HarnessStateHook {
     subscribeAgentMapProposalChanges,
     subscribeAgentMapInitializationChanges,
     subscribeEventReconnects,
-    systemGraphAnnouncements,
     refreshWorkspaceScopes,
     runsBySession,
     runsByExecution,

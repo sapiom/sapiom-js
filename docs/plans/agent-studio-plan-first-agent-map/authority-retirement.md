@@ -41,9 +41,12 @@ or other refresh handlers run. Shared discovery, accepted source evidence,
 PackageInventory, rail launch edges, ordinary sessions and each agent's
 Canvas/Steps retain their own consumers; they are not legacy project topology.
 
-SAP-3090 first disconnects `WorkspaceGraphView` from the shell and removes the
-older-protocol session handoff. The following layer deletes its now-unreachable
-browser modules. `agent-map-authority.spec.ts` includes omitted-catalog recovery
+SAP-3090 disconnects `WorkspaceGraphView` from the shell and removes the
+older-protocol session handoff at `42fcaccf`. The following layer deletes the
+renderer, parser, layout, loader, navigation, announcement state, API methods,
+mock topology and graph-only tests. Shared viewport behavior and its tests now
+live together in `graph-viewport.ts` / `graph-viewport.test.ts`; Agent Map owns
+the labels and controls it still uses. `agent-map-authority.spec.ts` includes omitted-catalog recovery
 and exact keyboard tabs; `project-altitude.spec.ts` preserves pane geometry,
 Steps restoration, independent disclosure and map/agent Back/Forward navigation.
 
@@ -54,7 +57,7 @@ this file as evidence that a host or recovery exercise passed.
 
 | Gate | Reproducible evidence |
 | --- | --- |
-| Missing identity, exact recovery, unchanged conversation and no old requests/events | `web/e2e/agent-map-authority.spec.ts`; counters intercept read, refresh and navigation before cache/delay, and check event invalidations. |
+| Missing identity, exact recovery, unchanged conversation and no old requests/events | `web/e2e/agent-map-authority.spec.ts`; browser network observation starts before boot and counts old read, refresh and navigation requests. Old event frames must leave catalog/workflow fetch counts, selection and session actions unchanged. |
 | Exact node navigation, error rejection and session parity | `web/e2e/agent-map-navigation.spec.ts`, including Claude, Codex, archived/no sessions, delayed responses, Info/resource inspection and mobile. |
 | Current HTTP authority and retained root/descendant sessions | `src/server/studio-workspace-wiring.test.ts`; protected 410 on all three legacy routes, no graph read/refresh/watch, no retained graph owners. |
 | Shared discovery still works without the legacy API | `src/server/system-graph-freshness.test.ts`, `workspace-rescan.test.ts` and core workspace-watch broker/watcher suites. Preserve cold reads, edits/renames/deletes, superseded scan budgets, repository boundaries, lease retirement and symlink deduplication. |
@@ -112,7 +115,7 @@ An unavailable identity must remain a bounded error throughout recovery.
 | SAP-3082 | Catalog identity, saved selection, private implementation bindings and protected resolution. |
 | SAP-3084 | Node inspection/navigation and ordinary conversation/Canvas behavior. |
 | SAP-3087 / SAP-3088 | Discovery freshness and shared workspace watcher ownership. |
-| SAP-3090 | Remove older-protocol browser rendering, loaders, API methods, announcements and fixtures after this gate is reviewed. |
+| SAP-3090 | Browser rendering, loaders, API methods, announcements and fixtures are removed in two dependent layers. Human review follows the complete cleanup stack; implementation does not authorize release. |
 | SAP-3091 | Remove the unreachable graph runtime/router/store/invocation wiring; retain shared discovery, rail and per-agent graph helpers. |
 | SAP-3086 / E8 assignee | Package/upgrade evidence, release decision, recovery owner and out-of-hours approver. Approval must be recorded, not assumed. |
 
