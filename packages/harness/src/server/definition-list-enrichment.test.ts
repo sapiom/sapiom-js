@@ -14,8 +14,6 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const credentialsFilePath = vi.hoisted(() => vi.fn());
-
 vi.mock("@sapiom/mcp/auth", () => ({
   resolveEnvironment: vi.fn(async (environment?: string) => ({
     name: environment === "dev" ? "staging" : "production",
@@ -31,9 +29,10 @@ vi.mock("@sapiom/mcp/auth", () => ({
   }),
   writeCredentials: vi.fn(async () => {}),
   clearCredentials: vi.fn(async () => {}),
-  credentialsFilePath,
+  credentialsFilePath: vi.fn(),
 }));
 
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 import type {
   HarnessAdapter,
   LaunchOpts,
@@ -93,7 +92,7 @@ describe("definition list enrichment wiring (SAP-3214)", () => {
     tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "harness-definition-list-enrichment-"),
     );
-    credentialsFilePath.mockReturnValue(
+    vi.mocked(credentialsFilePath).mockReturnValue(
       path.join(tempDir, "credentials.json"),
     );
     previousAgentsUrl = process.env.SAPIOM_AGENTS_URL;

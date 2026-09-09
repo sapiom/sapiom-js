@@ -5410,7 +5410,13 @@ describe("SessionManager", () => {
 
       expect(onAgentMapSessionExit).toHaveBeenCalledOnce();
       expect(onAgentMapSessionExit).toHaveBeenCalledWith(session.id);
-      expect(manager.get(session.id)).toEqual(beforeResume);
+      // Preparation now enters the starting lifetime, so its failure clears
+      // the old exit result while retaining identity and last real activity.
+      expect(manager.get(session.id)).toEqual({
+        ...beforeResume,
+        exitCode: null,
+        exitTail: null,
+      });
       expect(spawns).toHaveLength(1);
     },
   );
