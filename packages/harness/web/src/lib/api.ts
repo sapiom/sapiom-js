@@ -416,6 +416,8 @@ export interface HarnessApi {
    */
   sessionRecord(id: string): Promise<SessionRecord | null>;
   resumeSession(id: string): Promise<HarnessSession>;
+  /** Restart one live Claude session whose launch-time MCP auth is stale. */
+  restartMcpSession(id: string): Promise<HarnessSession>;
   /** Take a transcript-only history row (`resumeMode: "agent-resume"`, no
    *  `harnessSessionId`) into the registry and resume it — the honest
    *  alternative to silently opening a fresh session in its directory.
@@ -788,6 +790,13 @@ class RealApi implements HarnessApi {
   resumeSession(id: string): Promise<HarnessSession> {
     return this.request<HarnessSession>(
       `/api/sessions/${encodeURIComponent(id)}/resume`,
+      { method: "POST" },
+    );
+  }
+
+  restartMcpSession(id: string): Promise<HarnessSession> {
+    return this.request<HarnessSession>(
+      `/api/sessions/${encodeURIComponent(id)}/restart-mcp`,
       { method: "POST" },
     );
   }
@@ -3102,6 +3111,47 @@ export class MockApi implements HarnessApi {
       session.id === resumed.id ? resumed : session,
     );
     return resumed;
+  }
+
+  async restartMcpSession(id: string): Promise<HarnessSession> {
+    const existing = this.sessions.find((session) => session.id === id);
+    if (!existing) throw new Error(`mock: no session to restart for ${id}`);
+    if (typeof window !== "undefined") {
+      const win = window as unknown as {
+        __HARNESS_TEST__?: Record<string, unknown>;
+      };
+      const previous =
+        (win.__HARNESS_TEST__?.restartMcpSessionCalls as string[] | undefined) ??
+        [];
+      win.__HARNESS_TEST__ = {
+        ...(win.__HARNESS_TEST__ ?? {}),
+        restartMcpSessionCalls: [...previous, id],
+      };
+    }
+    const restarting: HarnessSession = {
+      ...existing,
+      mcpAuthState: "restarting",
+    };
+    this.sessions = this.sessions.map((session) =>
+      session.id === id ? restarting : session,
+    );
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "session.status", session: restarting });
+    });
+    await delay(300);
+    const restarted: HarnessSession = {
+      ...restarting,
+      status: "running",
+      mcpAuthState: "current",
+      lastActiveAt: new Date().toISOString(),
+    };
+    this.sessions = this.sessions.map((session) =>
+      session.id === id ? restarted : session,
+    );
+    void import("./events").then(({ publishMockBusMessage }) => {
+      publishMockBusMessage({ type: "session.status", session: restarted });
+    });
+    return restarted;
   }
 
   /** Mirrors the real route: registers the transcript-only row as a session

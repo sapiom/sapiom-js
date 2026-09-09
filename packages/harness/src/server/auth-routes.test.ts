@@ -112,6 +112,7 @@ function startApp(
       authEnabled: opts.authEnabled,
       performBrowserAuthImpl: opts.performBrowserAuthImpl,
       onPlanningUserChanged: opts.onPlanningUserChanged,
+      onCredentialRemoved: opts.onCredentialRemoved,
     }),
   );
   const server = app.listen(0);
@@ -596,6 +597,55 @@ describe("POST /api/auth/disconnect", () => {
     expect(provider.calls.clear).toBe(1);
     // getKey() must return null immediately — no stale key after disconnect.
     expect(provider.getKey()).toBeNull();
+  });
+
+  it("does not report disconnect success until credential-bearing processes stop", async () => {
+    const stopped = deferred<void>();
+    const onCredentialRemoved = vi.fn(() => stopped.promise);
+    const result = startApp({ bus, onCredentialRemoved });
+    server = result.server;
+
+    let responseSettled = false;
+    const response = fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    }).then((value) => {
+      responseSettled = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(onCredentialRemoved).toHaveBeenCalledOnce());
+    expect(responseSettled).toBe(false);
+
+    stopped.resolve();
+    expect((await response).status).toBe(200);
+  });
+
+  it("publishes signed-out state even when process reconciliation fails", async () => {
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
+    const result = startApp({
+      bus,
+      authState,
+      apiKeyProvider: makeProvider(null, "sk-live-key"),
+      onCredentialRemoved: vi.fn().mockRejectedValue(new Error("stop failed")),
+    });
+    server = result.server;
+
+    const response = await fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(500);
+    expect(authState.get()).toEqual({
+      authenticated: false,
+      organizationName: null,
+    });
+    expect(busEvents).toContainEqual({
+      type: "auth.changed",
+      authenticated: false,
+      organizationName: null,
+    });
   });
 
   it("cancels an in-flight sign-in so a late browser-auth resolve cannot re-authenticate", async () => {

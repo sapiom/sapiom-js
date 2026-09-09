@@ -2,7 +2,10 @@
  * Wiring-level regression for the Canvas cloud-status badge. The SPA routes
  * already receive definition metadata through enrichWorkflows(); this proves
  * the real POST /api/canvas/:sessionId/render path receives the same mutable
- * active-build projection instead of the raw workflow registry snapshot.
+ * active-build projection instead of the raw workflow registry snapshot, and
+ * that the projection follows the tenant-scoped list (SAP-3214): one list
+ * request per pass, retained display bits through an outage, an absent id
+ * marked unavailable, nothing from a request started before sign-out.
  */
 import {
   createServer as createHttpServer,
@@ -48,46 +51,57 @@ function fakeClaudeAdapter(): HarnessAdapter {
   };
 }
 
+const readyRow = (id: string, slug: string) => ({
+  id,
+  slug,
+  activeBuildRunId: `build-ready-${id}`,
+  activeBuildRunStatus: "ready",
+});
+
 describe("Canvas build-status wiring", () => {
   let tempDir: string;
   let harness: HarnessServer | undefined;
   let definitionsApi: HttpServer | undefined;
   let previousAgentsUrl: string | undefined;
-  let definitionRequests: number;
-  let definitionStatus = 200;
-  let definitionBody: unknown;
-  let holdDefinition: ((url: string) => Promise<void>) | null = null;
-  let definitionApiKeys: Array<string | undefined>;
+  let listRequests: number;
+  let listStatus = 200;
+  let listRows: unknown;
+  let holdList: (() => Promise<void>) | null = null;
+  let listApiKeys: Array<string | undefined>;
+  let detailRequests: number;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "harness-canvas-build-status-"),
     );
     previousAgentsUrl = process.env.SAPIOM_AGENTS_URL;
-    definitionRequests = 0;
-    definitionStatus = 200;
-    definitionBody = {
-      slug: "order-triage",
-      activeBuildRunId: "build-ready-1",
-      activeBuildRunStatus: "ready",
-    };
-    holdDefinition = null;
-    definitionApiKeys = [];
+    listRequests = 0;
+    listStatus = 200;
+    listRows = [
+      readyRow("4821", "order-triage"),
+      readyRow("4822", "other-agent"),
+    ];
+    holdList = null;
+    listApiKeys = [];
+    detailRequests = 0;
 
+    // Enrichment reads the tenant list; a ready row needs no detail request.
     definitionsApi = createHttpServer(async (req, res) => {
-      if (!/^\/agents\/v1\/definitions\/482[12]$/.test(req.url ?? "")) {
-        res.writeHead(404).end();
+      if (req.url === "/agents/v1/definitions") {
+        listRequests += 1;
+        listApiKeys.push(req.headers["x-sapiom-api-key"] as string | undefined);
+        const status = listStatus;
+        const body =
+          status === 200
+            ? listRows
+            : { message: "private upstream diagnostic" };
+        await holdList?.();
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(body));
         return;
       }
-      definitionRequests += 1;
-      definitionApiKeys.push(
-        req.headers["x-sapiom-api-key"] as string | undefined,
-      );
-      const status = definitionStatus;
-      const body = definitionBody;
-      await holdDefinition?.(req.url!);
-      res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(body));
+      if (req.url?.startsWith("/agents/v1/definitions/")) detailRequests += 1;
+      res.writeHead(404).end();
     });
     await new Promise<void>((resolve) => {
       definitionsApi!.listen(0, "127.0.0.1", resolve);
@@ -175,8 +189,9 @@ describe("Canvas build-status wiring", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ ok: true, mode: "single" });
-    expect(definitionRequests).toBe(1);
-    expect(definitionApiKeys).toEqual(["sk-test"]);
+    expect(listRequests).toBe(1);
+    expect(listApiKeys).toEqual(["sk-test"]);
+    expect(detailRequests).toBe(0);
     await expect(
       fs.readFile(renderFileFor(sessionDir, ORDER_TRIAGE), "utf8"),
     ).resolves.toContain(">deployed<");
@@ -193,12 +208,14 @@ describe("Canvas build-status wiring", () => {
       return route === "state" ? body.workflows : body;
     };
     const readyRows = await rows("state");
-    expect(readyRows[0].deploymentLookup).toEqual({
-      lastConfirmedDeployed: true,
-      unavailable: false,
+    expect(readyRows[0]).toMatchObject({
+      definitionAccess: "visible",
+      deploymentLookup: { lastConfirmedDeployed: true, unavailable: false },
     });
-    definitionStatus = 503;
-    definitionBody = { message: "private upstream diagnostic" };
+
+    // The list is down: build fields cleared, the confirmed display bit kept,
+    // no per-id fallback, no upstream diagnostic leaked.
+    listStatus = 503;
     for (const route of ["state", "workflows"]) {
       const unavailable = await rows(route);
       expect(unavailable[0]).toMatchObject({
@@ -206,45 +223,49 @@ describe("Canvas build-status wiring", () => {
         activeBuildRunStatus: null,
         deploymentLookup: { lastConfirmedDeployed: true, unavailable: true },
       });
+      expect(unavailable[0].definitionAccess).toBeUndefined();
       expect(JSON.stringify(unavailable)).not.toContain(
         "private upstream diagnostic",
       );
     }
-    definitionStatus = 404;
-    definitionBody = {
-      statusCode: 404,
-      message: "Agent definition not found: 4821",
-    };
-    expect(
-      (await rows("workflows")).find((row) => row.definitionId === 4821)
-        ?.deploymentLookup,
-    ).toEqual({
-      lastConfirmedDeployed: false,
-      unavailable: false,
+    expect(detailRequests).toBe(0);
+
+    // 4821 left the account's list: not visible, never requested by id.
+    listStatus = 200;
+    listRows = [readyRow("4822", "other-agent")];
+    const partial = await rows("workflows");
+    expect(partial.find((row) => row.definitionId === 4821)).toMatchObject({
+      definitionAccess: "unavailable",
+      activeBuildRunStatus: null,
+      deploymentLookup: { lastConfirmedDeployed: false, unavailable: false },
     });
-    expect(
-      await fs.readFile(path.join(stateRoot, "workflows.json"), "utf8"),
-    ).not.toContain("deploymentLookup");
+    expect(partial.find((row) => row.definitionId === 4822)).toMatchObject({
+      definitionAccess: "visible",
+      activeBuildRunStatus: "ready",
+    });
+    expect(detailRequests).toBe(0);
+    const persisted = await fs.readFile(
+      path.join(stateRoot, "workflows.json"),
+      "utf8",
+    );
+    expect(persisted).not.toContain("deploymentLookup");
+    expect(persisted).not.toContain("definitionAccess");
 
     // A request started under the old identity must not return ready after logout.
-    definitionStatus = 200;
-    definitionBody = {
-      slug: "old-account-agent",
-      activeBuildRunId: "late-build",
-      activeBuildRunStatus: "ready",
-    };
+    listRows = [
+      { ...readyRow("4821", "old-account-agent") },
+      { ...readyRow("4822", "old-account-agent") },
+    ];
     let release!: () => void;
     let entered!: () => void;
     const started = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    holdDefinition = (url) =>
-      url.endsWith("4821")
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            release = resolve;
-            entered();
-          });
+    holdList = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+        entered();
+      });
     const pending = rows("state");
     await started;
     expect((await request("auth/disconnect", "POST")).status).toBe(200);
