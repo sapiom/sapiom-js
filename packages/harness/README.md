@@ -34,6 +34,17 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+Codex receives the generated remote Sapiom, local `sapiom-dev`, and optional
+Agent Map MCP configuration on every session launch and resume. Studio uses session-specific
+server names such as `sapiom-dev-<session suffix>` and identifies them in the
+agent's instructions. This keeps existing Codex MCP registrations intact and
+avoids inheriting old credentials or conflicting transports from a server with
+the same name. Credentials are passed through Codex's environment and cleared from
+shell-tool environments; they never appear in command arguments. Authoring-process
+settings stay on the MCP server. Studio does not write to your Codex `config.toml`. If a generated MCP
+file cannot be read or parsed, the session reports an error so you can start a
+new session to regenerate it.
+
 ## Telemetry
 
 With explicit opt-in, Agent Studio collects usage events (prompts, tool calls,
