@@ -235,10 +235,12 @@ describe("llm.run — a structured call truncated before its tool call", () => {
 
   it("throws when the cap landed mid-input, leaving a required field unwritten", async () => {
     // The same failure one token later: the block is there, so a presence check reads it as
-    // success, and the caller destructures `undefined` out of a partial object.
+    // success, and the caller destructures `undefined` out of a partial object. The input is
+    // deliberately NON-empty — an empty one short-circuits on the emptiness check above and
+    // would leave the `required` branch this test is named for unexercised.
     const cutMidInput = {
       stop_reason: "max_tokens",
-      content: [{ type: "tool_use", name: "classify_ticket", input: {} }],
+      content: [{ type: "tool_use", name: "classify_ticket", input: { note: "partial" } }],
     };
     const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, cutMidInput) });
     const error = await sapiom.llm

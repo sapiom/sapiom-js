@@ -59,9 +59,10 @@
  * out of the same budget — so a cap sized for the answer alone can be exhausted
  * mid-deliberation, ending the turn before the answer (or, with `output`, before
  * the forced tool call) is ever emitted. Size it for thinking plus output: a few
- * thousand tokens, not a few hundred. It is a ceiling, not a reservation — billing
- * settles on the tokens actually produced, so headroom on a short reply costs
- * nothing (SAP-3280).
+ * thousand tokens, not a few hundred. Billing settles on the tokens actually
+ * produced, so a cap with headroom does not bill for tokens the model never
+ * emitted — but it is not free either: the gateway's admission weight scales with
+ * `max_tokens`, so size the cap for the work rather than padding it (SAP-3280).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -498,8 +499,9 @@ export class LlmStructuredOutputTruncatedError extends Error {
         ? `Structured output "${outputName}" was never emitted: the model hit max_tokens${cap} before the forced tool call. `
         : `Structured output "${outputName}" is incomplete: the model hit max_tokens${cap} partway through the forced tool call, so its input is missing required fields. `) +
         `Thinking tokens count against max_tokens, so raise the cap to cover thinking plus output ` +
-        `— a few thousand tokens, not a few hundred. The cap is a ceiling, not a reservation: ` +
-        `billing settles on the tokens actually produced.`,
+        `— a few thousand tokens, not a few hundred; billing settles on the tokens actually produced. ` +
+        `Retrying the same request cannot succeed: catch this and fail() the step rather than letting ` +
+        `the engine re-run it.`,
     );
     this.name = "LlmStructuredOutputTruncatedError";
     this.outputName = outputName;
@@ -588,6 +590,13 @@ function withStructuredOutput(request: Record<string, unknown>, output: LlmStruc
  * @throws {LlmStructuredOutputTruncatedError} when `spec.output` was set and the
  * turn hit `max_tokens` before the forced tool call was emitted, or partway through
  * its input — the cap has to cover thinking as well as output.
+ *
+ * This one is not worth retrying, and the engine does not know that: it is not a member
+ * of the platform's non-retryable set, so left to escape a step it is re-run with the
+ * identical under-capped request (up to the runner's per-step attempt limit), billing the
+ * thinking each time and failing the same way. Catch it in a step declared `canFail: true`
+ * and return `fail(error.message)` — the shape `CodingRunHttpError` already uses. Raising
+ * the cap is the actual fix.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,

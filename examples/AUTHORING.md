@@ -639,8 +639,9 @@ the turn ends before the tool call is emitted and there is nothing to read — o
 inputs only, so a starved cap passes every easy case first. `llm.run` throws
 `LlmStructuredOutputTruncatedError` when that happens rather than handing back an
 unreadable response, and `pnpm examples:check` rejects a structured call capped under 2048.
-Size for thinking plus output; the cap is a ceiling, not a reservation, so headroom on a
-short reply costs nothing.
+Catch it in a step with `canFail: true` and `fail()`: retrying the same request bills the
+thinking again and fails the same way. Billing settles on the tokens actually produced, but
+the cap is not free either — admission weight scales with it, so size it for the work.
 
 - **Don't ask for "ONLY minified JSON" and parse the reply.** The pattern this replaced
   took `output.indexOf("{")` to `output.lastIndexOf("}")` and `JSON.parse`'d it. Any

@@ -397,15 +397,37 @@ the result back out. For a **plain-text** reply instead, use
 
 **Thinking tokens count against `max_tokens`.** The same `thinking` block you must not parse
 is also spent out of the cap. If deliberation exhausts the budget, the turn ends before the
-forced tool call is ever emitted: the response carries no `tool_use` block, `structuredOf`
-correctly returns `undefined`, and the step throws. Deliberation is longest on the hardest,
-most ambiguous inputs, so a starved cap passes every test and every easy case and then drops
-exactly the item that was worth the most (SAP-3280).
+forced tool call is ever emitted, and `llm.run` throws `LlmStructuredOutputTruncatedError`
+rather than handing back a response with no `tool_use` block to read. Deliberation is longest
+on the hardest, most ambiguous inputs, so a starved cap passes every test and every easy case
+and then drops exactly the item that was worth the most (SAP-3280).
 
 So size the cap for thinking **plus** output — a few thousand tokens, not a few hundred; the
-example above uses `4096`. The cap is a ceiling, not a reservation: billing settles on the
-tokens actually produced, so headroom on a short reply costs nothing, while a call that
-truncates mid-thinking costs its thinking and returns nothing you can use.
+example above uses `4096`. Billing settles on the tokens actually produced, so a cap with
+headroom does not bill for tokens the model never emitted — but it is not free either: the
+platform's admission weight scales with `max_tokens`, so size the cap for the work rather than
+padding it.
+
+**Catch the truncation; do not let the engine retry it.** Raising the cap is the fix, but a
+step that lets this error escape is re-run with the identical under-capped request, billing the
+thinking on every attempt and failing the same way each time. Handle it like
+`CodingRunHttpError` above — in a step declared `canFail: true`:
+
+```typescript
+import { fail } from "@sapiom/agent";
+import { LlmStructuredOutputTruncatedError } from "@sapiom/tools";
+
+try {
+  const response = await ctx.sapiom.llm.run({ request, output });
+  return goto("use", ctx.sapiom.llm.structuredOf(response)!);
+} catch (error) {
+  if (error instanceof LlmStructuredOutputTruncatedError) {
+    // `error.reason` is "no-tool-call" or "incomplete-input"; both mean raise the cap.
+    return fail(error.message);
+  }
+  throw error;
+}
+```
 
 ### The label rule
 

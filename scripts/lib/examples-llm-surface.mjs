@@ -170,8 +170,8 @@ export function checkStructuredOutputCap({ path, source }) {
         "Thinking is spent out of the same budget, so a cap this size can end the turn before " +
         "the forced tool call is emitted — the structured result then never arrives, on the " +
         "hardest inputs only (SAP-3280). Size it for thinking plus output " +
-        `(at least ${STRUCTURED_CAP_FLOOR}; the examples use 4096). The cap is a ceiling, not a ` +
-        "reservation — billing settles on the tokens actually produced.",
+        `(at least ${STRUCTURED_CAP_FLOOR}; the examples use 4096); billing settles on the tokens ` +
+        "actually produced.",
     );
   }
 
