@@ -1,3 +1,5 @@
+import type { AgentMapImplementationsResponse } from "@shared/agent-map";
+import { parseAgentMapImplementations } from "./agent-map-deployment";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
@@ -50,6 +52,7 @@ import type {
   AcceptedProposalDelta,
   AgentMapWorkspaceResponse,
   MapOperation,
+  PlanNodeId,
   PutStudioCurrentWorkspaceRequest,
   StudioCurrentWorkspaceResponse,
   StudioProjectId,
@@ -60,6 +63,10 @@ import type {
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
 import { getTheme } from "./theme";
+import {
+  parseAgentMapNodeTarget,
+  type AgentMapNodeTarget,
+} from "./agent-map-navigation";
 import { refuseAgentName } from "@shared/agent-name";
 import {
   parseSystemGraphNavigation,
@@ -74,7 +81,9 @@ import { basenameOf, isWithinDir, parentOf, samePath } from "./paths";
 
 import type { CanvasGraph, CanvasGraphNode } from "./canvas-graph";
 import {
+  isBoundSessionFixture,
   MOCK_ACCOUNT_PLAN,
+  MOCK_BOUND_SESSION,
   MOCK_FS_TREE,
   MOCK_HARNESSES,
   MOCK_HISTORY,
@@ -372,6 +381,11 @@ export interface HarnessApi {
   getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse>;
+  getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse>;
+  getAgentMapNodeImplementation(
+    projectId: StudioProjectId,
+    nodeId: PlanNodeId,
+  ): Promise<AgentMapNodeTarget>;
   getStudioCurrentWorkspace(
     projectId: StudioProjectId,
   ): Promise<StudioCurrentWorkspaceResponse>;
@@ -648,6 +662,22 @@ class RealApi implements HarnessApi {
   }
   async retryAgentMapInitialization(projectId: StudioProjectId): Promise<AgentMapInitializationStatus> {
     return parseAgentMapInitializationStatus(await this.request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/agent-map/initialization/retry`, { method: "POST" }), projectId);
+  }
+
+  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
+    return parseAgentMapImplementations(await this.request<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/agent-map/implementations`,
+    ), projectId);
+  }
+
+  async getAgentMapNodeImplementation(
+    projectId: StudioProjectId,
+    nodeId: PlanNodeId,
+  ): Promise<AgentMapNodeTarget> {
+    const value = await this.request<unknown>(
+      `/api/projects/${encodeURIComponent(projectId)}/agent-map/nodes/${encodeURIComponent(nodeId)}/implementation`,
+    );
+    return parseAgentMapNodeTarget(value, projectId, nodeId);
   }
 
   async getAgentMapWorkspace(
@@ -1955,6 +1985,7 @@ export class MockApi implements HarnessApi {
     StudioProjectId,
     StudioWorkspaceSelection
   >();
+  private agentMapTargets = new Map<string, AgentMapNodeTarget>();
   private agentMapSnapshots = new Map<
     StudioProjectId,
     AgentMapWorkspaceResponse
@@ -2042,7 +2073,10 @@ export class MockApi implements HarnessApi {
   private sessionsStore: HarnessSession[] =
     this.fresh || this.noLiveSessions
       ? []
-      : MOCK_SESSIONS.map((session) => ({
+      : [
+          ...MOCK_SESSIONS,
+          ...(isBoundSessionFixture() ? [MOCK_BOUND_SESSION] : []),
+        ].map((session) => ({
           ...session,
           ...(this.restoredSessions
             ? { status: "exited" as const, ready: false }
@@ -2297,7 +2331,7 @@ export class MockApi implements HarnessApi {
         )
         .map((scope, bindingIndex) => ({
           projectId: scope.projectId!,
-          agentId: `agent_00000000-0000-4000-${String(bindingIndex).padStart(4, "0")}-${String(index + 1).padStart(12, "0")}`,
+          agentId: `agent_00000000-0000-4000-${(0x8000 + bindingIndex).toString(16)}-${String(index + 1).padStart(12, "0")}`,
         }));
       return bindings.length > 0
         ? {
@@ -2428,6 +2462,34 @@ export class MockApi implements HarnessApi {
     return { projectId, status: "queued", errorCode: null, retryable: false };
   }
 
+  async getAgentMapImplementations(projectId: StudioProjectId): Promise<AgentMapImplementationsResponse> {
+    const snapshot = this.agentMapSnapshots.get(projectId);
+    return { projectId, mapVersionId: null, bindings: (snapshot?.proposal?.nodes ?? [])
+      .filter((node) => node.kind === "agent" || node.kind === "subagent")
+      .map((node) => {
+        const target = this.agentMapTargets.get(`${projectId}:${node.id}`);
+        return { nodeId: node.id, agentId: target?.agentId ?? null, revision: 0,
+          resolution: target ? "bound" : "unbound" };
+      }),
+    };
+  }
+
+  async getAgentMapNodeImplementation(
+    projectId: StudioProjectId,
+    nodeId: PlanNodeId,
+  ): Promise<AgentMapNodeTarget> {
+    await delay();
+    const target = this.agentMapTargets.get(`${projectId}:${nodeId}`);
+    if (!target)
+      throw new ApiError(
+        404,
+        "No implementation is linked yet.",
+        undefined,
+        "unbound",
+      );
+    return parseAgentMapNodeTarget(target, projectId, nodeId);
+  }
+
   async getAgentMapWorkspace(
     projectId: StudioProjectId,
   ): Promise<AgentMapWorkspaceResponse> {
@@ -2454,6 +2516,27 @@ export class MockApi implements HarnessApi {
         "planner_mock",
       );
       this.agentMapSnapshots.set(projectId, fixture.snapshot);
+      this.studioWorkflows()
+        .filter((workflow) =>
+          workflow.studioBindings?.some(
+            (binding) => binding.projectId === projectId,
+          ),
+        )
+        .slice(0, 2)
+        .forEach((workflow, index) => {
+          const nodeId = fixture.snapshot.proposal!.nodes.filter(
+            (node) => node.kind === "agent",
+          )[index].id;
+          const agentId = workflow.studioBindings!.find(
+            (binding) => binding.projectId === projectId,
+          )!.agentId;
+          this.agentMapTargets.set(`${projectId}:${nodeId}`, {
+            projectId,
+            nodeId,
+            agentId,
+            workflowPath: workflow.path,
+          });
+        });
       seededGoldenFixture = true;
       // Publish before the delayed GET settles so the golden journey covers the
       // cold-open queue/replay path. Durable recovery already has the same
@@ -3108,7 +3191,7 @@ export class MockApi implements HarnessApi {
 
   async listWorkflows(): Promise<WorkflowInfo[]> {
     await delay();
-    return this.workflows;
+    return this.studioWorkflows();
   }
 
   async getWorkflowGraph(workflowPath: string): Promise<WorkflowGraphResponse> {

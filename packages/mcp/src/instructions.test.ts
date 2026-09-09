@@ -43,16 +43,33 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
   });
 
-  it("keeps local authoring and hosted direct access on distinct aliases", () => {
-    // Two-MCP frame: this server authors agents under the local `sapiom` alias; the
-    // hosted capability MCP answers one-off calls under the distinct `sapiom-direct`
-    // alias. The 2.6-era copy conflated them onto one `sapiom` alias, which is why
-    // the negative assertions below exist.
+  // SKIPPED, deliberately, like the SAP-3178 and SAP-3180 blocks: #814 moved this fallback to
+  // a body whose server-side release (sapiom/Sapiom#4884) has not merged. Sapiom `main` serves
+  // 2.10 (digest 47a4e3a3…), which is what this copy tracks. Un-skip when #4884 lands and this
+  // copy is re-synced to that body.
+  it.skip("names the two servers by role and keeps distinct aliases in the registration commands", () => {
+    // Two-MCP frame: this server authors agents; the hosted capability server answers
+    // one-off calls. Under SAP-3179 both are named by ROLE — "the local authoring
+    // server", "the hosted capability server" — with the same phrases the Agent Studio
+    // system prompt uses, because the aliases differ by context: Studio wires `sapiom`
+    // (hosted) / `sapiom-dev` (local), while a plain Claude Code user registers `sapiom`
+    // (local) / `sapiom-direct` (hosted). A Studio session reads both texts, so "use the
+    // `sapiom` alias to author agents" pointed it at the remote server. Aliases survive
+    // only inside the two `claude mcp add` commands. The 2.6-era copy conflated the two
+    // servers onto one `sapiom` alias, which is why the negative assertions below exist.
     expect(AUTHORING_INSTRUCTIONS).toContain(
+      "is **the local authoring server**",
+    );
+    expect(AUTHORING_INSTRUCTIONS).toContain("the hosted capability");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
       "`sapiom-dev` is this package's MCP server identity",
     );
+    expect(AUTHORING_INSTRUCTIONS).not.toContain("the local `sapiom` alias");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "the distinct `sapiom-direct` alias",
+    );
     expect(AUTHORING_INSTRUCTIONS).toContain(
-      "supported local alias `sapiom` with `claude mcp add sapiom -- npx -y @sapiom/mcp`",
+      "`claude mcp add sapiom -- npx -y @sapiom/mcp`",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp",

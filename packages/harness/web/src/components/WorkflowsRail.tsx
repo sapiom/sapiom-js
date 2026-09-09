@@ -37,6 +37,7 @@ import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
 import {
+  LiveMark,
   ProjectRow,
   ProjectTreeRows,
   dirKey,
@@ -82,6 +83,10 @@ import {
 } from "../lib/project-membership";
 import type { RailAxis, RailSort } from "../lib/project-tree";
 import { samePath } from "../lib/paths";
+import {
+  liveSessionsForProject,
+  liveSessionsForStudioProject,
+} from "../lib/session-scope";
 import type { PendingWorkspace } from "../lib/use-harness-state";
 import { SAPIOM_AGENTS_URL } from "../lib/urls";
 import { getTheme, subscribeTheme, toggleTheme } from "../lib/theme";
@@ -1269,6 +1274,12 @@ export function WorkflowsRail({
             const studioProject = studioProjects?.find(
               (candidate) => candidate.projectId === workspaceScope?.projectId,
             );
+            // Use the session tab strip's project identity for both levels of
+            // the live indicator. Older servers without Studio projects retain
+            // their folder-based membership.
+            const projectSessions = studioProject
+              ? liveSessionsForStudioProject(sessions, studioProject.projectId)
+              : liveSessionsForProject(sessions, project.root);
             // Current servers issue a durable Studio project for every scope.
             // Its project label owns Agent Map navigation; creation remains an
             // ordinary project action available beside that read-only view.
@@ -1379,6 +1390,12 @@ export function WorkflowsRail({
                   }
                   trailing={
                     <>
+                      {/* Project and group marks share the project membership
+                          used by the session tabs (SAP-3200, D37). */}
+                      <LiveMark
+                        count={projectSessions.length}
+                        testId={`project-live-${project.label}`}
+                      />
                       {creating && (
                         <span
                           className="workspace-row-spinner"
@@ -1560,6 +1577,7 @@ export function WorkflowsRail({
                     onToggleCollapsed={toggleCollapsed}
                     focusedAgentPath={focusedAgentPath}
                     onFocusAgent={focusProjectAgent}
+                    sessions={projectSessions}
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>

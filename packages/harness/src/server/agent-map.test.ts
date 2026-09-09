@@ -16,6 +16,8 @@ import type {
 } from "../shared/agent-map.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
+import { createAgentMapImplementations } from "./agent-map-implementations.js";
+import type { WorkflowInfo } from "../shared/types.js";
 
 describe("createAgentMapRouter", () => {
   const roots: string[] = [];
@@ -67,30 +69,23 @@ describe("createAgentMapRouter", () => {
         agents: [{ agentId: "agent_00000000-0000-4000-8000-000000000001", name: "Planner", path: privateRoot }], provider: "codex" } : null });
     initializers.push(initialization);
     const app = express();
+    const workflows: WorkflowInfo[] = [{ name: "Planner", path: path.join(privateRoot, "planner"),
+      definitionId: null, definitionSlug: null, source: "scan" }];
+    let scanComplete = true;
+    const bindingOptions = { catalog, store, listWorkspaceScopes,
+      preferences: new StudioWorkspacePreferenceStore(path.join(stateRoot, "studio-workspace-preferences.json")),
+      listWorkflows: () => workflows, isWorkflowScanComplete: () => scanComplete };
+    const implementations = createAgentMapImplementations(bindingOptions);
     app.use(express.json());
     app.use("/api", createBootTokenMiddleware("test-token"));
     app.use("/api", express.json());
     app.use(
       "/api",
       createAgentMapRouter({
-        catalog,
-        store,
+        ...bindingOptions,
+        implementations,
         initialization,
-        preferences: new StudioWorkspacePreferenceStore(
-          path.join(stateRoot, "studio-workspace-preferences.json"),
-        ),
         currentUserId: () => currentUserId,
-        listWorkflows: () => [
-          {
-            name: "Planner",
-            path: path.join(privateRoot, "planner"),
-            definitionId: null,
-            definitionSlug: null,
-            source: "scan" as const,
-          },
-        ],
-        isWorkflowScanComplete: () => true,
-        listWorkspaceScopes,
         ...projectLifecycle,
       }),
     );
@@ -108,11 +103,72 @@ describe("createAgentMapRouter", () => {
       store,
       proposals,
       infer,
+      implementations,
+      workflows,
+      setScanComplete: (complete: boolean) => { scanComplete = complete; },
       setCurrentUserId: (userId: string) => {
         currentUserId = userId;
       },
     };
   }
+
+  it("resolves current exact targets through protected, path-free projections without initialization", async () => {
+    const onProjectCreated = vi.fn(), onRootBound = vi.fn();
+    const f = await start({ onProjectCreated, onRootBound });
+    const projectId = f.project.projectId;
+    f.workflows[0].definitionId = 42;
+    f.workflows.push({ ...f.workflows[0], path: path.join(f.privateRoot, "clone") },
+      { ...f.workflows[0], path: path.join(f.stateRoot, "foreign") });
+    const base = `${f.baseUrl}/api/projects/${projectId}/agent-map`;
+    const headers = { "X-Harness-Token": "test-token" };
+    expect((await fetch(`${base}/implementations`)).status).toBe(401);
+    const inventory = await f.implementations.inventory(projectId, () => {});
+    expect(inventory.candidates).toHaveLength(2);
+    expect(inventory.candidates[0].agentId).not.toBe(inventory.candidates[1].agentId);
+    const created = await f.proposals.propose({ projectId, userId: "user-test", sessionId: "builder" }, {
+      schemaVersion: 1, proposalId: null, expectedVersion: 0, requestId: "map",
+      operations: [{ kind: "add-node", draftRef: "parent", node: { kind: "agent", name: "Agent", purpose: "Test", ownerAgent: null, contractRefs: [] } },
+        { kind: "add-node", draftRef: "child", node: { kind: "subagent", name: "Child", purpose: "Test", ownerAgent: { draftRef: "parent" }, contractRefs: [] } }],
+    });
+    const nodeId = Object.values(created.allocatedNodeIds)[0];
+    const nodeUrl = `${base}/nodes/${nodeId}/implementation`;
+    expect((await fetch(nodeUrl)).status).toBe(401);
+    expect((await (await fetch(nodeUrl, { headers })).json()).code).toBe("unbound");
+    const projection = await f.implementations.projection(projectId, () => {});
+    const agentId = inventory.candidates.find(candidate => candidate.path.endsWith("clone"))!.agentId;
+    await f.implementations.bind(projectId, { expectedMapVersionId: projection.mapVersionId,
+      nodeId, expectedRevision: 0, agentId }, () => {});
+    const response = await fetch(nodeUrl, { headers });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ projectId, nodeId, agentId, workflowPath: path.join(f.privateRoot, "clone") });
+    const publicRead = await fetch(`${base}/implementations`, { headers });
+    expect(publicRead.headers.get("cache-control")).toBe("no-store");
+    expect(await publicRead.text()).not.toContain(f.privateRoot);
+    const childId = Object.values(created.allocatedNodeIds)[1];
+    expect((await (await fetch(`${base}/nodes/${childId}/implementation`, { headers })).json()).code).toBe("unbound");
+    f.workflows.splice(1, 1);
+    f.setScanComplete(false);
+    expect((await fetch(nodeUrl, { headers })).status).toBe(503);
+    f.setScanComplete(true);
+    expect((await (await fetch(nodeUrl, { headers })).json()).code).toBe("target_not_found");
+    expect(f.infer).not.toHaveBeenCalled();
+    expect(onProjectCreated).not.toHaveBeenCalled();
+    expect(onRootBound).not.toHaveBeenCalled();
+  });
+
+  it("rejects an auth change while a private target is being read", async () => {
+    const f = await start();
+    const read = vi.spyOn(f.implementations, "target").mockImplementation(async () => {
+      f.setCurrentUserId("different-user");
+      return { projectId: f.project.projectId, nodeId: "node", agentId: "agent", workflowPath: f.privateRoot };
+    });
+    const response = await fetch(`${f.baseUrl}/api/projects/${f.project.projectId}/agent-map/nodes/node/implementation`, {
+      headers: { "X-Harness-Token": "test-token" },
+    });
+    expect(response.status).toBe(401);
+    expect(await response.text()).not.toContain(f.privateRoot);
+    read.mockRestore();
+  });
 
   it("authenticates initialization reads and retries, and rechecks authored history on retry", async () => {
     const f = await start();

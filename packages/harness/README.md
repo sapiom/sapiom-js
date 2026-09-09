@@ -34,6 +34,21 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+The rail's cloud icon marks an agent as deployed once Studio confirms a ready
+hosted build. Failed checks silently retain the last confirmed indicator, and changing
+accounts clears this evidence. Retained indicators do not enable cloud runs.
+
+Codex receives the generated remote Sapiom, local `sapiom-dev`, and optional
+Agent Map MCP configuration on every session launch and resume. Studio uses session-specific
+server names such as `sapiom-dev-<session suffix>` and identifies them in the
+agent's instructions. This keeps existing Codex MCP registrations intact and
+avoids inheriting old credentials or conflicting transports from a server with
+the same name. Credentials are passed through Codex's environment and cleared from
+shell-tool environments; they never appear in command arguments. Authoring-process
+settings stay on the MCP server. Studio does not write to your Codex `config.toml`. If a generated MCP
+file cannot be read or parsed, the session reports an error so you can start a
+new session to regenerate it.
+
 ## Telemetry
 
 With explicit opt-in, Agent Studio collects usage events (prompts, tool calls,
@@ -230,6 +245,42 @@ state. The authenticated `POST .../initialization/retry` repeats eligibility che
 credentials, and raw model output are never included.
 While generation is active, the selected project also polls its durable status
 so completion by another Studio process is visible without reloading the page.
+
+### Agent Map layout
+
+Agent Maps use the **Vertical ELK** layout in both the CLI host and desktop.
+ELK 0.12.0 runs in a bundled local worker and arranges the saved nodes and
+relationships; it does not change the map, its history, or the inference pass.
+Disconnected components pack to the available pane; Fit restores automatic
+framing after a manual pan or zoom. Per-agent Canvas views keep their own layout.
+
+Vertical replaces the previous project map layout for everyone. Existing maps
+open directly, including maps with an older layout preference. Only agents
+without a map use the normal initialization path.
+
+If arrangement fails, **Retry layout** tries again without modifying the saved
+map. Opening a map loads the bundled worker (about 1.6 MB raw / 467 kB gzip).
+
+### Agent Map implementation links
+
+Agent Map nodes resolve to exact same-project Studio implementations. Existing
+generated maps inherit uniquely proven initialization links. Missing or ambiguous
+implementations remain unresolved, preserving the planned node and map history.
+
+The boot-token-protected `GET /api/projects/:projectId/agent-map/implementations`
+returns a path-free projection. `GET .../nodes/:nodeId/implementation` resolves
+the current exact local target for navigation. Both are uncached reads and do
+not start sessions, scans or another model pass.
+
+Click an agent or subagent node to open its linked agent’s step graph on Canvas,
+keeping the current conversation. Use the node’s Info button to inspect its plan.
+Other node kinds open the inspector directly. Unlinked, missing or ambiguous
+implementations keep the map open and show a recovery message in the inspector.
+
+Agent and subagent nodes show **Draft** until a ready hosted build is confirmed,
+then **Deployed**, including while idle or after local edits. Badges share the
+rail's deployment evidence. Unavailable lookups offer **Retry status** to check
+again without reloading the map. Other node kinds have no deployment badge.
 
 ### Agent Map MCP
 

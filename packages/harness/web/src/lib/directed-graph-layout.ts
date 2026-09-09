@@ -29,8 +29,8 @@ export interface DirectedGraphLayout {
   bounds: { width: number; height: number };
 }
 
-const NODE_WIDTH = 184;
-const NODE_HEIGHT = 72;
+export const NODE_WIDTH = 184;
+export const NODE_HEIGHT = 72;
 const RANK_GAP = 112;
 const ROW_GAP = 40;
 const EDGE_INSET = 32;

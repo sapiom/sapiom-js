@@ -79,6 +79,307 @@ describe("agent.coding.launch — dispatch handle", () => {
   });
 });
 
+describe("agent.coding.launch — deadlineMinutes", () => {
+  it("sends the deadline as snake_case deadline_minutes", async () => {
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing", deadlineMinutes: 30 });
+
+    expect(capture.body).toMatchObject({ deadline_minutes: 30 });
+    expect(capture.body).not.toHaveProperty("deadlineMinutes");
+  });
+
+  it("omits the key entirely when no deadline is given — not null, not 0", async () => {
+    // The server has to tell "no deadline" (dispatch now) from "zero minutes",
+    // so an unset deadline must not reach the wire at all.
+    const capture: Capture = {};
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fakeLaunchFetch(capture),
+    });
+
+    await sapiom.models.coding.launch({ task: "do a thing" });
+
+    expect(capture.body).not.toHaveProperty("deadline_minutes");
+  });
+});
+
+describe("agent.coding — awaiting_capacity is not terminal", () => {
+  it("keeps polling a deferred run instead of resolving it", async () => {
+    // A run parked on a deadline reports awaiting_capacity for as long as it
+    // waits for a lane. Resolving there would hand the caller a null result.
+    const statuses = ["awaiting_capacity", "awaiting_capacity", "completed"];
+    let polls = 0;
+    const fetch = (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const status = isPost ? "pending" : (statuses[polls++] ?? "completed");
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({
+          data: {
+            id: "run-deferred",
+            attributes: {
+              status,
+              summary: status === "completed" ? "done" : null,
+              result: null,
+              error: null,
+            },
+            relationships: { execution_environment: { data: { id: "env-1" } } },
+          },
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch });
+
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 30,
+    });
+    expect(await handle.status()).toBe("awaiting_capacity");
+
+    const result = await handle.wait({ pollMs: 1 });
+
+    expect(result.status).toBe("completed");
+    expect(polls).toBe(statuses.length);
+  });
+});
+
+describe("agent.coding — the deadline widens wait()'s poll budget", () => {
+  /**
+   * Holds the run in awaiting_capacity for two polls, jumping the clock past
+   * the 20-minute surface default between them, then completes it. Time is
+   * moved with a Date.now stub rather than fake timers so the loop's real
+   * `setTimeout(pollMs)` still runs.
+   */
+  function deferredPastDefault(): typeof globalThis.fetch {
+    const realNow = Date.now();
+    let offsetMs = 0;
+    let polls = 0;
+    jest.spyOn(Date, "now").mockImplementation(() => realNow + offsetMs);
+    return (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const deferred = !isPost && polls++ === 0;
+      // The first poll finds the run parked; by the time the loop re-checks its
+      // budget, 25 minutes have passed — past the 20-minute surface default.
+      if (deferred) offsetMs = 25 * 60_000;
+      const status = isPost
+        ? "pending"
+        : deferred
+          ? "awaiting_capacity"
+          : "completed";
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({
+          data: {
+            id: "run-slow",
+            attributes: { status, summary: null, result: null, error: null },
+            relationships: { execution_environment: { data: { id: "env-1" } } },
+          },
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("run() survives a deadline longer than the surface default", async () => {
+    // `coding.run` takes no timeoutMs, so a fixed 20-minute default would throw
+    // on exactly the runs a 60-minute deadline exists for.
+    const sapiom = createClient({ apiKey: "k", fetch: deferredPastDefault() });
+
+    const result = await sapiom.models.coding.run({
+      task: "do a thing",
+      deadlineMinutes: 60,
+    });
+
+    expect(result.status).toBe("completed");
+  }, 10_000); // one real 3s poll sleep — run() takes no pollMs
+
+  it("still times out at the surface default when no deadline was asked for", async () => {
+    // The widening is opt-in: an ordinary run keeps the 20-minute budget.
+    const sapiom = createClient({ apiKey: "k", fetch: deferredPastDefault() });
+
+    await expect(
+      sapiom.models.coding.run({ task: "do a thing" }),
+    ).rejects.toThrow(/timed out after 1200000ms \(last status: awaiting_capacity\)/);
+  });
+
+  it("an explicit timeoutMs still wins over the deadline", async () => {
+    const sapiom = createClient({ apiKey: "k", fetch: deferredPastDefault() });
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 60,
+    });
+
+    await expect(handle.wait({ timeoutMs: 1_000 })).rejects.toThrow(
+      /timed out after 1000ms/,
+    );
+  });
+});
+
+describe("agent.coding — polling backs off while a run is deferred", () => {
+  /**
+   * Records the delay each poll sleep ASKS for while firing it immediately, so
+   * the backoff schedule is observable without the test taking that long.
+   */
+  function recordPollDelays(): number[] {
+    const delays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    jest.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      delays.push(ms ?? 0);
+      return realSetTimeout(fn, 0);
+    }) as unknown as typeof globalThis.setTimeout);
+    return delays;
+  }
+
+  function fetchStatuses(statuses: string[]): typeof globalThis.fetch {
+    let polls = 0;
+    return (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      const status = isPost
+        ? "pending"
+        : (statuses[polls++] ?? "completed");
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({
+          data: {
+            id: "run-parked",
+            attributes: { status, summary: null, result: null, error: null },
+            relationships: { execution_environment: { data: { id: "env-1" } } },
+          },
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+  }
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("doubles the interval while deferred and snaps back once the run moves", async () => {
+    // A parked run has nothing new to report, so polling it at full cadence for
+    // the whole widened budget would burn the caller's rate limit. A run that is
+    // actually `running` goes straight back to the caller's interval.
+    const delays = recordPollDelays();
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fetchStatuses([
+        "awaiting_capacity",
+        "awaiting_capacity",
+        "awaiting_capacity",
+        "running",
+        "running",
+        "completed",
+      ]),
+    });
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 60,
+    });
+
+    await handle.wait({ pollMs: 1 });
+
+    expect(delays).toEqual([2, 4, 8, 1, 1]);
+  });
+
+  it("returns a terminal result that arrives after the budget ran out", async () => {
+    // Precedence is deliberate: the loop checks TERMINAL before the budget, so
+    // a run that finished while the poll was in flight is reported, not thrown
+    // away. Runs are billed — a timeout here would charge for nothing.
+    const realNow = Date.now();
+    let offsetMs = 0;
+    jest.spyOn(Date, "now").mockImplementation(() => realNow + offsetMs);
+    const fetch = (async (_url: string, init: RequestInit = {}) => {
+      const isPost = (init.method ?? "GET") === "POST";
+      // The budget expires WHILE this poll is in flight, and the poll comes
+      // back finished — the exact race the ordering decides.
+      if (!isPost) offsetMs = 25 * 60_000;
+      return {
+        ok: true,
+        status: isPost ? 202 : 200,
+        json: async () => ({
+          data: {
+            id: "run-late",
+            attributes: {
+              status: isPost ? "pending" : "completed",
+              summary: isPost ? null : "done",
+              result: null,
+              error: null,
+            },
+            relationships: { execution_environment: { data: { id: "env-1" } } },
+          },
+        }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+    const sapiom = createClient({ apiKey: "k", fetch });
+    const handle = await sapiom.models.coding.launch({ task: "do a thing" });
+
+    // 1ms budget, 25 minutes gone by the time the result lands.
+    const result = await handle.wait({ timeoutMs: 1, pollMs: 1 });
+
+    expect(result.status).toBe("completed");
+    expect(result.summary).toBe("done");
+  });
+
+  it("never sleeps past the budget, however far the backoff has escalated", async () => {
+    // The backoff can reach a minute; sleeping that long against a shorter
+    // budget would overrun `timeoutMs` and then throw an error understating
+    // the real wait.
+    const delays = recordPollDelays();
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fetchStatuses(["awaiting_capacity"]),
+    });
+    const handle = await sapiom.models.coding.launch({ task: "do a thing" });
+
+    await handle.wait({ timeoutMs: 5_000, pollMs: 40_000 });
+
+    // Backoff wanted 60s (40s doubled, then capped); the remaining budget cut
+    // it to ~5s, so the loop rechecks at the budget's edge rather than a full
+    // minute past it.
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBeLessThanOrEqual(5_001);
+    expect(delays[0]).toBeGreaterThan(4_000);
+  });
+
+  it("caps the backoff so a long deadline still polls periodically", async () => {
+    const delays = recordPollDelays();
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: fetchStatuses([
+        "awaiting_capacity",
+        "awaiting_capacity",
+        "completed",
+      ]),
+    });
+    const handle = await sapiom.models.coding.launch({
+      task: "do a thing",
+      deadlineMinutes: 480,
+    });
+
+    await handle.wait({ pollMs: 40_000 });
+
+    // 40s doubles to 80s, clamped to the 60s ceiling and held there.
+    expect(delays).toEqual([60_000, 60_000]);
+  });
+});
+
 describe("agent.coding — typed HTTP failures", () => {
   const repositoryMessage =
     "The requested git_repository is not an active Sapiom repository available to this tenant. " +

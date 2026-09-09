@@ -2758,6 +2758,14 @@ button.rail-footer-card:hover {
   background: var(--text-faint);
 }
 
+/* A project or group header's live mark (SAP-3200): the dot recipe above in
+   its running state, standing at the trailing edge of the row ahead of the
+   actions that fade in on hover, so a hovered row never shifts it. Geometry
+   only; the colour is the running state's and is not restated here. */
+.project-live-dot {
+  margin-right: var(--sp1);
+}
+
 .session-dot[data-status="running"] {
   background: var(--green);
 }
@@ -4428,7 +4436,7 @@ button.system-graph-node.is-navigable:focus-visible {
 }
 
 /* Plan-first Agent Map: the existing graph plane and controls, projected from
-   durable proposal state. Proposed is deliberately one neutral treatment. */
+   durable proposal state and shared deployment evidence. */
 .agent-map-live,
 .agent-map-live-body,
 .agent-map-canvas,
@@ -4518,6 +4526,66 @@ button.system-graph-node.is-navigable:focus-visible {
 
 .agent-map-edge-label {
   pointer-events: none;
+  /* Keep measured SVG ink consistent at fit zoom instead of snapping glyphs. */
+  text-rendering: geometricPrecision;
+}
+
+.agent-map-live-header > .system-graph-node-meta {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.agent-map-deployment-message {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  color: var(--text-dim);
+  font-size: var(--type-meta);
+}
+
+.agent-map-deployment-message > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-map-deployment-message > button {
+  flex-shrink: 0;
+}
+
+.agent-map-inspector .agent-map-deployment {
+  white-space: normal;
+}
+
+.agent-map-deployment[data-deployment-state="deployed"] {
+  color: var(--green);
+}
+
+.agent-map-controls {
+  max-width: calc(100% - var(--sp3) * 2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.agent-map-node-wrap {
+  position: absolute;
+}
+
+.agent-map-node-wrap > .agent-map-node {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.agent-map-node-wrap.has-info > .agent-map-node {
+  padding-right: calc(var(--control-h-xs) + var(--sp2));
+}
+
+.agent-map-node-info {
+  position: absolute;
+  top: var(--sp1);
+  right: var(--sp1);
 }
 
 .agent-map-node {
