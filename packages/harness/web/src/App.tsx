@@ -72,6 +72,7 @@ import {
   ConnectivityBanner,
   ConnectivityScreen,
 } from "./components/ConnectivityState";
+import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
@@ -184,7 +185,10 @@ import {
 } from "./lib/use-harness-state";
 import { useAgentMapEntry } from "./lib/use-agent-map-entry";
 import {
+  deploymentStateLabel,
+  deploymentStateTitle,
   isWorkflowRunnable,
+  prodRunBlockedToast,
   workflowDeploymentState,
 } from "./lib/workflow-deployment";
 import { SecretsPanel } from "./components/SecretsPanel";
@@ -2788,15 +2792,7 @@ export const App = (): JSX.Element => {
             const deploymentState = workflow
               ? workflowDeploymentState(workflow, lastErr)
               : "draft";
-            harness.showToast(
-              deploymentState === "failed"
-                ? "Last deploy failed — retry Deploy."
-                : deploymentState === "building"
-                  ? "The cloud build is still in progress."
-                  : deploymentState === "linked"
-                    ? "No ready deployment yet — deploy it first."
-                    : "This agent isn't deployed yet — deploy it first.",
-            );
+            harness.showToast(prodRunBlockedToast(deploymentState));
           }
         } else if (direct === "run-local") {
           if (!workflow) {
@@ -3293,6 +3289,19 @@ export const App = (): JSX.Element => {
               }
             />
 
+            {sessionBarSession &&
+              (sessionBarSession.mcpAuthState === "restart-required" ||
+                sessionBarSession.mcpAuthState === "restarting") && (
+                <McpAuthRestartNotice
+                  restarting={
+                    sessionBarSession.mcpAuthState === "restarting"
+                  }
+                  onRestart={async () => {
+                    await harness.restartMcpSession(sessionBarSession.id);
+                  }}
+                />
+              )}
+
             <div className="terminal-slot">
               {showReview && reviewSummary ? (
                 <PastSessionPane
@@ -3551,7 +3560,23 @@ export const App = (): JSX.Element => {
                     so the link/build state lives here in the tab bar. */}
                 {shownTab === "canvas" &&
                   !atMapAltitude &&
-                  rightPaneWorkflow?.definitionId != null && (
+                  rightPaneWorkflow?.definitionId != null &&
+                  rightPaneDeploymentState === "unavailable" && (
+                    /* Not a link: this account can't open that dashboard page. */
+                    <span
+                      className="status-tag right-pane-deployed"
+                      data-testid="agent-unavailable-tag"
+                      data-deployment-state="unavailable"
+                      data-tooltip={deploymentStateTitle("unavailable")}
+                    >
+                      <Icon name="CloudOff" size={12} />
+                      {deploymentStateLabel("unavailable")}
+                    </span>
+                  )}
+                {shownTab === "canvas" &&
+                  !atMapAltitude &&
+                  rightPaneWorkflow?.definitionId != null &&
+                  rightPaneDeploymentState !== "unavailable" && (
                     <a
                       className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                       data-testid="workflow-dashboard-link"
@@ -3565,13 +3590,9 @@ export const App = (): JSX.Element => {
                       data-tooltip="Open this agent in the Sapiom dashboard"
                     >
                       <Icon name="Cloud" size={12} />
-                      {rightPaneDeploymentState === "ready"
-                        ? "deployed"
-                        : rightPaneDeploymentState === "building"
-                          ? "building"
-                          : rightPaneDeploymentState === "failed"
-                            ? "deploy failed"
-                            : "linked"}
+                      {deploymentStateLabel(
+                        rightPaneDeploymentState ?? "linked",
+                      )}
                     </a>
                   )}
                 {/* Full view belongs to the graph surface currently shown:

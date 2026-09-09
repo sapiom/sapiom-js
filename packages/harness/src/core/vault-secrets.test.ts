@@ -56,6 +56,7 @@ describe("auth contract", () => {
       apiKey: {
         getKey: () => "sk_stale",
         snapshot: () => ({ apiKey: "sk_stale", generation: 0 }),
+        subscribe: () => () => {},
         refresh: async () => {
           refreshed += 1;
           return "sk_fresh";

@@ -248,25 +248,29 @@ export interface CanvasWatcherManagerDeps {
 
 /** Registry of one SessionCanvasWatcher per active harness session. */
 export class CanvasWatcherManager {
-  private readonly watchers = new Map<string, SessionCanvasWatcher>();
+  private readonly watchers = new Map<
+    string,
+    { cwd: string; watcher: SessionCanvasWatcher }
+  >();
 
   constructor(private readonly deps: CanvasWatcherManagerDeps) {}
 
-  /** Idempotent: replaces any existing watcher for this session (e.g. a resume
-   *  into a different cwd). */
+  /** Idempotent for repeated running frames at the same session root. */
   start(harnessSessionId: string, cwd: string): void {
+    const canonicalCwd = path.resolve(cwd);
+    if (this.watchers.get(harnessSessionId)?.cwd === canonicalCwd) return;
     this.stop(harnessSessionId);
-    this.watchers.set(
-      harnessSessionId,
-      new SessionCanvasWatcher(cwd, harnessSessionId, {
+    this.watchers.set(harnessSessionId, {
+      cwd: canonicalCwd,
+      watcher: new SessionCanvasWatcher(canonicalCwd, harnessSessionId, {
         onCanvasChange: (id) => this.deps.onChange(id),
         onSourceChange: (id) => this.deps.onSourceChange(id),
       }),
-    );
+    });
   }
 
   stop(harnessSessionId: string): void {
-    this.watchers.get(harnessSessionId)?.close();
+    this.watchers.get(harnessSessionId)?.watcher.close();
     this.watchers.delete(harnessSessionId);
   }
 
