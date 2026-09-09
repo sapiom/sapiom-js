@@ -7,6 +7,7 @@ import {
   ThreadPrimitive,
   useAuiState,
   type TextMessagePartProps,
+  type ThreadComposerRuntime,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import {
@@ -18,16 +19,20 @@ import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { EmptyState } from "./EmptyState";
 
+export interface ChatDraft {
+  text: string;
+}
 interface Props {
   harnessSessionId: string;
   bootToken: string;
+  draft: ChatDraft;
 }
 const connectionError =
   "Connection lost. Reconnect to see the latest response.";
 const runError =
   "Assistant could not finish. Reconnect and check the conversation before sending again.";
 
-export function OpenCodeChat({ harnessSessionId, bootToken }: Props) {
+export function OpenCodeChat({ harnessSessionId, bootToken, draft }: Props) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -75,6 +80,7 @@ export function OpenCodeChat({ harnessSessionId, bootToken }: Props) {
       bootToken={bootToken}
       conversationId={conversationId}
       retry={retry}
+      draft={draft}
     />
   ) : (
     <div className="studio-chat-start">
@@ -92,11 +98,13 @@ function RuntimeChat({
   bootToken,
   conversationId,
   retry,
+  draft,
 }: {
   baseUrl: string;
   bootToken: string;
   conversationId: string;
   retry: () => void;
+  draft: ChatDraft;
 }) {
   const [transportError, setTransportError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -183,6 +191,8 @@ function RuntimeChat({
         connected={connected}
         error={transportError ?? actionError}
         retry={retry}
+        composer={runtime.thread.composer}
+        draft={draft}
       />
     </AssistantRuntimeProvider>
   );
@@ -218,11 +228,15 @@ function ChatSurface({
   connected,
   error,
   retry,
+  composer,
+  draft,
 }: {
   conversationId: string;
   connected: boolean;
   error: string | null;
   retry: () => void;
+  composer: ThreadComposerRuntime;
+  draft: ChatDraft;
 }) {
   const loading = useAuiState((s) => s.thread.isLoading);
   const running = useAuiState((s) => s.thread.isRunning);
@@ -230,6 +244,13 @@ function ChatSurface({
   const ready = useOpenCodeThreadState(
     (s) => s.sessionId === conversationId && s.loadState.type === "ready",
   );
+  useEffect(() => {
+    if (!ready) return;
+    composer.setText(draft.text);
+    return composer.subscribe(() => {
+      draft.text = composer.getState().text;
+    });
+  }, [composer, draft, ready]);
   const hasText = useAuiState((s) => {
     for (let i = s.thread.messages.length - 1; i >= 0; i--) {
       const message = s.thread.messages[i];

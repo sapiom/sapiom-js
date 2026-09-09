@@ -39,6 +39,7 @@ import {
   type WorkflowScanOutcome,
 } from "./api";
 import { unavailableWorkflowDeployment } from "./workflow-deployment";
+import { macroNeedsReadySession } from "./macro-actions";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
 import { projectToOpen } from "./project-tree";
@@ -2142,10 +2143,14 @@ export function useHarnessState(): HarnessStateHook {
   const runMacro = useCallback(
     async (id: string, req: RunMacroRequest): Promise<void> => {
       const macro = state?.macros.find((candidate) => candidate.id === id);
-      if (macro?.action.kind === "inject" && macro.execution !== "background")
-        revealTerminal(req.harnessSessionId);
       try {
         await api.runMacro(id, req);
+        if (
+          macro &&
+          macroNeedsReadySession(macro) &&
+          macro.execution !== "background"
+        )
+          revealTerminal(req.harnessSessionId);
       } catch (err) {
         // App.tsx fires this without awaiting — surface failures as a toast
         // instead of an invisible unhandled rejection (which is exactly how
@@ -2385,8 +2390,8 @@ export function useHarnessState(): HarnessStateHook {
   // generic toast message.
   const injectInput = useCallback(
     async (sessionId: string, text: string): Promise<void> => {
-      revealTerminal(sessionId);
       await api.injectInput(sessionId, { text, submit: true });
+      revealTerminal(sessionId);
     },
     [revealTerminal],
   );
