@@ -51,6 +51,7 @@ import type { JSX } from "react";
 import type {
   AppState,
   CreateSessionRequest,
+  HarnessEntry,
   HarnessKind,
   HarnessSession,
   MacroDef,
@@ -156,6 +157,12 @@ import { sessionDisplayName } from "./lib/session-name";
 import type { PaletteAction } from "./lib/palette";
 import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
+import {
+  DEFAULT_HARNESS,
+  FALLBACK_HARNESSES,
+  isHarnessSelectable,
+  orderHarnesses,
+} from "./lib/harness-registry";
 import {
   useNavigationHistory,
   type NavigationVisit,
@@ -275,6 +282,36 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
+    () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
+  );
+  const [harnessEntries, setHarnessEntries] = useState<HarnessEntry[] | null>(
+    null,
+  );
+  // Keep the selection above the composer so every template entry point sees
+  // automatic corrections and choices that could not be saved to preferences.
+  useEffect(() => {
+    let cancelled = false;
+    harness
+      .listHarnesses()
+      .then((registry) => {
+        if (cancelled || registry.length === 0) return;
+        setHarnessEntries(orderHarnesses(registry));
+        const selectable = registry.filter(isHarnessSelectable);
+        setSelectedHarness((current) =>
+          selectable.some((entry) => entry.id === current)
+            ? current
+            : ((selectable[0]?.id as HarnessKind | undefined) ?? current),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [harness.listHarnesses]);
+  useEffect(() => {
+    saveUiPrefs({ preferredHarness: selectedHarness });
+  }, [selectedHarness]);
   // Live browser connectivity (navigator.onLine + online/offline events).
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
@@ -1704,7 +1741,7 @@ export const App = (): JSX.Element => {
         harness.setActiveSessionId(decision.to.id);
       return;
     }
-    void startProjectSession(root, label, preferredHarness());
+    void startProjectSession(root, label, selectedHarness);
   };
   selectProjectRef.current = handleSelectWorkspace;
 
@@ -1741,21 +1778,12 @@ export const App = (): JSX.Element => {
   };
 
   const handleStartProjectSession = async (root: string, label: string): Promise<void> => {
-    const started = await startProjectSession(root, label, preferredHarness());
+    const started = await startProjectSession(root, label, selectedHarness);
     if (!started) return;
     studioRestoreGenerationRef.current += 1;
     setStudioSelection(null);
     setSelectedProject(null);
   };
-
-  /**
-   * The provider a create-initiated session boots with — the same stored
-   * preference the rail used to read before it dispatched. It moved here with
-   * the create itself; the rail no longer starts sessions.
-   */
-  function preferredHarness(): HarnessKind {
-    return loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
-  }
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -1995,7 +2023,7 @@ export const App = (): JSX.Element => {
         : null;
       const session =
         existing ??
-        (await createSessionAt(request.root, preferredHarness(), {
+        (await createSessionAt(request.root, selectedHarness, {
           initialUserInputPending: input.instruction.trim().length > 0,
         }));
       await harness.bindWorkflow(session.id, created.path);
@@ -2147,6 +2175,21 @@ export const App = (): JSX.Element => {
       | "template_gallery"
       | "template_detail" = "template_gallery",
   ): Promise<void> => {
+    // Capture the current choice for this launch, including async scaffolding.
+    let agentHarness = selectedHarness;
+    // A deep link can open before registry loading finishes. Resolve its
+    // selection before creating a session on an unavailable default adapter.
+    const registry =
+      harnessEntries ??
+      (await harness.listHarnesses().catch(() => FALLBACK_HARNESSES));
+    const selectable = registry.filter(isHarnessSelectable);
+    if (!selectable.some((entry) => entry.id === agentHarness)) {
+      agentHarness =
+        (selectable[0]?.id as HarnessKind | undefined) ?? agentHarness;
+      setSelectedHarness((current) =>
+        current === selectedHarness ? agentHarness : current,
+      );
+    }
     // Product metric — "templates used". Fires at the choke point every
     // template surface funnels through; `agent.created` fires later when the
     // clone produces a real sapiom.json, so built ≥ templates holds.
@@ -2175,12 +2218,12 @@ export const App = (): JSX.Element => {
       trackUse();
       setTemplatesOpen(false);
       setFocusedAgentPath(created.path);
-      const session = await createSessionAt(parent, "claude-code");
+      const session = await createSessionAt(parent, agentHarness);
       await harness.bindWorkflow(session.id, created.path);
       setFocusedAgentPath(created.path);
       return;
     }
-    const session = await createSessionAt(cwd, "claude-code", {
+    const session = await createSessionAt(cwd, agentHarness, {
       initialUserInputPending: true,
     });
     trackUse();
@@ -2213,7 +2256,6 @@ export const App = (): JSX.Element => {
 
   const handleComposerSubmitIdea = async (
     idea: string,
-    agentHarness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ): Promise<void> => {
     const cwd = uniqueProjectDir(
@@ -2224,7 +2266,7 @@ export const App = (): JSX.Element => {
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
-    await createSessionAt(cwd, agentHarness, {
+    await createSessionAt(cwd, selectedHarness, {
       keepComposerOpen: true,
       standaloneBuilder: true,
       scaffold: { template: "default" },
@@ -3306,6 +3348,9 @@ export const App = (): JSX.Element => {
                    screen gives way to the terminal (createSessionAt clears
                    `composing`), and the canvas reveals itself once populated. */
                 <NewSessionComposer
+                  harness={selectedHarness}
+                  entries={harnessEntries ?? FALLBACK_HARNESSES}
+                  onHarnessChange={setSelectedHarness}
                   firstRun={state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
@@ -3316,7 +3361,6 @@ export const App = (): JSX.Element => {
                     setSelectedProject(null);
                     setTemplatesOpen(true);
                   }}
-                  listHarnesses={harness.listHarnesses}
                   listTemplates={harness.listTemplates}
                   telemetryOptIn={
                     harness.settings?.telemetryOptIn ?? state.telemetryOptIn
