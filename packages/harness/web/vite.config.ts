@@ -147,6 +147,7 @@ export default defineConfig({
         ? undefined
         : {
             "/api": { target: HARNESS_SERVER },
+            "/opencode": { target: HARNESS_SERVER },
             "/canvas": { target: HARNESS_SERVER },
             "/ws": { target: "ws://localhost:4100", ws: true },
           },

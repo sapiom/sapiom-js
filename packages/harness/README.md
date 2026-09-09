@@ -48,6 +48,13 @@ offline startup, unsupported backends, and unavailable flags leave it off.
 These access checks are independent of optional telemetry and never prevent
 ordinary Terminal startup. Only the resolved boolean is exposed to the browser.
 
+Eligible internal users see a **Terminal | Assistant** switch, with Terminal
+selected initially. Assistant sends prompts and streams Sapiom responses in the
+selected project. Returning to a session reopens its OpenCode conversation;
+switching views detaches the display while execution continues. Connection errors
+offer **Reconnect**, which reloads history without resending accepted prompts.
+This first slice includes basic tool status; richer controls arrive separately.
+
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
 Studio adds the Sapiom key only when forwarding to the configured services.

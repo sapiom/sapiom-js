@@ -82,6 +82,7 @@ import { RunSheet } from "./components/RunSheet";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
+import { AssistantPane } from "./components/AssistantPane";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
@@ -3349,11 +3350,17 @@ export const App = (): JSX.Element => {
               ) : showWorkbench && conversationSession ? (
                 <div className="agent-view" data-testid="agent-view">
                   <div className="agent-view-panel" id="agent-panel-terminal">
-                    <Terminal
+                    <AssistantPane
                       sessionId={conversationSession.id}
-                      token={harness.bootToken}
-                      cwd={conversationSession.cwd}
-                    />
+                      bootToken={harness.bootToken}
+                      authRevision={harness.authRevision}
+                    >
+                      <Terminal
+                        sessionId={conversationSession.id}
+                        token={harness.bootToken}
+                        cwd={conversationSession.cwd}
+                      />
+                    </AssistantPane>
                   </div>
                 </div>
               ) : (
