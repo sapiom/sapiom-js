@@ -5,6 +5,21 @@ response always includes `studioProjects`, including an empty list when the
 catalog cannot be read. A missing identity is an unavailable map, not permission
 to infer a project from its name or serve a second topology.
 
+## Release boundary
+
+The server retirement in [#892](https://github.com/sapiom/sapiom-js/pull/892)
+and client recovery in [#893](https://github.com/sapiom/sapiom-js/pull/893) must
+ship together. Merge both before merging a Harness version PR, publishing npm
+packages or tagging a desktop release. The server-only layer still has a
+bundled browser fallback that reaches the retired endpoint on catalog failure.
+
+Hold `.changeset/quiet-project-map-authority.md` in the client layer. It marks
+the documented HTTP endpoint removal as a **breaking minor** and includes the
+replacement APIs. Withholding this changeset does not technically prevent an
+unrelated release from including the server change; the release dependency
+must also be observed. The client recovery changeset remains a patch, while
+the combined Harness release takes the higher minor bump.
+
 ## Authority matrix
 
 | Journey | Authority and disposition |
@@ -117,6 +132,11 @@ constants and lockfile update), and committed its output on the local
 **0.4.7**, both strictly higher than the candidate's package versions. Created
 matching local tag **v0.4.7** at version commit
 `1156fa84cdf328d431968d8dadd5361b3ee03253`.
+
+Those version numbers belong to the original local rehearsal, before the
+breaking minor classification. They are not recovery versions for a published
+minor release. Final release validation must choose recovery package and
+desktop versions strictly above the versions that actually ship.
 
 No recovery branch, version PR, tag or package was published. This proves the
 local preparation sequence, not update delivery. The actual npm/version-PR and
