@@ -178,23 +178,25 @@ Things to know:
   ```
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
-- **A hosted pause has a deadline.** `timeoutMs` sets it; omitted, the hosted engine
-  applies its default of 7 days. A pause that receives no signal by then is finalized
-  as failed with `PauseTimeoutError`, so a dropped result surfaces as an error rather
-  than a run that parks forever. The default matches the sandboxed capability's
-  resume-token TTL, so for a coding pause a later result could not be accepted
-  anyway. It does **not** bound a dispatched child agent: a child's result comes
-  back through stored parent linkage with no token check, so it can land long after
-  seven days. Size `timeoutMs` to whatever you are waiting on, on any pause that can
-  outlive a week: a child run's worst case (otherwise the parent fails while the
-  child is still working), or a human gate:
+- **A hosted pause has a deadline.** `timeoutMs` sets it. Omitted, the hosted engine
+  picks one from what the pause is waiting on: **7 days for a machine wait**, and
+  **one year when it recognizes a run parked on a human approval gate**, since no
+  token expires while a person thinks. A pause that receives no signal by its
+  deadline is finalized as failed with `PauseTimeoutError`, so a dropped result
+  surfaces as an error rather than a run that parks forever.
+
+  The 7 days match the sandboxed capability's resume-token TTL, so for a coding pause
+  a later result could not be accepted anyway. That reasoning does **not** cover a
+  dispatched child agent: a child's result comes back through stored parent linkage
+  with no token check, so it can land long after seven days. Set `timeoutMs`
+  explicitly on a child pause that can outlive a week, or the parent fails while the
+  child is still working:
 
   ```ts
-  // A human gate: nothing but this deadline bounds the wait.
-  return pauseUntilSignal({
-    signal: "approval.decision",
-    resumeStep: "decide",
-    timeoutMs: 365 * 24 * 60 * 60 * 1000, // one year
+  // A dispatched child, not a human gate: the machine default would cut it off.
+  return pauseUntilSignal(ctx.sapiom.agents.run({ definition, input }), {
+    resumeStep: "review",
+    timeoutMs: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
   ```
 
