@@ -42,33 +42,6 @@ describe("createEventsWebSocketHandler", () => {
     expect(sent).toEqual([JSON.stringify({ type: "canvas.reload", harnessSessionId: "sess-1" })]);
   });
 
-  it("forwards path-free workspace graph revisions", () => {
-    const bus = new EventBus();
-    const handler = createEventsWebSocketHandler(bus, BOOT_TOKEN);
-    const { ws, sent } = createFakeWs();
-
-    handler(
-      ws,
-      {} as IncomingMessage,
-      new URLSearchParams({ token: BOOT_TOKEN }),
-    );
-    bus.publish({
-      type: "system-graph.changed",
-      workspaceKey: "workspace-test",
-      revision: 4,
-      state: "stale",
-    });
-
-    expect(sent).toEqual([
-      JSON.stringify({
-        type: "system-graph.changed",
-        workspaceKey: "workspace-test",
-        revision: 4,
-        state: "stale",
-      }),
-    ]);
-  });
-
   it("unsubscribes from the bus once the socket closes", () => {
     const bus = new EventBus();
     const handler = createEventsWebSocketHandler(bus, BOOT_TOKEN);

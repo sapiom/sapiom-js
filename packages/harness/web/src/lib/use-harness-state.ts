@@ -1217,7 +1217,6 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     return subscribeEvents(
       (message) => {
-        if (message.type === "system-graph.changed") return;
         // SessionRecord invalidations have a targeted listener below. Keeping
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.

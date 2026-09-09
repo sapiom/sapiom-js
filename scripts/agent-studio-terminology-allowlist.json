@@ -518,6 +518,13 @@
     "reason": "Test IDs inside the mock canvas document; the e2e suite selects on them."
   },
   {
+    "id": "web-bus-workflow-change-event",
+    "path": "packages/harness/web/src/lib/bus-message-type.ts",
+    "pattern": "^workflows\\.changed$",
+    "occurrences": 1,
+    "reason": "The transport accepts the retained source-discovery WebSocket event by its existing protocol name."
+  },
+  {
     "id": "web-api-workflow-change-event",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^workflows\\.changed$",

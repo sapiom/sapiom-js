@@ -499,7 +499,7 @@ export interface DetectedLaunch {
   fromStepId: string | null;
 }
 
-/** Internal source evidence. It never crosses the system-graph HTTP boundary. */
+/** Private syntax evidence for per-agent Canvas extraction. */
 export interface SourceEvidence {
   /** POSIX path relative to the caller's source root. */
   file: string;

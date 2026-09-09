@@ -353,9 +353,8 @@ HTTP contracts that need more than a type to use are written up under `docs/`:
 
 - [`docs/agent-canvas-graph.md`](docs/agent-canvas-graph.md) — the session-free
   `GET /api/workflows/:path/graph` Canvas route keyed by an agent's path.
-- [`docs/workspace-system-graph.md`](docs/workspace-system-graph.md) — the
-  retired Project dependency-graph endpoints (`410 legacy_graph_retired`) and
-  migration to the durable Agent Map APIs.
+- [`docs/agent-map-api.md`](docs/agent-map-api.md) — durable project identity,
+  map/node navigation, recovery and the removed project graph endpoints.
 
 ## Testing
 
