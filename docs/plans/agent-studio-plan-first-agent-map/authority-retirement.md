@@ -13,12 +13,14 @@ ship together. Merge both before merging a Harness version PR, publishing npm
 packages or tagging a desktop release. The server-only layer still has a
 bundled browser fallback that reaches the retired endpoint on catalog failure.
 
-Hold `.changeset/quiet-project-map-authority.md` in the client layer. It marks
-the documented HTTP endpoint removal as a **breaking minor** and includes the
-replacement APIs. Withholding this changeset does not technically prevent an
-unrelated release from including the server change; the release dependency
-must also be observed. The client recovery changeset remains a patch, while
-the combined Harness release takes the higher minor bump.
+The server layer carries `.changeset/quiet-project-map-authority.md`, marking
+the documented HTTP endpoint removal as a **breaking minor** with replacement
+APIs, even when other patch changesets are pending. Its `.release-blocked` file
+makes `scripts/assert-release-ready.mjs` fail before versioning or publishing.
+The local version/release commands and the Release PR, npm Publish and Desktop
+Release workflows all run that check. The client layer removes the blocker
+together with the unavailable-map recovery. Its recovery changeset remains a
+patch; the combined Harness release takes the higher minor bump.
 
 ## Authority matrix
 
