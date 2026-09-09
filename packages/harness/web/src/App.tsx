@@ -524,6 +524,8 @@ export const App = (): JSX.Element => {
 
   // A catalog retry may resolve the exact scope selected earlier. Promote it
   // without the boot reload's session hydration or a path/name-based guess.
+  // This refreshes identities only; an already selected map keeps its loaded
+  // workspace until the normal map refresh or invalidation path runs.
   useEffect(() => {
     if (!selectedProject) return;
     const state = harness.state;
@@ -1241,12 +1243,10 @@ export const App = (): JSX.Element => {
         setStudioSelection(null);
       }
       if (visit.kind === "project") {
-        // Through the SAME door the rail click uses, not the raw setter: a
-        // project selection now hands the conversation to that project (and
-        // starts one where there is none), and a replayed visit that only
-        // re-selected the key would land on the map with somebody else's chat
-        // beside it. The ref exists because the handler closes over `state`,
-        // which is only available past the loading guard.
+        // Replay through the rail's selection handler: current Studio project
+        // navigation is read-only; older-server session handoff remains until
+        // SAP-3090. The ref reaches the handler below the loading guard, where
+        // the hydrated `state` is available.
         selectProjectRef.current?.(visit.workspaceKey, visit.root, visit.label);
       } else if (visit.kind === "agent-map") {
         const state = harness.state;
@@ -1779,6 +1779,8 @@ export const App = (): JSX.Element => {
       if (isMobile) setRightCollapsed(false);
       return;
     }
+    // Older-server compatibility only: these payloads omit studioProjects.
+    // Retain their session handoff until the browser deletion in SAP-3090.
     const decision = sessionForFocus({
       focusPath: root,
       active: activeSession,
@@ -1796,12 +1798,12 @@ export const App = (): JSX.Element => {
   selectProjectRef.current = handleSelectWorkspace;
 
   /**
-   * Open the first session of a project you just selected.
+   * Start an explicitly requested project session, or an older-server handoff.
    *
    * Guarded BY ROOT, not by a boolean: two projects can be starting at once
-   * (select one, select another before the first POST resolves) and a single
-   * flag would drop the second create silently. Re-selecting the SAME project
-   * mid-flight is the double-create this prevents.
+   * (request one, then another before the first POST resolves) and a single
+   * flag would drop the second create silently. Repeating a request for the
+   * same project mid-flight is the double-create this prevents.
    */
   const startProjectSession = async (
     root: string,

@@ -355,7 +355,7 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
       assert.equal(
         response.status,
         410,
-        `Legacy graph ${method} ${suffix} was admitted`,
+        `Legacy graph ${method} ${suffix}: expected 410, received ${response.status}`,
       );
     }
     const assets = join(resolveWebDir(), "assets");

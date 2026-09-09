@@ -28,12 +28,22 @@ async function open(
   identity: Probe["identity"] = "ready",
   project = "acme-app",
 ) {
+  const setupErrors: string[] = [];
+  const recordPageError = (error: Error) => setupErrors.push(error.message);
+  page.on("pageerror", recordPageError);
   // Expose the catalog-only refresh and active pointer from this test's hook
   // instance, without adding a production test API or hydrating sessions.
   await page.route("**/src/lib/use-harness-state.ts", async (route) => {
     const response = await route.fetch();
     const body = await response.text();
-    expect(body).toContain("    refreshWorkspaceScopes,");
+    if (!body.includes("    refreshWorkspaceScopes,")) {
+      setupErrors.push(
+        "use-harness-state.ts: missing refreshWorkspaceScopes return field",
+      );
+      // Settle the request so the test can report the setup error after navigation.
+      await route.fulfill({ response, body });
+      return;
+    }
     await route.fulfill({
       response,
       body: body.replace(
@@ -51,6 +61,14 @@ async function open(
       body:
         (await response.text()) +
         `
+if (typeof MockApi !== "function") {
+  throw new Error("Authority fixture: api.ts no longer defines MockApi");
+}
+for (const method of ["getSystemGraph", "getSystemGraphNavigation", "getState", "getStudioCurrentWorkspace", "listWorkflows"]) {
+  if (typeof MockApi.prototype[method] !== "function") {
+    throw new Error("Authority fixture: missing MockApi." + method);
+  }
+}
 const authority = window.__authority = {
   identity: ${JSON.stringify(identity)}, reads: 0, refreshes: 0,
   navigation: 0, invalidations: 0, states: 0, workflows: 0,
@@ -93,10 +111,22 @@ MockApi.prototype.listWorkflows = function() {
 `,
     });
   });
-  await page.goto(
-    "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
-  );
-  await expect(page.getByTestId("session-context")).toBeVisible();
+  try {
+    await page.goto(
+      "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
+    );
+    expect(setupErrors, "Authority fixture setup failed").toEqual([]);
+    await expect(page.getByTestId("session-context")).toBeVisible();
+  } catch (error) {
+    if (setupErrors.length) {
+      throw new Error(
+        `Authority fixture setup failed:\n${setupErrors.join("\n")}`,
+      );
+    }
+    throw error;
+  } finally {
+    page.off("pageerror", recordPageError);
+  }
   await page.getByTestId(`project-select-${project}`).click();
 }
 
