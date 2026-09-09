@@ -6,14 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { RegistryWorkflowInfo as WorkflowInfo } from "./workflow-registry.js";
 import {
   dirtyGraphSourceRoots,
-  graphSourceRootsWithinScope,
   HarnessRegistryInventoryProvider,
   inventorySourceRoot,
   type AgentInventoryResult,
   type HarnessRegistryInventoryProviderOptions,
   type WorkspaceScope,
 } from "./system-graph-inventory.js";
-import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
 import type {
   ManifestNameInspection,
   ManifestNameInspectionOptions,
@@ -279,15 +277,6 @@ describe("HarnessRegistryInventoryProvider", () => {
     expect(
       inventorySourceRoot("\\\\server\\share\\workspace", "nested/agent"),
     ).toBe("\\\\server\\share\\workspace\\nested\\agent");
-  });
-
-  it("uses a checkout-invariant shared local key for a scope-root agent", () => {
-    expect(workspaceRelativeLocalKey("/checkouts/one", "/checkouts/one")).toBe(
-      "local:root",
-    );
-    expect(
-      workspaceRelativeLocalKey("/different/name", "/different/name"),
-    ).toBe("local:root");
   });
 
   it("returns linked agents provisionally before source inspection starts", async () => {
@@ -1388,13 +1377,6 @@ describe("HarnessRegistryInventoryProvider", () => {
       ]);
       await fs.symlink(workspaceRoot, linkedRoot, "dir");
 
-      expect(
-        graphSourceRootsWithinScope(linkedRoot, [
-          agentRoot,
-          nestedRoot,
-          outsideRoot,
-        ]),
-      ).toEqual([await fs.realpath(agentRoot), await fs.realpath(nestedRoot)]);
       expect(
         dirtyGraphSourceRoots(
           linkedRoot,

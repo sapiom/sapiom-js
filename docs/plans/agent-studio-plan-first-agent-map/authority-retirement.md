@@ -50,6 +50,19 @@ the labels and controls it still uses. `agent-map-authority.spec.ts` includes om
 and exact keyboard tabs; `project-altitude.spec.ts` preserves pane geometry,
 Steps restoration, independent disclosure and map/agent Back/Forward navigation.
 
+SAP-3091 extracts the retained owners before deleting server composition:
+
+| Retained module | Responsibility |
+| --- | --- |
+| `shared/workspace-scope.ts` | Scope keys, the public `WorkspaceScopeSummary` shape, and browser-safe workspace-relative identities. |
+| `core/workspace-scope-catalog.ts` | Stable canonical-root keys and allowlisted root resolution. |
+| `core/workspace-path.ts` | Source containment and canonical source-root selection for shared discovery/watchers. |
+| `core/canvas-interconnections.ts` | Per-agent invocation modes and source scanning for Canvas. |
+
+The public PackageInventory contract remains in `@sapiom/agent`. Canonical path
+caching, accepted discovery evidence, shared watch leases and individual-agent
+Canvas extraction keep their existing owners and regression coverage.
+
 ## Evidence required before browser deletion
 
 Attach results to SAP-3089 at the reviewed PR head. Do not treat the presence of

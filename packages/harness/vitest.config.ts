@@ -22,8 +22,8 @@ export default defineConfig({
       "@shared/types": fileURLToPath(
         new URL("src/shared/types.ts", import.meta.url),
       ),
-      "@shared/system-graph": fileURLToPath(
-        new URL("src/shared/system-graph.ts", import.meta.url),
+      "@shared/workspace-scope": fileURLToPath(
+        new URL("src/shared/workspace-scope.ts", import.meta.url),
       ),
       "@shared/agent-map-initialization": fileURLToPath(new URL("src/shared/agent-map-initialization.ts", import.meta.url)),
       "@shared/agent-map": fileURLToPath(
