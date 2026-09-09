@@ -341,6 +341,58 @@ test("leaves a deliberately bounded plain-text call alone", () => {
   );
 });
 
+test("resolves a cap held in an in-file constant", () => {
+  // The bypass a digits-only check leaves open: write the starved number one line higher.
+  // `fan-out-and-combine` already caps its calls this way.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const PLAN_MAX_TOKENS = 512;",
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: PLAN_MAX_TOKENS },",
+      "  output: { name: PLAN_TOOL, schema: PLAN_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("at 512 tokens"), "reports the resolved value");
+});
+
+test("accepts a named cap that clears the floor", () => {
+  assert.deepEqual(
+    checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        "const PLAN_MAX_TOKENS = 4096;",
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages, max_tokens: PLAN_MAX_TOKENS },",
+        "  output: { name: PLAN_TOOL, schema: PLAN_SCHEMA },",
+        "});",
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
+test("skips a cap it cannot resolve rather than guessing", () => {
+  // An imported or computed cap is the known edge — pinned here so it stays a decision
+  // rather than becoming a surprise. No template does this today.
+  assert.deepEqual(
+    checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        'import { PLAN_MAX_TOKENS } from "./config.js";',
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: { messages, max_tokens: PLAN_MAX_TOKENS },",
+        "  output: { name: PLAN_TOOL, schema: PLAN_SCHEMA },",
+        "});",
+      ].join("\n"),
+    }),
+    [],
+  );
+});
+
 test("judges each call in a file separately", () => {
   const errors = checkStructuredOutputCap({
     path: "examples/example/index.ts",

@@ -271,6 +271,25 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     expect(structuredOf(res, "classify_ticket")).toEqual({ priority: "high" });
   });
 
+  it("reads an empty input at the cap as truncation even with nothing required", async () => {
+    // Without this, a schema that lists no `required` fields has no evidence to fail on, and
+    // the mid-input cut goes back to being silent — the exact hole the error exists to close.
+    const cutMidInput = {
+      stop_reason: "max_tokens",
+      content: [{ type: "tool_use", name: "classify_ticket", input: {} }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, cutMidInput) });
+    const error = await sapiom.llm
+      .run({
+        request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
+        output: { name: "classify_ticket", schema: { type: "object", properties: {} } },
+      })
+      .catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+
+    expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+    expect(error.reason).toBe("incomplete-input");
+  });
+
   it("leaves a partial result alone when the turn did not end at the cap", async () => {
     // A missing required field with any other stop_reason is the model's answer, not a
     // truncation — judging it would make this a schema validator, which it is not.

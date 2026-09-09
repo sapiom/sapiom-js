@@ -452,9 +452,17 @@ export function structuredOf<TSchema = unknown>(response: unknown, name?: string
 }
 
 /**
- * {@link run} asked for structured output, and the model ran out of `max_tokens`
- * before it emitted the forced tool call — so there is no `tool_use` block to read
- * and never will be.
+ * Where the cap cut a forced tool call short. Exported so a consumer branching on
+ * {@link LlmStructuredOutputTruncatedError.reason} need not re-declare the union.
+ */
+export type LlmTruncationReason = "no-tool-call" | "incomplete-input";
+
+/**
+ * {@link run} asked for structured output, and the model ran out of `max_tokens` before it
+ * finished the forced tool call — either it never emitted one (`"no-tool-call"`) or the cap
+ * landed partway through its input, leaving a block whose `input` is empty or missing fields
+ * the schema requires (`"incomplete-input"`). Either way there is no structured result to
+ * read and there never will be.
  *
  * This exists because the two failures are indistinguishable downstream: a truncated
  * turn and a genuinely empty structured result both leave {@link structuredOf}
@@ -471,19 +479,17 @@ export class LlmStructuredOutputTruncatedError extends Error {
   /** The cap the request carried, when it declared one. */
   readonly maxTokens: number | undefined;
   /**
-   * Where the cap cut the turn off: before the tool call was emitted at all
-   * (`"no-tool-call"`), or partway through its input (`"incomplete-input"` — the block
-   * is present but its `input` is missing fields the schema requires). Same cause, same
-   * fix; branch on it only if you want to tell them apart.
+   * Which of the two shapes this was. Same cause and same fix either way — raise the cap —
+   * so branch on it only if you want to tell them apart.
    */
-  readonly reason: "no-tool-call" | "incomplete-input";
+  readonly reason: LlmTruncationReason;
   /** The verbatim response, for programmatic inspection (it still carries usage/disclosure). */
   readonly response: unknown;
 
   constructor(
     outputName: string,
     maxTokens: number | undefined,
-    reason: "no-tool-call" | "incomplete-input",
+    reason: LlmTruncationReason,
     response: unknown,
   ) {
     const cap = maxTokens === undefined ? "" : ` (${maxTokens})`;
@@ -523,15 +529,17 @@ function requiredKeysOf(schema: Record<string, unknown>): string[] {
  * and a caller's own partial-result handling are all left exactly as they were.
  *
  * Two shapes, because the cap can land on either side of the tool call. No block at all is the
- * common one. A block whose `input` is missing a field the schema requires is the same failure
- * one token later — the model was cut off mid-input, `structuredOf` hands back `{}` or a partial
- * object, and the caller destructures `undefined` out of it. Fields the schema does not require
- * are the model's to omit and are not read as truncation.
+ * common one. A block whose `input` came back empty, or missing a field the schema requires, is
+ * the same failure one token later — the model was cut off mid-input, `structuredOf` hands back
+ * `{}` or a partial object, and the caller destructures `undefined` out of it. An empty `input`
+ * counts on its own because a schema listing no `required` fields would otherwise have no
+ * evidence at all. Fields the schema does not require are the model's to omit and, alongside
+ * others that did arrive, are not read as truncation.
  */
 function truncationOf(
   response: unknown,
   output: LlmStructuredOutputSpec,
-): "no-tool-call" | "incomplete-input" | undefined {
+): LlmTruncationReason | undefined {
   const stopReason = (response as { stop_reason?: unknown } | null | undefined)?.stop_reason;
   if (stopReason !== "max_tokens") return undefined;
 
@@ -540,6 +548,8 @@ function truncationOf(
   if (typeof structured !== "object" || structured === null) return "incomplete-input";
 
   const present = structured as Record<string, unknown>;
+  if (Object.keys(present).length === 0) return "incomplete-input";
+
   const missing = requiredKeysOf(output.schema).some((key) => !(key in present));
   return missing ? "incomplete-input" : undefined;
 }
