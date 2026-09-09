@@ -190,7 +190,7 @@ export interface HarnessStateHook {
    *  recorded for it). Stable identity — safe as an effect dependency. */
   sessionRecord: (id: string) => Promise<SessionRecord | null>;
   resumeSession: (harnessSessionId: string) => Promise<HarnessSession>;
-  /** Explicitly replace one live Claude runtime with stale MCP auth. */
+  /** Explicitly replace one live coding-agent runtime with stale MCP auth. */
   restartMcpSession: (harnessSessionId: string) => Promise<HarnessSession>;
   /**
    * Portable continue: a fresh session in `cwd`, seeded with our own

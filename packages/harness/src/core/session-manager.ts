@@ -1243,20 +1243,22 @@ export class SessionManager {
     }
   }
 
-  /** Replace one stale Claude runtime only when its conversation is resumable. */
+  /** Replace one stale coding-agent runtime when its conversation is resumable. */
   async restartForMcpCredentials(id: string): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     const handle = this.ptys.get(id);
     if (
-      session.harness !== "claude-code" ||
       session.mcpAuthState !== "restart-required" ||
       !handle?.mcpCredentialLaunch ||
       handle.killed
     ) {
       throw new McpSessionRestartUnavailableError();
     }
+    const harnessLabel =
+      listHarnessAdapters().find((adapter) => adapter.id === session.harness)
+        ?.label ?? session.harness;
 
     const runtimeEpoch = handle.runtimeEpoch;
     const restoreRestartRequired = (): void => {
@@ -1272,7 +1274,7 @@ export class SessionManager {
       restoreRestartRequired();
       throw new SessionNotResumeableError(
         id,
-        "Claude Code has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.",
+        `${harnessLabel} has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.`,
       );
     }
     let resumable: boolean;
@@ -1289,7 +1291,7 @@ export class SessionManager {
       restoreRestartRequired();
       throw new SessionNotResumeableError(
         id,
-        "Claude Code no longer has this conversation, so it cannot be restarted safely. Start a new session instead.",
+        `${harnessLabel} no longer has this conversation, so it cannot be restarted safely. Start a new session instead.`,
       );
     }
     if (this.ptys.get(id) !== handle || handle.killed) {
