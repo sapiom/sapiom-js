@@ -18,7 +18,12 @@ import {
   isTerminate,
   parseNonRetryableStepErrorPayload,
 } from '@sapiom/agent';
-import type { NextStepDirective, AgentManifest, NonRetryableStepErrorPayload } from '@sapiom/agent';
+import type {
+  NextStepDirective,
+  AgentManifest,
+  NonRetryableStepErrorPayload,
+  PauseTimeoutPayload,
+} from '@sapiom/agent';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
 import type { AdvanceResult, CompleteDispatchOutcome, CreateExecutionOptions } from './advance-result.js';
@@ -407,14 +412,53 @@ export class AgentRunnerCore {
   }
 
   /**
-   * Finalize a paused execution whose `paused_until` elapsed with no signal.
-   * Called by the sweep processor; null on benign races.
+   * Handle a paused execution whose `paused_until` elapsed with no signal.
+   *
+   * Two outcomes, decided by whether the pause declared a `timeoutStep`:
+   *   - `timeoutStep` declared (and the store supports the resume capability):
+   *     resume the run there with a branded `PauseTimeoutPayload` as input, so
+   *     the workflow can branch on the timeout instead of dying. Returns a
+   *     RUNNING result for the caller to advance.
+   *   - Otherwise: finalize the execution as failed with `PauseTimeoutError`
+   *     (the original behavior).
+   *
+   * Called by the sweep processor; null on benign races (CAS lost to a signal
+   * that resumed the same execution first).
    */
   async expirePausedExecution(executionId: string): Promise<AdvanceResult | null> {
     const row = await this.deps.store.loadExecution(executionId);
     if (!row || row.status !== EXECUTION_STATUS.PAUSED || !row.pausedUntil || row.pausedUntil.getTime() > Date.now()) {
       return null;
     }
+
+    // In-workflow timeout path: resume at the declared timeoutStep (when the
+    // store implements the capability and the target step exists) rather than
+    // failing the run.
+    const timeoutStep = row.pausedTimeoutStep;
+    if (timeoutStep && this.deps.store.resumeAtTimeoutStep && row.manifest.steps[timeoutStep]) {
+      const payload: PauseTimeoutPayload = {
+        __sapiomPauseTimeout: true,
+        signal: row.pausedSignalName ?? '',
+        pausedUntilMs: row.pausedUntil.getTime(),
+      };
+      const won = await this.deps.store.resumeAtTimeoutStep({
+        executionId,
+        expectedVersion: row.version,
+        timeoutStep,
+        timeoutStepInput: payload,
+        sharedState: row.sharedState ?? {},
+      });
+      if (!won) {
+        this.recordCasLoss('pause_timeout_resume', executionId, row.version);
+        return null;
+      }
+      this.obs.count({
+        name: 'workflow.pause.timeout_resumed',
+        attributes: { 'workflow.name': row.name },
+      });
+      return { kind: ADVANCE_RESULT_KIND.RUNNING };
+    }
+
     const err = new PauseTimeoutError(row.pausedSignalName ?? '(unknown signal)', row.pausedUntil);
     const won = await this.deps.store.failExecution({
       executionId,

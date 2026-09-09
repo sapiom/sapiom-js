@@ -58,10 +58,15 @@ export function validateDirective(
   if (isPause(directive)) {
     const signalName = directive.signal.name;
     const resume = directive.resumeStep;
+    const timeout = directive.timeoutStep;
     const declared = transitions.some(
-      (t) => t.kind === 'pause' && t.signal === signalName && (resume === undefined || t.resumeStep === resume),
+      (t) =>
+        t.kind === 'pause' &&
+        t.signal === signalName &&
+        (resume === undefined || t.resumeStep === resume) &&
+        (timeout === undefined || t.timeoutStep === timeout),
     );
-    return declared ? null : new DisallowedTransitionError(stepName, 'pause', resume);
+    return declared ? null : new DisallowedTransitionError(stepName, 'pause', resume ?? timeout);
   }
   return null;
 }
