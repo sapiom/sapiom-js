@@ -113,12 +113,16 @@ function isX402Response(data: unknown): data is X402PaymentResponse {
 }
 
 function isSapiomPaymentResponse(data: unknown): data is SapiomPaymentResponse {
+  // The discriminant for a Sapiom 402 body is `requiresPayment === true`. Do
+  // NOT gate on `paymentData` — that field lives on the transaction-creation
+  // type, not on SapiomPaymentResponse (which carries transactionId/x402/
+  // message). Requiring it here rejected every real response, leaving the
+  // Sapiom-wrapper branch in extractX402 unreachable.
   return (
     data !== null &&
     typeof data === "object" &&
     "requiresPayment" in data &&
-    (data as any).requiresPayment === true &&
-    "paymentData" in data
+    (data as any).requiresPayment === true
   );
 }
 
@@ -243,7 +247,9 @@ export class HttpErrorDetector implements ErrorDetectorAdapter {
     const httpError = error as HttpError;
     const data = httpError.data;
 
-    if (isSapiomPaymentResponse(data)) {
+    // Prefer the id carried in a Sapiom-format body, but only when present —
+    // otherwise fall through so the header and generic fallbacks below still run.
+    if (isSapiomPaymentResponse(data) && data.transactionId) {
       return data.transactionId;
     }
 
