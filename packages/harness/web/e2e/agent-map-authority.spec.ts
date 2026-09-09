@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 type Probe = {
-  identity: "ready" | "missing-id" | "missing-project";
+  identity: "ready" | "missing-id" | "missing-project" | "older-protocol";
   reads: number;
   refreshes: number;
   navigation: number;
@@ -91,6 +91,7 @@ MockApi.prototype.getState = async function() {
   const state = await stateRead.call(this);
   authority.projects = Object.fromEntries(state.studioProjects.map(p => [p.displayName, p.projectId]));
   if (identity === "missing-project") state.studioProjects = [];
+  if (identity === "older-protocol") delete state.studioProjects;
   if (identity === "missing-id") {
     state.workspaceScopes = state.workspaceScopes.map(({ projectId, ...scope }) => scope);
   }
@@ -153,8 +154,8 @@ async function evidence(page: Page) {
   });
 }
 
-for (const identity of ["missing-id", "missing-project"] as const) {
-  test(`current project with ${identity} offers identity recovery without legacy fallback or session actions`, async ({
+for (const identity of ["missing-id", "missing-project", "older-protocol"] as const) {
+  test(`project with ${identity} offers identity recovery without legacy fallback or session actions`, async ({
     page,
   }) => {
     await open(page, identity);
@@ -219,7 +220,7 @@ test("recovering another project cannot restore the active conversation's projec
   expect(await evidence(page)).toEqual(before);
 });
 
-for (const identity of ["missing-id", "missing-project"] as const) {
+for (const identity of ["missing-id", "missing-project", "older-protocol"] as const) {
   test(`keyboard session selection matches the visible unresolved project's tabs with ${identity}`, async ({
     page,
   }) => {
