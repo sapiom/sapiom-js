@@ -71,8 +71,10 @@ selected project. Returning to a session reopens its OpenCode conversation;
 switching views detaches the display while execution continues. Connection errors
 offer **Reconnect**, which reloads history without resending accepted prompts.
 This first slice includes basic tool status; richer controls arrive separately.
-Studio actions that send a foreground prompt to the CLI reveal Terminal so its
-response stays visible. Background actions keep the selected view. A failed UI
+Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
+rejected send shows its error and keeps the selected view. Unsent chat text stays
+in memory per session across view/tab switches and reconnects until sign-out or
+reload. Background actions keep the selected view. A failed UI
 access poll retains the open draft for at most 60 seconds after the last success;
 explicit revocation/sign-out takes effect immediately when observed. The host
 continues enforcing its own capability expiry independently.

@@ -357,6 +357,7 @@ test("shows stream loss and reconnects without replaying an accepted prompt", as
   await input.press("Enter");
   const c = conversations.get("ses_sess_boot")!;
   await expect.poll(() => c.prompts.length).toBe(1);
+  await input.fill("An unsent follow-up");
   failEvents = true;
   for (const stream of c.streams) stream.end();
   await expect(page.getByRole("alert")).toContainText("Connection lost");
@@ -367,6 +368,7 @@ test("shows stream loss and reconnects without replaying an accepted prompt", as
     "First chunk recovered",
   );
   await expect(input).toBeEnabled();
+  await expect(input).toHaveValue("An unsent follow-up");
   expect(c.prompts).toEqual(["A single request"]);
 });
 
@@ -428,6 +430,8 @@ test("reveals foreground Terminal input and preserves Assistant for background a
   page,
 }) => {
   await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("Keep this unsent draft");
   await page.evaluate(() => {
     (window as any).__HARNESS_TEST__.publish({
       type: "canvas.reload",
@@ -470,8 +474,55 @@ test("reveals foreground Terminal input and preserves Assistant for background a
     .poll(() => conversations.get("ses_sess_boot")!.streams.size)
     .toBe(0);
   await assistant.click();
+  await expect(input).toHaveValue("Keep this unsent draft");
   const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
   await tabs.nth(1).click();
+  await expect(input).toHaveValue("");
+  await input.fill("A different tab's draft");
   await tabs.nth(0).click();
   await expect(assistant).toHaveAttribute("aria-pressed", "true");
+  await expect(input).toHaveValue("Keep this unsent draft");
+  await input.press("Enter");
+  await expect
+    .poll(() => conversations.get("ses_sess_boot")!.prompts)
+    .toEqual(["Keep this unsent draft"]);
+  finish("ses_sess_boot", " complete");
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await assistant.click();
+  await expect(input).toHaveValue("");
+});
+
+test("shows a rejected inspector command without leaving Assistant or losing its draft", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await openAssistant(page);
+  await page.evaluate(() => {
+    (window as any).__HARNESS_TEST__.publish({
+      type: "canvas.reload",
+      harnessSessionId: "sess-boot",
+    });
+  });
+  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
+    "data-view",
+    "board",
+  );
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("Keep this draft after failure");
+  await page.getByTestId("canvas-chat-toggle").click();
+  await page.getByTestId("canvas-freeform-input").fill("Explain this agent");
+  await page.evaluate(() => {
+    (window as any).__MOCK_INJECT_FAIL_ONCE__ = true;
+  });
+  await page.getByTestId("canvas-freeform-ask").click();
+  await expect(page.getByTestId("toast")).toContainText(
+    "Session is still initialising",
+  );
+  await expect(input).toHaveValue("Keep this draft after failure");
+  await expect(
+    page.getByRole("button", { name: "Assistant", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
+  expect(errors).toEqual([]);
 });

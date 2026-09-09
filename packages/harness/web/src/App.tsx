@@ -3830,7 +3830,13 @@ export const App = (): JSX.Element => {
                   }
                   onInjectPrompt={(text) => {
                     if (harness.activeSessionId)
-                      void harness.injectInput(harness.activeSessionId, text);
+                      void harness
+                        .injectInput(harness.activeSessionId, text)
+                        .catch((err) =>
+                          harness.showToast(
+                            errorMessage(err, "Could not send the prompt to Terminal."),
+                          ),
+                        );
                   }}
                   onDescribeWorkflow={handleDescribeWithAI}
                 />
