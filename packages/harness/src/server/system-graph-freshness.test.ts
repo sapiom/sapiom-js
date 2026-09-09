@@ -863,10 +863,22 @@ export const agent = defineAgent({ name: "checkout-agent" });`,
   });
 
   it(
-    "registers each agent once when the launch directory is a symlink",
+    "deduplicates a symlinked launch directory and excludes linked node_modules",
     { timeout: 30_000 },
     async () => {
       // Both spellings must reach the same registry rows when explicitly scanned.
+      // A discoverable dependency must stay excluded through either spelling.
+      const dependenciesRoot = path.join(tempRoot, "dependencies");
+      await scaffoldAgent(
+        dependenciesRoot,
+        "dependency-agent",
+        installedAgentSource("dependency-agent"),
+      );
+      await fs.symlink(
+        dependenciesRoot,
+        path.join(workspaceRoot, "node_modules"),
+        "dir",
+      );
       await scaffoldAgent(
         workspaceRoot,
         "research",
@@ -917,7 +929,10 @@ export const agent = defineAgent({ name: "checkout-agent" });`,
         ).json()) as WorkflowInfo[];
       };
       const initial = await scan(workspaceRoot);
-      expect(initial).toHaveLength(2);
+      expect(initial.map((row) => row.definitionSlug).sort()).toEqual([
+        "growth",
+        "research",
+      ]);
       expect(
         new Set(await Promise.all(initial.map((row) => fs.realpath(row.path))))
           .size,
