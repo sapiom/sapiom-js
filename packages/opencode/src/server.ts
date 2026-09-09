@@ -23,6 +23,13 @@ export interface OpenCodeServer {
   close(): Promise<void>;
 }
 
+/** The caller must retain its state-owner lock when process exit is unconfirmed. */
+export class OpenCodeShutdownError extends Error {
+  constructor() {
+    super("OpenCode did not exit within the shutdown deadline");
+  }
+}
+
 /** Tools receive platform necessities, never the host's provider/auth variables. */
 function platformEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};
@@ -129,9 +136,10 @@ export async function startOpenCodeServer(
         await Promise.race([exit, delay(options.shutdownTimeoutMs ?? 2000)]);
       signalChild(child, "SIGKILL");
       if (!exited) await Promise.race([exit, delay(2000)]);
-      if (!exited)
-        throw new Error("OpenCode did not exit within the shutdown deadline");
-    })());
+      if (!exited) throw new OpenCodeShutdownError();
+    })().catch(() => {
+      throw new OpenCodeShutdownError();
+    }));
   const authenticatedFetch = async (
     path: string,
     init: RequestInit = {},
