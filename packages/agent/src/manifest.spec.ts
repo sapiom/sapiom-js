@@ -282,9 +282,9 @@ describe("buildManifest", () => {
   });
 
   it("defaulted field is NOT in required in the manifest JSON Schema (AJV pre-check must not be stricter than Zod)", () => {
-    // `count` has a Zod default → zod.toJSONSchema marks it required; buildManifest
-    // must strip it so a caller that omits `count` passes AJV pre-check.
-    // Only top-level `required` entries are treated (nested objects out of scope for v1).
+    // `count` has a Zod default, so a caller may omit it — Zod supplies the
+    // value on parse. It must not be reported as required, or the AJV pre-gate
+    // rejects an input the sandbox parse would have accepted.
     const schema = z.object({
       name: z.string(),
       count: z.number().default(0),
@@ -304,6 +304,32 @@ describe("buildManifest", () => {
     expect(required).toBeDefined();
     expect(required).toContain("name");
     expect(required).not.toContain("count");
+  });
+
+  it("a NESTED defaulted field is NOT in required either (SAP-3218)", () => {
+    // The published schema used to treat only the top level, so `{ opts: {} }`
+    // was rejected by the pre-gate while an omitted input passed — a partial
+    // input was stricter than no input at all. See introspection.spec.ts for
+    // the full matrix (arrays, unions, prefault); this pins the manifest.
+    const schema = z.object({
+      name: z.string(),
+      opts: z.object({ verbose: z.boolean().default(false) }),
+    });
+    const def = defineAgent({
+      name: "wf",
+      entry: "step",
+      steps: { step: makeStep("step", { inputSchema: schema }) },
+    });
+    const manifest = buildManifest(def, {
+      sdkVersion: DUMMY_SDK_VERSION,
+      artifact: DUMMY_ARTIFACT,
+    });
+    const stepSchema = manifest.steps.step.inputSchema!;
+    const opts = (stepSchema.properties as Record<string, Record<string, unknown>>)
+      .opts;
+    expect(opts.required ?? []).toEqual([]);
+    // The `opts` object itself has no default, so it stays required.
+    expect(stepSchema.required).toEqual(["name", "opts"]);
   });
 
   it("strips additionalProperties:false from the schema (top-level AND nested) so inputs with extra fields are accepted", () => {
