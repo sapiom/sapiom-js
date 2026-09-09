@@ -133,6 +133,23 @@ describe("renderCanvasForSession", () => {
     expect(await readRender(readyCwd, ORDER_TRIAGE)).toContain(">deployed<");
   });
 
+  it("labels a definition the signed-in account cannot see as unavailable, over any remembered build status", async () => {
+    const cwd = await tmpCwd();
+    await renderCanvasForSession({ cwd, boundWorkflowPath: ORDER_TRIAGE }, [
+      {
+        path: ORDER_TRIAGE,
+        name: "order-triage",
+        definitionId: 42,
+        activeBuildRunStatus: "ready",
+        definitionAccess: "unavailable",
+      },
+    ]);
+    const html = await readRender(cwd, ORDER_TRIAGE);
+    expect(html).toContain(">unavailable<");
+    expect(html).not.toContain(">deployed<");
+    expect(html).not.toContain(">linked<");
+  });
+
   it("serves the second render of an unchanged workflow from the extraction cache", async () => {
     const cwd = await tmpCwd();
     const workflows: RenderableWorkflow[] = [
