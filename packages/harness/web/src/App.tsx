@@ -3458,7 +3458,13 @@ export const App = (): JSX.Element => {
                 data-testid="right-tab-canvas"
               >
                 <Icon name="Workflow" size={14} />
-                {projectMapSelected ? "Agent Map" : "Canvas"}
+                {projectMapSelected ? (
+                  <>
+                    <span className="right-pane-tab-qualifier">Agent </span>Map
+                  </>
+                ) : (
+                  "Canvas"
+                )}
               </button>
               {/* Steps are an AGENT's steps. At map altitude there is no
                   meaningful step list for a whole project, and a tab that
