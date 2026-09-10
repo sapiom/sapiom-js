@@ -76,14 +76,15 @@ rejected send shows its error and keeps the selected view. Unsent chat text is
 keyed by authenticated principal and Studio session above the centre pane, so it
 survives Terminal/Assistant and session switches, reconnects, exited-session
 views, and temporary New Session or past-session review navigation. It is never
-persisted: sign-out/account change, session deletion, and page/app reload clear
-the applicable in-memory draft. Conversation view is a separate, unpersisted
-mount-local preference: Terminal is the initial/reset view, while a foreground
-CLI prompt accepted by Studio explicitly reveals it. Background actions keep
-the selected view. A failed UI
-access poll retains the open draft for at most 60 seconds after the last success;
-explicit revocation/sign-out takes effect immediately when observed. The host
-continues enforcing its own capability expiry independently.
+persisted: actual Assistant-access retirement, authority crossover, sign-out,
+session deletion, and page/app reload clear the applicable in-memory draft.
+Same-authority renewals, polls, and reconnects retain it. Conversation view is
+a separate, unpersisted mount-local preference: Terminal is the initial/reset
+view, while a foreground CLI prompt accepted by Studio explicitly reveals it.
+Background actions keep the selected view. A failed UI access poll retains the
+open draft for at most 60 seconds after the last success; explicit
+revocation/sign-out takes effect immediately when observed. The host continues
+enforcing its own capability expiry independently.
 
 The current `@assistant-ui/react-opencode` integration stays behind
 `OpenCodeChat`, the host-to-UI adapter. The host exposes only the shared,
