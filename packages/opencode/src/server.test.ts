@@ -39,11 +39,15 @@ describe("packaged OpenCode runtime", () => {
   it("rejects a zombie before positive descendant fencing", () => {
     const tracked = new Map([
       ["20:birth-20", { pid: 20, birthId: "birth-20" }],
+      ["22:birth-22", { pid: 22, birthId: "birth-22" }],
     ]);
     expect(
       evaluateTrackedClosure(
         tracked,
-        new Map([[20, { pid: 20, birthId: "birth-20", state: "S" }]]),
+        new Map([
+          [20, { pid: 20, birthId: "birth-20", state: "T" }],
+          [22, { pid: 22, birthId: "birth-22", state: "S" }],
+        ]),
       ),
     ).toBe("waiting");
     expect(
@@ -52,6 +56,7 @@ describe("packaged OpenCode runtime", () => {
         new Map([
           [20, { pid: 20, birthId: "birth-20", state: "Z" }],
           [21, { pid: 21, birthId: "birth-21", state: "S" }],
+          [22, { pid: 22, birthId: "birth-22", state: "T" }],
         ]),
       ),
     ).toBe("uncertain");
@@ -59,7 +64,10 @@ describe("packaged OpenCode runtime", () => {
     expect(
       evaluateTrackedClosure(
         tracked,
-        new Map([[20, { pid: 20, birthId: "birth-20", state: "T" }]]),
+        new Map([
+          [20, { pid: 20, birthId: "birth-20", state: "T" }],
+          [22, { pid: 22, birthId: "birth-22", state: "T" }],
+        ]),
       ),
     ).toBe("stopped");
   });
