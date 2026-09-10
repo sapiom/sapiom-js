@@ -17,7 +17,7 @@ export type { TransportConfig, Attribution } from "./_client/index.js";
 
 // The generic dispatch contract: any capability handle that carries a `dispatch`
 // member is pausable via `pauseUntilSignal` in @sapiom/agent.
-export type { DispatchHandle, MaybeDispatchHandle } from "./dispatch.js";
+export type { DispatchHandle } from "./dispatch.js";
 
 export * as sandboxes from "./sandboxes/index.js";
 export { Sandbox } from "./sandboxes/index.js";
@@ -87,6 +87,9 @@ export type {
 } from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
 export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
+// Thrown by `agents.launch` when the dispatch is refused (`agents.run` returns
+// the same rejection as data instead). Catch it to `fail()` a step cleanly.
+export { AgentDispatchError } from "./agents/index.js";
 
 // llm — routed LLM calls through the gateway's /v2 routing front-end: `run`
 // (synchronous direct), `submit` (deferred-start; pausable handle), `redeem`,

@@ -5,6 +5,7 @@
 import { createClient } from "../index.js";
 import {
   AGENTS_RESULT_SIGNAL,
+  AgentDispatchError,
   AgentResultSchemaError,
   agentResultSchema,
 } from "./index.js";
@@ -116,7 +117,7 @@ describe("agentResultSchema", () => {
  * the engine's pre-gate refuses) without the calling step blowing up and
  * retrying to its cap.
  */
-describe("orchestrations dispatch rejection — resolves, never throws", () => {
+describe("orchestrations dispatch rejection — `run` resolves it, `launch` throws it", () => {
   /** A fetch that answers the create-execution POST with one non-2xx. */
   function rejectingFetch(
     status: number,
@@ -224,39 +225,61 @@ describe("orchestrations dispatch rejection — resolves, never throws", () => {
     expect(result.status).not.toBe("completed");
   });
 
-  it("launch resolves a NON-pausable handle: no `dispatch`, rejection readable, wait() resolves it", async () => {
+  it("launch THROWS a typed AgentDispatchError rather than a handle that can't be paused on", async () => {
+    const body = {
+      statusCode: 404,
+      code: "definition_not_found",
+      message: "gone",
+    };
     const sapiom = createClient({
       apiKey: "k",
-      fetch: rejectingFetch(404, { message: "gone" }),
+      fetch: rejectingFetch(404, body),
     });
 
-    const handle = await sapiom.agents.launch({ definition: "typo-slug" });
+    // No child exists, so there is no pausable handle to hand back. Throwing
+    // beats returning an object that lies about being a RunHandle.
+    const error = await sapiom.agents
+      .launch({ definition: "typo-slug" })
+      .catch((caught: unknown) => caught);
 
-    expect(handle.executionId).toBeNull();
-    // No child exists, so nothing can ever fire the resume signal — the absent
-    // `dispatch` is what makes `pauseUntilSignal` refuse the handle.
-    expect(handle.dispatch).toBeUndefined();
-    expect(handle.rejection).toMatchObject({ code: "not_found", status: 404 });
-    expect(await handle.status()).toBe("rejected");
-    expect(await handle.wait()).toMatchObject({
-      status: "rejected",
-      executionId: null,
+    expect(error).toBeInstanceOf(AgentDispatchError);
+    expect(error).toMatchObject({
+      name: "AgentDispatchError",
+      code: "not_found",
+      status: 404,
+      details: body,
+      message: "gone",
     });
   });
 
-  it("resolves a refused delayed dispatch (`at`) the same way", async () => {
+  it("the thrown error converts to the same AgentRunError `run` reports as data", async () => {
+    const body = { message: "gone" };
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(404, body),
+    });
+
+    const thrown = (await sapiom.agents
+      .launch({ definition: "typo-slug" })
+      .catch((e: unknown) => e)) as AgentDispatchError;
+    const viaRun = await sapiom.agents.run({ definition: "typo-slug" });
+
+    // The two entry points differ in MECHANISM, never in what they report.
+    expect(thrown.toRunError()).toEqual(viaRun.error);
+  });
+
+  it("throws on a refused delayed dispatch (`at`) too", async () => {
     const sapiom = createClient({
       apiKey: "k",
       fetch: rejectingFetch(404, { message: "gone" }),
     });
 
-    const handle = await sapiom.agents.launch({
-      definition: "typo-slug",
-      at: "2099-01-01T00:00:00.000Z",
-    });
-
-    expect(handle.dispatch).toBeUndefined();
-    expect(handle.rejection).toMatchObject({ code: "not_found" });
+    await expect(
+      sapiom.agents.launch({
+        definition: "typo-slug",
+        at: "2099-01-01T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({ name: "AgentDispatchError", code: "not_found" });
   });
 
   it("a SUCCESSFUL delayed dispatch is pausable and names no run yet", async () => {
@@ -273,7 +296,6 @@ describe("orchestrations dispatch rejection — resolves, never throws", () => {
       at: "2099-01-01T00:00:00.000Z",
     });
 
-    expect(handle.rejection).toBeUndefined();
     expect(handle.dispatch).toEqual({
       correlationId: "trigger-trig-1",
       resultSignal: AGENTS_RESULT_SIGNAL,

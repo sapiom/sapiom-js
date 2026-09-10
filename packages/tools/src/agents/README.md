@@ -23,13 +23,17 @@ const enrich = defineStep({
   pause: { signal: agents.AGENTS_RESULT_SIGNAL, resumeStep: "use-result" },
   canFail: true,
   async run(input, ctx) {
-    const child = await agents.launch({ definition: "enrich-lead", input });
-    // A refused dispatch (unknown slug, input the engine rejected, transport
-    // fault) produced no child, so there is nothing to pause on.
-    if (child.rejection) {
-      return fail(`enrich-lead dispatch rejected: ${child.rejection.message}`);
+    try {
+      const child = await agents.launch({ definition: "enrich-lead", input });
+      return pauseUntilSignal(child, { resumeStep: "use-result" });
+    } catch (error) {
+      // A refused dispatch (unknown slug, input the engine rejected, transport
+      // fault) produced no child, so there was no handle to pause on.
+      if (error instanceof agents.AgentDispatchError) {
+        return fail(`enrich-lead dispatch rejected: ${error.message}`);
+      }
+      throw error;
     }
-    return pauseUntilSignal(child, { resumeStep: "use-result" });
   },
 });
 
@@ -49,7 +53,7 @@ const useResult = defineStep({
 
 - **`run` blocks; `launch` returns a pausable handle.** `run` polls until the run reaches a terminal state and returns its result — use it for standalone, inline calls. `launch` returns immediately with a handle you hand to `pauseUntilSignal(handle, { resumeStep })` to suspend the step until the run finishes. Don't use `run` to pause a step — it returns a result, not a handle.
 
-- **Failure is data, not an exception — including a rejected dispatch.** Branch on `status`; `if (result.status !== "completed")` is the only check you need for the common case. `run` resolves on every outcome and never throws:
+- **`run` reports failure as data; `launch` throws.** They return different kinds of thing, so a refused dispatch reaches you differently. `run` returns a result already discriminated on `status`, so `if (result.status !== "completed")` is the only check it needs — no try/catch, whatever went wrong:
 
   | `status`      | What happened                                                                                                                             | `executionId` |
   | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
@@ -60,14 +64,16 @@ const useResult = defineStep({
   | `"unknown"`   | The run WAS created but its status couldn't be read — the read was refused, or kept faulting. **The child may still be running.**         | set           |
   | `"timed_out"` | `wait` hit its `timeoutMs` while the run was still going.                                                                                 | set           |
 
-  On `"rejected"`, `"unknown"` and `"timed_out"`, `error` is an `AgentRunError`: `{ code, message, status, details }`. `code` is the coarse bucket (`"not_found"` for an unknown slug or a missing run, `"invalid_input"` for refused input, `"http"`, `"transport"`, and `"timeout"` — which pairs only with `"timed_out"`), and `details` keeps the platform's own response body, so its stable code and any validation issues survive. Validate an incoming resume payload with `agents.agentResultSchema.parse(value)` if you want a runtime check.
+  On `"rejected"`, `"unknown"` and `"timed_out"`, `error` is an `AgentRunError`: `{ code, message, status, details }`. `code` is the coarse bucket (`"not_found"` for an unknown slug or a missing run, `"invalid_input"` for refused input, `"http"`, `"transport"`, and `"timeout"` — which pairs only with `"timed_out"`), and `details` keeps the platform's own response body, so its stable code and any validation issues survive.
 
-- **Only `"rejected"` is safe to re-dispatch.** It is the one status that guarantees nothing is running. `"unknown"` and `"timed_out"` both carry a real `executionId` for a child that may still be working — re-running the slug there gives you two copies. If you retry on those, pass an `idempotencyKey`.
+- **`launch` throws `AgentDispatchError` on a refused dispatch.** It owes you a _pausable handle_, and a dispatch that created no child has none — an object with a null `executionId` that can't be paused on would be lying about what it is. So catch it and `fail()` the step, as the example above does. Every handle `launch` does return is pausable. `error.toRunError()` gives you the same `AgentRunError` `run` would have reported, if you want one shape across both call styles.
 
-- **A rejected `launch` isn't pausable.** `launch` doesn't throw either, but a dispatch that was refused produced no child, so nothing can ever fire the resume signal. That handle carries no `dispatch` and exposes the rejection as `handle.rejection` instead — check it before pausing, as the example above does. Pausing on it anyway throws from `pauseUntilSignal` rather than parking the step on a signal that never arrives.
+  Uncaught, it's an ordinary step throw, so the engine retries it up to `maxAttemptsPerStep` before failing the run. A refused dispatch is deterministic and won't self-heal, so catch it rather than letting the retry cap burn.
+
+- **Only `"rejected"` is safe to re-dispatch.** It is the one outcome that guarantees nothing is running. `"unknown"` and `"timed_out"` both carry a real `executionId` for a child that may still be working — re-running the slug there gives you two copies. If you retry on those, pass an `idempotencyKey`.
 
 - **Addressed by slug.** `definition` is the deployed agent's slug — its stable handle. `input` is passed to its entry step.
 
 - **`idempotencyKey` deduplicates.** Repeating a launch with the same key returns the existing run instead of starting a new one.
 
-- **Delayed dispatch (`at`).** `launch({ definition, input, at })` schedules the child to run at a future time (`at` is a `Date` or ISO 8601 string) instead of now, and returns a **pause-only** handle: hand it to `pauseUntilSignal` and the step resumes with the child's result once the scheduled run finishes. `status`/`wait` aren't available on a delayed handle (there's no run until then), so use `launch` + `pauseUntilSignal`, not `run` — this is the one place the no-throw contract doesn't reach: a refused delayed launch still resolves a rejected handle, but calling `status`/`wait` (and so `run`) on a SUCCESSFUL one throws, as it always has. For a plain fire-and-forget one-off (no resume), use the `schedules` capability instead.
+- **Delayed dispatch (`at`).** `launch({ definition, input, at })` schedules the child to run at a future time (`at` is a `Date` or ISO 8601 string) instead of now, and returns a **pause-only** handle: hand it to `pauseUntilSignal` and the step resumes with the child's result once the scheduled run finishes. `status`/`wait` aren't available on a delayed handle (there's no run until then), so use `launch` + `pauseUntilSignal`, not `run`. A refused delayed launch throws `AgentDispatchError` like any other; on a SUCCESSFUL one, `status`/`wait` (and so `run`) throw because there is no run to read until the scheduled time. For a plain fire-and-forget one-off (no resume), use the `schedules` capability instead.

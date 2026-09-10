@@ -429,15 +429,15 @@ const research = await ctx.sapiom.agents.run({
   definition: "research-topic", // the deployed child's slug
   input: { topic: input.topic },
 });
-// agents.run NEVER throws (the one exception is a delayed dispatch — see
-// `at` below). It resolves on any terminal status (completed | failed |
-// cancelled), on a REJECTED dispatch (unknown slug, input the engine
-// refused, transport fault — status "rejected", executionId null, error
-// { code, message, status, details }), on a status it could not read
-// ("unknown"), and on a wait timeout ("timed_out"). So this ONE branch
-// covers every way a stage can not deliver — skip it and a bad stage
-// silently feeds `null` onward. Only "rejected" guarantees nothing is
-// running, so it is the only status you may safely re-dispatch on.
+// agents.run reports failure as DATA — no try/catch needed. It resolves on
+// any terminal status (completed | failed | cancelled), on a REJECTED
+// dispatch (unknown slug, input the engine refused, transport fault —
+// status "rejected", executionId null, error { code, message, status,
+// details }), on a status it could not read ("unknown"), and on a wait
+// timeout ("timed_out"). So this ONE branch covers every way a stage can
+// not deliver — skip it and a bad stage silently feeds `null` onward.
+// Only "rejected" guarantees nothing is running, so it is the only status
+// you may safely re-dispatch on.
 if (research.status !== "completed") {
   // (fail() requires this step to declare canFail: true)
   return fail(`research-topic ${research.status}: ${String(research.error)}`);
@@ -447,11 +447,12 @@ const script = await ctx.sapiom.agents.run({
   input: { research: research.output },
 });
 // …and so on. Use agents.launch + pauseUntilSignal for a long-running child
-// so the coordinator's step doesn't time out. launch doesn't throw either, but
-// a REJECTED dispatch produced no child to pause on — check `child.rejection`
-// before pauseUntilSignal. Delayed dispatch is the carve-out: on a handle from
-// launch({ ..., at }) there is no run to wait on until the scheduled time, so
-// status/wait (and therefore run) DO throw — pause on it, don't await it.
+// so the coordinator's step doesn't time out. launch is the one that THROWS:
+// it owes you a pausable handle, and a refused dispatch has none, so wrap it
+// in try/catch and route an AgentDispatchError to fail() (uncaught, the engine
+// retries it to maxAttemptsPerStep first — a slug typo won't self-heal). On a
+// handle from launch({ ..., at }) there is no run until the scheduled time, so
+// status/wait (and therefore run) throw there too — pause on it, don't await.
 ```
 
 Building a system in one session? Scaffold the stages as separate projects and deploy
@@ -674,7 +675,8 @@ Stub naming rules:
   result and the resume payload, merged over the defaults. This is how you cover the branches
   a coordinator must have — `{ "status": "failed" }` for a child that ran and failed, and
   `{ "status": "rejected", "error": { "code": "not_found", "message": "…" } }` for a dispatch
-  that was refused, which yields a handle with no `dispatch` and a `rejection` to read.
+  that was refused. A stubbed rejection follows the real split: `agents.run` returns it as
+  data, `agents.launch` throws `AgentDispatchError`, so your try/catch runs locally too.
 - `run_local` reports `unusedStubs` (key matched nothing — usually a typo or plural/singular
   slip) and `stubWarnings` (key matched but wrong shape). A green run with either non-empty
   means the stub silently didn't apply.

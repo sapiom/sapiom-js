@@ -30,7 +30,8 @@ import type {
   RunHandle,
   RunStatus,
 } from "../models/index.js";
-import { AGENTS_RESULT_SIGNAL } from "../agents/index.js";
+import { AGENTS_RESULT_SIGNAL, AgentDispatchError } from "../agents/index.js";
+import type { ExecutionStatus } from "../agents/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
@@ -575,6 +576,15 @@ function stubCodingResult(
  * real id on every other status. `output` defaults to `{}` on a completed run
  * (what a local run has always seen) and `null` otherwise.
  */
+/** The statuses a live run can report from a status read (see `status()` below). */
+const LIFECYCLE_STATUSES = new Set<string>([
+  "running",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
 function stubAgentRunResult(
   resolved: unknown,
   generatedId: string,
@@ -1049,14 +1059,14 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             `stub-exec-${++launchSeq}`,
           ),
         ),
-      launch: (spec) => {
+      launch: async (spec) => {
         const generatedId = `stub-exec-${++launchSeq}`;
         // `launch()` honors the key matching the call the author wrote
         // (`agents.launch`) first, then the shared `agents.run` that controls
         // both paths — the same precedence as `models.coding`. Before this the
         // handle was built unconditionally as a success, so the
-        // `if (child.rejection)` branch the README and the authoring skill both
-        // require was impossible to cover in a local run.
+        // try/catch the README and the authoring skill both require was
+        // impossible to cover in a local run.
         const result = stubAgentRunResult(
           r(dispatchedKeys("agents"), [spec], () => ({
             status: "completed" as const,
@@ -1064,27 +1074,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           generatedId,
         );
 
-        // A rejected dispatch created no child. Mirror the real client: no
-        // `dispatch` member (so the handle is not pausable, and `dispatchable`
-        // registers no resume payload for it) with the rejection readable off
-        // the handle.
+        // A rejected dispatch created no child, so there is no pausable handle
+        // to hand back. Mirror the real client and THROW, so a local run
+        // exercises the same try/catch the author writes against production.
         if (result.status === "rejected") {
-          const rejection = (result.error ?? {
-            code: "transport",
-            message: "stubbed dispatch rejection",
-            status: null,
-            details: null,
-          }) as AgentRunError;
-          const rejectedResult: AgentRunResult = {
-            ...result,
-            error: rejection,
-          };
-          return Promise.resolve({
-            executionId: null,
-            rejection,
-            status: () => Promise.resolve("rejected" as const),
-            wait: () => Promise.resolve(rejectedResult),
-          });
+          throw new AgentDispatchError(
+            (result.error ?? {
+              code: "transport",
+              message: "stubbed dispatch rejection",
+              status: null,
+              details: null,
+            }) as AgentRunError,
+          );
         }
 
         const executionId = result.executionId ?? generatedId;
@@ -1094,7 +1095,16 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             correlationId: executionId,
             resultSignal: AGENTS_RESULT_SIGNAL,
           },
-          status: () => Promise.resolve(result.status),
+          // `status()` reports a LIFECYCLE status. `"unknown"`/`"timed_out"` are
+          // `wait()` outcomes, not lifecycle states, and both describe a run
+          // that exists and isn't known-terminal — so they read as "running"
+          // here while `wait()` still resolves them verbatim.
+          status: () =>
+            Promise.resolve(
+              LIFECYCLE_STATUSES.has(result.status)
+                ? (result.status as ExecutionStatus)
+                : "running",
+            ),
           wait: () => Promise.resolve(result),
         };
         // Register the resume payload so a local `pauseUntilSignal` on this

@@ -4,7 +4,7 @@
  * engine then validates the directive against the pinned manifest.
  */
 
-import type { DispatchHandle, MaybeDispatchHandle } from '@sapiom/tools';
+import type { DispatchHandle } from '@sapiom/tools';
 
 import { DIRECTIVE_KIND, fail, goto, pauseUntilSignal, retry, terminate } from './index.js';
 
@@ -83,22 +83,6 @@ describe('pauseUntilSignal — dispatch handle overload', () => {
     // Not a promise — the args form returns the directive directly.
     expect((d as { then?: unknown }).then).toBeUndefined();
     expect(d.signal).toEqual({ name: 's', correlationId: undefined });
-  });
-
-  // SAP-3219: a capability that resolves a rejected dispatch as data hands back a
-  // handle with NO `dispatch`. Pausing on it would wait for a signal nothing can
-  // ever fire, so refuse it loudly instead of hanging the step.
-  it('rejects a handle carrying no `dispatch` instead of pausing on an undefined signal', async () => {
-    const rejected: MaybeDispatchHandle = {};
-    await expect(pauseUntilSignal(rejected, { resumeStep: 'review' })).rejects.toThrow(
-      /carries no `dispatch`/,
-    );
-  });
-
-  it('rejects a launch promise that resolves a dispatch-less handle', async () => {
-    await expect(
-      pauseUntilSignal(Promise.resolve({} as MaybeDispatchHandle), { resumeStep: 'review' }),
-    ).rejects.toThrow(/nothing to pause on/);
   });
 });
 

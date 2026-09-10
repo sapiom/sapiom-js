@@ -1,22 +1,22 @@
+import { AgentDispatchError } from "../agents/index.js";
 import { createStubClient } from "./index.js";
 
 // `agents.launch` built its handle unconditionally as a success and never
 // consulted the overrides, while its sibling `agents.run` (and
 // `models.coding.launch`) both resolved through them. The README and the
 // authoring skill tell every author to write
-// `if (child.rejection) return fail(...)` before `pauseUntilSignal`, so under
-// the stub that branch was dead code no local test could cover. `launch()` now
-// consults `agents.launch` > `agents.run` and merges the override over the
-// built-in defaults, so run and launch agree on the shape the way the real
-// client's `run() === launch().wait()` requires.
+// try/catch around `launch`, so under the stub that catch block was dead code
+// no local test could cover. `launch()` now consults `agents.launch` >
+// `agents.run`, merged over the built-in defaults, and mirrors the real
+// client's split: a stubbed `status: "rejected"` THROWS from `launch` and
+// RESOLVES from `run`.
 describe("createStubClient().agents — launch override keys", () => {
   it("defaults to a completed, pausable run when nothing is stubbed", async () => {
     const stub = createStubClient();
 
     const handle = await stub.agents.launch({ definition: "enrich-lead" });
 
-    expect(handle.rejection).toBeUndefined();
-    expect(handle.dispatch?.resultSignal).toBe("agents.result");
+    expect(handle.dispatch.resultSignal).toBe("agents.result");
     expect(await handle.status()).toBe("completed");
     expect(await handle.wait()).toMatchObject({
       status: "completed",
@@ -49,7 +49,7 @@ describe("createStubClient().agents — launch override keys", () => {
     expect((await handle.wait()).output).toBe("from-launch");
   });
 
-  it("lets a stubbed rejection exercise the `child.rejection` branch the docs require", async () => {
+  it("lets a stubbed rejection exercise the try/catch the docs require", async () => {
     const rejection = {
       code: "not_found",
       message: "no such definition: typo-slug",
@@ -60,19 +60,36 @@ describe("createStubClient().agents — launch override keys", () => {
       overrides: { "agents.launch": { status: "rejected", error: rejection } },
     });
 
-    const handle = await stub.agents.launch({ definition: "typo-slug" });
-
-    expect(handle.rejection).toEqual(rejection);
-    // No child exists, so the handle is not pausable and names no run.
-    expect(handle.dispatch).toBeUndefined();
-    expect(handle.executionId).toBeNull();
-    expect(await handle.status()).toBe("rejected");
-    expect(await handle.wait()).toEqual({
-      executionId: null,
-      status: "rejected",
-      output: null,
-      error: rejection,
+    // Throws exactly as the real client does, so the author's catch block runs
+    // in a local test instead of being dead code until production.
+    await expect(
+      stub.agents.launch({ definition: "typo-slug" }),
+    ).rejects.toMatchObject({
+      name: "AgentDispatchError",
+      code: "not_found",
+      status: 404,
     });
+  });
+
+  it("keeps a stubbed rejection as DATA on the run() path", async () => {
+    const stub = createStubClient({
+      overrides: {
+        "agents.run": {
+          status: "rejected",
+          error: {
+            code: "not_found",
+            message: "gone",
+            status: 404,
+            details: null,
+          },
+        },
+      },
+    });
+
+    // Same override key family, opposite mechanism — mirroring the real client.
+    const result = await stub.agents.run({ definition: "typo-slug" });
+
+    expect(result).toMatchObject({ status: "rejected", executionId: null });
   });
 
   it("fills in a partial override, keeping executionId null only on a rejection", async () => {
@@ -123,7 +140,9 @@ describe("createStubClient().agents — launch override keys", () => {
       overrides: { "agents.launch": { status: "rejected" } },
     });
 
-    await stub.agents.launch({ definition: "typo-slug" });
+    await expect(
+      stub.agents.launch({ definition: "typo-slug" }),
+    ).rejects.toBeInstanceOf(AgentDispatchError);
 
     expect(signals.size).toBe(0);
   });
