@@ -430,14 +430,15 @@ const research = await ctx.sapiom.agents.run({
   input: { topic: input.topic },
 });
 // agents.run reports failure as DATA — no try/catch needed. It resolves on
-// any terminal status (completed | failed | cancelled), on a REJECTED
-// dispatch (unknown slug, input the engine refused, transport fault —
-// status "rejected", executionId null, error { code, message, status,
-// details }), on a status it could not read ("unknown"), and on a wait
-// timeout ("timed_out"). So this ONE branch covers every way a stage can
-// not deliver — skip it and a bad stage silently feeds `null` onward.
-// Only "rejected" guarantees nothing is running, so it is the only status
-// you may safely re-dispatch on.
+// any terminal status (completed | failed | cancelled), on a refused
+// dispatch ("rejected" — unknown slug or input the engine refused, with
+// error { code, message, status, details }), on an ambiguous one or an
+// unreadable status ("unknown"), and on a wait timeout ("timed_out"). So
+// this ONE branch covers every way a stage can not deliver — skip it and a
+// bad stage silently feeds `null` onward. Only "rejected" proves nothing is
+// running, so it is the only status you may re-dispatch on blindly; on
+// "unknown"/"timed_out" a child may still be working, so retry only with an
+// idempotencyKey.
 if (research.status !== "completed") {
   // (fail() requires this step to declare canFail: true)
   return fail(`research-topic ${research.status}: ${String(research.error)}`);
@@ -453,6 +454,8 @@ const script = await ctx.sapiom.agents.run({
 // retries it to maxAttemptsPerStep first — a slug typo won't self-heal). On a
 // handle from launch({ ..., at }) there is no run until the scheduled time, so
 // status/wait (and therefore run) throw there too — pause on it, don't await.
+// The thrown error's childMayExist says whether a retry is safe: false when
+// the platform proved it created nothing, true when the outcome was ambiguous.
 ```
 
 Building a system in one session? Scaffold the stages as separate projects and deploy

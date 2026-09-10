@@ -184,7 +184,7 @@ describe("orchestrations dispatch rejection — `run` resolves it, `launch` thro
     });
   });
 
-  it("resolves a transport fault as code 'transport' with a null status", async () => {
+  it("resolves a transport fault as 'unknown', NOT 'rejected' — a child may exist", async () => {
     const fetch = (async () => {
       throw new TypeError("fetch failed");
     }) as unknown as typeof globalThis.fetch;
@@ -192,7 +192,11 @@ describe("orchestrations dispatch rejection — `run` resolves it, `launch` thro
 
     const result = await sapiom.agents.run({ definition: "enrich-lead" });
 
-    expect(result.status).toBe("rejected");
+    // The response can be lost AFTER the platform accepted the request, so this
+    // does not prove nothing was created. `"rejected"` would license a
+    // re-dispatch that duplicates a live child.
+    expect(result.status).toBe("unknown");
+    expect(result.executionId).toBeNull();
     expect(result.error).toEqual({
       code: "transport",
       message: "fetch failed",
@@ -201,7 +205,7 @@ describe("orchestrations dispatch rejection — `run` resolves it, `launch` thro
     });
   });
 
-  it("buckets any other non-2xx as code 'http' and keeps a non-JSON body as text", async () => {
+  it("resolves a 5xx as 'unknown' too — the row may have been created then failed", async () => {
     const sapiom = createClient({
       apiKey: "k",
       fetch: rejectingFetch(503, "upstream unavailable"),
@@ -209,11 +213,60 @@ describe("orchestrations dispatch rejection — `run` resolves it, `launch` thro
 
     const result = await sapiom.agents.run({ definition: "enrich-lead" });
 
-    expect(result.error).toMatchObject({
-      code: "http",
-      status: 503,
-      details: "upstream unavailable",
+    expect(result.status).toBe("unknown");
+    expect(result.error).toMatchObject({ code: "http", status: 503 });
+  });
+
+  it.each([
+    [404, "not_found"],
+    [400, "invalid_input"],
+    [401, "http"],
+    [403, "http"],
+    [422, "invalid_input"],
+  ])(
+    "resolves a %i as 'rejected' — the platform's answer proves nothing was created",
+    async (status, code) => {
+      const sapiom = createClient({
+        apiKey: "k",
+        fetch: rejectingFetch(status, { message: "no" }),
+      });
+
+      const result = await sapiom.agents.run({ definition: "d" });
+
+      expect(result.status).toBe("rejected");
+      expect(result.error).toMatchObject({ code, status });
+    },
+  );
+
+  it("marks the thrown error ambiguous or proven so a launch caller can tell", async () => {
+    const proven = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(404, { message: "no such slug" }),
     });
+    const ambiguous = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(503, "upstream unavailable"),
+    });
+
+    await expect(
+      proven.agents.launch({ definition: "d" }),
+    ).rejects.toMatchObject({
+      childMayExist: false,
+    });
+    await expect(
+      ambiguous.agents.launch({ definition: "d" }),
+    ).rejects.toMatchObject({ childMayExist: true });
+  });
+
+  it("keeps a non-JSON error body as raw text in `details`", async () => {
+    const sapiom = createClient({
+      apiKey: "k",
+      fetch: rejectingFetch(503, "upstream unavailable"),
+    });
+
+    const result = await sapiom.agents.run({ definition: "enrich-lead" });
+
+    expect(result.error).toMatchObject({ details: "upstream unavailable" });
   });
 
   it("`status !== 'completed'` is the single branch for a rejection", async () => {
@@ -428,6 +481,39 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
     expect(result.status).toBe("timed_out");
     expect(result.error).toMatchObject({ code: "timeout", status: null });
   });
+
+  it.each([408, 429])(
+    "rides out a transient %i on the status read instead of giving up",
+    async (transient) => {
+      let reads = 0;
+      const sapiom = createClient({
+        apiKey: "k",
+        fetch: launchThenStatus(async () => {
+          reads += 1;
+          if (reads === 1) {
+            return {
+              ok: false,
+              status: transient,
+              text: async () => "slow down",
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ status: "completed", output: { ok: true } }),
+            text: async () => "",
+          };
+        }),
+      });
+      const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+      const result = await handle.wait({ timeoutMs: 60_000, pollMs: 1 });
+
+      // One rate-limit answer must not end an hour-long wait.
+      expect(result.status).toBe("completed");
+      expect(reads).toBe(2);
+    },
+  );
 
   it("rides out a transient 5xx and resolves the terminal status", async () => {
     let reads = 0;

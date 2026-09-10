@@ -27,6 +27,13 @@
  *     handle, and a dispatch that produced no child has no handle to give: an
  *     object that cannot be paused on, whose `executionId` is null, would be
  *     lying about what it is. Catch it and `fail()` the step, or let it surface.
+ *
+ * Either way, only a refusal the platform PROVED is reported as "nothing was
+ * created" (`status: "rejected"`, or `childMayExist: false` on the thrown
+ * error). An ambiguous dispatch — a 5xx, or a response lost after the platform
+ * accepted the request — is reported as `"unknown"` / `childMayExist: true`,
+ * because a child may be running that we never learned the id of. Re-dispatch
+ * only on the proven case, or pass an `idempotencyKey`.
  */
 import {
   Transport,
@@ -66,23 +73,44 @@ const TERMINAL = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
 const MAX_CONSECUTIVE_POLL_FAULTS = 5;
 
 /**
+ * Statuses that PROVE the platform created no child, so re-dispatching is safe.
+ * Each is refused before (or instead of) any run row existing: no such
+ * definition, input the pre-gate rejected, a credential declined.
+ *
+ * Everything else is ambiguous. A 5xx may have created the row and then failed;
+ * a lost response (no status at all) may have been lost AFTER the platform
+ * accepted the request. Those resolve `"unknown"`, never `"rejected"`.
+ */
+const PROVES_NO_CHILD = new Set([400, 401, 403, 404, 422]);
+
+/**
+ * Transient poll statuses: the platform answered, but with "ask again". Both
+ * clear on their own, so they must not end a `wait()` the way a 404 does.
+ */
+const TRANSIENT_POLL_STATUSES = new Set([408, 429]);
+
+/**
  * Every status an {@link AgentRunResult} can carry: a run's own lifecycle, plus
  * the three outcomes where no child lifecycle could be reported.
  *
- *   - `"rejected"`  — the DISPATCH was refused, so NO RUN WAS EVER CREATED
- *                     (unknown slug, input the engine's pre-gate refuses, a
- *                     transport fault, a credential the platform declined).
+ *   - `"rejected"`  — the dispatch was refused in a way that PROVES no run was
+ *                     created (unknown slug, input the engine's pre-gate
+ *                     refuses, a credential the platform declined).
  *                     `executionId` is `null`. This is the only status on which
  *                     re-dispatching is safe: nothing is running. Reached from
  *                     `run` only — `launch` throws {@link AgentDispatchError}
  *                     for the same condition.
  *   - `"timed_out"` — the run was created and is likely still going; `wait()`
  *                     stopped polling at its `timeoutMs`. `executionId` is set.
- *   - `"unknown"`   — the run was created, but its status could not be read:
- *                     the read was refused (execution gone, credential
- *                     declined) or kept faulting. `executionId` is set and the
- *                     child MAY STILL BE RUNNING — check on it rather than
- *                     dispatching a second copy.
+ *   - `"unknown"`   — a child MAY EXIST and may still be running, so do not
+ *                     dispatch a second copy. Two ways to get here:
+ *                       · the run was created but its status could not be read
+ *                         (the read was refused, or kept faulting) —
+ *                         `executionId` is set, so you can check on it;
+ *                       · the DISPATCH itself was ambiguous (a 5xx, or a
+ *                         response lost after the platform accepted the
+ *                         request) — `executionId` is `null`, because no id was
+ *                         ever returned to us.
  *
  * All three are NON-completed statuses, which is all an author needs for the
  * common branch: `if (result.status !== "completed")` covers them alongside
@@ -160,6 +188,17 @@ export class AgentDispatchError extends Error {
   readonly status: number | null;
   /** Parsed platform response body (or its raw text); `null` when there was none. */
   readonly details: unknown;
+  /**
+   * Whether a child may have been created anyway. `false` only when the
+   * platform's answer PROVES it created nothing (unknown slug, refused input,
+   * declined credential — see {@link PROVES_NO_CHILD}).
+   *
+   * `true` means the outcome is ambiguous: a 5xx may have created the run row
+   * and then failed, and a lost response may have been lost after the platform
+   * accepted the request. DO NOT re-dispatch on `true` without an
+   * `idempotencyKey` — you may start a second copy of a live child.
+   */
+  readonly childMayExist: boolean;
 
   constructor(error: AgentRunError) {
     super(error.message);
@@ -167,6 +206,8 @@ export class AgentDispatchError extends Error {
     this.code = error.code;
     this.status = error.status;
     this.details = error.details;
+    this.childMayExist =
+      error.status === null || !PROVES_NO_CHILD.has(error.status);
   }
 
   /** This rejection as the `error` of a non-completed {@link AgentRunResult}. */
@@ -205,9 +246,11 @@ export interface AgentRunSpec {
  */
 export interface AgentRunResult {
   /**
-   * The child run's id. `null` only when no run exists to name: a rejected
-   * dispatch (`status: "rejected"`). Set on every other status, `"unknown"` and
-   * `"timed_out"` included — the run is out there and can be checked on.
+   * The child run's id, or `null` when no id was ever returned to us: a
+   * `"rejected"` dispatch (nothing was created) or an ambiguous one
+   * (`"unknown"` — something may have been created, but we never learned its
+   * id). Set on every other status, including a `"unknown"` that came from a
+   * failed status read and every `"timed_out"`.
    */
   executionId: string | null;
   status: AgentRunStatus;
@@ -502,13 +545,18 @@ export async function launch(
           // `"rejected"`: an author who read that as "nothing was dispatched"
           // would start a second copy of a live child.
           //
-          // A 4xx won't cure itself (execution gone, credential declined), so
-          // give up at once. A 5xx or transport fault may be a blip, so ride a
-          // few out — but bounded, because a real outage would otherwise burn
-          // the whole `timeoutMs` on doomed requests.
+          // Most 4xx won't cure themselves (execution gone, credential
+          // declined), so give up at once. 408/429 are the exceptions — the
+          // platform is saying "ask again" — and a 5xx or transport fault may
+          // be a blip, so ride those out. Bounded either way, because a real
+          // outage would otherwise burn the whole `timeoutMs` on doomed
+          // requests.
+          const permanent =
+            pollError.status !== null &&
+            pollError.status < 500 &&
+            !TRANSIENT_POLL_STATUSES.has(pollError.status);
           const hopeless =
-            (pollError.status !== null && pollError.status < 500) ||
-            consecutiveFaults >= MAX_CONSECUTIVE_POLL_FAULTS;
+            permanent || consecutiveFaults >= MAX_CONSECUTIVE_POLL_FAULTS;
           if (hopeless) {
             return {
               executionId,
@@ -569,7 +617,12 @@ export async function run(
     if (error instanceof AgentDispatchError) {
       return {
         executionId: null,
-        status: "rejected",
+        // `"rejected"` promises the caller that nothing is running, so it is
+        // reserved for a refusal the platform's answer PROVES. An ambiguous
+        // dispatch (5xx, or a response lost after the platform accepted the
+        // request) may have created a child we never learned the id of —
+        // `"unknown"` says exactly that, and warns off a blind re-dispatch.
+        status: error.childMayExist ? "unknown" : "rejected",
         output: null,
         error: error.toRunError(),
       };

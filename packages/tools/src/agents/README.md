@@ -55,14 +55,14 @@ const useResult = defineStep({
 
 - **`run` reports failure as data; `launch` throws.** They return different kinds of thing, so a refused dispatch reaches you differently. `run` returns a result already discriminated on `status`, so `if (result.status !== "completed")` is the only check it needs — no try/catch, whatever went wrong:
 
-  | `status`      | What happened                                                                                                                             | `executionId` |
-  | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-  | `"completed"` | The run finished; read `output`.                                                                                                          | set           |
-  | `"failed"`    | The run itself failed; `error` is what the child reported.                                                                                | set           |
-  | `"cancelled"` | The run was cancelled.                                                                                                                    | set           |
-  | `"rejected"`  | The **dispatch** was refused, so **no run was ever created** — unknown slug, `input` the engine's pre-gate refused, or a transport fault. | `null`        |
-  | `"unknown"`   | The run WAS created but its status couldn't be read — the read was refused, or kept faulting. **The child may still be running.**         | set           |
-  | `"timed_out"` | `wait` hit its `timeoutMs` while the run was still going.                                                                                 | set           |
+  | `status`      | What happened                                                                                                                                                                                                                                                                           | `executionId` |
+  | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+  | `"completed"` | The run finished; read `output`.                                                                                                                                                                                                                                                        | set           |
+  | `"failed"`    | The run itself failed; `error` is what the child reported.                                                                                                                                                                                                                              | set           |
+  | `"cancelled"` | The run was cancelled.                                                                                                                                                                                                                                                                  | set           |
+  | `"rejected"`  | The dispatch was refused in a way that **proves no run was created** — unknown slug (404), `input` the engine's pre-gate refused (400/422), a declined credential (401/403).                                                                                                            | `null`        |
+  | `"unknown"`   | **A child may exist and may still be running.** Either the run was created and its status couldn't be read (`executionId` set), or the dispatch itself was ambiguous — a 5xx, or a response lost after the platform accepted the request (`executionId` `null`, since no id came back). | see left      |
+  | `"timed_out"` | `wait` hit its `timeoutMs` while the run was still going.                                                                                                                                                                                                                               | set           |
 
   On `"rejected"`, `"unknown"` and `"timed_out"`, `error` is an `AgentRunError`: `{ code, message, status, details }`. `code` is the coarse bucket (`"not_found"` for an unknown slug or a missing run, `"invalid_input"` for refused input, `"http"`, `"transport"`, and `"timeout"` — which pairs only with `"timed_out"`), and `details` keeps the platform's own response body, so its stable code and any validation issues survive.
 
@@ -70,7 +70,11 @@ const useResult = defineStep({
 
   Uncaught, it's an ordinary step throw, so the engine retries it up to `maxAttemptsPerStep` before failing the run. A refused dispatch is deterministic and won't self-heal, so catch it rather than letting the retry cap burn.
 
-- **Only `"rejected"` is safe to re-dispatch.** It is the one outcome that guarantees nothing is running. `"unknown"` and `"timed_out"` both carry a real `executionId` for a child that may still be working — re-running the slug there gives you two copies. If you retry on those, pass an `idempotencyKey`.
+  The error's **`childMayExist`** draws the same distinction the `"rejected"` / `"unknown"` split draws for `run`: `false` when the platform proved it created nothing, `true` when the outcome was ambiguous (a 5xx, or a lost response). Retry only on `false`, or with an `idempotencyKey`.
+
+- **Only `"rejected"` is safe to re-dispatch.** It is the one outcome that guarantees nothing is running, and it is deliberately narrow: a refusal only counts when the platform's answer proves it created nothing. A lost response or a 5xx does **not** prove that — the platform may have accepted the request and created the child before the response went missing — so those resolve `"unknown"`, not `"rejected"`.
+
+  `"unknown"` and `"timed_out"` both name a child that may still be working. Re-running the slug there gives you two copies; pass an `idempotencyKey` if you retry on them. On an `"unknown"` from an ambiguous dispatch there is no `executionId` to check, so an `idempotencyKey` on the original call is the only thing that makes a retry safe — worth setting up front on any dispatch you intend to retry.
 
 - **Addressed by slug.** `definition` is the deployed agent's slug — its stable handle. `input` is passed to its entry step.
 

@@ -17,19 +17,28 @@ The two entry points now report it according to what each returns:
   `status`, and a coordinator treats "the child failed" and "the child never started"
   as one fact, so `if (result.status !== "completed")` stays the single branch and no
   try/catch is needed.
+
+  `"rejected"` is deliberately narrow: it promises nothing is running, so it is used
+  only when the platform's answer proves nothing was created (404, 400/422, 401/403).
+  A 5xx, or a response lost after the platform accepted the request, may have created
+  a child whose id never came back — those resolve `"unknown"` with a `null`
+  `executionId`, so re-dispatch guidance stays safe.
 - **`launch` throws `AgentDispatchError`** (exported from the package root, with
   `.code`, `.status`, `.details`, and `.toRunError()`). It owes the caller a pausable
   handle, and a dispatch that created no child has none — a handle with a null
   `executionId` that cannot be paused on would misrepresent itself. Catch it and
   `fail()` the step. Uncaught it is an ordinary step throw, so it still retries to the
   cap; making it terminal-without-retry needs the engine's non-retryable error set to
-  admit it, which is separate work.
+  admit it, which is separate work. The error's `childMayExist` draws the same
+  proven-vs-ambiguous distinction as the `"rejected"`/`"unknown"` split, so a `launch`
+  caller can tell whether a retry is safe.
 
 `wait()` no longer throws. Hitting `timeoutMs` resolves `status: "timed_out"`; a status
 read the platform refuses, or one that keeps faulting, resolves `status: "unknown"`.
 Both keep `executionId`, because the run exists and can be checked on later. A
-transient 5xx or transport fault is ridden out for a few consecutive polls before
-`"unknown"`, rather than spending the whole `timeoutMs` on doomed requests.
+transient 5xx, 408, 429 or transport fault is ridden out for a few consecutive polls
+before `"unknown"`, rather than spending the whole `timeoutMs` on doomed requests — and
+a single rate-limit answer no longer ends an hour-long wait.
 
 Of the three new statuses only `"rejected"` means nothing is running, so it is the only
 one on which re-dispatching is safe. `"unknown"` and `"timed_out"` name a child that may
@@ -59,4 +68,8 @@ defaults, matching `models.coding.launch`. It previously built a completed run
 unconditionally, so the try/catch the docs require was impossible to cover in a local
 test. A stubbed `{ status: "rejected" }` throws from `launch` and resolves from `run`,
 mirroring the real split; `{ status: "failed" }` covers a child that ran and failed, and
-the resume payload a paused step receives follows the stubbed status.
+the resume payload a paused step receives follows the stubbed status. A partial
+`{ status: "rejected" }` fills in a real `AgentRunError` (so `result.error.code` reads
+the same under the stub as in production), a function override returning a promise is
+awaited, and a delayed `launch({ at })` returns production's shape — `executionId: null`
+with a trigger correlation id.

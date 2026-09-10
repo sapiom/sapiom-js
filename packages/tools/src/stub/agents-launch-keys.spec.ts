@@ -96,12 +96,19 @@ describe("createStubClient().agents — launch override keys", () => {
     const rejected = createStubClient({
       overrides: { "agents.run": { status: "rejected" } },
     });
-    // A partial stub still yields every field — the resume payload needs them.
+    // A partial stub still yields every field — the resume payload needs them —
+    // and the public contract says a rejected result carries an AgentRunError,
+    // so `result.error.code` must read the same way it does in production.
     expect(await rejected.agents.run({ definition: "typo-slug" })).toEqual({
       executionId: null,
       status: "rejected",
       output: null,
-      error: null,
+      error: {
+        code: "transport",
+        message: "stubbed dispatch rejection",
+        status: null,
+        details: null,
+      },
     });
 
     const failed = createStubClient({
@@ -131,6 +138,38 @@ describe("createStubClient().agents — launch override keys", () => {
       definition: "enrich-lead",
       error: { message: "nope" },
     });
+  });
+
+  it("awaits an override function that returns a promise", async () => {
+    const stub = createStubClient({
+      overrides: {
+        // Supported everywhere else in the stub, so it must work here: an
+        // unawaited promise reads as `{}` and silently becomes "completed".
+        "agents.run": async () => ({
+          status: "failed",
+          error: { message: "async stub" },
+        }),
+      },
+    });
+
+    const result = await stub.agents.run({ definition: "enrich-lead" });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toEqual({ message: "async stub" });
+  });
+
+  it("mirrors production's delayed-dispatch handle for `at` (null id, trigger correlation)", async () => {
+    const stub = createStubClient();
+
+    const handle = await stub.agents.launch({
+      definition: "enrich-lead",
+      at: "2099-01-01T00:00:00.000Z",
+    });
+
+    // Production returns no executionId until the schedule fires and correlates
+    // on the trigger, so a local run of a scheduled child must not see a run id.
+    expect(handle.executionId).toBeNull();
+    expect(handle.dispatch.correlationId).toMatch(/^trigger-/);
   });
 
   it("registers no resume payload for a rejected launch (nothing will ever fire)", async () => {

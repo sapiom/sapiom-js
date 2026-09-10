@@ -585,15 +585,23 @@ const LIFECYCLE_STATUSES = new Set<string>([
   "cancelled",
 ]);
 
+/** The rejection a partial `{ status: "rejected" }` stub stands in for. */
+const STUB_DISPATCH_REJECTION: AgentRunError = {
+  code: "transport",
+  message: "stubbed dispatch rejection",
+  status: null,
+  details: null,
+};
+
 function stubAgentRunResult(
   resolved: unknown,
   generatedId: string,
 ): AgentRunResult {
   const base = (resolved ?? {}) as Partial<AgentRunResult>;
   const status = base.status ?? "completed";
+  const namesNoRun = status === "rejected" || status === "unknown";
   return {
-    executionId:
-      base.executionId ?? (status === "rejected" ? null : generatedId),
+    executionId: base.executionId ?? (namesNoRun ? null : generatedId),
     status,
     output:
       base.output !== undefined
@@ -601,7 +609,11 @@ function stubAgentRunResult(
         : status === "completed"
           ? {}
           : null,
-    error: base.error ?? null,
+    // The public contract says a rejected result carries an AgentRunError, so a
+    // partial stub must too — otherwise `result.error.code` reads fine against
+    // production and throws under the stub.
+    error:
+      base.error ?? (status === "rejected" ? STUB_DISPATCH_REJECTION : null),
   };
 }
 
@@ -1052,12 +1064,16 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     agents: {
-      run: (spec) =>
-        Promise.resolve(
-          stubAgentRunResult(
+      // An override may be a function returning a PROMISE (every other
+      // capability supports that, since they hand `r()`'s value straight back).
+      // Await it before normalizing, or a promise reads as `{}` — no `status` —
+      // and silently becomes the completed default.
+      run: async (spec) =>
+        stubAgentRunResult(
+          await Promise.resolve(
             r("agents.run", [spec], () => ({ status: "completed" as const })),
-            `stub-exec-${++launchSeq}`,
           ),
+          `stub-exec-${++launchSeq}`,
         ),
       launch: async (spec) => {
         const generatedId = `stub-exec-${++launchSeq}`;
@@ -1068,9 +1084,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // try/catch the README and the authoring skill both require was
         // impossible to cover in a local run.
         const result = stubAgentRunResult(
-          r(dispatchedKeys("agents"), [spec], () => ({
-            status: "completed" as const,
-          })),
+          await Promise.resolve(
+            r(dispatchedKeys("agents"), [spec], () => ({
+              status: "completed" as const,
+            })),
+          ),
           generatedId,
         );
 
@@ -1079,20 +1097,25 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // exercises the same try/catch the author writes against production.
         if (result.status === "rejected") {
           throw new AgentDispatchError(
-            (result.error ?? {
-              code: "transport",
-              message: "stubbed dispatch rejection",
-              status: null,
-              details: null,
-            }) as AgentRunError,
+            (result.error ?? STUB_DISPATCH_REJECTION) as AgentRunError,
           );
         }
 
-        const executionId = result.executionId ?? generatedId;
+        // A DELAYED dispatch (`spec.at`) has no child until the scheduled time,
+        // so production returns `executionId: null` and correlates on the
+        // trigger id, not a run id. Mirror both, or a local run of a scheduled
+        // child takes a different branch than the deployed one.
+        const delayed = spec.at !== undefined;
+        const executionId = delayed
+          ? null
+          : (result.executionId ?? generatedId);
+        const correlationId = delayed
+          ? `trigger-stub-${generatedId}`
+          : (result.executionId ?? generatedId);
         const handle: AgentRunHandle = {
           executionId,
           dispatch: {
-            correlationId: executionId,
+            correlationId,
             resultSignal: AGENTS_RESULT_SIGNAL,
           },
           // `status()` reports a LIFECYCLE status. `"unknown"`/`"timed_out"` are
@@ -1112,11 +1135,14 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // completed|failed only, so a stub of any OTHER non-completed status
         // resumes as `failed` — the branch an author writes for a bad child.
         const at = "2099-01-01T00:00:00.000Z";
+        // The payload's executionId is required, and a delayed child's real id
+        // isn't knowable at launch — use the correlation key the resume lands on.
+        const payloadExecutionId = executionId ?? correlationId;
         return dispatchable(handle, opts.signals, () =>
           result.status === "completed"
             ? {
                 status: "completed" as const,
-                executionId,
+                executionId: payloadExecutionId,
                 definition: spec.definition,
                 version: "stub",
                 output: result.output,
@@ -1125,7 +1151,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               }
             : {
                 status: "failed" as const,
-                executionId,
+                executionId: payloadExecutionId,
                 definition: spec.definition,
                 version: "stub",
                 error: result.error,
