@@ -31,7 +31,9 @@ Sapiom regardless of your SDK version: one-off call vs agent, the capability cat
 lifetime, trigger kinds, App Links, which capability calls an LLM, composing deployed agents,
 vocabulary — are **served live** from <https://api.sapiom.ai/v1/agents/authoring-rules> and
 only summarized here; each such chapter is bracketed by `section:` markers naming the served
-section it points at. When a summary below and the served text disagree, the served text wins.
+section it points at. A pointer's `#name` fragment names that section's marker (an HTML
+comment, `section: name`) in the served text — the endpoint serves raw Markdown, so search for
+the marker rather than expecting a browser to jump to it. When a summary below and the served text disagree, the served text wins.
 This copy was written against release 1.0 of it; `sapiom_dev_agents_check` warns when the
 served copy differs.
 
