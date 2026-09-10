@@ -12,6 +12,8 @@ export function AssistantPane({
   authRevision,
   terminalRevision,
   drafts,
+  onSignIn,
+  onOpenSettings,
   children,
 }: {
   sessionId: string;
@@ -19,6 +21,8 @@ export function AssistantPane({
   authRevision: number;
   terminalRevision: number;
   drafts: ChatDraftStore;
+  onSignIn: () => void;
+  onOpenSettings: () => void;
   children: ReactNode;
 }) {
   const [enabled, setEnabled] = useState(false);
@@ -110,6 +114,9 @@ export function AssistantPane({
             harnessSessionId={sessionId}
             bootToken={bootToken}
             draft={draft}
+            onSignIn={onSignIn}
+            onOpenSettings={onOpenSettings}
+            onOpenTerminal={() => setMode("Terminal")}
           />
         ) : (
           children

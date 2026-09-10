@@ -68,6 +68,16 @@ access poll retains the open draft for at most 60 seconds after the last success
 explicit revocation/sign-out takes effect immediately when observed. The host
 continues enforcing its own capability expiry independently.
 
+The current `@assistant-ui/react-opencode` integration stays behind
+`OpenCodeChat`, the host-to-UI adapter. The host exposes only the shared,
+strictly parsed transport-error contract; the adapter selects trusted static
+copy and maps its bounded actions to the existing sign-in, Settings, Terminal,
+or reconnect surfaces. Replacing the pinned UI library means replacing that
+adapter, not changing the host association/runtime protocol or adopting native
+events directly. Confirmed missing native history leaves the Studio session and
+record intact and opens Terminal; it never fabricates Continue/Resume or a new
+native conversation.
+
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
 Studio adds the Sapiom key only when forwarding to the configured services.
