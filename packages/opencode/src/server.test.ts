@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   evaluateTrackedClosure,
+  evaluateWindowsCleanup,
   OpenCodeShutdownError,
   OpenCodeStartupError,
   startOpenCodeServer,
@@ -36,6 +37,12 @@ const options = (config: Record<string, unknown> = {}) => ({
 });
 
 describe("packaged OpenCode runtime", () => {
+  it("distinguishes Windows no-child spawn failure from post-spawn exit", () => {
+    expect(evaluateWindowsCleanup(undefined, undefined)).toBe("no-child");
+    expect(evaluateWindowsCleanup(42, null)).toBe("running");
+    expect(evaluateWindowsCleanup(42, 1)).toBe("uncertain");
+  });
+
   it("rejects a zombie before positive descendant fencing", () => {
     const tracked = new Map([
       ["20:birth-20", { pid: 20, birthId: "birth-20" }],
