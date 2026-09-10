@@ -46,7 +46,15 @@ The Studio host refreshes the internal Assistant capability at most every 30
 seconds and expires an enabled decision within 60 seconds. Missing identity,
 offline startup, unsupported backends, and unavailable flags leave it off.
 These access checks are independent of optional telemetry and never prevent
-ordinary Terminal startup. Only the resolved boolean is exposed to the browser.
+ordinary Terminal startup. The browser receives only the resolved boolean and a
+random, process-memory `authorityRevision`; it never receives principal fields,
+credentials, identity hashes, or grant diagnostics. The revision stays stable
+through polling, reconnects, transient retention, and renewed leases for the
+same authority. A verified principal crossover or actual revocation, denial,
+expiry, or sign-out rotates it before the new state is observable. Disabled
+responses carry the current retirement barrier, and repeated disabled polls do
+not rotate it. Browser draft stores use this opaque boundary to prevent text
+from crossing authorities without persisting it.
 
 Eligible internal users see a **Terminal | Assistant** switch, with Terminal
 selected initially. Assistant sends prompts and streams Sapiom responses in the
