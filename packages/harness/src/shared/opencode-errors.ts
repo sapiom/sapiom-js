@@ -52,7 +52,8 @@ const fixedFailures = {
   },
   access_expired: {
     code: "access_expired",
-    message: "Assistant access expired. Check your account access and try again.",
+    message:
+      "Assistant access expired. Check your account access and try again.",
     retryable: false,
     action: "open_settings",
   },
@@ -144,9 +145,7 @@ export function openCodeTransportFailure(
   reason?: OpenCodeStartupReason,
 ): OpenCodeTransportFailure {
   if (code !== "runtime_start_failed") return { ...fixedFailures[code] };
-  const definition = reason
-    ? startupFailures[reason]
-    : genericStartup;
+  const definition = reason ? startupFailures[reason] : genericStartup;
   return {
     code,
     ...definition,
@@ -168,9 +167,7 @@ export function parseOpenCodeTransportFailure(
   const keys = Object.keys(candidate);
   if (
     !keys.every((key) =>
-      ["code", "message", "retryable", "action", "reason"].includes(
-        key,
-      ),
+      ["code", "message", "retryable", "action", "reason"].includes(key),
     ) ||
     !openCodeTransportErrorCodes.includes(
       candidate.code as OpenCodeTransportErrorCode,
