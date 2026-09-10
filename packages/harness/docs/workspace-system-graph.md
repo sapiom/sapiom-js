@@ -1,4 +1,43 @@
-# Project system graph HTTP contract
+# Retired Project system graph HTTP contract
+
+**Breaking for HTTP clients:** current Studio servers retire the following
+routes. Authenticated requests return `410` with `error: "legacy_graph_retired"`
+before any scope lookup, graph read, refresh, navigation or watcher activation:
+
+```http
+GET  /api/workspaces/:workspaceKey/system-graph
+POST /api/workspaces/:workspaceKey/system-graph/refresh
+GET  /api/workspaces/:workspaceKey/system-graph/navigation
+```
+
+The boot-token gate still runs first: send `X-Harness-Token`; missing or invalid
+tokens return `401`. Authenticated unknown workspace keys also receive the
+retirement response. Current servers do not emit `system-graph.changed` events
+or return the historical snapshots/cache headers described below.
+
+## Migration to Agent Map
+
+Read `GET /api/state` for server-issued `studioProjects[].projectId` values and
+their exact `workspaceScopes[].projectId` associations. A `workspaceKey` is not
+a project ID; do not derive an ID from a path, name or legacy graph key.
+
+Use `GET /api/projects/:projectId/agent-map/workspace` to read the durable map
+and shared proposal. To navigate an implementation-backed node, use
+`GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` with its
+exact map node ID. Ordinary session tabs and per-agent Canvas remain available.
+These APIs use the same boot-token protection and are not drop-in replacements
+for the process-memory graph snapshot or its revision-matched navigation.
+
+If the catalog cannot resolve a project's identity, keep its conversation and
+selection, show an unavailable-map retry, and re-read the catalog. Do not call
+the retired routes or start a session as a fallback. Current Studio's
+**Reload projects** action provides this recovery; stale clients must upgrade
+to a release containing both the server retirement and client recovery.
+
+## Historical contract — older servers only
+
+The remainder documents the retired protocol for older servers. Its success
+responses, lifecycle states and events do not describe the current server.
 
 Agent Studio exposes a local, read-only dependency graph for each opened
 Project. The route keeps its historical `/workspaces/` name, but a
