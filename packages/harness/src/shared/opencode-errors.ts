@@ -22,16 +22,16 @@ export type OpenCodeStartupReason = (typeof openCodeStartupReasons)[number];
 
 export type OpenCodeTransportAction =
   | "sign_in"
-  | "open_account"
-  | "reconnect"
-  | "open_session";
+  | "open_settings"
+  | "open_terminal"
+  | "reconnect";
 
 export interface OpenCodeTransportFailure {
   code: OpenCodeTransportErrorCode;
   message: string;
   retryable: boolean;
   action: OpenCodeTransportAction;
-  startupReason?: OpenCodeStartupReason;
+  reason?: OpenCodeStartupReason;
 }
 
 export interface OpenCodeTransportErrorBody {
@@ -48,13 +48,13 @@ const fixedFailures = {
     code: "access_denied",
     message: "Assistant access is not available for this account.",
     retryable: false,
-    action: "open_account",
+    action: "open_settings",
   },
   access_expired: {
     code: "access_expired",
     message: "Assistant access expired. Check your account access and try again.",
     retryable: false,
-    action: "open_account",
+    action: "open_settings",
   },
   authentication_required: {
     code: "authentication_required",
@@ -73,7 +73,7 @@ const fixedFailures = {
     message:
       "The saved Assistant conversation is unavailable. The Studio session is still available.",
     retryable: false,
-    action: "open_session",
+    action: "open_terminal",
   },
   transport_unavailable: {
     code: "transport_unavailable",
@@ -137,20 +137,20 @@ export function openCodeTransportFailure(
 ): OpenCodeTransportFailure;
 export function openCodeTransportFailure(
   code: "runtime_start_failed",
-  startupReason?: OpenCodeStartupReason,
+  reason?: OpenCodeStartupReason,
 ): OpenCodeTransportFailure;
 export function openCodeTransportFailure(
   code: OpenCodeTransportErrorCode,
-  startupReason?: OpenCodeStartupReason,
+  reason?: OpenCodeStartupReason,
 ): OpenCodeTransportFailure {
   if (code !== "runtime_start_failed") return { ...fixedFailures[code] };
-  const definition = startupReason
-    ? startupFailures[startupReason]
+  const definition = reason
+    ? startupFailures[reason]
     : genericStartup;
   return {
     code,
     ...definition,
-    ...(startupReason ? { startupReason } : {}),
+    ...(reason ? { reason } : {}),
   };
 }
 
@@ -168,7 +168,7 @@ export function parseOpenCodeTransportFailure(
   const keys = Object.keys(candidate);
   if (
     !keys.every((key) =>
-      ["code", "message", "retryable", "action", "startupReason"].includes(
+      ["code", "message", "retryable", "action", "reason"].includes(
         key,
       ),
     ) ||
@@ -181,21 +181,28 @@ export function parseOpenCodeTransportFailure(
   let expected: OpenCodeTransportFailure;
   if (code === "runtime_start_failed") {
     if (
-      candidate.startupReason !== undefined &&
+      candidate.reason !== undefined &&
       !openCodeStartupReasons.includes(
-        candidate.startupReason as OpenCodeStartupReason,
+        candidate.reason as OpenCodeStartupReason,
       )
     )
       return null;
     expected = openCodeTransportFailure(
       code,
-      candidate.startupReason as OpenCodeStartupReason | undefined,
+      candidate.reason as OpenCodeStartupReason | undefined,
     );
   } else {
-    if (candidate.startupReason !== undefined) return null;
+    if (candidate.reason !== undefined) return null;
     expected = openCodeTransportFailure(code);
   }
-  return JSON.stringify(candidate) === JSON.stringify(expected) ? expected : null;
+  return keys.length === Object.keys(expected).length &&
+    candidate.code === expected.code &&
+    candidate.message === expected.message &&
+    candidate.retryable === expected.retryable &&
+    candidate.action === expected.action &&
+    candidate.reason === expected.reason
+    ? expected
+    : null;
 }
 
 export function parseOpenCodeTransportErrorBody(
