@@ -44,6 +44,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -67,6 +68,7 @@ import type {
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";
+import { createGraphViewportStore } from "./lib/graph-viewport";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ConnectivityBanner,
@@ -287,6 +289,12 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  // A project map remounts when browsing another project or agent. Keep its
+  // viewport for this signed-in UI lifetime, without persisting map data.
+  const agentMapViewportStore = useMemo(
+    createGraphViewportStore,
+    [harness.authRevision],
+  );
   const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
     () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
   );
@@ -3676,6 +3684,7 @@ export const App = (): JSX.Element => {
               ) : studioView?.altitude === "map" ? (
                 <AgentMapPane
                   key={`${studioView.projectId}:${harness.authRevision}`}
+                  viewportStore={agentMapViewportStore}
                   visible={!rightCollapsed && shownTab === "canvas"}
                   api={harness.api}
                   workflows={state.workflows}
