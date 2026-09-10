@@ -278,7 +278,13 @@ export class OpenCodeBridge {
           ? { "x-sapiom-api-key": key, "x-sapiom-model": this.model }
           : { "x-api-key": key }),
       });
-      for (const name of ["mcp-session-id", "mcp-protocol-version"]) {
+      // Queued MCP tools close the POST stream and deliver results through
+      // GET replay. Its cursor must survive the credential bridge.
+      for (const name of [
+        "mcp-session-id",
+        "mcp-protocol-version",
+        "last-event-id",
+      ]) {
         if (service === "mcp" && req.header(name))
           headers.set(name, req.header(name)!);
       }
