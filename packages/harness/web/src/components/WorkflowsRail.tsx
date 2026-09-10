@@ -36,6 +36,7 @@ import { PlanCard } from "./PlanCard";
 import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
 import { describeUpdateOutcome, getDesktopBridge } from "../lib/desktop";
+import { chooseProjectFolder } from "../lib/folder-step";
 import {
   LiveMark,
   ProjectRow,
@@ -1006,7 +1007,28 @@ export function WorkflowsRail({
             data-tooltip="Add a project"
             onClick={() => {
               setHistoryOpen(false);
-              setStartMode("open");
+              // THE BRIDGE DECIDES WHETHER OUR DIALOG OPENS AT ALL, not what
+              // renders inside it. `FolderField` already feature-detects
+              // `chooseDirectory`, but one level too deep: it used the answer
+              // to swap a `<datalist>`, so a desktop user still got a modal
+              // wrapping a text input with the OS browser offered as a button
+              // inside it. In `open` mode this dialog asks one question — which
+              // folder — and Finder answers it better than we do.
+              void chooseProjectFolder({
+                chooseDirectory: getDesktopBridge()?.chooseDirectory ?? null,
+                // The dialog's own precedence for where to start.
+                startingAt: projectRoot ?? launchDir,
+                openDialog: () => setStartMode("open"),
+                onPicked: (root) => {
+                  void onOpenProject(root).catch((err: unknown) => {
+                    onToast(
+                      err instanceof Error
+                        ? err.message
+                        : "Couldn't open that folder.",
+                    );
+                  });
+                },
+              });
             }}
           >
             <Icon name="FolderPlus" size={14} />
