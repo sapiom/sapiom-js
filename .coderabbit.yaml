@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+# Preserve the organization's review settings unless overridden below.
+inheritance: true
+
+reviews:
+  auto_review:
+    enabled: true
+    # Stacked PRs target the preceding feature branch instead of main.
+    base_branches:
+      - ".*"
