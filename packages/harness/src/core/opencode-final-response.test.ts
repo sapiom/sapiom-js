@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostedOpenCode } from "./opencode-host.js";
@@ -51,6 +51,27 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(hosted.stateRoot, { recursive: true, force: true });
+});
+
+it.each([
+  ["ses_nested/path", "msg_empty"],
+  ["ses_test", "msg_nested/path"],
+  ["ses_test", "msg_nested\\path"],
+  ["ses_test", "msg_%2foutside"],
+  ["ses_test", "msg_"],
+  ["ses_test", `msg_${"a".repeat(129)}`],
+  ["ses_test", ["msg_empty"]],
+])("rejects invalid recovery IDs before storage or native requests: %j / %j", async (sessionId, messageId) => {
+  await expect(
+    new OpenCodeFinalResponse().recover(
+      hosted,
+      sessionId as string,
+      messageId as string,
+    ),
+  ).rejects.toThrow("Invalid Assistant recovery identifiers");
+  expect(await readdir(hosted.stateRoot)).toEqual([]);
+  expect(hosted.server.fetchJson).not.toHaveBeenCalled();
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 it("coalesces recovery and never resends it after a host restart", async () => {
