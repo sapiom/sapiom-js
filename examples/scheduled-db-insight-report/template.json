@@ -110,6 +110,13 @@
       }
     }
   ],
+  "app": {
+    "name": "Insight report dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4173,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/scheduled-db-insight-report/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [

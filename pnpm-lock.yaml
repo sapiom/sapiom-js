@@ -29,6 +29,9 @@ importers:
       eslint:
         specifier: ^8.57.0
         version: 8.57.1
+      playwright:
+        specifier: ^1.61.0
+        version: 1.61.1
       prettier:
         specifier: ^3.2.5
         version: 3.8.4

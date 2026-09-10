@@ -460,14 +460,15 @@ offending word.
 
 ### `examples/<slug>/template.json` — the rich manifest (detail page)
 
-| Field             | Shows up as                      | Write it as                                                                                                                     |
-| ----------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `whatItDoes`      | "What it does" (the card's lead) | ≤320 chars, about three sentences, **verb first**. "Create a cited account brief…", never "For turning a…". See "What it does". |
-| `longDescription` | "About"                          | 2–4 short paragraphs. The fuller story. Plain first; name the mechanism once, casually.                                         |
-| `useCases`        | "Use cases" (chips)              | Exactly 3, each ≤40 chars. Short noun phrases — "Relationship graph", not a sentence.                                           |
-| `notes`           | "Notes"                          | **How to run it.** Easy path first (Use this template), advanced path second. See "How to run it".                              |
-| `examples`        | "Examples"                       | Real `{ input, output }` pairs. Keep these accurate to the code; don't invent fields.                                           |
-| `author`          | "By …"                           | `{ "name": "Sapiom", "url": "https://sapiom.ai/" }` for first-party.                                                            |
+| Field             | Shows up as                          | Write it as                                                                                                                                                                                                  |
+| ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `whatItDoes`      | "What it does" (the card's lead)     | ≤320 chars, about three sentences, **verb first**. "Create a cited account brief…", never "For turning a…". See "What it does".                                                                              |
+| `longDescription` | "About"                              | 2–4 short paragraphs. The fuller story. Plain first; name the mechanism once, casually.                                                                                                                      |
+| `useCases`        | "Use cases" (chips)                  | Exactly 3, each ≤40 chars. Short noun phrases — "Relationship graph", not a sentence.                                                                                                                        |
+| `notes`           | "Notes"                              | **How to run it.** Easy path first (Use this template), advanced path second. See "How to run it".                                                                                                           |
+| `examples`        | "Examples"                           | Real `{ input, output }` pairs. Keep these accurate to the code; don't invent fields.                                                                                                                        |
+| `author`          | "By …"                               | `{ "name": "Sapiom", "url": "https://sapiom.ai/" }` for first-party.                                                                                                                                         |
+| `app`             | The dashboard card, and the App Link | Only if your template **ships a dashboard**. `{ name, entry, start, port, build?, preview }` — see [Shipping a dashboard](#app-shipping-a-dashboard-optional) below. Most templates have none; leave it out. |
 
 #### What the template needs to run (all optional, all machine-read)
 
@@ -505,6 +506,88 @@ labelled "sample" that really posts to Slack is a hazard. A real resource with r
 means a real run — nothing pretends.
 
 `pnpm examples:check` fails if a declared `seed` file isn't in the example directory.
+
+#### `app`: shipping a dashboard (optional)
+
+A template can ship a **dashboard** — a small web page, published beside the agent when
+someone clones the template, that shows what the agent produced. Declare it with one `app`
+block in `template.json`; put its source in a directory of your template; commit a screenshot.
+That is the whole contract. The template page shows the screenshot as a card ("Ships with a
+dashboard") before anyone clones, and on clone Sapiom publishes the source as an App Link the
+user can open. A template with no `app` block has no dashboard region — nothing else changes.
+
+```json
+"app": {
+  "name": "Insight report dashboard",
+  "entry": "app/",
+  "start": "node server.mjs",
+  "port": 4173,
+  "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/scheduled-db-insight-report/preview.png"
+}
+```
+
+| Field     | Write it as                                                                                                                                                                                                                                                          |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`    | The **dashboard's** name, not the template's — it is the card's heading under the template's title. "Insight report dashboard", not "Scheduled Metrics Report".                                                                                                      |
+| `entry`   | The directory holding the dashboard source, relative to your template directory, **with a trailing slash** (`"app/"`). It is the subtree Sapiom uploads and the working directory `build` and `start` run in. Must exist; `pnpm examples:check` fails if it doesn't. |
+| `start`   | The command that serves the page, run inside `entry`. It must listen on `port` and keep running. Because it runs inside `entry`, write `node server.mjs`, not `node app/server.mjs`.                                                                                 |
+| `port`    | The TCP port `start` listens on. Pick something that is not `3000` — that is where a local Sapiom backend usually is, and a collision there means your screenshot is of the wrong app.                                                                               |
+| `build`   | Optional: a command run once inside `entry` before `start` (`npm install`, a bundler). Omit it when there is nothing to build — `null` and `""` mean the same. **Prefer no build step**: a dependency-free page starts faster and cannot fail on an install.         |
+| `preview` | The `https://` URL of a **real screenshot** of the rendered dashboard, hosted in this repo — see below. Never a drawn mock, never a live embed, never an empty state.                                                                                                |
+
+**What the dashboard must do.** Render **this template's own output** — the thing its
+zero-setup run produces — so that the first thing a user sees after cloning is real content,
+not an empty table. Read the data the way the run leaves it: the run's terminal output over
+the Sapiom API (`GET /v1/workflows/executions?definitionId=…&status=completed&limit=1`, then
+`GET /v1/workflows/executions/{id}` → `output`), or the database the template writes to. Read
+`SAPIOM_API_KEY` and `SAPIOM_DEFINITION_ID` (and `SAPIOM_API_URL` when not production) from
+`process.env` — the environment the publish step is expected to inject when it puts the
+dashboard on an App Link — and **fall back to a captured run** when they are absent, so the
+page is never blank: the pilot commits `app/sample-report.json`, the verbatim output of one
+real zero-setup run, and its page labels which source it is showing. Keep the source small and dependency-free where
+you can: one Node server (`node:http`), one HTML page, no framework. Copy
+`examples/scheduled-db-insight-report/app/` — it is the reference.
+
+**Is it worth shipping?** A dashboard earns its card when the template's output has a shape
+a page shows better than a run's JSON does: a report to read, a table of results to scan, a
+chart, a list with status. Ask what the screenshot will show on a **first, zero-setup run**.
+If the honest answer is a header and an empty list — because the interesting output needs a
+real credential or a real repo — do not ship one. A screenshot of an empty dashboard is the
+failure this block exists to prevent, and the schema will not stop you; only you can.
+
+**The screenshot, and where it lives.** `preview` must be a real capture of your dashboard
+rendering real output, at the **1200×760** aspect the card renders it at. Host it in this
+repo: commit it as `examples/<id>/preview.png` (beside `template.json`, outside `entry`, so
+it clones with the template but is not uploaded into the running dashboard) and point
+`preview` at its raw URL on `main`:
+
+```text
+https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/<id>/preview.png
+```
+
+This is the same host and ref production already reads `registry.json` and every
+`template.json` from, so no new bucket, credential, or CDN is involved; the URL resolves the
+moment your PR merges, which is also the moment the manifest that references it goes live.
+Capture it with the helper, which starts your dashboard exactly as the publish step will
+(`build`, then `start`, inside `entry`) and captures the viewport at 2× device pixels:
+
+```bash
+pnpm exec playwright install chromium                          # once
+pnpm examples:app:screenshot <id>                              # writes examples/<id>/preview.png
+```
+
+Have your page set `<body data-ready="true">` once its data has rendered — the helper waits
+for it, so the capture is of content rather than a loading state. Look at the PNG before you
+commit it: it should read as a real product screen with real numbers in it. Regenerate it
+whenever the page changes.
+
+**What CI checks.** `pnpm examples:check` fails an `app` block that is missing a required
+field, carries a field the schema does not declare, has an `entry` without a trailing slash
+or not on disk, a `port` outside 1–65535, a `build` that is neither a string nor `null`, or a `preview` that
+is not an absolute `https://` URL. It accepts a manifest with no `app` block. The schema is a
+hand-maintained mirror of the backend's parser; a block that passes here is carried to the
+template page intact, and a block that would fail there is rejected here instead of being
+dropped silently on the wire.
 
 ---
 
@@ -717,6 +800,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] One `complexity`, picked by counting judgment points — not by counting steps.
 - [ ] A `kind` on every step, and `checkpoint: true` only on a real human approval gate.
 - [ ] `pnpm examples:sort` then `pnpm examples:check` both clean.
+- [ ] If it ships a dashboard: `app` declared, source under `entry`, `preview.png` captured with `pnpm examples:app:screenshot` from a real run — not empty, not a mock.
 
 **Copy**
 

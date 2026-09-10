@@ -608,5 +608,19 @@
     "pattern": "plannerOrigin",
     "occurrences": 1,
     "reason": "Released-event fixture proves the private infrastructure bootstrap prompt never becomes a human transcript turn after upgrade."
+  },
+  {
+    "id": "db-insight-dashboard-runs-list-route",
+    "path": "examples/scheduled-db-insight-report/app/server.mjs",
+    "pattern": "^/v1/workflows/executions\\?$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that lists an agent's runs. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "db-insight-dashboard-run-detail-route",
+    "path": "examples/scheduled-db-insight-report/app/server.mjs",
+    "pattern": "^/v1/workflows/executions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
   }
 ]
