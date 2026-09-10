@@ -1021,7 +1021,14 @@ export function WorkflowsRail({
                 // last one sent the OS picker to its default folder in the
                 // case the dialog handled best: no project open, nothing
                 // pinned, but somewhere the user was working recently.
-                startingAt: projectRoot ?? launchDir ?? recentDirs[0],
+                //
+                // `||` between the tiers, where `StartDialog` writes `??`.
+                // An empty `launchDir` is not an answer to "which folder", and
+                // `??` treats it as one — it would stop the chain there and
+                // then be discarded downstream, losing the recent folder to
+                // the OS default. Each tier has to fall through when it is
+                // empty, not merely when it is absent.
+                startingAt: projectRoot || launchDir || recentDirs[0],
                 openDialog: () => setStartMode("open"),
                 onPicked: (root) => {
                   void onOpenProject(root).catch((err: unknown) => {
