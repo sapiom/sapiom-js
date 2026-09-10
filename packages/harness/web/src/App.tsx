@@ -3269,24 +3269,34 @@ export const App = (): JSX.Element => {
                   onClose={() => setReviewSummary(null)}
                 />
               ) : showDead && conversationSession ? (
-                <DeadSessionPane
-                  session={conversationSession}
-                  resumeMode={deadResumeMode}
-                  loadRecord={harness.sessionRecord}
-                  onResume={() =>
-                    void harness.resumeSession(conversationSession.id)
+                <AssistantPane
+                  sessionId={conversationSession.id}
+                  bootToken={harness.bootToken}
+                  authRevision={harness.authRevision}
+                  terminalRevision={
+                    harness.terminalRevealBySession.get(conversationSession.id) ??
+                    0
                   }
-                  onContinue={() =>
-                    void harness.rehydrateSession({
-                      cwd: conversationSession.cwd,
-                      harness: conversationSession.harness,
-                      from: conversationSession.id,
-                    })
-                  }
-                  onClose={() =>
-                    void harness.closeSession(conversationSession.id)
-                  }
-                />
+                >
+                  <DeadSessionPane
+                    session={conversationSession}
+                    resumeMode={deadResumeMode}
+                    loadRecord={harness.sessionRecord}
+                    onResume={() =>
+                      void harness.resumeSession(conversationSession.id)
+                    }
+                    onContinue={() =>
+                      void harness.rehydrateSession({
+                        cwd: conversationSession.cwd,
+                        harness: conversationSession.harness,
+                        from: conversationSession.id,
+                      })
+                    }
+                    onClose={() =>
+                      void harness.closeSession(conversationSession.id)
+                    }
+                  />
+                </AssistantPane>
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session that can WORK on this agent — its
                    board still draws on the right, from the workflow-keyed route
@@ -3354,7 +3364,10 @@ export const App = (): JSX.Element => {
                       sessionId={conversationSession.id}
                       bootToken={harness.bootToken}
                       authRevision={harness.authRevision}
-                      terminalRevision={harness.terminalRevealBySession.get(conversationSession.id) ?? 0}
+                      terminalRevision={
+                    harness.terminalRevealBySession.get(conversationSession.id) ??
+                    0
+                  }
                     >
                       <Terminal
                         sessionId={conversationSession.id}

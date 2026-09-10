@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -6,7 +6,6 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAuiState,
-  type TextMessagePartProps,
   type ThreadComposerRuntime,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
@@ -18,6 +17,16 @@ import {
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { EmptyState } from "./EmptyState";
+import {
+  finalResponseAgent,
+  turnRecoveryAgent,
+  openCodeTurn,
+  openCodeResult,
+} from "../../../src/shared/opencode-turn";
+import {
+  openCodeCompletionTokens,
+  openCodeVisibleParts,
+} from "../../../src/shared/opencode-completion";
 
 export interface ChatDraft {
   text: string;
@@ -187,6 +196,8 @@ function RuntimeChat({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ChatSurface
+        baseUrl={baseUrl}
+        bootToken={bootToken}
         conversationId={conversationId}
         connected={connected}
         error={transportError ?? actionError}
@@ -198,12 +209,6 @@ function RuntimeChat({
   );
 }
 
-const AssistantText = ({ text }: TextMessagePartProps) => (
-  <Markdown text={text} />
-);
-const UserText = ({ text }: TextMessagePartProps) => (
-  <p className="studio-chat-user-text">{text}</p>
-);
 const ToolProgress = ({
   toolName,
   status,
@@ -224,6 +229,8 @@ const ToolProgress = ({
 );
 
 function ChatSurface({
+  baseUrl,
+  bootToken,
   conversationId,
   connected,
   error,
@@ -231,6 +238,8 @@ function ChatSurface({
   composer,
   draft,
 }: {
+  baseUrl: string;
+  bootToken: string;
   conversationId: string;
   connected: boolean;
   error: string | null;
@@ -251,23 +260,96 @@ function ChatSurface({
       draft.text = composer.getState().text;
     });
   }, [composer, draft, ready]);
-  const hasText = useAuiState((s) => {
-    for (let i = s.thread.messages.length - 1; i >= 0; i--) {
-      const message = s.thread.messages[i];
-      if (message.role === "user") return false;
-      if (
-        message.content.some(
-          (part) => part.type === "text" && part.text.length > 0,
-        )
-      )
-        return true;
-    }
-    return false;
-  });
+  const native = useOpenCodeThreadState((s) => s);
+  const completionTokens = useMemo(
+    () =>
+      openCodeCompletionTokens(
+        native.messageOrder
+          .map((id) => native.messagesById[id]!)
+          .filter(Boolean),
+      ),
+    [native.messageOrder, native.messagesById],
+  );
+  const turn = openCodeTurn(
+    native.messageOrder.map((id) => native.messagesById[id]!).filter(Boolean),
+    native.sessionStatus?.type,
+  );
+  const attempted = useRef(new Set<string>());
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
+  const missing = turn.missing;
+  const pending = Object.values(native.pendingUserMessages).some(
+    (message) => message.status === "pending",
+  );
+  useEffect(() => {
+    if (
+      !ready ||
+      !connected ||
+      error ||
+      running ||
+      pending ||
+      !missing ||
+      attempted.current.has(missing)
+    )
+      return;
+    attempted.current.add(missing);
+    setRecovering(true);
+    setRecoveryFailed(false);
+    // The host verifies native history and allows one continuation.
+    // Never resend the original prompt on idle, disconnect, or remount.
+    void fetch(`${baseUrl}/session/${conversationId}/final-response`, {
+      method: "POST",
+      headers: {
+        "X-Harness-Token": bootToken,
+        "Content-Type": "application/json",
+      },
+      credentials: "omit",
+      body: JSON.stringify({ messageId: missing }),
+      signal: AbortSignal.timeout(130_000),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Final response failed");
+        retry(); // Reconcile history even if the last text event was missed.
+      })
+      .catch(() => setRecoveryFailed(true))
+      .finally(() => setRecovering(false));
+  }, [
+    baseUrl,
+    bootToken,
+    connected,
+    conversationId,
+    error,
+    missing,
+    pending,
+    ready,
+    retry,
+    running,
+  ]);
   const failed = useOpenCodeThreadState(
     (s) => s.loadState.type === "error" || s.runState.type === "error",
   );
   const visibleError = error ?? (failed ? runError : null);
+  const checking = !connected || !ready || loading || turn.status === "unknown";
+  const working =
+    !visibleError &&
+    (running ||
+      recovering ||
+      turn.status === "working" ||
+      pending ||
+      (!!missing && !attempted.current.has(missing)));
+  const status = visibleError
+    ? "Failed"
+    : checking
+      ? "Checking status…"
+      : working
+        ? "Working"
+        : turn.status === "finished"
+          ? "Finished"
+          : turn.status === "failed" || recoveryFailed
+            ? "Failed"
+            : turn.status === "stopped"
+              ? "Stopped"
+              : "Ready";
   return (
     <ThreadPrimitive.Root
       className="studio-chat"
@@ -285,42 +367,81 @@ function ChatSurface({
             />
           </ThreadPrimitive.Empty>
           <ThreadPrimitive.Messages>
-            {({ message }) => (
-              <MessagePrimitive.Root
-                className={
-                  message.role === "user"
-                    ? "studio-chat-user"
-                    : "studio-chat-assistant"
-                }
-              >
-                <MessagePrimitive.Parts
-                  components={{
-                    Text: message.role === "user" ? UserText : AssistantText,
-                    tools: { Fallback: ToolProgress },
-                  }}
-                />
-                <MessagePrimitive.Error>
-                  <ErrorPrimitive.Root className="studio-chat-error">
-                    <ErrorPrimitive.Message />
-                  </ErrorPrimitive.Root>
-                </MessagePrimitive.Error>
-              </MessagePrimitive.Root>
-            )}
+            {({ message }) => {
+              const nativeMessage = native.messagesById[message.id];
+              const token =
+                nativeMessage?.info?.role === "assistant"
+                  ? completionTokens.get(nativeMessage.info.parentID)
+                  : undefined;
+              const result = openCodeResult(nativeMessage, token);
+              const visibleParts = openCodeVisibleParts(message.content, token);
+              return message.role === "user" &&
+                [finalResponseAgent, turnRecoveryAgent].includes(
+                  native.messagesById[message.id]?.info?.agent ?? "",
+                ) ? null : (
+                <MessagePrimitive.Root
+                  className={
+                    message.role === "user"
+                      ? "studio-chat-user"
+                      : "studio-chat-assistant"
+                  }
+                >
+                  {message.content.map((part, index) =>
+                    part.type === "text" ? (
+                      message.role === "user" ? (
+                        <p key={index} className="studio-chat-user-text">
+                          {part.text}
+                        </p>
+                      ) : result ? null : (
+                        <Markdown
+                          key={index}
+                          text={visibleParts[index] ?? ""}
+                        />
+                      )
+                    ) : (
+                      <MessagePrimitive.PartByIndex
+                        key={index}
+                        index={index}
+                        components={{ tools: { Fallback: ToolProgress } }}
+                      />
+                    ),
+                  )}
+                  {result && <Markdown text={result.answer} />}
+                  <MessagePrimitive.Error>
+                    <ErrorPrimitive.Root className="studio-chat-error">
+                      <ErrorPrimitive.Message />
+                    </ErrorPrimitive.Root>
+                  </MessagePrimitive.Error>
+                </MessagePrimitive.Root>
+              );
+            }}
           </ThreadPrimitive.Messages>
-          {(!connected || !ready || loading || (running && !hasText)) &&
-            !visibleError && (
-              <div role="status" className="studio-chat-meta">
-                {!connected
-                  ? "Connecting…"
-                  : loading || !ready
-                    ? "Loading conversation…"
-                    : "Assistant is working…"}
-              </div>
-            )}
+          {status === "Failed" && !visibleError && (
+            <div className="studio-chat-error" role="alert">
+              Assistant could not complete this request. Review the response
+              above and send a follow-up to continue.
+            </div>
+          )}
+          {status === "Stopped" && (
+            <div className="studio-chat-meta" role="note">
+              Assistant has stopped. Completion was not confirmed; review the
+              response above before continuing.
+            </div>
+          )}
           {visibleError && <Recovery message={visibleError} retry={retry} />}
         </div>
       </ThreadPrimitive.Viewport>
       <div className="studio-chat-dock">
+        <div
+          role="status"
+          aria-label="Assistant status"
+          className="status-tag studio-chat-status"
+          data-status={status}
+        >
+          <span className="status-tag-dot" aria-hidden="true" />
+          {status}
+          {recovering ? " · Continuing unfinished work…" : ""}
+        </div>
         <ComposerPrimitive.Root className="studio-chat-composer">
           <ComposerPrimitive.Input
             className="studio-chat-input"
@@ -332,14 +453,26 @@ function ChatSurface({
             cancelOnEscape={false}
             addAttachmentOnPaste={false}
             disabled={
-              !connected || !ready || loading || disabled || !!visibleError
+              !connected ||
+              !ready ||
+              loading ||
+              disabled ||
+              !!visibleError ||
+              recovering ||
+              (!!missing && !recoveryFailed)
             }
           />
           <div className="studio-chat-actions">
             <ComposerPrimitive.Send
               className="composer-send"
               aria-label="Send message"
-              disabled={!connected || !ready || !!visibleError}
+              disabled={
+                !connected ||
+                !ready ||
+                !!visibleError ||
+                working ||
+                (!!missing && !recoveryFailed)
+              }
             >
               <Icon name="ArrowUp" size={14} />
             </ComposerPrimitive.Send>
