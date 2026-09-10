@@ -15,8 +15,25 @@ await server.close();
 The bridge URL must be loopback. Only its revocable credential enters the model
 and remote MCP configuration. The runtime inherits an allowlist of platform
 environment variables; provider keys and the Electron esbuild pin are excluded
-from tool processes. Project/global Claude configuration and external skills are
-disabled. Runtime state stays below the supplied directory.
+from the runtime. A controlled native plugin removes the bridge configuration
+and runtime-admin credential from the runtime environment before tool execution,
+and startup fails if that plugin does not initialize or if native HTTP
+authentication stops rejecting unauthenticated requests. OpenCode project
+configuration, global configuration, default plugins, Claude configuration, and
+external skills are excluded; the sole configured plugin is created in an
+ephemeral config root. The native process also receives an ephemeral home so
+OpenCode cannot discover `$HOME/.opencode`; the controlled shell hook restores
+the caller's original home variables for user tools and resolves an absent
+`HOME` from `USERPROFILE`, `HOMEDRIVE`/`HOMEPATH`, or the OS account instead of
+exposing the native isolation directory. Runtime state stays below the supplied
+directory.
+
+The runtime credential has no independent time-to-live. Its lifetime is bounded
+by the Studio grant: grant expiry, access revocation, or runtime retirement
+revokes it at the bridge, and a replacement runtime receives a rotated
+credential. This protects normal child-process and browser boundaries; it is not
+an operating-system sandbox. An unrestricted process running as the same user
+can inspect runtime memory or files and is outside this trust boundary.
 
 Startup and shutdown have deadlines. POSIX shutdown signals the owned process
 group; Windows process-tree hardening and packaged-platform validation remain
