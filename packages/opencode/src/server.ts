@@ -67,6 +67,15 @@ export function evaluateTrackedClosure(
   return allStopped ? "stopped" : "waiting";
 }
 
+/** @internal Shared verbatim with the generated supervisor for deterministic tests. */
+export function evaluateWindowsCleanup(
+  nativePid: number | undefined,
+  exitCode: number | null | undefined,
+): "no-child" | "running" | "uncertain" {
+  if (nativePid === undefined) return "no-child";
+  return exitCode === null ? "running" : "uncertain";
+}
+
 export type OpenCodeStartupFailureCode =
   | "executable-not-found"
   | "permission-denied"
@@ -220,6 +229,7 @@ const cleanupPath = ${JSON.stringify(cleanupProof.path)};
 const cleanupToken = ${JSON.stringify(cleanupProof.token)};
 const shutdownTimeoutMs = ${JSON.stringify(shutdownTimeoutMs)};
 const evaluateTrackedClosure = ${evaluateTrackedClosure.toString()};
+const evaluateWindowsCleanup = ${evaluateWindowsCleanup.toString()};
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let native;
 let nativePid;
@@ -375,7 +385,9 @@ async function freezeDescendants() {
   return false;
 }
 async function cleanupWindows() {
-  if (!nativePid || native?.exitCode !== null) return false;
+  const disposition = evaluateWindowsCleanup(nativePid, native?.exitCode);
+  if (disposition === "no-child") return true;
+  if (disposition !== "running") return false;
   const result = spawnSync("taskkill", ["/pid", String(nativePid), "/T", "/F"], {
     windowsHide: true,
     stdio: "ignore",
