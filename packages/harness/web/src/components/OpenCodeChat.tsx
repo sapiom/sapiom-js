@@ -302,6 +302,7 @@ function RuntimeChat({
         onSignIn={onSignIn}
         onOpenSettings={onOpenSettings}
         onOpenTerminal={onOpenTerminal}
+        onTypedError={onTypedError}
       />
     </AssistantRuntimeProvider>
   );
@@ -338,6 +339,7 @@ function ChatSurface({
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  onTypedError,
 }: {
   baseUrl: string;
   bootToken: string;
@@ -350,6 +352,7 @@ function ChatSurface({
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  onTypedError: (failure: OpenCodeTransportFailure) => void;
 }) {
   const loading = useAuiState((s) => s.thread.isLoading);
   const running = useAuiState((s) => s.thread.isRunning);
@@ -421,8 +424,18 @@ function ChatSurface({
       body: JSON.stringify({ messageId: missing }),
       signal: AbortSignal.any([abort.signal, AbortSignal.timeout(130_000)]),
     })
-      .then((response) => {
-        if (!response.ok) throw new Error("Final response failed");
+      .then(async (response) => {
+        if (!response.ok) {
+          const failure = await responseFailure(response);
+          if (failure) {
+            // A typed terminal rejection is not a failed recovery attempt the
+            // composer may work around. Keep the incomplete turn blocked and
+            // expose its exact static action without submitting anything else.
+            onTypedError(failure);
+            return;
+          }
+          throw new Error("Final response failed");
+        }
         retry(); // Reconcile history even if the last text event was missed.
       })
       .catch(() => {
@@ -443,6 +456,7 @@ function ChatSurface({
     ready,
     retry,
     running,
+    onTypedError,
   ]);
   const failed = useOpenCodeThreadState(
     (s) => s.loadState.type === "error" || s.runState.type === "error",
