@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -110,6 +111,7 @@ const runtimeCredentialKeys = [
   "OPENCODE_SERVER_USERNAME",
   "OPENCODE_SERVER_PASSWORD",
 ] as const;
+const toolHomeKeys = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
 
 async function createCredentialIsolationPlugin(
   launchRoot: string,
@@ -135,6 +137,7 @@ async function createCredentialIsolationPlugin(
   const source = `import { writeFile } from "node:fs/promises";
 import { createStudioCompletionHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
 const keys = ${JSON.stringify(runtimeCredentialKeys)};
+const toolHomeKeys = ${JSON.stringify(toolHomeKeys)};
 const toolHomeEnvironment = ${JSON.stringify(toolHomeEnvironment)};
 export const SapiomCredentialIsolation = async (input) => {
   for (const key of keys) delete process.env[key];
@@ -150,6 +153,7 @@ export const SapiomCredentialIsolation = async (input) => {
         delete process.env[key];
         delete output.env[key];
       }
+      for (const key of toolHomeKeys) delete output.env[key];
       Object.assign(output.env, toolHomeEnvironment);
     },
   };
@@ -181,12 +185,20 @@ export async function startOpenCodeServer(
   const sourceEnvironment = options.environment ?? process.env;
   const platform = platformEnvironment(sourceEnvironment);
   const toolHomeEnvironment = Object.fromEntries(
-    ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"].flatMap((key) =>
+    toolHomeKeys.flatMap((key) =>
       sourceEnvironment[key] === undefined
         ? []
         : [[key, sourceEnvironment[key]]],
     ),
   );
+  const resolvedToolHome =
+    sourceEnvironment.HOME ??
+    sourceEnvironment.USERPROFILE ??
+    (sourceEnvironment.HOMEDRIVE && sourceEnvironment.HOMEPATH
+      ? `${sourceEnvironment.HOMEDRIVE}${sourceEnvironment.HOMEPATH}`
+      : homedir());
+  toolHomeEnvironment.HOME ??= resolvedToolHome;
+  toolHomeEnvironment.USERPROFILE ??= resolvedToolHome;
   const { pluginUrl, readyPath } = await createCredentialIsolationPlugin(
     launchRoot,
     toolHomeEnvironment,

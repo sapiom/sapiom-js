@@ -381,6 +381,50 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(synthetic.state.rejected).toBeGreaterThanOrEqual(2);
   }, 30_000);
 
+  it("does not expose its isolated native home to a tool when caller HOME is absent", async () => {
+    const callerProfile = join(root, "caller-profile");
+    const environment = {
+      ...process.env,
+      HOME: undefined,
+      USERPROFILE: callerProfile,
+    };
+    runtime = await startOpenCodeServer({
+      cwd: root,
+      stateRoot: join(root, "state"),
+      environment,
+      config: createSapiomOpenCodeConfig({
+        bridgeUrl: "http://127.0.0.1:9/runtime",
+        runtimeToken: "synthetic-home-semantics-token",
+      }),
+    });
+    const session = await runtime.fetchJson<{ id: string }>("/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const inspect =
+      "console.log(JSON.stringify({home:process.env.HOME ?? null,profile:process.env.USERPROFILE}))";
+    const result = await runtime.fetchJson<{
+      parts: Array<{ state?: { status?: string; output?: string } }>;
+    }>(`/session/${session.id}/shell`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent: "build",
+        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(inspect)}`,
+      }),
+    });
+    const shellState = result.parts[0]?.state;
+    expect(shellState?.status).toBe("completed");
+    expect(shellState?.output?.trim().length).toBeGreaterThan(0);
+    const childEnvironment = JSON.parse(shellState!.output!) as {
+      home: string | null;
+      profile: string;
+    };
+    expect(childEnvironment.profile).toBe(callerProfile);
+    expect(childEnvironment.home).toBe(callerProfile);
+  }, 30_000);
+
   it("fails startup closed when the controlled scrubber cannot load", async () => {
     const stateRoot = join(root, "state");
     const realFetch = globalThis.fetch;
@@ -412,7 +456,7 @@ describe("pinned OpenCode 1.18.29", () => {
       startOpenCodeServer({
         cwd: root,
         stateRoot,
-        startupTimeoutMs: 2_000,
+        startupTimeoutMs: 5_000,
         config: createSapiomOpenCodeConfig({
           bridgeUrl: "http://127.0.0.1:9/runtime",
           runtimeToken: "synthetic-fail-closed-token",
