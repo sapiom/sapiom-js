@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import express from "express";
 import { createServer, type Server } from "node:http";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AssistantGrant } from "../core/assistant-access.js";
 import {
   OpenCodeBridge,
@@ -177,6 +179,79 @@ describe("Studio OpenCode credential bridge", () => {
     });
     expect(await response.json()).toEqual({ result: true });
     expect(response.headers.get("mcp-session-id")).toBe("mcp-next");
+  });
+
+  it("resumes a queued MCP result without repeating its tool call", async () => {
+    let calls = 0;
+    let callId: string | number | undefined;
+    const cursors: unknown[] = [];
+    upstream.all("/v1/mcp", (req, res) => {
+      res.setHeader("mcp-session-id", "queued-session");
+      if (req.method === "DELETE") {
+        res.status(405).end();
+        return;
+      }
+      if (req.method === "GET") {
+        const cursor = req.header("last-event-id");
+        if (!cursor) {
+          res.status(405).end();
+          return;
+        }
+        cursors.push(cursor);
+        expect(req.header("mcp-session-id")).toBe("queued-session");
+        expect(req.header("mcp-protocol-version")).toBe("2025-11-25");
+        expect(req.header("x-api-key")).toBe("sk_private_studio");
+        expect(req.header("authorization")).toBeUndefined();
+        res.type("text/event-stream").end(
+          `id: queued-result\ndata: ${JSON.stringify({
+            jsonrpc: "2.0",
+            id: callId,
+            result: { content: [{ type: "text", text: "MCP_OK" }] },
+          })}\n\n`,
+        );
+        return;
+      }
+      const { id, method } = req.body;
+      if (method === "initialize") {
+        res.json({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2025-11-25",
+            capabilities: { tools: {} },
+            serverInfo: { name: "queued-fixture", version: "1" },
+          },
+        });
+      } else if (method === "tools/call") {
+        calls++;
+        callId = id;
+        res.type("text/event-stream").end("id: queued-start\nretry: 10\ndata:\n\n");
+      } else res.status(202).end();
+    });
+    expect(
+      (await request("mcp", { method: "GET", body: undefined })).status,
+    ).toBe(405);
+    expect(
+      (await request("mcp", { method: "DELETE", body: undefined })).status,
+    ).toBe(405);
+    const client = new Client({ name: "replay-test", version: "1" });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${origin}/opencode-runtime/${credential.id}/mcp`),
+      { requestInit: { headers: { Authorization: `Bearer ${credential.token}` } } },
+    );
+    try {
+      await client.connect(transport);
+      const result = await client.callTool(
+        { name: "lookup", arguments: {} },
+        undefined,
+        { timeout: 3000 },
+      );
+      expect(result.content).toEqual([{ type: "text", text: "MCP_OK" }]);
+      expect(cursors).toEqual(["queued-start"]);
+      expect(calls).toBe(1);
+    } finally {
+      await client.close();
+    }
   });
 
   it("never forwards upstream error bodies or follows redirects with credentials", async () => {

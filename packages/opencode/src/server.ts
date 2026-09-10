@@ -111,6 +111,9 @@ export async function startOpenCodeServer(
         OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
         OPENCODE_DISABLE_PROJECT_CONFIG: "1",
         OPENCODE_DISABLE_AUTOUPDATE: "1",
+        // Native discovery retains the complete MCP catalog without placing
+        // every remote tool schema in every model request.
+        OPENCODE_EXPERIMENTAL_CODE_MODE: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

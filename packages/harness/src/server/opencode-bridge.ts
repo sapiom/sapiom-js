@@ -171,7 +171,13 @@ export class OpenCodeBridge {
           ? { "x-sapiom-api-key": key, "x-sapiom-model": this.model }
           : { "x-api-key": key }),
       });
-      for (const name of ["mcp-session-id", "mcp-protocol-version"]) {
+      // Queued MCP tools close the POST stream and deliver results through
+      // GET replay. Its cursor must survive the credential bridge.
+      for (const name of [
+        "mcp-session-id",
+        "mcp-protocol-version",
+        "last-event-id",
+      ]) {
         if (service === "mcp" && req.header(name))
           headers.set(name, req.header(name)!);
       }
@@ -199,7 +205,14 @@ export class OpenCodeBridge {
       });
       if (!response.ok) {
         await response.body?.cancel();
-        res.status(response.status === 401 ? 401 : 502).json({
+        // MCP uses 405 to decline optional notification streams or session
+        // cleanup; clients handle that without treating it as a service outage.
+        const status =
+          response.status === 401 ||
+          (service === "mcp" && response.status === 405)
+            ? response.status
+            : 502;
+        res.status(status).json({
           error:
             response.status === 401
               ? "Studio credentials were rejected. Sign in again, then retry."

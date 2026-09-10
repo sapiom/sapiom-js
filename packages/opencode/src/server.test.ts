@@ -51,6 +51,8 @@ describe("packaged OpenCode runtime", () => {
     }>("/inspect");
     expect(inspected.cwd).toBe(directory);
     expect(inspected.config).toEqual(config);
+    expect(inspected.keys).toContain("OPENCODE_EXPERIMENTAL_CODE_MODE");
+    expect(inspected.keys).not.toContain("OPENCODE_EXPERIMENTAL");
     expect(JSON.stringify(inspected)).not.toContain("sk_private");
     for (const key of [
       "SAPIOM_API_KEY",
