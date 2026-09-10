@@ -59,9 +59,10 @@ import { z } from "zod/v4";
  * approval slower than the reminder interval, bypassing the graceful `escalate`
  * step entirely, and omitting `timeoutMs` is no longer an escape: a pause with no
  * deadline now inherits the engine's 7-day default, which does the same damage on
- * a one-week horizon. One year is the explicit opt-out: long enough that a slow
- * approver never loses the run, finite enough that an abandoned chain still lands
- * in a terminal state. Reminders and escalation stay driven purely by the signal
+ * a one-week horizon. One year is the explicit opt-out, and it is still a terminal
+ * deadline: an approval that outlives it is failed by the sweep like any other,
+ * not resumed. The year is picked so no realistic approver reaches it, while an
+ * abandoned chain still lands in a terminal state instead of parking forever. Reminders and escalation stay driven purely by the signal
  * convention: the run-detail one-click Approve/Reject, a cron that fires
  * `remind`/`timeout` on a schedule, or a `run_local` auto-resume, never the pause
  * deadline. (`wait-for-webhook` is the mirror image: it *wants* a short terminal
@@ -94,11 +95,11 @@ const DEFAULT_MAX_REMINDERS = 2;
 
 // An explicit, deliberately long gate deadline. A pause with no `timeoutMs` gets
 // the hosted engine's 7-day default, and a lapsed deadline *terminates* the run
-// with a PauseTimeoutError instead of resuming the step, which would hard-fail
-// any approval slower than a week and skip `escalate` entirely. One year is the
-// opt-out: long enough that a slow approver never loses the run, finite enough
-// that an abandoned chain still reaches a terminal state instead of parking
-// forever. Reminders and escalation come from the signal, never from this value.
+// instead of resuming the step, which would hard-fail any approval slower than a
+// week and skip `escalate` entirely. One year is the opt-out, and it is still
+// terminal: an approval that outlives it is failed too. The year is picked so no
+// realistic approver reaches it, while an abandoned chain still lands in a
+// terminal state. Reminders and escalation come from the signal, not this value.
 const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
 
 /** Postgres table the durable ledger appends to. */
