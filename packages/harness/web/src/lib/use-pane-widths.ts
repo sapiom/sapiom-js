@@ -36,9 +36,10 @@ export const RAIL_MIN = 180;
 export const RAIL_MAX = 480;
 /** 20rem — the workspace rail's default width. */
 export const RAIL_DEFAULT = 320;
-/** 20rem — the canvas pane can never be squeezed below this. */
+/** 20rem — the canvas pane can never be squeezed below this. There is no
+ *  fixed upper bound: the grid's `minmax(CANVAS_MIN, 1fr)` terminal track is
+ *  what stops the canvas, so it can grow to whatever the viewport allows. */
 export const CANVAS_MIN = 320;
-export const CANVAS_MAX = 720;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -55,7 +56,7 @@ function loadStoredWidths(): PaneWidths {
       rail: clamp(typeof parsed.rail === "number" ? parsed.rail : RAIL_DEFAULT, RAIL_MIN, RAIL_MAX),
       // Absent/null canvas = equal split (the default); a stored number is a
       // deliberate user drag and wins until the next double-click reset.
-      canvas: typeof parsed.canvas === "number" ? clamp(parsed.canvas, CANVAS_MIN, CANVAS_MAX) : null,
+      canvas: typeof parsed.canvas === "number" ? Math.max(parsed.canvas, CANVAS_MIN) : null,
     };
   } catch {
     return fallback;
@@ -148,7 +149,7 @@ export function usePaneWidths(): {
       "canvas",
       -1,
       CANVAS_MIN,
-      CANVAS_MAX,
+      Infinity,
       () => {
         if (widths.canvas != null) return widths.canvas;
         const pane = document.querySelector(".canvas-pane");
