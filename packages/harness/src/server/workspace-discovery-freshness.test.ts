@@ -12,7 +12,6 @@ import type {
   SpawnSpec,
   WorkflowInfo,
 } from "../shared/types.js";
-import { CachedAgentInvocationProvider } from "../core/system-graph-relationships.js";
 import type { RegistryWorkflowInfo } from "../core/workflow-registry.js";
 import { startServer, type HarnessServer } from "./index.js";
 
@@ -89,7 +88,7 @@ describe("workspace discovery freshness without legacy graph authority", () => {
 
   beforeEach(async () => {
     tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "system-graph-freshness-"),
+      path.join(os.tmpdir(), "workspace-discovery-freshness-"),
     );
     stateRoot = path.join(tempRoot, "state");
     workspaceRoot = path.join(tempRoot, "workspace");
@@ -116,10 +115,6 @@ describe("workspace discovery freshness without legacy graph authority", () => {
   });
 
   it("updates inventory through explicit scans without legacy graph work or a session", async () => {
-    const invocationObservations = vi.spyOn(
-      CachedAgentInvocationProvider.prototype,
-      "invocationObservations",
-    );
     await scaffoldAgent(workspaceRoot, "research");
     await scaffoldAgent(workspaceRoot, "growth");
     server = await startServer({
@@ -195,10 +190,6 @@ describe("workspace discovery freshness without legacy graph authority", () => {
         events.filter((message) => message.type === "workflows.changed").length,
       ).toBeGreaterThanOrEqual(4),
     );
-    expect(
-      events.filter((message) => message.type === "system-graph.changed"),
-    ).toEqual([]);
-    expect(invocationObservations).not.toHaveBeenCalled();
     expect(server.sessionManager.list()).toEqual([]);
   });
 

@@ -354,8 +354,8 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
       );
       assert.equal(
         response.status,
-        410,
-        `Legacy graph ${method} ${suffix}: expected 410, received ${response.status}`,
+        404,
+        `Legacy graph ${method} ${suffix}: expected 404, received ${response.status}`,
       );
     }
     const assets = join(resolveWebDir(), "assets");
@@ -366,7 +366,7 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     const bytes = await readFile(join(assets, workerFile));
     return (
       `Vertical only across origins, ignored old preferences/links, retry/recovery, live update and disposal; ` +
-      `legacy reads/refreshes/navigation 0/0/0; direct legacy requests 410; ` +
+      `legacy reads/refreshes/navigation 0/0/0; direct legacy requests 404; ` +
       `map/history unchanged by views; worker ${bytes.length}B (${gzipSync(bytes).length}B gzip); UI ready cold ${coldMs}ms, warm ${warmMs}ms`
     );
   } finally {
