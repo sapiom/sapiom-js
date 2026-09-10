@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OpenCodeShutdownError } from "@sapiom/opencode";
 import type { AssistantGrant } from "./assistant-access.js";
 import { OpenCodeHost, OpenCodeTransportError } from "./opencode-host.js";
 
@@ -306,6 +307,20 @@ describe("Studio-owned OpenCode lifecycle", () => {
     ).resolves.toBeUndefined();
     grant = saved;
     changed();
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: { code: "transport_unavailable" },
+    });
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("retains the owner lock when startup cannot prove native cleanup", async () => {
+    expectShutdownFailure = true;
+    start.mockRejectedValueOnce(new OpenCodeShutdownError());
+
+    await expect(host.ensure("studio-one")).rejects.toThrow("shutdown");
+    await expect(
+      access(join(start.mock.calls[0][0].stateRoot, "..", "runtime.lock")),
+    ).resolves.toBeUndefined();
     await expect(host.ensure("studio-one")).rejects.toMatchObject({
       failure: { code: "transport_unavailable" },
     });
