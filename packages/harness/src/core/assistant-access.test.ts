@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import { AssistantAccess } from "./assistant-access.js";
+import { StudioCredentialRefreshError } from "./studio-credentials.js";
 
 let access: AssistantAccess;
 let env: ResolvedEnvironment;
@@ -114,7 +115,74 @@ describe("Assistant access", () => {
     request.mockImplementation(async () => Response.json({ assistant: false }));
     await vi.advanceTimersByTimeAsync(30000);
     expect(access.get()).toBeNull();
+    expect(access.getFailureCode()).toBe("access_denied");
     expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains an unchanged verified grant through successive network and 5xx failures only until its original expiry", async () => {
+    const changed = vi.fn();
+    access.subscribe(changed);
+    await access.refresh();
+    const grant = access.get()!;
+    request.mockRejectedValueOnce(new TypeError("offline"));
+    await access.refresh();
+    expect(access.get()).toBe(grant);
+    request.mockResolvedValueOnce(new Response("", { status: 503 }));
+    await access.refresh();
+    expect(access.get()).toBe(grant);
+    expect(access.get()!.expiresAt).toBe(grant.expiresAt);
+    expect(changed).toHaveBeenCalledOnce();
+    vi.setSystemTime(grant.expiresAt + 1);
+    expect(access.get()).toBeNull();
+    expect(access.getFailureCode()).toBe("access_expired");
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a grant through a classified credential-refresh outage without extending it", async () => {
+    await access.refresh();
+    const grant = access.get()!;
+    env.credentials!.studioCredentials = {
+      ...pair,
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    };
+    access.close();
+    access = new AssistantAccess({
+      enabled: true,
+      harnessVersion: "0.16.0",
+      getApiKey: () => key,
+      loadEnvironment: load,
+      refreshCredentials: async () => {
+        throw new StudioCredentialRefreshError("transient", "offline");
+      },
+      fetch: request,
+    });
+    // A new host must never invent eligibility from an outage.
+    await access.refresh();
+    expect(access.get()).toBeNull();
+    expect(access.getFailureCode()).toBe("transport_unavailable");
+
+    access.close();
+    env.credentials!.studioCredentials = pair;
+    let fail = false;
+    access = new AssistantAccess({
+      enabled: true,
+      harnessVersion: "0.16.0",
+      getApiKey: () => key,
+      loadEnvironment: load,
+      refreshCredentials: async (environment) => {
+        if (fail)
+          throw new StudioCredentialRefreshError("transient", "offline");
+        return environment.credentials!.studioCredentials!;
+      },
+      fetch: request,
+    });
+    await access.refresh();
+    const verified = access.get()!;
+    fail = true;
+    await access.refresh();
+    expect(access.get()).toBe(verified);
+    expect(access.get()!.expiresAt).toBe(verified.expiresAt);
+    expect(verified.expiresAt).toBe(grant.expiresAt);
   });
 
   it("expires within 60 seconds even when a refresh is stuck", async () => {
@@ -188,17 +256,42 @@ describe("Assistant access", () => {
     expect(access.get()).toBeNull();
   });
 
-  it("invalidates on a key change, offline evaluation, and unreadable credentials", async () => {
+  it("invalidates on a key change, unreadable credentials, and expired credentials", async () => {
     await access.refresh();
     key = null;
     expect(access.get()).toBeNull();
     key = "sk_private";
-    request.mockRejectedValue(new Error("offline"));
-    await access.refresh();
-    expect(access.get()).toBeNull();
     load.mockRejectedValue(new Error("unreadable"));
     await access.refresh();
     expect(access.get()).toBeNull();
+    expect(access.getFailureCode()).toBe("access_denied");
+    load.mockImplementation(async () => structuredClone(env));
+    env.credentials!.studioCredentials = {
+      ...pair,
+      expiresAt: new Date(Date.now() - 1).toISOString(),
+    };
+    await access.refresh();
+    expect(access.get()).toBeNull();
+    expect(access.getFailureCode()).toBe("authentication_required");
+  });
+
+  it("revokes the old authority before evaluating an identity or tenant crossover", async () => {
+    const changed = vi.fn();
+    access.subscribe(changed);
+    await access.refresh();
+    let finish!: (response: Response) => void;
+    env.credentials!.tenantId = "other-tenant";
+    request.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (finish = resolve)),
+    );
+    const pending = access.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(access.get()).toBeNull();
+    expect(access.getFailureCode()).toBe("access_denied");
+    expect(changed).toHaveBeenCalledTimes(2);
+    finish(Response.json({ ...enabled, tenantId: "other-tenant" }));
+    await pending;
+    expect(access.get()).toMatchObject({ tenantId: "other-tenant" });
   });
 
   it("does not extend the lease by slow response delivery", async () => {
