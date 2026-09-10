@@ -43,6 +43,30 @@ export interface OpenCodeServer {
   close(): Promise<void>;
 }
 
+interface SupervisorProcessIdentity {
+  pid: number;
+  birthId: string;
+  state: string;
+}
+
+/** @internal Shared verbatim with the generated supervisor for deterministic tests. */
+export function evaluateTrackedClosure(
+  tracked: ReadonlyMap<
+    string,
+    Pick<SupervisorProcessIdentity, "pid" | "birthId">
+  >,
+  processes: ReadonlyMap<number, SupervisorProcessIdentity>,
+): "stopped" | "waiting" | "uncertain" {
+  let allStopped = true;
+  for (const identity of tracked.values()) {
+    const current = processes.get(identity.pid);
+    if (!current || current.birthId !== identity.birthId) return "uncertain";
+    if (current.state.startsWith("Z")) return "uncertain";
+    if (!current.state.startsWith("T")) allStopped = false;
+  }
+  return allStopped ? "stopped" : "waiting";
+}
+
 export type OpenCodeStartupFailureCode =
   | "executable-not-found"
   | "permission-denied"
@@ -195,11 +219,11 @@ import { dirname } from "node:path";
 const cleanupPath = ${JSON.stringify(cleanupProof.path)};
 const cleanupToken = ${JSON.stringify(cleanupProof.token)};
 const shutdownTimeoutMs = ${JSON.stringify(shutdownTimeoutMs)};
+const evaluateTrackedClosure = ${evaluateTrackedClosure.toString()};
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let native;
 let nativePid;
 let launched = false;
-let accepted = false;
 let stopping;
 const tracked = new Map();
 async function syncDirectory(directory) {
@@ -344,19 +368,9 @@ async function freezeDescendants() {
     await wait(10);
     const processes = await processTable();
     if (processes === null) return false;
-    let allStopped = true;
-    for (const identity of tracked.values()) {
-      const current = processes.get(identity.pid);
-      if (
-        !current ||
-        current.birthId !== identity.birthId ||
-        (!current.state.startsWith("T") && !current.state.startsWith("Z"))
-      ) {
-        allStopped = false;
-        break;
-      }
-    }
-    if (allStopped && tracked.size === before) return true;
+    const closure = evaluateTrackedClosure(tracked, processes);
+    if (closure === "uncertain") return false;
+    if (closure === "stopped" && tracked.size === before) return true;
   }
   return false;
 }
@@ -379,15 +393,7 @@ async function cleanupWindows() {
 }
 async function cleanupPosix(cause) {
   if (!nativePid) return true;
-  if (cause === "native-exit") {
-    if (accepted) return false;
-    const running = await runningTracked();
-    return (
-      running !== null &&
-      running.length === 0 &&
-      (await waitForEmptyGroup(nativePid, 250))
-    );
-  }
+  if (cause === "native-exit") return false;
   if (!(await freezeOwnedGroup())) return false;
   if (!(await freezeDescendants())) return false;
   if (!(await signalTrackedGroups("SIGKILL"))) return false;
@@ -427,10 +433,6 @@ process.once("SIGINT", () => void stop("signal"));
 process.on("message", (message) => {
   if (message?.type === "stop") {
     void stop();
-    return;
-  }
-  if (message?.type === "ready" && launched && !stopping) {
-    accepted = true;
     return;
   }
   if (launched || stopping || !message || message.type !== "launch") return;
