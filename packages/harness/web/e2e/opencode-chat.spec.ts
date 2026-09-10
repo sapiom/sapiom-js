@@ -14,6 +14,8 @@ type Conversation = {
   }>;
   streams: Set<Response>;
   prompts: string[];
+  busy: boolean;
+  recoveries: string[];
 };
 let server: Server;
 let origin: string;
@@ -28,10 +30,13 @@ let failEvents: boolean;
 let failPrompt: boolean;
 let failAccess: boolean;
 let accessCalls: number;
+let recoveryReply: ((text: string, agent?: string) => void) | undefined;
 const historyReplies: Array<() => void> = [];
 let routeCalls: number;
 const conversations = new Map<string, Conversation>();
 const emit = (c: Conversation, type: string, properties: object) => {
+  if (type === "session.status")
+    c.busy = (properties as any).status.type !== "idle";
   for (const stream of c.streams)
     stream.write(`data: ${JSON.stringify({ type, properties })}\n\n`);
 };
@@ -64,6 +69,7 @@ test.beforeEach(async ({ page }) => {
   failPrompt = false;
   failAccess = false;
   accessCalls = 0;
+  recoveryReply = undefined;
   historyReplies.length = 0;
   routeCalls = 0;
   const app = express();
@@ -88,7 +94,14 @@ test.beforeEach(async ({ page }) => {
     const id = `ses_${req.params.studioId.replaceAll("-", "_")}`;
     let c = conversations.get(id);
     if (!c) {
-      c = { id, turns: [], streams: new Set(), prompts: [] };
+      c = {
+        id,
+        turns: [],
+        streams: new Set(),
+        prompts: [],
+        busy: false,
+        recoveries: [],
+      };
       conversations.set(id, c);
     }
     const path = req.params[0];
@@ -127,7 +140,7 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === "session/status") {
-      res.json({ [id]: { type: "idle" } });
+      res.json({ [id]: { type: c.busy ? "busy" : "idle" } });
       return;
     }
     if (path === "event") {
@@ -138,7 +151,61 @@ test.beforeEach(async ({ page }) => {
       res.type("text/event-stream").flushHeaders();
       c.streams.add(res);
       res.write('data: {"type":"server.connected","properties":{}}\n\n');
+      res.write(
+        `data: ${JSON.stringify({ type: "session.status", properties: { sessionID: id, status: { type: c.busy ? "busy" : "idle" } } })}\n\n`,
+      );
       res.once("close", () => c!.streams.delete(res));
+      return;
+    }
+    if (path === `session/${id}/final-response`) {
+      c.recoveries.push(req.body.messageId);
+      emit(c, "session.status", { sessionID: id, status: { type: "busy" } });
+      recoveryReply = (text, agent = "sapiom-turn-recovery") => {
+        const previous = c!.turns.at(-1)!;
+        const messageId = `${previous.info.id}_recovered`;
+        const user = {
+          info: {
+            id: `${messageId}_user`,
+            sessionID: id,
+            role: "user",
+            agent,
+            time: { created: Date.now() },
+          },
+          parts: [
+            {
+              id: `prt_${messageId}_user`,
+              sessionID: id,
+              messageID: `${messageId}_user`,
+              type: "text",
+              text: "Internal recovery instruction",
+            },
+          ],
+        };
+        const answer = {
+          info: {
+            ...previous.info,
+            id: messageId,
+            agent,
+            parentID: user.info.id,
+          },
+          parts: [
+            {
+              id: `prt_${messageId}`,
+              sessionID: id,
+              messageID: messageId,
+              type: "text",
+              text,
+            },
+          ],
+        };
+        c!.turns.push(user, answer);
+        emit(c!, "message.updated", { info: user.info });
+        emit(c!, "message.part.updated", { part: user.parts[0] });
+        emit(c!, "message.updated", { info: answer.info });
+        emit(c!, "message.part.updated", { part: answer.parts[0] });
+        emit(c!, "session.status", { sessionID: id, status: { type: "idle" } });
+        res.status(204).end();
+      };
       return;
     }
     if (path === `session/${id}/prompt_async`) {
@@ -154,6 +221,7 @@ test.beforeEach(async ({ page }) => {
           id: userId,
           sessionID: id,
           role: "user",
+          agent: "build",
           time: { created: Date.now() },
         },
         parts: [
@@ -223,6 +291,340 @@ test.beforeEach(async ({ page }) => {
       url: `${origin}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}`,
     }),
   );
+});
+
+function endWithoutAnswer(c: Conversation) {
+  const preamble = c.turns.at(-1)!;
+  preamble.info.finish = "tool-calls";
+  preamble.info.time.completed = Date.now();
+  const tool = {
+    id: "prt_tool",
+    sessionID: c.id,
+    messageID: preamble.info.id,
+    type: "tool",
+    callID: "call_read",
+    tool: "read",
+    state: {
+      status: "completed",
+      input: { filePath: "README.md" },
+      output: "# OpenCode playground",
+      title: "README.md",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    },
+  };
+  preamble.parts.push(tool);
+  emit(c, "message.updated", { info: preamble.info });
+  emit(c, "message.part.updated", { part: tool });
+  const final = {
+    info: { ...preamble.info, id: "msg_empty", agent: "build", finish: "stop" },
+    parts: [],
+  };
+  c.turns.push(final);
+  emit(c, "message.updated", { info: final.info });
+  emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+}
+
+function useCompletionContract(c: Conversation) {
+  const user = c.turns.findLast((turn) => turn.info.role === "user")!;
+  user.info.system ??= openCodeCompletionPrompt().system;
+  emit(c, "message.updated", { info: user.info });
+  return /^StudioAssistantResult\/v[12]:([a-f0-9-]{36})/.exec(
+    user.info.system,
+  )![1];
+}
+
+function declareResult(
+  c: Conversation,
+  status: "finished" | "failed",
+  answer: string,
+) {
+  const token = useCompletionContract(c);
+  const turn = c.turns.at(-1)!;
+  turn.parts[0].text = `<!-- studio-result:${token}:${status} -->\n${answer}`;
+  turn.info.finish = "stop";
+  turn.info.time.completed = Date.now();
+  emit(c, "message.part.updated", { part: turn.parts[0] });
+  emit(c, "message.updated", { info: turn.info });
+  emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+}
+
+for (const reported of ["finished", "failed"] as const) {
+  test(`renders the explicit ${reported} result without internal tool details or duplicate text`, async ({
+    page,
+  }) => {
+    await openAssistant(page);
+    await page
+      .getByRole("textbox", { name: "Message Assistant" })
+      .fill("Reply exactly CHAT_OK. Do not use tools.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    const answer =
+      reported === "finished"
+        ? "CHAT_OK"
+        : "I could not complete this request.";
+    declareResult(c, reported, answer);
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await expect(status).toHaveText(
+      reported === "finished" ? "Finished" : "Failed",
+    );
+    await expect(page.locator(".studio-chat-assistant")).toHaveText(answer);
+    await expect(
+      page.getByText("studio-result:", { exact: false }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(page.locator(".studio-chat-assistant")).toHaveText(answer);
+    expect(c.recoveries).toHaveLength(0);
+    expect(c.prompts).toHaveLength(1);
+  });
+}
+
+test("hides a footer split across text parts when the native turn is interrupted", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Run the tests.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  const token = useCompletionContract(c);
+  const turn = c.turns.at(-1)!;
+  const footer = `<!-- studio-result:${token}:finished -->`;
+  turn.parts[0].text = `Some progress.\n\n${footer.slice(0, 30)}`;
+  turn.parts.push({
+    ...turn.parts[0],
+    id: "prt_split_footer",
+    text: footer.slice(30),
+  });
+  for (const part of turn.parts) emit(c, "message.part.updated", { part });
+  turn.info.finish = "length";
+  turn.info.time.completed = Date.now();
+  emit(c, "message.updated", { info: turn.info });
+  emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(status).toHaveText("Failed");
+  await expect(page.locator(".studio-chat-assistant")).toHaveText(
+    "Some progress.",
+  );
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(page.locator(".studio-chat-assistant")).toHaveText(
+    "Some progress.",
+  );
+  expect(c.recoveries).toHaveLength(0);
+  expect(c.prompts).toHaveLength(1);
+});
+
+for (const recovered of [true, false]) {
+  test(`continues a preamble-only native stop once and then shows ${recovered ? "Finished" : "Stopped"}`, async ({
+    page,
+  }) => {
+    await openAssistant(page);
+    await page
+      .getByRole("textbox", { name: "Message Assistant" })
+      .fill("Create the math module and run tests.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    useCompletionContract(c);
+    const preamble = c.turns.at(-1)!;
+    preamble.parts[0].text =
+      "I'll create both files and verify the directory structure in parallel.";
+    Object.assign(preamble.info, {
+      agent: "build",
+      finish: "stop",
+    });
+    preamble.info.time.completed = Date.now();
+    emit(c, "message.part.updated", { part: preamble.parts[0] });
+    emit(c, "message.updated", { info: preamble.info });
+    emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+    await expect.poll(() => c.recoveries.length).toBe(1);
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await expect(status).toContainText("Working");
+    recoveryReply!(recovered ? "" : "I'll do that next.");
+    if (recovered)
+      declareResult(c, "finished", "Created both files. All 3 tests passed.");
+    else useCompletionContract(c);
+    await expect(status).toHaveText(recovered ? "Finished" : "Stopped");
+    await expect(
+      page.getByText("Model did not produce structured output"),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(status).toHaveText(recovered ? "Finished" : "Stopped");
+    expect(c.recoveries).toHaveLength(1);
+    expect(c.prompts).toHaveLength(1);
+  });
+}
+
+test("preserves an unconfirmed explanation as Stopped after history restoration", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("Run the math tests and explain the results.");
+  await input.press("Enter");
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  endWithoutAnswer(c);
+  await expect.poll(() => c.recoveries.length).toBe(1);
+  recoveryReply!(
+    "All 3 tests passed: positive numbers, negative numbers, and zero.",
+  );
+  useCompletionContract(c);
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(status).toHaveText("Stopped");
+  await expect(page.getByRole("note")).toContainText(
+    "Completion was not confirmed",
+  );
+  await expect(
+    page.getByText("All 3 tests passed:", { exact: false }),
+  ).toBeVisible();
+  await expect(input).toBeEnabled();
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(status).toHaveText("Stopped");
+  expect(c.recoveries).toHaveLength(1);
+  expect(c.prompts).toHaveLength(1);
+});
+
+for (const recovered of [true, false]) {
+  test(`recovers a tools-only turn once and shows ${recovered ? "Finished" : "Failed"}`, async ({
+    page,
+  }, testInfo) => {
+    await openAssistant(page);
+    const status = page.getByRole("status", { name: "Assistant status" });
+    const input = page.getByRole("textbox", { name: "Message Assistant" });
+    await input.fill("Read the README and explain what's here.");
+    await input.press("Enter");
+    await expect(
+      page.locator(".studio-chat-assistant").filter({ hasText: "First chunk" }),
+    ).toBeVisible();
+    await expect(status).toHaveText("Working");
+    const c = conversations.get("ses_sess_boot")!;
+    endWithoutAnswer(c);
+    await expect.poll(() => c.recoveries.length).toBe(1);
+    await expect(status).toContainText("Working");
+    await expect(
+      page.getByRole("button", { name: "Send message" }),
+    ).toBeDisabled();
+    recoveryReply!(
+      recovered
+        ? "This scratch project contains a README and a .sapiom folder for testing Studio Assistant."
+        : "",
+    );
+    await expect(status).toHaveText(recovered ? "Finished" : "Failed");
+    await expect(page.locator(".studio-chat-meta")).toContainText(
+      "read · Complete",
+    );
+    if (!recovered)
+      await expect(page.getByRole("alert")).toContainText(
+        "could not complete this request",
+      );
+    await page
+      .locator(".studio-conversation")
+      .screenshot({ path: testInfo.outputPath("overall-status.png") });
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(status).toHaveText(recovered ? "Finished" : "Failed");
+    expect(c.recoveries).toEqual(["msg_empty"]);
+    expect(c.prompts).toHaveLength(1);
+    await expect(page.getByText("Internal recovery instruction")).toHaveCount(
+      0,
+    );
+  });
+}
+
+test("keeps an old summary-only recovery failed after restoring history", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Create a math module and run tests");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.locator(".studio-chat-assistant").filter({ hasText: "First chunk" }),
+  ).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  endWithoutAnswer(c);
+  await expect.poll(() => c.recoveries.length).toBe(1);
+  recoveryReply!(
+    "Only a todo list was created. No files were written or tests run.",
+    "sapiom-final-response",
+  );
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(status).toHaveText("Failed");
+  await expect(
+    page
+      .locator(".studio-chat-assistant")
+      .filter({ hasText: "No files were written or tests run." }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(status).toHaveText("Failed");
+  expect(c.recoveries).toHaveLength(1);
+});
+
+test("keeps Working after streamed text until the engine finishes", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("Explain this project");
+  await input.press("Enter");
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(
+    page.locator(".studio-chat-assistant").filter({ hasText: "First chunk" }),
+  ).toBeVisible();
+  await expect(status).toHaveText("Working");
+  finish("ses_sess_boot", " — here is the explanation.");
+  await expect(status).toHaveText("Finished");
+});
+
+test("opens saved Assistant history when its Terminal session has exited", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Explain this project");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect
+    .poll(() => conversations.get("ses_sess_boot")!.prompts.length)
+    .toBe(1);
+  finish("ses_sess_boot", " — saved explanation.");
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Finished");
+  await page.evaluate(() =>
+    (window as any).__HARNESS_TEST__.publish({
+      type: "session.status",
+      session: {
+        id: "sess-boot",
+        agentSessionId: null,
+        boundWorkflowPath: null,
+        harness: "claude-code",
+        cwd: "/Users/demo/acme-app",
+        title: "acme-app",
+        status: "exited",
+        ready: false,
+        exitCode: 0,
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      },
+    }),
+  );
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Finished");
+  expect(conversations.get("ses_sess_boot")!.prompts).toHaveLength(1);
 });
 test.afterEach(async () => {
   server.closeAllConnections();

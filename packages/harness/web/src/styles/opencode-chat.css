@@ -88,6 +88,19 @@
   margin: 0 auto;
   padding: var(--sp3) var(--sp4) var(--sp4);
 }
+.studio-chat-status {
+  margin-bottom: var(--sp2);
+}
+.studio-chat-status[data-status="Finished"] .status-tag-dot {
+  color: var(--green-text);
+}
+.studio-chat-status[data-status="Failed"] .status-tag-dot {
+  color: var(--red-text);
+}
+.studio-chat-status[data-status="Working"] .status-tag-dot,
+.studio-chat-status[data-status="Stopped"] .status-tag-dot {
+  color: var(--amber-text);
+}
 .studio-chat-composer {
   background: var(--surface-raised);
   border-radius: var(--radius);
