@@ -237,4 +237,51 @@ describe("DurableFileLock", () => {
     expect(rejectedRename).toBeGreaterThan(0);
     expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(owner);
   });
+
+  it("never restores a tombstone over a competing live owner", async () => {
+    const { target, lockPath } = await fixture();
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ ownerId: "dead", pid: 999_999_999 })}\n`,
+    );
+    const renamed = deferred();
+    const resume = deferred();
+    const reclaiming = new DurableFileLock(target, {
+      timeoutMs: 30,
+      retryMs: 1,
+      hooks: {
+        isPidAlive: (pid) => pid === process.pid,
+        afterReclaimRename: async () => {
+          renamed.resolve();
+          await resume.promise;
+        },
+      },
+    }).acquire();
+    await renamed.promise;
+
+    let competingOwnerId = "";
+    const competingRelease = await new DurableFileLock(target, {
+      hooks: {
+        afterLockAcquired: (ownerId) => {
+          competingOwnerId = ownerId;
+        },
+      },
+    }).acquire();
+    resume.resolve();
+
+    await expect(reclaiming).rejects.toThrow("Storage unavailable");
+    expect(competingOwnerId).not.toBe("");
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+      ownerId: competingOwnerId,
+      pid: process.pid,
+    });
+    await expect(
+      new DurableFileLock(target, {
+        timeoutMs: 5,
+        retryMs: 1,
+      }).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+
+    await competingRelease();
+  });
 });
