@@ -62,6 +62,13 @@ describe("packaged OpenCode runtime", () => {
       expect(inspected.keys).not.toContain(key);
     expect(JSON.stringify(config)).toContain("/llm/v2/openai/v1");
     expect(JSON.stringify(config)).toContain("/mcp");
+    expect(config.agent).toMatchObject({
+      "sapiom-final-response": { hidden: true, permission: { "*": "deny" } },
+      "sapiom-turn-recovery": { hidden: true, mode: "primary" },
+    });
+    expect(
+      (config.agent as Record<string, unknown>)["sapiom-turn-recovery"],
+    ).not.toHaveProperty("permission");
     await expect(server.fetch("https://other.example/private")).rejects.toThrow(
       "Invalid",
     );
