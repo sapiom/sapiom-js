@@ -2905,13 +2905,28 @@ export const App = (): JSX.Element => {
               await harness.removeProject(root);
             }}
             onOpenProject={async (requestedRoot) => {
+              // CLAIMED BEFORE THE SCAN, not after it. The scan is the slow
+              // part, and this generation is what a later user choice
+              // invalidates (`handleSelectWorkspace` bumps the same ref). Taken
+              // afterwards it claimed a NEWER generation than the selection the
+              // user made while waiting, so a slow open would win a race it had
+              // already lost and yank the view back to the folder just added.
+              //
+              // The open itself is NOT conditional — the project is still added
+              // either way. Only the navigation to it is dropped, because the
+              // user has since said where they want to be.
+              const generation = ++studioRestoreGenerationRef.current;
+              const stale = (): boolean =>
+                generation !== studioRestoreGenerationRef.current;
               const openedRoot = await harness.openProject(requestedRoot);
+              if (stale()) return;
               let restoringProject: {
                 projectId: StudioProjectId;
                 cwd: string;
               } | null = null;
               try {
                 const refreshed = await harness.api.getState();
+                if (stale()) return;
                 const scope = refreshed.workspaceScopes?.find((candidate) =>
                   samePath(candidate.cwd, openedRoot),
                 );
@@ -2924,11 +2939,10 @@ export const App = (): JSX.Element => {
                   cwd: scope.cwd,
                 };
                 restoredStudioProjectsRef.current.add(project.projectId);
-                const generation = ++studioRestoreGenerationRef.current;
                 const current = await harness.api.getStudioCurrentWorkspace(
                   project.projectId,
                 );
-                if (generation !== studioRestoreGenerationRef.current) return;
+                if (stale()) return;
                 const restoredSelection = current.selection;
                 if (restoredSelection.kind === "agent") {
                   const workflow = refreshed.workflows.find((candidate) =>
@@ -2953,11 +2967,17 @@ export const App = (): JSX.Element => {
                 setFocusedAgentPath(scope.cwd);
                 if (isMobile) setRightCollapsed(true);
               } catch {
-                if (restoringProject) {
+                if (restoringProject && !stale()) {
                   // Preference restoration is best-effort. The project itself
                   // opened successfully, so fall back to its stable map rather
                   // than leaving the previous workspace selected. Keep the
                   // restore guard so later session frames cannot repeat it.
+                  //
+                  // Staleness gates the FALLBACK too: a failure to read the
+                  // preference is not a reason to override a choice the user
+                  // made while waiting. Bumping is inside the guard as well,
+                  // or a stale failure would invalidate the newer selection's
+                  // own pending restore.
                   studioRestoreGenerationRef.current += 1;
                   setStudioSelection({
                     kind: "agent-map",

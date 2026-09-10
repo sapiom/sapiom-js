@@ -111,6 +111,51 @@ test.describe("desktop host", () => {
     await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
   });
 
+  test("a slow open does not yank the view off a project chosen while waiting", async ({
+    page,
+  }) => {
+    /* THE DIALOG USED TO BE THE LOCK. While it was open the rail was behind a
+       modal, so "add a folder" could not overlap "select a project". Opening
+       the OS picker instead hands the rail back the moment it closes, and the
+       scan behind it is the slow part — so the two DO overlap now, and the
+       later choice has to win.
+
+       Not a contrived window: the mock's scan takes 250ms, and a real one
+       walks a tree. */
+    await installDesktopBridge(page, "/Users/demo/blank-slate");
+    // `mockStudioProjects=present` because the competing choice has to be a
+    // durable project — a selectable map is what the finishing scan overrides.
+    await page.goto("/?mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    const other = page.getByTestId("project-select-acme-app");
+    await expect(other).toBeVisible();
+
+    // No awaits between these two: the second click has to land inside the
+    // first one's scan, which is the whole point.
+    await page.getByTestId("rail-add-project").click();
+    await other.click();
+
+    // The open still COMPLETES — the folder is added, because the user did ask
+    // for it. Only the navigation to it is dropped.
+    await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
+
+    /* SETTLE FIRST, THEN ASSERT, and that ordering is the test.
+       `toHaveAttribute` retries until it matches and returns on the first
+       pass, so asserting straight after the row appears is satisfied by the
+       state BEFORE the stale navigation lands — it passed against the
+       unfixed build. The override arrives a few frames later, after the
+       preference read that follows the scan, so the wait is what gives it
+       the chance to happen. */
+    await page.waitForTimeout(1500);
+    await expect(other).toHaveAttribute("aria-pressed", "true");
+    // Stated from the other side too: the late arrival must not have taken
+    // the selection for itself.
+    await expect(
+      page.getByTestId("project-select-blank-slate"),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("the field's own Choose still serves the entrance that keeps a dialog", async ({
     page,
   }) => {
