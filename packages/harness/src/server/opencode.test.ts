@@ -68,8 +68,14 @@ beforeEach(async () => {
     if (session) res.json(session);
     else res.status(404).json({ error: "private native diagnostics" });
   });
-  engine.get("/session/:id/message", (_req, res) => {
-    res.json([]);
+  engine.get("/session/:id/message", (req, res) => {
+    res.json(
+      requests.some(
+        (request) => request.path === `/session/${req.params.id}/prompt_async`,
+      )
+        ? [{ info: { id: "msg_admitted", role: "user", time: {} }, parts: [] }]
+        : [],
+    );
   });
   engine.post("/session/:id/prompt_async", (_req, res) => {
     res.status(204).end();
@@ -166,6 +172,54 @@ async function readUntil(
 }
 
 describe("Studio-scoped OpenCode transport", () => {
+  it("authenticates and scopes final-answer recovery without exposing native overrides", async () => {
+    const id = await attach("studio-b");
+    const path = `studio-b/session/${id}/final-response`;
+    expect(
+      (
+        await request(path, {
+          method: "POST",
+          headers: {},
+          body: JSON.stringify({ messageId: "msg_empty" }),
+        })
+      ).status,
+    ).toBe(401);
+    for (const body of [
+      {},
+      { messageId: "../escape" },
+      { messageId: "msg_empty", agent: "build" },
+      { messageId: "msg_empty", tools: { bash: true } },
+    ])
+      expect(
+        (await request(path, { method: "POST", body: JSON.stringify(body) }))
+          .status,
+      ).toBe(400);
+    expect((await request(path)).status).toBe(400);
+    expect(
+      (
+        await request("studio-a/session/ses_secret/final-response", {
+          method: "POST",
+          body: JSON.stringify({ messageId: "msg_empty" }),
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(path, {
+          method: "POST",
+          body: JSON.stringify({ messageId: "msg_empty" }),
+        })
+      ).status,
+    ).toBe(502);
+    expect(
+      requests.filter(
+        (request) =>
+          request.path.endsWith("/message") &&
+          Object.prototype.hasOwnProperty.call(request.body ?? {}, "agent"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("authenticates before startup and rejects flag-off or unauthorized workspaces", async () => {
     expect(
       (await request("studio-a/attach", { method: "POST", headers: {} }))
@@ -241,8 +295,14 @@ describe("Studio-scoped OpenCode transport", () => {
       },
     });
     expect(response.status).toBe(204);
-    const native = requests.at(-1)!;
-    expect(native.body).toEqual(body);
+    const native = requests.find((request) =>
+      request.path.endsWith("/prompt_async"),
+    )!;
+    expect(native.body).toEqual({
+      ...body,
+      system: expect.stringContaining("StudioAssistantResult/v2:"),
+    });
+    expect(native.body).not.toHaveProperty("format");
     expect(native.headers.authorization).toBe("Basic native-only");
     for (const name of ["x-harness-token", "cookie", "x-opencode-directory"])
       expect(native.headers[name]).toBeUndefined();

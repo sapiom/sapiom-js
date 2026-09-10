@@ -13,6 +13,8 @@ import {
   openCodeTransportFailure,
   type OpenCodeTransportFailure,
 } from "../shared/opencode-errors.js";
+import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
+import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 
 export function createOpenCodeRouter(
   host: Pick<OpenCodeHost, "ensure">,
@@ -20,6 +22,7 @@ export function createOpenCodeRouter(
 ): Router {
   const router = express.Router();
   const associations = new OpenCodeAssociations();
+  const finalResponse = new OpenCodeFinalResponse();
   router.use(
     createBootTokenMiddleware(bootToken),
     express.json({ limit: "1mb" }),
@@ -36,7 +39,9 @@ export function createOpenCodeRouter(
     const id = req.params.harnessSessionId!;
     const read = req.method === "GET";
     const conversation =
-      /^session\/(ses_[A-Za-z0-9_-]+)(\/message|\/prompt_async)?$/.exec(path);
+      /^session\/(ses_[A-Za-z0-9_-]+)(\/message|\/prompt_async|\/final-response)?$/.exec(
+        path,
+      );
     const collection = [
       "experimental/session",
       "session/status",
@@ -46,13 +51,19 @@ export function createOpenCodeRouter(
     const prompt =
       !read && req.method === "POST" && conversation?.[2] === "/prompt_async";
     const attach = req.method === "POST" && path === "attach";
+    const recover =
+      req.method === "POST" && conversation?.[2] === "/final-response";
     const allowed =
       attach ||
       prompt ||
+      recover ||
       (read &&
         (path === "event" ||
           collection ||
-          (conversation && conversation[2] !== "/prompt_async")));
+          (conversation &&
+            !["/prompt_async", "/final-response"].includes(
+              conversation[2] ?? "",
+            ))));
     const queryAllowed = Object.entries(req.query).every(
       ([key, value]) =>
         path === "experimental/session" &&
@@ -63,17 +74,18 @@ export function createOpenCodeRouter(
       !allowed ||
       !/^[A-Za-z0-9_-]{1,128}$/.test(id) ||
       !queryAllowed ||
-      (conversation && !isConversationId(conversation[1]))
+      (conversation && !isConversationId(conversation[1])) ||
+      (recover &&
+        (Object.keys(req.body ?? {}).length !== 1 ||
+          !/^msg_[A-Za-z0-9_-]{1,128}$/.test(req.body?.messageId ?? "")))
     ) {
       res.status(400).json({ error: "Unsupported Assistant request" });
       return;
     }
     if (prompt && !validPrompt(req.body)) {
-      res
-        .status(400)
-        .json({
-          error: "Send a text message without model or workspace overrides",
-        });
+      res.status(400).json({
+        error: "Send a text message without model or workspace overrides",
+      });
       return;
     }
     const disconnected = new AbortController();
@@ -86,11 +98,9 @@ export function createOpenCodeRouter(
       const signal = AbortSignal.any([hosted.signal, disconnected.signal]);
       signal.throwIfAborted();
       if (conversation && conversation[1] !== nativeId) {
-        res
-          .status(403)
-          .json({
-            error: "Conversation does not belong to this Studio session",
-          });
+        res.status(403).json({
+          error: "Conversation does not belong to this Studio session",
+        });
         return;
       }
       if (attach) {
@@ -101,17 +111,38 @@ export function createOpenCodeRouter(
         await streamOpenCodeEvents(hosted, nativeId, res, signal);
         return;
       }
+      if (recover) {
+        await finalResponse.recover(hosted, nativeId, req.body.messageId);
+        if (!res.destroyed) res.status(204).end();
+        return;
+      }
+      if (prompt && finalResponse.isRunning(hosted)) {
+        res
+          .status(409)
+          .json({ error: "Assistant is finishing the previous response" });
+        return;
+      }
       const nativePath =
         path === "experimental/session" ? `session/${nativeId}` : path;
-      const upstream = await hosted.server.fetch(`/${nativePath}`, {
+      const init = {
         method: req.method,
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        ...(prompt ? { body: JSON.stringify(req.body) } : {}),
+        ...(prompt
+          ? {
+              body: JSON.stringify({
+                ...req.body,
+                ...openCodeCompletionPrompt(),
+              }),
+            }
+          : {}),
         signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
-      });
+      };
+      const upstream = prompt
+        ? await finalResponse.send(hosted, nativeId, init)
+        : await hosted.server.fetch(`/${nativePath}`, init);
       if (!upstream.ok) {
         await upstream.body?.cancel();
         sendFailure(
@@ -119,7 +150,7 @@ export function createOpenCodeRouter(
           openCodeTransportFailure(
             upstream.status === 404 && conversation
               ? "native_history_missing"
-              : "transport_unavailable",
+            : "transport_unavailable",
           ),
         );
         return;

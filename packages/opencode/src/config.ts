@@ -27,6 +27,18 @@ export function createSapiomOpenCodeConfig(
     model: `sapiom/${model}`,
     enabled_providers: ["sapiom"],
     plugin: [],
+    agent: {
+      "sapiom-final-response": {
+        mode: "primary",
+        hidden: true,
+        permission: { "*": "deny" },
+        prompt:
+          "Write the final answer using the existing conversation and completed tool results. Do not perform additional work. Explain any limitations plainly.",
+      },
+      // Inherits native coding instructions and default permissions. Unlike the
+      // old summary-only agent, this can finish the user's remaining work.
+      "sapiom-turn-recovery": { mode: "primary", hidden: true },
+    },
     provider: {
       sapiom: {
         npm: "@ai-sdk/openai-compatible",
