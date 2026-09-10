@@ -54,6 +54,15 @@ const APPROVAL_SIGNAL = "approval.decision";
 /** The signal a candidate fires to accept or decline a provisional offer. */
 const CONFIRM_SIGNAL = "candidate.confirm";
 
+/**
+ * Explicit deadline for a human gate, one year. A pause with no `timeoutMs`
+ * inherits the engine's 7-day default, and a lapsed deadline *terminates* the
+ * run rather than resuming it, so the default would hard-fail any approval
+ * slower than a week. Long enough that a slow approver never loses the run,
+ * finite enough that an abandoned one still reaches a terminal state.
+ */
+const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
+
 // ─────────────────────────────────────────────────────────────── shapes ──
 /** String-only config bag (matches how templates receive their `config`). */
 type Config = Record<string, string>;
@@ -417,6 +426,7 @@ const notifyApprover = defineStep({
       signal: APPROVAL_SIGNAL,
       resumeStep: "onDecision",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });
@@ -500,6 +510,7 @@ const offer = defineStep({
       signal: CONFIRM_SIGNAL,
       resumeStep: "resolve",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });

@@ -50,22 +50,24 @@ import { z } from "zod/v4";
  * approver and re-pause, up to `maxReminders`, after which the gate escalates. An
  * explicit `{ decision: "timeout" }` escalates immediately.
  *
- * The gates carry NO `timeoutMs`, on purpose. The engine has a paused-run reaper:
- * a lapsed deadline *terminates* the run with a `PauseTimeoutError` rather than
- * resuming the step, so a lapsed gate never reaches `decide`/`remind`/`escalate`.
- * Handing a signal pause a `reminderMs`-sized `timeoutMs` (as an earlier version
- * did) would therefore hard-fail any approval slower than the reminder interval
- * and bypass the graceful `escalate` step entirely. Omitting it is safe because
- * the engine recognizes a run waiting on a human approval gate and gives it a
- * one-year deadline instead of the 7 days it applies to machine waits, which is
- * exactly the shape this chain wants: a slow approver never loses the run, and an
- * abandoned chain still reaches a terminal state instead of parking forever.
- * Reminders and escalation stay driven purely by the signal convention: the
- * run-detail one-click Approve/Reject, a cron that fires `remind`/`timeout` on a
- * schedule, or a `run_local` auto-resume, never the pause deadline.
- * (`wait-for-webhook` is the mirror image: a machine wait that *wants* a short
- * terminal timeout and opts into one.) Do not add a `timeoutMs` here without
- * moving to that terminal model.
+ * The gates carry a deliberately long `GATE_PAUSE_TIMEOUT_MS` (one year), and the
+ * value is load-bearing. The engine has a paused-run reaper: `timeoutMs` sets
+ * `pausedUntil`, and a background sweep *terminates* the run with a
+ * `PauseTimeoutError` once it lapses. It does NOT resume the step, so a lapsed
+ * gate never reaches `decide`/`remind`/`escalate`. Handing a signal pause a
+ * `reminderMs`-sized `timeoutMs` (as an earlier version did) would hard-fail any
+ * approval slower than the reminder interval, bypassing the graceful `escalate`
+ * step entirely, and omitting `timeoutMs` is no longer an escape: a pause with no
+ * deadline now inherits the engine's 7-day default, which does the same damage on
+ * a one-week horizon. One year is the explicit opt-out: long enough that a slow
+ * approver never loses the run, finite enough that an abandoned chain still lands
+ * in a terminal state. Reminders and escalation stay driven purely by the signal
+ * convention: the run-detail one-click Approve/Reject, a cron that fires
+ * `remind`/`timeout` on a schedule, or a `run_local` auto-resume, never the pause
+ * deadline. (`wait-for-webhook` is the mirror image: it *wants* a short terminal
+ * timeout and opts into one; this chain wants a reminder loop, so its deadline is
+ * a backstop rather than a cadence.) Do not shorten it toward the reminder
+ * interval without moving to that terminal model.
  *
  * ── Chain state ────────────────────────────────────────────────────────────────
  * The canonical chain state — which gate we're on, who has approved, the full
@@ -89,6 +91,15 @@ const APPROVAL_SIGNAL = "approval.decision";
 
 /** Reminders sent before a silent gate escalates. */
 const DEFAULT_MAX_REMINDERS = 2;
+
+// An explicit, deliberately long gate deadline. A pause with no `timeoutMs` gets
+// the hosted engine's 7-day default, and a lapsed deadline *terminates* the run
+// with a PauseTimeoutError instead of resuming the step, which would hard-fail
+// any approval slower than a week and skip `escalate` entirely. One year is the
+// opt-out: long enough that a slow approver never loses the run, finite enough
+// that an abandoned chain still reaches a terminal state instead of parking
+// forever. Reminders and escalation come from the signal, never from this value.
+const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
 
 /** Postgres table the durable ledger appends to. */
 const LEDGER_TABLE = "approval_chain_ledger";
@@ -502,17 +513,18 @@ const present = defineStep({
     // pause is kept on purpose: an approver IS assigned, so somebody can resume
     // it, and the run detail ships one-click Approve/Reject.
     //
-    // NO `timeoutMs`: a lapsed deadline *terminates* the run (PauseTimeoutError)
-    // rather than resuming it, so any ceiling short enough to be useful would
-    // skip `escalate`. The engine reads this as a human approval gate and gives
-    // it a one-year deadline rather than the 7 days it applies to machine waits.
-    // The reminder/escalation loop is driven by the `approval.decision` signal
-    // (one-click UI, a cron firing `remind`/`timeout`, or a `run_local`
-    // auto-resume), never by the deadline. See the header note before adding one.
+    // `GATE_PAUSE_TIMEOUT_MS` is load-bearing, not decoration: a lapsed deadline
+    // *terminates* the run (PauseTimeoutError) rather than resuming it, so the
+    // engine's 7-day default would silently fail any approval slower than a week
+    // and skip `escalate`. The reminder/escalation loop is driven by the
+    // `approval.decision` signal (one-click UI, a cron firing `remind`/`timeout`,
+    // or a `run_local` auto-resume), never by the deadline. Read the header note
+    // before shortening it or dropping it.
     return pauseUntilSignal({
       signal: APPROVAL_SIGNAL,
       resumeStep: "decide",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });
@@ -521,8 +533,8 @@ const decide = defineStep({
   name: "decide",
   next: ["present", "remind", "finalize", "compensate", "escalate"],
   // `payload` IS the approval signal body (or empty on a `remind` / `run_local`
-  // auto-resume). The gates carry no `timeoutMs` and the engine treats them as
-  // human gates, so in practice the deadline sweep never lands here; see `present`.
+  // auto-resume). The gates carry a one-year `timeoutMs`, so in practice the
+  // deadline sweep never lands here; see `present`.
   async run(payload: ApprovalDecision, ctx: Ctx) {
     const approvers = must(ctx.shared.get("approvers"), "approvers");
     const gateIndex = must(ctx.shared.get("gateIndex"), "gateIndex");
@@ -618,12 +630,13 @@ const remind = defineStep({
     });
 
     // Re-suspend on the same gate until a decision (or the next reminder tick).
-    // As in `present`, no `timeoutMs`: the reminder cadence comes from the signal
-    // convention, not from the engine's (terminal) pause deadline.
+    // As in `present`, the same one-year backstop: the reminder cadence comes from
+    // the signal convention, not from the engine's (terminal) pause deadline.
     return pauseUntilSignal({
       signal: APPROVAL_SIGNAL,
       resumeStep: "decide",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });
