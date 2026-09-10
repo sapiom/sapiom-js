@@ -30,7 +30,10 @@ const authFixture = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@sapiom/mcp/auth", () => {
+// Partial mock: every export not listed below stays real, so a new auth
+// import in the server cannot fail here as a missing mock export.
+vi.mock("@sapiom/mcp/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@sapiom/mcp/auth")>();
   const resolveEnvironment = vi.fn(async (environment?: string) => {
     const requested = environment ?? "production";
     const name =
@@ -57,6 +60,7 @@ vi.mock("@sapiom/mcp/auth", () => {
   });
 
   return {
+    ...actual,
     resolveEnvironment,
     readCredentials: vi.fn(async () => authFixture.credential),
     readCredentialsOrThrow: vi.fn(async () => {
