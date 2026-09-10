@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { access, mkdtemp, mkdir, rm } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OpenCodeShutdownError } from "@sapiom/opencode";
 import type { AssistantGrant } from "./assistant-access.js";
 import { OpenCodeHost, OpenCodeTransportError } from "./opencode-host.js";
 
@@ -95,6 +104,106 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(start.mock.calls[0][0].stateRoot).not.toBe(
       start.mock.calls[1][0].stateRoot,
     );
+  });
+
+  it("durably protects the runtime identity before accepting native launch", async () => {
+    const cleanupProof = {
+      path: join(root, "runtime-cleanup.json"),
+      token: "synthetic-proof-token",
+    };
+    start.mockImplementationOnce(async (options) => {
+      expect(options.beforeLaunch).toEqual(expect.any(Function));
+      await options.beforeLaunch!({
+        pid: process.pid,
+        cleanupProof,
+      });
+      const runtimeRoot = join(options.stateRoot, "..");
+      const guardName = (await readdir(runtimeRoot)).find((name) =>
+        name.startsWith("runtime.lock.guard-"),
+      );
+      expect(guardName).toBeDefined();
+      expect(
+        JSON.parse(await readFile(join(runtimeRoot, guardName!), "utf8")),
+      ).toMatchObject({ pid: process.pid, cleanupProof });
+      return {
+        pid: process.pid,
+        exited: neverExited,
+        fetch: vi.fn(),
+        fetchJson: vi.fn(),
+        close,
+      };
+    });
+    close.mockImplementationOnce(async () => {
+      await writeFile(
+        cleanupProof.path,
+        `${JSON.stringify({ status: "complete", token: cleanupProof.token })}\n`,
+      );
+    });
+
+    await host.ensure("studio-one");
+    await host.retire("studio-one");
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("sanitizes rejected runtime protection and releases it for explicit retry", async () => {
+    start.mockImplementationOnce(async (options) => {
+      await options.beforeLaunch!({
+        pid: 0,
+        cleanupProof: {
+          path: join(root, "invalid-cleanup.json"),
+          token: "synthetic-proof-token",
+        },
+      });
+      throw new Error("unreachable");
+    });
+
+    const failure = await host.ensure("studio-one").catch((error) => error);
+    expect(failure).toMatchObject({
+      failure: { code: "runtime_start_failed" },
+    });
+    expect(failure.failure).not.toHaveProperty("reason");
+    expect(JSON.stringify(failure.failure)).not.toContain("invalid-cleanup");
+    expect(revoke).toHaveBeenCalledOnce();
+    await host.ensure("studio-one");
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts a pending protection before a late authority can launch native", async () => {
+    const cleanupProof = {
+      path: join(root, "retired-cleanup.json"),
+      token: "retired-proof-token",
+    };
+    let nativeLaunchAdmitted = false;
+    start.mockImplementationOnce(async (options) => {
+      const protection = options.beforeLaunch!({
+        pid: process.pid,
+        cleanupProof,
+      });
+      grant = null;
+      changed();
+      await protection;
+      if (!options.signal.aborted) nativeLaunchAdmitted = true;
+      return {
+        pid: process.pid,
+        exited: neverExited,
+        fetch: vi.fn(),
+        fetchJson: vi.fn(),
+        close,
+      };
+    });
+    close.mockImplementationOnce(async () => {
+      await writeFile(
+        cleanupProof.path,
+        `${JSON.stringify({ status: "complete", token: cleanupProof.token })}\n`,
+      );
+    });
+
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: { code: "authentication_required" },
+    });
+    expect(nativeLaunchAdmitted).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+    expect(revoke).toHaveBeenCalled();
   });
 
   it("does not inspect workspaces or start a process when access is off", async () => {
@@ -198,6 +307,20 @@ describe("Studio-owned OpenCode lifecycle", () => {
     ).resolves.toBeUndefined();
     grant = saved;
     changed();
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: { code: "transport_unavailable" },
+    });
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("retains the owner lock when startup cannot prove native cleanup", async () => {
+    expectShutdownFailure = true;
+    start.mockRejectedValueOnce(new OpenCodeShutdownError());
+
+    await expect(host.ensure("studio-one")).rejects.toThrow("shutdown");
+    await expect(
+      access(join(start.mock.calls[0][0].stateRoot, "..", "runtime.lock")),
+    ).resolves.toBeUndefined();
     await expect(host.ensure("studio-one")).rejects.toMatchObject({
       failure: { code: "transport_unavailable" },
     });

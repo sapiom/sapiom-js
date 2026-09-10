@@ -18,7 +18,10 @@ import {
   type OpenCodeStartupReason,
   type OpenCodeTransportFailure,
 } from "../shared/opencode-errors.js";
-import { DurableFileLock } from "./durable-file-lock.js";
+import {
+  DurableFileLock,
+  type DurableFileLockRelease,
+} from "./durable-file-lock.js";
 import type {
   OpenCodeBridge,
   OpenCodeBridgeCredential,
@@ -40,7 +43,7 @@ interface Managed {
   abort: AbortController;
   ready?: Promise<HostedOpenCode>;
   credential?: OpenCodeBridgeCredential;
-  unlock?: () => Promise<void>;
+  unlock?: DurableFileLockRelease;
   cleanupFailed?: boolean;
 }
 interface Options {
@@ -259,13 +262,15 @@ export class OpenCodeHost {
     let server: OpenCodeServer | undefined;
     let startupAttempted = false;
     try {
-      entry.unlock = await new DurableFileLock(join(stateRoot, "runtime"), {
+      const release = await new DurableFileLock(join(stateRoot, "runtime"), {
         timeoutMs: 1000,
+        processGuard: "required",
         storageError: () =>
           new Error(
             "Assistant is already open in another Studio window or its state is unavailable",
           ),
       }).acquire();
+      entry.unlock = release;
       await this.validate(entry);
       entry.credential = this.options.bridge.issue();
       const config = createSapiomOpenCodeConfig({
@@ -279,6 +284,7 @@ export class OpenCodeHost {
         stateRoot: join(stateRoot, "engine"),
         config,
         signal: entry.abort.signal,
+        beforeLaunch: (identity) => release.protectProcess(identity),
       });
       void server.exited
         .then(() => {
