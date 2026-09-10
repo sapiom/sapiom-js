@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { OpenCodeChat, type ChatDraft } from "./OpenCodeChat";
+import {
+  OpenCodeChat,
+  type ChatDraft,
+  type ChatDraftStore,
+} from "./OpenCodeChat";
 
 /** The server owns eligibility; this is only its short-lived UI projection. */
 export function AssistantPane({
@@ -7,21 +11,18 @@ export function AssistantPane({
   bootToken,
   authRevision,
   terminalRevision,
+  drafts,
   children,
 }: {
   sessionId: string;
   bootToken: string;
   authRevision: number;
   terminalRevision: number;
+  drafts: ChatDraftStore;
   children: ReactNode;
 }) {
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<"Terminal" | "Assistant">("Terminal");
-  // Preserve only unsent text across runtime disposal, scoped to this sign-in.
-  const drafts = useMemo(
-    () => new Map<string, ChatDraft>(),
-    [authRevision, bootToken],
-  );
   const draft = useMemo(() => {
     const entry = drafts.get(sessionId) ?? { text: "" };
     drafts.set(sessionId, entry);

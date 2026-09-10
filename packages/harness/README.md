@@ -72,9 +72,15 @@ switching views detaches the display while execution continues. Connection error
 offer **Reconnect**, which reloads history without resending accepted prompts.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
-rejected send shows its error and keeps the selected view. Unsent chat text stays
-in memory per session across view/tab switches and reconnects until sign-out or
-reload. Background actions keep the selected view. A failed UI
+rejected send shows its error and keeps the selected view. Unsent chat text is
+keyed by authenticated principal and Studio session above the centre pane, so it
+survives Terminal/Assistant and session switches, reconnects, exited-session
+views, and temporary New Session or past-session review navigation. It is never
+persisted: sign-out/account change, session deletion, and page/app reload clear
+the applicable in-memory draft. Conversation view is a separate, unpersisted
+mount-local preference: Terminal is the initial/reset view, while a foreground
+CLI prompt accepted by Studio explicitly reveals it. Background actions keep
+the selected view. A failed UI
 access poll retains the open draft for at most 60 seconds after the last success;
 explicit revocation/sign-out takes effect immediately when observed. The host
 continues enforcing its own capability expiry independently.
