@@ -1016,8 +1016,12 @@ export function WorkflowsRail({
               // folder — and Finder answers it better than we do.
               void chooseProjectFolder({
                 chooseDirectory: getDesktopBridge()?.chooseDirectory ?? null,
-                // The dialog's own precedence for where to start.
-                startingAt: projectRoot ?? launchDir,
+                // The dialog's own precedence for where to start, all three
+                // tiers of it (`StartDialog`'s initial `cwd`). Dropping the
+                // last one sent the OS picker to its default folder in the
+                // case the dialog handled best: no project open, nothing
+                // pinned, but somewhere the user was working recently.
+                startingAt: projectRoot ?? launchDir ?? recentDirs[0],
                 openDialog: () => setStartMode("open"),
                 onPicked: (root) => {
                   void onOpenProject(root).catch((err: unknown) => {

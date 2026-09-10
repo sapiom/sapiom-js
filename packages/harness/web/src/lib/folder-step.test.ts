@@ -60,7 +60,11 @@ describe("the folder step", () => {
     expect(openDialog).not.toHaveBeenCalled();
   });
 
-  it("swallows a failed native pick without falling back", async () => {
+  it("falls back to the dialog when the native pick FAILS", async () => {
+    // The one case that is not a decline. A broken bridge used to be swallowed
+    // exactly like a cancel, which left Add a project doing nothing at all on
+    // a desktop build whose picker was unavailable — a dead control with no
+    // way through. Cancelling still does nothing; failing offers the fallback.
     const openDialog = vi.fn();
     const onPicked = vi.fn();
 
@@ -73,7 +77,7 @@ describe("the folder step", () => {
     ).resolves.toBeUndefined();
 
     expect(onPicked).not.toHaveBeenCalled();
-    expect(openDialog).not.toHaveBeenCalled();
+    expect(openDialog).toHaveBeenCalledTimes(1);
   });
 
   it("omits the starting folder rather than passing an empty one", async () => {

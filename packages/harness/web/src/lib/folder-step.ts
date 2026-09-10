@@ -46,8 +46,14 @@ export interface FolderStepHost {
  *
  * Resolves once the question has been ASKED, not answered: the dialog path
  * returns as soon as the dialog is open. Only the native path has an answer to
- * wait for, and a cancelled or failed pick is a no-op rather than an error —
- * dismissing a folder browser is not a failure, and there is nothing to report.
+ * wait for.
+ *
+ * CANCELLING AND FAILING ARE DIFFERENT ANSWERS, and they were conflated here.
+ * Cancelling resolves `null` and is a no-op — dismissing a folder browser is
+ * not a failure and there is nothing to report. A REJECTION is not a decline:
+ * it means the bridge is broken, and swallowing it left the only entrance to
+ * adding a project doing nothing at all, with no way through. The typed-path
+ * dialog still works on this host, so a failure falls back to it.
  */
 export async function chooseProjectFolder(host: FolderStepHost): Promise<void> {
   if (!host.chooseDirectory) {
@@ -61,6 +67,8 @@ export async function chooseProjectFolder(host: FolderStepHost): Promise<void> {
     // which lets `""` past, and "start at nowhere" is not a starting folder.
     picked = await host.chooseDirectory(host.startingAt || undefined);
   } catch {
+    // Not a decline — see above. Leave the user a working way to answer.
+    host.openDialog();
     return;
   }
   if (picked) host.onPicked(picked);
