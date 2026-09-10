@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await runtime?.close();
   runtime = undefined;
   await new Promise<void>(
@@ -423,6 +424,55 @@ describe("pinned OpenCode 1.18.29", () => {
     };
     expect(childEnvironment.profile).toBe(callerProfile);
     expect(childEnvironment.home).toBe(callerProfile);
+  }, 30_000);
+
+  it("uses the OS account home when the supplied environment has no home family", async () => {
+    const ambientHome = join(root, "hostile-ambient-home");
+    vi.stubEnv("HOME", ambientHome);
+    const environment = {
+      ...process.env,
+      HOME: undefined,
+      USERPROFILE: undefined,
+      HOMEDRIVE: undefined,
+      HOMEPATH: undefined,
+    };
+    runtime = await startOpenCodeServer({
+      cwd: root,
+      stateRoot: join(root, "state"),
+      environment,
+      config: createSapiomOpenCodeConfig({
+        bridgeUrl: "http://127.0.0.1:9/runtime",
+        runtimeToken: "synthetic-account-home-token",
+      }),
+    });
+    const session = await runtime.fetchJson<{ id: string }>("/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const inspect =
+      "console.log(JSON.stringify({home:process.env.HOME,profile:process.env.USERPROFILE}))";
+    const result = await runtime.fetchJson<{
+      parts: Array<{ state?: { status?: string; output?: string } }>;
+    }>(`/session/${session.id}/shell`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent: "build",
+        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(inspect)}`,
+      }),
+    });
+    const shellState = result.parts[0]?.state;
+    expect(shellState?.status).toBe("completed");
+    expect(shellState?.output?.trim().length).toBeGreaterThan(0);
+    expect(JSON.parse(shellState!.output!)).toEqual({
+      home: userInfo().homedir,
+      profile: userInfo().homedir,
+    });
+    expect(shellState!.output!).not.toContain(ambientHome);
+    expect(shellState!.output!).not.toContain(
+      `${join(root, "state", "launch-")}`,
+    );
   }, 30_000);
 
   it("fails startup closed when the controlled scrubber cannot load", async () => {
