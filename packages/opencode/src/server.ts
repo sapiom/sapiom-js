@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
-import { homedir } from "node:os";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -499,7 +499,7 @@ export async function startOpenCodeServer(
     sourceEnvironment.USERPROFILE ??
     (sourceEnvironment.HOMEDRIVE && sourceEnvironment.HOMEPATH
       ? `${sourceEnvironment.HOMEDRIVE}${sourceEnvironment.HOMEPATH}`
-      : homedir());
+      : userInfo().homedir);
   toolHomeEnvironment.HOME ??= resolvedToolHome;
   toolHomeEnvironment.USERPROFILE ??= resolvedToolHome;
   const { pluginUrl, readyPath } = await createCredentialIsolationPlugin(
