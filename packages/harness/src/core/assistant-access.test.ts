@@ -137,7 +137,8 @@ describe("Assistant access", () => {
     expect(readmitted.authorityRevision).not.toBe(retired.authorityRevision);
   });
 
-  it("rotates an already-disabled barrier on explicit sign-out only once", () => {
+  it("rotates once when clear retires a grant and keeps that retired barrier", async () => {
+    await access.refresh();
     const initial = access.getBrowserState().authorityRevision;
     access.clear();
     const retired = access.getBrowserState();
@@ -146,6 +147,7 @@ describe("Assistant access", () => {
       authorityRevision: expect.any(String),
     });
     expect(retired.authorityRevision).not.toBe(initial);
+    access.clear();
     expect(access.getBrowserState()).toEqual(retired);
   });
 

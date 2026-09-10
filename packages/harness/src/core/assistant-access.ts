@@ -114,12 +114,7 @@ export class AssistantAccess {
   clear(): void {
     this.epoch++;
     this.credentialFingerprint = null;
-    const wasEnabled = this.grant !== null;
     this.adopt(null, "authentication_required");
-    // An explicit sign-out/identity retirement is a browser authority barrier
-    // even if capability access had already become disabled. Repeated disabled
-    // polls never reach this path and therefore keep the barrier stable.
-    if (!wasEnabled) this.authorityRevision = randomUUID();
   }
 
   refresh(): Promise<void> {
