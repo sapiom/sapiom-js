@@ -1,3 +1,6 @@
+import { LocalWorkspaceScopeCatalog, type WorkspaceScope } from "../core/workspace-scope-catalog.js";
+import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
 import { hasAuthoredAgentMap } from "../core/agent-map-initialization-record.js";
@@ -149,16 +152,11 @@ import { invalidateExtractionCache } from "../core/canvas-cache.js";
 import {
   CachedAgentInvocationProvider,
   HarnessRegistryInventoryProvider,
-  LocalWorkspaceScopeCatalog,
   SourceAgentInvocationProvider,
   StaticSystemGraphBuilder,
-  type WorkspaceScope,
 } from "../core/system-graph.js";
 import {
-  canonicalGraphPath,
   dirtyGraphSourceRoots,
-  graphSourceRootsWithinScope,
-  isWithinGraphPath,
 } from "../core/system-graph-inventory.js";
 import { SystemGraphStore } from "../core/system-graph-store.js";
 import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
@@ -1193,8 +1191,8 @@ export const startServer = async (
     let sawIntersectingStatus = false;
     for (const [scopeRoot, status] of acceptedScopeStatusByCanonicalRoot) {
       if (
-        isWithinGraphPath(scopeRoot, canonicalRoot) ||
-        isWithinGraphPath(canonicalRoot, scopeRoot)
+        isWithinWorkspacePath(scopeRoot, canonicalRoot) ||
+        isWithinWorkspacePath(canonicalRoot, scopeRoot)
       ) {
         sawIntersectingStatus = true;
         if (status !== "degraded") {
@@ -1210,8 +1208,8 @@ export const startServer = async (
     const nextRoots = acceptedCanonicalWorkflowRoots.map((entry) => {
       if (
         entry.identityEvidence === "unknown" ||
-        (!isWithinGraphPath(canonicalRoot, entry.canonicalRoot) &&
-          !isWithinGraphPath(entry.canonicalRoot, canonicalRoot))
+        (!isWithinWorkspacePath(canonicalRoot, entry.canonicalRoot) &&
+          !isWithinWorkspacePath(entry.canonicalRoot, canonicalRoot))
       ) {
         return entry;
       }
@@ -1745,7 +1743,7 @@ export const startServer = async (
           if (
             systemGraphStore.peek(canonicalScope.workspaceKey) &&
             canonicalSourceRoots.some((sourceRoot) =>
-              isWithinGraphPath(canonicalScope.root, sourceRoot),
+              isWithinWorkspacePath(canonicalScope.root, sourceRoot),
             )
           ) {
             systemGraphStore.requestRefresh(canonicalScope);
@@ -1776,7 +1774,7 @@ export const startServer = async (
         if (
           systemGraphStore.peek(canonicalScope.workspaceKey) &&
           canonicalSourceRoots.some((sourceRoot) =>
-            isWithinGraphPath(canonicalScope.root, sourceRoot),
+            isWithinWorkspacePath(canonicalScope.root, sourceRoot),
           )
         ) {
           systemGraphStore.requestRefresh(canonicalScope);
@@ -1808,8 +1806,8 @@ export const startServer = async (
       if (!systemGraphStore.peek(scope.workspaceKey)) continue;
       const scopeRoot = canonicalGraphPath(scope.root);
       if (
-        !isWithinGraphPath(scopeRoot, canonicalChangedRoot) &&
-        !isWithinGraphPath(canonicalChangedRoot, scopeRoot)
+        !isWithinWorkspacePath(scopeRoot, canonicalChangedRoot) &&
+        !isWithinWorkspacePath(canonicalChangedRoot, scopeRoot)
       ) {
         continue;
       }
@@ -2072,7 +2070,7 @@ export const startServer = async (
   const workspaceWatcher = new WorkspaceWatcherManager({
     sharedWatchBroker: sharedWorkspaceWatchBroker,
     listSourceRoots: (_harnessSessionId, cwd) =>
-      graphSourceRootsWithinScope(
+      sourceRootsWithinScope(
         cwd,
         workflowsCache.map((workflow) => workflow.path),
       ),
@@ -2291,8 +2289,8 @@ export const startServer = async (
         root: canonicalGraphPath(scope.root),
       };
       if (
-        isWithinGraphPath(canonicalScope.root, canonicalChangedRoot) ||
-        isWithinGraphPath(canonicalChangedRoot, canonicalScope.root)
+        isWithinWorkspacePath(canonicalScope.root, canonicalChangedRoot) ||
+        isWithinWorkspacePath(canonicalChangedRoot, canonicalScope.root)
       ) {
         scopes.push(canonicalScope);
       }
@@ -2334,8 +2332,8 @@ export const startServer = async (
     };
     for (const [token, dirtyRoot] of outstandingDirtyPrerequisites) {
       if (
-        isWithinGraphPath(canonicalScope.root, dirtyRoot) ||
-        isWithinGraphPath(dirtyRoot, canonicalScope.root)
+        isWithinWorkspacePath(canonicalScope.root, dirtyRoot) ||
+        isWithinWorkspacePath(dirtyRoot, canonicalScope.root)
       ) {
         systemGraphStore.markStale(canonicalScope, token);
       }
@@ -2874,7 +2872,7 @@ export const startServer = async (
     };
     const roots = includeRetainedRoots
       ? [
-          ...graphSourceRootsWithinScope(
+          ...sourceRootsWithinScope(
             scope.root,
             workflowsCache.map((workflow) => workflow.path),
           ),
@@ -2900,7 +2898,7 @@ export const startServer = async (
   };
 
   const workflowRootsForGraphScope = (scope: WorkspaceScope): string[] =>
-    graphSourceRootsWithinScope(
+    sourceRootsWithinScope(
       scope.root,
       workflowsCache.map((workflow) => workflow.path),
     );

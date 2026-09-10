@@ -44,7 +44,7 @@ import type {
 import {
   type WorkspaceKey,
   type WorkspaceScopeSummary,
-} from "@shared/system-graph";
+} from "@shared/workspace-scope";
 import type {
   AcceptedProposalDelta,
   AgentMapWorkspaceResponse,

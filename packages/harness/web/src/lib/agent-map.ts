@@ -11,7 +11,7 @@ import {
   parseAcceptedProposalDelta as parseSharedAcceptedProposalDelta,
   parseMapChangeProposal,
 } from "@shared/agent-map-codec";
-import type { WorkspaceScopeSummary } from "@shared/system-graph";
+import type { WorkspaceScopeSummary } from "@shared/workspace-scope";
 import type { WorkflowInfo } from "@shared/types";
 import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
 

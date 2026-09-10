@@ -1331,7 +1331,7 @@ export interface AppState {
   workflows: WorkflowInfo[];
   /** Opaque identities for the workspace folders currently known to Studio.
    * Optional for compatibility with older servers and test fixtures. */
-  workspaceScopes?: import("./system-graph.js").WorkspaceScopeSummary[];
+  workspaceScopes?: import("./workspace-scope.js").WorkspaceScopeSummary[];
   /** Path-free durable project identities for the plan-first Agent Map. */
   studioProjects?: import("./agent-map.js").StudioProjectSummary[];
   macros: MacroDef[];

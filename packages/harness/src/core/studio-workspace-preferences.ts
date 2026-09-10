@@ -10,7 +10,7 @@ import {
   type StudioWorkspacePreference,
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
-import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
+import { workspaceRelativeLocalKey } from "../shared/workspace-scope.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 
 interface PrivateAgentBinding extends StudioWorkspaceAgentSummary {

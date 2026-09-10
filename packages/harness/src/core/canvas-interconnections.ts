@@ -25,9 +25,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import ts from "typescript";
 
-import type { AgentInvocationMode } from "../shared/system-graph.js";
-
-export type { AgentInvocationMode } from "../shared/system-graph.js";
+/** Invocation modes displayed by an individual agent's Canvas. */
+export type AgentInvocationMode = "blocking" | "async";
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",

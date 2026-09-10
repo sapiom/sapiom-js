@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-
+export { LocalWorkspaceScopeCatalog } from "./workspace-scope-catalog.js";
+export type { WorkspaceScopeResolver, WorkspaceScopeCatalog } from "./workspace-scope-catalog.js";
 import { packageInventorySchema } from "@sapiom/agent";
 
 import type {
@@ -8,7 +8,6 @@ import type {
   SystemGraph,
   SystemGraphNavigationTarget,
   WorkspaceKey,
-  WorkspaceScopeSummary,
 } from "../shared/system-graph.js";
 import {
   canonicalGraphPath,
@@ -45,14 +44,6 @@ export type {
   AgentInvocationWarning,
 } from "./system-graph-relationships.js";
 
-export interface WorkspaceScopeResolver {
-  resolve(workspaceKey: WorkspaceKey): Promise<WorkspaceScope | null>;
-}
-
-export interface WorkspaceScopeCatalog extends WorkspaceScopeResolver {
-  list(): Promise<WorkspaceScopeSummary[]>;
-}
-
 export interface SystemGraphBuilder {
   build(scope: WorkspaceScope): Promise<SystemGraphBuildResult>;
   /** Optional lifecycle hook for builders with workspace-scoped caches. */
@@ -67,46 +58,6 @@ export interface SystemGraphBuildResult {
   navigation?: SystemGraphNavigationTarget[];
   /** Starts non-blocking enrichment only after this result is visible. */
   afterCommit?: () => void;
-}
-
-function workspaceKeyForRoot(root: string): WorkspaceKey {
-  return `workspace-${createHash("sha256").update(root).digest("hex").slice(0, 16)}`;
-}
-
-/**
- * Resolves only roots the running Studio already knows about. A caller cannot
- * manufacture a key and turn the graph endpoint into an arbitrary path scan.
- */
-export class LocalWorkspaceScopeCatalog implements WorkspaceScopeCatalog {
-  constructor(
-    private readonly listRoots: () =>
-      | readonly string[]
-      | Promise<readonly string[]>,
-  ) {}
-
-  async list(): Promise<WorkspaceScopeSummary[]> {
-    const byRoot = new Map<string, WorkspaceScopeSummary>();
-    for (const root of await this.listRoots()) {
-      const canonical = canonicalGraphPath(root);
-      byRoot.set(canonical, {
-        workspaceKey: workspaceKeyForRoot(canonical),
-        cwd: root,
-      });
-    }
-    return [...byRoot.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([, summary]) => summary);
-  }
-
-  async resolve(workspaceKey: WorkspaceKey): Promise<WorkspaceScope | null> {
-    for (const root of await this.listRoots()) {
-      const canonical = canonicalGraphPath(root);
-      if (workspaceKeyForRoot(canonical) === workspaceKey) {
-        return { workspaceKey, root: canonical };
-      }
-    }
-    return null;
-  }
 }
 
 function warningOrder(left: GraphWarning, right: GraphWarning): number {

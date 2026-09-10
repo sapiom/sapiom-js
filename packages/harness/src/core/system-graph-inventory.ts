@@ -1,3 +1,8 @@
+import type { WorkspaceScope } from "./workspace-scope-catalog.js";
+import type { WorkspaceKey } from "../shared/workspace-scope.js";
+export type { WorkspaceScope } from "./workspace-scope-catalog.js";
+import { isWithinWorkspacePath as isWithinGraphPath, sourceRootsWithinScope as graphSourceRootsWithinScope } from "./workspace-path.js";
+export { isWithinWorkspacePath as isWithinGraphPath, sourceRootsWithinScope as graphSourceRootsWithinScope } from "./workspace-path.js";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 
@@ -11,7 +16,6 @@ import {
 import {
   type AgentKey,
   type GraphWarning,
-  type WorkspaceKey,
 } from "../shared/system-graph.js";
 import type { RegistryWorkflowInfo as WorkflowInfo } from "./workflow-registry.js";
 import { fingerprintWorkflowSources } from "./canvas-cache.js";
@@ -23,11 +27,6 @@ import type {
 import { inspectAgentProjectMarker } from "./agent-project-discovery.js";
 
 export { canonicalGraphPath } from "./canonical-graph-path.js";
-
-export interface WorkspaceScope {
-  workspaceKey: WorkspaceKey;
-  root: string;
-}
 
 /** Harness-only evidence paired with one public inventory record. */
 export interface AgentInventoryContextItem {
@@ -187,35 +186,6 @@ export function inventorySourceRoot(
       ? scopeRoot
       : api.join(scopeRoot, ...inventoryPath.split("/"));
   return canonicalGraphPath(joined);
-}
-
-export function isWithinGraphPath(root: string, candidate: string): boolean {
-  if (isWindowsAbsolute(root) !== isWindowsAbsolute(candidate)) return false;
-  const api = pathApi(root);
-  const relative = api.relative(root, candidate);
-  return (
-    relative === "" ||
-    (relative !== ".." &&
-      !relative.startsWith(`..${api.sep}`) &&
-      !api.isAbsolute(relative))
-  );
-}
-
-/** Canonical registered roots contained by a workspace, safe for symlinked scopes. */
-export function graphSourceRootsWithinScope(
-  scopeRoot: string,
-  sourceRoots: readonly string[],
-): string[] {
-  const canonicalScopeRoot = canonicalGraphPath(scopeRoot);
-  return [
-    ...new Set(
-      sourceRoots
-        .map(canonicalGraphPath)
-        .filter((sourceRoot) =>
-          isWithinGraphPath(canonicalScopeRoot, sourceRoot),
-        ),
-    ),
-  ].sort();
 }
 
 /**

@@ -16,7 +16,7 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectSummary,
   StudioWorkspaceSelection,
