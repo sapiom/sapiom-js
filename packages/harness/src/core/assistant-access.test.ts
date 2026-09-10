@@ -220,6 +220,18 @@ describe("Assistant access", () => {
     expect(changed).toHaveBeenCalledOnce();
   });
 
+  it("notifies hosts when the verified user changes even if an identity revision is reused", async () => {
+    const changed = vi.fn();
+    access.subscribe(changed);
+    await access.refresh();
+    request.mockResolvedValue(
+      Response.json({ ...enabled, userId: "user-two" }),
+    );
+    await access.refresh();
+    expect(access.get()?.userId).toBe("user-two");
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
   it("fences an older response when a newer credential observation is queued", async () => {
     await access.refresh();
     const expiry = access.get()!.expiresAt;

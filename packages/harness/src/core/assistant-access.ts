@@ -128,6 +128,8 @@ export class AssistantAccess {
     failure: AssistantAccessFailureCode = this.failure,
   ): void {
     const changed =
+      this.grant?.userId !== grant?.userId ||
+      this.grant?.tenantId !== grant?.tenantId ||
       this.grant?.identityRevision !== grant?.identityRevision ||
       this.grant?.environment.name !== grant?.environment.name ||
       this.grant?.environment.apiURL !== grant?.environment.apiURL ||
