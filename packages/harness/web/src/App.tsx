@@ -3118,7 +3118,10 @@ export const App = (): JSX.Element => {
                         : "0px"
                       : widths.canvas == null
                         ? "1fr"
-                        : `${widths.canvas}px`
+                        : // Clamp the pinned width to what the shell can hold
+                          // (the terminal keeps its floor), so a width saved on a
+                          // wide monitor doesn't overflow a narrower window.
+                          `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`
                   }`,
           }}
         >
@@ -3432,12 +3435,10 @@ export const App = (): JSX.Element => {
               <div
                 className="pane-resize-handle pane-resize-handle-canvas"
                 // Track the canvas column's ACTUAL edge, not the requested width.
-                // The column is `minmax(CANVAS_MIN, widths.canvas)`, so it clamps
-                // below widths.canvas once the terminal is at its own floor
-                // (100% − CANVAS_MIN). Positioning the handle at the raw
-                // widths.canvas then stranded it in the terminal, a growing gap
-                // to the left of the board it splits. The same clamp keeps them
-                // welded at every width. (null = the 1fr/1fr split, always at 50%.)
+                // The column track is clamped to `100% − CANVAS_MIN` (the
+                // terminal's floor), so the handle uses the same expression to
+                // stay welded to the board's edge at every width. (null = the
+                // 1fr/1fr split, always at 50%.)
                 style={{
                   right:
                     widths.canvas == null

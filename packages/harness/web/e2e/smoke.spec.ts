@@ -1962,6 +1962,44 @@ test.describe("resizable panes", () => {
     expect((canvasAfter?.width ?? 0) - canvasBefore.width).toBeGreaterThan(60);
   });
 
+  test("the canvas pane grows past 720px, stopping only at the terminal's floor, and a wide saved width does not overflow a narrower window", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1800, height: 800 });
+    const handle = page.getByTestId("resize-handle-canvas");
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("expected bounding box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 2000, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+
+    const app = page.locator(".app");
+    const terminalWidth =
+      (await page.locator(".center-pane").boundingBox())?.width ?? 0;
+    const canvasWide =
+      (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasWide).toBeGreaterThan(720);
+    expect(terminalWidth).toBeGreaterThanOrEqual(318); // CANVAS_MIN = 320 is also the terminal's floor
+    expect(terminalWidth).toBeLessThan(335);
+
+    // The pinned width persists; shrinking the window must clamp the track
+    // rather than push the shell into horizontal overflow.
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await page.reload();
+    await expect(page.locator(".canvas-pane")).toBeVisible();
+    const narrowApp = await app.boundingBox();
+    if (!narrowApp) throw new Error("expected bounding box");
+    const scrollWidth = await app.evaluate((el) => el.scrollWidth);
+    expect(scrollWidth).toBeLessThanOrEqual(Math.ceil(narrowApp.width) + 1);
+    const canvasNarrow =
+      (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasNarrow).toBeLessThan(canvasWide);
+    const terminalNarrow =
+      (await page.locator(".center-pane").boundingBox())?.width ?? 0;
+    expect(terminalNarrow).toBeGreaterThanOrEqual(318);
+  });
+
   test("rail and canvas widths cannot be dragged past their min-width floors", async ({
     page,
   }) => {
