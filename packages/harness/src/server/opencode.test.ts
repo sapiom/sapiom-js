@@ -492,6 +492,27 @@ describe("Studio-scoped OpenCode transport", () => {
           part: { sessionID: "ses_secret" },
         },
       },
+      {
+        directory: root,
+        payload: {
+          ...auth,
+          properties: {
+            ...auth.properties,
+            sessionID: "ses_foreign",
+          },
+        },
+      },
+      {
+        directory: root,
+        payload: {
+          ...auth,
+          properties: {
+            ...auth.properties,
+            sessionID: id,
+            info: { sessionID: "ses_foreign" },
+          },
+        },
+      },
     ])
       expect(scopedOpenCodeEvent(event, id, scope)).toBeNull();
     expect(

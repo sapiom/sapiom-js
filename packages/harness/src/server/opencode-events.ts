@@ -49,7 +49,8 @@ export function scopedOpenCodeEvent(
     record(properties.error).name === "ProviderAuthError" &&
     record(record(properties.error).data).providerID === "sapiom" &&
     ((present.length > 0 && present.every((value) => value === id)) ||
-      (scope &&
+      (present.length === 0 &&
+        scope &&
         envelope.payload !== undefined &&
         envelope.directory === scope.cwd))
   )
