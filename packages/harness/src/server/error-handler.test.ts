@@ -39,4 +39,23 @@ describe("unhandledRequestErrorHandler", () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "internal error" });
   });
+
+  it("sanitizes body-parser size errors as structured JSON 413", async () => {
+    const res = await throwFrom(
+      Object.assign(new Error("request entity too large"), {
+        status: 413,
+        statusCode: 413,
+        type: "entity.too.large",
+        body: "private request content",
+      }),
+    );
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({
+      error: {
+        message: "Request body is too large.",
+        type: "invalid_request_error",
+        code: "request_body_too_large",
+      },
+    });
+  });
 });

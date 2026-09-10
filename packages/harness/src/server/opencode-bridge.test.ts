@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import { createServer, type Server } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AssistantGrant } from "../core/assistant-access.js";
 import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
+import { startServer } from "./index.js";
 import { openCodeModelCompletionToken } from "./opencode-model-response.js";
 import {
   OpenCodeBridge,
@@ -591,6 +595,188 @@ describe("Studio OpenCode credential bridge", () => {
     expect(
       (await request("mcp", { method: "GET", body: undefined })).status,
     ).toBe(502);
+  });
+
+  it.each([
+    [
+      400,
+      "invalid_request_error",
+      "assistant_invalid_request",
+      "The Assistant request was rejected as invalid.",
+    ],
+    [
+      401,
+      "authentication_error",
+      "assistant_authentication_failed",
+      "Studio credentials were rejected. Sign in again.",
+    ],
+    [
+      403,
+      "permission_error",
+      "assistant_permission_denied",
+      "The Assistant service denied this request.",
+    ],
+    [
+      413,
+      "invalid_request_error",
+      "assistant_request_too_large",
+      "The Assistant request is too large.",
+    ],
+    [
+      429,
+      "rate_limit_error",
+      "assistant_rate_limited",
+      "The Assistant service is rate limited.",
+    ],
+    [
+      408,
+      "upstream_error",
+      "assistant_upstream_error",
+      "The Assistant service request failed.",
+    ],
+    [
+      409,
+      "upstream_error",
+      "assistant_upstream_error",
+      "The Assistant service request failed.",
+    ],
+    [
+      500,
+      "server_error",
+      "assistant_service_unavailable",
+      "The Assistant service is temporarily unavailable.",
+    ],
+    [
+      502,
+      "server_error",
+      "assistant_service_unavailable",
+      "The Assistant service is temporarily unavailable.",
+    ],
+    [
+      503,
+      "server_error",
+      "assistant_service_unavailable",
+      "The Assistant service is temporarily unavailable.",
+    ],
+    [
+      504,
+      "server_error",
+      "assistant_service_unavailable",
+      "The Assistant service is temporarily unavailable.",
+    ],
+  ] as const)(
+    "preserves and sanitizes upstream HTTP %i without model-response replay",
+    async (status, type, code, message) => {
+      let calls = 0;
+      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+        calls++;
+        res
+          .status(status)
+          .set("x-private-upstream", "sk_private_studio")
+          .send("credential=sk_private_studio");
+      });
+      const response = await request();
+      expect(response.status).toBe(status);
+      expect(response.headers.get("x-private-upstream")).toBeNull();
+      expect(await response.json()).toEqual({
+        error: { message, type, code },
+      });
+      expect(calls).toBe(1);
+    },
+  );
+
+  it.each([
+    [413, "13", "13"],
+    [429, "17", "17"],
+    [503, "Wed, 21 Oct 2099 07:28:00 GMT", "Wed, 21 Oct 2099 07:28:00 GMT"],
+    [400, "19", null],
+    [502, "23", null],
+    [429, "1e3", null],
+    [429, "-1", null],
+    [413, "9007199254740992", null],
+    [503, "Wednesday, 21-Oct-99 07:28:00 GMT", null],
+    [503, "Wed, 21 Oct 2015 07:28:00 GMT", null],
+  ] as const)(
+    "for HTTP %i validates Retry-After %s before forwarding it",
+    async (status, retryAfter, expected) => {
+      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+        res.status(status).set("Retry-After", retryAfter).end();
+      });
+      const response = await request();
+      expect(response.status).toBe(status);
+      expect(response.headers.get("retry-after")).toBe(expected);
+    },
+  );
+
+  it("returns a sanitized retryable service error when the upstream is unreachable", async () => {
+    const unavailable = createServer();
+    await new Promise<void>((resolve) =>
+      unavailable.listen(0, "127.0.0.1", resolve),
+    );
+    const address = unavailable.address() as { port: number };
+    await new Promise<void>((resolve, reject) =>
+      unavailable.close((error) => (error ? reject(error) : resolve())),
+    );
+    grant!.environment.services.llm = `http://127.0.0.1:${address.port}`;
+
+    const response = await request();
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: {
+        message: "Assistant connection failed.",
+        type: "server_error",
+        code: "assistant_connection_failed",
+      },
+    });
+  });
+
+  it("returns structured JSON 413 through the assembled Studio middleware", async () => {
+    const stateRoot = await mkdtemp(join(tmpdir(), "studio-bridge-limit-"));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const studio = await startServer({
+      port: 0,
+      bootToken: "synthetic-boot-token",
+      telemetryOptIn: false,
+      authMode: "disabled",
+      adapters: {},
+      stateRoot,
+      launchDir: stateRoot,
+      autoCreateSession: false,
+      loadSystemPrompt: async () => "",
+    });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${studio.port}/opencode-runtime/unknown/llm/v2/openai/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer synthetic-runtime-token",
+            "Content-Type": "application/json",
+          },
+          body: "x".repeat(4 * 1024 * 1024 + 1),
+        },
+      );
+      expect(response.status).toBe(413);
+      expect(response.headers.get("content-type")).toContain(
+        "application/json",
+      );
+      expect(await response.json()).toEqual({
+        error: {
+          message: "Request body is too large.",
+          type: "invalid_request_error",
+          code: "request_body_too_large",
+        },
+      });
+      expect(consoleError).toHaveBeenCalledWith(
+        "[harness] request body too large",
+      );
+    } finally {
+      await studio.close();
+      await rm(stateRoot, { recursive: true, force: true });
+      consoleError.mockRestore();
+    }
   });
 
   it("revokes credentials and active streams on access loss, and permits a fresh login", async () => {

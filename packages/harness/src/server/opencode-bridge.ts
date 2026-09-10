@@ -35,6 +35,99 @@ const sameAuthority = (a: AssistantGrant, b: AssistantGrant) =>
   a.environment.apiURL === b.environment.apiURL &&
   a.environment.credentials?.apiKey === b.environment.credentials?.apiKey;
 
+type BridgeErrorType =
+  | "authentication_error"
+  | "invalid_request_error"
+  | "permission_error"
+  | "rate_limit_error"
+  | "server_error"
+  | "upstream_error";
+
+function sendBridgeError(
+  res: Response,
+  status: number,
+  error: { message: string; type: BridgeErrorType; code: string },
+  retryAfter?: string,
+): void {
+  res.setHeader("Cache-Control", "no-store");
+  if (retryAfter) res.setHeader("Retry-After", retryAfter);
+  res.status(status).json({ error });
+}
+
+function upstreamError(status: number): {
+  message: string;
+  type: BridgeErrorType;
+  code: string;
+} {
+  switch (status) {
+    case 400:
+      return {
+        message: "The Assistant request was rejected as invalid.",
+        type: "invalid_request_error",
+        code: "assistant_invalid_request",
+      };
+    case 401:
+      return {
+        message: "Studio credentials were rejected. Sign in again.",
+        type: "authentication_error",
+        code: "assistant_authentication_failed",
+      };
+    case 403:
+      return {
+        message: "The Assistant service denied this request.",
+        type: "permission_error",
+        code: "assistant_permission_denied",
+      };
+    case 413:
+      return {
+        message: "The Assistant request is too large.",
+        type: "invalid_request_error",
+        code: "assistant_request_too_large",
+      };
+    case 429:
+      return {
+        message: "The Assistant service is rate limited.",
+        type: "rate_limit_error",
+        code: "assistant_rate_limited",
+      };
+    default:
+      return status >= 500
+        ? {
+            message: "The Assistant service is temporarily unavailable.",
+            type: "server_error",
+            code: "assistant_service_unavailable",
+          }
+        : {
+            message: "The Assistant service request failed.",
+            type: "upstream_error",
+            code: "assistant_upstream_error",
+          };
+  }
+}
+
+/** Only forward the standardized header on statuses that define its use. */
+function validatedRetryAfter(
+  response: globalThis.Response,
+): string | undefined {
+  if (![413, 429, 503].includes(response.status)) return;
+  const value = response.headers.get("retry-after");
+  if (!value) return;
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value);
+    if (Number.isSafeInteger(seconds)) return value;
+    return;
+  }
+  // HTTP senders generate IMF-fixdate. A canonical round trip rejects the
+  // obsolete/lenient date forms accepted by Date.parse and mismatched days.
+  const timestamp = Date.parse(value);
+  if (
+    Number.isFinite(timestamp) &&
+    timestamp > Date.now() &&
+    new Date(timestamp).toUTCString() === value
+  )
+    return value;
+}
+
 /** Destinations come exclusively from Studio's signed-in environment. */
 export function assistantUpstreams(env: ResolvedEnvironment): {
   llm: URL;
@@ -143,12 +236,20 @@ export class OpenCodeBridge {
       token.length > 256 ||
       !timingSafeEqual(entry.digest, digest(token))
     ) {
-      res.status(401).json({ error: "Invalid Assistant runtime credential" });
+      sendBridgeError(res, 401, {
+        message: "Invalid Assistant runtime credential.",
+        type: "authentication_error",
+        code: "assistant_runtime_credential_invalid",
+      });
       return;
     }
     if (!grant || !sameAuthority(entry.grant, grant)) {
       this.revoke(req.params.id!);
-      res.status(403).json({ error: "Assistant access is unavailable" });
+      sendBridgeError(res, 403, {
+        message: "Assistant access is unavailable.",
+        type: "permission_error",
+        code: "assistant_access_unavailable",
+      });
       return;
     }
     if (
@@ -157,7 +258,11 @@ export class OpenCodeBridge {
         req.method,
       )
     ) {
-      res.status(400).json({ error: "Unsupported Assistant service request" });
+      sendBridgeError(res, 400, {
+        message: "Unsupported Assistant service request.",
+        type: "invalid_request_error",
+        code: "assistant_request_unsupported",
+      });
       return;
     }
     const abort = new AbortController();
@@ -193,11 +298,19 @@ export class OpenCodeBridge {
         try {
           request = JSON.parse(body?.toString("utf8") ?? "");
         } catch {
-          res.status(400).json({ error: "Invalid model request" });
+          sendBridgeError(res, 400, {
+            message: "Invalid model request.",
+            type: "invalid_request_error",
+            code: "assistant_model_request_invalid",
+          });
           return;
         }
         if (!request || typeof request !== "object" || Array.isArray(request)) {
-          res.status(400).json({ error: "Invalid model request" });
+          sendBridgeError(res, 400, {
+            message: "Invalid model request.",
+            type: "invalid_request_error",
+            code: "assistant_model_request_invalid",
+          });
           return;
         }
         body = Buffer.from(JSON.stringify({ ...request, model: this.model }));
@@ -221,19 +334,14 @@ export class OpenCodeBridge {
         : await request();
       if (!response.ok) {
         await response.body?.cancel();
-        // MCP uses 405 to decline optional notification streams or session
-        // cleanup; clients handle that without treating it as a service outage.
-        const status =
-          response.status === 401 ||
-          (service === "mcp" && response.status === 405)
-            ? response.status
-            : 502;
-        res.status(status).json({
-          error:
-            response.status === 401
-              ? "Studio credentials were rejected. Sign in again, then retry."
-              : "The Assistant service request failed. Please retry.",
-        });
+        // Preserve status-based client policy, including MCP's optional 405,
+        // while replacing all credential-bearing upstream content.
+        sendBridgeError(
+          res,
+          response.status,
+          upstreamError(response.status),
+          validatedRetryAfter(response),
+        );
         return;
       }
       res.status(response.status);
@@ -255,9 +363,11 @@ export class OpenCodeBridge {
       } else res.end();
     } catch {
       if (!res.headersSent && !res.destroyed) {
-        res
-          .status(502)
-          .json({ error: "Assistant connection failed. Please retry." });
+        sendBridgeError(res, 502, {
+          message: "Assistant connection failed.",
+          type: "server_error",
+          code: "assistant_connection_failed",
+        });
       } else res.destroy();
     } finally {
       res.off("close", disconnected);
