@@ -22,8 +22,9 @@ The local version/release commands and the Release PR, npm Publish and Desktop
 Release workflows all run that check. The client layer removes the blocker
 together with the unavailable-map recovery. Its recovery changeset remains a
 patch; the combined Harness release takes the higher minor bump. SAP-3091 also
-adds `.changeset/quiet-retired-server-graphs.md` for the observable transition
-from the temporary 410 response to generic API 404.
+adds `.changeset/quiet-retired-server-graphs.md`. Both retirement changesets
+describe the final authenticated JSON API 404, which applies to every unknown
+`/api` path. The intermediate 410 fence is not a separately published contract.
 
 ## Authority matrix
 
@@ -81,9 +82,10 @@ complete cleanup is available, as authorized by the maintainer.
 | SAP-3091 2/3 ([#910](https://github.com/sapiom/sapiom-js/pull/910)) | `1a338947` | Remove server routes and graph composition; retain discovery/currentness/watch ownership. |
 | SAP-3091 3/3 | `cab477b541b0485f22a4948075d2921ba1a3434c` | Delete the server engine/store/watchers/relationships/contracts and filter unsupported browser events. |
 
-The last row is the exact source-deletion revision. Later evidence-only edits do
-not change the tested runtime. A fresh production source and clean-built `dist`
-search finds no remaining imports or callers of the retired modules. Old route
+The last row is the exact source-deletion revision. Subsequent review fixes
+have their own runtime revision and verification record below. A fresh production
+source and clean-built `dist` search finds no remaining imports or callers of
+the retired modules. Old route
 and event strings remain only in negative test/smoke probes. The public
 `@sapiom/agent` PackageInventory source and schema are unchanged from `main`.
 
@@ -105,12 +107,52 @@ The Linux packaged run is Linux evidence. The required signed/notarized macOS
 installer and its upgrade journey remain release validation, not an inference
 from a Linux result. Record that platform's evidence in SAP-3086 before shipping.
 
-## Final cleanup evidence — 2026-09-09
+## Review-fix verification — 2026-09-10
+
+Runtime source revision: `5bfed981be12701e523e9096bdd0ab498aff0f20`, including
+`main` at `8679d7457a8c4a1f40b2137da9e677de01b62a53`. The JSON record's
+`reviewFixes` entry contains fresh build hashes and per-PR typecheck results.
+These updates preserve the original reviewed commits and the seven PR
+boundaries; the cumulative working branch still contains every layer.
+
+- #892 uses main's complete partial auth mock to resolve the merge conflict.
+  All 263 integration checks passed; that mock's four cases also passed on
+  #892's own tree. Main's deliberate removal of the duplicate Claude review
+  workflow is carried through the stack.
+- #907 restores per-project manual pan and zoom across project/agent navigation.
+  Saved views are scoped to the current signed-in UI lifetime; offscreen maps
+  recover by fitting, and Fit continues following pane/layout changes. Browser
+  coverage restores E3.3's project tabs across different agent bindings. Its
+  changeset identifies the removed compatibility branch as internal cleanup.
+- #908 restores `--text-faint`, `--font-mono` and `--type-meta`, with computed
+  style assertions and before/after mock screenshots in light and dark themes.
+  The stale mock failure comment is removed. The viewport and metadata tests
+  failed on the original code, then passed with the fixes.
+- #910 reconciles both retirement changesets to the final JSON 404 contract,
+  including all unknown `/api` paths. Boot-token authentication remains required.
+
+Harness and dependency builds, Harness typecheck/lint, terminology and
+provider-copy checks passed. All **3,845 Harness unit/integration cases** passed
+(two explicit skips), all **10 performance cases** passed, all **634 browser
+cases** passed, and all **15 Canvas browser cases** passed. All seven isolated
+PR heads passed server/browser typechecks; #907's own tree also passed all ten
+viewport/project-altitude cases. The fresh build contains no retired graph files.
+
+The first three-worker Harness run failed one archive-wiring case with an empty
+turn list. The affected file passed unchanged **8/8**, and the full two-worker
+rerun passed unchanged. The initial failure remains in the JSON record; no test
+or admission guard was weakened.
+
+The package hashes and smoke evidence below belong to the earlier deletion
+revision. They are historical evidence, not a newly packaged review-fix artifact.
+Signed macOS installer/upgrade validation remains the SAP-3086 release gate.
+
+## Original cleanup evidence — 2026-09-09
 
 Runtime revision: `cab477b541b0485f22a4948075d2921ba1a3434c`. The
 [machine-readable verification record](./retirement-verification.json) includes
-package/bundle hashes, counts, skips and initial failures. Evidence-only commits
-after this revision do not alter the runtime.
+package/bundle hashes, counts, skips and initial failures. The subsequent
+review-fix revision is recorded separately above.
 
 - A clean Harness build followed by the root build, typecheck and lint passed.
   Terminology, provider-copy, PR-template/security checks and all 178 root script
