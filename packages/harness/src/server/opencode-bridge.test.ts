@@ -799,6 +799,31 @@ describe("Studio OpenCode credential bridge", () => {
     next.revoke();
   });
 
+  it.each(["userId", "tenantId"] as const)(
+    "rejects and revokes a prior credential when verified %s changes",
+    async (field) => {
+      const previous = grant!;
+      grant = { ...previous, [field]: `different-${field}` };
+
+      const crossed = await request();
+      expect(crossed.status).toBe(403);
+      expect(await crossed.json()).toEqual({
+        error: {
+          message: "Assistant access is unavailable.",
+          type: "permission_error",
+          code: "assistant_access_unavailable",
+        },
+      });
+      expect((await request()).status).toBe(401);
+
+      grant = previous;
+      credential = bridge.issue();
+      grant = { ...previous, [field]: `notified-${field}` };
+      changed();
+      expect((await request()).status).toBe(401);
+    },
+  );
+
   it("requires explicit service configuration outside the production environment", () => {
     expect(() =>
       assistantUpstreams({
