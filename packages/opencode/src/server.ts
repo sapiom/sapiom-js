@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export interface StartOpenCodeServerOptions {
   cwd: string;
@@ -116,12 +116,30 @@ async function createCredentialIsolationPlugin(
 ): Promise<{ pluginUrl: string; readyPath: string }> {
   const pluginPath = join(launchRoot, "credential-isolation.mjs");
   const readyPath = join(launchRoot, "credential-isolation.ready");
+  const compiledHook = fileURLToPath(
+    new URL("./completion-hook.js", import.meta.url),
+  );
+  let hookPath = compiledHook;
+  try {
+    await access(hookPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    hookPath = fileURLToPath(new URL("./completion-hook.ts", import.meta.url));
+    await access(hookPath);
+  }
+  hookPath = hookPath.replace(
+    /([/\\])app\.asar([/\\])/,
+    "$1app.asar.unpacked$2",
+  );
   const source = `import { writeFile } from "node:fs/promises";
+import { createStudioCompletionHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
 const keys = ${JSON.stringify(runtimeCredentialKeys)};
 export const SapiomCredentialIsolation = async () => {
   for (const key of keys) delete process.env[key];
+  const completionHooks = createStudioCompletionHooks();
   await writeFile(${JSON.stringify(readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
   return {
+    ...completionHooks,
     "shell.env": async (_input, output) => {
       for (const key of keys) {
         delete process.env[key];
