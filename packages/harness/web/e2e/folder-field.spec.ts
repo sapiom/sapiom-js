@@ -5,6 +5,11 @@
  * browser is the picker, and the `npx` browser host — which is what every other
  * spec here runs as — falls back to the field plus a native `<datalist>`.
  *
+ * On desktop the bridge now decides whether our dialog opens AT ALL, not just
+ * what renders inside it, so the two hosts no longer share one entrance: "Add
+ * a project" asks the OS directly, while "Add existing agents" keeps the dialog
+ * because it has to show what it found under the folder.
+ *
  * The desktop half is covered by INJECTING the bridge the Electron preload
  * exposes (`window.sapiomDesktop`). That is the same shape
  * `harness-desktop/src/preload/desktop.mts` publishes and the desktop smoke run
@@ -71,7 +76,7 @@ test.describe("browser host (npx)", () => {
 });
 
 test.describe("desktop host", () => {
-  test("Choose opens the OS folder browser at the current folder, and takes its answer", async ({
+  test("Add a project skips our dialog and asks the OS, at the current root", async ({
     page,
   }) => {
     await installDesktopBridge(page, "/Users/demo/blank-slate");
@@ -79,35 +84,52 @@ test.describe("desktop host", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("rail-add-project").click();
 
-    const input = page.getByTestId("folder-field-input");
-    await expect(input).toHaveValue("/Users/demo/acme-app/projects");
-    // No datalist on desktop: the OS dialog IS the completion there.
-    await expect(page.getByTestId("folder-field-options")).toHaveCount(0);
-
-    await page.getByTestId("folder-field-choose").click();
+    // THE DIALOG NEVER OPENS on this host. Asserted first and asserted at all
+    // because the failure this guards is showing BOTH — our modal wrapping a
+    // text field, with the OS browser as a button inside it.
+    await expect(page.locator(".modal-start")).toHaveCount(0);
     // Opened where the user already is, rather than at some default root.
     expect(await chooseCalls(page)).toEqual(["/Users/demo/acme-app/projects"]);
-    await expect(input).toHaveValue("/Users/demo/blank-slate");
-
-    // And the choice drives the dialog, not just the field.
-    await expect(page.getByTestId("open-project")).toBeEnabled();
-    await page.getByTestId("open-project").click();
+    // And the answer is the whole interaction: the project is added, with no
+    // confirm step, because picking a folder in Finder already was the confirm.
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
   });
 
-  test("cancelling the OS dialog leaves the folder alone", async ({ page }) => {
-    // `showOpenDialog` resolves null on cancel (harness-desktop/main/dialogs.ts),
-    // and null must never be written into the field — a cancelled pick is not a
-    // choice of "nothing".
+  test("cancelling the OS dialog adds nothing and opens nothing", async ({
+    page,
+  }) => {
+    // `showOpenDialog` resolves null on cancel (harness-desktop/main/dialogs.ts).
+    // A cancelled pick must not fall back into our dialog: the user declined
+    // the question, not the way it was asked.
     await installDesktopBridge(page, null);
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("rail-add-project").click();
 
+    expect(await chooseCalls(page)).toHaveLength(1);
+    await expect(page.locator(".modal-start")).toHaveCount(0);
+    await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
+  });
+
+  test("the field's own Choose still serves the entrance that keeps a dialog", async ({
+    page,
+  }) => {
+    // "Add existing agents" has to show what it found under the folder, so the
+    // picker is only its first step and the dialog stays on both hosts. That
+    // keeps `FolderField`'s desktop branch reachable, so it is still covered
+    // here rather than deleted with the entrance that stopped using it.
+    await installDesktopBridge(page, "/Users/demo/blank-slate");
+    await page.goto("/");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("add-existing-agents").click();
+    await expect(page.locator(".modal-start")).toBeVisible();
+
     const input = page.getByTestId("folder-field-input");
+    // No datalist on desktop: the OS dialog IS the completion there.
+    await expect(page.getByTestId("folder-field-options")).toHaveCount(0);
+
     await page.getByTestId("folder-field-choose").click();
     expect(await chooseCalls(page)).toHaveLength(1);
-    await expect(input).toHaveValue("/Users/demo/acme-app/projects");
-    await expect(page.getByTestId("open-project")).toBeEnabled();
+    await expect(input).toHaveValue("/Users/demo/blank-slate");
   });
 });
