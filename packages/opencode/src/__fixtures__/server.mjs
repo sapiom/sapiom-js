@@ -1,5 +1,10 @@
 import { createServer } from "node:http";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -40,6 +45,24 @@ if (config.spawnOnTermMarker) {
       { detached: true, stdio: "ignore" },
     ).unref();
   });
+}
+if (config.startupExitWriter) {
+  const writerSource = `const fs=require("node:fs");fs.appendFileSync(${JSON.stringify(
+    config.startupExitWriter,
+  )},"write\\n");setInterval(()=>fs.appendFileSync(${JSON.stringify(
+    config.startupExitWriter,
+  )},"write\\n"),25)`;
+  const writer = spawn(process.execPath, ["-e", writerSource], {
+    detached: true,
+    stdio: "ignore",
+  });
+  writer.unref();
+  writeFileSync("runtime.tool.pid", String(writer.pid));
+  const deadline = Date.now() + 2_000;
+  const observeWriter = setInterval(() => {
+    if (existsSync(config.startupExitWriter)) process.exit(3);
+    if (Date.now() >= deadline) process.exit(4);
+  }, 10);
 }
 if (config.crash) {
   console.error("private provider diagnostic");
