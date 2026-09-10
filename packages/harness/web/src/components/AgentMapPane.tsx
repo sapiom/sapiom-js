@@ -14,6 +14,7 @@ import type {
 } from "@shared/agent-map";
 import type { WorkflowInfo } from "@shared/types";
 import type { HarnessApi } from "../lib/api";
+import type { GraphViewportStore } from "../lib/graph-viewport";
 import {
   agentMapDeployments,
   type AgentMapDeployments,
@@ -33,6 +34,7 @@ import { AgentMapInspector } from "./AgentMapInspector";
 import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
+  viewportStore: GraphViewportStore;
   visible: boolean;
   api: Pick<
     HarnessApi,
@@ -51,6 +53,7 @@ interface AgentMapPaneProps {
 }
 
 export function AgentMapPane({
+  viewportStore,
   visible,
   api,
   workflows,
@@ -280,6 +283,7 @@ export function AgentMapPane({
   } else if (proposal && proposal.nodes.length > 0) {
     content = (
       <PopulatedAgentMap
+        viewportStore={viewportStore}
         value={value}
         selected={selected}
         deployments={deployments}
@@ -359,6 +363,7 @@ export function AgentMapPane({
 }
 
 function PopulatedAgentMap({
+  viewportStore,
   value,
   deployments,
   onRetryStatus,
@@ -369,6 +374,7 @@ function PopulatedAgentMap({
   openError,
   onCloseInspector,
 }: {
+  viewportStore: GraphViewportStore;
   value: AgentMapWorkspaceResponse;
   deployments: AgentMapDeployments;
   onRetryStatus: () => void;
@@ -421,6 +427,7 @@ function PopulatedAgentMap({
       </div>
       <div className="agent-map-live-body">
         <AgentMapCanvas
+          viewportStore={viewportStore}
           proposal={proposal}
           deployments={deployments}
           selectedNodeId={selected}

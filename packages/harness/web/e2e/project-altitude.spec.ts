@@ -115,6 +115,60 @@ test("E3.4 — selecting a sibling agent moves the right pane and NOTHING else",
   ).toEqual(tabsBefore);
 });
 
+test("E3.3 — sessions bound to different agents stay in the project strip on sibling Canvas navigation", async ({ page }) => {
+  await page.goto(
+    "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
+  );
+  await expect(page.getByTestId("project-select-polsia")).toBeVisible();
+  await page.getByTestId("project-select-polsia").click();
+  const map = page.getByTestId("agent-map-live");
+  await expect(map).toBeVisible();
+  const projectId = await map.getAttribute("data-project-id");
+  expect(projectId).toBeTruthy();
+  await page.evaluate((projectId) => {
+    const { publish } = (window as unknown as {
+      __HARNESS_TEST__: { publish: (message: unknown) => void };
+    }).__HARNESS_TEST__;
+    for (const [index, agent] of ["mailer", "rollup"].entries()) {
+      const id = `sess-polsia-${agent}`;
+      publish({
+        type: "session.status",
+        session: {
+          id,
+          agentSessionId: null,
+          harness: "claude-code",
+          cwd: "/Users/demo/polsia",
+          status: "running",
+          ready: true,
+          title: agent,
+          createdAt: `2026-08-01T1${index}:00:00.000Z`,
+          lastActiveAt: `2026-08-01T1${index}:00:00.000Z`,
+          boundWorkflowPath: agent === "mailer"
+            ? "/Users/demo/polsia/packages/harness/web/src/components/mailer"
+            : "/Users/demo/polsia/scripts/tools/rollup",
+          agentMapIdentity: { projectId, userId: "user_mock", sessionId: id },
+        },
+      });
+    }
+  }, projectId!);
+  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+  await expect(tabs.nth(0)).toHaveAttribute("data-testid", "session-tab-main-sess-polsia-mailer");
+  await expect(tabs.nth(1)).toHaveAttribute("data-testid", "session-tab-main-sess-polsia-rollup");
+  await tabs.nth(0).click();
+  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-polsia-mailer");
+  await page.getByTestId("project-select-polsia").click();
+  await expect(map).toBeVisible();
+  const before = await tabs.allTextContents();
+  await page.getByTestId("workflow-rollup").locator(".workflow-item-trigger").click();
+  await expect(page.getByTestId("workflow-rollup")).toHaveClass(/is-focused/);
+  await expect(map).toHaveCount(0);
+  await expect(page.getByTestId("right-panel-board")).toBeVisible();
+  await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-polsia-mailer");
+  await expect(tabs).toHaveCount(2);
+  expect(await tabs.allTextContents()).toEqual(before);
+});
+
 test("E3.9/E3.10 — Steps says why it cannot answer for a project; Code is gone", async ({
   page,
 }) => {
