@@ -31,6 +31,8 @@ import {
 export interface ChatDraft {
   text: string;
 }
+/** In-memory only: App owns one store for the current authenticated principal. */
+export type ChatDraftStore = Map<string, ChatDraft>;
 interface Props {
   harnessSessionId: string;
   bootToken: string;

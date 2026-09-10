@@ -44,6 +44,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -83,6 +84,7 @@ import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
 import { AssistantPane } from "./components/AssistantPane";
+import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
@@ -284,6 +286,23 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  // Draft text belongs to a principal + Studio session, not to whichever
+  // centre-pane branch happens to be mounted. An auth barrier replaces this
+  // whole store; an app reload intentionally drops it rather than persisting
+  // sensitive, unsent text.
+  const assistantDrafts = useMemo<ChatDraftStore>(
+    () => new Map(),
+    [harness.authRevision, harness.bootToken],
+  );
+  // Successful session deletion removes its keyed draft. Exited sessions stay
+  // in state (and keep their draft) until the user actually closes them.
+  useEffect(() => {
+    if (!harness.state) return;
+    const sessionIds = new Set(harness.state.sessions.map(({ id }) => id));
+    for (const id of assistantDrafts.keys()) {
+      if (!sessionIds.has(id)) assistantDrafts.delete(id);
+    }
+  }, [assistantDrafts, harness.state]);
   const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
     () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
   );
@@ -3273,6 +3292,7 @@ export const App = (): JSX.Element => {
                   sessionId={conversationSession.id}
                   bootToken={harness.bootToken}
                   authRevision={harness.authRevision}
+                  drafts={assistantDrafts}
                   terminalRevision={
                     harness.terminalRevealBySession.get(conversationSession.id) ??
                     0
@@ -3364,6 +3384,7 @@ export const App = (): JSX.Element => {
                       sessionId={conversationSession.id}
                       bootToken={harness.bootToken}
                       authRevision={harness.authRevision}
+                      drafts={assistantDrafts}
                       terminalRevision={
                     harness.terminalRevealBySession.get(conversationSession.id) ??
                     0
