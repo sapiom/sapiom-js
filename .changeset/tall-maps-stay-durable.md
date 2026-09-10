@@ -2,4 +2,6 @@
 "@sapiom/harness": patch
 ---
 
-Remove the older-server project graph fallback. Project clicks now open the durable Agent Map or offer identity recovery without selecting or creating a conversation. Ordinary sessions retain their independent Canvas and Steps views.
+Remove unreachable legacy project graph browser code from Studio's bundled client and server. This internal cleanup preserves durable Agent Map navigation, project-wide conversation tabs, and ordinary sessions' independent Canvas and Steps views.
+
+Restore each project's map pan and zoom when returning from another project or an agent Canvas. If the saved view would leave every node offscreen, fit the map into view.

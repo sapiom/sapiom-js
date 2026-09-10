@@ -4,7 +4,7 @@
 
 **Breaking for HTTP clients** (minor while `@sapiom/harness` is pre-1.0): retire
 the documented project System Graph endpoints. Authenticated requests to all
-three routes now return `410` with `error: "legacy_graph_retired"`:
+three routes now return the generic JSON API `404` response:
 
 - `GET /api/workspaces/:workspaceKey/system-graph`
 - `POST /api/workspaces/:workspaceKey/system-graph/refresh`

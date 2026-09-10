@@ -2991,11 +2991,8 @@ export class MockApi implements HarnessApi {
 
   async getRailState(projectRoot: string): Promise<string | null> {
     await delay(60);
-    // Test-only, mock mode only, matching __MOCK_SYSTEM_GRAPH_FAIL_ONCE__: a
-    // read-only checkout or a 5xx on this route is the one case where "safe to
-    // write" and "safe to draw" have different answers, and getting that wrong
-    // leaves the rail naming every system while the map shows an unlabelled
-    // blob. Reachable only by throwing the read.
+    // Mock-only read failure: keep the rail usable without overwriting saved
+    // state that could not be loaded.
     if (
       typeof window !== "undefined" &&
       (window as unknown as { __MOCK_RAIL_STATE_FAIL__?: boolean })
