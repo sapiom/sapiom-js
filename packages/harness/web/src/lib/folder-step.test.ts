@@ -88,4 +88,20 @@ describe("the folder step", () => {
 
     expect(chooseDirectory).toHaveBeenCalledWith(undefined);
   });
+
+  it("omits an EMPTY starting folder too, not just a missing one", async () => {
+    // `launchDir` reaches callers through `?? null`, which lets `""` past, so
+    // the two cases are not the same value arriving twice — an empty string
+    // would be forwarded as an empty `defaultPath` by `??`.
+    const chooseDirectory = vi.fn().mockResolvedValue(null);
+
+    await chooseProjectFolder({
+      chooseDirectory,
+      startingAt: "",
+      openDialog: vi.fn(),
+      onPicked: vi.fn(),
+    });
+
+    expect(chooseDirectory).toHaveBeenCalledWith(undefined);
+  });
 });

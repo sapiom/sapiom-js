@@ -56,7 +56,10 @@ export async function chooseProjectFolder(host: FolderStepHost): Promise<void> {
   }
   let picked: string | null = null;
   try {
-    picked = await host.chooseDirectory(host.startingAt ?? undefined);
+    // `||`, NOT `??`: an empty string has to be omitted too, not forwarded as
+    // an empty `defaultPath`. `launchDir` reaches callers through `?? null`,
+    // which lets `""` past, and "start at nowhere" is not a starting folder.
+    picked = await host.chooseDirectory(host.startingAt || undefined);
   } catch {
     return;
   }
