@@ -56,12 +56,32 @@ const cwd = path.join(dir, app.entry);
 const out = path.join(dir, "preview.png");
 const url = `http://localhost:${app.port}/`;
 
+// Detached on POSIX so the shell and the server it spawns form one process
+// group, which `stop` can signal as a whole — killing only the shell would
+// leave `node server.mjs` alive and the port bound for the next run. Windows
+// has no process groups; there the shell is killed and its child is left to
+// exit on its own.
 function sh(command) {
   return spawn(command, {
     cwd,
     shell: true,
+    detached: process.platform !== "win32",
     stdio: ["ignore", "inherit", "inherit"],
   });
+}
+
+/** Signal the whole process group and wait for the child to actually close. */
+function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null)
+    return Promise.resolve();
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  try {
+    if (process.platform === "win32") child.kill("SIGTERM");
+    else process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // Already gone.
+  }
+  return closed;
 }
 
 function waitForExit(child, label) {
@@ -123,5 +143,5 @@ try {
   console.log(`wrote ${path.relative(ROOT, out)} (${WIDTH}×${HEIGHT} @2x)`);
 } finally {
   await browser?.close();
-  server.kill("SIGTERM");
+  await stop(server);
 }

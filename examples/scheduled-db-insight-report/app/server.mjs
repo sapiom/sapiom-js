@@ -37,16 +37,50 @@ const API_KEY = process.env.SAPIOM_API_KEY || "";
 const DEFINITION_ID = process.env.SAPIOM_DEFINITION_ID || "";
 const LIVE_CACHE_MS = 30_000;
 
-/** The captured run, read once — it never changes while the server is up. */
+/**
+ * The key travels in a header, so the API must be reached over TLS — except a
+ * loopback address, which is where a local Sapiom backend lives. A plain-http
+ * remote URL is refused rather than used: live mode is simply off, and the
+ * page shows the captured run with the reason in its footer.
+ */
+function apiUrlIsSafe(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    if (protocol === "https:") return true;
+    return (
+      protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]", "::1"].includes(hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+const LIVE_CONFIG_ERROR =
+  API_KEY && DEFINITION_ID && !apiUrlIsSafe(API_URL)
+    ? `SAPIOM_API_URL must be https (or a loopback address); refusing to send the API key to ${API_URL}`
+    : null;
+const LIVE = Boolean(API_KEY && DEFINITION_ID) && !LIVE_CONFIG_ERROR;
+
+/**
+ * The captured run, read once — it never changes while the server is up. The
+ * rejection is observed here so a missing or corrupt file cannot surface as an
+ * unhandled rejection before the first request; the request handler turns it
+ * into a 500 instead.
+ */
 const sample = readFile(path.join(HERE, "sample-report.json"), "utf8").then(
   (text) => JSON.parse(text),
 );
+sample.catch(() => {});
 
 let liveCache = { at: 0, value: null };
 
 async function api(route) {
   const res = await fetch(`${API_URL}${route}`, {
     headers: { "x-api-key": API_KEY, accept: "application/json" },
+    // A redirect would carry the key to whatever origin the Location names.
+    // The API does not redirect its JSON routes, so a 3xx is treated as a
+    // failure (`ok` is false for it) rather than followed.
+    redirect: "manual",
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`${route} → HTTP ${res.status}`);
@@ -93,7 +127,15 @@ async function readLive() {
 }
 
 async function report() {
-  if (!API_KEY || !DEFINITION_ID) return sample;
+  if (!LIVE) {
+    const captured = await sample;
+    return LIVE_CONFIG_ERROR
+      ? {
+          ...captured,
+          source: { ...captured.source, liveError: LIVE_CONFIG_ERROR },
+        }
+      : captured;
+  }
   try {
     return await readLive();
   } catch (err) {
@@ -105,7 +147,10 @@ async function report() {
   }
 }
 
+// Same observed-rejection pattern as `sample`: a missing page is a 500 on `/`,
+// not a crash at startup.
 const page = readFile(path.join(HERE, "index.html"));
+page.catch(() => {});
 
 const server = createServer(async (req, res) => {
   const url = new URL(
@@ -136,6 +181,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  const mode = API_KEY && DEFINITION_ID ? "live" : "captured";
+  if (LIVE_CONFIG_ERROR) console.warn(LIVE_CONFIG_ERROR);
+  const mode = LIVE ? "live" : "captured";
   console.log(`insight report dashboard on http://localhost:${PORT} (${mode})`);
 });
