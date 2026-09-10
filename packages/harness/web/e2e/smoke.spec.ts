@@ -1982,6 +1982,13 @@ test.describe("resizable panes", () => {
     expect(canvasWide).toBeGreaterThan(720);
     expect(terminalWidth).toBeGreaterThanOrEqual(318); // CANVAS_MIN = 320 is also the terminal's floor
     expect(terminalWidth).toBeLessThan(335);
+    // Overdrag past the terminal's floor must not bank invisible excess: the
+    // stored width is the rendered width, not the pointer's travel.
+    const stored = await page.evaluate(() =>
+      (JSON.parse(localStorage.getItem("sapiom-harness-pane-widths") ?? "{}") as { canvas?: number })
+        .canvas,
+    );
+    expect(stored ?? 0).toBeLessThanOrEqual(Math.ceil(canvasWide) + 1);
 
     // The pinned width persists; shrinking the window must clamp the track
     // rather than push the shell into horizontal overflow.
@@ -1998,6 +2005,23 @@ test.describe("resizable panes", () => {
     const terminalNarrow =
       (await page.locator(".center-pane").boundingBox())?.width ?? 0;
     expect(terminalNarrow).toBeGreaterThanOrEqual(318);
+
+    // A short drag back right shrinks the pane immediately — the drag starts
+    // from the rendered edge, not from the wider stored number.
+    const narrowHandle = await handle.boundingBox();
+    if (!narrowHandle) throw new Error("expected bounding box");
+    await page.mouse.move(
+      narrowHandle.x + narrowHandle.width / 2,
+      narrowHandle.y + narrowHandle.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(narrowHandle.x + 100, narrowHandle.y + narrowHandle.height / 2, {
+      steps: 5,
+    });
+    await page.mouse.up();
+    const canvasShrunk =
+      (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasShrunk).toBeLessThan(canvasNarrow - 60);
   });
 
   test("rail and canvas widths cannot be dragged past their min-width floors", async ({
