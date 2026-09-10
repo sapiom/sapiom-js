@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import express, { type Response } from "express";
 import type { Server } from "node:http";
 import { openCodeCompletionPrompt } from "../../src/shared/opencode-completion";
+import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
 
 // Exercise the pinned adapter over actual incremental HTTP SSE, without a model.
 test.describe.configure({ mode: "serial" });
@@ -20,11 +21,14 @@ let server: Server;
 let origin: string;
 let enabled: boolean;
 let failAttach: boolean;
+let attachError: unknown | null;
 let failMetadata: boolean;
+let metadataError: unknown | null;
 let holdHistory: boolean;
 let failEvents: boolean;
 let failPrompt: boolean;
 let failAccess: boolean;
+let finalResponseError: unknown | null;
 let accessCalls: number;
 let recoveryReply: ((text: string, agent?: string) => void) | undefined;
 const historyReplies: Array<() => void> = [];
@@ -56,11 +60,14 @@ test.beforeEach(async ({ page }) => {
   conversations.clear();
   enabled = true;
   failAttach = false;
+  attachError = null;
   failMetadata = false;
+  metadataError = null;
   holdHistory = false;
   failEvents = false;
   failPrompt = false;
   failAccess = false;
+  finalResponseError = null;
   accessCalls = 0;
   recoveryReply = undefined;
   historyReplies.length = 0;
@@ -104,6 +111,10 @@ test.beforeEach(async ({ page }) => {
       time: { created: 1, updated: 1 },
     };
     if (path === "attach") {
+      if (attachError) {
+        res.status(503).json(attachError);
+        return;
+      }
       res.status(failAttach ? 502 : 200).json({ conversationId: id });
       return;
     }
@@ -112,6 +123,10 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === `session/${id}`) {
+      if (metadataError) {
+        res.status(403).json(metadataError);
+        return;
+      }
       res.status(failMetadata ? 503 : 200).json(session);
       return;
     }
@@ -144,6 +159,10 @@ test.beforeEach(async ({ page }) => {
     }
     if (path === `session/${id}/final-response`) {
       c.recoveries.push(req.body.messageId);
+      if (finalResponseError) {
+        res.status(410).json(finalResponseError);
+        return;
+      }
       emit(c, "session.status", { sessionID: id, status: { type: "busy" } });
       recoveryReply = (text, agent = "sapiom-turn-recovery") => {
         const previous = c!.turns.at(-1)!;
@@ -730,6 +749,37 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(input).toHaveValue("First session draft");
 
+  // Closing an exited session is the deletion boundary for its draft. If a
+  // later server event reuses that Studio session id, no deleted text returns.
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.getByTestId("dead-session-close").click();
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-leasing-2",
+  );
+  await page.evaluate(() =>
+    (window as any).__HARNESS_TEST__.publish({
+      type: "session.status",
+      session: {
+        id: "sess-boot",
+        agentSessionId: null,
+        boundWorkflowPath: "/Users/demo/acme-app/leasing",
+        harness: "claude-code",
+        cwd: "/Users/demo/acme-app",
+        title: "acme-app",
+        status: "running",
+        ready: true,
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      },
+    }),
+  );
+  await page.getByTestId("session-tab-sess-boot").click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(input).toHaveValue("");
+  await page.getByTestId("session-tab-sess-leasing-2").click();
+  await expect(input).toHaveValue("Second session draft");
+
   // An auth barrier replaces the whole store. A newly verified principal can
   // use Assistant, but never inherits either prior principal's unsent text.
   enabled = false;
@@ -836,6 +886,168 @@ test("shows startup failure and reconnects without sending a prompt", async ({
     page.getByRole("textbox", { name: "Message Assistant" }),
   ).toBeEnabled();
   expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
+});
+
+test("renders a permanent startup repair action from the strict shared contract", async ({
+  page,
+}) => {
+  attachError = {
+    error: openCodeTransportFailure(
+      "runtime_start_failed",
+      "executable-not-found",
+    ),
+  };
+  await page.goto("/?seed=0");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("OpenCode runtime is missing");
+  await expect(alert.getByRole("button", { name: "Reconnect" })).toHaveCount(0);
+  await alert.getByRole("button", { name: "Open Settings" }).click();
+  await expect(page.getByTestId("settings-popover")).toBeVisible();
+  expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
+});
+
+test("keeps confirmed missing native history honest and opens the existing session", async ({
+  page,
+}) => {
+  attachError = {
+    error: openCodeTransportFailure("native_history_missing"),
+  };
+  await page.goto("/?seed=0");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(
+    "saved Assistant conversation is unavailable",
+  );
+  await expect(alert.getByRole("button", { name: "Reconnect" })).toHaveCount(0);
+  await alert.getByRole("button", { name: "Open Terminal" }).click();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
+});
+
+test("passes a typed adapter read denial to account settings without trusting wire copy", async ({
+  page,
+}) => {
+  metadataError = {
+    error: openCodeTransportFailure("access_denied"),
+  };
+  await page.goto("/?seed=0");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(
+    "Assistant access is not available for this account",
+  );
+  await expect(
+    page.getByRole("button", { name: "Send message" }),
+  ).toBeDisabled();
+  await alert.getByRole("button", { name: "Open Settings" }).click();
+  await expect(page.getByTestId("settings-popover")).toBeVisible();
+  expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
+
+  // A server-controlled string that does not match the shared table is not a
+  // typed error. The adapter falls back without rendering the diagnostic.
+  metadataError = {
+    error: {
+      ...openCodeTransportFailure("access_denied"),
+      message: "credential=must-not-render",
+    },
+  };
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-popover")).toBeHidden();
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Could not load or send");
+  await expect(page.getByText("credential=must-not-render")).toHaveCount(0);
+});
+
+test("offers the existing sign-in flow only for authentication_required", async ({
+  page,
+}) => {
+  attachError = {
+    error: openCodeTransportFailure("authentication_required"),
+  };
+  await page.goto("/?seed=0");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("Sign in to Studio to use Assistant");
+  await alert.getByRole("button", { name: "Sign in" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as any).__HARNESS_TEST__?.lastAuthStart ?? null,
+      ),
+    )
+    .not.toBeNull();
+  expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
+});
+
+test("drops unscoped native errors and stops continuation on a scoped terminal error", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("One accepted request");
+  await input.press("Enter");
+  const c = conversations.get("ses_sess_boot")!;
+  await expect.poll(() => c.prompts).toEqual(["One accepted request"]);
+
+  // Neither an unscoped native session error nor a native-spoofed Studio event
+  // may reach the pinned adapter as a terminal failure.
+  emit(c, "session.error", {
+    error: { name: "UnknownError", data: { message: "unscoped" } },
+  });
+  emit(c, "studio.error", {
+    ...openCodeTransportFailure("authentication_required"),
+    sessionID: "ses_spoofed",
+  });
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  emit(c, "studio.error", openCodeTransportFailure("runtime_exited"));
+  await expect(page.getByRole("alert")).toContainText("Assistant stopped");
+  await expect(
+    page.getByRole("button", { name: "Send message" }),
+  ).toBeDisabled();
+
+  // Even if idle/missing-turn evidence follows, the terminal error suppresses
+  // the bounded final-response request and never repeats the accepted prompt.
+  endWithoutAnswer(c);
+  for (const stream of c.streams) stream.end();
+  await expect.poll(() => c.recoveries).toEqual([]);
+  expect(c.prompts).toEqual(["One accepted request"]);
+});
+
+test("keeps an incomplete turn blocked when final-response returns a typed terminal error", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("One request with incomplete native history");
+  await input.press("Enter");
+  const c = conversations.get("ses_sess_boot")!;
+  await expect
+    .poll(() => c.prompts)
+    .toEqual(["One request with incomplete native history"]);
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+
+  finalResponseError = {
+    error: openCodeTransportFailure("native_history_missing"),
+  };
+  endWithoutAnswer(c);
+
+  await expect.poll(() => c.recoveries).toEqual(["msg_empty"]);
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(
+    "saved Assistant conversation is unavailable",
+  );
+  await expect(
+    page.getByRole("button", { name: "Send message" }),
+  ).toBeDisabled();
+  await expect(input).toBeDisabled();
+  await expect(alert.getByRole("button", { name: "Reconnect" })).toHaveCount(0);
+  expect(c.prompts).toEqual(["One request with incomplete native history"]);
+
+  await alert.getByRole("button", { name: "Open Terminal" }).click();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
 test("shows stream loss and reconnects without replaying an accepted prompt", async ({
