@@ -553,7 +553,9 @@ describe("Studio OpenCode credential bridge", () => {
       } else if (method === "tools/call") {
         calls++;
         callId = id;
-        res.type("text/event-stream").end("id: queued-start\nretry: 10\ndata:\n\n");
+        res
+          .type("text/event-stream")
+          .end("id: queued-start\nretry: 10\ndata:\n\n");
       } else res.status(202).end();
     });
     expect(
@@ -565,7 +567,11 @@ describe("Studio OpenCode credential bridge", () => {
     const client = new Client({ name: "replay-test", version: "1" });
     const transport = new StreamableHTTPClientTransport(
       new URL(`${origin}/opencode-runtime/${credential.id}/mcp`),
-      { requestInit: { headers: { Authorization: `Bearer ${credential.token}` } } },
+      {
+        requestInit: {
+          headers: { Authorization: `Bearer ${credential.token}` },
+        },
+      },
     );
     try {
       await client.connect(transport);
@@ -798,6 +804,40 @@ describe("Studio OpenCode credential bridge", () => {
     expect(next.token).not.toBe(credential.token);
     next.revoke();
   });
+
+  it.each([
+    ["userId", "other-user"],
+    ["tenantId", "other-tenant"],
+  ] as const)(
+    "rejects and revokes a credential after verified %s changes",
+    async (field, value) => {
+      let calls = 0;
+      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+        calls++;
+        res.json({ choices: [] });
+      });
+      const previous = grant!;
+      grant = { ...previous, [field]: value };
+
+      const rejected = await request();
+      expect(rejected.status).toBe(403);
+      expect(await rejected.json()).toEqual({
+        error: {
+          message: "Assistant access is unavailable.",
+          type: "permission_error",
+          code: "assistant_access_unavailable",
+        },
+      });
+      expect((await request()).status).toBe(401);
+
+      grant = previous;
+      credential = bridge.issue();
+      grant = { ...previous, [field]: `notified-${field}` };
+      changed();
+      expect((await request()).status).toBe(401);
+      expect(calls).toBe(0);
+    },
+  );
 
   it("requires explicit service configuration outside the production environment", () => {
     expect(() =>
