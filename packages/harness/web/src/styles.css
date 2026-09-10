@@ -4138,10 +4138,9 @@ button.rail-footer-card:hover {
 }
 
 .agent-map-node-meta {
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
 }
 
 .agent-map-controls {
