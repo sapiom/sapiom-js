@@ -6,11 +6,6 @@
  * integration boundary.
  */
 
-import type {
-  SystemGraphLifecycleState,
-  WorkspaceKey,
-} from "./system-graph.js";
-
 // ---------------------------------------------------------------------------
 // Constants & well-known paths
 // ---------------------------------------------------------------------------
@@ -592,12 +587,6 @@ export type BusMessage =
       target: "prod" | "local";
     }
   | { type: "workflows.changed" }
-  | {
-      type: "system-graph.changed";
-      workspaceKey: WorkspaceKey;
-      revision: number;
-      state: SystemGraphLifecycleState;
-    }
   | {
       type: "agent-map.proposal.changed";
       delta: import("./agent-map.js").AcceptedProposalDelta;

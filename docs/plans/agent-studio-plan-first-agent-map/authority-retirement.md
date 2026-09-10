@@ -1,4 +1,4 @@
-# Agent Map authority and retirement gate (SAP-3089)
+# Agent Map authority and source retirement (SAP-3089 / SAP-3090 / SAP-3091)
 
 The current Studio server owns one durable Agent Map per project. Its state
 response always includes `studioProjects`, including an empty list when the
@@ -8,9 +8,10 @@ to infer a project from its name or serve a second topology.
 ## Release boundary
 
 The server retirement in [#892](https://github.com/sapiom/sapiom-js/pull/892)
-and client recovery in [#893](https://github.com/sapiom/sapiom-js/pull/893) must
-ship together. Merge both before merging a Harness version PR, publishing npm
-packages or tagging a desktop release. The server-only layer still has a
+and client recovery in [#893](https://github.com/sapiom/sapiom-js/pull/893) are
+the foundation of the cumulative SAP-3090 / SAP-3091 cleanup stack. Review and
+ship all seven layers together before merging a Harness version PR, publishing
+npm packages or tagging a desktop release. The server-only layer still has a
 bundled browser fallback that reaches the retired endpoint on catalog failure.
 
 The server layer carries `.changeset/quiet-project-map-authority.md`, marking
@@ -20,7 +21,10 @@ makes `scripts/assert-release-ready.mjs` fail before versioning or publishing.
 The local version/release commands and the Release PR, npm Publish and Desktop
 Release workflows all run that check. The client layer removes the blocker
 together with the unavailable-map recovery. Its recovery changeset remains a
-patch; the combined Harness release takes the higher minor bump.
+patch; the combined Harness release takes the higher minor bump. SAP-3091 also
+adds `.changeset/quiet-retired-server-graphs.md`. Both retirement changesets
+describe the final authenticated JSON API 404, which applies to every unknown
+`/api` path. The intermediate 410 fence is not a separately published contract.
 
 ## Authority matrix
 
@@ -63,10 +67,32 @@ The public PackageInventory contract remains in `@sapiom/agent`. Canonical path
 caching, accepted discovery evidence, shared watch leases and individual-agent
 Canvas extraction keep their existing owners and regression coverage.
 
-## Evidence required before browser deletion
+## Source-deletion boundaries
 
-Attach results to SAP-3089 at the reviewed PR head. Do not treat the presence of
-this file as evidence that a host or recovery exercise passed.
+All layers were implemented on one cumulative working branch. Separate snapshot
+refs keep the PR diffs reviewable; the final ref contains the complete stack for
+local Studio validation. Human review is intentionally deferred until the
+complete cleanup is available, as authorized by the maintainer.
+
+| Ticket/layer | Revision | Change |
+| --- | --- | --- |
+| SAP-3090 1/2 ([#907](https://github.com/sapiom/sapiom-js/pull/907)) | `42fcaccf` | Remove browser entry points and older-server session handoff. |
+| SAP-3090 2/2 ([#908](https://github.com/sapiom/sapiom-js/pull/908)) | `4c4b7190` | Delete unreachable browser topology and repoint retained viewport/styles/tests. |
+| SAP-3091 1/3 ([#909](https://github.com/sapiom/sapiom-js/pull/909)) | `67337e6d` | Extract retained workspace scope/path owners and Canvas invocation type. |
+| SAP-3091 2/3 ([#910](https://github.com/sapiom/sapiom-js/pull/910)) | `1a338947` | Remove server routes and graph composition; retain discovery/currentness/watch ownership. |
+| SAP-3091 3/3 | `cab477b541b0485f22a4948075d2921ba1a3434c` | Delete the server engine/store/watchers/relationships/contracts and filter unsupported browser events. |
+
+The last row is the exact source-deletion revision. Subsequent review fixes
+have their own runtime revision and verification record below. A fresh production
+source and clean-built `dist` search finds no remaining imports or callers of
+the retired modules. Old route
+and event strings remain only in negative test/smoke probes. The public
+`@sapiom/agent` PackageInventory source and schema are unchanged from `main`.
+
+## Retained verification gates
+
+Record results on SAP-3090, SAP-3091 and parent SAP-3083 at the accepted stack
+head. The table defines the observation scope; actual run results follow below.
 
 | Gate | Reproducible evidence |
 | --- | --- |
@@ -81,12 +107,112 @@ The Linux packaged run is Linux evidence. The required signed/notarized macOS
 installer and its upgrade journey remain release validation, not an inference
 from a Linux result. Record that platform's evidence in SAP-3086 before shipping.
 
-## Candidate evidence — 2026-09-09
+## Review-fix verification — 2026-09-10
+
+Runtime source revision: `5bfed981be12701e523e9096bdd0ab498aff0f20`, including
+`main` at `8679d7457a8c4a1f40b2137da9e677de01b62a53`. The JSON record's
+`reviewFixes` entry contains fresh build hashes and per-PR typecheck results.
+These updates preserve the original reviewed commits and the seven PR
+boundaries; the cumulative working branch still contains every layer.
+
+- #892 uses main's complete partial auth mock to resolve the merge conflict.
+  All 263 integration checks passed; that mock's four cases also passed on
+  #892's own tree. Main's deliberate removal of the duplicate Claude review
+  workflow is carried through the stack.
+- #907 restores per-project manual pan and zoom across project/agent navigation.
+  Saved views are scoped to the current signed-in UI lifetime; offscreen maps
+  recover by fitting, and Fit continues following pane/layout changes. Browser
+  coverage restores E3.3's project tabs across different agent bindings. Its
+  changeset identifies the removed compatibility branch as internal cleanup.
+- #908 restores `--text-faint`, `--font-mono` and `--type-meta`, with computed
+  style assertions and before/after mock screenshots in light and dark themes.
+  The stale mock failure comment is removed. The viewport and metadata tests
+  failed on the original code, then passed with the fixes.
+- #910 reconciles both retirement changesets to the final JSON 404 contract,
+  including all unknown `/api` paths. Boot-token authentication remains required.
+
+Harness and dependency builds, Harness typecheck/lint, terminology and
+provider-copy checks passed. All **3,845 Harness unit/integration cases** passed
+(two explicit skips), all **10 performance cases** passed, all **634 browser
+cases** passed, and all **15 Canvas browser cases** passed. All seven isolated
+PR heads passed server/browser typechecks; #907's own tree also passed all ten
+viewport/project-altitude cases. The fresh build contains no retired graph files.
+
+The first three-worker Harness run failed one archive-wiring case with an empty
+turn list. The affected file passed unchanged **8/8**, and the full two-worker
+rerun passed unchanged. The initial failure remains in the JSON record; no test
+or admission guard was weakened.
+
+The package hashes and smoke evidence below belong to the earlier deletion
+revision. They are historical evidence, not a newly packaged review-fix artifact.
+Signed macOS installer/upgrade validation remains the SAP-3086 release gate.
+
+## Original cleanup evidence — 2026-09-09
+
+Runtime revision: `cab477b541b0485f22a4948075d2921ba1a3434c`. The
+[machine-readable verification record](./retirement-verification.json) includes
+package/bundle hashes, counts, skips and initial failures. The subsequent
+review-fix revision is recorded separately above.
+
+- A clean Harness build followed by the root build, typecheck and lint passed.
+  Terminology, provider-copy, PR-template/security checks and all 178 root script
+  tests passed. The Node 24 VM's root test command still fails the unchanged
+  `agent-core` unreadable-directory assertion; this is not a green root run.
+- All **3,840 retained Harness unit/integration cases** passed (two explicit
+  skips), and all **10 isolated performance cases** passed. Remaining packages
+  passed separately: MCP 179 (three skips), CLI 73, desktop 205.
+- The browser run passed **625/627**; two Chrome targets crashed in the template
+  preference file. That entire file then passed **23/23**, without code changes.
+  All **627** unique cases passed across the full run and scoped rerun. All
+  **15 Canvas browser cases** passed. The current authority tests include
+  omitted-catalog recovery, exact session tabs and negative legacy request/event
+  probes; retained map layout, navigation, history, focus and mobile checks pass.
+- Fresh Linux x64 packaging uses Harness **0.16.0**, desktop **0.4.6**, Electron
+  **33.4.11**. The unpacked app passed **16** smoke checks (one Windows-only skip).
+  The actual AppImage extract-and-run wrapper also passed **16** checks on its
+  isolated run, using the identical artifact and unchanged smoke coverage.
+  Both runs recorded old graph read/refresh/navigation counts **0/0/0**, direct
+  removed-route responses **404/404/404**, and unchanged saved map/history.
+- All **195** built Harness runtime/assets match the packaged files byte-for-byte
+  (the builder intentionally excludes TypeScript declarations and source maps).
+  The clean built and packaged trees contain no retired graph modules. Desktop
+  packaging used copied dependencies; shared workspace native binaries retain
+  their original hashes.
+
+AppImage: `sapiom-0.4.6-x86_64.AppImage`
+
+SHA-256: `e63fb39419b54edc828814a7195faca6814edfe99b1f7f6c675c89752a3293ad`.
+
+### Preexisting session-scope race observed during validation
+
+The first AppImage run passed the map and other checks but failed its initial
+session creation with `409 PROJECT_SESSION_SCOPE_UNAVAILABLE`. Its catalog
+shows a newly enrolled root becoming `missing` during the handoff from
+`pendingProjectCwds` to `SessionManager.pendingCreates`. Concurrent scope
+reconciliation can omit the root while bootstrap scheduling/claim is awaiting.
+The admission guard then correctly refuses the stale identity. The source
+paths and scope derivation are unchanged by server cleanup; removed graph
+scopes supplied no protective lease. The race predates this work in
+[`873dad63`](https://github.com/sapiom/sapiom-js/commit/873dad63928c287b35c37c5c401042d7ffa05149)
+and the scheduling handoff in
+[`21684912`](https://github.com/sapiom/sapiom-js/commit/21684912c20feaf1d86a84e5ab8199dc205f32cc).
+
+The isolated AppImage rerun passed without changing the artifact or test. That
+result does not fix the race. SAP-3091 records it as a separate functional
+follow-up: retain scope continuously through enrollment, scheduling, claim and
+transfer to pending creation, without allowing duplicate bootstrap sessions or
+weakening final admission. A deterministic regression can hold the second
+outbox `beforeSchedule` callback, complete a concurrent `/api/workflows` read,
+then require one successful session with the same active identity. This seam
+has been identified but not implemented or run in the cleanup.
+
+## Historical SAP-3089 authority evidence — 2026-09-09
 
 The server fence is commit `d3c91355`, based on main `65219660`. Browser code,
 screenshots, and this record are reviewed together in the next stack layer.
-This records implementation evidence; the SAP-3090 deletion decision still
-requires review of that final head and its CI.
+This is the original authority-fence evidence, before the source-deletion
+revisions above. Its temporary 410 responses and original test counts are not
+the final cleanup result.
 
 - Root build, typecheck and lint passed, including the final Harness browser
   rebuild. Terminology and provider-copy checks passed.
