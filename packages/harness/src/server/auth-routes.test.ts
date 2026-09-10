@@ -72,14 +72,36 @@ function collectBusEvents(bus: EventBus): BusMessage[] {
   return events;
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  return {
+    promise: new Promise<T>((done) => {
+      resolve = done;
+    }),
+    resolve,
+  };
+}
+
 /** Build and start a minimal express app mounting the auth router. */
-function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
+function startApp(
+  opts: Partial<AuthRoutesOptions> & {
+    bus: EventBus;
+    onRequest?: (method: string, path: string) => void;
+  },
+) {
   const authState =
     opts.authState ??
     createMutableAuthState({ authenticated: false, organizationName: null });
   const apiKeyProvider = opts.apiKeyProvider ?? makeProvider();
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    opts.onRequest?.(req.method, req.path);
+    next();
+  });
   app.use(
     "/api",
     createAuthRouter({
@@ -90,6 +112,7 @@ function startApp(opts: Partial<AuthRoutesOptions> & { bus: EventBus }) {
       authEnabled: opts.authEnabled,
       performBrowserAuthImpl: opts.performBrowserAuthImpl,
       onPlanningUserChanged: opts.onPlanningUserChanged,
+      onCredentialRemoved: opts.onCredentialRemoved,
     }),
   );
   const server = app.listen(0);
@@ -576,6 +599,55 @@ describe("POST /api/auth/disconnect", () => {
     expect(provider.getKey()).toBeNull();
   });
 
+  it("does not report disconnect success until credential-bearing processes stop", async () => {
+    const stopped = deferred<void>();
+    const onCredentialRemoved = vi.fn(() => stopped.promise);
+    const result = startApp({ bus, onCredentialRemoved });
+    server = result.server;
+
+    let responseSettled = false;
+    const response = fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    }).then((value) => {
+      responseSettled = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(onCredentialRemoved).toHaveBeenCalledOnce());
+    expect(responseSettled).toBe(false);
+
+    stopped.resolve();
+    expect((await response).status).toBe(200);
+  });
+
+  it("publishes signed-out state even when process reconciliation fails", async () => {
+    const authState = createMutableAuthState({
+      authenticated: true,
+      organizationName: "Acme",
+    });
+    const result = startApp({
+      bus,
+      authState,
+      apiKeyProvider: makeProvider(null, "sk-live-key"),
+      onCredentialRemoved: vi.fn().mockRejectedValue(new Error("stop failed")),
+    });
+    server = result.server;
+
+    const response = await fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(500);
+    expect(authState.get()).toEqual({
+      authenticated: false,
+      organizationName: null,
+    });
+    expect(busEvents).toContainEqual({
+      type: "auth.changed",
+      authenticated: false,
+      organizationName: null,
+    });
+  });
+
   it("cancels an in-flight sign-in so a late browser-auth resolve cannot re-authenticate", async () => {
     type AuthResult = {
       apiKey: string;
@@ -609,9 +681,7 @@ describe("POST /api/auth/disconnect", () => {
     });
     expect(startRes.status).toBe(200);
 
-    // Give the async chain time to reach performBrowserAuthImpl.
-    await new Promise((r) => setTimeout(r, 10));
-    expect(capturedResolve).toBeDefined();
+    await vi.waitFor(() => expect(capturedResolve).toBeDefined());
 
     // Disconnect while the browser flow is still pending.
     const disconnectRes = await fetch(`${baseUrl}/api/auth/disconnect`, {
@@ -631,8 +701,10 @@ describe("POST /api/auth/disconnect", () => {
       apiKeyId: "key-late",
     });
 
-    // Give the async chain time to (not) write credentials.
-    await new Promise((r) => setTimeout(r, 20));
+    // Cross one event-loop turn after resolving the browser result. Promise
+    // continuations drain before setImmediate, so the stale-attempt guard has
+    // deterministically run before the negative assertions below.
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     // The late resolve must NOT have re-authenticated.
     expect(authState.get().authenticated).toBe(false);
@@ -648,5 +720,178 @@ describe("POST /api/auth/disconnect", () => {
       (e) => "authenticated" in e && !e.authenticated,
     );
     expect(unauthEvents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("allows immediate relogin after disconnect and ignores the older OAuth completion", async () => {
+    type AuthResult = {
+      apiKey: string;
+      tenantId: string;
+      organizationName: string;
+      apiKeyId: string;
+    };
+    const first = deferred<AuthResult>();
+    const second = deferred<AuthResult>();
+    const browserAuth = vi
+      .fn<() => Promise<AuthResult>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const result = startApp({
+      bus,
+      performBrowserAuthImpl: browserAuth,
+      apiKeyProvider: makeProvider("key-new"),
+    });
+    server = result.server;
+
+    expect(
+      (await fetch(`${result.baseUrl}/api/auth/start`, { method: "POST" }))
+        .status,
+    ).toBe(200);
+    await vi.waitFor(() => expect(browserAuth).toHaveBeenCalledTimes(1));
+
+    expect(
+      (
+        await fetch(`${result.baseUrl}/api/auth/disconnect`, {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await fetch(`${result.baseUrl}/api/auth/start`, { method: "POST" }))
+        .status,
+    ).toBe(200);
+    await vi.waitFor(() => expect(browserAuth).toHaveBeenCalledTimes(2));
+
+    second.resolve({
+      apiKey: "key-new",
+      tenantId: "tenant-new",
+      organizationName: "New Org",
+      apiKeyId: "key-new-id",
+    });
+    await vi.waitFor(() =>
+      expect(result.authState.get()).toEqual({
+        authenticated: true,
+        organizationName: "New Org",
+      }),
+    );
+
+    first.resolve({
+      apiKey: "key-old",
+      tenantId: "tenant-old",
+      organizationName: "Old Org",
+      apiKeyId: "key-old-id",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(result.authState.get()).toEqual({
+      authenticated: true,
+      organizationName: "New Org",
+    });
+    expect(writeCredentials).toHaveBeenCalledTimes(1);
+    expect(writeCredentials).toHaveBeenCalledWith(
+      "production",
+      "https://app.sapiom.ai",
+      "https://api.sapiom.ai",
+      expect.objectContaining({ apiKey: "key-new" }),
+    );
+  });
+
+  it("orders disconnect after an in-progress credential write", async () => {
+    const write = deferred<void>();
+    const disconnectObserved = deferred<void>();
+    let writeDone = false;
+    vi.mocked(writeCredentials).mockImplementationOnce(async () => {
+      await write.promise;
+      writeDone = true;
+    });
+    vi.mocked(clearCredentials).mockImplementationOnce(async () => {
+      expect(writeDone).toBe(true);
+    });
+    const provider = makeProvider("key-old");
+    const result = startApp({
+      bus,
+      apiKeyProvider: provider,
+      performBrowserAuthImpl: vi.fn().mockResolvedValue({
+        apiKey: "key-old",
+        tenantId: "tenant-old",
+        organizationName: "Old Org",
+        apiKeyId: "key-old-id",
+      }),
+      onRequest: (method, path) => {
+        if (method === "POST" && path === "/api/auth/disconnect") {
+          disconnectObserved.resolve();
+        }
+      },
+    });
+    server = result.server;
+
+    await fetch(`${result.baseUrl}/api/auth/start`, { method: "POST" });
+    await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalledOnce());
+
+    const disconnect = fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
+    await disconnectObserved.promise;
+
+    write.resolve();
+    expect((await disconnect).status).toBe(200);
+
+    expect(clearCredentials).toHaveBeenCalledOnce();
+    expect(provider.calls.refresh).toBe(0);
+    expect(result.authState.get().authenticated).toBe(false);
+    expect(
+      busEvents.filter(
+        (event) => event.type === "auth.changed" && event.authenticated,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("orders disconnect after an in-progress provider refresh", async () => {
+    const refresh = deferred<string | null>();
+    const disconnectObserved = deferred<void>();
+    let refreshDone = false;
+    const provider = makeProvider();
+    provider.refresh = vi.fn(async () => {
+      const key = await refresh.promise;
+      refreshDone = true;
+      return key;
+    });
+    vi.mocked(clearCredentials).mockImplementationOnce(async () => {
+      expect(refreshDone).toBe(true);
+    });
+    const result = startApp({
+      bus,
+      apiKeyProvider: provider,
+      performBrowserAuthImpl: vi.fn().mockResolvedValue({
+        apiKey: "key-old",
+        tenantId: "tenant-old",
+        organizationName: "Old Org",
+        apiKeyId: "key-old-id",
+      }),
+      onRequest: (method, path) => {
+        if (method === "POST" && path === "/api/auth/disconnect") {
+          disconnectObserved.resolve();
+        }
+      },
+    });
+    server = result.server;
+
+    await fetch(`${result.baseUrl}/api/auth/start`, { method: "POST" });
+    await vi.waitFor(() => expect(provider.refresh).toHaveBeenCalledOnce());
+
+    const disconnect = fetch(`${result.baseUrl}/api/auth/disconnect`, {
+      method: "POST",
+    });
+    await disconnectObserved.promise;
+
+    refresh.resolve("key-old");
+    expect((await disconnect).status).toBe(200);
+
+    expect(clearCredentials).toHaveBeenCalledOnce();
+    expect(result.authState.get().authenticated).toBe(false);
+    expect(
+      busEvents.filter(
+        (event) => event.type === "auth.changed" && event.authenticated,
+      ),
+    ).toHaveLength(0);
   });
 });

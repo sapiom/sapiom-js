@@ -126,7 +126,7 @@
           },
           "duration": {
             "enum": ["15m", "1h", "4h", "24h", "7d"],
-            "description": "postgres only. 7d is the maximum and there is NO renew verb — a managed Postgres is scratch space, not a datastore. A template that needs durable state must say so in `notes`."
+            "description": "postgres only, and legacy: the platform no longer reads it. A Sapiom Postgres is permanent and metered by slot — see the served rule at https://api.sapiom.ai/v1/agents/authoring-rules#database-lifecycle. Omit it in a new template; existing declarations still parse."
           },
           "seed": {
             "type": "string",
@@ -135,7 +135,7 @@
           "ephemeral": {
             "type": "boolean",
             "default": true,
-            "description": "True when the resource is disposable per run. False signals the 7-day TTL problem applies and the template needs a durability story in `notes`."
+            "description": "True when the resource is disposable per run. False signals the template keeps state across runs and needs a durability story in `notes`."
           },
           "reuse": {
             "type": "object",

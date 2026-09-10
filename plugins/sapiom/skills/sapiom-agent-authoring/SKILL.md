@@ -17,16 +17,35 @@ A Sapiom **agent** is a small TypeScript project you author with your coding age
 `defineAgent({ name, entry, steps })` where each step's `run(input, ctx)` does work — calling
 paid Sapiom capabilities through the typed `ctx.sapiom.*` client — and returns a directive.
 You test it locally without a Sapiom account or capability spend, then deploy it to run on
-Sapiom's cloud: on demand, on a schedule, or resumed by signals. All from the terminal; no
+Sapiom's cloud: on demand, on a schedule, on an event or inbound webhook, or resumed by signals.
+All from the terminal; no
 dashboard required.
 
 **Load this skill before scaffolding — it drives the whole lifecycle from zero.** Inside a
 scaffolded project, `AGENTS.md` is the quick reference; this skill is the deep guide.
 
-## If the Sapiom dev MCP isn't connected yet
+**Two kinds of content live here, and they update differently.** The authoring _mechanics_ —
+the step model, directives, `ctx.shared`, pause/resume, local stubs — describe the
+`@sapiom/agent` in your `node_modules` and ship with it. The _platform rules_ — what is true of
+Sapiom regardless of your SDK version: one-off call vs agent, the capability catalog, database
+lifetime, trigger kinds, App Links, which capability calls an LLM, composing deployed agents,
+vocabulary — are **served live** from <https://api.sapiom.ai/v1/agents/authoring-rules> and
+only summarized here; each such chapter is bracketed by `section:` markers naming the served
+section it points at. A pointer's `#name` fragment names that section's marker (an HTML
+comment, `section: name`) in the served text — the endpoint serves raw Markdown, so search for
+the marker rather than expecting a browser to jump to it. When a summary below and the served text disagree, the served text wins.
+This copy was written against release 1.0 of it; `sapiom_dev_agents_check` warns when the
+served copy differs.
 
-The lifecycle below runs through the **sapiom-dev** MCP server (`@sapiom/mcp`). If its tools
-(`sapiom_authenticate`, `sapiom_dev_agents_*`) aren't available, add the server first:
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+
+<!-- section: one-off-vs-agent -->
+
+## If the local authoring server isn't connected yet
+
+The lifecycle below runs through **the local authoring server** — the `@sapiom/mcp` package,
+stdio. If its tools (`sapiom_authenticate`, `sapiom_dev_agents_*`) aren't available, add it
+first:
 
 ```bash
 claude mcp add sapiom -- npx -y @sapiom/mcp
@@ -34,6 +53,12 @@ claude mcp add sapiom -- npx -y @sapiom/mcp
 
 Other clients: run `npx -y @sapiom/mcp` as a local (stdio) MCP server — see
 [docs.sapiom.ai](https://docs.sapiom.ai/integration/mcp-servers/setup) for per-client config.
+Sapiom's other server, **the hosted capability server** (`https://api.sapiom.ai/v1/mcp`), is
+for a one-off call with no automation to keep; which server a task belongs to, and what local
+work does and does not spend, is the served section
+[One-off call, or an agent?](https://api.sapiom.ai/v1/agents/authoring-rules#one-off-vs-agent).
+
+<!-- /section: one-off-vs-agent -->
 
 ## Lifecycle from Zero
 
@@ -70,7 +95,9 @@ filesystem, process, environment, network, and third-party services.
 
 Run `sapiom_authenticate` — it opens a browser login and caches an API key in
 `~/.sapiom/credentials.json`. Confirm with `sapiom_status`. This makes your coding agent an
-API-key principal; link, deploy, and cloud run require it.
+API-key principal; link, deploy, and cloud run require it. Which server's `sapiom_authenticate` that is (the one
+alongside the `sapiom_dev_agents_*` tools) and why local work needs no account: served section
+[One-off call, or an agent?](https://api.sapiom.ai/v1/agents/authoring-rules#one-off-vs-agent).
 
 ### 4. Link → deploy → run → inspect
 
@@ -271,19 +298,39 @@ reference instead.
 | `ctx.attempts`       | `number`                         | How many times this step has run (0-indexed)                                                                                                              |
 | `ctx.logger`         | `StepLogger`                     | `info / warn / error / debug(msg, meta?)`                                                                                                                 |
 | `ctx.sapiom`         | `Sapiom`                         | The typed capability client — the `Sapiom` interface from `@sapiom/tools`, installed in your `node_modules` (see "Capabilities" below)                    |
-| `ctx.isLocalTrace`   | `boolean \| undefined`           | `true` under `run_local`; **absent** on a deployed run. Gate raw I/O `run_local` cannot stub (see "Testing with `run_local`")                              |
+| `ctx.isLocalTrace`   | `boolean \| undefined`           | `true` under `run_local`; **absent** on a deployed run. Gate raw I/O `run_local` cannot stub (see "Testing with `run_local`")                             |
 | `ctx.organizationId` | `string \| null`                 | Tenant org                                                                                                                                                |
 | `ctx.tenantId`       | `string \| null`                 | Tenant id                                                                                                                                                 |
 
+<!-- section: capability-catalog -->
+
 ## Capabilities from Steps
 
-Steps call Sapiom's paid capabilities through `ctx.sapiom.*` — sandboxes, repositories,
-coding models (`ctx.sapiom.models.coding`), file storage, content generation, search,
-databases, email, domains, memory, and more as they land. **Do not memorize the catalog:
-types are the source of truth.** The full surface is the `Sapiom` interface in `@sapiom/tools`
-— installed in your project's `node_modules`, so its types match the exact version you're on.
-`ctx.sapiom.` autocompletes what exists, `npm run typecheck` rejects what doesn't, and the full
-catalog with pricing lives at [docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities).
+Steps call Sapiom's paid capabilities through the typed `ctx.sapiom.*` client. **Do not
+memorize the catalog: types are the source of truth.** The full surface is the `Sapiom`
+interface in `@sapiom/tools` — installed in your project's `node_modules`, so its types match
+the exact version you're on. `ctx.sapiom.` autocompletes what exists, `npm run typecheck`
+rejects what doesn't, and the catalog with pricing lives at
+[docs.sapiom.ai/capabilities](https://docs.sapiom.ai/capabilities). What the catalog spans, how
+per-agent secrets and the read-only Vault reach a step, and why triggers are cloud objects
+rather than `ctx.sapiom` calls: served section
+[Capabilities from steps](https://api.sapiom.ai/v1/agents/authoring-rules#capability-catalog).
+Database lifetime and metering: served section
+[Database lifecycle](https://api.sapiom.ai/v1/agents/authoring-rules#database-lifecycle).
+
+<!-- /section: capability-catalog -->
+
+### Secrets, `agents.launch`, receipts, App Link webhooks
+
+Taught once, in the served text — not restated here. Per-agent secrets and the read-only Vault:
+[Capabilities from steps](https://api.sapiom.ai/v1/agents/authoring-rules#capability-catalog) and
+[Credentials and configuration](https://docs.sapiom.ai/reference/credentials-and-configuration).
+Fire-and-forget dispatch with `ctx.sapiom.agents.launch`: "Composing Deployed Agents" below and
+[Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
+Receipts and manual replay of inbound events: the local authoring server's served primer (in
+your context from the moment it connects) and its REST pointers. App Link `/hook/*` webhooks:
+[App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links) and
+[App Links](https://docs.sapiom.ai/capabilities/app-links#webhooks).
 
 ### Coding Repository Errors
 
@@ -315,169 +362,60 @@ try {
 }
 ```
 
+<!-- section: llm-call-surface -->
+
 ## Calling LLMs from Steps
 
-Three DIFFERENT capabilities call an LLM from step code — picking the wrong one for the
-job is the most common mistake in authored agents:
+Three DIFFERENT capabilities call an LLM from step code — picking the wrong one for the job is
+the most common mistake in authored agents. In one line each: `ctx.sapiom.llm.run` is ONE call
+(summarize, extract, classify, one-shot generate); `ctx.sapiom.models.run` is a platform-driven
+multi-turn reasoning + tool-calling loop (never for a one-shot — it loops and overthinks);
+`ctx.sapiom.agents.run` dispatches a DEPLOYED agent by slug. You never pick a model: omit
+`model` and let the platform route it — a raw provider model id is never honored on any surface.
 
-| Capability              | Use for                                                                                            | Never for                                                          |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `ctx.sapiom.llm.run`    | ONE LLM call — summarize, extract, classify, one-shot generate                                       | A multi-turn task, or anything needing its own tool-calling loop      |
-| `ctx.sapiom.models.run` | A platform-driven multi-turn reasoning + tool-calling loop (minutes, not seconds). `models.coding.run` for sandboxed coding tasks. | A one-shot completion — it will loop and overthink                    |
-| `ctx.sapiom.agents.run` | Dispatching a DEPLOYED agent by slug — composing systems from small deployed agents                  | Anything that isn't itself a deployed agent                           |
+The full rule — the worked example (`llm.run` with `output`, read back with `structuredOf`;
+`textOf` for plain text; never `content[0]`), why `max_tokens` must budget for thinking as well
+as output, the label rule and the result's `servedClass`/`lane` disclosure, and how to debug a
+run in the Run Inspector — is the served section
+[Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface).
+Read it before the first `llm.*` / `models.run` / `agents.run` call. Customer guide:
+[Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface).
 
-**⚠️ The mistake to never repeat:** sending single-shot, fixed-shape intent through
-`models.run`'s multi-turn loop instead of one `llm.run` call. The symptom: the run takes
-far longer than the task needs, "overthinks" a trivial extraction, and — if the caller just
-grabs the first content block hoping it's the answer — returns a `thinking` block instead.
+<!-- /section: llm-call-surface -->
 
-### Worked example: a trivial fixed-shape-JSON task
-
-**Wrong** — one-shot intent sent through the multi-turn loop, then the answer string-parsed
-out of free text:
-
-```typescript
-// DON'T: models.run for a one-shot extraction — it loops and overthinks, and
-// "reply with only JSON" is brittle (prose, invalid JSON, or a leading
-// `thinking` block all break a naive `JSON.parse(content[0])`).
-const run = await ctx.sapiom.models.run({
-  prompt: `Reply with ONLY JSON: {"priority": "...", "category": "..."} for: ${input.text}`,
-});
-const parsed = JSON.parse(run.output ?? "{}"); // brittle, and pays for a reasoning loop
-```
-
-**Right** — `llm.run` with `output` for the fixed shape, read back with `structuredOf`
-(forced tool-use output has no `text` block — the result lives in `tool_use`, never
-`content[0]`):
-
-```typescript
-const response = await ctx.sapiom.llm.run({
-  request: {
-    messages: [{ role: "user", content: `Classify this support ticket: ${input.text}` }],
-    max_tokens: 256,
-  },
-  // No `model` — omit it and let the platform choose (recommended; passing
-  // "smart" would be a no-op — it already is the default — and a raw provider
-  // model id is never honored).
-  output: {
-    name: "classify_ticket",
-    schema: {
-      type: "object",
-      properties: {
-        priority: { type: "string", enum: ["low", "medium", "high"] },
-        category: { type: "string" },
-      },
-      required: ["priority", "category"],
-    },
-  },
-});
-
-const { priority, category } = ctx.sapiom.llm.structuredOf<{
-  priority: string;
-  category: string;
-}>(response)!;
-```
-
-`output` automates the forced tool call and its `tool_choice` wiring; `structuredOf` reads
-the result back out. For a **plain-text** reply instead, use
-`ctx.sapiom.llm.textOf(response)` — it reads only the `type === 'text'` block, skipping a
-`thinking` block that may precede it.
-
-### The label rule
-
-**You never pick a model.** Every `model`/`label` field across `llm.*`, `models.run`, and
-`models.coding.run` takes a **routing label** (e.g. `"smart"`) that the platform resolves
-against its configured label set — never a raw provider model id (never honored, on any
-surface). Omit it entirely to let the platform choose (the recommended default) — passing
-`"smart"` is a no-op: it already is the default. The result discloses what actually served, in the platform's own
-vocabulary — `servedClass` (the billing size the label resolved to) and `lane` (the billing
-lane it executed in) — never a model or provider id.
-
-### Debugging a run
-
-Find the run in the dashboard's run detail view, find the suspicious step's row id, then
-open the **Run Inspector** for that step's full-fidelity input/output/error/logs.
-
-Full guide: [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface).
+<!-- section: agent-composition -->
 
 ## Composing Deployed Agents (System Design)
 
 **One agent per project — but a system is several projects.** The "keep exactly one
-`defineAgent(...)` export" rule is a statement about a PROJECT, not about your system. A
-multi-stage system ("research → write script → voiceover → assemble → post") is not one
-big agent with five steps: it is several small agents, each its own project, deployed
-separately, composed by a thin coordinator that dispatches them by slug. A small deployed
-agent is independently testable, versioned, and reusable from more than one caller; a
-monolith couples every stage into a single deploy unit and step graph, so any stage change
-redeploys — and risks — all of them.
+`defineAgent(...)` export" rule is a statement about a PROJECT, not about your system: a
+multi-stage system is several small agents, each its own project, deployed separately, composed
+by a thin coordinator that dispatches them by slug with `ctx.sapiom.agents.run`. `agents.run`
+reports failure as DATA and never throws — one branch on `research.status !== "completed"`
+covers a failed child, a refused dispatch (`"rejected"`) and a wait timeout alike, and skipping
+it lets a bad stage silently feed `null` downstream. Only `"rejected"` proves nothing is
+running, so it is the only status you may re-dispatch on without an `idempotencyKey`. For a
+long-running child use `ctx.sapiom.agents.launch` and pause the calling step on the handle
+(`pauseUntilSignal`, below) so the coordinator's step doesn't time out — `launch` is the one
+that THROWS: it owes you a pausable handle and a refused dispatch has none, so catch
+`AgentDispatchError` and `fail()` the step. Deploy bottom-up —
+children first, the coordinator last, since it dispatches them by their slugs. The worked
+example is the served section
+[Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
 
-**Wrong** — one project inlining every stage as a step:
+<!-- /section: agent-composition -->
 
-```typescript
-// DON'T: video-pipeline/index.ts with research, script, voiceover, assemble,
-// post as five steps of ONE defineAgent. No stage is reusable or
-// independently testable, and every stage change redeploys all five.
-```
-
-**Right** — each stage its own deployed project; a coordinator composes them:
-
-```typescript
-// research-topic/, write-script/, generate-voiceover/, assemble-video/,
-// post-video/: five small projects, each deployed on its own slug.
-// video-pipeline/ is then just the coordinator:
-const research = await ctx.sapiom.agents.run({
-  definition: "research-topic", // the deployed child's slug
-  input: { topic: input.topic },
-});
-// agents.run reports failure as DATA — no try/catch needed. It resolves on
-// any terminal status (completed | failed | cancelled), on a refused
-// dispatch ("rejected" — unknown slug or input the engine refused, with
-// error { code, message, status, details }), on an ambiguous one or an
-// unreadable status ("unknown"), and on a wait timeout ("timed_out"). So
-// this ONE branch covers every way a stage can not deliver — skip it and a
-// bad stage silently feeds `null` onward. Only "rejected" proves nothing is
-// running, so it is the only status you may re-dispatch on blindly; on
-// "unknown"/"timed_out" a child may still be working, so retry only with an
-// idempotencyKey.
-if (research.status !== "completed") {
-  // (fail() requires this step to declare canFail: true)
-  return fail(`research-topic ${research.status}: ${String(research.error)}`);
-}
-const script = await ctx.sapiom.agents.run({
-  definition: "write-script",
-  input: { research: research.output },
-});
-// …and so on. Use agents.launch + pauseUntilSignal for a long-running child
-// so the coordinator's step doesn't time out. launch is the one that THROWS:
-// it owes you a pausable handle, and a refused dispatch has none, so wrap it
-// in try/catch and route an AgentDispatchError to fail() (uncaught, the engine
-// retries it to maxAttemptsPerStep first — a slug typo won't self-heal). On a
-// handle from launch({ ..., at }) there is no run until the scheduled time, so
-// status/wait (and therefore run) throw there too — pause on it, don't await.
-// The thrown error's childMayExist says whether a retry is safe: false when
-// the platform proved it created nothing, true when the outcome was ambiguous.
-```
-
-Building a system in one session? Scaffold the stages as separate projects and deploy
-bottom-up — children first, the coordinator last (it dispatches them by their slugs).
+<!-- section: platform-vocabulary -->
 
 ## Naming Conventions
 
-Several words are overloaded across this platform. Know which meaning a given context
-uses — conflating two costs you a wrong capability choice, not just a wrong word:
+"agent", "run", "task", "session", "dispatch" and "label" each carry several meanings on this
+platform, and conflating two costs you a wrong capability choice, not just a wrong word. The
+glossary — and the rule for new capabilities: don't re-overload "agent" or "run", give a new
+verb its own name — is the served section
+[Platform vocabulary](https://api.sapiom.ai/v1/agents/authoring-rules#platform-vocabulary).
 
-| Term         | Meaning(s) on this platform                                                                                                                                                                                                                                                                                                    |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **agent**    | (1) `@sapiom/agent` — this authoring framework (`defineAgent`, this skill). (2) A **deployed agent** — one project's compiled definition, dispatched by `ctx.sapiom.agents.run`/`launch` (addressed by its slug via `AgentRunSpec.definition`) — the customer-facing name is always "agent." (3) `ctx.sapiom.models.run`'s managed multi-turn loop — a managed loop the platform runs for you; you call it, you never author it. (4) A **Claude Code subagent** — an unrelated feature of the coding tool itself, not part of the Sapiom SDK. |
-| **run**      | (1) `ctx.sapiom.llm.run` — one synchronous LLM call. (2) `ctx.sapiom.models.run` / `agents.run` — `launch()` + `wait()`, blocking until terminal (vs. `launch()` alone, which returns a pausable handle). (3) An execution instance/row of any of the above — the thing you inspect/debug. (4) The dashboard's Run button / Local Run / Prod Run (Studio UI actions, not an API call).                                                                                                                                                                                                                                       |
-| **task**     | `CodingRunSpec.task` — the coding agent's prompt-equivalent field. Deliberately not called `prompt`: it's handed to a sandboxed coding agent, not a bare LLM call.                                                                                                                                                            |
-| **session**  | (1) `ctx.sapiom.llm.createSession`/`callSession` — reserved LLM capacity accepting repeated drop-in calls until its TTL/budget ends it (replacing the deferred `submit`/`redeem` lane). (2) A Studio harness terminal session — unrelated, no LLM-capacity semantics.                                                                |
-| **dispatch** | The structural contract (`DispatchHandle`) a long-running capability's `launch()` handle satisfies so a step can `pauseUntilSignal(handle, …)` and resume on completion. Every dispatched capability (coding, `models.run`, `agents.run`, more later) shares this ONE contract — "dispatch" always means this pattern, never anything else.  |
-| **label**    | The author-facing term for a `model:`/`label:` *input* value (e.g. `"smart"`) — never a raw provider model id (never honored, on any surface). Not a contradiction that a result's `servedClass` field says "class": that field *reports* the billing class the platform resolved your label to — it's a disclosure field, not author-facing input vocabulary. You still write `label`; the platform still reports back `servedClass`.                                                                                                     |
-
-**The rule new capabilities must follow:** don't re-overload "agent" or "run" further. If a
-new capability needs its own verb, name it something else (`dispatch`, `launch`, `submit`,
-`create*`) rather than adding a sixth meaning to a word that already has five.
+<!-- /section: platform-vocabulary -->
 
 ## Failure Handling & Retries
 
@@ -604,6 +542,23 @@ Under `run_local`, a dispatch pause auto-resumes with the stub result; a manual 
 auto-resumes with `{}`. There is no manual-signal payload override in the local runner, so
 type the resumed step's input with optional fields accordingly.
 
+<!-- section: trigger-kinds -->
+
+## Triggers — Run a Deployed Agent Without a Human
+
+A trigger is a persisted cloud object attached to a **deployed** agent by slug; each fire starts
+an independent production run. Create one with `sapiom_dev_agents_schedule` — `kind` is one of
+`schedule_cron`, `schedule_once`, `event`, `webhook` (the `event`/`webhook` kinds and
+`sapiom_dev_agents_schedule_secret` need `@sapiom/mcp` >= 0.15). "Run this agent when an
+external system POSTs to us" is a `webhook` trigger, not a hand-built HTTP server. The required
+field per kind, the signing scheme a webhook sender must follow, secret rotation, and why a
+Slack / Stripe / GitHub / Meta sender needs an App Link `/hook/*` receiver instead of our HMAC:
+served sections [Trigger kinds](https://api.sapiom.ai/v1/agents/authoring-rules#trigger-kinds)
+and [App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links).
+Full guide: [Triggers](https://docs.sapiom.ai/guides/triggers).
+
+<!-- /section: trigger-kinds -->
+
 ## Determinism
 
 A step body runs **once** on the happy path. It re-runs only on retry (after a throw or
@@ -703,30 +658,32 @@ Write each step the way it should run in production — never weaken logic to sh
 - **One `defineAgent` export per file.** The scaffold wraps a single `index.ts`.
 - **`ctx.shared` for fanout.** When three steps all need the entry input, write it into
   `ctx.shared` in the entry step — don't thread it through every `goto` payload.
-- **One-off capability call, no automation to keep?** That's not an agent — use Sapiom's
-  [remote MCP](https://docs.sapiom.ai/integration/mcp-servers/remote) (`https://api.sapiom.ai/v1/mcp`,
-  direct `sapiom_*` tools, `tool_discover` to find the right one) or the typed SDK client
-  ([`@sapiom/tools`](https://www.npmjs.com/package/@sapiom/tools)) instead of scaffolding.
+- **One-off capability call, no automation to keep?** That's not an agent — the served section
+  [One-off call, or an agent?](https://api.sapiom.ai/v1/agents/authoring-rules#one-off-vs-agent)
+  says which server or SDK client to use instead of scaffolding.
 
 ## Troubleshooting
 
-| Symptom                                                | Cause                                           | Fix                                                                                                 |
-| ------------------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `Cannot find module '@sapiom/agent'`                   | Deps not installed                              | `npm install` inside the scaffolded dir                                                             |
-| Type error: `fail(...)` not assignable                 | Step missing `canFail: true`                    | Add `canFail: true` to `defineStep`                                                                 |
-| Type error: `terminate(...)` not assignable            | Step missing `terminal: true`                   | Add `terminal: true` to `defineStep`                                                                |
-| `goto` target rejected by types                        | Target not in `next[]`                          | Add the target name to `next`                                                                       |
-| `check` fails: step missing from graph                 | `steps` object key doesn't match `name` field   | Match the key in `steps: { start }` to `defineStep({ name: "start" })`                              |
-| `run_local` reports `unusedStubs`                      | Stub path typo or namespace/handle mix-up       | Namespace path for calls (`repositories.list`), singular for handles (`repository.pushFromSandbox`) |
-| Paused step resumes with empty input                   | Manual gate; `run_local` auto-resumes with `{}` | Type the resumed step's input with optional fields                                                  |
-| `sapiom_authenticate` → credential not found at deploy | Authenticated in a different shell              | Re-run `sapiom_authenticate`; credential is per-machine in `~/.sapiom/credentials.json`             |
+| Symptom                                                            | Cause                                           | Fix                                                                                                 |
+| ------------------------------------------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `Cannot find module '@sapiom/agent'`                               | Deps not installed                              | `npm install` inside the scaffolded dir                                                             |
+| Type error: `fail(...)` not assignable                             | Step missing `canFail: true`                    | Add `canFail: true` to `defineStep`                                                                 |
+| Type error: `terminate(...)` not assignable                        | Step missing `terminal: true`                   | Add `terminal: true` to `defineStep`                                                                |
+| `goto` target rejected by types                                    | Target not in `next[]`                          | Add the target name to `next`                                                                       |
+| `check` fails: step missing from graph                             | `steps` object key doesn't match `name` field   | Match the key in `steps: { start }` to `defineStep({ name: "start" })`                              |
+| `run_local` reports `unusedStubs`                                  | Stub path typo or namespace/handle mix-up       | Namespace path for calls (`repositories.list`), singular for handles (`repository.pushFromSandbox`) |
+| Paused step resumes with empty input                               | Manual gate; `run_local` auto-resumes with `{}` | Type the resumed step's input with optional fields                                                  |
+| `sapiom_authenticate` → credential not found at deploy             | Authenticated in a different shell              | Re-run `sapiom_authenticate`; credential is per-machine in `~/.sapiom/credentials.json`             |
+| Webhook trigger answers 401 to a third party (Slack, Meta, Stripe) | Their signature scheme is not our HMAC          | Receive on an App Link `/hook/*` (verify their signature there) or re-sign through a translator     |
 
 ## References
 
-| Resource                                                   | What it covers                                               |
-| ---------------------------------------------------------- | ------------------------------------------------------------ |
-| [Authoring guide](https://docs.sapiom.ai/agents/authoring) | Full step model, failure patterns, pause/resume, determinism |
-| [Quickstart](https://docs.sapiom.ai/agents/quick-start)    | Scaffold → write → test → deploy walkthrough                 |
-| [Capabilities](https://docs.sapiom.ai/capabilities)        | The full `ctx.sapiom.*` catalog with pricing                 |
-| [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface) | `llm.run` vs `models.run` vs `agents.run` — which to call and why |
-| `AGENTS.md` in your scaffold                               | The quick in-project reference                               |
+| Resource                                                                     | What it covers                                                                                                 |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.0 |
+| [Authoring guide](https://docs.sapiom.ai/agents/authoring)                   | Full step model, failure patterns, pause/resume, determinism                                                   |
+| [Quickstart](https://docs.sapiom.ai/agents/quick-start)                      | Scaffold → write → test → deploy walkthrough                                                                   |
+| [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |
+| [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface) | `llm.run` vs `models.run` vs `agents.run` — which to call and why                                              |
+| [Triggers](https://docs.sapiom.ai/guides/triggers)                           | Cron, one-off, event, and webhook triggers; webhook signing + secret rotation                                  |
+| `AGENTS.md` in your scaffold                                                 | The quick in-project reference                                                                                 |

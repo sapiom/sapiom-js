@@ -13,23 +13,31 @@ you have Sapiom MCP servers pre-wired, and the conventions below are
 active for the whole session. Follow them.
 
 **The MCPs, and when to use each:**
-- **sapiom** (remote, HTTP) — the paid capability surface an agent calls at
-  *runtime* from inside a deployed agent's step code (ctx.sapiom.*):
-  repositories, sandboxes, LLM calls (see below), and so on. You don't call
-  this directly while authoring.
-- **sapiom-dev** (local, stdio) — the developer surface for this session. Its
-  scaffold, check, and Local Run path uses no Sapiom capability spend; Deploy
-  and Prod Run are authenticated cloud operations. Use its sapiom_dev_agents_*
-  tools to author and ship agents, and sapiom_authenticate / sapiom_status if
-  you need to sign in.
-- **agent-map** (local, HTTP, in a Studio project) — shared project Agent Map,
-  build-plan, and writable subsession tools. These support agent delivery;
-  they do not replace the authoring tools or execute deployed agents.
+- **The hosted capability server** (remote, HTTP) — the paid capability surface
+  an agent calls at *runtime* from inside a deployed agent's step code
+  (ctx.sapiom.*): repositories, sandboxes, LLM calls (see below), and so on.
+  You don't call this directly while authoring.
+- **The local authoring server** (local, stdio; the \`@sapiom/mcp\` package) —
+  the developer surface for this session. Its scaffold, check, and Local Run
+  path uses no Sapiom capability spend; Deploy and Prod Run are authenticated
+  cloud operations. Use its sapiom_dev_agents_* tools to author and ship
+  agents. To sign in, call the sapiom_authenticate / sapiom_status pair that
+  sits alongside those sapiom_dev_agents_* tools. The hosted server has a
+  same-named sapiom_authenticate that only describes the auth flows and
+  caches nothing, and a sapiom_status that reports the hosted session's
+  API-key auth, not the credential link/deploy/run need.
+- **agent-map** (local, HTTP; only when this Studio build exposes it inside a
+  project — skip this bullet if it is not in your tool list) — shared project
+  Agent Map, build-plan, and writable subsession tools. These support agent
+  delivery; they do not replace the authoring tools or execute deployed agents.
 
 **Calling LLMs from agent code:** one-shot call → \`ctx.sapiom.llm.run\`; a
 platform-driven multi-turn loop → \`ctx.sapiom.models.run\` (never for a
 one-shot — it overthinks); dispatching a deployed agent by slug →
-\`ctx.sapiom.agents.run\`. Structured output = tool-use/schema output — read
+\`ctx.sapiom.agents.run\` (waits for the terminal state) or
+\`ctx.sapiom.agents.launch\` (same spec, returns a handle at once — use it
+wherever the caller must return fast, e.g. a webhook receiver, or with
+\`pauseUntilSignal\` for a long child). Structured output = tool-use/schema output — read
 the \`tool_use\` block's input, never string-parse; a plain-text reply reads
 only \`type === 'text'\` blocks. **Omit \`model\` entirely** — the platform
 routes it, and \`smart\` is already the default, so naming it changes
@@ -38,6 +46,21 @@ deliberately. Raw provider ids are never
 honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented in the guide.
 Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
+
+**Secrets, inbound events, App Link webhooks:** secrets set in the dashboard
+per deployed agent reach a step only as env vars (their Vault ref is derived
+server-side, so step code cannot name it); \`ctx.sapiom.vault.get(ref, key)\`
+reads tenant secrets stored under your own ref and returns \`null\` when
+absent — agent code cannot write the Vault, and a Sapiom-managed resource is
+used through its handle, never by copying its credentials into Vault. Every
+inbound event or webhook leaves a receipt
+(matched or unmatched) and a failed fire can be replayed by hand, never
+automatically; until a tool exists, use the receipts REST routes the
+sapiom-dev primer lists (list receipts, replay a receipt or a fire). An App
+Link receives webhooks only once \`webhooksEnabled\` is on (off by default):
+\`https://apps.sapiom.ai/{org}/{slug}/hook/<path>\` forwards the body byte-exact
+(third-party signatures verify inside the app) and holds a request up to 60 s
+while the app wakes. Details: https://docs.sapiom.ai/capabilities/app-links.
 
 **When something about Sapiom is wrong, send it upstream.** If the user hits a
 bug, calls something confusing or broken, or wishes it worked differently,
@@ -63,8 +86,9 @@ the agent is selected in the workspace
 rail. The Canvas follows that selection and refreshes automatically when the
 source changes. Local Run, Prod Run, and Deploy are available in the selected
 agent's action bar. For how multiple agents, resources, and artifacts connect,
-use the shared project Agent Map instead: it is maintained through project
-tools, not automatically inferred from source edits.
+use the shared project Agent Map when the agent-map tools are present: it is
+maintained through project tools, not automatically inferred from source
+edits. Without them, select the agent and read its Canvas.
 
 **Your current workspace state:** Agent Studio mirrors what it knows about
 this workspace at \`.sapiom/harness-context.json\`, relative to your working

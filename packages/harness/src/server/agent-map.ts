@@ -20,12 +20,15 @@ import {
   StudioProjectCatalogError,
 } from "../core/studio-project-catalog.js";
 import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import { AgentMapBindingError, type AgentMapImplementationBindings } from "../core/agent-map-implementation-bindings.js";
+import { createAgentMapImplementations } from "./agent-map-implementations.js";
 import {
   StudioWorkspacePreferenceStore,
   StudioWorkspacePreferenceStoreError,
 } from "../core/studio-workspace-preferences.js";
 
 export interface AgentMapRouterOptions {
+  implementations?: AgentMapImplementationBindings;
   initialization?: AgentMapInitializationCoordinator;
   catalog: StudioProjectCatalog;
   store: AgentMapWorkspaceStore;
@@ -118,6 +121,34 @@ async function allowlistedScope(
 /** Mounted beneath the boot-token-protected `/api` boundary. */
 export function createAgentMapRouter(options: AgentMapRouterOptions): Router {
   const router = Router();
+  const implementations = options.implementations ?? createAgentMapImplementations(options);
+
+  for (const target of [false, true]) {
+    const suffix = target ? "nodes/:nodeId/implementation" : "implementations";
+    router.get(`/projects/:projectId/agent-map/${suffix}`, async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const userId = options.currentUserId();
+      const assertAuthorized = () => {
+        if (options.currentUserId() !== userId) throw new AgentMapBindingError("unauthorized");
+      };
+      try {
+        const { projectId } = req.params;
+        if (!studioProjectIdSchema.safeParse(projectId).success) throw new AgentMapBindingError("malformed_input");
+        if (!(await options.catalog.resolve(projectId))) throw new AgentMapBindingError("project_not_found");
+        const nodeId = "nodeId" in req.params ? req.params.nodeId : "";
+        const result = await (target ? implementations.target(projectId, nodeId, assertAuthorized) :
+          implementations.projection(projectId, assertAuthorized));
+        assertAuthorized();
+        res.json(result);
+      } catch (error) {
+        const code = error instanceof AgentMapBindingError && !["malformed_state", "unsupported_schema"].includes(error.code)
+          ? error.code : "storage_unavailable";
+        const status = code === "unauthorized" ? 401 : code === "malformed_input" ? 400 :
+          code === "target_ambiguous" ? 409 : ["storage_unavailable", "discovery_unavailable"].includes(code) ? 503 : 404;
+        res.status(status).json({ code, error: "Agent Map implementation could not be resolved" });
+      }
+    });
+  }
 
   router.post("/projects", async (req, res) => {
     const parsed = createProjectSchema.safeParse(req.body);

@@ -151,6 +151,13 @@ export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
+/** Browser-safe projection of a live session's private MCP credential stamp. */
+export type McpAuthState =
+  | "current"
+  | "restart-required"
+  | "restarting"
+  | "not-applicable";
+
 /** A harness session = one pty running one agent process in one directory. */
 export interface HarnessSession {
   /** Our id (uuid). */
@@ -163,6 +170,13 @@ export interface HarnessSession {
   /** Display title (first prompt, or directory basename until known). */
   title: string;
   status: SessionStatus;
+  /**
+   * Whether this live process was launched against the current Sapiom MCP
+   * credential. The underlying generation and key remain server-private.
+   * Absent on records written by older versions and never persisted by the
+   * current SessionManager.
+   */
+  mcpAuthState?: McpAuthState;
   createdAt: string;
   lastActiveAt: string;
   /**
@@ -1080,6 +1094,7 @@ export interface SessionRecord {
 // POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
+// POST   /api/sessions/:id/restart-mcp  → HarnessSession (replace exact stale resumable runtime)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
@@ -1698,6 +1713,17 @@ export interface WorkflowInfo {
    */
   activeBuildRunId?: string | null;
   activeBuildRunStatus?: string | null;
+  /** Serve-time display evidence; retained values never authorize a cloud run. */
+  deploymentLookup?: {
+    lastConfirmedDeployed: boolean | null;
+    unavailable: boolean;
+  };
+  /**
+   * Visibility of the linked definition for the signed-in account, from the
+   * tenant-scoped list at serve time. "unavailable" = another account or
+   * deleted. Absent = unknown. Never persisted to workflows.json.
+   */
+  definitionAccess?: "visible" | "unavailable";
   /**
    * Provenance from sapiom.json: the gallery template this project was cloned
    * from. Distinct from `source` below, which records how the REGISTRY learned

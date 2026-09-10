@@ -34,11 +34,160 @@ export interface StepInputContract {
 export type AgentInputContract = StepInputContract;
 
 /**
- * Convert a Zod schema to its JSON Schema representation.
- * Used by the manifest generator (build phase, sandbox) and by engine tooling.
+ * Convert a Zod schema to the JSON Schema of what a CALLER MAY SEND.
+ *
+ * Used by the manifest generator (build phase, sandbox), by the input-contract
+ * helpers below, and by engine tooling. Every consumer of this function
+ * describes an input — a step's `inputSchema` — so the conversion is done in
+ * Zod's `io: "input"` mode and then normalized by
+ * {@link normalizeInputJsonSchema}. See both for why.
  */
 export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
-  return z.toJSONSchema(schema) as Record<string, unknown>;
+  // `io: "input"` describes the value a caller SENDS rather than the value a
+  // parse RETURNS. Three consequences, all of them what an input contract
+  // wants:
+  //   - a field with `.default()` / `.prefault()` / `.catch()` is not listed in
+  //     `required` (at every depth), because omitting it is legal — Zod
+  //     supplies the value on parse;
+  //   - a `.pipe()` / `.transform()` is described by its INPUT type, so the
+  //     pre-gate checks what was actually sent (and `.transform()` no longer
+  //     throws "Transforms cannot be represented in JSON Schema" at build);
+  //   - plain `z.object()` is not emitted as closed, matching its
+  //     strip-not-reject parse.
+  const jsonSchema = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+  return normalizeInputJsonSchema(jsonSchema);
+}
+
+/**
+ * Normalize an already-converted input JSON Schema so it accepts exactly what
+ * the Zod schema behind it parses. Pure JSON in, pure JSON out — no Zod
+ * involved, so a caller that must run `z.toJSONSchema` with its own Zod module
+ * instance (the engine does, to keep `.meta()` registry lookups on one
+ * instance) can still share this normalization, and so can a pre-gate holding
+ * only a stored manifest.
+ *
+ * Two rules, applied to every schema node reachable from the root:
+ *
+ * 1. Drop `additionalProperties: false`. `z.strictObject()` still emits it in
+ *    input mode, and an AJV pre-gate that rejects unnamed fields is stricter
+ *    than the authoritative Zod parse downstream — including for additive
+ *    fields an upstream layer adds that the author does not control. A typed
+ *    catchall (`additionalProperties: { … }`) is preserved.
+ *
+ * 2. Drop from `required` any key whose `properties` entry declares a
+ *    `default`. A caller may omit such a field, so reporting it missing makes a
+ *    PARTIAL input stricter than an omitted one (SAP-3218). `io: "input"`
+ *    already does this, so for a freshly converted schema this rule is an
+ *    invariant guard rather than the load-bearing mechanism. It IS load-bearing
+ *    for a schema converted in output mode, and for a manifest built by an
+ *    older SDK that a pre-gate has to normalize without a redeploy.
+ */
+export function normalizeInputJsonSchema(
+  jsonSchema: Record<string, unknown>,
+): Record<string, unknown> {
+  return normalizeSchemaNode(jsonSchema) as Record<string, unknown>;
+}
+
+// The traversal is STRUCTURAL, not a blind deep walk: it descends only through
+// keywords whose values are subschemas. That matters because several JSON
+// Schema keywords carry arbitrary CALLER DATA — `default`, `const`, `enum`,
+// `examples`, `example` — and an author's default or example may itself be a
+// JSON-Schema-shaped object (an agent whose input IS a schema is a real case).
+// A blind walk applies both rules to that payload and silently rewrites it:
+// a `default` of `{ properties: …, required: ["a"], additionalProperties: false }`
+// would come back with `required: []` and no `additionalProperties`. Anything
+// not listed below is copied through untouched, payload and validation
+// keywords alike.
+//
+// The inverse hazard is why this cannot instead be a blind walk that skips
+// payload KEYS: inside a `properties` map, a property may legitimately be
+// NAMED `default` or `required`, and its value is a real subschema that must
+// be normalized. Only position — not name — distinguishes the two.
+
+/** Keywords whose value is a single subschema (or, pre-2020-12, a list of them). */
+const SUBSCHEMA_KEYWORDS = new Set([
+  'items',
+  'additionalItems',
+  'contains',
+  'propertyNames',
+  'not',
+  'if',
+  'then',
+  'else',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+]);
+
+/** Keywords whose value is an array of subschemas. */
+const SUBSCHEMA_LIST_KEYWORDS = new Set(['anyOf', 'oneOf', 'allOf', 'prefixItems']);
+
+/** Keywords whose value is a map of name → subschema. */
+const SUBSCHEMA_MAP_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  'dependentSchemas',
+  '$defs',
+  'definitions',
+]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSchemaNode(value: unknown): unknown {
+  // A boolean schema (`true` / `false`) and any non-object are already final.
+  if (!isPlainObject(value)) return value;
+
+  const node = value;
+  const out: Record<string, unknown> = {};
+  for (const [keyword, v] of Object.entries(node)) {
+    // Rule 1. `additionalProperties` is the one keyword that is either a
+    // boolean constraint or a subschema, so it is handled before the rest.
+    if (keyword === 'additionalProperties') {
+      if (v === false) continue;
+      out[keyword] = isPlainObject(v) ? normalizeSchemaNode(v) : v;
+      continue;
+    }
+    // Rule 2.
+    if (keyword === 'required' && Array.isArray(v)) {
+      out[keyword] = dropDefaultedKeys(v, node.properties);
+      continue;
+    }
+    if (SUBSCHEMA_KEYWORDS.has(keyword)) {
+      out[keyword] = Array.isArray(v) ? v.map(normalizeSchemaNode) : normalizeSchemaNode(v);
+      continue;
+    }
+    if (SUBSCHEMA_LIST_KEYWORDS.has(keyword)) {
+      out[keyword] = Array.isArray(v) ? v.map(normalizeSchemaNode) : v;
+      continue;
+    }
+    if (SUBSCHEMA_MAP_KEYWORDS.has(keyword) && isPlainObject(v)) {
+      const mapped: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(v)) {
+        mapped[name] = normalizeSchemaNode(sub);
+      }
+      out[keyword] = mapped;
+      continue;
+    }
+    out[keyword] = v;
+  }
+  return out;
+}
+
+/**
+ * Filter a `required` array down to the keys the caller must actually supply:
+ * a key whose sibling `properties` entry declares a `default` may be omitted.
+ * Non-string entries and keys with no `properties` entry are left alone.
+ */
+function dropDefaultedKeys(required: unknown[], properties: unknown): unknown[] {
+  if (!isPlainObject(properties)) {
+    return required;
+  }
+  return required.filter((key) => {
+    if (typeof key !== 'string') return true;
+    const prop = properties[key];
+    return !(isPlainObject(prop) && 'default' in prop);
+  });
 }
 
 /**

@@ -16,7 +16,12 @@ import type {
   PlanNodeKind,
 } from "@shared/agent-map";
 
-import { layoutDirectedGraph } from "../lib/directed-graph-layout";
+import {
+  agentMapDeploymentLabel,
+  agentMapDeploymentTitle,
+  type AgentMapDeployments,
+} from "../lib/agent-map-deployment";
+import { useAgentMapLayout } from "../lib/use-agent-map-layout";
 import {
   GRAPH_DEFAULT_MIN_ZOOM,
   GRAPH_MAX_ZOOM,
@@ -25,9 +30,11 @@ import {
   fitGraphView,
   panGraphViewWithKeyboard,
   resetGraphView,
+  revealGraphRect,
   wheelGraphView,
   type GraphArrowKey,
   type GraphView,
+  type GraphRect,
 } from "../lib/graph-viewport";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
@@ -35,8 +42,11 @@ import { Icon, type IconName } from "./Icon";
 
 interface AgentMapCanvasProps {
   proposal: MapChangeProposal;
+  deployments: AgentMapDeployments;
   selectedNodeId: PlanNodeId | null;
-  onSelectNode: (nodeId: PlanNodeId) => void;
+  onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  pendingNodeId: PlanNodeId | null;
 }
 
 const KIND_ICON: Record<PlanNodeKind, IconName> = {
@@ -59,33 +69,19 @@ const AGENT_MAP_MIN_ZOOM = 0.001;
 
 export function AgentMapCanvas({
   proposal,
+  deployments,
   selectedNodeId,
   onSelectNode,
+  onInspectNode,
+  pendingNodeId,
 }: AgentMapCanvasProps): JSX.Element {
-  const computed = useMemo(() => {
-    try {
-      return {
-        failed: false,
-        layout: layoutDirectedGraph(
-          proposal.nodes,
-          proposal.relationships.map((relationship) => ({
-            id: relationship.id,
-            from: relationship.fromNodeId,
-            to: relationship.toNodeId,
-            label: `${relationship.kind}${relationship.executionMode ? ` · ${relationship.executionMode}` : ""}`,
-          })),
-        ),
-      } as const;
-    } catch {
-      return { failed: true, layout: null } as const;
-    }
-  }, [proposal.nodes, proposal.relationships]);
   const [view, setView] = useState<GraphView>(resetGraphView);
   const [minZoom, setMinZoom] = useState(GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const computed = useAgentMapLayout(proposal, viewportRef);
   const dragRef = useRef<DragState | null>(null);
-  const fittedProposalRef = useRef<string | null>(null);
+  const fittedProjectRef = useRef<string | null>(null);
   const followsUpdates = useRef(true);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
@@ -115,15 +111,12 @@ export function AgentMapCanvas({
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
-    if (fittedProposalRef.current !== proposal.id)
+    if (fittedProjectRef.current !== proposal.projectId)
       followsUpdates.current = true;
     const measure = (): void => {
-      if (
-        !followsUpdates.current ||
-        viewport.getBoundingClientRect().width <= 0
-      )
-        return;
-      fittedProposalRef.current = proposal.id;
+      const visible = viewport.getBoundingClientRect().width > 0;
+      if (!followsUpdates.current || !visible) return;
+      fittedProjectRef.current = proposal.projectId;
       fit();
     };
     measure();
@@ -131,7 +124,7 @@ export function AgentMapCanvas({
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [fit, layout, proposal.id]);
+  }, [fit, layout, proposal.projectId]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -186,26 +179,38 @@ export function AgentMapCanvas({
     setPanning(false);
   };
 
-  if (computed.failed || !layout) {
-    return (
-      <EmptyState
-        className="system-graph-state"
-        testId="agent-map-layout-error"
-        icon="TriangleAlert"
-        title="Agent Map couldn't be arranged"
-        body="The proposal is safe. Retry after the next update."
-      />
-    );
-  }
+  const revealNode = (node: GraphRect): void => {
+    const viewport = viewportRef.current;
+    if (!viewport || !layout) return;
+    setView((current) => {
+      const next = revealGraphRect(
+        current,
+        layout.bounds,
+        {
+          width: viewport.clientWidth,
+          height: viewport.clientHeight,
+        },
+        node,
+      );
+      if (next.x === current.x && next.y === current.y) return current;
+      followsUpdates.current = false;
+      return next;
+    });
+  };
 
   return (
-    <div className="agent-map-canvas" data-testid="agent-map-canvas">
+    <div
+      className="agent-map-canvas"
+      data-testid="agent-map-canvas"
+      data-layout-engine="elk"
+      data-layout-state={computed.state}
+    >
       <div
         ref={viewportRef}
         className={`agent-map-viewport${panning ? " is-panning" : ""}`}
         data-testid="agent-map-viewport"
         role="region"
-        aria-label="Proposed Agent Map. Use arrow keys to pan and Tab to inspect nodes."
+        aria-label="Agent Map. Use arrow keys to pan and Tab to inspect nodes."
         tabIndex={0}
         onKeyDown={(event) => {
           if (
@@ -228,22 +233,55 @@ export function AgentMapCanvas({
           if (!(event.target as Element).closest("button")) fit();
         }}
       >
+        {!layout && (
+          <EmptyState
+            className="system-graph-state"
+            testId={
+              computed.state === "error"
+                ? "agent-map-layout-error"
+                : "agent-map-layout-loading"
+            }
+            icon={computed.state === "error" ? "TriangleAlert" : "Workflow"}
+            title={
+              computed.state === "error"
+                ? "Agent Map couldn't be arranged"
+                : "Arranging Agent Map…"
+            }
+            body={
+              computed.state === "error"
+                ? "Your map is safe. Try arranging it again."
+                : undefined
+            }
+            cta={
+              computed.state === "error" ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={computed.retry}
+                >
+                  Retry layout
+                </button>
+              ) : undefined
+            }
+          />
+        )}
         <div
           className="agent-map-subject"
           data-testid="agent-map-subject"
           style={{
-            width: layout.bounds.width,
-            height: layout.bounds.height,
+            width: layout?.bounds.width ?? 0,
+            height: layout?.bounds.height ?? 0,
             transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
           }}
           role="group"
-          aria-label="Proposed architecture"
+          aria-hidden={!layout}
+          aria-label="Agent architecture"
         >
           <svg
             className="agent-map-edges"
-            width={layout.bounds.width}
-            height={layout.bounds.height}
-            viewBox={`0 0 ${layout.bounds.width} ${layout.bounds.height}`}
+            width={layout?.bounds.width ?? 0}
+            height={layout?.bounds.height ?? 0}
+            viewBox={`0 0 ${layout?.bounds.width ?? 0} ${layout?.bounds.height ?? 0}`}
             aria-hidden="true"
           >
             <defs>
@@ -258,7 +296,7 @@ export function AgentMapCanvas({
                 <path d="M 0 0 L 8 4 L 0 8 z" className="agent-map-arrow" />
               </marker>
             </defs>
-            {layout.edges.map((edge) => (
+            {layout?.edges.map((edge) => (
               <g key={edge.id} data-testid={`agent-map-edge-${edge.id}`}>
                 <path
                   className="agent-map-edge"
@@ -276,22 +314,20 @@ export function AgentMapCanvas({
               </g>
             ))}
           </svg>
-          {layout.nodes.map((placed) => {
+          {layout?.nodes.map((placed) => {
             const node = nodesById.get(placed.id as PlanNodeId)!;
             const owner = node.ownerAgentId
               ? nodesById.get(node.ownerAgentId)
               : null;
+            const opensAgent =
+              node.kind === "agent" || node.kind === "subagent";
+            const deployment = deployments.get(node.id);
             // Every map-node name is user-authored. Keep the privacy marker
             // on a USER_NAMED_OBJECTS value even when node.kind is not agent.
             return (
-              <button
+              <div
                 key={node.id}
-                type="button"
-                className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
-                data-testid={`agent-map-node-${node.id}`}
-                data-node-kind={node.kind}
-                data-proposal-state="proposed"
-                {...trackingAttrs({ object: "agent" })}
+                className={`agent-map-node-wrap${opensAgent ? " has-info" : ""}`}
                 style={
                   {
                     left: placed.x,
@@ -300,27 +336,79 @@ export function AgentMapCanvas({
                     height: placed.height,
                   } satisfies CSSProperties
                 }
-                aria-pressed={selectedNodeId === node.id}
-                aria-label={`${node.name}, ${node.kind}, Proposed`}
-                onClick={() => onSelectNode(node.id)}
+                onFocus={() => revealNode(placed)}
               >
-                <span className="agent-map-node-heading">
-                  <Icon name={KIND_ICON[node.kind]} size={14} />
-                  <span className="system-graph-node-label">{node.name}</span>
-                </span>
-                <span className="system-graph-node-meta">
-                  {node.kind} · Proposed
-                  {owner ? ` · owned by ${owner.name}` : ""}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
+                  data-testid={`agent-map-node-${node.id}`}
+                  data-node-kind={node.kind}
+                  data-deployment-state={deployment?.indicator ?? undefined}
+                  data-deployment-unavailable={deployment?.unavailable}
+                  title={
+                    deployment ? agentMapDeploymentTitle(deployment) : undefined
+                  }
+                  {...trackingAttrs({ object: "agent" })}
+                  aria-pressed={selectedNodeId === node.id}
+                  aria-label={`${node.name}, ${node.kind}${deployment ? `, ${agentMapDeploymentLabel(deployment)}` : ""}`}
+                  aria-busy={pendingNodeId === node.id}
+                  onClick={(event) =>
+                    onSelectNode(node.id, event.currentTarget)
+                  }
+                >
+                  <span className="agent-map-node-heading">
+                    <Icon name={KIND_ICON[node.kind]} size={14} />
+                    <span className="system-graph-node-label">{node.name}</span>
+                  </span>
+                  <span className="system-graph-node-meta">
+                    {deployment && (
+                      <>
+                        <span
+                          className="agent-map-deployment"
+                          data-deployment-state={
+                            deployment.indicator ?? undefined
+                          }
+                        >
+                          {agentMapDeploymentLabel(deployment, true)}
+                        </span>{" "}
+                        ·{" "}
+                      </>
+                    )}
+                    {node.kind}
+                    {pendingNodeId === node.id ? " · Opening…" : ""}
+                    {owner ? ` · owned by ${owner.name}` : ""}
+                  </span>
+                </button>
+                {opensAgent && (
+                  <button
+                    type="button"
+                    className="theme-toggle agent-map-node-info"
+                    data-testid={`agent-map-info-${node.id}`}
+                    aria-label={`Inspect ${node.name}`}
+                    aria-expanded={selectedNodeId === node.id}
+                    {...trackingAttrs({ object: "agent" })}
+                    onClick={(event) =>
+                      onInspectNode(node.id, event.currentTarget)
+                    }
+                  >
+                    <Icon name="Info" size={14} />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
         <div
           className="system-graph-controls agent-map-controls"
+          style={!layout ? { display: "none" } : undefined}
           role="group"
           aria-label="Agent Map view controls"
         >
+          {computed.state !== "ready" && (
+            <span className="system-graph-node-meta" role="status">
+              Arranging…
+            </span>
+          )}
           <button
             type="button"
             className="theme-toggle"

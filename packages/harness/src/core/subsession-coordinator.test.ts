@@ -496,7 +496,14 @@ describe("SubsessionCoordinator", () => {
       delegationKey, outcome: `Implement ${delegationKey}`,
     })) } };
     const limited = newCoordinator("limited-wait", { readinessTimeoutMs: 250, batchWaitTimeoutMs: 100 });
-    const first = await limited.execute(caller, batch);
+    // Expire the batch after the first child starts, independent of disk speed.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const deadline = Date.now() + 100;
+    const stopClock = manager.onStatusChange((session) => {
+      if (session.id !== caller.sessionId && session.status === "running")
+        vi.setSystemTime(deadline);
+    });
+    const first = await limited.execute(caller, batch).finally(stopClock);
     expect(first.results).toHaveLength(3);
     expect(first.results.map(({ error }) => error?.code)).toEqual(["readiness_timeout", "readiness_timeout", "readiness_timeout"]);
     expect(first.results.map(({ sessionState }) => sessionState)).toEqual(["awaiting-ready", "reserved", "reserved"]);

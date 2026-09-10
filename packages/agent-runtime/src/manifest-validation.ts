@@ -1,4 +1,4 @@
-import { StepInputValidationError } from '@sapiom/agent';
+import { normalizeInputJsonSchema, StepInputValidationError } from '@sapiom/agent';
 // Explicit `.js` so the emitted ESM resolves under Node's strict ESM loader
 // (the extensionless form only works for the CJS build).
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -19,6 +19,18 @@ const ajv = new Ajv2020({ strict: false, allErrors: true });
  * Validate `input` against `schema`. Throws `StepInputValidationError` when
  * validation fails; returns void on success (no coercion — the authoritative
  * parse downstream does that). `schema = null` is a no-op.
+ *
+ * The schema is normalized first, by the same `normalizeInputJsonSchema` the
+ * manifest generator applies, for two reasons. It keeps this pre-gate from
+ * being stricter than the Zod parse it fronts: `additionalProperties: false`
+ * would reject fields an upstream layer adds that the author does not control,
+ * even though the parse downstream strips unknown keys rather than rejecting
+ * them. And it repairs a manifest that was BUILT before the generator was
+ * fixed — a stored manifest from an older SDK still lists a nested defaulted
+ * field as required (SAP-3218), so normalizing on the way in makes a partial
+ * input work with no redeploy. (A `.prefault()` field still needs one: output
+ * mode emitted no `default` keyword for it, so there is nothing here to key
+ * off.)
  */
 export function validateManifestStepInput(
   stepName: string,
@@ -29,42 +41,12 @@ export function validateManifestStepInput(
     return;
   }
 
-  const validate = ajv.compile(relaxAdditionalProperties(schema) as Record<string, unknown>);
+  const validate = ajv.compile(normalizeInputJsonSchema(schema));
   const valid = validate(input);
   if (!valid) {
     const issues = mapAjvErrors(validate.errors ?? []);
     throw new StepInputValidationError(stepName, issues);
   }
-}
-
-/**
- * Recursively strip `additionalProperties: false` from a JSON Schema.
- *
- * `z.toJSONSchema()` emits `additionalProperties: false` on every object, which
- * makes AJV reject any field the schema doesn't name — including additive
- * fields an upstream layer may add that the author has no control over. The
- * authoritative downstream Zod parse *strips* unknown keys rather than
- * rejecting, so a strict pre-gate would be stricter than the parse it fronts.
- * We relax the pre-gate to match: drop the `false` constraint wherever it
- * appears. A catchall (`additionalProperties: { type: ... }`) is left intact; a
- * property literally named `additionalProperties` is never `=== false`, so it's
- * never mis-stripped.
- */
-function relaxAdditionalProperties(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(relaxAdditionalProperties);
-  }
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-      if (key === 'additionalProperties' && v === false) {
-        continue;
-      }
-      out[key] = relaxAdditionalProperties(v);
-    }
-    return out;
-  }
-  return value;
 }
 
 /** Map AJV errors to the `$ZodIssueCustom`-compatible shape `StepInputValidationError` accepts. */

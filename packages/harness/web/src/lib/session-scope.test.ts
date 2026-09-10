@@ -16,6 +16,7 @@ import {
   selectedRunForSubject,
   sessionForFocus,
   sessionReachesFocus,
+  sessionSharesFocusProject,
   sessionStripSubject,
   shownRunForSubject,
   type AttributedRun,
@@ -1361,4 +1362,32 @@ describe("canvasSourceFor: a session bound to nothing still draws its own board"
       kind: "none",
     });
   });
+});
+
+describe("conversation project compatibility", () => {
+  it.each(["running", "exited"] as const)(
+    "keeps %s legacy conversations within their exact project",
+    (status) => {
+      const legacy = session({ cwd: ADS, status });
+      expect(
+        sessionSharesFocusProject(legacy, ADS, [POLSIA], "outer", POLSIA),
+      ).toBe(true);
+      expect(
+        sessionSharesFocusProject(legacy, ADS, [POLSIA], "nested", ADS),
+      ).toBe(false);
+    },
+  );
+  it.each([ADS, null])(
+    "keeps an ended session’s own Canvas with subject %s",
+    (path) => {
+      const ended = session({ status: "exited", boundWorkflowPath: path });
+      expect(
+        canvasSourceFor({
+          subjectPath: path,
+          bindingPath: ended.boundWorkflowPath!,
+          sessionId: ended.id,
+        }),
+      ).toEqual({ kind: "session", sessionId: ended.id });
+    },
+  );
 });

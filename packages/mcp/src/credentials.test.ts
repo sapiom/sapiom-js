@@ -13,6 +13,7 @@ import {
   readCredentialsOrThrow,
   writeCredentials,
   clearCredentials,
+  credentialsFilePath,
 } from "./credentials.js";
 
 const mockHomedir = "/mock/home";
@@ -48,6 +49,10 @@ beforeEach(() => {
   );
   vi.mocked(fs.writeFile).mockResolvedValue();
   vi.mocked(fs.mkdir).mockResolvedValue(undefined);
+});
+
+it("exposes the shared credential-store path", () => {
+  expect(credentialsFilePath()).toBe(credentialsPath);
 });
 
 afterEach(() => {

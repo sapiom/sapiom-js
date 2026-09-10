@@ -76,29 +76,33 @@ filesystem, environment, and process effects in author code remain real.
 
 ## Tools
 
-| Tool                                 | Network          | What it does                                                               |
-| ------------------------------------ | ---------------- | -------------------------------------------------------------------------- |
-| `sapiom_authenticate`                | browser          | Log in and cache an API key for the current environment                    |
-| `sapiom_status`                      | —                | Report authentication status                                               |
-| `sapiom_logout`                      | —                | Clear cached credentials                                                   |
-| `sapiom_send_feedback`               | ✓                | Relay the user's product feedback to the Sapiom team                       |
-| `sapiom_dev_agents_scaffold`         | npm optional     | Create a new agent project; may query npm for current dependency versions  |
-| `sapiom_dev_agents_check`            | author code only | Typecheck, import, bundle, and validate the definition and step graph      |
-| `sapiom_dev_agents_run_local`        | author code only | Run locally with `ctx.sapiom.*` calls stubbed (no Sapiom capability spend) |
-| `sapiom_dev_agents_link`             | ✓                | Resolve/create the hosted orchestration and cache its id                   |
-| `sapiom_dev_agents_clone`            | ✓                | Fork a gallery template (or re-clone a fork) into a local project          |
-| `sapiom_dev_agents_deploy`           | ✓                | Bundle current local source, build in the cloud, and wait                  |
-| `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                               |
-| `sapiom_dev_agents_inspect`          | ✓                | Inspect an execution or build (optionally waiting for it)                  |
-| `sapiom_dev_agents_signal`           | ✓                | Resume a paused execution by delivering a signal                           |
-| `sapiom_dev_agents_schedule`         | ✓                | Create a recurring (cron) or one-off schedule for a deployed agent         |
-| `sapiom_dev_agents_schedule_inspect` | ✓                | Inspect one schedule (with fire history) or list an agent's schedules      |
-| `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a schedule (stops all future fires)                                 |
-| `sapiom_dev_agents_cron_preview`     | ✓                | Validate a cron expression and preview its next occurrences                |
-| `sapiom_dev_sandbox_configure`       | —                | Write a validated `type: "sandbox"` preview resource into `sapiom.json`    |
-| `sapiom_dev_sandbox_check`           | —                | Validate the project's sandbox resources without deploying                 |
-| `sapiom_dev_sandbox_preview`         | ✓                | Deploy the app to a sandbox for a live URL that expires with its `ttl`     |
-| `sapiom_dev_app_publish`             | ✓                | Publish the same app to a durable App Link (`apps.sapiom.ai/{org}/{slug}`) |
+| Tool                                 | Network          | What it does                                                                    |
+| ------------------------------------ | ---------------- | ------------------------------------------------------------------------------- |
+| `sapiom_authenticate`                | browser          | Log in and cache an API key for the current environment                         |
+| `sapiom_status`                      | —                | Report authentication status                                                    |
+| `sapiom_logout`                      | —                | Clear cached credentials                                                        |
+| `sapiom_send_feedback`               | ✓                | Relay the user's product feedback to the Sapiom team                            |
+| `sapiom_dev_agents_scaffold`         | npm optional     | Create a new agent project; may query npm for current dependency versions       |
+| `sapiom_dev_agents_check`            | author code only | Typecheck, import, bundle, and validate the definition and step graph           |
+| `sapiom_dev_agents_run_local`        | author code only | Run locally with `ctx.sapiom.*` calls stubbed (no Sapiom capability spend)      |
+| `sapiom_dev_agents_link`             | ✓                | Resolve/create the hosted orchestration and cache its id                        |
+| `sapiom_dev_agents_clone`            | ✓                | Fork a gallery template (or re-clone a fork) into a local project               |
+| `sapiom_dev_agents_deploy`           | ✓                | Bundle current local source, build in the cloud, and wait                       |
+| `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                                    |
+| `sapiom_dev_agents_inspect`          | ✓                | Inspect an execution or build (optionally waiting for it)                       |
+| `sapiom_dev_agents_signal`           | ✓                | Resume a paused execution by delivering a signal                                |
+| `sapiom_dev_agents_schedule`         | ✓                | Create a trigger: cron, one-off, event (`eventType`), or webhook (URL + secret) |
+| `sapiom_dev_agents_schedule_inspect` | ✓                | Inspect one trigger (with fire history) or list an agent's triggers             |
+| `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a trigger of any kind (stops all future fires)                           |
+| `sapiom_dev_agents_schedule_secret`  | ✓                | Rotate, complete-rotate, or revoke a webhook trigger's signing secret           |
+| `sapiom_dev_agents_cron_preview`     | ✓                | Validate a cron expression and preview its next occurrences                     |
+| `sapiom_dev_sandbox_configure`       | —                | Write a validated `type: "sandbox"` preview resource into `sapiom.json`         |
+| `sapiom_dev_sandbox_check`           | —                | Validate the project's sandbox resources without deploying                      |
+| `sapiom_dev_sandbox_preview`         | ✓                | Deploy the app to a sandbox for a live URL that expires with its `ttl`          |
+| `sapiom_dev_app_publish`             | ✓                | Publish the same app to a durable App Link (`apps.sapiom.ai/{org}/{slug}`)      |
+| `sapiom_dev_app_list`                | ✓                | List the org's App Links: URL, visibility, webhooks, spend cap, wake state      |
+| `sapiom_dev_app_settings`            | ✓                | Change a link's `webhooksEnabled`, visibility, spend cap, wake rate limit       |
+| `sapiom_dev_app_delete`              | ✓                | Delete a link (URL stops resolving, slug freed); `confirm: true` required       |
 
 A typical loop: `scaffold` → write step code → `run_local` until green → `link`
 → `deploy` → `run` → `inspect`.
@@ -110,6 +114,15 @@ once the link needs to be permanent or shared. `app_publish` reads the same
 (≤ 10 MiB), and returns a durable `https://apps.sapiom.ai/{org}/{slug}` URL that
 wakes the app on demand — republishing the same slug updates it in place. See
 the `sapiom-sandbox-preview` skill for the routing rules.
+
+Once a link exists, `app_list`, `app_settings` and `app_delete` manage it without
+leaving the terminal. Webhooks are **off by default**: `app_settings { slug,
+webhooksEnabled: true }` turns them on, after which third parties POST to
+`https://apps.sapiom.ai/{org}/{slug}/hook/<path>` (the `/hook` prefix is
+stripped and the body forwarded byte-exact, so Slack/Stripe/GitHub signature
+checks run inside the app). These settings need the `org.write` permission —
+publish authority alone is not enough — and a refusal comes back as a message
+naming the permission and the fields, for the agent to relay rather than retry.
 
 ## How capabilities fit in
 

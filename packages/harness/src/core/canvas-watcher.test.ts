@@ -55,6 +55,16 @@ describe("CanvasWatcherManager", () => {
     await fs.rm(cwd, { recursive: true, force: true });
   });
 
+  it("keeps the existing watcher for repeated starts at the same root", () => {
+    manager.start("sess-1", cwd);
+    const stop = vi.spyOn(manager, "stop");
+
+    manager.start("sess-1", path.join(cwd, "."));
+
+    expect(stop).not.toHaveBeenCalled();
+    expect(manager.size).toBe(1);
+  });
+
   it("fires onChange(harnessSessionId) when a file is created under a not-yet-existing canvas dir", async () => {
     manager.start("sess-1", cwd);
 

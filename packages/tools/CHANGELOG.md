@@ -1,5 +1,21 @@
 # @sapiom/tools
 
+## 0.36.0
+
+### Minor Changes
+
+- 6ab81d9: Coding runs and model runs take an optional `deadlineMinutes` — how long you're willing to wait — sent on the wire as `deadline_minutes`. It is the deadline half of the label + deadline vocabulary: you state the kind of call (`model`) and how long you can wait, and the platform derives the billing lane from that rather than you naming one. **In this release the field is accepted and sent on the wire only; lane derivation lands in a later platform release, so a deadline does not yet change how a run is dispatched or priced.** Omitting it is unchanged behavior — the key never reaches the wire and the run dispatches immediately.
+
+  `RunStatus` and `ModelRunStatus` gain `awaiting_capacity`, the non-terminal state a deferred run reports while it waits for a lane. `run()` and a `launch()` handle keep polling through it rather than resolving with no result, and `wait()`'s default poll budget now widens to cover the deadline you asked for (an explicit `timeoutMs` still wins). While a run is parked, polling backs off — doubling up to a minute between checks — and returns to the caller's interval as soon as the run is moving, so a long deadline costs a few hundred requests rather than thousands.
+
+  Note for consumers who `switch` exhaustively over `RunStatus` or `ModelRunStatus`: a new union member is a compile error against a `default: assertNever(status)` arm. Handle `awaiting_capacity` as non-terminal — the run is still in flight.
+
+- 7eb17c5: `llm`: the session deferred lane now exports its resume-boundary contract from the package root, matching the async lane (SAP-3184).
+
+  A step paused on `llm.createSession(...)` and resumed on `LLM_SESSION_READY_SIGNAL` receives an `LlmSessionReadyPayload` as input — an `LlmSession` narrowed to the two shapes the engine delivers: `state: "ready"` (hand it to `callSession`; `baseUrls` carries the session-scoped URLs when reported), or `state: "failed"` with the gateway's structured reason (`deadline_exhausted`, `grant_mint_failed`, `session_ready_failed`, `session_unsupported`). Validate it at the resume boundary with `llmSessionReadySchema.parse(...)`, which throws `LlmSessionReadySchemaError` on a malformed payload — the same shape of API as `llmRouteResultSchema` / `LlmRouteResultSchemaError`. All three are importable from `@sapiom/tools` with no subpath.
+
+  Also re-exported from the root while closing the same gap: the `LlmSession` and `LlmSessionState` types, `RoutingLabel` and `ModelLabel`, and the serving-disclosure reader `readDisclosure` with its `LlmDisclosureResult` type. Purely additive — no existing export changes shape or name.
+
 ## 0.35.0
 
 ### Minor Changes

@@ -1,5 +1,59 @@
 # @sapiom/harness
 
+## 0.16.0
+
+### Minor Changes
+
+- b4d6067: Replace Proposed with Draft and Deployed on Agent Map agent/subagent nodes and their inspector, using the same deployment evidence and tooltips as the rail cloud icon. Failed checks retain confirmed indicators without an explanation; Retry status remains available. Status recovery preserves the map and conversation. Non-agent nodes no longer display proposal status. Accessible node names follow these label changes, and the `data-proposal-state` DOM attribute is removed.
+- fd9ec19: A project row in the rail now shows a green dot when the project has live coding-agent sessions, so which projects are active reads at a glance without opening them. The dot names its own count, "1 live session" or "3 live sessions", in its tooltip and to a screen reader, and it disappears when the last of those sessions ends. Group headers carry the same dot for the agents filed under them. Project and group counts use the same durable project identity as the session tabs, keeping nested projects separate and including a project's sessions across roots. Older servers without Studio project identities retain folder-based membership. Agent rows are unchanged, and the rail still lists no sessions.
+- 674ba1d: Open an Agent Map node’s linked agent on Canvas while preserving the active session, with separate Info controls for inspecting the plan.
+
+  Hide conversations belonging to another project when an agent is selected.
+
+- 55630a9: Expose protected `GET /api/projects/:projectId/agent-map/implementations` and `GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` endpoints for binding summaries and exact local navigation targets. Resolve existing generated maps through their original agent associations without changing map history or starting another model pass.
+- ff414ff: Replace the previous Agent Map layout with Vertical ELK in Studio and the desktop app. All existing maps use the new layout without regenerating their nodes, connections, or history. Remove the layout selector and earlier layout preferences. A failed layout can be retried without changing saved maps.
+
+  Opening a map loads the bundled ELK worker (about 1.6 MB raw / 467 kB gzip).
+
+- 6707366: Add a vertical Agent Map layout using a bundled ELK worker. The renderer bundles a 1.6 MB worker and pins ELK for repeatable output.
+
+### Patch Changes
+
+- 3d96d32: Attach generated Sapiom MCP configuration to Codex sessions on launch and resume, using session-specific server names and environment-based credentials while preserving existing Codex settings. Invalid or unreadable generated configuration now reports a launch error instead of silently starting without MCP servers.
+- 908b72c: The canvas Render-failed state shows one message instead of two drawn on top of each other. The app's card and the rendered document both painted the failure reason, and the card is a transparent layer over the document, so the short reason and the long one overlapped and neither was readable. The document now stands its prose down while it is embedded, the same way it already hides its title, badge and legend as chrome the app draws instead. Opened on its own, or embedded somewhere that never takes the message over, the document keeps its prose and is still the only message, so a failure never ends as an empty board.
+- f6dd638: Pack disconnected vertical Agent Maps to the viewport while retaining manual pan, zoom, and selection across map updates. Focusing an off-screen node reveals it; relationship labels render consistently at fit scale.
+- 6468ead: Keep deployment indicators consistent during lookup failures without showing a refresh-failure explanation, and discard stale deployment evidence when accounts change. Retained display status never enables cloud runs.
+- e690f7c: Re-sync the offline teaching fallbacks with the 2026-09 served-text release (SAP-3180), so a
+  session whose startup fetch fails learns the same four things an online session does:
+
+  - **Vault semantics** — secrets are set in the dashboard per deployed agent; agent code reads
+    `ctx.sapiom.vault.get` and cannot write; a Sapiom-managed resource is used through its
+    handle, never by copying its credentials into Vault.
+  - **`ctx.sapiom.agents.launch`** — fire-and-forget dispatch of a deployed agent for any caller
+    that must return fast (a webhook receiver); `agents.run` waits for the terminal state.
+  - **Receipts and manual replay** of inbound events, pointed at the REST surface until a tool
+    exists.
+  - **App Link webhooks** — `/hook/*` forwarding, off by default behind `webhooksEnabled`, 60 s
+    hold, byte-exact body so third-party signature schemes verify inside the app.
+
+  `@sapiom/mcp`'s `AUTHORING_INSTRUCTIONS` (primer 2.9) and `@sapiom/harness`'s
+  `DEFAULT_SYSTEM_PROMPT` (1.1) move with their digest pins; the 2.9 primer also drops the
+  `deadlineMinutes` clause that offered a knob `llm.run` does not have. The
+  `sapiom-agent-authoring` skill gains a pointer to where these are taught, not a restatement.
+
+  Naming note: the 2.9 primer spells the receipts and replay routes with their real
+  `/v1/workflows/` REST prefix, because no tool or docs page covers them yet and the routes
+  are the only surface that exists. The primer's guard is therefore scoped to the per-step
+  executions path it was written about. The Studio system prompt, which is Agent Studio
+  visible text and subject to the terminology gate, names the same routes without the prefix
+  and defers to the primer for the full paths.
+
+- Updated dependencies [8ae573b]
+- Updated dependencies [e690f7c]
+  - @sapiom/mcp@0.15.0
+  - @sapiom/agent-core@0.13.5
+  - @sapiom/agent@0.13.2
+
 ## 0.15.0
 
 ### Minor Changes
