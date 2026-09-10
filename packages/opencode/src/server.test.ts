@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startOpenCodeServer, type OpenCodeServer } from "./server.js";
+import {
+  OpenCodeStartupError,
+  startOpenCodeServer,
+  type OpenCodeServer,
+} from "./server.js";
 import { createSapiomOpenCodeConfig } from "./config.js";
 
 let directory: string;
@@ -46,22 +50,33 @@ describe("packaged OpenCode runtime", () => {
     });
     const inspected = await server.fetchJson<{
       cwd: string;
-      config: Record<string, unknown>;
       keys: string[];
+      runtimeKeys: string[];
+      credentialValueInherited: boolean;
+      configChecks: {
+        model: string;
+        modelBridge: boolean;
+        mcpBridge: boolean;
+      };
     }>("/inspect");
     expect(inspected.cwd).toBe(directory);
-    expect(inspected.config).toEqual(config);
     expect(inspected.keys).toContain("OPENCODE_EXPERIMENTAL_CODE_MODE");
     expect(inspected.keys).not.toContain("OPENCODE_EXPERIMENTAL");
-    expect(JSON.stringify(inspected)).not.toContain("sk_private");
     for (const key of [
       "SAPIOM_API_KEY",
       "ANTHROPIC_API_KEY",
       "ESBUILD_BINARY_PATH",
+      "OPENCODE_CONFIG_CONTENT",
+      "OPENCODE_SERVER_USERNAME",
+      "OPENCODE_SERVER_PASSWORD",
     ])
-      expect(inspected.keys).not.toContain(key);
-    expect(JSON.stringify(config)).toContain("/llm/v2/openai/v1");
-    expect(JSON.stringify(config)).toContain("/mcp");
+      expect([...inspected.keys, ...inspected.runtimeKeys]).not.toContain(key);
+    expect(inspected.credentialValueInherited).toBe(false);
+    expect(inspected.configChecks).toEqual({
+      model: "sapiom/smart",
+      modelBridge: true,
+      mcpBridge: true,
+    });
     expect(config.agent).toMatchObject({
       "sapiom-final-response": { hidden: true, permission: { "*": "deny" } },
       "sapiom-turn-recovery": { hidden: true, mode: "primary" },
@@ -89,7 +104,12 @@ describe("packaged OpenCode runtime", () => {
         ...options({ stall: true }),
         startupTimeoutMs: 400,
       }),
-    ).rejects.toThrow("could not start");
+    ).rejects.toMatchObject({
+      name: "OpenCodeStartupError",
+      code: "timed-out",
+      retryable: true,
+      message: "OpenCode took too long to start. Retry the connection.",
+    });
     const pid = Number(await readFile(join(directory, "runtime.pid"), "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
     server = await startOpenCodeServer(options());
@@ -104,13 +124,112 @@ describe("packaged OpenCode runtime", () => {
     });
     const timer = setTimeout(() => abort.abort(), 100);
     try {
-      await expect(starting).rejects.toThrow();
+      await expect(starting).rejects.toMatchObject({
+        code: "cancelled",
+        retryable: true,
+      });
     } finally {
       clearTimeout(timer);
     }
-    await expect(startOpenCodeServer(options({ crash: true }))).rejects.toThrow(
-      "OpenCode could not start. Please retry.",
+    await expect(
+      startOpenCodeServer(options({ crash: true })),
+    ).rejects.toMatchObject({
+      code: "exited",
+      exitCode: 1,
+      retryable: true,
+      message:
+        "OpenCode exited before it became ready. Retry, then update or reinstall Studio if the problem continues.",
+    });
+  });
+
+  it("never launches native after an awaited protection barrier is aborted", async () => {
+    const abort = new AbortController();
+    let releaseBarrier!: () => void;
+    let enteredBarrier!: () => void;
+    const barrierEntered = new Promise<void>((resolve) => {
+      enteredBarrier = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const starting = startOpenCodeServer({
+      ...options(),
+      signal: abort.signal,
+      beforeLaunch: async (identity) => {
+        expect(identity.pid).toBeGreaterThan(0);
+        expect(identity.cleanupProof.token.length).toBeGreaterThanOrEqual(16);
+        enteredBarrier();
+        await barrier;
+      },
+    });
+    await barrierEntered;
+    abort.abort();
+    releaseBarrier();
+    await expect(starting).rejects.toMatchObject({ code: "cancelled" });
+    await expect(
+      readFile(join(directory, "runtime.pid"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sanitizes protection failure and confirms resistant group cleanup", async () => {
+    await expect(
+      startOpenCodeServer({
+        ...options(),
+        beforeLaunch: async () => {
+          throw new Error("private lock diagnostic");
+        },
+      }),
+    ).rejects.toEqual(new OpenCodeStartupError("launch-failed"));
+
+    const nativeLaunchMarker = join(directory, "native-term-launch");
+    const descendantLaunchMarker = join(directory, "descendant-term-launch");
+    server = await startOpenCodeServer(
+      options({
+        resistant: true,
+        resistantMarker: descendantLaunchMarker,
+        spawnOnTermMarker: nativeLaunchMarker,
+      }),
     );
+    const nativePid = Number(
+      await readFile(join(directory, "runtime.pid"), "utf8"),
+    );
+    const resistantPid = Number(
+      await readFile(join(directory, "runtime.tool.pid"), "utf8"),
+    );
+    await server.close();
+    expect(await processIsRunning(nativePid)).toBe(false);
+    expect(await processIsRunning(resistantPid)).toBe(false);
+    await expect(readFile(nativeLaunchMarker)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(descendantLaunchMarker)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("classifies real executable path and permission failures without raw details", async () => {
+    const missing = join(directory, "private-provider-token-missing");
+    await expect(
+      startOpenCodeServer({
+        ...options(),
+        command: { executable: missing },
+      }),
+    ).rejects.toEqual(new OpenCodeStartupError("executable-not-found"));
+    if (process.platform !== "win32") {
+      const blocked = join(directory, "private-provider-token-blocked");
+      await writeFile(blocked, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+      await expect(
+        startOpenCodeServer({
+          ...options(),
+          command: { executable: blocked },
+        }),
+      ).rejects.toEqual(new OpenCodeStartupError("permission-denied"));
+    }
+    expect(
+      (await readdir(join(directory, "state"))).filter((entry) =>
+        entry.startsWith("launch-"),
+      ),
+    ).toEqual([]);
   });
 
   it.each([
@@ -124,3 +243,22 @@ describe("packaged OpenCode runtime", () => {
     ).toThrow("private loopback");
   });
 });
+
+async function processIsRunning(pid: number): Promise<boolean> {
+  if (process.platform === "linux") {
+    try {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
