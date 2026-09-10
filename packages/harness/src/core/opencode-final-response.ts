@@ -97,6 +97,15 @@ export class OpenCodeFinalResponse {
     sessionId: string,
     messageId: string,
   ): Promise<void> {
+    // Validate at the storage boundary, including callers outside the router.
+    // Keep the existing filenames so persisted dispatch fences still apply.
+    if (
+      typeof sessionId !== "string" ||
+      !/^ses_[A-Za-z0-9_-]{1,128}$/.test(sessionId) ||
+      typeof messageId !== "string" ||
+      !/^msg_[A-Za-z0-9_-]{1,128}$/.test(messageId)
+    )
+      throw new Error("Invalid Assistant recovery identifiers");
     const file = join(
       hosted.stateRoot,
       `final-response-${sessionId}-${messageId}.json`,
