@@ -62,9 +62,10 @@ A legitimately slow approver must not lose the run.
 
 Omitting `timeoutMs` is not the way to get that. A pause with no deadline inherits the
 engine's 7-day default, which hard-fails a two-week approval exactly the same way. One
-year is the explicit opt-out: long enough that no realistic approver loses the run,
-finite enough that an abandoned chain still reaches a terminal state instead of parking
-in the paused table forever.
+year is the explicit opt-out, and it stays a terminal deadline: an approval that
+outlives it is failed by the sweep like any other, not resumed. The year is picked so
+no realistic approver reaches it, while an abandoned chain still lands in a terminal
+state instead of parking in the paused table forever.
 
 Reminders and escalation are therefore driven entirely by the `approval.decision`
 signal, not by an engine deadline:
