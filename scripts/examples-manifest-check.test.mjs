@@ -10,12 +10,13 @@
 // =============================================================================
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import Ajv from "ajv";
 import {
+  checkAppEntry,
   checkResourceReuse,
   checkResourceSeeds,
   checkSetupSync,
@@ -587,6 +588,170 @@ test("a seed file that does not exist fails", () => {
     errors[0],
     /^manifest-resource-seed: "fixture" \/resources\/0\/seed points at "seed\.sql"/,
   );
+});
+
+// ── app (SAP-3252) ─────────────────────────────────────────────────────────
+// The block is a hand-maintained mirror of the backend's `templateManifestSchema
+// .app` (Sapiom `template-registry.service.ts`), whose own spec asserts the same
+// edge cases below. A case that passes here and fails there is a dashboard that
+// vanishes on the wire with no error anywhere.
+
+const APP = {
+  name: "Insight report dashboard",
+  entry: "app/",
+  start: "node server.mjs",
+  port: 3000,
+  preview:
+    "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/fixture/preview.png",
+};
+
+test("a fully declared app block is valid, with and without a build step", () => {
+  assert.deepEqual(check({ app: APP }), []);
+  assert.deepEqual(check({ app: { ...APP, build: "npm install" } }), []);
+});
+
+test("a manifest with no app block passes — most templates ship no dashboard", () => {
+  assert.deepEqual(check({ longDescription: "Still here." }), []);
+});
+
+test("a partial app block fails, naming every missing field", () => {
+  const errors = check({
+    app: { name: "Half-authored dashboard", entry: "app/" },
+  });
+  assert.equal(errors.length, 3, JSON.stringify(errors));
+  for (const field of ["start", "port", "preview"]) {
+    assert.ok(
+      errors.some((e) =>
+        new RegExp(`\\/app must have required property '${field}'`).test(e),
+      ),
+      `expected a failure for ${field}: ${JSON.stringify(errors)}`,
+    );
+  }
+});
+
+test("a typo'd field inside the app block fails rather than being silently stripped", () => {
+  const errors = check({ app: { ...APP, previewUrl: APP.preview } });
+  assert.equal(errors.length, 1, JSON.stringify(errors));
+  assert.match(errors[0], /\/app must NOT have additional properties/);
+});
+
+for (const [label, build] of [
+  ["null", null],
+  ["an empty string", ""],
+]) {
+  test(`a build of ${label} reads as "no build step" and passes, as the backend coerces it`, () => {
+    assert.deepEqual(check({ app: { ...APP, build } }), []);
+  });
+}
+
+test("a build that is not a string fails", () => {
+  const errors = check({ app: { ...APP, build: ["npm", "install"] } });
+  assert.equal(errors.length, 1, JSON.stringify(errors));
+  assert.match(errors[0], /\/app\/build must be string,null/);
+});
+
+for (const [label, preview] of [
+  ["http", "http://raw.githubusercontent.com/sapiom/sapiom-js/main/x.png"],
+  ["javascript:", "javascript:alert(1)"],
+  ["data:", "data:image/png;base64,AAAA"],
+  ["a relative path", "preview.png"],
+  ["a bare scheme with no host", "https://"],
+]) {
+  test(`a preview that is ${label} fails — only an absolute https URL reaches the card`, () => {
+    const errors = check({ app: { ...APP, preview } });
+    assert.ok(errors.length >= 1, JSON.stringify(errors));
+    assert.ok(
+      errors.every((e) => /\/app\/preview/.test(e)),
+      JSON.stringify(errors),
+    );
+  });
+}
+
+test("a preview that is well-formed by pattern but not a parseable URL fails the parse mirror", () => {
+  // Passes the scheme pattern, fails `new URL()` — exactly the gap the backend's
+  // `.url()` closes on its side, so the check has to close it on this one.
+  const errors = check({
+    app: { ...APP, preview: "https://exa mple.com/x.png" },
+  });
+  assert.ok(
+    errors.some((e) =>
+      /^manifest-app-preview: "fixture" template\.json \/app\/preview/.test(e),
+    ),
+    JSON.stringify(errors),
+  );
+});
+
+for (const [label, port] of [
+  ["above the TCP range", 70000],
+  ["zero", 0],
+  ["a float", 3000.5],
+  ["a string", "3000"],
+]) {
+  test(`a port that is ${label} fails`, () => {
+    const errors = check({ app: { ...APP, port } });
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0], /\/app\/port must be/);
+  });
+}
+
+for (const [label, entry] of [
+  ["missing its trailing slash", "app"],
+  ["absolute", "/app/"],
+  ["a parent traversal", "../app/"],
+  ["a hidden directory", ".app/"],
+]) {
+  test(`an entry that is ${label} fails`, () => {
+    const errors = check({ app: { ...APP, entry } });
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0], /\/app\/entry must match pattern/);
+  });
+}
+
+test("a nested entry directory with a trailing slash is valid", () => {
+  assert.deepEqual(check({ app: { ...APP, entry: "web/dashboard/" } }), []);
+});
+
+test("checkAppEntry: an entry that is not on disk fails", () => {
+  const errors = checkAppEntry("fixture", { app: APP }, () => false);
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /^manifest-app-entry: "fixture" \/app\/entry points at "app\/"/,
+  );
+});
+
+test("checkAppEntry: an entry on disk passes, and no app block is not a problem", () => {
+  assert.deepEqual(
+    checkAppEntry("fixture", { app: APP }, () => true),
+    [],
+  );
+  assert.deepEqual(
+    checkAppEntry("fixture", {}, () => false),
+    [],
+  );
+});
+
+test("checkAppEntry passes for every real app-declaring manifest against its directory", () => {
+  const registry = JSON.parse(
+    readFileSync(path.join(ROOT, "examples", "registry.json"), "utf8"),
+  );
+  let declaring = 0;
+  for (const t of registry.templates) {
+    const dir = path.join(ROOT, t.sourcePath);
+    const manifest = JSON.parse(
+      readFileSync(path.join(dir, "template.json"), "utf8"),
+    );
+    if (!manifest.app) continue;
+    declaring++;
+    assert.deepEqual(
+      checkAppEntry(t.id, manifest, (entry) => {
+        const entryPath = path.join(dir, entry);
+        return existsSync(entryPath) && statSync(entryPath).isDirectory();
+      }),
+      [],
+    );
+  }
+  assert.ok(declaring >= 1, "the pilot template must declare an app block");
 });
 
 test("a seed file that exists passes, and no seed is not a problem", () => {
