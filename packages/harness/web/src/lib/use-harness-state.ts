@@ -426,19 +426,9 @@ export function useHarnessState(): HarnessStateHook {
   const [systemGraphAnnouncements, setSystemGraphAnnouncements] = useState<
     Map<WorkspaceKey, SystemGraphAnnouncement>
   >(new Map());
-  // Compatibility lasts only for a confirmed older-server protocol. Unknown
-  // boot state and current-server catalog errors must never enable old graphs.
-  const legacyGraphProtocol = useRef(false);
-  legacyGraphProtocol.current =
-    state !== null && state.studioProjects === undefined;
-
   useEffect(() => {
     if (!state) return;
-    const workspaceKeys = new Set(
-      state.studioProjects === undefined
-        ? (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey)
-        : [],
-    );
+    const workspaceKeys = new Set<WorkspaceKey>();
     const projectIds = new Set(
       (state.studioProjects ?? []).map((project) => project.projectId),
     );
@@ -1244,11 +1234,7 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     return subscribeEvents(
       (message) => {
-        if (
-          message.type === "system-graph.changed" &&
-          !legacyGraphProtocol.current
-        )
-          return;
+        if (message.type === "system-graph.changed") return;
         // SessionRecord invalidations have a targeted listener below. Keeping
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.
@@ -1324,10 +1310,6 @@ export function useHarnessState(): HarnessStateHook {
             // and let the next event/auth/manual refresh retry; never create an
             // unhandled rejection from the event callback.
             .catch(() => undefined);
-        } else if (message.type === "system-graph.changed") {
-          // Invalidate even while its workspace destination is closed. The next
-          // open must never resurrect a pre-edit process-lifetime promise.
-          systemGraphLoader.invalidate(message.workspaceKey, message.revision);
         } else if (message.type === "agent-map.initialization.changed") {
           try {
             const status = parseAgentMapInitializationStatus(message.status);

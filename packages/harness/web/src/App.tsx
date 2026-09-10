@@ -44,6 +44,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -67,6 +68,7 @@ import type {
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";
+import { createGraphViewportStore } from "./lib/graph-viewport";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ConnectivityBanner,
@@ -89,7 +91,6 @@ import { HelpOverlay } from "./components/HelpOverlay";
 import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { WorkspaceGraphView } from "./components/WorkspaceGraphView";
 import { boundWorkflowPathOf, createApi, errorMessage } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
@@ -288,6 +289,12 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  // A project map remounts when browsing another project or agent. Keep its
+  // viewport for this signed-in UI lifetime, without persisting map data.
+  const agentMapViewportStore = useMemo(
+    createGraphViewportStore,
+    [harness.authRevision],
+  );
   const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
     () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
   );
@@ -356,7 +363,7 @@ export const App = (): JSX.Element => {
   // selection and the Canvas/Steps subject. The active conversation is always
   // harness.activeSessionId; choosing the project map does not rewrite it.
   const [focusedAgentPath, setFocusedAgentPath] = useState<string | null>(null);
-  // An unresolved project (or an older-server compatibility selection).
+  // A project whose durable identity has not resolved yet.
   // Studio projects use `studioSelection` below with the same invariant: chat stays in
   // the centre and the map draws beside it, so this selects a SUBJECT rather
   // than replacing the workbench.
@@ -549,7 +556,7 @@ export const App = (): JSX.Element => {
     };
     setStudioSelection(selection);
     setSelectedProject(null);
-    void harness.api.putStudioCurrentWorkspace(projectId, selection);
+    void harness.api.putStudioCurrentWorkspace(projectId, selection).catch(() => {});
   }, [harness.api, harness.state, selectedProject]);
 
   // A selected agent that disappears falls back to its map in memory. Only
@@ -972,8 +979,7 @@ export const App = (): JSX.Element => {
           selectedProject?.root ?? null,
           knownRootsOf(harness.settings?.recentDirs, harness.state?.launchDir),
         );
-        const unresolvedProject = selectedProject !== null &&
-          harness.state?.studioProjects !== undefined;
+        const unresolvedProject = selectedProject !== null;
         const studioProjectId =
           effectiveStudioSelection?.projectId ??
           (unresolvedProject ? null : shortcutActive?.agentMapIdentity?.projectId) ??
@@ -1247,9 +1253,8 @@ export const App = (): JSX.Element => {
         setStudioSelection(null);
       }
       if (visit.kind === "project") {
-        // Replay through the rail's selection handler: current Studio project
-        // navigation is read-only; older-server session handoff remains until
-        // SAP-3090. The ref reaches the handler below the loading guard, where
+        // Replay through the rail's read-only project selection handler.
+        // The ref reaches the handler below the loading guard, where
         // the hydrated `state` is available.
         selectProjectRef.current?.(visit.workspaceKey, visit.root, visit.label);
       } else if (visit.kind === "agent-map") {
@@ -1489,16 +1494,13 @@ export const App = (): JSX.Element => {
    * ONE selection, at ONE altitude — the contract the rail, the centre pane and
    * the canvas all read, so they cannot disagree about what is on screen (E3.8).
    */
-  const legacyView = canvasView(selectedProject, effectiveFocusedAgentPath);
   const studioView = planFirstSelection
     ? studioCanvasView(planFirstSelection)
     : null;
-  const view = studioView ?? legacyView;
+  const view = studioView ?? canvasView(selectedProject, effectiveFocusedAgentPath);
   const atMapAltitude = view.altitude === "map";
-  // Missing identity in the current protocol is an unavailable Agent Map.
-  // Only an older server that omits studioProjects supports the legacy view.
-  const unresolvedProjectMap =
-    selectedProject !== null && state.studioProjects !== undefined;
+  // Missing identity always offers recovery, including older server payloads.
+  const unresolvedProjectMap = selectedProject !== null;
   const projectMapSelected =
     studioView?.altitude === "map" || unresolvedProjectMap;
 
@@ -1747,7 +1749,6 @@ export const App = (): JSX.Element => {
     const studioProjectId = workspaceScopes.find(
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
-    let selectedAgentMap = false;
     if (
       studioProjectId &&
       state.studioProjects?.some(
@@ -1761,8 +1762,7 @@ export const App = (): JSX.Element => {
       };
       setStudioSelection(selection);
       setSelectedProject(null);
-      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection);
-      selectedAgentMap = true;
+      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection).catch(() => {});
     } else {
       setStudioSelection(null);
       setSelectedProject({ workspaceKey, root, label });
@@ -1779,30 +1779,12 @@ export const App = (): JSX.Element => {
     closeMobileDrawer();
     // A Studio project-name click is a read-only navigation action. It must not
     // choose, create, resume, focus, or prompt any session.
-    if (selectedAgentMap || state.studioProjects !== undefined) {
-      if (isMobile) setRightCollapsed(false);
-      return;
-    }
-    // Older-server compatibility only: these payloads omit studioProjects.
-    // Retain their session handoff until the browser deletion in SAP-3090.
-    const decision = sessionForFocus({
-      focusPath: root,
-      active: activeSession,
-      sessions: state.sessions,
-      roots: knownProjectRoots(),
-    });
-    if (decision.kind === "keep") return;
-    if (decision.to) {
-      if (decision.to.id !== harness.activeSessionId)
-        harness.setActiveSessionId(decision.to.id);
-      return;
-    }
-    void startProjectSession(root, label, selectedHarness);
+    if (isMobile) setRightCollapsed(false);
   };
   selectProjectRef.current = handleSelectWorkspace;
 
   /**
-   * Start an explicitly requested project session, or an older-server handoff.
+   * Start an explicitly requested project session.
    *
    * Guarded BY ROOT, not by a boolean: two projects can be starting at once
    * (request one, then another before the first POST resolves) and a single
@@ -3708,6 +3690,7 @@ export const App = (): JSX.Element => {
               ) : studioView?.altitude === "map" ? (
                 <AgentMapPane
                   key={`${studioView.projectId}:${harness.authRevision}`}
+                  viewportStore={agentMapViewportStore}
                   visible={!rightCollapsed && shownTab === "canvas"}
                   api={harness.api}
                   workflows={state.workflows}
@@ -3727,21 +3710,6 @@ export const App = (): JSX.Element => {
                   onRetryGeneration={agentMapEntry.retryGeneration}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}
-                />
-              ) : legacyView.altitude === "map" ? (
-                <WorkspaceGraphView
-                  key={legacyView.project.workspaceKey}
-                  workspaceKey={legacyView.project.workspaceKey}
-                  workspaceName={legacyView.project.label}
-                  api={harness.api}
-                  workflows={state.workflows}
-                  workspaceScopes={workspaceScopes}
-                  latestAnnouncement={
-                    harness.systemGraphAnnouncements.get(
-                      legacyView.project.workspaceKey,
-                    ) ?? null
-                  }
-                  onOpenAgent={handleFocusAgent}
                 />
               ) : null}
               <div

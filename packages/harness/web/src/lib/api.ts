@@ -2246,12 +2246,9 @@ export class MockApi implements HarnessApi {
   }
 
   private studioProjects(): StudioProjectSummary[] | undefined {
-    // Production authority is determined by the server response and always
-    // uses durable Studio project summaries. Mock mode keeps the historical
-    // fixtures stable unless a plan-first scenario opts in explicitly; the
-    // dedicated agent-map fixture is also an opt-in. `absent` names the
-    // legacy-server compatibility contract exercised by the remaining direct
-    // creation specs. This is test data selection, not a product feature flag.
+    // Durable-map fixtures opt into the current project catalog. Standalone
+    // session fixtures also cover servers without identities: their project
+    // clicks offer recovery, while ordinary sessions remain usable.
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const mode = params.get("mockStudioProjects");

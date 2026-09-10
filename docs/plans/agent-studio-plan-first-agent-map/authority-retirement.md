@@ -34,12 +34,18 @@ patch; the combined Harness release takes the higher minor bump.
 | Missing project identity, ambiguous scope, unsafe path or unavailable catalog | Show an unavailable Agent Map with a project-catalog retry. Keep ordinary sessions and per-agent Canvas reachable through explicit selection. Retry promotes only an exact server-issued workspace-key/project-ID association. |
 | Selected durable map disappears from the catalog | Keep that selected ID and offer catalog retry. Explicit agent/session selection still opens its ordinary Canvas/Steps. |
 | Current server receives old graph GET, refresh or navigation | Boot token remains required; authenticated requests receive 410 `legacy_graph_retired` before scope resolution, graph reads or watcher activation. No legacy graph owners are retained. |
-| Older server omits `studioProjects` entirely | Temporary browser protocol compatibility only. `WorkspaceGraphView`, its loader and announcements remain for this older payload until SAP-3090. An empty list is not this protocol. |
+| Older server omits `studioProjects` entirely | The browser offers the same identity recovery, preserving the selected project and conversation. There is no fallback renderer or implicit session handoff. Ordinary session tabs remain available. |
 
-Current-server graph events are ignored before browser state, cache invalidation
+Old graph events are ignored before browser state, cache invalidation
 or other refresh handlers run. Shared discovery, accepted source evidence,
 PackageInventory, rail launch edges, ordinary sessions and each agent's
 Canvas/Steps retain their own consumers; they are not legacy project topology.
+
+SAP-3090 first disconnects `WorkspaceGraphView` from the shell and removes the
+older-protocol session handoff. The following layer deletes its now-unreachable
+browser modules. `agent-map-authority.spec.ts` includes omitted-catalog recovery
+and exact keyboard tabs; `project-altitude.spec.ts` preserves pane geometry,
+Steps restoration, independent disclosure and map/agent Back/Forward navigation.
 
 ## Evidence required before browser deletion
 
