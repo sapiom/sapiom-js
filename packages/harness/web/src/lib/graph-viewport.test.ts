@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  SYSTEM_GRAPH_FLOOR_ZOOM,
-  SYSTEM_GRAPH_KEYBOARD_PAN_STEP,
-  SYSTEM_GRAPH_MAX_ZOOM,
-  createSystemGraphViewportStore,
-  fitSystemGraphView,
-  panSystemGraphViewWithKeyboard,
-  resetSystemGraphView,
-  revealSystemGraphRect,
-  systemGraphViewIntersectsViewport,
-  zoomSystemGraphAtPointer,
-} from "./system-graph-viewport";
+  GRAPH_FLOOR_ZOOM,
+  GRAPH_KEYBOARD_PAN_STEP,
+  GRAPH_MAX_ZOOM,
+  createGraphViewportStore,
+  fitGraphView,
+  panGraphViewWithKeyboard,
+  resetGraphView,
+  revealGraphRect,
+  graphViewIntersectsViewport,
+  zoomGraphAtPointer,
+} from "./graph-viewport";
 
-describe("fitSystemGraphView", () => {
+describe("fitGraphView", () => {
   it("contains a graph with preferred air in roomy, narrow, and short viewports", () => {
     for (const viewport of [
       { width: 1200, height: 800 },
@@ -21,7 +21,7 @@ describe("fitSystemGraphView", () => {
       { width: 1200, height: 280 },
     ]) {
       const graph = { width: 900, height: 480 };
-      const fit = fitSystemGraphView(graph, viewport, 16);
+      const fit = fitGraphView(graph, viewport, 16);
       const insetX = Math.min(3.5 * 16, viewport.width * 0.2);
       const insetY = Math.min(3.5 * 16, viewport.height * 0.2);
       expect(graph.width * fit.zoom).toBeLessThanOrEqual(
@@ -36,29 +36,29 @@ describe("fitSystemGraphView", () => {
   });
 
   it("uses the 10% hard floor only when a very large graph cannot fit above it", () => {
-    const fit = fitSystemGraphView(
+    const fit = fitGraphView(
       { width: 20_000, height: 10_000 },
       { width: 600, height: 400 },
       16,
     );
-    expect(fit.zoom).toBe(SYSTEM_GRAPH_FLOOR_ZOOM);
-    expect(fit.minZoom).toBe(SYSTEM_GRAPH_FLOOR_ZOOM);
+    expect(fit.zoom).toBe(GRAPH_FLOOR_ZOOM);
+    expect(fit.minZoom).toBe(GRAPH_FLOOR_ZOOM);
   });
 
   it("caps a tiny graph at the 300% maximum", () => {
     expect(
-      fitSystemGraphView(
+      fitGraphView(
         { width: 20, height: 20 },
         { width: 1200, height: 800 },
         16,
       ).zoom,
-    ).toBe(SYSTEM_GRAPH_MAX_ZOOM);
+    ).toBe(GRAPH_MAX_ZOOM);
   });
 });
 
-describe("system graph view math", () => {
+describe("shared graph view math", () => {
   it("resets to 100% with zero pan", () => {
-    expect(resetSystemGraphView()).toEqual({ zoom: 1, x: 0, y: 0 });
+    expect(resetGraphView()).toEqual({ zoom: 1, x: 0, y: 0 });
   });
 
   it("keeps the graph point beneath the pointer fixed while zooming", () => {
@@ -68,7 +68,7 @@ describe("system graph view math", () => {
       x: (pointer.x - before.x) / before.zoom,
       y: (pointer.y - before.y) / before.zoom,
     };
-    const after = zoomSystemGraphAtPointer(before, 1.5, pointer);
+    const after = zoomGraphAtPointer(before, 1.5, pointer);
 
     expect(after.x + graphPoint.x * after.zoom).toBeCloseTo(pointer.x, 8);
     expect(after.y + graphPoint.y * after.zoom).toBeCloseTo(pointer.y, 8);
@@ -79,28 +79,28 @@ describe("system graph view math", () => {
     const viewport = { width: 600, height: 400 };
 
     expect(
-      systemGraphViewIntersectsViewport(
+      graphViewIntersectsViewport(
         { zoom: 1, x: 0, y: 0 },
         graph,
         viewport,
       ),
     ).toBe(true);
     expect(
-      systemGraphViewIntersectsViewport(
+      graphViewIntersectsViewport(
         { zoom: 1, x: 2_000, y: 2_000 },
         graph,
         viewport,
       ),
     ).toBe(false);
     expect(
-      systemGraphViewIntersectsViewport(
+      graphViewIntersectsViewport(
         { zoom: 1, x: 749, y: 0 },
         graph,
         viewport,
       ),
     ).toBe(true);
     expect(
-      systemGraphViewIntersectsViewport(
+      graphViewIntersectsViewport(
         { zoom: 1, x: 749, y: 0 },
         graph,
         viewport,
@@ -112,13 +112,13 @@ describe("system graph view math", () => {
   it("pans by keyboard in the requested direction", () => {
     const view = { zoom: 1, x: 12, y: -8 };
 
-    expect(panSystemGraphViewWithKeyboard(view, "ArrowLeft")).toEqual({
+    expect(panGraphViewWithKeyboard(view, "ArrowLeft")).toEqual({
       ...view,
-      x: view.x - SYSTEM_GRAPH_KEYBOARD_PAN_STEP,
+      x: view.x - GRAPH_KEYBOARD_PAN_STEP,
     });
-    expect(panSystemGraphViewWithKeyboard(view, "ArrowDown")).toEqual({
+    expect(panGraphViewWithKeyboard(view, "ArrowDown")).toEqual({
       ...view,
-      y: view.y + SYSTEM_GRAPH_KEYBOARD_PAN_STEP,
+      y: view.y + GRAPH_KEYBOARD_PAN_STEP,
     });
   });
 
@@ -128,7 +128,7 @@ describe("system graph view math", () => {
     const node = { x: 32, y: 32, width: 184, height: 64 };
     const hidden = { zoom: 1, x: -900, y: 0 };
 
-    const revealed = revealSystemGraphRect(hidden, graph, viewport, node);
+    const revealed = revealGraphRect(hidden, graph, viewport, node);
     const left =
       viewport.width / 2 +
       revealed.x +
@@ -149,7 +149,7 @@ describe("system graph view math", () => {
   });
 
   it("keeps in-memory views isolated per workspace", () => {
-    const store = createSystemGraphViewportStore();
+    const store = createGraphViewportStore();
     store.set("workspace-a", { zoom: 1.5, x: 20, y: -10 });
     store.set("workspace-b", { zoom: 0.5, x: -30, y: 40 });
 

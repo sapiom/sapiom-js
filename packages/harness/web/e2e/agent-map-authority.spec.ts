@@ -2,10 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 
 type Probe = {
   identity: "ready" | "missing-id" | "missing-project" | "older-protocol";
-  reads: number;
-  refreshes: number;
-  navigation: number;
-  invalidations: number;
   states: number;
   workflows: number;
   activeSessionId: string | null;
@@ -23,11 +19,22 @@ type TestWindow = Window & {
   };
 };
 
+const legacyRequests = new WeakMap<Page, [number, number, number]>();
+
 async function open(
   page: Page,
   identity: Probe["identity"] = "ready",
   project = "acme-app",
 ) {
+  // Observe real browser requests before boot, including accidental reads that
+  // would bypass a mock method or a deleted loader.
+  const requests: [number, number, number] = [0, 0, 0];
+  legacyRequests.set(page, requests);
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (!/^\/api\/workspaces\/[^/]+\/system-graph(?:\/|$)/.test(path)) return;
+    requests[path.endsWith("/refresh") ? 1 : path.endsWith("/navigation") ? 2 : 0]++;
+  });
   const setupErrors: string[] = [];
   const recordPageError = (error: Error) => setupErrors.push(error.message);
   page.on("pageerror", recordPageError);
@@ -52,8 +59,7 @@ async function open(
       ),
     });
   });
-  // Instrument entry to each legacy API method, before cache hits/delays. A
-  // successful map alone cannot prove an obsolete background read didn't run.
+  // Retained catalog reads and session actions remain independently observed.
   await page.route("**/src/lib/api.ts", async (route) => {
     const response = await route.fetch();
     await route.fulfill({
@@ -64,25 +70,14 @@ async function open(
 if (typeof MockApi !== "function") {
   throw new Error("Authority fixture: api.ts no longer defines MockApi");
 }
-for (const method of ["getSystemGraph", "getSystemGraphNavigation", "getState", "getStudioCurrentWorkspace", "listWorkflows"]) {
+for (const method of ["getState", "getStudioCurrentWorkspace", "listWorkflows"]) {
   if (typeof MockApi.prototype[method] !== "function") {
     throw new Error("Authority fixture: missing MockApi." + method);
   }
 }
 const authority = window.__authority = {
-  identity: ${JSON.stringify(identity)}, reads: 0, refreshes: 0,
-  navigation: 0, invalidations: 0, states: 0, workflows: 0,
+  identity: ${JSON.stringify(identity)}, states: 0, workflows: 0,
   projects: {}, preferenceReads: [], holdStates: false, heldStates: [], completedStates: 0,
-};
-const graphRead = MockApi.prototype.getSystemGraph;
-MockApi.prototype.getSystemGraph = function(key, options) {
-  authority[options?.refresh ? "refreshes" : "reads"]++;
-  return graphRead.call(this, key, options);
-};
-const navigationRead = MockApi.prototype.getSystemGraphNavigation;
-MockApi.prototype.getSystemGraphNavigation = function(...args) {
-  authority.navigation++;
-  return navigationRead.apply(this, args);
 };
 const stateRead = MockApi.prototype.getState;
 MockApi.prototype.getState = async function() {
@@ -132,14 +127,9 @@ MockApi.prototype.listWorkflows = function() {
 }
 
 async function evidence(page: Page) {
-  return page.evaluate(() => {
+  const result = await page.evaluate(() => {
     const win = window as TestWindow;
     return {
-      legacy: [
-        win.__authority.reads,
-        win.__authority.refreshes,
-        win.__authority.navigation,
-      ],
       session: win.__authority.activeSessionId,
       actions: [
         "createSessionCalls",
@@ -152,6 +142,7 @@ async function evidence(page: Page) {
       ),
     };
   });
+  return { ...result, legacy: [...legacyRequests.get(page)!] };
 }
 
 for (const identity of ["missing-id", "missing-project", "older-protocol"] as const) {
@@ -365,15 +356,8 @@ test("durable map ignores old graph events and keeps exact navigation and sessio
   await open(page);
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
   const before = await evidence(page);
-  const eventsBefore = await page.evaluate(async () => {
+  const eventsBefore = await page.evaluate(() => {
     const win = window as TestWindow;
-    const { systemGraphLoader } =
-      await import("/src/lib/system-graph-loader.ts");
-    const invalidate = systemGraphLoader.invalidate.bind(systemGraphLoader);
-    systemGraphLoader.invalidate = (...args: unknown[]) => {
-      win.__authority.invalidations++;
-      return invalidate(...args);
-    };
     const counts = [win.__authority.states, win.__authority.workflows];
     for (const workspaceKey of [
       "workspace-mock-1",
@@ -389,11 +373,6 @@ test("durable map ignores old graph events and keeps exact navigation and sessio
     }
     return counts;
   });
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as TestWindow).__authority.invalidations),
-    )
-    .toBe(0);
   expect(
     await page.evaluate(() => {
       const probe = (window as TestWindow).__authority;

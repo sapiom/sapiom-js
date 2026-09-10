@@ -403,7 +403,7 @@ function PopulatedAgentMap({
       }}
     >
       <div className="agent-map-live-header">
-        <span className="system-graph-node-meta">
+        <span className="agent-map-node-meta">
           Version {proposal.version}
         </span>
         {failed.length > 0 && (

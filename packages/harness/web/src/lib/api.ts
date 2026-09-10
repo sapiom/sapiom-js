@@ -42,9 +42,6 @@ import type {
   WorkflowInfo,
 } from "@shared/types";
 import {
-  type SystemGraph,
-  type SystemGraphNavigationResponse,
-  type SystemGraphSnapshot,
   type WorkspaceKey,
   type WorkspaceScopeSummary,
 } from "@shared/system-graph";
@@ -68,10 +65,6 @@ import {
   type AgentMapNodeTarget,
 } from "./agent-map-navigation";
 import { refuseAgentName } from "@shared/agent-name";
-import {
-  parseSystemGraphNavigation,
-  parseSystemGraphSnapshot,
-} from "./system-graph";
 import {
   parseAgentMapWorkspaceResponse,
   parseStudioCurrentWorkspaceResponse,
@@ -393,15 +386,6 @@ export interface HarnessApi {
     projectId: StudioProjectId,
     selection: StudioWorkspaceSelection,
   ): Promise<StudioCurrentWorkspaceResponse>;
-  /** Revisioned local dependency projection for one server-issued workspace key. */
-  getSystemGraph(
-    workspaceKey: WorkspaceKey,
-    options?: { refresh?: boolean },
-  ): Promise<SystemGraphSnapshot>;
-  /** Server-owned AgentKey resolver for one exact graph revision. */
-  getSystemGraphNavigation(
-    workspaceKey: WorkspaceKey,
-  ): Promise<SystemGraphNavigationResponse>;
   createSession(req: CreateSessionRequest): Promise<HarnessSession>;
   attachFile(id: string, req: AttachFileRequest): Promise<AttachFileResponse>;
   listSessions(): Promise<HarnessSession[]>;
@@ -714,33 +698,6 @@ class RealApi implements HarnessApi {
       },
     );
     return parseStudioCurrentWorkspaceResponse(value, projectId);
-  }
-
-  async getSystemGraph(
-    workspaceKey: WorkspaceKey,
-    options: { refresh?: boolean } = {},
-  ): Promise<SystemGraphSnapshot> {
-    const route = `/api/workspaces/${encodeURIComponent(workspaceKey)}/system-graph`;
-    const response = await this.response(
-      options.refresh ? `${route}/refresh` : route,
-      options.refresh ? { method: "POST" } : undefined,
-    );
-    const snapshot = parseSystemGraphSnapshot(
-      (await response.json()) as unknown,
-    );
-    if (snapshot.workspaceKey !== workspaceKey) {
-      throw new Error("Invalid system graph response");
-    }
-    return snapshot;
-  }
-
-  async getSystemGraphNavigation(
-    workspaceKey: WorkspaceKey,
-  ): Promise<SystemGraphNavigationResponse> {
-    const value = await this.request<unknown>(
-      `/api/workspaces/${encodeURIComponent(workspaceKey)}/system-graph/navigation`,
-    );
-    return parseSystemGraphNavigation(value, { workspaceKey });
   }
 
   createSession(req: CreateSessionRequest): Promise<HarnessSession> {
@@ -1590,242 +1547,6 @@ function mockWorkflowGraphDocument(name: string, graph: CanvasGraph): string {
   ].join("");
 }
 
-const MOCK_POLSIA_ROOT = "/Users/demo/polsia";
-
-/**
- * A compact Polsia-style direct-call topology for the deep Project fixture.
- * Two source records for Outreach -> Mailer deliberately collapse into one
- * combined connector in the renderer. Rollup stays disconnected so inventory
- * coverage is tested independently of direct invocation extraction.
- */
-const MOCK_POLSIA_GRAPH_EDGES: SystemGraph["edges"] = [
-  {
-    from: "agent:outreach",
-    to: "agent:mailer",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:outreach",
-    to: "agent:mailer",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-  {
-    from: "agent:ads",
-    to: "agent:gateway",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:gateway",
-    to: "agent:ads-worker",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-  {
-    from: "agent:gateway",
-    to: "agent:queue",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:ads-worker",
-    to: "agent:queue",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-  {
-    from: "agent:queue",
-    to: "agent:sender",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "blocking",
-  },
-  {
-    from: "agent:sender",
-    to: "agent:gateway",
-    kind: "invokes",
-    basis: "static-invocation",
-    mode: "async",
-  },
-];
-
-function codeUnitOrder(left: string, right: string): number {
-  return left === right ? 0 : left < right ? -1 : 1;
-}
-
-function hasGraphControl(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.codePointAt(0)!;
-    return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
-  });
-}
-
-function mockCanonicalIdentity(value: string | null): string | null {
-  const identity = value?.trim() ?? "";
-  return identity !== "" &&
-    identity !== "." &&
-    identity !== ".." &&
-    !identity.startsWith("local:") &&
-    !identity.includes("/") &&
-    !identity.includes("\\") &&
-    !hasGraphControl(identity)
-    ? identity
-    : null;
-}
-
-function mockInventoryPath(scopeRoot: string, workflowPath: string): string {
-  if (samePath(scopeRoot, workflowPath)) return ".";
-  const normalizedRoot = scopeRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  const normalizedPath = workflowPath.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalizedPath.slice(normalizedRoot.length + 1);
-}
-
-export interface MockSystemGraphProjection {
-  nodes: SystemGraph["nodes"];
-  targets: SystemGraphNavigationResponse["targets"];
-  warnings: SystemGraph["warnings"];
-  degraded: boolean;
-}
-
-/** Process-local discovery proof used by the browser mock. The real REST
- * WorkflowInfo intentionally does not expose registry evidence, so mock graph
- * projection receives the same information as a separate sidecar. */
-export interface MockWorkflowIdentityEvidence {
-  kind: "marker" | "source" | "not-agent" | "unknown";
-  sourceDefinitionName?: string | null;
-}
-
-export type MockWorkflowIdentityEvidenceByPath = Readonly<
-  Record<string, MockWorkflowIdentityEvidence>
->;
-
-/** Deterministic identity/navigation projection for the browser mock. */
-export function projectMockSystemGraphInventory(
-  scopeRoot: string,
-  workflows: readonly WorkflowInfo[],
-  evidenceByPath: MockWorkflowIdentityEvidenceByPath = {},
-): MockSystemGraphProjection {
-  const rows = workflows
-    .filter((workflow) => isWithinDir(scopeRoot, workflow.path))
-    .map((workflow) => {
-      const inventoryPath = mockInventoryPath(scopeRoot, workflow.path);
-      const fallbackKey = `local:${inventoryPath === "." ? "root" : inventoryPath}`;
-      const marker = mockCanonicalIdentity(workflow.definitionSlug);
-      const evidence = evidenceByPath[workflow.path];
-      const hasPersistedSourceName =
-        evidence !== undefined &&
-        Object.prototype.hasOwnProperty.call(evidence, "sourceDefinitionName");
-      const sourceName = hasPersistedSourceName
-        ? mockCanonicalIdentity(evidence.sourceDefinitionName ?? null)
-        : null;
-      const sourceIsAuthoritative =
-        evidence?.kind === "source" ||
-        (evidence?.kind === "unknown" && hasPersistedSourceName);
-      // `unknown` may retain the last accepted syntax identity for continuity,
-      // but it can never make the graph ready until a fresh scan proves it.
-      const degraded =
-        evidence?.kind === "unknown" ||
-        (evidence?.kind === "source" && sourceName === null);
-      const canonical = sourceIsAuthoritative
-        ? sourceName !== null
-        : evidence?.kind === "not-agent"
-          ? false
-          : marker !== null;
-      return {
-        workflow,
-        inventoryPath,
-        fallbackKey,
-        candidateKey: sourceIsAuthoritative
-          ? (sourceName ?? fallbackKey)
-          : (marker ?? fallbackKey),
-        canonical,
-        degraded,
-      };
-    })
-    .sort(
-      (left, right) =>
-        codeUnitOrder(left.inventoryPath, right.inventoryPath) ||
-        codeUnitOrder(left.candidateKey, right.candidateKey) ||
-        codeUnitOrder(left.workflow.name, right.workflow.name) ||
-        codeUnitOrder(left.workflow.path, right.workflow.path),
-    )
-    .filter(
-      (row, index, all) =>
-        all.findIndex((candidate) =>
-          samePath(candidate.workflow.path, row.workflow.path),
-        ) === index,
-    );
-  const canonicalCounts = new Map<string, number>();
-  const provisionalCounts = new Map<string, number>();
-  for (const row of rows) {
-    const counts = row.canonical ? canonicalCounts : provisionalCounts;
-    counts.set(row.candidateKey, (counts.get(row.candidateKey) ?? 0) + 1);
-  }
-  const used = new Set<string>();
-  const projected = rows.map((row) => {
-    const canonicalCount = canonicalCounts.get(row.candidateKey) ?? 0;
-    const provisionalCount = provisionalCounts.get(row.candidateKey) ?? 0;
-    const ambiguous = row.canonical
-      ? canonicalCount > 1
-      : canonicalCount === 0 && provisionalCount > 1;
-    const shadowedByCanonical = !row.canonical && canonicalCount > 0;
-    const base =
-      ambiguous || shadowedByCanonical ? row.fallbackKey : row.candidateKey;
-    let agentKey = base;
-    let suffix = 2;
-    while (used.has(agentKey)) {
-      agentKey = `${base}~${suffix}`;
-      suffix += 1;
-    }
-    used.add(agentKey);
-    return {
-      agentKey,
-      label: row.workflow.name,
-      workflowPath: row.workflow.path,
-    };
-  });
-  projected.sort((left, right) => codeUnitOrder(left.agentKey, right.agentKey));
-  const duplicateCandidates = [
-    ...new Set([...canonicalCounts.keys(), ...provisionalCounts.keys()]),
-  ]
-    .filter((candidateKey) => {
-      const canonicalCount = canonicalCounts.get(candidateKey) ?? 0;
-      const provisionalCount = provisionalCounts.get(candidateKey) ?? 0;
-      return (
-        (canonicalCount > 1 ||
-          (canonicalCount === 0 && provisionalCount > 1)) &&
-        mockCanonicalIdentity(candidateKey) !== null
-      );
-    })
-    .sort(codeUnitOrder);
-  return {
-    nodes: projected.map(({ agentKey, label }) => ({
-      id: `agent:${agentKey}`,
-      agentKey,
-      label,
-    })),
-    targets: projected.map(({ agentKey, workflowPath }) => ({
-      agentKey,
-      workflowPath,
-    })),
-    warnings: duplicateCandidates.map((candidateKey) => ({
-      code: "duplicate-agent-key",
-      agentKey: candidateKey,
-      message: `Multiple agents use ${candidateKey}; kept each with a local identity.`,
-    })),
-    degraded:
-      duplicateCandidates.length > 0 || rows.some((row) => row.degraded),
-  };
-}
-
 function goldenAgentMapFixture(
   project: StudioProjectSummary,
   acceptedAt: string,
@@ -1987,7 +1708,7 @@ export class MockApi implements HarnessApi {
   // from when the run was first observed (not module load) — see getRunState.
   private progressiveRunStart = new Map<string, number>();
   /** Stable for the lifetime of the mock process, mirroring server-issued
-   * opaque keys without putting filesystem paths into graph payloads. */
+   * opaque keys without deriving durable project IDs from filesystem paths. */
   private workspaceKeys = new Map<string, WorkspaceKey>();
   private studioProjectIds = new Map<string, StudioProjectId>();
   private studioPreferences = new Map<
@@ -1999,14 +1720,6 @@ export class MockApi implements HarnessApi {
     StudioProjectId,
     AgentMapWorkspaceResponse
   >();
-  private systemGraphSnapshots = new Map<WorkspaceKey, SystemGraphSnapshot>();
-  private systemGraphNavigation = new Map<
-    WorkspaceKey,
-    SystemGraphNavigationResponse
-  >();
-  private systemGraphRevision = new Map<WorkspaceKey, number>();
-  private pendingSystemGraphRevision = new Map<WorkspaceKey, number>();
-
   async startAuth(): Promise<AuthStartResponse> {
     // Record the call for Playwright assertions (same pattern as runMacro/deploy).
     if (typeof window !== "undefined") {
@@ -2097,22 +1810,6 @@ export class MockApi implements HarnessApi {
         ...MOCK_WORKFLOWS,
         ...(isSearchFixturesEnabled() ? MOCK_SEARCH_WORKFLOWS : []),
       ].map((workflow) => ({ ...workflow }));
-  /** Mock-only equivalent of the server's private accepted identity sidecar. */
-  private workflowIdentityEvidenceStore: Record<
-    string,
-    MockWorkflowIdentityEvidence
-  > = Object.fromEntries(
-    this.workflowsStore
-      .filter(
-        (workflow) =>
-          workflow.path === `${MOCK_POLSIA_ROOT}/backend/src/agents/outreach`,
-      )
-      .map((workflow) => [
-        workflow.path,
-        { kind: "source", sourceDefinitionName: "outreach" } as const,
-      ]),
-  );
-
   /*
    * Every read of the fixtures goes through the move log (`mockMoves`), so a
    * moved agent reads at its NEW path from every instance and every call site —
@@ -2130,55 +1827,6 @@ export class MockApi implements HarnessApi {
 
   private set workflows(next: WorkflowInfo[]) {
     this.workflowsStore = next;
-    this.invalidateSystemGraphProjections();
-  }
-
-  private get workflowIdentityEvidence(): MockWorkflowIdentityEvidenceByPath {
-    if (mockMoves.length === 0) return this.workflowIdentityEvidenceStore;
-    return Object.fromEntries(
-      Object.entries(this.workflowIdentityEvidenceStore).map(
-        ([workflowPath, evidence]) => [replayMockMoves(workflowPath), evidence],
-      ),
-    );
-  }
-
-  /**
-   * Mock/test mutation seam for the syntax-discovery lifecycle. It keeps the
-   * private proof sidecar out of WorkflowInfo while exercising the same rail
-   * event plus revisioned graph invalidation as production add/edit/delete.
-   */
-  replaceSourceDiscoveredWorkflows(
-    workflows: readonly WorkflowInfo[],
-    evidenceByPath: MockWorkflowIdentityEvidenceByPath,
-  ): void {
-    this.workflowIdentityEvidenceStore = { ...evidenceByPath };
-    this.workflows = workflows.map((workflow) => ({ ...workflow }));
-    void import("./events").then(({ publishMockBusMessage }) => {
-      publishMockBusMessage({ type: "workflows.changed" });
-    });
-  }
-
-  private allocateSystemGraphRevision(workspaceKey: WorkspaceKey): number {
-    const revision = (this.systemGraphRevision.get(workspaceKey) ?? 0) + 1;
-    this.systemGraphRevision.set(workspaceKey, revision);
-    return revision;
-  }
-
-  private invalidateSystemGraphProjections(): void {
-    for (const [workspaceKey, snapshot] of this.systemGraphSnapshots) {
-      const revision = this.allocateSystemGraphRevision(workspaceKey);
-      this.pendingSystemGraphRevision.set(workspaceKey, revision);
-      this.systemGraphSnapshots.delete(workspaceKey);
-      this.systemGraphNavigation.delete(workspaceKey);
-      void import("./events").then(({ publishMockBusMessage }) => {
-        publishMockBusMessage({
-          type: "system-graph.changed",
-          workspaceKey,
-          revision,
-          state: snapshot.graph ? "stale" : "building",
-        });
-      });
-    }
   }
 
   /** A session whose cwd sat inside a moved directory follows it — on disk it
@@ -2701,203 +2349,6 @@ export class MockApi implements HarnessApi {
     return { ...current, selection, repaired: !valid };
   }
 
-  async getSystemGraph(
-    workspaceKey: WorkspaceKey,
-    options: { refresh?: boolean } = {},
-  ): Promise<SystemGraphSnapshot> {
-    const graphControl =
-      typeof window === "undefined"
-        ? null
-        : (window as unknown as {
-            __HARNESS_TEST__?: Record<string, unknown>;
-            __MOCK_SYSTEM_GRAPH_FAIL_ONCE__?: boolean;
-            __MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__?: number;
-            __MOCK_SYSTEM_GRAPH_STATE__?: SystemGraphSnapshot["state"];
-            __MOCK_SYSTEM_GRAPH_REVISION__?: number;
-          });
-    const cached = this.systemGraphSnapshots.get(workspaceKey);
-    const fixtureRequestsProjection =
-      cached !== undefined &&
-      graphControl !== null &&
-      (graphControl.__MOCK_SYSTEM_GRAPH_FAIL_ONCE__ === true ||
-        (graphControl.__MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__ ?? 0) > 0 ||
-        (graphControl.__MOCK_SYSTEM_GRAPH_STATE__ !== undefined &&
-          graphControl.__MOCK_SYSTEM_GRAPH_STATE__ !== cached.state) ||
-        (graphControl.__MOCK_SYSTEM_GRAPH_REVISION__ !== undefined &&
-          graphControl.__MOCK_SYSTEM_GRAPH_REVISION__ !== cached.revision));
-    if (
-      !options.refresh &&
-      cached &&
-      !this.pendingSystemGraphRevision.has(workspaceKey) &&
-      !fixtureRequestsProjection
-    ) {
-      return cached;
-    }
-    const graphDelay =
-      typeof window === "undefined"
-        ? 180
-        : ((window as unknown as { __MOCK_SYSTEM_GRAPH_DELAY_MS__?: number })
-            .__MOCK_SYSTEM_GRAPH_DELAY_MS__ ?? 180);
-    await delay(graphDelay);
-    const selectedScope = this.workspaceScopes().find(
-      (scope) => scope.workspaceKey === workspaceKey,
-    );
-    if (!selectedScope) {
-      throw new ApiError(404, "Workspace not found", "Workspace not found");
-    }
-    let state: SystemGraphSnapshot["state"] = "ready";
-    let revision =
-      this.pendingSystemGraphRevision.get(workspaceKey) ??
-      this.allocateSystemGraphRevision(workspaceKey);
-    this.pendingSystemGraphRevision.delete(workspaceKey);
-    if (graphControl) {
-      const win = graphControl;
-      const previous =
-        (win.__HARNESS_TEST__?.systemGraphRequests as
-          | WorkspaceKey[]
-          | undefined) ?? [];
-      win.__HARNESS_TEST__ = {
-        ...(win.__HARNESS_TEST__ ?? {}),
-        systemGraphRequests: [...previous, workspaceKey],
-      };
-      if (win.__MOCK_SYSTEM_GRAPH_FAIL_ONCE__) {
-        win.__MOCK_SYSTEM_GRAPH_FAIL_ONCE__ = false;
-        throw new ApiError(
-          500,
-          "System graph projection failed",
-          "System graph projection failed",
-        );
-      }
-      const degradedRemaining =
-        win.__MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__ ?? 0;
-      if (degradedRemaining > 0) {
-        state = "degraded";
-        win.__MOCK_SYSTEM_GRAPH_DEGRADED_REMAINING__ = degradedRemaining - 1;
-      }
-      state = win.__MOCK_SYSTEM_GRAPH_STATE__ ?? state;
-      revision = win.__MOCK_SYSTEM_GRAPH_REVISION__ ?? revision;
-      this.systemGraphRevision.set(
-        workspaceKey,
-        Math.max(this.systemGraphRevision.get(workspaceKey) ?? 0, revision),
-      );
-    }
-    const fixtureGraph: SystemGraph = {
-      kind: "system",
-      scope: { kind: "working-tree", workspaceKey },
-      nodes: [
-        { id: "agent:growth", agentKey: "growth", label: "Growth" },
-        { id: "agent:leasing", agentKey: "leasing", label: "Leasing" },
-        {
-          id: "agent:reporting",
-          agentKey: "reporting",
-          label: "Reporting",
-        },
-        {
-          id: "agent:research",
-          agentKey: "research",
-          label: "Research",
-        },
-        {
-          id: "agent:standalone",
-          agentKey: "standalone",
-          label: "Standalone",
-        },
-      ],
-      edges: [
-        {
-          from: "agent:research",
-          to: "agent:growth",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "blocking",
-        },
-        {
-          from: "agent:research",
-          to: "agent:growth",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "async",
-        },
-        {
-          from: "agent:research",
-          to: "agent:leasing",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "async",
-        },
-        {
-          from: "agent:growth",
-          to: "agent:research",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "async",
-        },
-        {
-          from: "agent:reporting",
-          to: "agent:leasing",
-          kind: "invokes",
-          basis: "static-invocation",
-          mode: "blocking",
-        },
-      ],
-      warnings: [],
-    };
-    // Keep the original invocation-rich graph for acme-app's graph behavior
-    // specs. Every other mock project is an honest inventory projection of the
-    // agents beneath that exact root, which lets Project-axis tests prove parent
-    // and nested projects expose the same membership as the rail.
-    const projection = projectMockSystemGraphInventory(
-      selectedScope.cwd,
-      this.workflows,
-      this.workflowIdentityEvidence,
-    );
-    const graph = samePath(selectedScope.cwd, "/Users/demo/acme-app")
-      ? fixtureGraph
-      : {
-          kind: "system" as const,
-          scope: { kind: "working-tree" as const, workspaceKey },
-          nodes: projection.nodes,
-          edges: samePath(selectedScope.cwd, MOCK_POLSIA_ROOT)
-            ? MOCK_POLSIA_GRAPH_EDGES
-            : [],
-          warnings: projection.warnings,
-        };
-    if (
-      !samePath(selectedScope.cwd, "/Users/demo/acme-app") &&
-      state === "ready" &&
-      projection.degraded
-    ) {
-      state = "degraded";
-    }
-    const snapshot = { workspaceKey, revision, state, graph };
-    const graphKeys = new Set(graph.nodes.map((node) => node.agentKey));
-    const navigation = {
-      workspaceKey,
-      revision,
-      targets: projection.targets.filter((target) =>
-        graphKeys.has(target.agentKey),
-      ),
-    };
-    this.systemGraphSnapshots.set(workspaceKey, snapshot);
-    this.systemGraphNavigation.set(workspaceKey, navigation);
-    return snapshot;
-  }
-
-  async getSystemGraphNavigation(
-    workspaceKey: WorkspaceKey,
-  ): Promise<SystemGraphNavigationResponse> {
-    const snapshot =
-      this.systemGraphSnapshots.get(workspaceKey) ??
-      (await this.getSystemGraph(workspaceKey));
-    return (
-      this.systemGraphNavigation.get(workspaceKey) ?? {
-        workspaceKey,
-        revision: snapshot.revision,
-        targets: [],
-      }
-    );
-  }
-
   async createSession(req: CreateSessionRequest): Promise<HarnessSession> {
     const requestedDelay =
       typeof window === "undefined"
@@ -3395,7 +2846,6 @@ export class MockApi implements HarnessApi {
       );
     if (samePath(from, to)) return;
     mockMoves.push({ from, to });
-    this.invalidateSystemGraphProjections();
     void import("./events").then(({ publishMockBusMessage }) => {
       publishMockBusMessage({ type: "workflows.changed" });
     });
@@ -3541,11 +2991,8 @@ export class MockApi implements HarnessApi {
 
   async getRailState(projectRoot: string): Promise<string | null> {
     await delay(60);
-    // Test-only, mock mode only, matching __MOCK_SYSTEM_GRAPH_FAIL_ONCE__: a
-    // read-only checkout or a 5xx on this route is the one case where "safe to
-    // write" and "safe to draw" have different answers, and getting that wrong
-    // leaves the rail naming every system while the map shows an unlabelled
-    // blob. Reachable only by throwing the read.
+    // Mock-only read failure: keep the rail usable without overwriting saved
+    // state that could not be loaded.
     if (
       typeof window !== "undefined" &&
       (window as unknown as { __MOCK_RAIL_STATE_FAIL__?: boolean })

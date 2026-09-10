@@ -280,7 +280,7 @@ export function AgentMapCanvas({
       >
         {!layout && (
           <EmptyState
-            className="system-graph-state"
+            className="agent-map-state"
             testId={
               computed.state === "error"
                 ? "agent-map-layout-error"
@@ -349,7 +349,7 @@ export function AgentMapCanvas({
                   markerEnd={`url(#${markerId})`}
                 />
                 <text
-                  className="system-graph-edge-label agent-map-edge-label"
+                  className="agent-map-edge-label"
                   x={edge.labelX}
                   y={edge.labelY}
                   textAnchor="middle"
@@ -403,9 +403,9 @@ export function AgentMapCanvas({
                 >
                   <span className="agent-map-node-heading">
                     <Icon name={KIND_ICON[node.kind]} size={14} />
-                    <span className="system-graph-node-label">{node.name}</span>
+                    <span className="agent-map-node-label">{node.name}</span>
                   </span>
-                  <span className="system-graph-node-meta">
+                  <span className="agent-map-node-meta">
                     {deployment && (
                       <>
                         <span
@@ -444,13 +444,13 @@ export function AgentMapCanvas({
           })}
         </div>
         <div
-          className="system-graph-controls agent-map-controls"
+          className="agent-map-controls"
           style={!layout ? { display: "none" } : undefined}
           role="group"
           aria-label="Agent Map view controls"
         >
           {computed.state !== "ready" && (
-            <span className="system-graph-node-meta" role="status">
+            <span className="agent-map-node-meta" role="status">
               Arranging…
             </span>
           )}
@@ -474,7 +474,7 @@ export function AgentMapCanvas({
           </button>
           <button
             type="button"
-            className="theme-toggle system-graph-zoom-reset"
+            className="theme-toggle agent-map-zoom-reset"
             aria-label="Reset Agent Map view"
             onClick={() => {
               followsUpdates.current = false;

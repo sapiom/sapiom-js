@@ -152,7 +152,7 @@ describe("redaction gate — realistic clicks must not carry user names or paths
             },
           ],
           $elements_chain:
-            `span.system-graph-node-label:attr__class="system-graph-node-label"text="${AGENT}"nth-child="1";` +
+            `span.agent-map-node-label:attr__class="agent-map-node-label"text="${AGENT}"nth-child="1";` +
             `button.agent-map-node:attr__class="agent-map-node"attr__aria-label="${AGENT}, connector, Proposed"text="${AGENT}"nth-child="1";` +
             `div.agent-map-live:attr__class="agent-map-live"nth-child="1"`,
         }),
