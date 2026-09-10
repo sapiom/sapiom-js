@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   resolveEnvironment,
   readCredentialsOrThrow,
@@ -18,13 +18,19 @@ export type AssistantAccessFailureCode = Extract<
   | "transport_unavailable"
 >;
 
-/** Private host state. Only `enabled` is projected to the browser. */
+/** Private host state. Principal fields are never projected to the browser. */
 export interface AssistantGrant {
   userId: string;
   tenantId: string;
   identityRevision: string;
   expiresAt: number;
   environment: ResolvedEnvironment;
+}
+
+/** Browser-safe access state. The revision is opaque and process-memory only. */
+export interface AssistantAccessProjection {
+  enabled: boolean;
+  authorityRevision: string;
 }
 
 interface CapabilityResponse {
@@ -67,6 +73,7 @@ export class AssistantAccess {
     ? "authentication_required"
     : "access_denied";
   private credentialFingerprint: string | null = null;
+  private authorityRevision = randomUUID();
   private epoch = 0;
   private closed = false;
   private queue: Promise<void> = Promise.resolve();
@@ -92,6 +99,13 @@ export class AssistantAccess {
     return this.failure;
   }
 
+  getBrowserState(): AssistantAccessProjection {
+    return {
+      enabled: this.get() !== null,
+      authorityRevision: this.authorityRevision,
+    };
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -100,7 +114,12 @@ export class AssistantAccess {
   clear(): void {
     this.epoch++;
     this.credentialFingerprint = null;
+    const wasEnabled = this.grant !== null;
     this.adopt(null, "authentication_required");
+    // An explicit sign-out/identity retirement is a browser authority barrier
+    // even if capability access had already become disabled. Repeated disabled
+    // polls never reach this path and therefore keep the barrier stable.
+    if (!wasEnabled) this.authorityRevision = randomUUID();
   }
 
   refresh(): Promise<void> {
@@ -135,6 +154,7 @@ export class AssistantAccess {
       this.grant?.environment.apiURL !== grant?.environment.apiURL ||
       this.grant?.environment.credentials?.apiKey !==
         grant?.environment.credentials?.apiKey;
+    if (changed) this.authorityRevision = randomUUID();
     this.grant = grant;
     this.failure = failure;
     clearTimeout(this.expiryTimer);

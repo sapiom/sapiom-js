@@ -79,6 +79,76 @@ describe("Assistant access", () => {
     expect(JSON.stringify(request.mock.calls)).not.toContain("sk_private");
   });
 
+  it("projects only an opaque authority revision and keeps it for same-principal renewals and outages", async () => {
+    const disabled = access.getBrowserState();
+    expect(disabled).toEqual({
+      enabled: false,
+      authorityRevision: expect.any(String),
+    });
+    expect(JSON.stringify(disabled)).not.toMatch(/user-one|tenant|sk_private/);
+
+    await access.refresh();
+    const verified = access.getBrowserState();
+    expect(verified.enabled).toBe(true);
+    expect(verified.authorityRevision).not.toBe(disabled.authorityRevision);
+
+    request.mockResolvedValueOnce(
+      Response.json({ ...enabled, maxAgeMs: 45_000 }),
+    );
+    await access.refresh();
+    expect(access.getBrowserState()).toEqual(verified);
+
+    request.mockRejectedValueOnce(new TypeError("offline"));
+    await access.refresh();
+    expect(access.getBrowserState()).toEqual(verified);
+  });
+
+  it("rotates the browser authority before notifying a principal crossover or retirement", async () => {
+    const observed: string[] = [];
+    access.subscribe(() => {
+      observed.push(access.getBrowserState().authorityRevision);
+    });
+    await access.refresh();
+    const first = access.getBrowserState().authorityRevision;
+    expect(observed).toEqual([first]);
+
+    request.mockResolvedValueOnce(
+      Response.json({ ...enabled, userId: "user-two" }),
+    );
+    await access.refresh();
+    const second = access.getBrowserState().authorityRevision;
+    expect(second).not.toBe(first);
+    expect(observed.at(-1)).toBe(second);
+
+    request.mockResolvedValue(Response.json({ assistant: false }));
+    await access.refresh();
+    const retired = access.getBrowserState();
+    expect(retired.enabled).toBe(false);
+    expect(retired.authorityRevision).not.toBe(second);
+    expect(observed.at(-1)).toBe(retired.authorityRevision);
+
+    await access.refresh();
+    expect(access.getBrowserState()).toEqual(retired);
+
+    request.mockResolvedValue(Response.json(enabled));
+    await access.refresh();
+    const readmitted = access.getBrowserState();
+    expect(readmitted.enabled).toBe(true);
+    expect(readmitted.authorityRevision).not.toBe(retired.authorityRevision);
+  });
+
+  it("rotates an already-disabled barrier on explicit sign-out only once", () => {
+    const initial = access.getBrowserState().authorityRevision;
+    access.clear();
+    const retired = access.getBrowserState();
+    expect(retired).toEqual({
+      enabled: false,
+      authorityRevision: expect.any(String),
+    });
+    expect(retired.authorityRevision).not.toBe(initial);
+    expect(access.getBrowserState()).toEqual(retired);
+  });
+
   it.each([
     {},
     { ...enabled, assistant: false },
