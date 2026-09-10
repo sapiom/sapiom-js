@@ -663,7 +663,7 @@ function createDefaultBuildLaunchOpts(
       systemPromptFile,
       ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
-      ...(req.harness === "claude-code"
+      ...(req.harness === "claude-code" || req.harness === "codex"
         ? {
             mcpCredentialLaunch: {
               generation,

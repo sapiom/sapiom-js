@@ -416,7 +416,7 @@ export interface HarnessApi {
    */
   sessionRecord(id: string): Promise<SessionRecord | null>;
   resumeSession(id: string): Promise<HarnessSession>;
-  /** Restart one live Claude session whose launch-time MCP auth is stale. */
+  /** Restart one live coding-agent session whose launch-time MCP auth is stale. */
   restartMcpSession(id: string): Promise<HarnessSession>;
   /** Take a transcript-only history row (`resumeMode: "agent-resume"`, no
    *  `harnessSessionId`) into the registry and resume it — the honest
