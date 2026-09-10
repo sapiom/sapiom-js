@@ -33,6 +33,7 @@ export interface DurableFileLockTestHooks {
   afterLockAcquired?: (ownerId: string) => void | Promise<void>;
   afterProtectionPublished?: () => void | Promise<void>;
   beforeReclaimRename?: () => void | Promise<void>;
+  afterReclaimRename?: () => void | Promise<void>;
   isPidAlive?: (pid: number) => boolean;
   processState?: (
     identity: Pick<DurableFileLockProcessIdentity, "pid" | "birthId">,
@@ -155,8 +156,10 @@ export class DurableFileLock {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
           throw this.failure();
         }
+        await this.hooks.afterReclaimRename?.();
         if (!(await this.tryCreate(lockPath, owner))) {
-          await fs.rename(tombstone, lockPath).catch(() => {});
+          await this.cleanupProtection(lockPath, observed);
+          await fs.rm(tombstone, { force: true });
           continue;
         }
         await this.cleanupProtection(lockPath, observed);
