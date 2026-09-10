@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export interface StartOpenCodeServerOptions {
   cwd: string;
@@ -119,14 +119,35 @@ async function createCredentialIsolationPlugin(
 ): Promise<{ pluginUrl: string; readyPath: string }> {
   const pluginPath = join(launchRoot, "credential-isolation.mjs");
   const readyPath = join(launchRoot, "credential-isolation.ready");
+  const compiledHook = fileURLToPath(
+    new URL("./completion-hook.js", import.meta.url),
+  );
+  let hookPath = compiledHook;
+  try {
+    await access(hookPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    hookPath = fileURLToPath(new URL("./completion-hook.ts", import.meta.url));
+    await access(hookPath);
+  }
+  hookPath = hookPath.replace(
+    /([/\\])app\.asar([/\\])/,
+    "$1app.asar.unpacked$2",
+  );
   const source = `import { writeFile } from "node:fs/promises";
+import { createStudioCompletionHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
 const keys = ${JSON.stringify(runtimeCredentialKeys)};
 const toolHomeKeys = ${JSON.stringify(toolHomeKeys)};
 const toolHomeEnvironment = ${JSON.stringify(toolHomeEnvironment)};
-export const SapiomCredentialIsolation = async () => {
+export const SapiomCredentialIsolation = async (input) => {
   for (const key of keys) delete process.env[key];
+  const completionHooks = createStudioCompletionHooks(async (sessionID) => {
+    const response = await input.client.session.messages({ path: { id: sessionID } });
+    return response.data ?? [];
+  });
   await writeFile(${JSON.stringify(readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
   return {
+    ...completionHooks,
     "shell.env": async (_input, output) => {
       for (const key of keys) {
         delete process.env[key];
