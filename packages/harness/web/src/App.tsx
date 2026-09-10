@@ -223,13 +223,15 @@ const effectiveStudioWorkspaceSelection = (
   selection: StudioWorkspaceSelection | null,
   state: Pick<AppState, "studioProjects" | "workflows"> | null | undefined,
 ): StudioWorkspaceSelection | null => {
-  if (!selection || !state) return null;
+  if (!selection || !state || state.studioProjects === undefined) return null;
   if (
-    !state.studioProjects?.some(
+    !state.studioProjects.some(
       (project) => project.projectId === selection.projectId,
     )
   ) {
-    return null;
+    // A selected durable map keeps its exact identity through catalog loss.
+    // Explicit agent/session selection can still use its ordinary Canvas.
+    return selection.kind === "agent-map" ? selection : null;
   }
   if (selection.kind === "agent-map") return selection;
   const agentStillExists = state.workflows.some((workflow) =>
@@ -354,8 +356,8 @@ export const App = (): JSX.Element => {
   // selection and the Canvas/Steps subject. The active conversation is always
   // harness.activeSessionId; choosing the project map does not rewrite it.
   const [focusedAgentPath, setFocusedAgentPath] = useState<string | null>(null);
-  // The legacy project the canvas is at MAP altitude for. Studio projects use
-  // `studioSelection` below, but retain the same invariant: the chat stays in
+  // An unresolved project (or an older-server compatibility selection).
+  // Studio projects use `studioSelection` below with the same invariant: chat stays in
   // the centre and the map draws beside it, so this selects a SUBJECT rather
   // than replacing the workbench.
   //
@@ -422,7 +424,11 @@ export const App = (): JSX.Element => {
       }
     }
 
-    if (!state?.studioProjects || !active) return;
+    // Explicit navigation owns its destination even if boot could not restore
+    // the active session's project until this catalog refresh.
+    if (
+      !state?.studioProjects || !active || selectedProject || studioSelection
+    ) return;
     const identityProjectId = active.agentMapIdentity?.projectId ?? null;
     const identityProject = identityProjectId
       ? state.studioProjects.find(
@@ -511,7 +517,40 @@ export const App = (): JSX.Element => {
         setFocusedAgentPath(scope.cwd);
         if (isMobile) setRightCollapsed(true);
       });
-  }, [harness.activeSessionId, harness.api, harness.state, isMobile]);
+  }, [
+    harness.activeSessionId,
+    harness.api,
+    harness.state,
+    isMobile,
+    selectedProject,
+    studioSelection,
+  ]);
+
+  // A catalog retry may resolve the exact scope selected earlier. Promote it
+  // without the boot reload's session hydration or a path/name-based guess.
+  // This refreshes identities only; an already selected map keeps its loaded
+  // workspace until the normal map refresh or invalidation path runs.
+  useEffect(() => {
+    if (!selectedProject) return;
+    const state = harness.state;
+    const projectId = state?.workspaceScopes?.find(
+      (scope) => scope.workspaceKey === selectedProject.workspaceKey,
+    )?.projectId;
+    if (
+      !projectId ||
+      !state?.studioProjects?.some((project) => project.projectId === projectId)
+    )
+      return;
+    studioRestoreGenerationRef.current += 1;
+    restoredStudioProjectsRef.current.add(projectId);
+    const selection: StudioWorkspaceSelection = {
+      kind: "agent-map",
+      projectId,
+    };
+    setStudioSelection(selection);
+    setSelectedProject(null);
+    void harness.api.putStudioCurrentWorkspace(projectId, selection);
+  }, [harness.api, harness.state, selectedProject]);
 
   // A selected agent that disappears falls back to its map in memory. Only
   // the server knows whether the project scan is complete enough to persist a
@@ -933,15 +972,19 @@ export const App = (): JSX.Element => {
           selectedProject?.root ?? null,
           knownRootsOf(harness.settings?.recentDirs, harness.state?.launchDir),
         );
+        const unresolvedProject = selectedProject !== null &&
+          harness.state?.studioProjects !== undefined;
         const studioProjectId =
           effectiveStudioSelection?.projectId ??
-          shortcutActive?.agentMapIdentity?.projectId ??
+          (unresolvedProject ? null : shortcutActive?.agentMapIdentity?.projectId) ??
           null;
         const tabs = studioProjectId
           ? liveSessionsForStudioProject(sessions, studioProjectId)
-          : subject.kind === "project"
-            ? liveSessionsForProject(sessions, subject.root)
-            : liveSessionsForFocus(sessions, subject.path);
+          : unresolvedProject
+            ? liveSessionsForProject(sessions, selectedProject.root)
+            : subject.kind === "project"
+              ? liveSessionsForProject(sessions, subject.root)
+              : liveSessionsForFocus(sessions, subject.path);
         const target = tabs[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
@@ -962,6 +1005,7 @@ export const App = (): JSX.Element => {
     // still addressed the outer one, until the next session event healed it.
   }, [
     harness.state?.sessions,
+    harness.state?.studioProjects,
     harness.activeSessionId,
     harness.settings?.recentDirs,
     focusedAgentPath,
@@ -1203,12 +1247,10 @@ export const App = (): JSX.Element => {
         setStudioSelection(null);
       }
       if (visit.kind === "project") {
-        // Through the SAME door the rail click uses, not the raw setter: a
-        // project selection now hands the conversation to that project (and
-        // starts one where there is none), and a replayed visit that only
-        // re-selected the key would land on the map with somebody else's chat
-        // beside it. The ref exists because the handler closes over `state`,
-        // which is only available past the loading guard.
+        // Replay through the rail's selection handler: current Studio project
+        // navigation is read-only; older-server session handoff remains until
+        // SAP-3090. The ref reaches the handler below the loading guard, where
+        // the hydrated `state` is available.
         selectProjectRef.current?.(visit.workspaceKey, visit.root, visit.label);
       } else if (visit.kind === "agent-map") {
         const state = harness.state;
@@ -1430,9 +1472,10 @@ export const App = (): JSX.Element => {
             [selectedStudioProject],
           )
       : null;
-  const planFirstSelection = selectedStudioScope
-    ? effectiveStudioSelection
-    : null;
+  const planFirstSelection =
+    selectedStudioScope || effectiveStudioSelection?.kind === "agent-map"
+      ? effectiveStudioSelection
+      : null;
   const effectiveFocusedAgentPath =
     planFirstSelection?.kind === "agent" && selectedStudioWorkflow
       ? selectedStudioWorkflow.path
@@ -1452,7 +1495,12 @@ export const App = (): JSX.Element => {
     : null;
   const view = studioView ?? legacyView;
   const atMapAltitude = view.altitude === "map";
-  const projectMapSelected = studioView?.altitude === "map";
+  // Missing identity in the current protocol is an unavailable Agent Map.
+  // Only an older server that omits studioProjects supports the legacy view.
+  const unresolvedProjectMap =
+    selectedProject !== null && state.studioProjects !== undefined;
+  const projectMapSelected =
+    studioView?.altitude === "map" || unresolvedProjectMap;
 
   /**
    * Whose tabs the strip shows: the ACTIVE session's PROJECT (SAP-2980), never
@@ -1475,13 +1523,15 @@ export const App = (): JSX.Element => {
   );
   const studioConversationProjectId =
     planFirstSelection?.projectId ??
-    activeSession?.agentMapIdentity?.projectId ??
+    (unresolvedProjectMap ? null : activeSession?.agentMapIdentity?.projectId) ??
     null;
   const focusTabs = studioConversationProjectId
     ? liveSessionsForStudioProject(state.sessions, studioConversationProjectId)
-    : conversation.kind === "project"
-      ? liveSessionsForProject(state.sessions, conversation.root)
-      : liveSessionsForFocus(state.sessions, conversation.path);
+    : unresolvedProjectMap
+      ? liveSessionsForProject(state.sessions, selectedProject.root)
+      : conversation.kind === "project"
+        ? liveSessionsForProject(state.sessions, conversation.root)
+        : liveSessionsForFocus(state.sessions, conversation.path);
   // Project-name navigation cannot activate a session. Keep an already-active
   // conversation only when it belongs to that exact project; a foreign CLI is
   // hidden until the user explicitly selects one of this project's tabs.
@@ -1729,10 +1779,12 @@ export const App = (): JSX.Element => {
     closeMobileDrawer();
     // A Studio project-name click is a read-only navigation action. It must not
     // choose, create, resume, focus, or prompt any session.
-    if (selectedAgentMap) {
+    if (selectedAgentMap || state.studioProjects !== undefined) {
       if (isMobile) setRightCollapsed(false);
       return;
     }
+    // Older-server compatibility only: these payloads omit studioProjects.
+    // Retain their session handoff until the browser deletion in SAP-3090.
     const decision = sessionForFocus({
       focusPath: root,
       active: activeSession,
@@ -1750,12 +1802,12 @@ export const App = (): JSX.Element => {
   selectProjectRef.current = handleSelectWorkspace;
 
   /**
-   * Open the first session of a project you just selected.
+   * Start an explicitly requested project session, or an older-server handoff.
    *
    * Guarded BY ROOT, not by a boolean: two projects can be starting at once
-   * (select one, select another before the first POST resolves) and a single
-   * flag would drop the second create silently. Re-selecting the SAME project
-   * mid-flight is the double-create this prevents.
+   * (request one, then another before the first POST resolves) and a single
+   * flag would drop the second create silently. Repeating a request for the
+   * same project mid-flight is the double-create this prevents.
    */
   const startProjectSession = async (
     root: string,
@@ -3628,7 +3680,32 @@ export const App = (): JSX.Element => {
                   the subject is a project, so there is no agent board drawn
                   behind the map. Keyed by project, so switching projects is a
                   fresh load rather than a mutation of the one on screen. */}
-              {studioView?.altitude === "map" ? (
+              {unresolvedProjectMap ||
+              (studioView?.altitude === "map" && !selectedStudioProject) ? (
+                <EmptyState
+                  className="canvas-empty"
+                  testId="agent-map-identity-unavailable"
+                  icon="Folder"
+                  title="Agent Map unavailable"
+                  body="Studio couldn't identify this project. Reload projects to try again, or select another project."
+                  cta={
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      data-testid="agent-map-reload-projects"
+                      onClick={() => {
+                        void harness.refreshWorkspaceScopes().catch(() => {
+                          harness.showToast(
+                            "Projects couldn't be reloaded. Try again.",
+                          );
+                        });
+                      }}
+                    >
+                      Reload projects
+                    </button>
+                  }
+                />
+              ) : studioView?.altitude === "map" ? (
                 <AgentMapPane
                   key={`${studioView.projectId}:${harness.authRevision}`}
                   visible={!rightCollapsed && shownTab === "canvas"}
