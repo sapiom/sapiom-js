@@ -21,7 +21,10 @@ and startup fails if that plugin does not initialize or if native HTTP
 authentication stops rejecting unauthenticated requests. OpenCode project
 configuration, global configuration, default plugins, Claude configuration, and
 external skills are excluded; the sole configured plugin is created in an
-ephemeral config root. Runtime state stays below the supplied directory.
+ephemeral config root. The native process also receives an ephemeral home so
+OpenCode cannot discover `$HOME/.opencode`; the controlled shell hook restores
+the caller's original home variables for user tools. Runtime state stays below
+the supplied directory.
 
 The runtime credential has no independent time-to-live. Its lifetime is bounded
 by the Studio grant: grant expiry, access revocation, or runtime retirement

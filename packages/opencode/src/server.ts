@@ -113,6 +113,7 @@ const runtimeCredentialKeys = [
 
 async function createCredentialIsolationPlugin(
   launchRoot: string,
+  toolHomeEnvironment: NodeJS.ProcessEnv,
 ): Promise<{ pluginUrl: string; readyPath: string }> {
   const pluginPath = join(launchRoot, "credential-isolation.mjs");
   const readyPath = join(launchRoot, "credential-isolation.ready");
@@ -134,9 +135,13 @@ async function createCredentialIsolationPlugin(
   const source = `import { writeFile } from "node:fs/promises";
 import { createStudioCompletionHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
 const keys = ${JSON.stringify(runtimeCredentialKeys)};
-export const SapiomCredentialIsolation = async () => {
+const toolHomeEnvironment = ${JSON.stringify(toolHomeEnvironment)};
+export const SapiomCredentialIsolation = async (input) => {
   for (const key of keys) delete process.env[key];
-  const completionHooks = createStudioCompletionHooks();
+  const completionHooks = createStudioCompletionHooks(async (sessionID) => {
+    const response = await input.client.session.messages({ path: { id: sessionID } });
+    return response.data ?? [];
+  });
   await writeFile(${JSON.stringify(readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
   return {
     ...completionHooks,
@@ -145,6 +150,7 @@ export const SapiomCredentialIsolation = async () => {
         delete process.env[key];
         delete output.env[key];
       }
+      Object.assign(output.env, toolHomeEnvironment);
     },
   };
 };
@@ -172,8 +178,20 @@ export async function startOpenCodeServer(
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
   await mkdir(options.stateRoot, { recursive: true, mode: 0o700 });
   const launchRoot = await mkdtemp(join(options.stateRoot, "launch-"));
-  const { pluginUrl, readyPath } =
-    await createCredentialIsolationPlugin(launchRoot);
+  const sourceEnvironment = options.environment ?? process.env;
+  const platform = platformEnvironment(sourceEnvironment);
+  const toolHomeEnvironment = Object.fromEntries(
+    ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"].flatMap((key) =>
+      sourceEnvironment[key] === undefined
+        ? []
+        : [[key, sourceEnvironment[key]]],
+    ),
+  );
+  const { pluginUrl, readyPath } = await createCredentialIsolationPlugin(
+    launchRoot,
+    toolHomeEnvironment,
+  );
+  const isolatedHome = join(launchRoot, "home");
   const directories = {
     XDG_CONFIG_HOME: join(launchRoot, "config"),
     ...Object.fromEntries(
@@ -184,7 +202,7 @@ export async function startOpenCodeServer(
     ),
   };
   await Promise.all(
-    Object.values(directories).map((path) =>
+    [...Object.values(directories), isolatedHome].map((path) =>
       mkdir(path, { recursive: true, mode: 0o700 }),
     ),
   );
@@ -207,7 +225,11 @@ export async function startOpenCodeServer(
       {
         cwd: options.cwd,
         env: {
-          ...platformEnvironment(options.environment ?? process.env),
+          ...platform,
+          HOME: isolatedHome,
+          ...(process.platform === "win32"
+            ? { USERPROFILE: isolatedHome }
+            : {}),
           ...directories,
           OPENCODE_CONFIG_CONTENT: JSON.stringify({
             ...options.config,
