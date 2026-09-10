@@ -37,14 +37,14 @@ describe("OpenCode transport error contract", () => {
       { ...failure, retryable: true },
       { ...failure, action: "sign_in" },
       { ...failure, detail: "private" },
-      { ...failure, startupReason: "exited" },
+      { ...failure, reason: "exited" },
       openCodeTransportFailure("runtime_start_failed", "exited"),
     ]) {
       if (value.code === "runtime_start_failed") {
         expect(
           parseOpenCodeTransportFailure({
             ...value,
-            startupReason: "unknown",
+            reason: "unknown",
           }),
         ).toBeNull();
       } else expect(parseOpenCodeTransportFailure(value)).toBeNull();
@@ -59,5 +59,26 @@ describe("OpenCode transport error contract", () => {
     expect(
       parseOpenCodeTransportErrorBody({ error: failure, diagnostic: true }),
     ).toBeNull();
+  });
+
+  it("accepts semantically valid wire fields in any object order", () => {
+    expect(
+      parseOpenCodeTransportFailure({
+        action: "open_settings",
+        retryable: false,
+        message: "Assistant access is not available for this account.",
+        code: "access_denied",
+      }),
+    ).toEqual(openCodeTransportFailure("access_denied"));
+    expect(
+      parseOpenCodeTransportFailure({
+        reason: "exited",
+        action: "reconnect",
+        code: "runtime_start_failed",
+        retryable: true,
+        message:
+          "OpenCode exited before it became ready. Retry, then update or reinstall Studio if the problem continues.",
+      }),
+    ).toEqual(openCodeTransportFailure("runtime_start_failed", "exited"));
   });
 });
