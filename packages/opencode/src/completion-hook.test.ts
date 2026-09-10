@@ -48,8 +48,11 @@ const compaction = (id: string) => ({
 
 type FixtureMessage = ReturnType<typeof user> | ReturnType<typeof compaction>;
 
-async function transform(messages: FixtureMessage[]) {
-  const hooks = createStudioCompletionHooks();
+async function transform(
+  messages: FixtureMessage[],
+  history: FixtureMessage[] = messages,
+) {
+  const hooks = createStudioCompletionHooks(async () => history);
   await hooks["experimental.chat.messages.transform"]({}, { messages });
 }
 
@@ -66,6 +69,16 @@ describe("Studio completion transform", () => {
     await transform(messages);
 
     expect(continuation.info.system).toBe(contract(tokenB));
+  });
+
+  it("loads authoritative history when native filtered messages omit the boundary", async () => {
+    const continuation = user("continue", { continuation: true });
+    const control = compaction("compaction");
+    const source = user("source", { system: contract(tokenA) });
+
+    await transform([control, continuation], [source, control, continuation]);
+
+    expect(continuation.info.system).toBe(contract(tokenA));
   });
 
   it("preserves an existing system and ordinary or replayed users", async () => {
@@ -189,5 +202,25 @@ describe("Studio completion transform", () => {
       await transform([user("source", { system: contract(tokenA) }), target]);
       expect(target.info.system).toBeUndefined();
     }
+  });
+
+  it("fails closed when authoritative history cannot resolve the target", async () => {
+    const absent = user("absent", { continuation: true });
+    await transform([absent], [user("source", { system: contract(tokenA) })]);
+    expect(absent.info.system).toBeUndefined();
+
+    const failed = user("failed", { continuation: true });
+    const hooks = createStudioCompletionHooks(async () => {
+      throw new Error("synthetic loader failure");
+    });
+    await expect(
+      hooks["experimental.chat.messages.transform"](
+        {},
+        {
+          messages: [failed],
+        },
+      ),
+    ).resolves.toBeUndefined();
+    expect(failed.info.system).toBeUndefined();
   });
 });
