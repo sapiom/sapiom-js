@@ -561,7 +561,7 @@ repo: commit it as `examples/<id>/preview.png` (beside `template.json`, outside 
 it clones with the template but is not uploaded into the running dashboard) and point
 `preview` at its raw URL on `main`:
 
-```
+```text
 https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/<id>/preview.png
 ```
 
@@ -583,7 +583,7 @@ whenever the page changes.
 
 **What CI checks.** `pnpm examples:check` fails an `app` block that is missing a required
 field, carries a field the schema does not declare, has an `entry` without a trailing slash
-or not on disk, a `port` outside 1–65535, a `build` that is not a string, or a `preview` that
+or not on disk, a `port` outside 1–65535, a `build` that is neither a string nor `null`, or a `preview` that
 is not an absolute `https://` URL. It accepts a manifest with no `app` block. The schema is a
 hand-maintained mirror of the backend's parser; a block that passes here is carried to the
 template page intact, and a block that would fail there is rejected here instead of being

@@ -59,8 +59,7 @@ const url = `http://localhost:${app.port}/`;
 // Detached on POSIX so the shell and the server it spawns form one process
 // group, which `stop` can signal as a whole — killing only the shell would
 // leave `node server.mjs` alive and the port bound for the next run. Windows
-// has no process groups; there the shell is killed and its child is left to
-// exit on its own.
+// has no process groups; there `stop` asks taskkill for the shell's whole tree.
 function sh(command) {
   return spawn(command, {
     cwd,
@@ -70,14 +69,20 @@ function sh(command) {
   });
 }
 
-/** Signal the whole process group and wait for the child to actually close. */
+/** Terminate the whole process tree and wait for the child to actually close. */
 function stop(child) {
   if (child.exitCode !== null || child.signalCode !== null)
     return Promise.resolve();
   const closed = new Promise((resolve) => child.once("close", resolve));
   try {
-    if (process.platform === "win32") child.kill("SIGTERM");
-    else process.kill(-child.pid, "SIGTERM");
+    if (process.platform === "win32") {
+      // `child.kill` reaches only the cmd.exe shell; /T takes its children too.
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
+    } else {
+      process.kill(-child.pid, "SIGTERM");
+    }
   } catch {
     // Already gone.
   }

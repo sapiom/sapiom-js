@@ -153,11 +153,12 @@ const page = readFile(path.join(HERE, "index.html"));
 page.catch(() => {});
 
 const server = createServer(async (req, res) => {
-  const url = new URL(
-    req.url ?? "/",
-    `http://${req.headers.host ?? "localhost"}`,
-  );
   try {
+    // Only the pathname is read, so the base is fixed: parsing against the
+    // request's own Host header would let a malformed one throw here, and this
+    // listener is async — an exception outside `try` is an unhandled rejection,
+    // not a 500.
+    const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/api/report") {
       const body = JSON.stringify(await report());
       res.writeHead(200, {
