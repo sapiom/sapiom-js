@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  evaluateTrackedClosure,
+  evaluateWindowsCleanup,
+  OpenCodeShutdownError,
   OpenCodeStartupError,
   startOpenCodeServer,
   type OpenCodeServer,
@@ -34,6 +37,48 @@ const options = (config: Record<string, unknown> = {}) => ({
 });
 
 describe("packaged OpenCode runtime", () => {
+  it("distinguishes Windows no-child spawn failure from post-spawn exit", () => {
+    expect(evaluateWindowsCleanup(undefined, undefined)).toBe("no-child");
+    expect(evaluateWindowsCleanup(42, null)).toBe("running");
+    expect(evaluateWindowsCleanup(42, 1)).toBe("uncertain");
+  });
+
+  it("rejects a zombie before positive descendant fencing", () => {
+    const tracked = new Map([
+      ["20:birth-20", { pid: 20, birthId: "birth-20" }],
+      ["22:birth-22", { pid: 22, birthId: "birth-22" }],
+    ]);
+    expect(
+      evaluateTrackedClosure(
+        tracked,
+        new Map([
+          [20, { pid: 20, birthId: "birth-20", state: "T" }],
+          [22, { pid: 22, birthId: "birth-22", state: "S" }],
+        ]),
+      ),
+    ).toBe("waiting");
+    expect(
+      evaluateTrackedClosure(
+        tracked,
+        new Map([
+          [20, { pid: 20, birthId: "birth-20", state: "Z" }],
+          [21, { pid: 21, birthId: "birth-21", state: "S" }],
+          [22, { pid: 22, birthId: "birth-22", state: "T" }],
+        ]),
+      ),
+    ).toBe("uncertain");
+
+    expect(
+      evaluateTrackedClosure(
+        tracked,
+        new Map([
+          [20, { pid: 20, birthId: "birth-20", state: "T" }],
+          [22, { pid: 22, birthId: "birth-22", state: "T" }],
+        ]),
+      ),
+    ).toBe("stopped");
+  });
+
   it("uses the bridge for model and MCP authentication and strips host secrets from tool environments", async () => {
     const config = createSapiomOpenCodeConfig({
       bridgeUrl: "http://127.0.0.1:1234/opencode-runtime/runtime",
@@ -131,14 +176,118 @@ describe("packaged OpenCode runtime", () => {
     } finally {
       clearTimeout(timer);
     }
+    await expect(startOpenCodeServer(options({ crash: true }))).rejects.toEqual(
+      new OpenCodeShutdownError(),
+    );
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "withholds cleanup proof when a startup exit leaves detached work",
+    async () => {
+      const writerLog = join(directory, "startup-writer.log");
+      let cleanupProof: { path: string; token: string } | undefined;
+      let writerPid: number | undefined;
+      let writerBirthId: string | undefined;
+      try {
+        await expect(
+          startOpenCodeServer({
+            ...options({ startupExitWriter: writerLog }),
+            beforeLaunch: (identity) => {
+              cleanupProof = identity.cleanupProof;
+            },
+          }),
+        ).rejects.toEqual(new OpenCodeShutdownError());
+
+        expect(cleanupProof).toBeDefined();
+        await expect(
+          readFile(cleanupProof!.path, "utf8"),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        writerPid = Number(
+          await readFile(join(directory, "runtime.tool.pid"), "utf8"),
+        );
+        writerBirthId = await linuxBirthId(writerPid);
+        expect(writerBirthId).toBeDefined();
+        const firstWrites = (await readFile(writerLog, "utf8")).split(
+          "\n",
+        ).length;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const laterWrites = (await readFile(writerLog, "utf8")).split(
+          "\n",
+        ).length;
+        expect(laterWrites).toBeGreaterThan(firstWrites);
+      } finally {
+        if (
+          writerPid !== undefined &&
+          (await linuxBirthId(writerPid)) === writerBirthId
+        )
+          process.kill(writerPid, "SIGKILL");
+        if (writerPid !== undefined) await waitUntilStopped(writerPid);
+      }
+    },
+  );
+
+  it("never launches native after an awaited protection barrier is aborted", async () => {
+    const abort = new AbortController();
+    let releaseBarrier!: () => void;
+    let enteredBarrier!: () => void;
+    const barrierEntered = new Promise<void>((resolve) => {
+      enteredBarrier = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const starting = startOpenCodeServer({
+      ...options(),
+      signal: abort.signal,
+      beforeLaunch: async (identity) => {
+        expect(identity.pid).toBeGreaterThan(0);
+        expect(identity.cleanupProof.token.length).toBeGreaterThanOrEqual(16);
+        enteredBarrier();
+        await barrier;
+      },
+    });
+    await barrierEntered;
+    abort.abort();
+    releaseBarrier();
+    await expect(starting).rejects.toMatchObject({ code: "cancelled" });
     await expect(
-      startOpenCodeServer(options({ crash: true })),
-    ).rejects.toMatchObject({
-      code: "exited",
-      exitCode: 1,
-      retryable: true,
-      message:
-        "OpenCode exited before it became ready. Retry, then update or reinstall Studio if the problem continues.",
+      readFile(join(directory, "runtime.pid"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sanitizes protection failure and confirms resistant group cleanup", async () => {
+    await expect(
+      startOpenCodeServer({
+        ...options(),
+        beforeLaunch: async () => {
+          throw new Error("private lock diagnostic");
+        },
+      }),
+    ).rejects.toEqual(new OpenCodeStartupError("launch-failed"));
+
+    const nativeLaunchMarker = join(directory, "native-term-launch");
+    const descendantLaunchMarker = join(directory, "descendant-term-launch");
+    server = await startOpenCodeServer(
+      options({
+        resistant: true,
+        resistantMarker: descendantLaunchMarker,
+        spawnOnTermMarker: nativeLaunchMarker,
+      }),
+    );
+    const nativePid = Number(
+      await readFile(join(directory, "runtime.pid"), "utf8"),
+    );
+    const resistantPid = Number(
+      await readFile(join(directory, "runtime.tool.pid"), "utf8"),
+    );
+    await server.close();
+    expect(await processIsRunning(nativePid)).toBe(false);
+    expect(await processIsRunning(resistantPid)).toBe(false);
+    await expect(readFile(nativeLaunchMarker)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(descendantLaunchMarker)).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 
@@ -178,3 +327,48 @@ describe("packaged OpenCode runtime", () => {
     ).toThrow("private loopback");
   });
 });
+
+async function processIsRunning(pid: number): Promise<boolean> {
+  if (process.platform === "linux") {
+    try {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+    } catch (error) {
+      if (
+        ["ENOENT", "ESRCH"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      )
+        return false;
+      throw error;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function linuxBirthId(pid: number): Promise<string | undefined> {
+  try {
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  } catch (error) {
+    if (
+      ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")
+    )
+      return undefined;
+    throw error;
+  }
+}
+
+async function waitUntilStopped(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (await processIsRunning(pid)) {
+    if (Date.now() >= deadline) throw new Error("fixture process did not stop");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
