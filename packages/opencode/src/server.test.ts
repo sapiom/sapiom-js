@@ -142,6 +142,71 @@ describe("packaged OpenCode runtime", () => {
     });
   });
 
+  it("never launches native after an awaited protection barrier is aborted", async () => {
+    const abort = new AbortController();
+    let releaseBarrier!: () => void;
+    let enteredBarrier!: () => void;
+    const barrierEntered = new Promise<void>((resolve) => {
+      enteredBarrier = resolve;
+    });
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const starting = startOpenCodeServer({
+      ...options(),
+      signal: abort.signal,
+      beforeLaunch: async (identity) => {
+        expect(identity.pid).toBeGreaterThan(0);
+        expect(identity.cleanupProof.token.length).toBeGreaterThanOrEqual(16);
+        enteredBarrier();
+        await barrier;
+      },
+    });
+    await barrierEntered;
+    abort.abort();
+    releaseBarrier();
+    await expect(starting).rejects.toMatchObject({ code: "cancelled" });
+    await expect(
+      readFile(join(directory, "runtime.pid"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sanitizes protection failure and confirms resistant group cleanup", async () => {
+    await expect(
+      startOpenCodeServer({
+        ...options(),
+        beforeLaunch: async () => {
+          throw new Error("private lock diagnostic");
+        },
+      }),
+    ).rejects.toEqual(new OpenCodeStartupError("launch-failed"));
+
+    const nativeLaunchMarker = join(directory, "native-term-launch");
+    const descendantLaunchMarker = join(directory, "descendant-term-launch");
+    server = await startOpenCodeServer(
+      options({
+        resistant: true,
+        resistantMarker: descendantLaunchMarker,
+        spawnOnTermMarker: nativeLaunchMarker,
+      }),
+    );
+    const nativePid = Number(
+      await readFile(join(directory, "runtime.pid"), "utf8"),
+    );
+    const resistantPid = Number(
+      await readFile(join(directory, "runtime.tool.pid"), "utf8"),
+    );
+    await server.close();
+    expect(await processIsRunning(nativePid)).toBe(false);
+    expect(await processIsRunning(resistantPid)).toBe(false);
+    await expect(readFile(nativeLaunchMarker)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(descendantLaunchMarker)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("classifies real executable path and permission failures without raw details", async () => {
     const missing = join(directory, "private-provider-token-missing");
     await expect(
@@ -178,3 +243,22 @@ describe("packaged OpenCode runtime", () => {
     ).toThrow("private loopback");
   });
 });
+
+async function processIsRunning(pid: number): Promise<boolean> {
+  if (process.platform === "linux") {
+    try {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}

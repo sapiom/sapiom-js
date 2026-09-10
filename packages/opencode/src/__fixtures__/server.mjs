@@ -16,6 +16,31 @@ for (const specifier of config.plugin ?? []) {
   writeFileSync(readyPath, "ready\n", { flag: "wx", mode: 0o600 });
 }
 writeFileSync("runtime.pid", String(process.pid));
+if (config.resistant) {
+  const resistantSource =
+    'process.on("SIGTERM",()=>{' +
+    (config.resistantMarker
+      ? `require("node:fs").writeFileSync(${JSON.stringify(config.resistantMarker)},"ran")`
+      : "") +
+    "});setInterval(()=>{},60000)";
+  const resistant = spawn(process.execPath, ["-e", resistantSource], {
+    detached: true,
+    stdio: "ignore",
+  });
+  writeFileSync("runtime.tool.pid", String(resistant.pid));
+}
+if (config.spawnOnTermMarker) {
+  process.on("SIGTERM", () => {
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(config.spawnOnTermMarker)},"ran")`,
+      ],
+      { detached: true, stdio: "ignore" },
+    ).unref();
+  });
+}
 if (config.crash) {
   console.error("private provider diagnostic");
   process.exit(1);
