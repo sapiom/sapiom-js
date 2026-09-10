@@ -6,7 +6,7 @@ The full authoring guide ships inside this project at `.claude/skills/sapiom-age
 
 ## Authoring
 
-- An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export — one agent per project. A multi-stage system is several small projects composed with `ctx.sapiom.agents.run` (see the sapiom-agent-authoring skill’s "Composing Deployed Agents").
+- An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export — one agent per project. A multi-stage system is several small projects composed with `ctx.sapiom.agents.run` (the rule and its worked example: [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition), summarized in the sapiom-agent-authoring skill).
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck.
 
 ## The entry input contract
@@ -80,3 +80,13 @@ return pauseUntilSignal(run, { resumeStep: "finalize" }); // suspend on the run'
 ## Determinism
 
 A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Don't rely on a value being recomputed identically across a pause/resume — capture compact non-deterministic values (timestamps, ids) once and pass them forward via the `goto(...)` input or `ctx.shared`; persist bulk state and carry a reference.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.0 of
+that text; `sapiom_dev_agents_check` warns when the served copy differs.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->

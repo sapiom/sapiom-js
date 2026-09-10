@@ -53,6 +53,24 @@ export type {
   ResolvedVersions,
 } from "./scaffold.js";
 
+// The served platform rules' stamp: what a shipped summary/pointer was written
+// against, and the "differs from the served copy" warning `check` attaches (SAP-3181).
+export {
+  AUTHORING_RULES_URL,
+  AUTHORING_RULES_PATH,
+  AUTHORING_RULES_RELEASE,
+  AUTHORING_RULES_DIGEST,
+  AUTHORING_RULES_SECTIONS,
+  AUTHORING_RULES_STAMP,
+  renderAuthoringRulesStamp,
+  parseAuthoringRulesStamp,
+  authoringRulesDriftWarning,
+} from "./authoring-rules.js";
+export type {
+  AuthoringRulesStamp,
+  AuthoringRulesSection,
+} from "./authoring-rules.js";
+
 // Best-effort dependency install + bundle-failure hinting — shared by scaffold,
 // the example seed, and the Canvas/check/run-local bundle paths.
 export { installProjectDependencies } from "./install-deps.js";

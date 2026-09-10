@@ -48,3 +48,13 @@ return pauseUntilSignal(run, { resumeStep: "finalize" });                       
 ## Determinism
 
 A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Don't rely on a value being recomputed identically across a pause/resume — capture non-deterministic values (timestamps, ids) once and pass them forward via the `goto(...)` input or `ctx.shared`.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.0 of
+that text; `sapiom_dev_agents_check` warns when the served copy differs.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
