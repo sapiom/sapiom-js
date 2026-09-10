@@ -52,6 +52,8 @@ import {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpSessionRestartUnavailableError,
+  McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
@@ -69,6 +71,8 @@ export {
   AdapterNotFoundError,
   AgentSessionIdentityReservedError,
   ExternalHarnessError,
+  McpSessionRestartUnavailableError,
+  McpCredentialGenerationChangedError,
   SessionAlreadyLiveError,
   SessionNotReadyError,
   SessionNotResumeableError,
@@ -387,6 +391,20 @@ export type SessionDataListener = (chunk: string) => void;
 /** See `onActivity()`. */
 export type SessionActivityListener = (harnessSessionId: string) => void;
 
+/** Server-private identity of the credential used to generate one MCP config. */
+export interface McpCredentialLaunch {
+  generation: number;
+  credentialBearing: boolean;
+}
+
+export type LaunchOptsBuildResult = Omit<
+  LaunchOpts,
+  "harnessSessionId" | "cwd"
+> & {
+  /** Removed before LaunchOpts reaches an adapter; never leaves the server. */
+  mcpCredentialLaunch?: McpCredentialLaunch;
+};
+
 /**
  * Builds the harness-specific part of LaunchOpts (generated system-prompt /
  * mcp-config / settings file paths). SessionManager owns cwd + harnessSessionId;
@@ -413,11 +431,19 @@ export type LaunchOptsBuilder = (
     agentMapMcp?: { url: string; bearerToken: string };
     resume?: boolean;
   },
-) =>
-  | Omit<LaunchOpts, "harnessSessionId" | "cwd">
-  | Promise<Omit<LaunchOpts, "harnessSessionId" | "cwd">>;
+) => LaunchOptsBuildResult | Promise<LaunchOptsBuildResult>;
 
 const defaultBuildLaunchOpts: LaunchOptsBuilder = () => ({});
+
+/** Runtime MCP state is derived from private PTY handles, never durable data. */
+function serializeSessionRegistry(sessions: HarnessSession[]): string {
+  const persisted = sessions.map((session) => {
+    const copy = { ...session };
+    delete copy.mcpAuthState;
+    return copy;
+  });
+  return JSON.stringify(persisted, null, 2) + "\n";
+}
 
 export interface SessionManagerOptions {
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
@@ -436,6 +462,8 @@ export interface SessionManagerOptions {
    * after that final await and before PTY admission. */
   loadSpawnPty?: () => Promise<PtySpawnFn>;
   buildLaunchOpts?: LaunchOptsBuilder;
+  /** Live credential generation checked synchronously immediately before spawn. */
+  currentCredentialGeneration?: () => number;
   /** Revalidates cwd containment and current principal before every spawn. */
   resolveAgentMapIdentity?: (
     sessionId: string,
@@ -571,6 +599,8 @@ interface PtyHandle {
   pty: IPty;
   /** Server-owned identity for this exact live PTY generation. */
   runtimeEpoch: string;
+  /** MCP credential identity captured with this exact live PTY generation. */
+  mcpCredentialLaunch?: McpCredentialLaunch;
   buffer: string;
   /** Latest content-bearing terminal repaint used for current-screen checks.
    * Unlike `buffer`, animation-only ANSI churn cannot evict the visible text. */
@@ -870,6 +900,23 @@ export class SessionManager {
     return this.kill(id);
   }
 
+  /** Stop credential-bearing PTYs launched no later than the removed generation. */
+  async terminateCredentialBearingSessions(
+    throughGeneration: number,
+  ): Promise<void> {
+    const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
+      handle.mcpCredentialLaunch?.credentialBearing &&
+      handle.mcpCredentialLaunch.generation <= throughGeneration
+        ? [{ id, runtimeEpoch: handle.runtimeEpoch }]
+        : [],
+    );
+    await Promise.all(
+      targets.map(({ id, runtimeEpoch }) =>
+        this.killIfRuntime(id, runtimeEpoch),
+      ),
+    );
+  }
+
 
   /**
    * Fail-closed admission for already-authenticated ingest work. A terminal
@@ -984,6 +1031,9 @@ export class SessionManager {
   private readonly subsessionBindingsPath: string;
   private readonly spawnPty: PtySpawnFn | undefined;
   private readonly buildLaunchOpts: LaunchOptsBuilder;
+  private readonly currentCredentialGeneration:
+    | (() => number)
+    | undefined;
   private readonly resolveAgentMapIdentity: SessionManagerOptions["resolveAgentMapIdentity"];
   private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
   private readonly rejectedProjectSessionMetadata = new Set<string>();
@@ -1052,6 +1102,7 @@ export class SessionManager {
     this.spawnPty = options.spawnPty;
     this.loadSpawnPty = options.loadSpawnPty ?? loadDefaultSpawn;
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
+    this.currentCredentialGeneration = options.currentCredentialGeneration;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
     this.prepareProjectSession = options.prepareProjectSession;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
@@ -1097,6 +1148,12 @@ export class SessionManager {
     }
     let dirty = false;
     for (const session of persisted) {
+      // This state is derived from a process-local PTY stamp. Never trust a
+      // value written by another build or carry it across a server restart.
+      if (session.mcpAuthState !== undefined) {
+        delete session.mcpAuthState;
+        dirty = true;
+      }
       const migration = migratePersistedProjectIdentity(session);
       if (migration.outcome === "rejected") {
         this.rejectedProjectSessionMetadata.add(session.id);
@@ -1164,6 +1221,112 @@ export class SessionManager {
   /** True only when this process owns the live PTY behind the record. */
   isLive(id: string): boolean {
     return this.ptys.has(id);
+  }
+
+  /** Recompute browser-safe state from private live-runtime stamps. */
+  reconcileMcpCredentialGeneration(currentGeneration: number): void {
+    for (const [id, handle] of this.ptys) {
+      const session = this.sessions.get(id);
+      if (!session) continue;
+      // The restart action owns this exact runtime until it either restores
+      // restart-required or replaces it. A concurrent credential change is
+      // still enforced by resume's launch-generation fence.
+      if (session.mcpAuthState === "restarting") continue;
+      const next = handle.mcpCredentialLaunch
+        ? handle.mcpCredentialLaunch.generation === currentGeneration
+          ? "current"
+          : "restart-required"
+        : "not-applicable";
+      if (session.mcpAuthState === next) continue;
+      session.mcpAuthState = next;
+      this.emitStatus(session, handle.runtimeEpoch);
+    }
+  }
+
+  /** Replace one stale coding-agent runtime when its conversation is resumable. */
+  async restartForMcpCredentials(id: string): Promise<HarnessSession> {
+    if (this.closing) throw new SessionManagerClosingError();
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    const handle = this.ptys.get(id);
+    if (
+      session.mcpAuthState !== "restart-required" ||
+      !handle?.mcpCredentialLaunch ||
+      handle.killed
+    ) {
+      throw new McpSessionRestartUnavailableError();
+    }
+    const harnessLabel =
+      listHarnessAdapters().find((adapter) => adapter.id === session.harness)
+        ?.label ?? session.harness;
+
+    const runtimeEpoch = handle.runtimeEpoch;
+    const restoreRestartRequired = (): void => {
+      if (this.ptys.get(id) !== handle || this.sessions.get(id) !== session)
+        return;
+      session.mcpAuthState = "restart-required";
+      this.emitStatus(session, runtimeEpoch);
+    };
+    session.mcpAuthState = "restarting";
+    this.emitStatus(session, runtimeEpoch);
+
+    if (!session.agentSessionId) {
+      restoreRestartRequired();
+      throw new SessionNotResumeableError(
+        id,
+        `${harnessLabel} has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.`,
+      );
+    }
+    let resumable: boolean;
+    try {
+      resumable = await this.getAdapter(session.harness).canResume(
+        session.agentSessionId,
+        session.cwd,
+      );
+    } catch (error) {
+      restoreRestartRequired();
+      throw error;
+    }
+    if (!resumable) {
+      restoreRestartRequired();
+      throw new SessionNotResumeableError(
+        id,
+        `${harnessLabel} no longer has this conversation, so it cannot be restarted safely. Start a new session instead.`,
+      );
+    }
+    if (this.ptys.get(id) !== handle || handle.killed) {
+      restoreRestartRequired();
+      throw new McpSessionRestartUnavailableError(
+        "The session changed while its restart was being prepared. Try again from its current state.",
+      );
+    }
+
+    let killed: boolean;
+    try {
+      killed = await this.killIfRuntime(id, runtimeEpoch);
+    } catch (error) {
+      restoreRestartRequired();
+      throw error;
+    }
+    if (!killed) {
+      throw new McpSessionRestartUnavailableError(
+        "The session changed before it could be restarted. Try again from its current state.",
+      );
+    }
+
+    // markExited() clears runtime-only MCP state. Keep the action observable
+    // while the ordinary resume path performs its own final checks and spawn.
+    session.mcpAuthState = "restarting";
+    this.emitStatus(session);
+    try {
+      return await this.resume(id);
+    } catch (error) {
+      if (!this.ptys.has(id) && session.mcpAuthState === "restarting") {
+        session.mcpAuthState = "not-applicable";
+        this.emitStatus(session);
+      }
+      throw error;
+    }
   }
 
   private getAdapter(harness: HarnessKind): HarnessAdapter {
@@ -1242,6 +1405,7 @@ export class SessionManager {
         cwd: input.cwd,
         title: input.title,
         status: "exited",
+        mcpAuthState: "not-applicable",
         createdAt: input.lastActiveAt,
         lastActiveAt: input.lastActiveAt,
         exitCode: null,
@@ -1265,6 +1429,11 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Resumes a stored conversation after the adapter confirms it can reopen it.
+   * Claims the starting state before preparation. Setup failures run normal
+   * exit cleanup and preserve the previous last-activity timestamp.
+   */
   async resume(
     id: string,
     trusted: TrustedSessionResumeOptions = {},
@@ -1355,14 +1524,15 @@ export class SessionManager {
     // they must see this lifecycle as starting, not schedule cleanup against
     // files that the resumed process is currently regenerating.
     const lastActiveBeforeResume = session.lastActiveAt;
-    const statusBeforeResume = session.status;
-    const exitCodeBeforeResume = session.exitCode;
     session.status = "starting";
     session.exitCode = null;
     session.lastActiveAt = this.now();
-    let opts: LaunchOpts;
-    let spec: SpawnSpec;
+    // A failed pre-PTY attempt is not activity; the failure path restores this
+    // timestamp so the dead pane's elapsed time still reflects real work.
     try {
+      await this.persist();
+      this.emitStatus(session);
+      // Preparation belongs to this lifetime so failure runs normal exit cleanup.
       const launchContext =
         trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
           ? {
@@ -1376,36 +1546,15 @@ export class SessionManager {
               resume: true as const,
             }
           : undefined;
-      opts = {
+      const built = await (launchContext
+        ? this.buildLaunchOpts(id, session, launchContext)
+        : this.buildLaunchOpts(id, session));
+      const { mcpCredentialLaunch, ...opts } = {
         harnessSessionId: id,
         cwd: session.cwd,
-        ...(await (launchContext
-          ? this.buildLaunchOpts(id, session, launchContext)
-          : this.buildLaunchOpts(id, session))),
+        ...built,
       };
-      spec = adapter.resume(session.agentSessionId, opts);
-    } catch (error) {
-      // Resume preparation may rotate project capabilities or write generated
-      // launch state before the process exists. No starting state was exposed
-      // or persisted yet, so restore the exact prior record while releasing
-      // any prepared authority.
-      session.status = statusBeforeResume;
-      session.exitCode = exitCodeBeforeResume;
-      session.lastActiveAt = lastActiveBeforeResume;
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
-    // The prior value is kept so the failure path below can put it back:
-    // `lastActiveAt` is stamped only to keep sweepDeadSessions() from reaping
-    // this record
-    // during the pre-pty window (it reaps non-exited records with no pty once
-    // they're older than the grace period). If the resume never produces a
-    // pty, that stamp is not activity and must not survive — otherwise a
-    // session idle since last night reports "Ran for 6h 25m" purely because
-    // someone clicked Resume.
-    try {
-      await this.persist();
-      this.emitStatus(session);
+      const spec = adapter.resume(session.agentSessionId, opts);
       // Schema-aware and strict: the caller leaves a valid current file
       // untouched, translates a valid legacy file, and reconstructs anything
       // missing/invalid from this session plus the live registry. Await it in
@@ -1416,12 +1565,16 @@ export class SessionManager {
       // — a session from before the canvas kit existed, or one whose canvas
       // file was somehow deleted, still gets a live pane on resume.
       await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(session, spec, () =>
-        this.revalidateAgentMapIdentity(
-          session.id,
-          session.cwd,
-          agentMapIdentity,
-        ),
+      await this.spawn(
+        session,
+        spec,
+        mcpCredentialLaunch,
+        () =>
+          this.revalidateAgentMapIdentity(
+            session.id,
+            session.cwd,
+            agentMapIdentity,
+          ),
       );
       if (session.projectBootstrap) {
         const runtimeEpoch = this.getRuntimeEpoch(session.id);
@@ -2643,6 +2796,7 @@ export class SessionManager {
   private async spawn(
     session: HarnessSession,
     spec: SpawnSpec,
+    mcpCredentialLaunch?: McpCredentialLaunch,
     revalidateAdmission?: () => Promise<void>,
   ): Promise<void> {
     if (this.closing) throw new SessionManagerClosingError();
@@ -2705,9 +2859,18 @@ export class SessionManager {
       );
       epochTransitioned = true;
       // Epoch transition is fallible and may wait on durable state. Revalidate
-      // project/user scope and shutdown admission once more after that await.
+      // project/user scope, credential generation, and shutdown admission once
+      // more after that await.
       await revalidateAdmission?.();
       if (this.closing) throw new SessionManagerClosingError();
+      if (
+        mcpCredentialLaunch &&
+        this.currentCredentialGeneration &&
+        mcpCredentialLaunch.generation !==
+          this.currentCredentialGeneration()
+      ) {
+        throw new McpCredentialGenerationChangedError();
+      }
       // A throw here — spawnFn itself, or loadDefaultSpawn() above (a broken
       // node-pty prebuild surfaces there, not at import time) — propagates to
       // create()/resume(), which own reconciling the session record to
@@ -2741,6 +2904,7 @@ export class SessionManager {
     const handle: PtyHandle = {
       pty,
       runtimeEpoch: ingestCredential.runtimeEpoch,
+      ...(mcpCredentialLaunch ? { mcpCredentialLaunch } : {}),
       buffer: "",
       readinessBuffer: "",
       readinessHistory: "",
@@ -2766,6 +2930,10 @@ export class SessionManager {
     this.ptys.set(session.id, handle);
 
     session.status = "running";
+    session.mcpAuthState =
+      mcpCredentialLaunch && this.currentCredentialGeneration
+        ? "current"
+        : "not-applicable";
     // A resumed session may carry `ready: true` from its previous life —
     // this is a fresh pty that hasn't proven itself interactive yet either
     // way (trust dialogs can reappear, e.g. under different sandbox flags).
@@ -2948,6 +3116,7 @@ export class SessionManager {
       // Capability cleanup never delays durable session reconciliation.
     }
     session.status = "exited";
+    session.mcpAuthState = "not-applicable";
     session.exitCode = exitCode;
     // Only markExited (a live-pty death) has output to preserve; every other
     // caller (pre-pty create/resume failure, kill()'s ghost path, the sweep)
@@ -3217,7 +3386,7 @@ export class SessionManager {
         : current.map((session) =>
             session.id === candidate.id ? candidate : session,
           );
-    return this.enqueueRegistryWrite(JSON.stringify(proposed, null, 2) + "\n");
+    return this.enqueueRegistryWrite(serializeSessionRegistry(proposed));
   }
 
   private enqueueRegistryWrite(
@@ -3252,14 +3421,14 @@ export class SessionManager {
       // mutated) or overwrite a successful commit with its old value. Wait,
       // then snapshot the authoritative published map at execution time.
       return this.enqueueRegistryWrite(
-        () => JSON.stringify(this.list(), null, 2) + "\n",
+        () => serializeSessionRegistry(this.list()),
         fence,
       );
     }
     // Outside an identity transaction, capture at call time: queued writes
     // represent the mutation that requested them, not an unrelated later one.
     return this.enqueueRegistryWrite(
-      JSON.stringify(this.list(), null, 2) + "\n",
+      serializeSessionRegistry(this.list()),
     );
   }
 
@@ -3425,6 +3594,7 @@ export class SessionManager {
         | undefined;
       let opts: LaunchOpts;
       let spec: SpawnSpec;
+      let mcpCredentialLaunch: McpCredentialLaunch | undefined;
       try {
         preparedProjectSession =
           agentMapIdentity && this.prepareProjectSession
@@ -3456,14 +3626,15 @@ export class SessionManager {
                 ...(agentMapIdentity ? { agentMapIdentity } : {}),
               }
             : undefined;
-        opts = {
+        const built = await (launchContext
+          ? this.buildLaunchOpts(id, req, launchContext)
+          : this.buildLaunchOpts(id, req));
+        ({ mcpCredentialLaunch, ...opts } = {
           harnessSessionId: id,
           cwd: req.cwd,
           ...(req.initialPrompt ? { initialPrompt: req.initialPrompt } : {}),
-          ...(await (launchContext
-            ? this.buildLaunchOpts(id, req, launchContext)
-            : this.buildLaunchOpts(id, req))),
-        };
+          ...built,
+        });
         spec = adapter.launch(opts);
       } catch (error) {
         // Scope resolution may already have claimed bootstrap ownership, and
@@ -3484,6 +3655,7 @@ export class SessionManager {
           preparedProjectSession?.initialTitle ??
           (basename(req.cwd) || req.cwd),
         status: "starting",
+        mcpAuthState: "not-applicable",
         createdAt: this.now(),
         lastActiveAt: this.now(),
         exitCode: null,
@@ -3516,12 +3688,16 @@ export class SessionManager {
         // "running" — it must never show a bare empty iframe because nothing's
         // been written to .sapiom/canvas/index.html yet.
         await this.ensureCanvasTemplate(session.cwd);
-        await this.spawn(session, spec, () =>
-          this.revalidateAgentMapIdentity(
-            session.id,
-            session.cwd,
-            agentMapIdentity,
-          ),
+        await this.spawn(
+          session,
+          spec,
+          mcpCredentialLaunch,
+          () =>
+            this.revalidateAgentMapIdentity(
+              session.id,
+              session.cwd,
+              agentMapIdentity,
+            ),
         );
         if (session.projectBootstrap) {
           const runtimeEpoch = this.getRuntimeEpoch(session.id);
@@ -3635,6 +3811,7 @@ export class SessionManager {
     session.agentMapIdentity = structuredClone(agentMapIdentity);
     session.lastActiveAt = this.now();
     let spec: SpawnSpec;
+    let mcpCredentialLaunch: McpCredentialLaunch | undefined;
     try {
       const promptAppendix = trusted.promptAppendix?.(id);
       const focusedContext = trusted.focusedContext?.(id);
@@ -3648,11 +3825,13 @@ export class SessionManager {
           : {}),
         agentMapIdentity,
       };
-      const opts: LaunchOpts = {
+      const built = await this.buildLaunchOpts(id, session, context);
+      let opts: LaunchOpts;
+      ({ mcpCredentialLaunch, ...opts } = {
         harnessSessionId: id,
         cwd: session.cwd,
-        ...(await this.buildLaunchOpts(id, session, context)),
-      };
+        ...built,
+      });
       spec = adapter.launch(opts);
     } catch (error) {
       session.status = "exited";
@@ -3665,8 +3844,12 @@ export class SessionManager {
       this.emitStatus(session);
       await this.writeWorkspaceContext(session);
       await this.ensureCanvasTemplate(session.cwd);
-      await this.spawn(session, spec, () =>
-        this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
+      await this.spawn(
+        session,
+        spec,
+        mcpCredentialLaunch,
+        () =>
+          this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
       );
       return session;
     } catch (error) {

@@ -21,6 +21,8 @@ system prompt, in whatever project directory you choose.
   Agent Studio only configures it. The `+` beside a project starts a session at
   that project root; the tab-strip `+` starts a sibling session. Sessions have
   resumable chat history.
+- **Templates** — quick starts, the template gallery, and bundled starters use
+  your selected coding agent.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
   open-in-Sapiom actions. How that discovery is rooted and bounded, how a
@@ -100,6 +102,27 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+### Codex MCP validation
+
+The ordinary unit and server tests cover launch/resume conversion, login and
+credential refresh, logout, and error reporting. To verify actual tool discovery
+with an installed Codex CLI, build the harness's workspace dependencies, then
+run the opt-in test:
+
+```bash
+pnpm --filter "@sapiom/harness^..." build
+RUN_CODEX_MCP_INTEGRATION=1 pnpm --filter @sapiom/harness exec vitest run src/core/adapters/codex-mcp.integration.test.ts
+```
+
+The test runs the `codex` binary found on `PATH`. Set `CODEX_TEST_BINARY` to the
+path of a different installed version to test that one instead.
+
+This test uses a temporary Codex home, the built `sapiom-dev` server, and local
+HTTP fixtures. It requires no Codex login or model request and checks both a
+fresh home and an existing configuration with conflicting server registrations.
+It also checks that command environments exclude MCP credentials and the Electron
+launch flag while preserving unrelated user shell settings.
 
 ### Project sessions and Agent Map bootstrap
 

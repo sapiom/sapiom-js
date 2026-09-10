@@ -18,6 +18,14 @@ The path is five steps:
 If you only remember one thing: **write for the person deciding whether to use this, not
 for the person who built it.** Plain, concrete, second-person. No pitch.
 
+The platform rules a template must respect — which capability calls an LLM, database lifetime,
+trigger kinds, App Link webhooks — are served live at
+<https://api.sapiom.ai/v1/agents/authoring-rules> and are not restated in this guide; where a
+step below touches one, it points at the served section. This guide was
+written against release 1.0 of that text.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+
 ---
 
 ## 1. Develop
@@ -256,9 +264,11 @@ run, and secrets are read at step dispatch.
    order.
 5. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
    must be the exact `ctx.sapiom.*` ids your code actually calls — see
-   [Capability ids](#capability-ids-correctness-not-style). One-shot LLM work uses
-   `llm.run`; managed multi-turn loops use `models.run`, and coding agents use
-   `models.coding`. The runtime path is **not** `llm.generate`.
+   [Capability ids](#capability-ids-correctness-not-style). Which of `llm.run`, `models.run`
+   and `models.coding` a step should call is the served rule
+   ([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface));
+   the manifest names whichever one the code actually calls. The runtime path is **not**
+   `llm.generate`.
 6. **Keep the manifest runnable, not just honest.** The `examples` you list must be real
    `{ input, output }` pairs the code produces — don't invent fields. And `examples[0].input`
    must **produce a terminal run when deployed**: in particular it must not name a resource (a
@@ -466,13 +476,13 @@ A declaration says what a thing **is**, never where it is stored — there is no
 `connectorId`, no `store`, and there never will be. Storage belongs to the resolver, which is what
 lets it change without touching your template.
 
-| Field             | Shows up as                                                                        | Write it as                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resources`       | "Sapiom will provision" in the setup panel, and the cost/lifetime line on the card | The managed things a run creates — a Postgres, a sandbox, a repo, an inbox. Each needs a `kind` and a `handle` (the slug your step code passes to `ctx.sapiom.database.get()`; unique within a template). `duration` is postgres-only, caps at **7d, and there is no renew verb** — if your template needs state that outlives that, say so in `notes` and set `ephemeral: false`. `seed` is read-side only; see below.                             |
-| `requiredSecrets` | The credential dialog on "Use this template"                                       | Only credentials **Sapiom cannot broker** — a Slack token, the customer's own DB. Never a Sapiom API key, never a non-secret value. Each needs `key`, `label`, `provider`; `key` follows process-env rules — not `PATH`, not `SAPIOM_*`, not `WORKFLOWS_*`. Mark `optional: true` only when the run still reaches a terminal state without it and says what it skipped.                                                                             |
-| `settings`        | Ordinary form fields, merged into the run input                                    | Non-secret config — a recipient, a lookback window, a row cap. **This is where a `RECIPIENT` belongs, not the vault**, which can't be listed, validated, or prompted for. `default` is required: a setting without one can't support a zero-interaction run, which is the point.                                                                                                                                                                    |
-| `defaultInput`    | The one-click Run path                                                             | The input a run starts with when the user supplies nothing. Merged **under** the user's input and under `settings` defaults, so an explicit value always wins. **Not the same as `examples[0].input`**, which is documentation and may legitimately hold a repo slug or a live URL that won't work on a fresh tenant. It never overrides your code's own defaults.                                                                                  |
-| `zeroSetup`       | The shelf's "runs with no setup" claim                                             | What an unconfigured run actually reaches: a `terminalState`, optional `expect[]` assertions over the terminal artifact (`nonEmptyArray`, `nonEmptyString`, `minLength`, `matches`, `equals`, `absent`), and a one-sentence `narrative`. Assert that the pattern **demonstrably ran and the output is honest about it** — not that the result is production-grade. The narrative renders verbatim, so it must never imply a send that won't happen. |
+| Field             | Shows up as                                                                        | Write it as                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources`       | "Sapiom will provision" in the setup panel, and the cost/lifetime line on the card | The managed things a run creates — a Postgres, a sandbox, a repo, an inbox. Each needs a `kind` and a `handle` (the slug your step code passes to `ctx.sapiom.database.get()`; unique within a template). `duration` is a legacy postgres-only field the platform no longer reads — a Sapiom Postgres is permanent and metered by slot, per the served rule ([Database lifecycle](https://api.sapiom.ai/v1/agents/authoring-rules#database-lifecycle)); omit it in a new template. `seed` is read-side only; see below. |
+| `requiredSecrets` | The credential dialog on "Use this template"                                       | Only credentials **Sapiom cannot broker** — a Slack token, the customer's own DB. Never a Sapiom API key, never a non-secret value. Each needs `key`, `label`, `provider`; `key` follows process-env rules — not `PATH`, not `SAPIOM_*`, not `WORKFLOWS_*`. Mark `optional: true` only when the run still reaches a terminal state without it and says what it skipped.                                                                                                                                                 |
+| `settings`        | Ordinary form fields, merged into the run input                                    | Non-secret config — a recipient, a lookback window, a row cap. **This is where a `RECIPIENT` belongs, not the vault**, which can't be listed, validated, or prompted for. `default` is required: a setting without one can't support a zero-interaction run, which is the point.                                                                                                                                                                                                                                        |
+| `defaultInput`    | The one-click Run path                                                             | The input a run starts with when the user supplies nothing. Merged **under** the user's input and under `settings` defaults, so an explicit value always wins. **Not the same as `examples[0].input`**, which is documentation and may legitimately hold a repo slug or a live URL that won't work on a fresh tenant. It never overrides your code's own defaults.                                                                                                                                                      |
+| `zeroSetup`       | The shelf's "runs with no setup" claim                                             | What an unconfigured run actually reaches: a `terminalState`, optional `expect[]` assertions over the terminal artifact (`nonEmptyArray`, `nonEmptyString`, `minLength`, `matches`, `equals`, `absent`), and a one-sentence `narrative`. Assert that the pattern **demonstrably ran and the output is honest about it** — not that the result is production-grade. The narrative renders verbatim, so it must never imply a send that won't happen.                                                                     |
 
 #### `seed`: only seed what your template READS
 
@@ -592,9 +602,10 @@ The `capabilities` array and each `steps[].capability` **must be the real `ctx.s
 the source calls.** Mismatches make the gallery advertise a capability the deployed run never
 uses, and skew the estimated cost.
 
-- One-shot LLM work uses **`llm.run`**. Use `models.run` only for a managed
-  multi-turn loop, and `models.coding` for a coding agent. None of these runtime
-  paths is `llm.generate`, a catalog id that reads `coming_soon`.
+- Which of `llm.run`, `models.run` and `models.coding` a step should call is the served
+  rule ([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface));
+  name the one the code calls. None of these runtime paths is `llm.generate`, a catalog id that
+  reads `coming_soon`.
 - Cross-check against `index.ts`: grep for `ctx.sapiom.<x>` and list exactly those ids.
 - Don't add a capability to the array that no step calls.
 
@@ -603,6 +614,10 @@ uses, and skew the estimated cost.
 ## Reading a model reply (correctness, not style)
 
 **Need data back from a model? Declare the shape. Never slice JSON out of prose.**
+
+This is the template-authoring view of the served rule
+([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface));
+if the two ever disagree, the served text wins.
 
 ```ts
 const REVIEW_TOOL = "emit_review";

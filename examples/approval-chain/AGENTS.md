@@ -108,3 +108,13 @@ forward via the `goto(...)` input or `ctx.shared` rather than recomputing them �
 the ledger uses DB-side `now()` for timestamps to stay deterministic across
 retries. The `correlationId` is `ctx.executionId` (stable across every gate), so a
 resume signal always lands on the right run.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.0 of
+that text; `sapiom_dev_agents_check` warns when the served copy differs.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->

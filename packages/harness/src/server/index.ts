@@ -27,6 +27,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import { scaffold } from "@sapiom/agent-core";
+import { credentialsFilePath } from "@sapiom/mcp/auth";
 import { WebSocketServer } from "ws";
 import open from "open";
 
@@ -125,6 +126,7 @@ import { projectAgentPromptAppendix } from "../profiles/project-agent.js";
 import { fetchSystemPromptForActiveEnvironment } from "../profiles/system-prompt-fetch.js";
 import { agentCoreTemplatesDir } from "../core/agent-core-templates.js";
 import { CanvasWatcherManager } from "../core/canvas-watcher.js";
+import { observeCredentialStore } from "../core/credential-store-observer.js";
 import {
   sourceObservationsWithinScope,
   WorkspaceWatcherManager,
@@ -602,7 +604,8 @@ function createDefaultBuildLaunchOpts(
 
     // Reconcile with the shared credential store at the common launch
     // boundary. Create, resume, and background tasks all await this builder.
-    const apiKey = await apiKeyProvider.refresh();
+    await apiKeyProvider.refresh();
+    const { apiKey, generation } = apiKeyProvider.snapshot();
 
     // The served prompt (SAP-2810): loaded per session start, so a backend deploy
     // reaches an install that never upgraded @sapiom/harness. The default loader
@@ -660,6 +663,14 @@ function createDefaultBuildLaunchOpts(
       systemPromptFile,
       ...(context?.agentMapMcp ? { agentMapMcp: context.agentMapMcp } : {}),
       ...(pluginDir ? { pluginDir } : {}),
+      ...(req.harness === "claude-code" || req.harness === "codex"
+        ? {
+            mcpCredentialLaunch: {
+              generation,
+              credentialBearing: apiKey !== null,
+            },
+          }
+        : {}),
       // Set on BOTH channels: the post-ready path hasn't delivered yet, but a
       // brief exists and will, and this is the flag that tells it to.
       ...(brief !== null && rehydrateFrom
@@ -669,6 +680,10 @@ function createDefaultBuildLaunchOpts(
   };
 }
 
+/**
+ * Starts Studio's HTTP server and session lifecycle services.
+ * Call the returned close() method to stop listeners and release resources.
+ */
 export const startServer = async (
   options: HarnessServerOptions,
 ): Promise<HarnessServer> => {
@@ -759,11 +774,8 @@ export const startServer = async (
    *  place the create route may write (see `listProjectDirs` below). */
   const defaultProjectRoot = options.projectRoot ?? launchDir;
 
-  // Serve-time slug enrichment: resolves each workflow's definitionSlug from
-  // the Sapiom Agents API when it's absent (deployed sapiom.json files carry
-  // only { "definitionId": "188" }, not the slug). Constructed once per server
-  // boot; caches successful id→slug resolutions in-memory (ids are stable).
-  // Never throws — a failed resolution leaves definitionSlug as-is.
+  // Serve-time definition enrichment (slug + build status) for linked
+  // workflows. One resolver per boot; never throws.
   const slugResolver = createDefinitionSlugResolver({
     apiKey: () => apiKeyProvider.getKey(),
     baseUrl: resolveAgentsBaseUrl(),
@@ -781,40 +793,73 @@ export const startServer = async (
       unavailable: workflow.definitionId != null,
     },
   });
-  // Auth guards cover individual lookups AND the complete async projection.
-  // Neither raw build fields nor retained display bits are written to disk.
+  /** A definition the account's list does not contain: never requested,
+   *  confirmed not deployed for this account. */
+  const notVisible = (
+    workflow: RegistryWorkflowInfo,
+  ): RegistryWorkflowInfo => ({
+    ...clearDeployment(workflow),
+    definitionAccess: "unavailable",
+    deploymentLookup: { lastConfirmedDeployed: false, unavailable: false },
+  });
+  /** Fill slug + build status for linked workflows from ONE tenant-scoped
+   *  list per pass (SAP-3214). Ids absent from the list are never requested
+   *  (the engine 404s them permanently) and are marked `definitionAccess:
+   *  "unavailable"`. Detail lookup only for a visible definition with no
+   *  ready build: only the detail shows a first deploy's in-flight build (a
+   *  rebuild of a ready definition reports `ready` in both). Signed out or
+   *  list unavailable: build fields cleared, retained display bit kept, no
+   *  per-id fallback. Auth guards cover the list, each lookup AND the complete
+   *  async projection. Neither raw build fields nor retained display bits are
+   *  written to disk. */
   const enrichWorkflows = async (
     workflows: RegistryWorkflowInfo[],
   ): Promise<RegistryWorkflowInfo[]> => {
     const scope = deploymentGeneration;
-    const enriched = await Promise.all(
-      workflows.map(async (workflow) => {
-        const cleared = clearDeployment(workflow);
-        if (workflow.definitionId == null) return cleared;
-        const result = await slugResolver.resolveMetadata(
-          String(workflow.definitionId),
-        );
-        if (scope !== deploymentGeneration) return cleared;
-        if (result.status === "available")
-          return {
-            ...workflow,
-            definitionSlug: result.metadata.slug ?? workflow.definitionSlug,
-            activeBuildRunId: result.metadata.activeBuildRunId,
-            activeBuildRunStatus: result.metadata.activeBuildRunStatus,
-            deploymentLookup: {
-              lastConfirmedDeployed:
-                result.metadata.activeBuildRunStatus === "ready",
-              unavailable: false,
-            },
-          };
+    const cleared = (): RegistryWorkflowInfo[] =>
+      workflows.map(clearDeployment);
+    if (!workflows.some((workflow) => workflow.definitionId != null))
+      return cleared();
+    const list = await slugResolver.listVisible();
+    if (scope !== deploymentGeneration) return cleared();
+    if (list.status === "unavailable")
+      return workflows.map((workflow) => {
+        const row = clearDeployment(workflow);
+        if (workflow.definitionId == null) return row;
         return {
-          ...cleared,
+          ...row,
           deploymentLookup: {
             lastConfirmedDeployed:
-              result.status === "not-found"
-                ? false
-                : result.lastConfirmedDeployed,
-            unavailable: result.status === "unavailable",
+              list.lastConfirmedDeployed.get(String(workflow.definitionId)) ??
+              null,
+            unavailable: true,
+          },
+        };
+      });
+    const enriched = await Promise.all(
+      workflows.map(async (workflow) => {
+        if (workflow.definitionId == null) return clearDeployment(workflow);
+        const definitionId = String(workflow.definitionId);
+        const listed = list.visible.get(definitionId);
+        if (listed === undefined) return notVisible(workflow);
+        let metadata = listed;
+        if (listed.activeBuildRunStatus === null) {
+          const detail = await slugResolver.resolveMetadata(definitionId);
+          if (scope !== deploymentGeneration) return clearDeployment(workflow);
+          if (detail.status === "not-found") return notVisible(workflow);
+          // An unavailable detail changes nothing: the list already proved
+          // visibility and the absence of a ready build.
+          if (detail.status === "available") metadata = detail.metadata;
+        }
+        return {
+          ...workflow,
+          definitionAccess: "visible" as const,
+          definitionSlug: metadata.slug ?? workflow.definitionSlug,
+          activeBuildRunId: metadata.activeBuildRunId,
+          activeBuildRunStatus: metadata.activeBuildRunStatus,
+          deploymentLookup: {
+            lastConfirmedDeployed: metadata.activeBuildRunStatus === "ready",
+            unavailable: false,
           },
         };
       }),
@@ -1308,10 +1353,10 @@ export const startServer = async (
   // Exit-time deletion of generated/<id> (see the onStatusChange handler
   // below) can race a fast resume(): resume regenerates the dir via
   // buildLaunchOpts, and the rm scheduled at the previous exit could still
-  // be in flight. Serialize by awaiting any pending removal for this id
-  // before (re)generating its files.
+  // be in flight. Keep each removal until the next config build: its presence
+  // guards repeated exited broadcasts, and its promise serializes regeneration.
   const generatedRoot = options.generatedRoot ?? statePaths.generated;
-  const pendingGeneratedRemovals = new Map<string, Promise<void>>();
+  const generatedRemovals = new Map<string, Promise<void>>();
 
   /**
    * The git branch the PRIOR session was last on, from whichever adapter
@@ -1441,12 +1486,14 @@ export const startServer = async (
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
     );
+  /** Waits for prior cleanup before preparing this run's files and capabilities. */
   const buildLaunchOpts: LaunchOptsBuilder = async (
     harnessSessionId,
     req,
     context,
   ) => {
-    await pendingGeneratedRemovals.get(harnessSessionId);
+    await generatedRemovals.get(harnessSessionId);
+    generatedRemovals.delete(harnessSessionId);
     // Scope/bootstrap ownership is already resolved; prepare the user's new
     // project before config generation and PTY spawn, never during resume.
     const initialPrompt = context?.resume
@@ -1541,6 +1588,8 @@ export const startServer = async (
       await closeCoordinatorOwnedSubsession.current?.(marker);
     },
     buildLaunchOpts,
+    currentCredentialGeneration: () =>
+      apiKeyProvider.snapshot().generation,
     resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
       const userId = localProjectPrincipal(projectUserId, machineId);
       return serializeProjectScopeResolution(async () => {
@@ -1823,6 +1872,8 @@ export const startServer = async (
     ingestCredentials,
     collectorUrl: options.collectorUrl,
     buildLaunchOpts,
+    currentCredentialGeneration: () =>
+      apiKeyProvider.snapshot().generation,
     onCleanup: (taskId) => {
       void removeGeneratedSessionDir(taskId, { generatedRoot }).catch(
         (err: unknown) => {
@@ -1834,6 +1885,70 @@ export const startServer = async (
   taskManager.onStatusChange((task) => {
     bus.publish({ type: "task.status", task });
   });
+  let credentialRemovalTail: Promise<void> = Promise.resolve();
+  let credentialRemovalInFlight: {
+    generation: number;
+    operation: Promise<void>;
+  } | null = null;
+  const reconcileCredentialRemoval = (): Promise<void> => {
+    const generation = apiKeyProvider.snapshot().generation;
+    if (credentialRemovalInFlight?.generation === generation) {
+      return credentialRemovalInFlight.operation;
+    }
+    // Each distinct removal generation receives a fresh sweep after the prior
+    // one. A newer sign-in can launch work while an older sweep is waiting for
+    // exits, so sharing that older target snapshot would make disconnect lie.
+    const operation = credentialRemovalTail
+      .catch(() => {})
+      .then(() =>
+        Promise.all([
+          sessionManager.terminateCredentialBearingSessions(generation),
+          taskManager.terminateCredentialBearingTasks(generation),
+        ]).then(() => {}),
+      );
+    const tracked = operation.finally(() => {
+      if (credentialRemovalInFlight?.operation === tracked) {
+        credentialRemovalInFlight = null;
+      }
+    });
+    credentialRemovalTail = tracked;
+    credentialRemovalInFlight = { generation, operation: tracked };
+    return tracked;
+  };
+  let credentialStoreObserver: ReturnType<typeof observeCredentialStore> = null;
+  const ensureCredentialStoreObserver = (): void => {
+    if (!authEnabled || credentialStoreObserver) return;
+    credentialStoreObserver = observeCredentialStore(
+      credentialsFilePath(),
+      () => apiKeyProvider.refresh().then(() => {}),
+      {
+        onError: (error) => {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            console.error("[harness] credential store observation failed");
+          }
+        },
+        onUnavailable: () => {
+          // A later key transition re-arms this. Avoid adding an unbounded
+          // watcher retry/fallback loop to the credential lifecycle.
+          credentialStoreObserver = null;
+        },
+      },
+    );
+  };
+  const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
+    ({ apiKey, generation }) => {
+      sessionManager.reconcileMcpCredentialGeneration(generation);
+      if (apiKey !== null) {
+        // First-run sign-in creates the directory after the boot-time watch
+        // attempt. Re-arm on that known transition without a polling fallback.
+        ensureCredentialStoreObserver();
+      } else {
+        void reconcileCredentialRemoval().catch(() => {
+          console.error("[harness] credential removal reconciliation failed");
+        });
+      }
+    },
+  );
 
   // Rolling summary (opt-in, `HarnessSettings.rollingSummary`): folds a live
   // session's record into a ≤500-word summary.md that a later portable
@@ -2063,17 +2178,16 @@ export const startServer = async (
       // The generated config dir is dead once the pty is: every file in it
       // is regenerated by buildLaunchOpts on resume, and the agent's last
       // emit.cjs execution (SessionEnd) happens before its process exits.
+      // Metadata broadcasts can repeat status=exited. Schedule removal once
+      // per lifetime; resume starts its next lifetime before regenerating
+      // configuration and awaits this removal before writing new files.
+      if (generatedRemovals.has(session.id)) return;
       const removal = removeGeneratedSessionDir(session.id, { generatedRoot })
         .then(() => undefined)
         .catch((err: unknown) => {
           console.error("[harness] generated-dir cleanup failed:", err);
-        })
-        .finally(() => {
-          if (pendingGeneratedRemovals.get(session.id) === removal) {
-            pendingGeneratedRemovals.delete(session.id);
-          }
         });
-      pendingGeneratedRemovals.set(session.id, removal);
+      generatedRemovals.set(session.id, removal);
     }
   });
 
@@ -2897,8 +3011,8 @@ export const startServer = async (
   /** Enrich only the bound workflow before a Canvas render. Canvas extraction
    *  needs the registry snapshot to resolve the binding, but its cloud badge
    *  needs the same mutable build projection exposed by /api/state. Limiting
-   *  the lookup to the bound workflow avoids one remote request per linked
-   *  agent on every source-triggered auto-render. */
+   *  the pass to the bound workflow avoids extra detail lookups on every
+   *  source-triggered auto-render. */
   const canvasWorkflowsForSession = async (
     session: Pick<HarnessSession, "boundWorkflowPath">,
   ): Promise<WorkflowInfo[]> => {
@@ -3024,57 +3138,43 @@ export const startServer = async (
     };
   });
 
-  // Boot-time retention sweep: keeps events.ndjson within the 50 MB / 30-day
-  // caps even on long-lived installs. Runs through the store's exclusive queue
-  // so the sweep's read→filter→rename window never races a concurrent append.
-  // Fire-and-forget — a slow FS is no reason to delay server startup.
-  const runNdjsonSweep = (): void => {
-    void eventStore
-      .runExclusive(() => sweepNdjson(eventStorePath))
-      .catch((err: unknown) => {
-        console.error("[harness] events.ndjson retention sweep failed:", err);
+  // Bound archive work per pass and run passes one at a time. Remaining work
+  // or a read/write failure skips cleanup; the next timer tick retries the
+  // conversations that are not yet archived.
+  let recordMaintenance = Promise.resolve();
+  // Session-exit sweeps can evict archives between passes. Remember completed
+  // writes until event cleanup succeeds, so a large backfill makes progress.
+  const archivedDuringBackfill = new Set<string>();
+  const runRecordMaintenance = (): Promise<void> => {
+    recordMaintenance = recordMaintenance.then(async () => {
+      const { archived, complete } = await backfillSessionRecords({
+        conversationIds: async () => (await sessionRecordReader.conversationIds())
+          .filter((id) => !archivedDuringBackfill.has(id)),
+        readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
+        archive: recordArchive,
+        isLiveSession: (id) => {
+          const session = sessionManager.get(id);
+          return session !== undefined && session.status !== "exited";
+        },
       });
-  };
-  runNdjsonSweep();
-  const ndjsonRetentionTimer = setInterval(
-    runNdjsonSweep,
-    NDJSON_RETENTION_SWEEP_MS,
-  );
-  ndjsonRetentionTimer.unref?.();
-
-  // One boot-time pass that archives conversations the log still holds but the
-  // archive doesn't, then sweeps the archive's own caps. This is what covers the
-  // two cases archiving-at-exit can't: a harness that was force-killed (no exit
-  // transition, no session.end), and every session that ended before this
-  // existed — whose history would otherwise vanish at its 30-day mark.
-  //
-  // It races the ndjson sweep queued above, and deliberately doesn't wait for
-  // it: reads run outside the store's exclusive queue by design (see store.ts),
-  // and either order is correct here — win the race and the record is archived
-  // from bytes retention was about to delete, lose it and the record is archived
-  // from what survived. Both beat not archiving it.
-  //
-  // Fire-and-forget: boot must not wait on it. The cost is one full index build
-  // (~130 ms against a 50 MB log), which the first history open would have paid
-  // anyway.
-  const recordBackfill = backfillSessionRecords({
-    conversationIds: () => sessionRecordReader.conversationIds(),
-    readFromEvents: (id) => sessionRecordReader.readFromEvents(id),
-    archive: recordArchive,
-    isLiveSession: (harnessSessionId) => {
-      const session = sessionManager.get(harnessSessionId);
-      return session !== undefined && session.status !== "exited";
-    },
-    onCapped: (remaining) => {
-      console.error(
-        `[harness] session record backfill hit its per-boot cap; ${remaining} conversation(s) left for the next boot`,
-      );
-    },
-  })
-    .then(() => recordArchive.sweep())
-    .catch((err: unknown) => {
-      console.error("[harness] session record backfill failed:", err);
+      for (const id of archived) archivedDuringBackfill.add(id);
+      if (!complete) {
+        console.warn("[harness] archive backfill reached its limit; keeping source events until the next pass");
+        return;
+      }
+      await recordArchive.sweep();
+      // The exclusive queue also protects retention's read/filter/rename from
+      // concurrent event appends.
+      await eventStore.runExclusive(() => sweepNdjson(eventStorePath));
+      archivedDuringBackfill.clear();
+    }).catch((err: unknown) => {
+      console.error("[harness] session record maintenance failed:", err);
     });
+    return recordMaintenance;
+  };
+  void runRecordMaintenance();
+  const ndjsonRetentionTimer = setInterval(runRecordMaintenance, NDJSON_RETENTION_SWEEP_MS);
+  ndjsonRetentionTimer.unref?.();
 
   const harnessVersion = readVersion();
   const batcher = createHarnessEmitter({
@@ -4315,6 +4415,7 @@ export const startServer = async (
           void agentMapMcp?.revokeSession(session.id);
         }
       },
+      onCredentialRemoved: reconcileCredentialRemoval,
     }),
   );
 
@@ -4594,6 +4695,10 @@ export const startServer = async (
     },
   ]);
 
+  if (authEnabled) {
+    ensureCredentialStoreObserver();
+  }
+
   let serverClose: Promise<void> | null = null;
   const closeServer = (): Promise<void> => {
     if (serverClose) return serverClose;
@@ -4610,6 +4715,8 @@ export const startServer = async (
         }
       };
 
+      credentialStoreObserver?.close();
+      unsubscribeCredentialChanges();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
@@ -4663,7 +4770,7 @@ export const startServer = async (
         await registrationClosing;
         await settle(() => sessionManager.flush());
         await settle(async () => {
-          await recordBackfill;
+          await recordMaintenance;
           while (pendingRecordArchives.size > 0) {
             await Promise.all([...pendingRecordArchives]);
           }

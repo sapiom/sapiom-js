@@ -8490,6 +8490,11 @@ button.system-graph-node.is-navigable:focus-visible {
   .right-pane-tab {
     padding: 3px var(--sp2);
   }
+
+  /* "Agent Map" shortens to "Map" rather than stacking its two words. */
+  .right-pane-tab-qualifier {
+    display: none;
+  }
 }
 
 /* Segmented control row — same --pane-header-h as the brand header and
@@ -8516,6 +8521,7 @@ button.system-graph-node.is-navigable:focus-visible {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
+  white-space: nowrap;
   transition:
     background-color var(--transition-fast),
     color var(--transition-fast),

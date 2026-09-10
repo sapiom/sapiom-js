@@ -119,11 +119,12 @@ export interface LlmRunSpec {
    */
   request: Record<string, unknown>;
   /**
-   * Routing label (e.g. `"smart"`, `"small"`, `"medium"`, `"large"`). The
-   * gateway resolves it against its configured label set — a raw provider
-   * model id is never honored. Omit to let the gateway choose (the
-   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
-   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
+   * Routing label, resolved by the gateway against its configured label set —
+   * a raw provider model id is never honored. Omit it (recommended) to let the
+   * gateway choose; pass `"small"`/`"medium"`/`"large"` only to pick a billing
+   * class deliberately. The full rule, with the worked example, is the served
+   * platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
+   * (written against release 1.0).
    */
   model?: RoutingLabel;
   /**
@@ -170,11 +171,12 @@ export interface LlmSubmitSpec {
    */
   request: Record<string, unknown>;
   /**
-   * Routing label (e.g. `"smart"`, `"small"`, `"medium"`, `"large"`). The
-   * gateway resolves it against its configured label set — a raw provider
-   * model id is never honored. Omit to let the gateway choose (the
-   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
-   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
+   * Routing label, resolved by the gateway against its configured label set —
+   * a raw provider model id is never honored. Omit it (recommended) to let the
+   * gateway choose; pass `"small"`/`"medium"`/`"large"` only to pick a billing
+   * class deliberately. The full rule, with the worked example, is the served
+   * platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
+   * (written against release 1.0).
    */
   model?: RoutingLabel;
   /**
