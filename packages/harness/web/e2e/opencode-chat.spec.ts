@@ -227,6 +227,7 @@ test.beforeEach(async ({ page }) => {
           id: userId,
           sessionID: id,
           role: "user",
+          agent: "build",
           time: { created: Date.now() },
         },
         parts: [
