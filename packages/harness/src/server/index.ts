@@ -195,6 +195,7 @@ import {
 } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
+import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -706,6 +707,7 @@ export const startServer = async (
     harnessVersion: readVersion(),
     getApiKey: () => apiKeyProvider.getKey(),
   });
+  const openCodeBridge = new OpenCodeBridge(assistantAccess);
 
   // Mutable auth state — seeded from the boot-time identity and updated by the
   // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
@@ -3529,6 +3531,7 @@ export const startServer = async (
 
   const app: Express = express();
   app.disable("x-powered-by");
+  app.use("/opencode-runtime", openCodeBridge.router);
 
   // Everything under /api requires the boot token; mounted as middleware
   // (not a router) so it also gates the workflows/macros routers below,
@@ -4256,6 +4259,7 @@ export const startServer = async (
       credentialStoreObserver?.close();
       unsubscribeCredentialChanges();
       assistantAccess.close();
+      openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
