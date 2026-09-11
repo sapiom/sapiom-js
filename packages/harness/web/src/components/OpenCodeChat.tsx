@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -246,7 +252,7 @@ function ChatSurface({
   const ready = useOpenCodeThreadState(
     (s) => s.sessionId === conversationId && s.loadState.type === "ready",
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!ready) return;
     composer.setText(draft.text);
     return composer.subscribe(() => {

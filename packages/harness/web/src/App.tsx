@@ -297,13 +297,16 @@ export const App = (): JSX.Element => {
     createGraphViewportStore,
     [harness.authRevision],
   );
+  const [assistantAuthorityRevision, setAssistantAuthorityRevision] = useState<
+    string | null
+  >(null);
   // Draft text belongs to a principal + Studio session, not to whichever
   // centre-pane branch happens to be mounted. An auth barrier replaces this
   // whole store; an app reload intentionally drops it rather than persisting
   // sensitive, unsent text.
   const assistantDrafts = useMemo<ChatDraftStore>(
     () => new Map(),
-    [harness.authRevision, harness.bootToken],
+    [assistantAuthorityRevision, harness.authRevision, harness.bootToken],
   );
   // Successful session deletion removes its keyed draft. Exited sessions stay
   // in state (and keep their draft) until the user actually closes them.
@@ -3323,6 +3326,8 @@ export const App = (): JSX.Element => {
                   bootToken={harness.bootToken}
                   authRevision={harness.authRevision}
                   drafts={assistantDrafts}
+                  authorityRevision={assistantAuthorityRevision}
+                  onAuthorityRevision={setAssistantAuthorityRevision}
                   terminalRevision={
                     harness.terminalRevealBySession.get(conversationSession.id) ??
                     0
@@ -3415,6 +3420,8 @@ export const App = (): JSX.Element => {
                       bootToken={harness.bootToken}
                       authRevision={harness.authRevision}
                       drafts={assistantDrafts}
+                      authorityRevision={assistantAuthorityRevision}
+                      onAuthorityRevision={setAssistantAuthorityRevision}
                       terminalRevision={
                         harness.terminalRevealBySession.get(
                           conversationSession.id,

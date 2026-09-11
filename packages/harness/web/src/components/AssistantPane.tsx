@@ -12,6 +12,8 @@ export function AssistantPane({
   authRevision,
   terminalRevision,
   drafts,
+  authorityRevision,
+  onAuthorityRevision,
   children,
 }: {
   sessionId: string;
@@ -19,9 +21,18 @@ export function AssistantPane({
   authRevision: number;
   terminalRevision: number;
   drafts: ChatDraftStore;
+  authorityRevision: string | null;
+  onAuthorityRevision: (revision: string) => void;
   children: ReactNode;
 }) {
-  const [enabled, setEnabled] = useState(false);
+  const [access, setAccess] = useState<{
+    enabled: boolean;
+    authorityRevision: string;
+  } | null>(null);
+  // An enabled response cannot mount chat until App has adopted the same
+  // opaque authority barrier and replaced the principal-scoped draft map.
+  const enabled =
+    access?.enabled === true && access.authorityRevision === authorityRevision;
   const [mode, setMode] = useState<"Terminal" | "Assistant">("Terminal");
   const draft = useMemo(() => {
     const entry = drafts.get(sessionId) ?? { text: "" };
@@ -41,10 +52,12 @@ export function AssistantPane({
     let expiry: ReturnType<typeof setTimeout>;
     const disable = () => {
       clearTimeout(expiry);
-      setEnabled(false);
+      setAccess((current) =>
+        current ? { ...current, enabled: false } : current,
+      );
       setMode("Terminal");
     };
-    setEnabled(false);
+    setAccess(null);
     setMode("Terminal");
     const refresh = async () => {
       try {
@@ -57,12 +70,21 @@ export function AssistantPane({
         if (abort.signal.aborted) return;
         if (response.status === 401 || response.status === 403) disable();
         if (!response.ok) throw new Error("Access check unavailable");
-        const { enabled: allowed } = await response.json();
+        const { enabled: allowed, authorityRevision: nextAuthorityRevision } =
+          await response.json();
         if (abort.signal.aborted) return;
-        if (typeof allowed !== "boolean")
+        if (
+          typeof allowed !== "boolean" ||
+          typeof nextAuthorityRevision !== "string" ||
+          nextAuthorityRevision.length === 0
+        )
           throw new Error("Invalid access check");
         clearTimeout(expiry);
-        setEnabled(allowed);
+        onAuthorityRevision(nextAuthorityRevision);
+        setAccess({
+          enabled: allowed,
+          authorityRevision: nextAuthorityRevision,
+        });
         if (allowed) expiry = setTimeout(disable, 60000);
         else setMode("Terminal");
       } catch {
@@ -80,7 +102,7 @@ export function AssistantPane({
       clearTimeout(timer);
       clearTimeout(expiry);
     };
-  }, [bootToken, authRevision]);
+  }, [bootToken, authRevision, onAuthorityRevision]);
 
   return (
     <div className="studio-conversation">
@@ -106,7 +128,7 @@ export function AssistantPane({
       <div className="studio-conversation-body">
         {enabled && mode === "Assistant" ? (
           <OpenCodeChat
-            key={sessionId}
+            key={`${authorityRevision}:${sessionId}`}
             harnessSessionId={sessionId}
             bootToken={bootToken}
             draft={draft}

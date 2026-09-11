@@ -16,6 +16,7 @@ type Conversation = {
 let server: Server;
 let origin: string;
 let enabled: boolean;
+let accessAuthorityRevision: string;
 let failAttach: boolean;
 let failMetadata: boolean;
 let holdHistory: boolean;
@@ -49,6 +50,7 @@ function finish(id: string, suffix: string) {
 test.beforeEach(async ({ page }) => {
   conversations.clear();
   enabled = true;
+  accessAuthorityRevision = "authority-a";
   failAttach = false;
   failMetadata = false;
   holdHistory = false;
@@ -197,7 +199,10 @@ test.beforeEach(async ({ page }) => {
   });
   await page.route("**/api/assistant/access", (route) => {
     accessCalls++;
-    return route.fulfill({ status: failAccess ? 503 : 200, json: { enabled } });
+    return route.fulfill({
+      status: failAccess ? 503 : 200,
+      json: { enabled, authorityRevision: accessAuthorityRevision },
+    });
   });
   await page.route("**/opencode/**", (route) =>
     route.continue({
@@ -475,13 +480,19 @@ test("surfaces a rejected prompt POST and reconnects without replaying it", asyn
   expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
 });
 
-test("retains the draft during a failed access poll but applies explicit revocation", async ({
+test("retains the draft across stable and failed access polls but clears it at a disabled authority barrier", async ({
   page,
 }) => {
   await page.clock.install();
   await openAssistant(page);
   const input = page.getByRole("textbox", { name: "Message Assistant" });
   await input.fill("An unsent draft");
+
+  const beforeStablePoll = accessCalls;
+  await page.clock.fastForward(16000);
+  await expect.poll(() => accessCalls).toBeGreaterThan(beforeStablePoll);
+  await expect(input).toHaveValue("An unsent draft");
+
   const before = accessCalls;
   failAccess = true;
   await page.clock.fastForward(16000);
@@ -490,11 +501,42 @@ test("retains the draft during a failed access poll but applies explicit revocat
   expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
   failAccess = false;
   enabled = false;
+  accessAuthorityRevision = "authority-retired";
   await page.clock.fastForward(16000);
   await expect(
     page.getByRole("group", { name: "Conversation view" }),
   ).toHaveCount(0);
   await expect(page.locator(".harness-terminal")).toBeVisible();
+
+  // Repeated disabled observations retain the same barrier. Readmission uses
+  // a new authority epoch, and neither can recover the retired draft.
+  const beforeDisabledPoll = accessCalls;
+  await page.clock.fastForward(16000);
+  await expect.poll(() => accessCalls).toBeGreaterThan(beforeDisabledPoll);
+  enabled = true;
+  accessAuthorityRevision = "authority-readmitted";
+  await page.clock.fastForward(16000);
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(input).toHaveValue("");
+});
+
+test("clears a draft on a direct enabled authority crossover without an auth event", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("Principal A private draft");
+
+  const before = accessCalls;
+  accessAuthorityRevision = "authority-b";
+  await page.clock.fastForward(16000);
+  await expect.poll(() => accessCalls).toBeGreaterThan(before);
+
+  // authRevision is deliberately unchanged: the access epoch alone must swap
+  // the App-owned store before the enabled Principal B chat can mount.
+  await expect(input).toHaveValue("");
+  expect(conversations.get("ses_sess_boot")!.prompts).toEqual([]);
 });
 
 test("expires the cached UI capability after sixty seconds without a successful poll", async ({
