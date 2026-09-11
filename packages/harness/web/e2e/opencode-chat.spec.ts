@@ -14,6 +14,8 @@ type Conversation = {
   }>;
   streams: Set<Response>;
   prompts: string[];
+  busy: boolean;
+  recoveries: string[];
 };
 let server: Server;
 let origin: string;
@@ -34,6 +36,8 @@ const historyReplies: Array<() => void> = [];
 let routeCalls: number;
 const conversations = new Map<string, Conversation>();
 const emit = (c: Conversation, type: string, properties: object) => {
+  if (type === "session.status")
+    c.busy = (properties as any).status.type !== "idle";
   for (const stream of c.streams)
     stream.write(`data: ${JSON.stringify({ type, properties })}\n\n`);
 };
@@ -92,7 +96,14 @@ test.beforeEach(async ({ page }) => {
     const id = `ses_${req.params.studioId.replaceAll("-", "_")}`;
     let c = conversations.get(id);
     if (!c) {
-      c = { id, turns: [], streams: new Set(), prompts: [] };
+      c = {
+        id,
+        turns: [],
+        streams: new Set(),
+        prompts: [],
+        busy: false,
+        recoveries: [],
+      };
       conversations.set(id, c);
     }
     const path = req.params[0];
@@ -131,7 +142,7 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === "session/status") {
-      res.json({ [id]: { type: "idle" } });
+      res.json({ [id]: { type: c.busy ? "busy" : "idle" } });
       return;
     }
     if (path === "event") {
@@ -142,6 +153,9 @@ test.beforeEach(async ({ page }) => {
       res.type("text/event-stream").flushHeaders();
       c.streams.add(res);
       res.write('data: {"type":"server.connected","properties":{}}\n\n');
+      res.write(
+        `data: ${JSON.stringify({ type: "session.status", properties: { sessionID: id, status: { type: c.busy ? "busy" : "idle" } } })}\n\n`,
+      );
       res.once("close", () => c!.streams.delete(res));
       return;
     }
@@ -294,6 +308,38 @@ async function openAssistant(page: Page) {
   await expect(
     page.getByRole("textbox", { name: "Message Assistant" }),
   ).toBeEnabled();
+}
+
+function endWithoutAnswer(c: Conversation) {
+  const preamble = c.turns.at(-1)!;
+  preamble.info.finish = "tool-calls";
+  preamble.info.time.completed = Date.now();
+  const tool = {
+    id: "prt_tool",
+    sessionID: c.id,
+    messageID: preamble.info.id,
+    type: "tool",
+    callID: "call_read",
+    tool: "read",
+    state: {
+      status: "completed",
+      input: { filePath: "README.md" },
+      output: "# OpenCode playground",
+      title: "README.md",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    },
+  };
+  preamble.parts.push(tool);
+  emit(c, "message.updated", { info: preamble.info });
+  emit(c, "message.part.updated", { part: tool });
+  const final = {
+    info: { ...preamble.info, id: "msg_empty", agent: "build", finish: "stop" },
+    parts: [],
+  };
+  c.turns.push(final);
+  emit(c, "message.updated", { info: final.info });
+  emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
 }
 
 test("defaults to Terminal and keeps Assistant unavailable when access is off", async ({
