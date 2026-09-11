@@ -39,6 +39,7 @@ import {
   type WorkflowScanOutcome,
 } from "./api";
 import { unavailableWorkflowDeployment } from "./workflow-deployment";
+import { macroNeedsReadySession } from "./macro-actions";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
 import { projectToOpen } from "./project-tree";
@@ -345,6 +346,8 @@ export interface HarnessStateHook {
    * by showing the reason inline rather than as a toast.
    */
   injectInput: (sessionId: string, text: string) => Promise<void>;
+  /** Reveal app-driven foreground PTY work in the matching conversation pane. */
+  terminalRevealBySession: Map<string, number>;
   /** Expose the toast setter so panels can push their own toasts. Defaults
    *  to the "error" tone; callers announcing a result opt into "info". */
   showToast: (message: string, tone?: ToastTone) => void;
@@ -474,6 +477,14 @@ export function useHarnessState(): HarnessStateHook {
     new WorkflowProjectionOrder<WorkflowInfo>(),
   ).current;
   const [authRevision, setAuthRevision] = useState(0);
+  const [terminalRevealBySession, setTerminalRevealBySession] = useState(
+    () => new Map<string, number>(),
+  );
+  const revealTerminal = useCallback((sessionId: string) => {
+    setTerminalRevealBySession((previous) =>
+      new Map(previous).set(sessionId, (previous.get(sessionId) ?? 0) + 1),
+    );
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -2109,8 +2120,15 @@ export function useHarnessState(): HarnessStateHook {
 
   const runMacro = useCallback(
     async (id: string, req: RunMacroRequest): Promise<void> => {
+      const macro = state?.macros.find((candidate) => candidate.id === id);
       try {
         await api.runMacro(id, req);
+        if (
+          macro &&
+          macroNeedsReadySession(macro) &&
+          macro.execution !== "background"
+        )
+          revealTerminal(req.harnessSessionId);
       } catch (err) {
         // App.tsx fires this without awaiting — surface failures as a toast
         // instead of an invisible unhandled rejection (which is exactly how
@@ -2125,7 +2143,7 @@ export function useHarnessState(): HarnessStateHook {
         );
       }
     },
-    [],
+    [revealTerminal, state?.macros],
   );
 
   // Deploy via the direct route: stream build status to the toast, then refresh
@@ -2351,8 +2369,9 @@ export function useHarnessState(): HarnessStateHook {
   const injectInput = useCallback(
     async (sessionId: string, text: string): Promise<void> => {
       await api.injectInput(sessionId, { text, submit: true });
+      revealTerminal(sessionId);
     },
-    [],
+    [revealTerminal],
   );
 
   const showToast = useCallback(
@@ -2424,6 +2443,7 @@ export function useHarnessState(): HarnessStateHook {
     startProdRun,
     runLocal,
     injectInput,
+    terminalRevealBySession,
     showToast,
     lastDeployErrorFor,
     deployStateByPath,

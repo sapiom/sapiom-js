@@ -10,7 +10,7 @@ name: Harness
 # status checks). Keep the paths list in sync if the harness gains a new
 # workspace dependency; the current closure is:
 #   harness -> agent, agent-core, agent-runtime, analytics-core, mcp,
-#              sandbox-preview, tools
+#              sandbox-preview, tools, opencode
 on:
   pull_request:
     types: [opened, synchronize, reopened, stacked]
@@ -23,6 +23,7 @@ on:
       - "packages/agent-runtime/**"
       - "packages/analytics-core/**"
       - "packages/mcp/**"
+      - "packages/opencode/**"
       - "packages/sandbox-preview/**"
       - "packages/tools/**"
       - "pnpm-lock.yaml"
@@ -40,6 +41,7 @@ on:
       - "packages/agent-runtime/**"
       - "packages/analytics-core/**"
       - "packages/mcp/**"
+      - "packages/opencode/**"
       - "packages/sandbox-preview/**"
       - "packages/tools/**"
       - "pnpm-lock.yaml"

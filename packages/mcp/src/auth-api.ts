@@ -14,6 +14,7 @@ export {
   clearCredentials,
   credentialsFilePath,
   type CredentialEntry,
+  type StudioCredentials,
   type EnvironmentConfig,
   type CredentialsFile,
   type ResolvedEnvironment,
