@@ -114,6 +114,22 @@ describe("Studio user credentials", () => {
     expect(await readFile(store.path, "utf8")).toContain("srt_old");
   });
 
+  it.each([
+    [new Response("private diagnostic", { status: 503 }), "transient"],
+    [new TypeError("private network diagnostic"), "transient"],
+    [new Response("private diagnostic", { status: 429 }), "rejected"],
+  ])(
+    "classifies only network and 5xx refresh failures as transient",
+    async (failure, kind) => {
+      if (failure instanceof Response) fetchMock.mockResolvedValue(failure);
+      else fetchMock.mockRejectedValue(failure);
+      await expect(refreshStudioCredentials(env)).rejects.toMatchObject({
+        kind,
+      });
+      expect(await readFile(store.path, "utf8")).toContain("srt_old");
+    },
+  );
+
   it("waits for an existing Studio credential mutation before reading", async () => {
     let release!: () => void;
     let locked!: () => void;
