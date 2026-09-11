@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { HostedOpenCode } from "./opencode-host.js";
+import {
+  OpenCodeTransportError,
+  type HostedOpenCode,
+} from "./opencode-host.js";
+import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 
 export const isConversationId = (id: unknown): id is string =>
@@ -52,14 +56,45 @@ export class OpenCodeAssociations {
         !isConversationId(saved.conversationId) ||
         saved.conversationId === hosted.harnessSessionId
       )
-        throw new Error("Assistant conversation association is invalid");
+        throw new OpenCodeTransportError(
+          openCodeTransportFailure("native_history_missing"),
+        );
       // Missing history is an error, never permission to silently replace it.
-      const session = await hosted.server.fetchJson<{ id: string }>(
-        `/session/${saved.conversationId}`,
-        { signal },
-      );
+      let response: Response;
+      try {
+        response = await hosted.server.fetch(
+          `/session/${saved.conversationId}`,
+          { signal },
+        );
+      } catch {
+        if (signal.reason instanceof OpenCodeTransportError)
+          throw signal.reason;
+        throw new OpenCodeTransportError(
+          openCodeTransportFailure("transport_unavailable"),
+        );
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new OpenCodeTransportError(
+          openCodeTransportFailure(
+            response.status === 404
+              ? "native_history_missing"
+              : "transport_unavailable",
+          ),
+        );
+      }
+      let session: { id?: unknown };
+      try {
+        session = (await response.json()) as { id?: unknown };
+      } catch {
+        throw new OpenCodeTransportError(
+          openCodeTransportFailure("transport_unavailable"),
+        );
+      }
       if (session.id !== saved.conversationId)
-        throw new Error("Assistant conversation is unavailable");
+        throw new OpenCodeTransportError(
+          openCodeTransportFailure("transport_unavailable"),
+        );
       return saved.conversationId;
     }
     const session = await hosted.server.fetchJson<{ id: string }>("/session", {
