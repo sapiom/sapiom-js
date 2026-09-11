@@ -258,7 +258,7 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * error. The failure carries the engine's pause-timeout error; it is an engine
  * state on the run, not a symbol this package exports.
  *
- * A pause on a **dispatched child agent** needs no `timeoutMs`. Its result comes
+ * A pause on a **child agent launched now** needs no `timeoutMs`. Its result comes
  * back through stored parent linkage rather than a resume token, so it is not
  * bounded by the TTL the default rests on, and the engine waives the deadline for
  * as long as the child is alive. That waiver is narrow: it covers a dispatch that
@@ -266,8 +266,13 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * reaches a terminal state or its run no longer exists, at which point the
  * ordinary deadline applies again.
  *
- * So set `timeoutMs` for what the default does not fit: a human gate expected to
- * outlive a week, or any wait that should give up sooner. `run_local` neither
+ * A **child scheduled with `at`** does not get that waiver. Its parent's deadline
+ * runs from the scheduled time instead of the pause, which covers the wait until
+ * the child starts but not the child's own run, so pass an explicit `timeoutMs`
+ * when a scheduled child can take more than a week once it begins.
+ *
+ * Otherwise set `timeoutMs` for what the default does not fit: a human gate
+ * expected to outlive a week, or any wait that should give up sooner. `run_local` neither
  * applies nor enforces any of this: it auto-resumes every pause immediately, with
  * the registered capability result or an empty payload, so a local run never sits
  * at a gate and never times out.
