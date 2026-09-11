@@ -538,9 +538,12 @@ export class DurableFileLock {
     token: string,
   ): Promise<StoredCleanupProof | null> {
     if (!cleanupFilePattern.test(path.basename(proofPath))) return null;
-    const root = path.dirname(lockPath);
-    const relativePath = path.relative(root, proofPath);
-    if (!isContainedPath(root, proofPath)) return null;
+    const root = path.resolve(path.dirname(lockPath));
+    const resolvedProofPath = path.resolve(proofPath);
+    const rootPrefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+    if (!resolvedProofPath.startsWith(rootPrefix)) return null;
+    const relativePath = path.relative(root, resolvedProofPath);
+    if (!isContainedPath(root, resolvedProofPath)) return null;
     const cleanupProof = { relativePath, token };
     const resolved = await this.resolveCleanupProof(lockPath, cleanupProof);
     if (resolved === null) return null;
@@ -566,8 +569,10 @@ export class DurableFileLock {
       !cleanupFilePattern.test(path.basename(proof.relativePath))
     )
       return null;
-    const root = path.dirname(lockPath);
+    const root = path.resolve(path.dirname(lockPath));
     const proofPath = path.resolve(root, proof.relativePath);
+    const rootPrefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+    if (!proofPath.startsWith(rootPrefix)) return null;
     if (!isContainedPath(root, proofPath)) return null;
     try {
       const [realRoot, realParent] = await Promise.all([
