@@ -75,6 +75,27 @@ describe("emitEvent", () => {
     ).resolves.toEqual(RECEIPT);
   });
 
+  // `EmitEventOptions` binds TypeScript callers, but this ships as a published
+  // package and a JS caller reaches the same function with nothing to stop them.
+  // The server rejects these too, so the value here is the local, named error
+  // instead of a round-trip and an opaque HTTP_400.
+  it.each([
+    ["an array", [{ leadId: "l_42" }]],
+    ["a scalar", 42],
+    ["a string", "lead.created"],
+    ["null", null],
+    ["undefined", undefined],
+  ])(
+    "rejects %s passed straight to emitEvent, before the wire",
+    async (_label, payload) => {
+      const { client, calls } = fakeClient();
+      await expect(
+        emitEvent({ type: "lead.created", payload: payload as never }, client),
+      ).rejects.toMatchObject({ code: "BAD_PAYLOAD" });
+      expect(calls).toEqual([]);
+    },
+  );
+
   // `JSON.stringify` turns a non-finite number into `null`, so the server's own
   // non-finite rejection would see a null and pass it — the receipt records a
   // value the sender never wrote. This has to fail before serialization.

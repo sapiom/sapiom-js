@@ -36,8 +36,11 @@ export interface EmitEventOptions {
   /**
    * Event data. Must be a top-level JSON object: it becomes the top layer of
    * the run-input fold, folded over each matched trigger's configured `input`
-   * (the payload wins on a key conflict), and the merge treats a non-object as
-   * absent — so an array would start a run with its data silently dropped.
+   * (the payload wins on a key conflict). An array or a scalar is a 400 — the
+   * server gates the shape precisely because the fold would otherwise treat a
+   * non-object as absent and start a run with the data dropped. `emitEvent`
+   * checks the same rule locally so a JS caller gets the answer without the
+   * round-trip.
    */
   payload: Record<string, unknown>;
   /**
@@ -93,6 +96,13 @@ export async function emitEvent(
   opts: EmitEventOptions,
   client: GatewayClient,
 ): Promise<EmitEventResult> {
+  // Re-checked here, not just in the parse helpers: `EmitEventOptions` binds
+  // TypeScript callers, but this is a published package and a JS caller reaches
+  // the same function with no type to stop them. The server does reject a
+  // non-object payload, so nothing is lost either way — this just turns a
+  // round-trip and an opaque HTTP_400 into the same BAD_PAYLOAD the CLI and the
+  // MCP already raise.
+  const payload = asEventPayload(opts.payload);
   // The one check that CANNOT be left to the server, and the reason this
   // otherwise-passthrough function validates at all. `JSON.parse('{"a":1e400}')`
   // yields `Infinity` with no error; the `JSON.stringify` on the way out has no
@@ -101,7 +111,7 @@ export async function emitEvent(
   // nothing wrong — the receipt would record a null the sender never wrote.
   // Every other rule stays the engine's; this one has to run before the
   // serialization that destroys the evidence.
-  const nonFinite = findNonFinitePath(opts.payload);
+  const nonFinite = findNonFinitePath(payload);
   if (nonFinite) {
     throw new AgentOperationError({
       code: "BAD_PAYLOAD",
@@ -110,7 +120,7 @@ export async function emitEvent(
   }
   return client.post<EmitEventResult>("/events", {
     type: opts.type,
-    payload: opts.payload,
+    payload,
     // Omit rather than send `id: undefined`: the route runs a whitelisting
     // validation pipe, so a declared-but-empty field is not the same as an
     // absent one, and absent is what "let the server mint a UUID" means.
@@ -147,12 +157,14 @@ function findNonFinitePath(value: unknown, at = "payload"): string | null {
 }
 
 /**
- * Narrow an already-decoded value to an event payload. The object check lives
- * here rather than in each caller because it is the same rule everywhere and
- * it is not obvious: an array or a scalar is valid JSON that the server
- * accepts at the envelope and the run-input fold then treats as ABSENT, so the
- * run starts with the data silently dropped. Rejecting at the call site is the
- * lesser evil.
+ * Narrow an already-decoded value to an event payload. One rule in one place:
+ * `emitEvent`, `parseEventPayload` and the MCP tool all land here, so a JS
+ * caller, a `--payload` string and a tool argument get the same answer.
+ *
+ * The rule is not arbitrary. An array or a scalar is valid JSON, and the
+ * run-input fold treats a non-object as ABSENT — a run would start with its
+ * data dropped. The server gates the shape for exactly that reason and 400s;
+ * this check just moves the same verdict to the call site, before the wire.
  *
  * Separate from `parseEventPayload` because a caller may already hold a value
  * rather than a string — an MCP tool argument, for instance — and re-encoding
