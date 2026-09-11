@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { OpenCodeShutdownError } from "@sapiom/opencode";
 import type { AssistantGrant } from "./assistant-access.js";
 import { OpenCodeHost, OpenCodeTransportError } from "./opencode-host.js";
@@ -26,6 +26,10 @@ const revoke = vi.fn();
 const close = vi.fn();
 const issue = vi.fn();
 const neverExited = new Promise<void>(() => {});
+const cleanupProofFor = (stateRoot: string, hex: string) => ({
+  path: join(stateRoot, `cleanup-${hex.repeat(32)}.json`),
+  token: hex.repeat(64),
+});
 beforeEach(async () => {
   expectShutdownFailure = false;
   root = await mkdtemp(join(tmpdir(), "studio-opencode-host-"));
@@ -107,12 +111,11 @@ describe("Studio-owned OpenCode lifecycle", () => {
   });
 
   it("durably protects the runtime identity before accepting native launch", async () => {
-    const cleanupProof = {
-      path: join(root, "runtime-cleanup.json"),
-      token: "synthetic-proof-token",
-    };
+    let cleanupProof: ReturnType<typeof cleanupProofFor> | undefined;
     start.mockImplementationOnce(async (options) => {
       expect(options.beforeLaunch).toEqual(expect.any(Function));
+      await mkdir(options.stateRoot, { recursive: true });
+      cleanupProof = cleanupProofFor(options.stateRoot, "a");
       await options.beforeLaunch!({
         pid: process.pid,
         cleanupProof,
@@ -124,7 +127,14 @@ describe("Studio-owned OpenCode lifecycle", () => {
       expect(guardName).toBeDefined();
       expect(
         JSON.parse(await readFile(join(runtimeRoot, guardName!), "utf8")),
-      ).toMatchObject({ pid: process.pid, cleanupProof });
+      ).toMatchObject({
+        version: 2,
+        pid: process.pid,
+        cleanupProof: {
+          relativePath: relative(runtimeRoot, cleanupProof.path),
+          token: cleanupProof.token,
+        },
+      });
       return {
         pid: process.pid,
         exited: neverExited,
@@ -134,6 +144,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
       };
     });
     close.mockImplementationOnce(async () => {
+      if (!cleanupProof) throw new Error("missing cleanup proof");
       await writeFile(
         cleanupProof.path,
         `${JSON.stringify({ status: "complete", token: cleanupProof.token })}\n`,
@@ -147,12 +158,10 @@ describe("Studio-owned OpenCode lifecycle", () => {
 
   it("sanitizes rejected runtime protection and releases it for explicit retry", async () => {
     start.mockImplementationOnce(async (options) => {
+      await mkdir(options.stateRoot, { recursive: true });
       await options.beforeLaunch!({
         pid: 0,
-        cleanupProof: {
-          path: join(root, "invalid-cleanup.json"),
-          token: "synthetic-proof-token",
-        },
+        cleanupProof: cleanupProofFor(options.stateRoot, "b"),
       });
       throw new Error("unreachable");
     });
@@ -169,12 +178,11 @@ describe("Studio-owned OpenCode lifecycle", () => {
   });
 
   it("aborts a pending protection before a late authority can launch native", async () => {
-    const cleanupProof = {
-      path: join(root, "retired-cleanup.json"),
-      token: "retired-proof-token",
-    };
+    let cleanupProof: ReturnType<typeof cleanupProofFor> | undefined;
     let nativeLaunchAdmitted = false;
     start.mockImplementationOnce(async (options) => {
+      await mkdir(options.stateRoot, { recursive: true });
+      cleanupProof = cleanupProofFor(options.stateRoot, "c");
       const protection = options.beforeLaunch!({
         pid: process.pid,
         cleanupProof,
@@ -192,6 +200,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
       };
     });
     close.mockImplementationOnce(async () => {
+      if (!cleanupProof) throw new Error("missing cleanup proof");
       await writeFile(
         cleanupProof.path,
         `${JSON.stringify({ status: "complete", token: cleanupProof.token })}\n`,
