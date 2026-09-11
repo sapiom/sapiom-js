@@ -705,6 +705,11 @@ export const App = (): JSX.Element => {
   // Lifted so the telemetry chip in the session bar can open the settings
   // popover from outside SessionBar's own gear button.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const signInForAssistant = useCallback(() => {
+    void harness.startAuth().catch((error) => {
+      harness.showToast(errorMessage(error, "Could not start sign-in."));
+    });
+  }, [harness.showToast, harness.startAuth]);
   // Right tab is part of the held arrangement: restored on reload.
   // Guard against a stored value for a tab that no longer exists ("skills",
   // and now "code" — its snippets moved to the deploy surface) — fall back to
@@ -3328,9 +3333,12 @@ export const App = (): JSX.Element => {
                   drafts={assistantDrafts}
                   authorityRevision={assistantAuthorityRevision}
                   onAuthorityRevision={setAssistantAuthorityRevision}
+                  onSignIn={signInForAssistant}
+                  onOpenSettings={() => setSettingsOpen(true)}
                   terminalRevision={
-                    harness.terminalRevealBySession.get(conversationSession.id) ??
-                    0
+                    harness.terminalRevealBySession.get(
+                      conversationSession.id,
+                    ) ?? 0
                   }
                 >
                   <DeadSessionPane
@@ -3422,6 +3430,8 @@ export const App = (): JSX.Element => {
                       drafts={assistantDrafts}
                       authorityRevision={assistantAuthorityRevision}
                       onAuthorityRevision={setAssistantAuthorityRevision}
+                      onSignIn={signInForAssistant}
+                      onOpenSettings={() => setSettingsOpen(true)}
                       terminalRevision={
                         harness.terminalRevealBySession.get(
                           conversationSession.id,
