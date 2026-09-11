@@ -73,6 +73,18 @@ export interface PauseUntilSignalDirective {
     readonly name: string;
     readonly correlationId?: string;
   };
+  /**
+   * Deadline for the signal, in ms from the moment the pause is recorded.
+   * Omitted, the hosted engine applies its default pause deadline of 7 days.
+   * A pause that receives no signal by its deadline is finalized as failed
+   * rather than parking forever, with the engine's pause-timeout error on the
+   * run (not an export of this package). Pass an explicit value for a wait
+   * that must run longer or give up sooner; a pause on a dispatched child
+   * agent needs none (see `pauseUntilSignal`).
+   *
+   * `run_local` neither applies nor enforces this: it auto-resumes every pause
+   * immediately, so the deadline is only observable against the hosted engine.
+   */
   readonly timeoutMs?: number;
   /** Step to run when the signal arrives. Defaults to the paused step. */
   readonly resumeStep?: string;
@@ -189,6 +201,7 @@ export interface Pause<Resume extends string> {
   readonly kind: typeof DIRECTIVE_KIND.PAUSE_UNTIL_SIGNAL;
   readonly signal: { readonly name: string; readonly correlationId?: string };
   readonly resumeStep?: Resume;
+  /** Deadline for the signal, in ms. Omitted, the hosted engine applies its 7-day default (see `pauseUntilSignal`). */
   readonly timeoutMs?: number;
   /** Optional audit output recorded for the pausing step. */
   readonly output?: unknown;
@@ -237,6 +250,32 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * Both are consumed as `return pauseUntilSignal(...)` from an async `run()`, so
  * async-return flattening makes the sync/async distinction invisible at the call
  * site.
+ *
+ * **A hosted pause has a deadline.** `timeoutMs` sets it; omitted, the hosted
+ * engine applies its default of 7 days, the capability resume-token TTL. If no
+ * signal arrives by then the run is finalized as failed rather than parking
+ * forever, so a lost webhook or a dropped capability result surfaces as an
+ * error. The failure carries the engine's pause-timeout error; it is an engine
+ * state on the run, not a symbol this package exports.
+ *
+ * A pause on a **child agent launched now** needs no `timeoutMs`. Its result comes
+ * back through stored parent linkage rather than a resume token, so it is not
+ * bounded by the TTL the default rests on, and the engine waives the deadline for
+ * as long as the child is alive. That waiver is narrow: it covers a dispatch that
+ * is still pending or waiting on the parent, and stops the moment the child
+ * reaches a terminal state or its run no longer exists, at which point the
+ * ordinary deadline applies again.
+ *
+ * A **child scheduled with `at`** does not get that waiver. Its parent's deadline
+ * runs from the scheduled time instead of the pause, which covers the wait until
+ * the child starts but not the child's own run, so pass an explicit `timeoutMs`
+ * when a scheduled child can take more than a week once it begins.
+ *
+ * Otherwise set `timeoutMs` for what the default does not fit: a human gate
+ * expected to outlive a week, or any wait that should give up sooner. `run_local` neither
+ * applies nor enforces any of this: it auto-resumes every pause immediately, with
+ * the registered capability result or an empty payload, so a local run never sits
+ * at a gate and never times out.
  */
 export function pauseUntilSignal<const Resume extends string>(args: {
   signal: string;

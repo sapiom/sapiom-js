@@ -54,6 +54,16 @@ const APPROVAL_SIGNAL = "approval.decision";
 /** The signal a candidate fires to accept or decline a provisional offer. */
 const CONFIRM_SIGNAL = "candidate.confirm";
 
+/**
+ * Explicit deadline for a human gate, one year. A pause with no `timeoutMs`
+ * inherits the engine's 7-day default, and a lapsed deadline *terminates* the
+ * run rather than resuming it, so the default would hard-fail any approval
+ * slower than a week. It stays a terminal deadline: an approval that outlives
+ * the year is failed too. The year is picked so no realistic approver reaches
+ * it, while an abandoned gate still lands in a terminal state.
+ */
+const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
+
 // ─────────────────────────────────────────────────────────────── shapes ──
 /** String-only config bag (matches how templates receive their `config`). */
 type Config = Record<string, string>;
@@ -417,6 +427,7 @@ const notifyApprover = defineStep({
       signal: APPROVAL_SIGNAL,
       resumeStep: "onDecision",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });
@@ -495,11 +506,16 @@ const offer = defineStep({
       index,
     });
 
-    // Suspend at $0 until this candidate confirms (or a timeout fires the signal).
+    // Suspend at $0 until this candidate confirms. Moving on when a candidate
+    // goes quiet is driven by the signal, not by `timeoutMs`: something external
+    // fires `candidate.confirm` with `{ decision: "timeout" }` and `resolve`
+    // advances to the next candidate. The deadline below is only the terminal
+    // backstop, it fails the run rather than delivering that payload.
     return pauseUntilSignal({
       signal: CONFIRM_SIGNAL,
       resumeStep: "resolve",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });
