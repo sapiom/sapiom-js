@@ -71,6 +71,9 @@ selected project. Returning to a session reopens its OpenCode conversation;
 switching views detaches the display while execution continues. Connection errors
 offer **Reconnect**, which reloads history without resending accepted prompts.
 This first slice includes basic tool status; richer controls arrive separately.
+An unconfirmed response keeps the answer and tool results visible as **Stopped**.
+Studio hides its internal completion markers even if the model supplies an
+incorrect turn ID.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
 keyed by authenticated principal and Studio session above the centre pane, so it

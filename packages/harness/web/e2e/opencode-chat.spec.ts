@@ -425,6 +425,51 @@ test("hides a footer split across text parts when the native turn is interrupted
   expect(c.prompts).toHaveLength(1);
 });
 
+for (const position of ["prefix", "footer"]) {
+  test(`hides a mismatched recovery ${position} while preserving Stopped after history restoration`, async ({
+    page,
+  }) => {
+    await openAssistant(page);
+    const input = page.getByRole("textbox", { name: "Message Assistant" });
+    await input.fill("Read the README and explain what's here.");
+    await input.press("Enter");
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    useCompletionContract(c);
+    endWithoutAnswer(c);
+    await expect.poll(() => c.recoveries.length).toBe(1);
+    const marker =
+      "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished -->";
+    const answer =
+      "The README describes a project for testing Studio Assistant.";
+    recoveryReply!(
+      position === "prefix" ? `${marker}\n${answer}` : `${answer}\n\n${marker}`,
+    );
+    useCompletionContract(c);
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await expect(status).toHaveText("Stopped");
+    await expect(page.getByText(answer, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("studio-result:", { exact: false }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("read · Complete", { exact: true }),
+    ).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(status).toHaveText("Stopped");
+    await expect(page.getByText(answer, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("studio-result:", { exact: false }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("note")).toContainText(
+      "Completion was not confirmed",
+    );
+    expect(c.recoveries).toHaveLength(1);
+    expect(c.prompts).toHaveLength(1);
+  });
+}
+
 for (const recovered of [true, false]) {
   test(`continues a preamble-only native stop once and then shows ${recovered ? "Finished" : "Stopped"}`, async ({
     page,
