@@ -6,9 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   OpenCodeAccessError,
+  OpenCodeTransportError,
   type HostedOpenCode,
 } from "../core/opencode-host.js";
 import { createOpenCodeRouter } from "./opencode.js";
+import { openCodeTransportFailure } from "../shared/opencode-errors.js";
+import { scopedOpenCodeEvent } from "./opencode-events.js";
 
 let root: string;
 let origin: string;
@@ -98,6 +101,7 @@ beforeEach(async () => {
       cwd: root,
       stateRoot,
       signal: abort.signal,
+      isCurrent: () => !abort.signal.aborted,
       server: {
         pid: 123,
         exited: new Promise<void>(() => {}),
@@ -314,15 +318,163 @@ describe("Studio-scoped OpenCode transport", () => {
     sessions.delete(id);
     router = createOpenCodeRouter({ ensure }, "boot-token");
     const missing = await request("studio-a/attach", { method: "POST" });
-    expect(missing.status).toBe(502);
-    expect(await missing.text()).not.toContain("private native diagnostics");
+    expect(missing.status).toBe(410);
+    expect(await missing.json()).toEqual({
+      error: openCodeTransportFailure("native_history_missing"),
+    });
     await writeFile(
       join(hosts.get("studio-a")!.stateRoot, "association.json"),
       '{"version":1,"conversationId":"studio-a"}',
     );
-    expect((await request("studio-a/attach", { method: "POST" })).status).toBe(
-      502,
-    );
+    const corrupt = await request("studio-a/attach", { method: "POST" });
+    expect(corrupt.status).toBe(410);
+    expect(await corrupt.json()).toEqual({
+      error: openCodeTransportFailure("native_history_missing"),
+    });
     expect(created).toBe(1);
+  });
+
+  it("returns exact typed access and startup failures without exposing diagnostics", async () => {
+    ensure.mockRejectedValueOnce(
+      new OpenCodeAccessError(
+        "private credential detail",
+        "authentication_required",
+      ),
+    );
+    const authentication = await request("studio-a/attach", {
+      method: "POST",
+    });
+    expect(authentication.status).toBe(401);
+    expect(await authentication.json()).toEqual({
+      error: openCodeTransportFailure("authentication_required"),
+    });
+    ensure.mockRejectedValueOnce(
+      new OpenCodeAccessError("private authority detail", "access_expired"),
+    );
+    const expired = await request("studio-a/attach", { method: "POST" });
+    expect(expired.status).toBe(403);
+    expect(await expired.json()).toEqual({
+      error: openCodeTransportFailure("access_expired"),
+    });
+    ensure.mockRejectedValueOnce(
+      new OpenCodeTransportError(
+        openCodeTransportFailure(
+          "runtime_start_failed",
+          "executable-not-found",
+        ),
+      ),
+    );
+    const startup = await request("studio-a/attach", { method: "POST" });
+    expect(startup.status).toBe(503);
+    expect(await startup.json()).toEqual({
+      error: openCodeTransportFailure(
+        "runtime_start_failed",
+        "executable-not-found",
+      ),
+    });
+    expect(created).toBe(0);
+  });
+
+  it.each(["access_expired", "runtime_exited"] as const)(
+    "emits a typed terminal event on %s and never submits work",
+    async (code) => {
+      await attach();
+      const response = await request("studio-a/event");
+      const reader = response.body!.getReader();
+      await readUntil(reader, '"busy"');
+      aborts
+        .get("studio-a")!
+        .abort(
+          new OpenCodeTransportError(
+            code === "access_expired"
+              ? openCodeTransportFailure("access_expired")
+              : openCodeTransportFailure("runtime_exited"),
+          ),
+        );
+      const terminal = await readUntil(reader, '"studio.error"');
+      expect(terminal).toContain(`"code":"${code}"`);
+      expect(await reader.read()).toEqual({ done: true, value: undefined });
+      expect(
+        requests.filter((item) =>
+          /prompt_async|final-response/.test(item.path),
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("drops native-spoofed, conflicting, unscoped, and stale terminal events", async () => {
+    const id = await attach();
+    const response = await request("studio-a/event");
+    const reader = response.body!.getReader();
+    await readUntil(reader, '"busy"');
+    const auth = {
+      type: "session.error",
+      properties: {
+        error: {
+          name: "ProviderAuthError",
+          data: { providerID: "sapiom", message: "private" },
+        },
+      },
+    };
+    const scope = { cwd: root, isCurrent: () => true };
+    for (const event of [
+      {
+        type: "studio.error",
+        properties: openCodeTransportFailure("access_denied"),
+      },
+      auth,
+      { directory: "/different", payload: auth },
+      {
+        ...auth,
+        properties: {
+          ...auth.properties,
+          sessionID: id,
+          part: { sessionID: "ses_secret" },
+        },
+      },
+      {
+        directory: root,
+        payload: {
+          ...auth,
+          properties: {
+            ...auth.properties,
+            sessionID: "ses_foreign",
+          },
+        },
+      },
+      {
+        directory: root,
+        payload: {
+          ...auth,
+          properties: {
+            ...auth.properties,
+            sessionID: id,
+            info: { sessionID: "ses_foreign" },
+          },
+        },
+      },
+    ])
+      expect(scopedOpenCodeEvent(event, id, scope)).toBeNull();
+    expect(
+      scopedOpenCodeEvent({ directory: root, payload: auth }, id, {
+        cwd: root,
+        isCurrent: () => false,
+      }),
+    ).toBeNull();
+    streams[0].write(
+      `data: ${JSON.stringify({
+        type: "message.part.delta",
+        properties: { sessionID: id, delta: "still-scoped" },
+      })}\n\n`,
+    );
+    const visible = await readUntil(reader, "still-scoped");
+    expect(visible).not.toContain("studio.error");
+    streams[0].write(
+      `data: ${JSON.stringify({ directory: root, payload: auth })}\n\n`,
+    );
+    const terminal = await readUntil(reader, "studio.error");
+    expect(terminal).toContain('"code":"authentication_required"');
+    expect(terminal).not.toContain("private");
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
   });
 });

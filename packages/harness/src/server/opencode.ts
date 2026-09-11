@@ -4,11 +4,15 @@ import {
   isConversationId,
 } from "../core/opencode-association.js";
 import {
-  OpenCodeAccessError,
+  OpenCodeTransportError,
   type OpenCodeHost,
 } from "../core/opencode-host.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import { streamOpenCodeEvents } from "./opencode-events.js";
+import {
+  openCodeTransportFailure,
+  type OpenCodeTransportFailure,
+} from "../shared/opencode-errors.js";
 
 export function createOpenCodeRouter(
   host: Pick<OpenCodeHost, "ensure">,
@@ -94,7 +98,7 @@ export function createOpenCodeRouter(
         return;
       }
       if (path === "event") {
-        await streamOpenCodeEvents(hosted.server, nativeId, res, signal);
+        await streamOpenCodeEvents(hosted, nativeId, res, signal);
         return;
       }
       const nativePath =
@@ -110,12 +114,14 @@ export function createOpenCodeRouter(
       });
       if (!upstream.ok) {
         await upstream.body?.cancel();
-        res
-          .status(upstream.status === 404 ? 404 : 502)
-          .json({
-            error:
-              "Assistant request failed. Refresh the conversation and retry.",
-          });
+        sendFailure(
+          res,
+          openCodeTransportFailure(
+            upstream.status === 404 && conversation
+              ? "native_history_missing"
+              : "transport_unavailable",
+          ),
+        );
         return;
       }
       if (upstream.status === 204) {
@@ -136,12 +142,12 @@ export function createOpenCodeRouter(
       else res.json(data);
     } catch (error) {
       if (!res.headersSent && !res.destroyed)
-        res
-          .status(error instanceof OpenCodeAccessError ? 403 : 502)
-          .json({
-            error:
-              "Assistant is unavailable. Check Studio sign-in and workspace access, then retry.",
-          });
+        sendFailure(
+          res,
+          error instanceof OpenCodeTransportError
+            ? error.failure
+            : openCodeTransportFailure("transport_unavailable"),
+        );
       else res.destroy();
     } finally {
       disconnected.abort();
@@ -149,6 +155,18 @@ export function createOpenCodeRouter(
     }
   }
   return router;
+}
+
+function sendFailure(res: Response, failure: OpenCodeTransportFailure): void {
+  const status =
+    failure.code === "authentication_required"
+      ? 401
+      : failure.code === "access_denied" || failure.code === "access_expired"
+        ? 403
+        : failure.code === "native_history_missing"
+          ? 410
+          : 503;
+  res.status(status).json({ error: failure });
 }
 
 function validPrompt(value: unknown): boolean {

@@ -1,6 +1,10 @@
 import { once } from "node:events";
 import type { Response } from "express";
-import type { OpenCodeServer } from "@sapiom/opencode";
+import {
+  OpenCodeTransportError,
+  type HostedOpenCode,
+} from "../core/opencode-host.js";
+import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -11,10 +15,20 @@ const record = (value: unknown): Record<string, unknown> =>
 export function scopedOpenCodeEvent(
   value: unknown,
   id: string,
+  scope?: { cwd: string; isCurrent: () => boolean },
 ): Record<string, unknown> | null {
   const envelope = record(value);
   const event = record(envelope.payload ?? value);
   const properties = record(event.properties);
+  if (scope && !scope.isCurrent()) return null;
+  if (
+    scope &&
+    envelope.payload !== undefined &&
+    envelope.directory !== undefined &&
+    envelope.directory !== scope.cwd
+  )
+    return null;
+  if (event.type === "studio.error") return null;
   if (event.type === "server.connected" || event.type === "server.heartbeat")
     return { type: event.type, properties: {} };
   const info = record(properties.info);
@@ -30,6 +44,20 @@ export function scopedOpenCodeEvent(
   )
     ids.push(info.id);
   const present = ids.filter((value) => value !== undefined);
+  if (
+    event.type === "session.error" &&
+    record(properties.error).name === "ProviderAuthError" &&
+    record(record(properties.error).data).providerID === "sapiom" &&
+    ((present.length > 0 && present.every((value) => value === id)) ||
+      (present.length === 0 &&
+        scope &&
+        envelope.payload !== undefined &&
+        envelope.directory === scope.cwd))
+  )
+    return {
+      type: "studio.error",
+      properties: openCodeTransportFailure("authentication_required"),
+    };
   return present.length > 0 && present.every((value) => value === id)
     ? event
     : null;
@@ -37,12 +65,12 @@ export function scopedOpenCodeEvent(
 
 /** Buffer at most one incomplete frame; never collect the complete response. */
 export async function streamOpenCodeEvents(
-  server: OpenCodeServer,
+  hosted: HostedOpenCode,
   id: string,
   res: Response,
   signal: AbortSignal,
 ): Promise<void> {
-  const upstream = await server.fetch("/event", {
+  const upstream = await hosted.server.fetch("/event", {
     signal,
     headers: { Accept: "text/event-stream" },
   });
@@ -64,7 +92,7 @@ export async function streamOpenCodeEvents(
   };
   let statusSeen = false;
   // Start after subscribing; never overwrite a newer native status with this snapshot.
-  void server
+  void hosted.server
     .fetchJson<Record<string, unknown>>("/session/status", {
       signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
     })
@@ -103,16 +131,48 @@ export async function streamOpenCodeEvents(
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (!data) continue;
-        const event = scopedOpenCodeEvent(JSON.parse(data), id);
+        const event = scopedOpenCodeEvent(JSON.parse(data), id, hosted);
         if (!event) continue;
         if (event.type === "session.status" || event.type === "session.idle")
           statusSeen = true;
         await write(event);
+        if (event.type === "studio.error") {
+          res.end();
+          return;
+        }
       }
       if (pending.length > maxFrame)
         throw new Error("Assistant event is too large");
     }
+    if (
+      signal.reason instanceof OpenCodeTransportError &&
+      !res.destroyed &&
+      !res.writableEnded
+    ) {
+      res.write(
+        `data: ${JSON.stringify({
+          type: "studio.error",
+          properties: signal.reason.failure,
+        })}\n\n`,
+      );
+    }
     res.end();
+  } catch (error) {
+    if (
+      signal.reason instanceof OpenCodeTransportError &&
+      !res.destroyed &&
+      !res.writableEnded
+    ) {
+      res.write(
+        `data: ${JSON.stringify({
+          type: "studio.error",
+          properties: signal.reason.failure,
+        })}\n\n`,
+      );
+      res.end();
+      return;
+    }
+    throw error;
   } finally {
     await reader.cancel().catch(() => {});
   }
