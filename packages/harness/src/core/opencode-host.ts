@@ -209,14 +209,16 @@ export class OpenCodeHost {
   private async workspace(id: string): Promise<OpenCodeWorkspace> {
     const workspace = await this.options.authorize(id);
     if (!workspace || workspace.harnessSessionId !== id)
-      throw new Error("This Studio workspace is unavailable");
+      throw new OpenCodeAccessError("This Studio workspace is unavailable");
     return { harnessSessionId: id, cwd: await realpath(workspace.cwd) };
   }
 
   private async validate(entry: Managed): Promise<void> {
     const workspace = await this.workspace(entry.workspace.harnessSessionId);
     if (workspace.cwd !== entry.workspace.cwd)
-      throw new Error("This Studio workspace changed. Please retry.");
+      throw new OpenCodeAccessError(
+        "This Studio workspace changed. Please retry.",
+      );
     const grant = this.options.access.get();
     if (
       this.closed ||
