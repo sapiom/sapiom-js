@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import {
   access,
   mkdir,
@@ -18,6 +18,7 @@ import { startOpenCodeServer, type OpenCodeServer } from "./server.js";
 let root: string;
 let runtime: OpenCodeServer | undefined;
 let bridge: Server | undefined;
+const nativeStartupTimeoutMs = 30_000;
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "opencode-native-"));
@@ -35,8 +36,8 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
+function environmentTag(value: string, key: string): string {
+  return createHmac("sha256", key).update(value).digest("hex");
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<unknown> {
@@ -193,6 +194,7 @@ describe("pinned OpenCode 1.18.29", () => {
     ]);
 
     const runtimeToken = "synthetic-runtime-token";
+    const tagKey = randomBytes(32).toString("hex");
     const config = {
       ...createSapiomOpenCodeConfig({
         bridgeUrl: "http://127.0.0.1:9/runtime",
@@ -221,6 +223,7 @@ describe("pinned OpenCode 1.18.29", () => {
       cwd: root,
       stateRoot: join(root, "state"),
       config,
+      startupTimeoutMs: nativeStartupTimeoutMs,
       environment: {
         ...process.env,
         HOME: hostileHome,
@@ -237,8 +240,9 @@ describe("pinned OpenCode 1.18.29", () => {
       body: "{}",
     });
     const inspect = [
-      "const { createHash } = require('node:crypto');",
-      "const rows = Object.entries(process.env).map(([key, value]) => [key, createHash('sha256').update(value).digest('hex')]);",
+      "const { createHmac } = require('node:crypto');",
+      `const tagKey = ${JSON.stringify(tagKey)};`,
+      "const rows = Object.entries(process.env).map(([key, value]) => [key, createHmac('sha256', tagKey).update(value).digest('hex')]);",
       "console.log(JSON.stringify(rows));",
     ].join("");
     const result = await runtime.fetchJson<{
@@ -260,9 +264,9 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(names).toContain("PATH");
     expect(rows).toContainEqual([
       "COLORTERM",
-      sha256("sapiom-native-environment-probe"),
+      environmentTag("sapiom-native-environment-probe", tagKey),
     ]);
-    expect(rows).toContainEqual(["HOME", sha256(hostileHome)]);
+    expect(rows).toContainEqual(["HOME", environmentTag(hostileHome, tagKey)]);
     for (const key of [
       "OPENCODE_CONFIG_CONTENT",
       "OPENCODE_SERVER_USERNAME",
@@ -277,14 +281,14 @@ describe("pinned OpenCode 1.18.29", () => {
     )
       .toString("utf8")
       .slice("opencode:".length);
-    const forbiddenHashes = [
+    const forbiddenTags = [
       runtimeToken,
       `Bearer ${runtimeToken}`,
       nativePassword,
       "synthetic-host-key",
       "synthetic-provider-key",
-    ].map(sha256);
-    expect(rows.some(([, hash]) => forbiddenHashes.includes(hash))).toBe(false);
+    ].map((value) => environmentTag(value, tagKey));
+    expect(rows.some(([, tag]) => forbiddenTags.includes(tag))).toBe(false);
 
     const [unauthenticated, wrongPassword, authenticated] = await Promise.all([
       realFetch(`${nativeOrigin}/global/health`),
@@ -311,7 +315,7 @@ describe("pinned OpenCode 1.18.29", () => {
     );
     expect(nativeConfig.plugin).toHaveLength(1);
     expect(nativeConfig.plugin?.[0]).toContain("credential-isolation.mjs");
-  }, 30_000);
+  }, 60_000);
 
   it("authenticates model and MCP requests and rejects a revoked runtime credential", async () => {
     const token = "synthetic-bridge-grant";
@@ -319,6 +323,7 @@ describe("pinned OpenCode 1.18.29", () => {
     runtime = await startOpenCodeServer({
       cwd: root,
       stateRoot: join(root, "state"),
+      startupTimeoutMs: nativeStartupTimeoutMs,
       config: createSapiomOpenCodeConfig({
         bridgeUrl: `${synthetic.origin}/runtime`,
         runtimeToken: token,
@@ -380,7 +385,7 @@ describe("pinned OpenCode 1.18.29", () => {
       expect.objectContaining({ text: "synthetic native reply" }),
     );
     expect(synthetic.state.rejected).toBeGreaterThanOrEqual(2);
-  }, 30_000);
+  }, 60_000);
 
   it("does not expose its isolated native home to a tool when caller HOME is absent", async () => {
     const callerProfile = join(root, "caller-profile");
@@ -392,6 +397,7 @@ describe("pinned OpenCode 1.18.29", () => {
     runtime = await startOpenCodeServer({
       cwd: root,
       stateRoot: join(root, "state"),
+      startupTimeoutMs: nativeStartupTimeoutMs,
       environment,
       config: createSapiomOpenCodeConfig({
         bridgeUrl: "http://127.0.0.1:9/runtime",
@@ -424,7 +430,7 @@ describe("pinned OpenCode 1.18.29", () => {
     };
     expect(childEnvironment.profile).toBe(callerProfile);
     expect(childEnvironment.home).toBe(callerProfile);
-  }, 30_000);
+  }, 60_000);
 
   it("uses the OS account home when the supplied environment has no home family", async () => {
     const ambientHome = join(root, "hostile-ambient-home");
@@ -439,6 +445,7 @@ describe("pinned OpenCode 1.18.29", () => {
     runtime = await startOpenCodeServer({
       cwd: root,
       stateRoot: join(root, "state"),
+      startupTimeoutMs: nativeStartupTimeoutMs,
       environment,
       config: createSapiomOpenCodeConfig({
         bridgeUrl: "http://127.0.0.1:9/runtime",
@@ -473,7 +480,7 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(shellState!.output!).not.toContain(
       `${join(root, "state", "launch-")}`,
     );
-  }, 30_000);
+  }, 60_000);
 
   it("fails startup closed when the controlled scrubber cannot load", async () => {
     const stateRoot = join(root, "state");

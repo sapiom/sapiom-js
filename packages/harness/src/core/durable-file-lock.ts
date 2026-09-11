@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -48,16 +49,44 @@ export interface DurableFileLockOptions {
   processGuard?: "required";
 }
 
-interface ProcessGuard extends DurableFileLockProcessIdentity {
-  ownerId: string;
-  version: 1;
+interface StoredCleanupProof {
+  relativePath: string;
+  token: string;
 }
+
+interface ProcessGuard {
+  birthId?: string;
+  cleanupProof: StoredCleanupProof;
+  ownerId: string;
+  pid: number;
+  version: 2;
+}
+
+const ownerIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const cleanupFilePattern = /^cleanup-[0-9a-f]{32}\.json$/;
+const cleanupTokenPattern = /^[0-9a-f]{64}$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const hasExactKeys = (value: Record<string, unknown>, keys: string[]) =>
   Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+
+const isSafeOwnerId = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value !== "." &&
+  value !== ".." &&
+  ownerIdPattern.test(value);
+
+const isContainedPath = (root: string, candidate: string): boolean => {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== "" &&
+    !path.isAbsolute(relative) &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`)
+  );
+};
 
 const sameOwner = (
   left: DurableFileLockOwner | null,
@@ -203,12 +232,16 @@ export class DurableFileLock {
         return Promise.reject(this.failure());
       return serialize(async () => {
         if (releaseStarted) throw this.failure();
-        this.validateIdentity(identity);
+        const cleanupProof = await this.validateIdentity(lockPath, identity);
         const guardPath = this.guardPath(lockPath, owner);
         const guard: ProcessGuard = {
           ownerId: owner.ownerId,
-          version: 1,
-          ...identity,
+          version: 2,
+          pid: identity.pid,
+          ...(identity.birthId === undefined
+            ? {}
+            : { birthId: identity.birthId }),
+          cleanupProof,
         };
         await this.writeAtomic(guardPath, guard);
         try {
@@ -227,19 +260,30 @@ export class DurableFileLock {
     return release;
   }
 
-  private validateIdentity(identity: DurableFileLockProcessIdentity): void {
+  private async validateIdentity(
+    lockPath: string,
+    identity: DurableFileLockProcessIdentity,
+  ): Promise<StoredCleanupProof> {
     if (
       !Number.isSafeInteger(identity.pid) ||
       identity.pid <= 0 ||
-      (identity.birthId !== undefined && !identity.birthId) ||
+      (identity.birthId !== undefined &&
+        (typeof identity.birthId !== "string" || !identity.birthId)) ||
       !isRecord(identity.cleanupProof) ||
       !hasExactKeys(identity.cleanupProof, ["path", "token"]) ||
       typeof identity.cleanupProof.path !== "string" ||
       !path.isAbsolute(identity.cleanupProof.path) ||
       typeof identity.cleanupProof.token !== "string" ||
-      identity.cleanupProof.token.length < 16
+      !cleanupTokenPattern.test(identity.cleanupProof.token)
     )
       throw this.failure();
+    const cleanupProof = await this.externalCleanupProof(
+      lockPath,
+      identity.cleanupProof.path,
+      identity.cleanupProof.token,
+    );
+    if (cleanupProof === null) throw this.failure();
+    return cleanupProof;
   }
 
   private async tryCreate(
@@ -315,8 +359,7 @@ export class DurableFileLock {
           "pid",
           ...(guarded ? ["state", "version"] : []),
         ]) ||
-        typeof decoded.ownerId !== "string" ||
-        !decoded.ownerId ||
+        !isSafeOwnerId(decoded.ownerId) ||
         !Number.isSafeInteger(decoded.pid) ||
         (decoded.pid as number) <= 0 ||
         (decoded.birthId !== undefined &&
@@ -359,30 +402,32 @@ export class DurableFileLock {
           "version",
         ]) ||
         decoded.ownerId !== owner.ownerId ||
-        decoded.version !== 1 ||
+        decoded.version !== 2 ||
         !Number.isSafeInteger(decoded.pid) ||
         (decoded.pid as number) <= 0 ||
         (decoded.birthId !== undefined &&
           (typeof decoded.birthId !== "string" || !decoded.birthId)) ||
         !isRecord(decoded.cleanupProof) ||
-        !hasExactKeys(decoded.cleanupProof, ["path", "token"]) ||
-        typeof decoded.cleanupProof.path !== "string" ||
-        !path.isAbsolute(decoded.cleanupProof.path) ||
+        !hasExactKeys(decoded.cleanupProof, ["relativePath", "token"]) ||
+        typeof decoded.cleanupProof.relativePath !== "string" ||
         typeof decoded.cleanupProof.token !== "string" ||
-        decoded.cleanupProof.token.length < 16
+        !cleanupTokenPattern.test(decoded.cleanupProof.token)
       )
+        return "invalid";
+      const cleanupProof = {
+        relativePath: decoded.cleanupProof.relativePath,
+        token: decoded.cleanupProof.token,
+      };
+      if ((await this.resolveCleanupProof(lockPath, cleanupProof)) === null)
         return "invalid";
       return {
         ownerId: owner.ownerId,
-        version: 1,
+        version: 2,
         pid: decoded.pid as number,
         ...(decoded.birthId === undefined
           ? {}
           : { birthId: decoded.birthId as string }),
-        cleanupProof: {
-          path: decoded.cleanupProof.path,
-          token: decoded.cleanupProof.token,
-        },
+        cleanupProof,
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
@@ -401,14 +446,32 @@ export class DurableFileLock {
     const guard = await this.readGuard(lockPath, owner);
     if (guard === "absent") return "dead";
     if (guard === "invalid") return "blocked";
-    return (await this.hasCleanupProof(guard)) ? "dead" : "blocked";
+    return (await this.hasCleanupProof(lockPath, guard)) ? "dead" : "blocked";
   }
 
-  private async hasCleanupProof(guard: ProcessGuard): Promise<boolean> {
+  private async hasCleanupProof(
+    lockPath: string,
+    guard: ProcessGuard,
+  ): Promise<boolean> {
     try {
-      const decoded = JSON.parse(
-        await fs.readFile(guard.cleanupProof.path, "utf8"),
-      ) as unknown;
+      const proofPath = await this.resolveCleanupProof(
+        lockPath,
+        guard.cleanupProof,
+      );
+      if (proofPath === null) return false;
+      const stat = await fs.lstat(proofPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) return false;
+      const file = await fs.open(
+        proofPath,
+        fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+      );
+      let encoded: string;
+      try {
+        encoded = await file.readFile("utf8");
+      } finally {
+        await file.close();
+      }
+      const decoded = JSON.parse(encoded) as unknown;
       return (
         isRecord(decoded) &&
         hasExactKeys(decoded, ["status", "token"]) &&
@@ -417,7 +480,9 @@ export class DurableFileLock {
       );
     } catch (error) {
       if (
-        (error as NodeJS.ErrnoException).code === "ENOENT" ||
+        ["ELOOP", "ENOENT"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        ) ||
         error instanceof SyntaxError
       )
         return false;
@@ -467,14 +532,73 @@ export class DurableFileLock {
     return `${lockPath}.guard-${owner.ownerId}`;
   }
 
+  private async externalCleanupProof(
+    lockPath: string,
+    proofPath: string,
+    token: string,
+  ): Promise<StoredCleanupProof | null> {
+    if (!cleanupFilePattern.test(path.basename(proofPath))) return null;
+    const root = path.dirname(lockPath);
+    const relativePath = path.relative(root, proofPath);
+    if (!isContainedPath(root, proofPath)) return null;
+    const cleanupProof = { relativePath, token };
+    const resolved = await this.resolveCleanupProof(lockPath, cleanupProof);
+    if (resolved === null) return null;
+    try {
+      await fs.lstat(resolved);
+      return null;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT"
+        ? cleanupProof
+        : null;
+    }
+  }
+
+  private async resolveCleanupProof(
+    lockPath: string,
+    proof: StoredCleanupProof,
+  ): Promise<string | null> {
+    if (
+      !cleanupTokenPattern.test(proof.token) ||
+      !proof.relativePath ||
+      path.isAbsolute(proof.relativePath) ||
+      path.normalize(proof.relativePath) !== proof.relativePath ||
+      !cleanupFilePattern.test(path.basename(proof.relativePath))
+    )
+      return null;
+    const root = path.dirname(lockPath);
+    const proofPath = path.resolve(root, proof.relativePath);
+    if (!isContainedPath(root, proofPath)) return null;
+    try {
+      const [realRoot, realParent] = await Promise.all([
+        fs.realpath(root),
+        fs.realpath(path.dirname(proofPath)),
+      ]);
+      if (!isContainedPath(realRoot, realParent) && realParent !== realRoot)
+        return null;
+      return proofPath;
+    } catch {
+      return null;
+    }
+  }
+
   private async cleanupProtection(
     lockPath: string,
     owner: DurableFileLockOwner,
   ): Promise<void> {
     const guardPath = this.guardPath(lockPath, owner);
     const guard = await this.readGuard(lockPath, owner);
-    if (guard !== "absent" && guard !== "invalid")
-      await fs.rm(guard.cleanupProof.path, { force: true }).catch(() => {});
+    if (guard !== "absent" && guard !== "invalid") {
+      const proofPath = await this.resolveCleanupProof(
+        lockPath,
+        guard.cleanupProof,
+      );
+      if (proofPath !== null) {
+        const stat = await fs.lstat(proofPath).catch(() => null);
+        if (stat?.isFile() && !stat.isSymbolicLink())
+          await fs.rm(proofPath, { force: true }).catch(() => {});
+      }
+    }
     await fs.rm(guardPath, { force: true }).catch(() => {});
   }
 
@@ -483,11 +607,10 @@ export class DurableFileLock {
       const directory = path.dirname(lockPath);
       const base = path.basename(lockPath);
       for (const entry of await fs.readdir(directory)) {
-        if (
-          !entry.startsWith(`${base}.claim-`) &&
-          !entry.startsWith(`${base}.reclaim-`) &&
-          !entry.includes(".pending-")
-        )
+        const prefix = [`${base}.claim-`, `${base}.reclaim-`].find(
+          (candidate) => entry.startsWith(candidate),
+        );
+        if (prefix === undefined || !isSafeOwnerId(entry.slice(prefix.length)))
           continue;
         const artifact = path.join(directory, entry);
         const owner = await this.readOwner(artifact);
