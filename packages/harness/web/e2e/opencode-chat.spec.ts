@@ -645,6 +645,38 @@ async function openAssistant(page: Page) {
   ).toBeEnabled();
 }
 
+function endWithoutAnswer(c: Conversation) {
+  const preamble = c.turns.at(-1)!;
+  preamble.info.finish = "tool-calls";
+  preamble.info.time.completed = Date.now();
+  const tool = {
+    id: "prt_tool",
+    sessionID: c.id,
+    messageID: preamble.info.id,
+    type: "tool",
+    callID: "call_read",
+    tool: "read",
+    state: {
+      status: "completed",
+      input: { filePath: "README.md" },
+      output: "# OpenCode playground",
+      title: "README.md",
+      metadata: {},
+      time: { start: 1, end: 2 },
+    },
+  };
+  preamble.parts.push(tool);
+  emit(c, "message.updated", { info: preamble.info });
+  emit(c, "message.part.updated", { part: tool });
+  const final = {
+    info: { ...preamble.info, id: "msg_empty", agent: "build", finish: "stop" },
+    parts: [],
+  };
+  c.turns.push(final);
+  emit(c, "message.updated", { info: final.info });
+  emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+}
+
 test("defaults to Terminal and keeps Assistant unavailable when access is off", async ({
   page,
 }) => {
