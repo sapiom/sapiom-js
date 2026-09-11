@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenCodeAssociations } from "./opencode-association.js";
@@ -39,11 +39,14 @@ it("serializes association commits across runtime retirement, including an alrea
     cwd: root,
     stateRoot: root,
     signal: abort.signal,
+    isCurrent: () => !abort.signal.aborted,
     server: {
       pid: 123,
       exited: new Promise<void>(() => {}),
       close: vi.fn(),
-      fetch: vi.fn(),
+      fetch: vi.fn(async (path: string) =>
+        Response.json({ id: path.split("/").at(-1) }),
+      ),
       async fetchJson<T>(path: string): Promise<T> {
         return {
           id: path === "/session" ? `ses_${++created}` : path.split("/").at(-1),
@@ -55,7 +58,12 @@ it("serializes association commits across runtime retirement, including an alrea
   const old = associations.ensure(hosted);
   await writing;
   abort.abort();
-  const replacement = { ...hosted, signal: new AbortController().signal };
+  const replacementAbort = new AbortController();
+  const replacement = {
+    ...hosted,
+    signal: replacementAbort.signal,
+    isCurrent: () => !replacementAbort.signal.aborted,
+  };
   const next = associations.ensure(replacement);
   try {
     expect(created).toBe(1);
@@ -72,4 +80,47 @@ it("serializes association commits across runtime retirement, including an alrea
     commit();
     await Promise.allSettled([old, next]);
   }
+});
+
+it("distinguishes confirmed missing history from transient lookup failure without creating a replacement", async () => {
+  root = await mkdtemp(join(tmpdir(), "studio-association-"));
+  const conversationId = "ses_saved";
+  await writeFile(
+    join(root, "association.json"),
+    JSON.stringify({ version: 1, conversationId }),
+  );
+  const abort = new AbortController();
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response("private missing", { status: 404 }))
+    .mockRejectedValueOnce(new TypeError("private network diagnostic"))
+    .mockResolvedValueOnce(Response.json({ id: conversationId }));
+  const create = vi.fn();
+  const hosted: HostedOpenCode = {
+    harnessSessionId: "studio-one",
+    cwd: root,
+    stateRoot: root,
+    signal: abort.signal,
+    isCurrent: () => !abort.signal.aborted,
+    server: {
+      pid: 123,
+      exited: new Promise<void>(() => {}),
+      close: vi.fn(),
+      fetch,
+      fetchJson: create,
+    },
+  };
+  const associations = new OpenCodeAssociations();
+  await expect(associations.ensure(hosted)).rejects.toMatchObject({
+    failure: { code: "native_history_missing", retryable: false },
+  });
+  await expect(associations.ensure(hosted)).rejects.toMatchObject({
+    failure: { code: "transport_unavailable", retryable: true },
+  });
+  await expect(associations.ensure(hosted)).resolves.toBe(conversationId);
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(create).not.toHaveBeenCalled();
+  expect(
+    JSON.parse(await readFile(join(root, "association.json"), "utf8")),
+  ).toEqual({ version: 1, conversationId });
 });
