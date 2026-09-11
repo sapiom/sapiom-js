@@ -56,7 +56,7 @@ external audit copy that never blocks the chain.
 
 Each gate pauses at $0 under a deliberately long deadline: `GATE_PAUSE_TIMEOUT_MS`,
 one year. The engine has a paused-run reaper that *terminates* a lapsed pause with a
-`PauseTimeoutError` (it does not resume the step), so a short deadline here would
+with the engine's pause-timeout error (it does not resume the step), so a short deadline here would
 silently fail any approval slower than it and never run the graceful `escalate` step.
 A legitimately slow approver must not lose the run.
 
