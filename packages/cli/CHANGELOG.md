@@ -1,5 +1,94 @@
 # @sapiom/cli
 
+## 16.0.0
+
+### Patch Changes
+
+- 4c9bafb: Stop restating the platform rules in npm-shipped files; point at the served copy
+  and stamp the pointer (SAP-3181).
+
+  The rules that are true of Sapiom regardless of the installed SDK — one-off call
+  vs agent, the capability catalog, database lifetime, trigger kinds, App Links,
+  which capability calls an LLM, composing deployed agents, platform vocabulary —
+  are served by the Sapiom API at `GET /v1/agents/authoring-rules`. Every copy
+  this repo used to ship of them was frozen at publish or scaffold time and could
+  never be corrected; that is how the 7-day database claim and the two-kind
+  trigger list reached customers.
+
+  - The `sapiom-agent-authoring` skill's platform chapters are now a short
+    summary plus a pointer to the served section, bracketed by
+    `<!-- section: … -->` markers so a Studio session can splice the served text
+    in. The authoring mechanics (step model, directives, `ctx.shared`,
+    pause/resume, stubs) are unchanged.
+  - Every scaffolded `AGENTS.md` (both `@sapiom/agent-core` templates, the
+    `@sapiom/cli` template and all gallery examples) and `examples/AUTHORING.md`
+    carry a one-paragraph pointer and a stamp:
+    `<!-- sapiom-authoring-rules release=… digest=… -->`.
+  - `@sapiom/tools`' JSDoc on the `model` field of `llm.run`, `llm.submit`,
+    `models.run` and `models.coding.run` points at the served rule instead of
+    restating it.
+  - `sapiom_dev_agents_check` reads the stamps in the project's `AGENTS.md` and
+    skill, makes one best-effort anonymous read of the served endpoint's
+    `X-Sapiom-Content-*` headers, and warns when a stamp differs from the served
+    copy. No stamp means no request; unreachable means no warning. The wording is
+    "differs from", never "older than" — digests do not order.
+  - `@sapiom/agent-core` exports the stamp vocabulary
+    (`AUTHORING_RULES_*`, `parseAuthoringRulesStamp`,
+    `renderAuthoringRulesStamp`, `authoringRulesDriftWarning`), and
+    `node scripts/authoring-rules-stamp.mjs --from-served` moves every stamp in
+    the repo to the current release at once.
+
+- Updated dependencies [758ba40]
+- Updated dependencies [7776065]
+- Updated dependencies [b260034]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [6c96a5b]
+- Updated dependencies [a56328d]
+- Updated dependencies [5602d4e]
+- Updated dependencies [4da9937]
+- Updated dependencies [84f5767]
+- Updated dependencies [e28f255]
+- Updated dependencies [d72433a]
+- Updated dependencies [ec252d3]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [4b1ebc5]
+- Updated dependencies [66542da]
+- Updated dependencies [421439b]
+- Updated dependencies [4c9bafb]
+- Updated dependencies [4936ce9]
+- Updated dependencies [d775192]
+- Updated dependencies [1a33894]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fc8b07b]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [cf3e872]
+- Updated dependencies [f618e7e]
+- Updated dependencies [5602d4e]
+- Updated dependencies [e40920e]
+- Updated dependencies [0f28c4e]
+- Updated dependencies [d2be8aa]
+- Updated dependencies [2b9f75e]
+- Updated dependencies [c343fd1]
+- Updated dependencies [b177f49]
+- Updated dependencies [48ab09f]
+- Updated dependencies [bcd6167]
+- Updated dependencies [9ddb57c]
+- Updated dependencies [981c940]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [b460c9a]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [42fcacc]
+- Updated dependencies [7776065]
+- Updated dependencies [5d18ba3]
+- Updated dependencies [9b957ca]
+- Updated dependencies [c2128f6]
+- Updated dependencies [e59da42]
+  - @sapiom/harness@0.17.0
+  - @sapiom/agent@0.14.0
+  - @sapiom/agent-core@0.14.0
+
 ## 15.0.0
 
 ### Patch Changes
