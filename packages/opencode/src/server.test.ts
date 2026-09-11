@@ -36,6 +36,23 @@ const options = (config: Record<string, unknown> = {}) => ({
   stateRoot: join(directory, "state"),
 });
 
+async function waitForRuntimePid(timeoutMs: number): Promise<number> {
+  const pidPath = join(directory, "runtime.pid");
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const pid = Number(await readFile(pidPath, "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 0) return pid;
+      throw new Error("runtime fixture published an invalid PID");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (Date.now() >= deadline)
+      throw new Error("runtime fixture did not publish readiness");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("packaged OpenCode runtime", () => {
   it("distinguishes Windows no-child spawn failure from post-spawn exit", () => {
     expect(evaluateWindowsCleanup(undefined, undefined)).toBe("no-child");
@@ -144,22 +161,32 @@ describe("packaged OpenCode runtime", () => {
   });
 
   it("bounds hung startup, cleans up the child, and allows another startup", async () => {
-    await expect(
-      startOpenCodeServer({
-        ...options({ stall: true }),
-        startupTimeoutMs: 400,
-      }),
-    ).rejects.toMatchObject({
+    const starting = startOpenCodeServer({
+      ...options({ stall: true }),
+      startupTimeoutMs: 5_000,
+    });
+    const outcomePromise = starting.then(
+      () => ({ started: true as const, error: undefined }),
+      (error: unknown) => ({ started: false as const, error }),
+    );
+    let outcome!: Awaited<typeof outcomePromise>;
+    let pid!: number;
+    try {
+      pid = await waitForRuntimePid(4_000);
+    } finally {
+      outcome = await outcomePromise;
+    }
+    expect(outcome.started).toBe(false);
+    expect(outcome.error).toMatchObject({
       name: "OpenCodeStartupError",
       code: "timed-out",
       retryable: true,
       message: "OpenCode took too long to start. Retry the connection.",
     });
-    const pid = Number(await readFile(join(directory, "runtime.pid"), "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
     server = await startOpenCodeServer(options());
     expect(server.pid).not.toBe(pid);
-  });
+  }, 30_000);
 
   it("honors revocation during startup and sanitizes child diagnostics", async () => {
     const abort = new AbortController();
