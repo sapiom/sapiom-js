@@ -303,7 +303,15 @@ describe("Agent Studio MCP authentication wiring", () => {
       headers: { "X-Harness-Token": "test-token" },
     });
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual({ enabled: false });
+    const first = (await response.json()) as Record<string, unknown>;
+    expect(first).toEqual({
+      enabled: false,
+      authorityRevision: expect.any(String),
+    });
+    const repeated = await fetch(url, {
+      headers: { "X-Harness-Token": "test-token" },
+    });
+    expect(await repeated.json()).toEqual(first);
   });
 
   async function waitForAuthenticated(): Promise<void> {

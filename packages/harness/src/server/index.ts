@@ -3549,7 +3549,7 @@ export const startServer = async (
   );
   app.get("/api/assistant/access", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ enabled: assistantAccess.get() !== null });
+    res.json(assistantAccess.getBrowserState());
   });
   app.use(
     "/api",
