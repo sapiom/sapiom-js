@@ -159,10 +159,11 @@ export function usePaneWidths(): {
         return app ? Math.max(app.getBoundingClientRect().width - CANVAS_MIN, CANVAS_MIN) : Infinity;
       },
       () => {
-        // Start from the RENDERED width: a stored width wider than the shell
-        // can hold is clamped by the grid, and the drag must track the edge
-        // the user grabbed, not the number in storage.
-        const pane = document.querySelector(".canvas-pane");
+        // Start from the RENDERED width of the grid column (`.right-pane`, which
+        // stays laid out whichever tab is shown): a stored width wider than the
+        // shell can hold is clamped by the grid, and the drag must track the
+        // edge the user grabbed, not the number in storage.
+        const pane = document.querySelector(".right-pane");
         if (pane) return pane.getBoundingClientRect().width;
         return widths.canvas ?? CANVAS_MIN;
       },

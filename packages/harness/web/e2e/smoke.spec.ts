@@ -1962,6 +1962,34 @@ test.describe("resizable panes", () => {
     expect((canvasAfter?.width ?? 0) - canvasBefore.width).toBeGreaterThan(60);
   });
 
+  test("dragging the handle while the Secrets tab is shown resizes from the pane's live width", async ({
+    page,
+  }) => {
+    // The board stays mounted but display:none behind Secrets, so the drag
+    // must measure the grid column, not the hidden board — otherwise the
+    // pane would snap to zero-plus-drag on the first move.
+    await page.getByTestId("right-tab-secrets").click();
+    await expect(page.getByTestId("right-panel-secrets")).toBeVisible();
+    const pane = page.locator(".right-pane");
+    const handle = page.getByTestId("resize-handle-canvas");
+    const before = await pane.boundingBox();
+    const handleBox = await handle.boundingBox();
+    if (!before || !handleBox) throw new Error("expected bounding boxes");
+
+    const y = handleBox.y + handleBox.height / 2;
+    await page.mouse.move(handleBox.x + handleBox.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 - 80, y, {
+      steps: 5,
+    });
+    await page.mouse.up();
+
+    const after = await pane.boundingBox();
+    const grew = (after?.width ?? 0) - before.width;
+    expect(grew).toBeGreaterThan(60);
+    expect(grew).toBeLessThan(100);
+  });
+
   test("the canvas pane grows past 720px, stopping only at the terminal's floor, and a wide saved width does not overflow a narrower window", async ({
     page,
   }) => {
