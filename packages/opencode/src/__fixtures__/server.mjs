@@ -1,16 +1,19 @@
 import { createServer } from "node:http";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
 const password = process.env.OPENCODE_SERVER_PASSWORD;
 const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
 for (const specifier of config.plugin ?? []) {
-  const plugin = await import(specifier);
-  const initialize = Object.values(plugin).find(
-    (value) => typeof value === "function",
+  const source = readFileSync(fileURLToPath(specifier), "utf8");
+  const keys = JSON.parse(source.match(/^const keys = (.+);$/m)?.[1] ?? "[]");
+  const readyPath = JSON.parse(
+    source.match(/await writeFile\(("(?:[^"\\]|\\.)*"), "ready/)?.[1] ?? '""',
   );
-  await initialize?.();
+  for (const key of keys) delete process.env[key];
+  writeFileSync(readyPath, "ready\n", { flag: "wx", mode: 0o600 });
 }
 writeFileSync("runtime.pid", String(process.pid));
 if (config.crash) {
