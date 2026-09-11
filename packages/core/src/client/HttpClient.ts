@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import type { HttpError, HttpResponse } from "../types/http.js";
+
 /**
  * Request configuration for the HTTP client
  */
@@ -33,6 +35,31 @@ export interface HttpClientConfig {
   headers: Record<string, string>;
   retry?: RetryConfig;
   versionPrefix?: string | null;
+}
+
+class HttpRequestError extends Error implements HttpError {
+  public readonly status: number;
+  public readonly statusText: string;
+  public readonly headers: Record<string, string>;
+  public readonly data: any;
+  public readonly response: HttpResponse;
+
+  constructor(response: Response, data: any, headers: Record<string, string>) {
+    super(
+      `Request failed with status ${response.status}: ${JSON.stringify(data)}`,
+    );
+    this.name = "HttpRequestError";
+    this.status = response.status;
+    this.statusText = response.statusText || "";
+    this.headers = headers;
+    this.data = data;
+    this.response = {
+      status: response.status,
+      statusText: this.statusText,
+      headers,
+      data,
+    };
+  }
 }
 
 /**
@@ -172,8 +199,10 @@ export class HttpClient {
 
       if (!response.ok) {
         const errorData = await this.parseResponse(response);
-        throw new Error(
-          `Request failed with status ${response.status}: ${JSON.stringify(errorData)}`,
+        throw new HttpRequestError(
+          response,
+          errorData,
+          this.responseHeaders(response),
         );
       }
 
@@ -262,6 +291,16 @@ export class HttpClient {
 
     // Return as text
     return text;
+  }
+
+  private responseHeaders(response: Response): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (typeof response.headers.forEach === "function") {
+      response.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+    }
+    return headers;
   }
 
   /**
