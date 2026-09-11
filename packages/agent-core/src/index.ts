@@ -147,9 +147,17 @@ export type {
 export { watchExecution, parseSseFrame, parseSseEvent } from "./watch.js";
 export type { WatchExecutionOptions } from "./watch.js";
 
-// signal (networked)
+// signal (networked) — the RESUME verb: wakes runs already paused on a signal
 export { signal, parseSignalPayload } from "./signal.js";
 export type { SignalOptions, SignalResult } from "./signal.js";
+
+// events (networked) — the START verb: fans out to the tenant's `event` triggers
+export { emitEvent, parseEventPayload } from "./events.js";
+export type {
+  EmitEventOptions,
+  EmitEventResult,
+  EventOutcome,
+} from "./events.js";
 
 // feedback (networked) — relay a user's product feedback to the Sapiom team
 export { sendFeedback } from "./feedback.js";

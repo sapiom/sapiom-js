@@ -1,0 +1,131 @@
+/**
+ * emitEvent — announce that something happened in the tenant, and let whatever
+ * subscribes to it start.
+ *
+ * Networked operation: takes a GatewayClient. The route is `POST /events`
+ * relative to the `/v1/workflows` base the client already targets.
+ *
+ * This is the START verb, and it is the other half of `signal.ts`: an event
+ * fans out by `type` to every active `event` trigger the tenant armed and
+ * starts 0..N NEW runs, while a signal wakes runs that are already paused.
+ * Events start, signals resume — one namespace each, and neither reaches the
+ * other's.
+ *
+ * A thin passthrough, like `schedule.ts`. Two deliberate non-features:
+ *
+ * - **No client-side validation of `type`.** The grammar (lowercase
+ *   dot-separated segments, `sapiom.*` reserved) is the engine's, and its 400
+ *   relays verbatim through the tenant API. Restating it here would give the
+ *   same input two answers that can drift; the one that is always right is the
+ *   server's.
+ * - **The result is the server's DTO, verbatim.** `signal()` defaults its
+ *   `matched` because the body is not guaranteed to carry it; here every field
+ *   is, and a receipt id this function invented would be a lie a caller could
+ *   go on to read back (`GET /v1/workflows/receipts/:id`).
+ */
+import { GatewayClient } from "./client.js";
+import { AgentOperationError } from "./errors.js";
+
+export interface EmitEventOptions {
+  /**
+   * What happened, as the triggers are matched on it: lowercase `[a-z0-9_]`
+   * segments joined by dots (`lead.created`). The `sapiom.*` namespace is
+   * reserved and 400s. Enforced by the engine, not here.
+   */
+  type: string;
+  /**
+   * Event data. Must be a top-level JSON object: it becomes the top layer of
+   * the run-input fold, folded over each matched trigger's configured `input`
+   * (the payload wins on a key conflict), and the merge treats a non-object as
+   * absent — so an array would start a run with its data silently dropped.
+   */
+  payload: Record<string, unknown>;
+  /**
+   * The sender's id for THIS delivery, 1..256 chars — the dedup identity.
+   * Reposting the same id returns the original receipt and starts nothing new,
+   * which is what makes a retry safe. Omit it and the server mints a UUID, so
+   * the call is accepted but a retry is a SECOND event. Sent on the wire as
+   * `id`; named `eventId` here because `id` alone, on an options object next to
+   * `type` and `payload`, reads as the event's own identity rather than the
+   * sender's.
+   */
+  eventId?: string;
+}
+
+/**
+ * `matched` — at least one active trigger subscribed to the type and was
+ * fired. `unmatched` — none did. The event is still recorded either way.
+ */
+export type EventOutcome = "matched" | "unmatched";
+
+export interface EmitEventResult {
+  /** The ledger row this delivery became. Read the chain back with `GET /v1/workflows/receipts/:id`. */
+  receiptId: string;
+  /**
+   * `unmatched` is NOT an error and never throws: it means no active `event`
+   * trigger subscribes to this type — a typo in `type`, or nothing armed yet.
+   */
+  outcome: EventOutcome;
+  /**
+   * True when this delivery collided with an earlier one carrying the same
+   * `eventId`. The receipt above is the ORIGINAL, nothing new was started, and
+   * `fireIds` is empty — a retry loop sees success rather than a conflict.
+   */
+  duplicate: boolean;
+  /**
+   * One id per trigger fire this event created — fire ids, not execution ids.
+   * Empty on `unmatched` and on a duplicate. To get from a fire to the run it
+   * started, read the receipt.
+   */
+  fireIds: string[];
+}
+
+/**
+ * Emit one custom event for this tenant. Returns as soon as the receipt is
+ * committed; the runs it started are enqueued, so an empty `fireIds` means
+ * "nothing was fired", never "nothing has finished yet".
+ *
+ * Throws `AgentOperationError` on gateway errors — including the engine's
+ * validation 400s (reserved or malformed `type`, an over-long `eventId`) and
+ * the per-IP throttle's 429.
+ */
+export async function emitEvent(
+  opts: EmitEventOptions,
+  client: GatewayClient,
+): Promise<EmitEventResult> {
+  return client.post<EmitEventResult>("/events", {
+    type: opts.type,
+    payload: opts.payload,
+    // Omit rather than send `id: undefined`: the route runs a whitelisting
+    // validation pipe, so a declared-but-empty field is not the same as an
+    // absent one, and absent is what "let the server mint a UUID" means.
+    ...(opts.eventId !== undefined ? { id: opts.eventId } : {}),
+  });
+}
+
+/**
+ * Parse a JSON payload string for an event. Exported so callers (CLI, MCP) can
+ * normalize errors consistently — the sibling of `parseSignalPayload`, but
+ * stricter: a signal's payload is opaque to the SDK, an event's has to survive
+ * the run-input fold, and a valid-JSON array would be accepted here only to be
+ * rejected a network round-trip later.
+ */
+export function parseEventPayload(raw: string): Record<string, unknown> {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new AgentOperationError({
+      code: "BAD_PAYLOAD",
+      message: "Event payload is not valid JSON.",
+    });
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new AgentOperationError({
+      code: "BAD_PAYLOAD",
+      message:
+        "Event payload must be a JSON object (it becomes the top layer of the run input).",
+    });
+  }
+  return value as Record<string, unknown>;
+}

@@ -21,7 +21,9 @@ describe("sapiom-agent-authoring skill sync", () => {
   const canonical = readFileSync(CANONICAL, "utf8");
 
   it("has a canonical source with the task-shape trigger frontmatter", () => {
-    expect(canonical.startsWith("---\nname: sapiom-agent-authoring")).toBe(true);
+    expect(canonical.startsWith("---\nname: sapiom-agent-authoring")).toBe(
+      true,
+    );
     expect(canonical).toContain("description:");
   });
 
@@ -88,8 +90,9 @@ describe("template AGENTS.md content", () => {
 });
 
 // The Claude Code plugin (repo root, plugins/sapiom — SAP-1366) carries its own
-// copy of the skill. Guarded: the plugin may not exist yet on this branch.
-describe("plugin skill copy (when present)", () => {
+// copy of the skill. No longer guarded on existence: the plugin shipped, and an
+// `if (!existsSync) return` would let a deleted copy pass as a green test.
+describe("plugin skill copy", () => {
   const pluginCopy = path.resolve(
     PKG_ROOT,
     "..",
@@ -101,8 +104,11 @@ describe("plugin skill copy (when present)", () => {
     "SKILL.md",
   );
 
-  it("matches the canonical if the plugin ships it", () => {
-    if (!existsSync(pluginCopy)) return; // plugin PR not merged yet
+  it("exists", () => {
+    expect(existsSync(pluginCopy)).toBe(true);
+  });
+
+  it("is identical to the canonical", () => {
     const canonical = readFileSync(CANONICAL, "utf8");
     expect(readFileSync(pluginCopy, "utf8")).toBe(canonical);
   });

@@ -21,6 +21,7 @@ import {
   completeScheduleSecretRotation,
   createSchedule,
   deploy,
+  emitEvent,
   getSchedule,
   inspect,
   inspectBuild,
@@ -101,7 +102,7 @@ function scheduleHint(schedule: ScheduleDetail): string | undefined {
   if (schedule.status === "active" && schedule.kind === "webhook")
     return `Armed — fires on every signed POST to the hook URL (publicId ${schedule.publicId}, secret v${schedule.secretVersion}). The secret was shown once at create/rotate time; rotate with sapiom_dev_agents_schedule_secret if it is lost.`;
   if (schedule.status === "active" && schedule.kind === "event")
-    return `Armed — fires on every '${schedule.eventType}' event this tenant emits (POST /v1/workflows/events with { type, payload }).`;
+    return `Armed — fires on every '${schedule.eventType}' event this tenant emits (sapiom_dev_agents_emit_event, or POST /v1/workflows/events with { type, payload }).`;
   if (schedule.status === "completed") return "Completed — no further fires.";
   if (schedule.status === "disabled")
     return schedule.revokedAt
@@ -618,9 +619,13 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_signal",
-    "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId).",
+    "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId, NOT by executionId — so one call resumes every run waiting on that pair). Signals resume; they never start a run — to start one, emit an event with sapiom_dev_agents_emit_event. Read `message` in the result whenever it is present: `matched` counts the runs that actually resumed, so it under-reports a partial fanout and a 0 does not prove nothing was waiting.",
     {
-      executionId: z.string().describe("The paused execution."),
+      executionId: z
+        .string()
+        .describe(
+          "A paused execution, as the addressable resource. Delivery is matched on name + correlationId, so this need not be the only run that resumes.",
+        ),
       name: z.string().describe("Signal name to deliver."),
       correlationId: z.string().describe("Signal correlation id."),
       payload: z
@@ -635,6 +640,39 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         return ok(
           await signal({ executionId, name, correlationId, payload }, client),
         );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    server,
+    "sapiom_dev_agents_emit_event",
+    "Emit one custom event for this tenant. It fans out by type to every active 'event' trigger the tenant armed and starts 0..N NEW runs; it never resumes a paused run (use sapiom_dev_agents_signal for that). Events start, signals resume. Returns { receiptId, outcome: 'matched' | 'unmatched', duplicate, fireIds }: 'unmatched' is a success, not an error — it means nothing subscribes to this type, so check it for a typo or arm a trigger with sapiom_dev_agents_schedule (kind 'event'). `fireIds` are trigger fires, not execution ids; read the receipt to get from a fire to the run it started. Pass eventId to make a retry safe.",
+    {
+      type: z
+        .string()
+        .describe(
+          "What happened — the type the triggers match on. Lowercase dot-separated segments, e.g. 'lead.created'; the 'sapiom.*' namespace is reserved.",
+        ),
+      payload: z
+        .record(z.unknown())
+        .describe(
+          "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict).",
+        ),
+      eventId: z
+        .string()
+        .optional()
+        .describe(
+          "Your id for THIS delivery (1..256 chars). Reposting the same id returns the original receipt and starts nothing new. Omit it and every call is a distinct event.",
+        ),
+    },
+    async ({ type, payload, eventId }) => {
+      const client = await gatewayClient(env);
+      if (!client) return NOT_AUTHED;
+      try {
+        return ok(await emitEvent({ type, payload, eventId }, client));
       } catch (err) {
         return fail(err);
       }
@@ -680,7 +718,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .string()
         .optional()
         .describe(
-          "Event type to match — required for 'event'. Lowercase dot-separated segments, e.g. 'lead.created'; the 'sapiom.*' namespace is reserved. Emit it with POST /v1/workflows/events { type, payload }.",
+          "Event type to match — required for 'event'. Lowercase dot-separated segments, e.g. 'lead.created'; the 'sapiom.*' namespace is reserved. Emit it with sapiom_dev_agents_emit_event, or POST /v1/workflows/events { type, payload }.",
         ),
       input: z
         .unknown()

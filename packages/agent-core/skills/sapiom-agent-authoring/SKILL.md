@@ -538,6 +538,25 @@ Under `run_local`, a dispatch pause auto-resumes with the stub result; a manual 
 auto-resumes with `{}`. There is no manual-signal payload override in the local runner, so
 type the resumed step's input with optional fields accordingly.
 
+### Waiting on a user-named signal
+
+The signal name in the object form is yours to choose — `pause_until_signal` takes any
+string, so a gate needs no capability handle and no registration. What decides the shape is
+the `correlationId`:
+
+- `ctx.executionId` (the default when omitted) makes the waiter unique to this run: one
+  delivery, one resume. Use it for a per-run approval.
+- A shared business key (an order id, a customer id) makes every run waiting on that key
+  resume together from a single delivery — "wait for any signal matching X". The fanout is
+  0..N runs, deliberately.
+
+Deliver it with `sapiom_dev_agents_signal` (or `sapiom agents signal`). Give any gate a human
+might never answer an explicit `timeoutMs`: when the deadline lapses the run ends as a pause
+timeout instead of resuming, so the failure is recorded rather than sat on. Delivery is
+matched on `(name, correlationId)`, never on the execution id the tool addresses, and the
+result's `matched` counts the runs that ACTUALLY resumed — read its `message` whenever
+present, because a `0` does not prove nothing was waiting.
+
 <!-- section: trigger-kinds -->
 
 ## Triggers — Run a Deployed Agent Without a Human
@@ -552,6 +571,12 @@ Slack / Stripe / GitHub / Meta sender needs an App Link `/hook/*` receiver inste
 served sections [Trigger kinds](https://api.sapiom.ai/v1/agents/authoring-rules#trigger-kinds)
 and [App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links).
 Full guide: [Triggers](https://docs.sapiom.ai/guides/triggers).
+
+Arming an `event` trigger is only half of it — something has to emit the event.
+`sapiom_dev_agents_emit_event` (or `sapiom agents emit`, or `emitEvent` from
+`@sapiom/agent-core`) does that: **events start runs, signals resume them**, so an emit never
+wakes the paused run above and a signal never starts a new one. An emit that matches no
+trigger comes back `outcome: "unmatched"` — a success, not an error.
 
 <!-- /section: trigger-kinds -->
 
