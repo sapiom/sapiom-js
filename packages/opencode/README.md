@@ -35,10 +35,17 @@ credential. This protects normal child-process and browser boundaries; it is not
 an operating-system sandbox. An unrestricted process running as the same user
 can inspect runtime memory or files and is outside this trust boundary.
 
-Startup and shutdown have deadlines. POSIX shutdown signals the owned process
-group; Windows process-tree hardening and packaged-platform validation remain
-tracked by SAP-3297. Binary paths inside `app.asar` resolve to their unpacked
-counterparts; the desktop packager must include the native binary there.
+Startup and shutdown have deadlines. Studio can durably protect the generated
+supervisor through `beforeLaunch`; native work starts only after that callback
+resolves. POSIX cleanup first stops the native launcher, then stops and removes
+its birth-validated native-managed descendants before publishing a run-scoped
+cleanup proof. A missing proof fails closed so another runtime cannot write the
+same state. The proof remains outside the ephemeral launch directory until the
+runtime lock consumes it. Windows uses its native process-tree termination for
+normal close; installed-platform validation remains tracked by SAP-3297.
+Binary paths inside `app.asar` resolve to their unpacked counterparts; the
+generated supervisor needs no source loader and runs under Electron with
+`ELECTRON_RUN_AS_NODE` without forwarding that variable to native or tools.
 
 `pnpm` must allow the `opencode-ai` install script so the platform binary exists
 before Studio starts. The workspace allowlist includes it. No UI is bundled in
