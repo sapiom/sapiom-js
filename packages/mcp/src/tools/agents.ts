@@ -15,6 +15,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  asEventPayload,
   cancelSchedule,
   check,
   clone,
@@ -656,8 +657,13 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "What happened — the type the triggers match on. Lowercase dot-separated segments, e.g. 'lead.created'; the 'sapiom.*' namespace is reserved.",
         ),
+      // `z.unknown()` + coerceJson, not `z.record(...)`: some clients serialize
+      // an object-valued arg as a JSON string, and a schema that demands an
+      // object would reject those at the boundary, before the coercion every
+      // other object arg in this module gets. `asEventPayload` re-imposes the
+      // object rule after decoding, so nothing is loosened.
       payload: z
-        .record(z.unknown())
+        .unknown()
         .describe(
           "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict).",
         ),
@@ -672,7 +678,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
-        return ok(await emitEvent({ type, payload, eventId }, client));
+        return ok(
+          await emitEvent(
+            { type, payload: asEventPayload(coerceJson(payload)), eventId },
+            client,
+          ),
+        );
       } catch (err) {
         return fail(err);
       }

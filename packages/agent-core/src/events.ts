@@ -104,6 +104,29 @@ export async function emitEvent(
 }
 
 /**
+ * Narrow an already-decoded value to an event payload. The object check lives
+ * here rather than in each caller because it is the same rule everywhere and
+ * it is not obvious: an array or a scalar is valid JSON that the server
+ * accepts at the envelope and the run-input fold then treats as ABSENT, so the
+ * run starts with the data silently dropped. Rejecting at the call site is the
+ * lesser evil.
+ *
+ * Separate from `parseEventPayload` because a caller may already hold a value
+ * rather than a string — an MCP tool argument, for instance — and re-encoding
+ * it just to re-parse it would only add a way to fail.
+ */
+export function asEventPayload(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new AgentOperationError({
+      code: "BAD_PAYLOAD",
+      message:
+        "Event payload must be a JSON object (it becomes the top layer of the run input).",
+    });
+  }
+  return value as Record<string, unknown>;
+}
+
+/**
  * Parse a JSON payload string for an event. Exported so callers (CLI, MCP) can
  * normalize errors consistently — the sibling of `parseSignalPayload`, but
  * stricter: a signal's payload is opaque to the SDK, an event's has to survive
@@ -120,12 +143,5 @@ export function parseEventPayload(raw: string): Record<string, unknown> {
       message: "Event payload is not valid JSON.",
     });
   }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new AgentOperationError({
-      code: "BAD_PAYLOAD",
-      message:
-        "Event payload must be a JSON object (it becomes the top layer of the run input).",
-    });
-  }
-  return value as Record<string, unknown>;
+  return asEventPayload(value);
 }

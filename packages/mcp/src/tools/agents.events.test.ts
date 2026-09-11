@@ -104,6 +104,48 @@ describe("sapiom_dev_agents_emit_event", () => {
     });
   });
 
+  it("decodes a payload a client serialized as a JSON string", async () => {
+    vi.mocked(emitEvent).mockResolvedValue({
+      receiptId: "rcpt-1",
+      outcome: "matched",
+      duplicate: false,
+      fireIds: ["fire-1"],
+    } as never);
+    const { server, handlers } = createMockServer();
+    register(server, env);
+
+    await handlers.get("sapiom_dev_agents_emit_event")!({
+      type: "lead.created",
+      payload: '{"leadId":"l_42"}',
+    });
+
+    expect(vi.mocked(emitEvent).mock.calls[0][0].payload).toEqual({
+      leadId: "l_42",
+    });
+  });
+
+  it.each([
+    ["an array", [1, 2]],
+    ["a scalar", 42],
+    ["null", null],
+    ["a non-JSON string", "lead.created"],
+  ])(
+    "rejects %s as a payload — the run-input fold would drop it silently",
+    async (_label, payload) => {
+      const { server, handlers } = createMockServer();
+      register(server, env);
+
+      const res = await handlers.get("sapiom_dev_agents_emit_event")!({
+        type: "lead.created",
+        payload,
+      });
+
+      expect(res.isError).toBe(true);
+      expect(parse(res).error.code).toBe("BAD_PAYLOAD");
+      expect(emitEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it("passes an omitted eventId through as undefined (the server mints the dedup id)", async () => {
     vi.mocked(emitEvent).mockResolvedValue({
       receiptId: "rcpt-2",

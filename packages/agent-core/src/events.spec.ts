@@ -4,7 +4,7 @@
  * silently drop. The GatewayClient is faked to record calls.
  */
 import type { GatewayClient } from "./client.js";
-import { emitEvent, parseEventPayload } from "./events.js";
+import { asEventPayload, emitEvent, parseEventPayload } from "./events.js";
 
 interface Call {
   method: string;
@@ -121,6 +121,32 @@ describe("parseEventPayload", () => {
     ["a boolean", "true"],
   ])("throws BAD_PAYLOAD on %s", (_label, raw) => {
     expect(() => parseEventPayload(raw)).toThrow(
+      expect.objectContaining({ code: "BAD_PAYLOAD" }),
+    );
+  });
+});
+
+describe("asEventPayload", () => {
+  it("passes a plain object through", () => {
+    const payload = { leadId: "l_42" };
+    expect(asEventPayload(payload)).toBe(payload);
+  });
+
+  it("accepts an empty object", () => {
+    expect(asEventPayload({})).toEqual({});
+  });
+
+  // The value form of the same rule `parseEventPayload` applies to a string —
+  // for callers that already hold a decoded value (an MCP tool argument).
+  it.each([
+    ["an array", [1, 2]],
+    ["null", null],
+    ["undefined", undefined],
+    ["a number", 42],
+    ["a string", "lead.created"],
+    ["a boolean", true],
+  ])("throws BAD_PAYLOAD on %s", (_label, value) => {
+    expect(() => asEventPayload(value)).toThrow(
       expect.objectContaining({ code: "BAD_PAYLOAD" }),
     );
   });
