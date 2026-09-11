@@ -29,6 +29,7 @@ let holdHistory: boolean;
 let failEvents: boolean;
 let failPrompt: boolean;
 let failAccess: boolean;
+let finalResponseError: unknown | null;
 let accessCalls: number;
 let recoveryReply: ((text: string, agent?: string) => void) | undefined;
 const historyReplies: Array<() => void> = [];
@@ -68,6 +69,7 @@ test.beforeEach(async ({ page }) => {
   failEvents = false;
   failPrompt = false;
   failAccess = false;
+  finalResponseError = null;
   accessCalls = 0;
   recoveryReply = undefined;
   historyReplies.length = 0;
@@ -159,6 +161,10 @@ test.beforeEach(async ({ page }) => {
     }
     if (path === `session/${id}/final-response`) {
       c.recoveries.push(req.body.messageId);
+      if (finalResponseError) {
+        res.status(410).json(finalResponseError);
+        return;
+      }
       emit(c, "session.status", { sessionID: id, status: { type: "busy" } });
       recoveryReply = (text, agent = "sapiom-turn-recovery") => {
         const previous = c!.turns.at(-1)!;
@@ -1013,6 +1019,40 @@ test("drops unscoped native errors and stops continuation on a scoped terminal e
   for (const stream of c.streams) stream.end();
   await expect.poll(() => c.recoveries).toEqual([]);
   expect(c.prompts).toEqual(["One accepted request"]);
+});
+
+test("keeps an incomplete turn blocked when final-response returns a typed terminal error", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("One request with incomplete native history");
+  await input.press("Enter");
+  const c = conversations.get("ses_sess_boot")!;
+  await expect
+    .poll(() => c.prompts)
+    .toEqual(["One request with incomplete native history"]);
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+
+  finalResponseError = {
+    error: openCodeTransportFailure("native_history_missing"),
+  };
+  endWithoutAnswer(c);
+
+  await expect.poll(() => c.recoveries).toEqual(["msg_empty"]);
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText(
+    "saved Assistant conversation is unavailable",
+  );
+  await expect(
+    page.getByRole("button", { name: "Send message" }),
+  ).toBeDisabled();
+  await expect(input).toBeDisabled();
+  await expect(alert.getByRole("button", { name: "Reconnect" })).toHaveCount(0);
+  expect(c.prompts).toEqual(["One request with incomplete native history"]);
+
+  await alert.getByRole("button", { name: "Open Terminal" }).click();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
 test("shows stream loss and reconnects without replaying an accepted prompt", async ({
