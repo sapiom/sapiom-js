@@ -1,5 +1,127 @@
 # @sapiom/harness
 
+## 0.17.0
+
+### Minor Changes
+
+- 84f5767: Surface when a running Claude session needs the current Sapiom connection, prevent prepared sessions or tasks from launching after it changes, and expose `MCP_CREDENTIAL_GENERATION_CHANGED` as a retryable conflict.
+- d775192: **Breaking for HTTP clients** (minor while `@sapiom/harness` is pre-1.0): retire
+  the documented project System Graph endpoints. Authenticated requests to all
+  three routes now return the generic JSON API `404` response:
+
+  - `GET /api/workspaces/:workspaceKey/system-graph`
+  - `POST /api/workspaces/:workspaceKey/system-graph/refresh`
+  - `GET /api/workspaces/:workspaceKey/system-graph/navigation`
+
+  The boot token remains required. These requests no longer resolve a scope,
+  read or refresh a legacy graph, or activate graph watchers.
+
+  Migrate to `GET /api/projects/:projectId/agent-map/workspace` for the durable
+  Agent Map and shared proposal, and
+  `GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` for exact
+  implementation navigation. Obtain server-issued project IDs from
+  `GET /api/state`; a workspace key, path or display name is not a project ID.
+  The durable APIs do not use the old process-memory graph snapshots or revision
+  matching protocol.
+
+  This release includes the matching Studio client recovery: an unresolved
+  project shows **Agent Map unavailable** with **Reload projects**, preserves its
+  conversation, and no longer starts or selects a session on a project click.
+  Shared workspace discovery, explicit session creation and ordinary session
+  navigation remain available independently of the retired graph.
+
+- 1a33894: Remove the retired project graph server runtime and HTTP handlers. Authenticated requests to the old graph, refresh, and navigation URLs return the generic JSON API 404; requests without the required boot token still return 401. The JSON 404 fallback applies to all unknown `/api` paths, preventing them from falling through to the Studio HTML shell.
+
+  Use durable project IDs and the Agent Map APIs. Shared agent discovery, ordinary sessions, and per-agent Canvas remain available.
+
+- fc8b07b: Bring Codex into Studio's Sapiom connection lifecycle: report stale credentials, explicitly restart resumable sessions with the current credential, and stop credential-bearing sessions and background tasks on disconnect.
+- fefb4f8: Expose the shared credential-store path to authenticated local integrations and stop affected Studio-managed Claude sessions and background tasks when the current Sapiom connection is removed.
+- cf3e872: Offer an explicit MCP session restart API and UI action when the Sapiom connection changes, and export `McpSessionRestartUnavailableError` for programmatic handling.
+- 2b9f75e: Resolve and refresh internal Assistant access using trusted Studio user credentials.
+- bcd6167: Add a revocable runtime-only credential bridge for the internal Studio Assistant.
+- 981c940: Add the internally gated Terminal/Assistant switch and a Studio-native streaming OpenCode conversation with connection recovery.
+- 1bb065e: Own OpenCode startup, authorized workspace state, access revocation, and shutdown in the shared Studio host.
+- 7df16bd: Associate Studio sessions with distinct OpenCode conversations and expose authenticated, session-scoped actions and incremental events.
+- b460c9a: Resolve linked agents from one tenant-scoped definitions list per poll instead
+  of a by-id lookup per agent: definitions the signed-in account cannot see are
+  never requested and show as unavailable in Studio. `WorkflowInfo` gains an
+  optional, serve-time `definitionAccess` field (never persisted).
+- d7f5c04: Let Studio request and privately retain a delegated signed-in user credential alongside its existing organization connection. Serialize user-token refresh with Studio login/sign-out, persist rotations atomically, and revoke the user-token family on sign-out when the backend is reachable. Existing CLI callers and legacy project ownership remain unchanged.
+
+### Patch Changes
+
+- 758ba40: Shorten the right pane's "Agent Map" tab to "Map" when the pane is narrow, instead of wrapping the label onto two lines.
+- 7776065: Limit archive backfill to 200 conversations per maintenance pass. Keep source events while work remains or archiving fails, and retry at the next scheduled cleanup.
+- b260034: Define a strict shared contract for sanitized Assistant transport failures and their trusted recovery actions.
+- 2acd9bb: Attach a per-request completion instruction and support one durable native continuation from saved conversation results after an eligible incomplete turn. Fence prompt admission and uncertain dispatch, retain normal permissions, bound recovery time, and prevent the same continuation from dispatching again after reload. Preserve the exact Studio completion protocol on native compaction continuations so completed answers remain classifiable without replaying prompts or tool calls.
+- 6c96a5b: Fix project selection when a current Studio server cannot resolve the project's identity: show "Agent Map unavailable" with a "Reload projects" retry instead of the legacy project graph, and no longer start or select a session when that project is clicked. Explicit session creation and session-tab navigation remain available. Reloading project identities preserves the selected project and active conversation, and current projects ignore obsolete graph events.
+
+  This patch restores Studio's documented read-only project-selection contract during catalog failures.
+
+- a56328d: Add shared Assistant turn interpretation that distinguishes native activity, explicit completion reports, errors, and unconfirmed stops. Bind completion declarations to the current request and hide their bookkeeping across streamed parts and restored history. The host and chat integration follow in dependent changes.
+- 5602d4e: Fence in-memory Assistant drafts by the server-issued authority revision so drafts cannot cross account, tenant, denial, or readmission boundaries.
+- 4da9937: Add an opt-in durable process guard that prevents a replacement Assistant runtime from starting until prior native writer cleanup is positively proven.
+- e28f255: Fence Assistant runtime startup with durable native cleanup ownership and retain the lock whenever cleanup cannot be proven.
+- d72433a: Preserve actionable Assistant service status codes and validated retry delays while replacing upstream error content with sanitized structured responses. Return oversized local requests as JSON 413 errors through the assembled Studio server.
+- ec252d3: Revoke Assistant bridge credentials when the verified user or tenant changes, even if an identity revision is incorrectly reused.
+- 6b0b11f: Name the two Sapiom MCP servers by role in both offline fallbacks — "the local
+  authoring server" and "the hosted capability server" — instead of by registration
+  alias (SAP-3179).
+
+  The two texts disagreed: the Studio prompt called the servers `sapiom` (hosted) and
+  `sapiom-dev` (local), which is what Studio registers; the authoring primer called them
+  `sapiom` (local) and `sapiom-direct` (hosted), which is what a plain Claude Code user is
+  told to register. A Studio session reads both, so "use the `sapiom` alias to author
+  agents" pointed it at the remote server the prompt had just said not to call while
+  authoring. Aliases now appear only inside the two `claude mcp add` commands, which are
+  unchanged. The Studio prompt also disambiguates the two same-named `sapiom_authenticate`
+  / `sapiom_status` pairs, so a session signs in against the local server.
+
+  Both digest pins move with the bodies. The paired backend content release
+  (sapiom/Sapiom#4884) must adopt the same two bodies for the cross-repo pins to agree.
+
+- 4b1ebc5: Keep overlapping Studio sign-in and sign-out transitions ordered while allowing a new sign-in to begin promptly after signing out.
+- 66542da: Retry fully received incomplete Assistant model responses up to twice before exposing output or tool calls. Pass through tool fragments, refusals, errors, uncertain endings, and oversized prefixes without retrying. A completion declaration is the model's report and does not independently verify task success.
+- 4936ce9: Keep the initial creation form open when attachment preparation fails, preserving the request and files so you can retry.
+- b04ad4d: Preserve MCP replay cursors and optional-stream protocol responses so queued tool results arrive without repeating the original tool call. Use the pinned OpenCode runtime's native Code Mode to retain full MCP discovery without sending every remote tool schema with each model request.
+- f618e7e: Retain unchanged verified Assistant access through bounded transient outages while revoking principal crossovers and exposing an opaque browser authority barrier for draft isolation.
+- 5602d4e: Retain unsent Assistant drafts across pane routes, session review, reconnects, and live-to-exited remounts while clearing them at authentication, deletion, and reload boundaries.
+- e40920e: Route strictly scoped Assistant runtime, authentication, and missing-history failures as actionable sanitized errors while preserving saved session associations and preventing replay.
+- 0f28c4e: Prevent repeated exit-status broadcasts from deleting configuration regenerated during session resume, including sessions restored after restart or imported from history. Failed resume preparation also cleans up regenerated configuration.
+- d2be8aa: Show trusted static recovery actions for typed Assistant transport and final-response failures while keeping incomplete turns blocked and preventing prompt or tool replay.
+- c343fd1: Prepare the first part of the Assistant UI dependency graph for Studio's gated chat integration.
+- b177f49: Prepare the remaining Radix dependency graph required by the pinned Assistant UI integration.
+- 48ab09f: Adopt the pinned Assistant UI OpenCode packages and remove all temporary direct Radix dependency declarations.
+- 9ddb57c: Preserve Assistant drafts across view changes and brief capability-check failures. Reveal Terminal after foreground work is accepted, and show rejected inspector sends without changing the view.
+- 175fe2b: Package a pinned headless OpenCode runtime and configure Sapiom access through Studio's private bridge.
+- 42fcacc: Remove unreachable legacy project graph browser code from Studio's bundled client and server. This internal cleanup preserves durable Agent Map navigation, project-wide conversation tabs, and ordinary sessions' independent Canvas and Steps views.
+
+  Restore each project's map pan and zoom when returning from another project or an agent Canvas. If the saved view would leave every node offscreen, fit the map into view.
+
+- 7776065: Preserve the selected coding agent when launching a template from the new-session composer or template gallery, including bundled starters. Codex selections no longer start Claude Code sessions.
+- 9b957ca: Remove the 720px cap on the Agent Map pane: the resize handle now lets it grow until the terminal hits its own minimum width.
+- c2128f6: Validate native session and message identifiers before creating Assistant continuation records or lock files. Reject malformed identifiers at the storage boundary while preserving the existing record names and protection against dispatching recovery twice.
+- e59da42: Show overall Assistant status separately from completed tools, preserve the answer when completion is unconfirmed, and expose the saved conversation after its Terminal exits. Display bounded continuation progress, reconcile its history, and hide internal completion bookkeeping. Finished reflects the model's explicit report; an unmarked answer remains Stopped and automatic continuation may still produce an unnecessary recap.
+- Updated dependencies [0710301]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [98f88fd]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [421439b]
+- Updated dependencies [4c9bafb]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [d516895]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [a2ce646]
+- Updated dependencies [5d18ba3]
+  - @sapiom/mcp@0.16.0
+  - @sapiom/opencode@0.1.0
+  - @sapiom/agent@0.14.0
+  - @sapiom/agent-core@0.14.0
+
 ## 0.16.0
 
 ### Minor Changes
