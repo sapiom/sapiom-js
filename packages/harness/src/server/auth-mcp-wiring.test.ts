@@ -295,6 +295,17 @@ describe("Agent Studio MCP authentication wiring", () => {
     });
   }
 
+  it("gates the capability projection with the boot token and stays off without user credentials", async () => {
+    const host = await boot({ authMode: "disabled" });
+    const url = `http://127.0.0.1:${host.port}/api/assistant/access`;
+    expect((await fetch(url)).status).toBe(401);
+    const response = await fetch(url, {
+      headers: { "X-Harness-Token": "test-token" },
+    });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ enabled: false });
+  });
+
   async function waitForAuthenticated(): Promise<void> {
     await vi.waitFor(() => expect(writeCredentials).toHaveBeenCalled());
     await Promise.resolve(
