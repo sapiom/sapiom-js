@@ -204,13 +204,13 @@ describe("Studio-scoped OpenCode transport", () => {
       ).status,
     ).toBe(403);
     expect(
-      (
+      await (
         await request(path, {
           method: "POST",
           body: JSON.stringify({ messageId: "msg_empty" }),
         })
-      ).status,
-    ).toBe(502);
+      ).json(),
+    ).toEqual({ error: openCodeTransportFailure("transport_unavailable") });
     expect(
       requests.filter(
         (request) =>
