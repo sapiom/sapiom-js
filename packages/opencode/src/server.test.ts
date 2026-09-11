@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { startOpenCodeServer, type OpenCodeServer } from "./server.js";
+import {
+  OpenCodeStartupError,
+  startOpenCodeServer,
+  type OpenCodeServer,
+} from "./server.js";
 import { createSapiomOpenCodeConfig } from "./config.js";
 
 let directory: string;
@@ -80,7 +84,12 @@ describe("packaged OpenCode runtime", () => {
         ...options({ stall: true }),
         startupTimeoutMs: 400,
       }),
-    ).rejects.toThrow("could not start");
+    ).rejects.toMatchObject({
+      name: "OpenCodeStartupError",
+      code: "timed-out",
+      retryable: true,
+      message: "OpenCode took too long to start. Retry the connection.",
+    });
     const pid = Number(await readFile(join(directory, "runtime.pid"), "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
     server = await startOpenCodeServer(options());
@@ -95,13 +104,47 @@ describe("packaged OpenCode runtime", () => {
     });
     const timer = setTimeout(() => abort.abort(), 100);
     try {
-      await expect(starting).rejects.toThrow();
+      await expect(starting).rejects.toMatchObject({
+        code: "cancelled",
+        retryable: true,
+      });
     } finally {
       clearTimeout(timer);
     }
-    await expect(startOpenCodeServer(options({ crash: true }))).rejects.toThrow(
-      "OpenCode could not start. Please retry.",
-    );
+    await expect(
+      startOpenCodeServer(options({ crash: true })),
+    ).rejects.toMatchObject({
+      code: "exited",
+      exitCode: 1,
+      retryable: true,
+      message:
+        "OpenCode exited before it became ready. Retry, then update or reinstall Studio if the problem continues.",
+    });
+  });
+
+  it("classifies real executable path and permission failures without raw details", async () => {
+    const missing = join(directory, "private-provider-token-missing");
+    await expect(
+      startOpenCodeServer({
+        ...options(),
+        command: { executable: missing },
+      }),
+    ).rejects.toEqual(new OpenCodeStartupError("executable-not-found"));
+    if (process.platform !== "win32") {
+      const blocked = join(directory, "private-provider-token-blocked");
+      await writeFile(blocked, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+      await expect(
+        startOpenCodeServer({
+          ...options(),
+          command: { executable: blocked },
+        }),
+      ).rejects.toEqual(new OpenCodeStartupError("permission-denied"));
+    }
+    expect(
+      (await readdir(join(directory, "state"))).filter((entry) =>
+        entry.startsWith("launch-"),
+      ),
+    ).toEqual([]);
   });
 
   it.each([
