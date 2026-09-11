@@ -253,6 +253,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
     finish();
     await rejected;
   });
+
   it("retires a confirmed exited process so retry can reopen the same persistent state", async () => {
     let exit!: () => void;
     const exited = new Promise<void>((resolve) => {

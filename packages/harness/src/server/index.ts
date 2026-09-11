@@ -159,6 +159,7 @@ import {
   resolveManifestName,
 } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
+import { createOpenCodeRouter } from "./opencode.js";
 import {
   createApiKeyProvider,
   staticApiKeyProvider,
@@ -3548,6 +3549,7 @@ export const startServer = async (
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
+  app.use("/opencode", createOpenCodeRouter(openCodeHost, options.bootToken));
 
   // Everything under /api requires the boot token; mounted as middleware
   // (not a router) so it also gates the workflows/macros routers below,
