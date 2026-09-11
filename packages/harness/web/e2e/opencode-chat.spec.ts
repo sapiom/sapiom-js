@@ -268,6 +268,93 @@ test("streams, disposes the old tab's connection, restores history, and sends a 
   await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
+test("keeps principal-scoped session drafts across centre-pane routes and exited-session remounts", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("First session draft");
+
+  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  await tabs.nth(1).click();
+  await input.fill("Second session draft");
+
+  // The create-new destination unmounts the whole conversation branch.
+  await page.getByTestId("rail-create-new").click();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await page.getByTestId("composer-back").click();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(input).toHaveValue("Second session draft");
+
+  // A transcript-only review is another centre-pane owner. Closing it returns
+  // to the same live Studio session without making the review adopt/resume.
+  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("past-sessions-trigger").hover();
+  await page
+    .getByTestId("history-2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33")
+    .click();
+  await expect(page.getByTestId("past-session-pane")).toBeVisible();
+  await page.getByTestId("past-session-close").click();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(input).toHaveValue("Second session draft");
+
+  await tabs.nth(0).click();
+  await expect(input).toHaveValue("First session draft");
+
+  // Natural Terminal exit swaps the live workbench for the dead-session pane.
+  // The remounted Assistant still owns the same session-keyed draft.
+  await page.evaluate(() =>
+    (window as any).__HARNESS_TEST__.publish({
+      type: "session.status",
+      session: {
+        id: "sess-boot",
+        agentSessionId: null,
+        boundWorkflowPath: "/Users/demo/acme-app/leasing",
+        harness: "claude-code",
+        cwd: "/Users/demo/acme-app",
+        title: "acme-app",
+        status: "exited",
+        ready: false,
+        exitCode: 0,
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+      },
+    }),
+  );
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(input).toHaveValue("First session draft");
+
+  // An auth barrier replaces the whole store. A newly verified principal can
+  // use Assistant, but never inherits either prior principal's unsent text.
+  enabled = false;
+  await page.evaluate(() =>
+    (window as any).__HARNESS_TEST__.publish({
+      type: "auth.changed",
+      authenticated: false,
+      organizationName: null,
+    }),
+  );
+  await expect(
+    page.getByRole("group", { name: "Conversation view" }),
+  ).toHaveCount(0);
+  enabled = true;
+  await page.evaluate(() =>
+    (window as any).__HARNESS_TEST__.publish({
+      type: "auth.changed",
+      authenticated: true,
+      organizationName: "Another organization",
+    }),
+  );
+  await expect(
+    page.getByRole("button", { name: "Assistant", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(input).toHaveValue("");
+});
+
 test("waits for the associated history before enabling the composer", async ({
   page,
 }) => {

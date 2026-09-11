@@ -85,6 +85,7 @@ import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
 import { AssistantPane } from "./components/AssistantPane";
+import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
@@ -296,6 +297,23 @@ export const App = (): JSX.Element => {
     createGraphViewportStore,
     [harness.authRevision],
   );
+  // Draft text belongs to a principal + Studio session, not to whichever
+  // centre-pane branch happens to be mounted. An auth barrier replaces this
+  // whole store; an app reload intentionally drops it rather than persisting
+  // sensitive, unsent text.
+  const assistantDrafts = useMemo<ChatDraftStore>(
+    () => new Map(),
+    [harness.authRevision, harness.bootToken],
+  );
+  // Successful session deletion removes its keyed draft. Exited sessions stay
+  // in state (and keep their draft) until the user actually closes them.
+  useEffect(() => {
+    if (!harness.state) return;
+    const sessionIds = new Set(harness.state.sessions.map(({ id }) => id));
+    for (const id of assistantDrafts.keys()) {
+      if (!sessionIds.has(id)) assistantDrafts.delete(id);
+    }
+  }, [assistantDrafts, harness.state]);
   const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
     () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
   );
@@ -3300,24 +3318,35 @@ export const App = (): JSX.Element => {
                   onClose={() => setReviewSummary(null)}
                 />
               ) : showDead && conversationSession ? (
-                <DeadSessionPane
-                  session={conversationSession}
-                  resumeMode={deadResumeMode}
-                  loadRecord={harness.sessionRecord}
-                  onResume={() =>
-                    void harness.resumeSession(conversationSession.id)
+                <AssistantPane
+                  sessionId={conversationSession.id}
+                  bootToken={harness.bootToken}
+                  authRevision={harness.authRevision}
+                  drafts={assistantDrafts}
+                  terminalRevision={
+                    harness.terminalRevealBySession.get(conversationSession.id) ??
+                    0
                   }
-                  onContinue={() =>
-                    void harness.rehydrateSession({
-                      cwd: conversationSession.cwd,
-                      harness: conversationSession.harness,
-                      from: conversationSession.id,
-                    })
-                  }
-                  onClose={() =>
-                    void harness.closeSession(conversationSession.id)
-                  }
-                />
+                >
+                  <DeadSessionPane
+                    session={conversationSession}
+                    resumeMode={deadResumeMode}
+                    loadRecord={harness.sessionRecord}
+                    onResume={() =>
+                      void harness.resumeSession(conversationSession.id)
+                    }
+                    onContinue={() =>
+                      void harness.rehydrateSession({
+                        cwd: conversationSession.cwd,
+                        harness: conversationSession.harness,
+                        from: conversationSession.id,
+                      })
+                    }
+                    onClose={() =>
+                      void harness.closeSession(conversationSession.id)
+                    }
+                  />
+                </AssistantPane>
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session that can WORK on this agent — its
                    board still draws on the right, from the workflow-keyed route
@@ -3385,7 +3414,12 @@ export const App = (): JSX.Element => {
                       sessionId={conversationSession.id}
                       bootToken={harness.bootToken}
                       authRevision={harness.authRevision}
-                      terminalRevision={harness.terminalRevealBySession.get(conversationSession.id) ?? 0}
+                      drafts={assistantDrafts}
+                      terminalRevision={
+                        harness.terminalRevealBySession.get(
+                          conversationSession.id,
+                        ) ?? 0
+                      }
                     >
                       <Terminal
                         sessionId={conversationSession.id}
