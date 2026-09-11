@@ -329,13 +329,6 @@
     "reason": "The internal session-binding route remains stable for existing clients."
   },
   {
-    "id": "web-system-graph-navigation-path-key",
-    "path": "packages/harness/web/src/lib/system-graph.ts",
-    "pattern": "^workflowPath$",
-    "occurrences": 1,
-    "reason": "The protected graph-navigation response key is a compatibility-sensitive private API contract."
-  },
-  {
     "id": "web-canvas-node-kind",
     "path": "packages/harness/web/src/lib/canvas-graph.ts",
     "pattern": "^launched-workflow$",
@@ -525,10 +518,17 @@
     "reason": "Test IDs inside the mock canvas document; the e2e suite selects on them."
   },
   {
+    "id": "web-bus-workflow-change-event",
+    "path": "packages/harness/web/src/lib/bus-message-type.ts",
+    "pattern": "^workflows\\.changed$",
+    "occurrences": 1,
+    "reason": "The transport accepts the retained source-discovery WebSocket event by its existing protocol name."
+  },
+  {
     "id": "web-api-workflow-change-event",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^workflows\\.changed$",
-    "occurrences": 3,
+    "occurrences": 2,
     "reason": "The internal WebSocket event name remains stable for existing clients. The mock announces source discovery, moves, and scaffolds through this signal."
   },
   {
@@ -608,5 +608,19 @@
     "pattern": "plannerOrigin",
     "occurrences": 1,
     "reason": "Released-event fixture proves the private infrastructure bootstrap prompt never becomes a human transcript turn after upgrade."
+  },
+  {
+    "id": "db-insight-dashboard-runs-list-route",
+    "path": "examples/scheduled-db-insight-report/app/server.mjs",
+    "pattern": "^/v1/workflows/executions\\?$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that lists an agent's runs. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "db-insight-dashboard-run-detail-route",
+    "path": "examples/scheduled-db-insight-report/app/server.mjs",
+    "pattern": "^/v1/workflows/executions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
   }
 ]

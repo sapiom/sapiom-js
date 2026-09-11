@@ -9,8 +9,6 @@ import type {
 } from "../shared/agent-map.js";
 import type { AppState, HarnessAdapter } from "../shared/types.js";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
-import { SystemGraphStore } from "../core/system-graph-store.js";
-import { SystemGraphWatcherManager } from "../core/system-graph-watcher.js";
 import { startServer, type HarnessServer } from "./index.js";
 
 describe("real Studio workspace wiring", () => {
@@ -25,22 +23,36 @@ describe("real Studio workspace wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it("resolves and retains a published durable root when only its descendant session remains", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "studio-root-scope-wiring-"));
+  it("keeps a durable root and descendant session without admitting legacy graph work", async () => {
+    root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "studio-root-scope-wiring-"),
+    );
     const projectRoot = path.join(root, "project");
     const descendant = path.join(projectRoot, "src");
     await fs.mkdir(descendant, { recursive: true });
-    const catalog = new StudioProjectCatalog(path.join(root, "studio-projects.json"));
-    const project = (await catalog.reconcile([
-      { workspaceKey: "legacy-project", cwd: projectRoot },
-    ])).projects[0]!;
-    await fs.writeFile(path.join(root, "settings.json"), JSON.stringify({ recentDirs: [projectRoot] }));
+    const catalog = new StudioProjectCatalog(
+      path.join(root, "studio-projects.json"),
+    );
+    const project = (
+      await catalog.reconcile([
+        { workspaceKey: "legacy-project", cwd: projectRoot },
+      ])
+    ).projects[0]!;
+    await fs.writeFile(
+      path.join(root, "settings.json"),
+      JSON.stringify({ recentDirs: [projectRoot] }),
+    );
     const adapter: HarnessAdapter = {
       id: "claude-code",
       eventSource: "hooks",
       doctor: async () => [],
       launch: (opts) => ({ command: "bash", args: [], env: {}, cwd: opts.cwd }),
-      resume: (_id, opts) => ({ command: "bash", args: [], env: {}, cwd: opts.cwd }),
+      resume: (_id, opts) => ({
+        command: "bash",
+        args: [],
+        env: {},
+        cwd: opts.cwd,
+      }),
       listPastSessions: async () => [],
       canResume: async () => true,
     };
@@ -54,24 +66,47 @@ describe("real Studio workspace wiring", () => {
       autoCreateSession: false,
       loadSystemPrompt: async () => "",
     });
-    const session = await server.sessionManager.create({ cwd: descendant, harness: "claude-code" });
+    const session = await server.sessionManager.create({
+      cwd: descendant,
+      harness: "claude-code",
+    });
     expect(session.agentMapIdentity?.projectId).toBe(project.projectId);
-    await fs.writeFile(path.join(root, "settings.json"), JSON.stringify({ recentDirs: [] }));
-    const watcherRetain = vi.spyOn(SystemGraphWatcherManager.prototype, "retain");
-    const storeRetain = vi.spyOn(SystemGraphStore.prototype, "retain");
+    await fs.writeFile(
+      path.join(root, "settings.json"),
+      JSON.stringify({ recentDirs: [] }),
+    );
     const headers = { "X-Harness-Token": "test-token" };
     const baseUrl = `http://127.0.0.1:${server.port}`;
-    const state = await (await fetch(`${baseUrl}/api/state`, { headers })).json() as AppState;
+    const state = (await (
+      await fetch(`${baseUrl}/api/state`, { headers })
+    ).json()) as AppState;
     const scope = state.workspaceScopes?.find(({ cwd }) => cwd === projectRoot);
     expect(scope?.projectId).toBe(project.projectId);
-    const graph = await fetch(`${baseUrl}/api/workspaces/${scope!.workspaceKey}/system-graph`, { headers });
-    expect(graph.status).toBe(200);
-    expect(watcherRetain.mock.calls.at(-1)?.[0].has(scope!.workspaceKey)).toBe(true);
-    expect(storeRetain.mock.calls.at(-1)?.[0].has(scope!.workspaceKey)).toBe(true);
+    // Includes identity-less descendant scopes and unknown/stale keys: neither
+    // is permission to serve a second topology or disclose private navigation.
+    for (const key of [
+      ...state.workspaceScopes!.map((scope) => scope.workspaceKey),
+      "missing",
+    ]) {
+      for (const [suffix, method] of [
+        ["", "GET"],
+        ["/refresh", "POST"],
+        ["/navigation", "GET"],
+      ]) {
+        const url = `${baseUrl}/api/workspaces/${key}/system-graph${suffix}`;
+        expect((await fetch(url, { method })).status).toBe(401);
+        const response = await fetch(url, { method, headers });
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "API route not found" });
+      }
+    }
     await fetch(`${baseUrl}/api/state`, { headers });
-    expect(watcherRetain.mock.calls.at(-1)?.[0].has(scope!.workspaceKey)).toBe(true);
-    expect(storeRetain.mock.calls.at(-1)?.[0].has(scope!.workspaceKey)).toBe(true);
-    expect((await fs.readFile(path.join(root, "settings.json"), "utf8"))).not.toContain(projectRoot);
+    expect(
+      server.sessionManager.get(session.id)?.agentMapIdentity?.projectId,
+    ).toBe(project.projectId);
+    expect(
+      await fs.readFile(path.join(root, "settings.json"), "utf8"),
+    ).not.toContain(projectRoot);
   });
 
   it("publishes opaque AppState bindings and restores one across a null-definition move and restart", async () => {

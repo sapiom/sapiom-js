@@ -26,7 +26,7 @@ async function measureLabels(
     svg.namespaceURI,
     "text",
   ) as SVGTextElement;
-  text.setAttribute("class", "system-graph-edge-label agent-map-edge-label");
+  text.setAttribute("class", "agent-map-edge-label");
   text.setAttribute("text-anchor", "middle");
   svg.append(text);
   viewport.append(svg);

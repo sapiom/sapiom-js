@@ -8,6 +8,15 @@ import {
 } from "@sapiom/mcp/auth";
 import { DurableFileLock } from "./durable-file-lock.js";
 
+export class StudioCredentialRefreshError extends Error {
+  constructor(
+    readonly kind: "transient" | "rejected",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /** Shared by Studio login, sign-out and refresh across CLI/desktop hosts. */
 export async function withStudioCredentialLock<T>(
   operation: () => Promise<T>,
@@ -41,20 +50,41 @@ export async function refreshStudioCredentials(
     if (!credentials) return null;
     if (Date.parse(credentials.expiresAt) > Date.now() + 90_000)
       return credentials;
-    const response = await fetch(`${env.apiURL}/v1/tokens/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken: credentials.refreshToken }),
-      signal: AbortSignal.timeout(5000),
-      redirect: "error",
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${env.apiURL}/v1/tokens/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: credentials.refreshToken }),
+        signal: AbortSignal.timeout(5000),
+        redirect: "error",
+      });
+    } catch {
+      throw new StudioCredentialRefreshError(
+        "transient",
+        "Studio credential refresh is temporarily unavailable",
+      );
+    }
     if (!response.ok)
-      throw new Error("Sign in again to restore Assistant access");
-    const pair = (await response.json()) as {
+      throw new StudioCredentialRefreshError(
+        response.status >= 500 ? "transient" : "rejected",
+        response.status >= 500
+          ? "Studio credential refresh is temporarily unavailable"
+          : "Sign in again to restore Assistant access",
+      );
+    let pair: {
       access_token?: string;
       refresh_token?: string;
       expires_in?: number;
     };
+    try {
+      pair = (await response.json()) as typeof pair;
+    } catch {
+      throw new StudioCredentialRefreshError(
+        "rejected",
+        "Invalid Studio credential refresh",
+      );
+    }
     if (
       !pair.access_token?.startsWith("sat_") ||
       !pair.refresh_token?.startsWith("srt_") ||
@@ -62,7 +92,10 @@ export async function refreshStudioCredentials(
       !Number.isFinite(pair.expires_in) ||
       pair.expires_in <= 0
     )
-      throw new Error("Invalid Studio credential refresh");
+      throw new StudioCredentialRefreshError(
+        "rejected",
+        "Invalid Studio credential refresh",
+      );
     const next = {
       accessToken: pair.access_token,
       refreshToken: pair.refresh_token,

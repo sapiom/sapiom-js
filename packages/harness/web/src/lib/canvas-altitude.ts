@@ -19,7 +19,7 @@
  * surfaces that can disagree about what you are looking at is the bug this
  * module exists to make impossible.
  */
-import type { WorkspaceKey, WorkspaceScopeSummary } from "@shared/system-graph";
+import type { WorkspaceKey, WorkspaceScopeSummary } from "@shared/workspace-scope";
 import type { StudioWorkspaceSelection } from "@shared/agent-map";
 
 import { basenameOf, samePath } from "./paths";

@@ -9,7 +9,7 @@ import {
   type StudioWorkspaceSelection,
 } from "../shared/agent-map.js";
 import type { WorkflowInfo } from "../shared/types.js";
-import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
+import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
 import { samePath } from "../shared/paths.js";
 import {
   AgentMapWorkspaceStore,

@@ -46,21 +46,15 @@ The Studio host refreshes the internal Assistant capability at most every 30
 seconds and expires an enabled decision within 60 seconds. Missing identity,
 offline startup, unsupported backends, and unavailable flags leave it off.
 These access checks are independent of optional telemetry and never prevent
-ordinary Terminal startup. Only the resolved boolean is exposed to the browser.
-
-Eligible internal users see a **Terminal | Assistant** switch, with Terminal
-selected initially. Assistant sends prompts and streams Sapiom responses in the
-selected project. Returning to a session reopens its OpenCode conversation;
-switching views detaches the display while execution continues. Connection errors
-offer **Reconnect**, which reloads history without resending accepted prompts.
-This first slice includes basic tool status; richer controls arrive separately.
-Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
-rejected send shows its error and keeps the selected view. Unsent chat text stays
-in memory per session across view/tab switches and reconnects until sign-out or
-reload. Background actions keep the selected view. A failed UI
-access poll retains the open draft for at most 60 seconds after the last success;
-explicit revocation/sign-out takes effect immediately when observed. The host
-continues enforcing its own capability expiry independently.
+ordinary Terminal startup. The browser receives only the resolved boolean and a
+random, process-memory `authorityRevision`; it never receives principal fields,
+credentials, identity hashes, or grant diagnostics. The revision stays stable
+through polling, reconnects, transient retention, and renewed leases for the
+same authority. A verified principal crossover or actual revocation, denial,
+expiry, or sign-out rotates it before the new state is observable. Disabled
+responses carry the current retirement barrier, and repeated disabled polls do
+not rotate it. Browser draft stores use this opaque boundary to prevent text
+from crossing authorities without persisting it.
 
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
@@ -68,12 +62,6 @@ Studio adds the Sapiom key only when forwarding to the configured services.
 Production uses the Sapiom LLM gateway. Other environments must explicitly set
 `services.llm` to their gateway origin in the matching credentials-file environment
 entry; Studio never falls back from a custom environment to production.
-
-Studio owns each Assistant runtime for the authorized session and working
-directory. Browser detachment leaves it running; sign-out, access revocation,
-and Studio shutdown stop it. Runtime state is isolated by user, organization,
-session, and directory under `~/.sapiom/harness/opencode`. A process lock prevents
-two Studio hosts from opening the same runtime state concurrently.
 
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
@@ -141,6 +129,27 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+### Codex MCP validation
+
+The ordinary unit and server tests cover launch/resume conversion, login and
+credential refresh, logout, and error reporting. To verify actual tool discovery
+with an installed Codex CLI, build the harness's workspace dependencies, then
+run the opt-in test:
+
+```bash
+pnpm --filter "@sapiom/harness^..." build
+RUN_CODEX_MCP_INTEGRATION=1 pnpm --filter @sapiom/harness exec vitest run src/core/adapters/codex-mcp.integration.test.ts
+```
+
+The test runs the `codex` binary found on `PATH`. Set `CODEX_TEST_BINARY` to the
+path of a different installed version to test that one instead.
+
+This test uses a temporary Codex home, the built `sapiom-dev` server, and local
+HTTP fixtures. It requires no Codex login or model request and checks both a
+fresh home and an existing configuration with conflicting server registrations.
+It also checks that command environments exclude MCP credentials and the Electron
+launch flag while preserving unrelated user shell settings.
 
 ### Project sessions and Agent Map bootstrap
 
@@ -371,9 +380,8 @@ HTTP contracts that need more than a type to use are written up under `docs/`:
 
 - [`docs/agent-canvas-graph.md`](docs/agent-canvas-graph.md) — the session-free
   `GET /api/workflows/:path/graph` Canvas route keyed by an agent's path.
-- [`docs/workspace-system-graph.md`](docs/workspace-system-graph.md) — the
-  Project dependency-graph endpoints, lifecycle states, cache signal, warnings,
-  and `system-graph.changed` event.
+- [`docs/agent-map-api.md`](docs/agent-map-api.md) — durable project identity,
+  map/node navigation, recovery and the removed project graph endpoints.
 
 ## Testing
 

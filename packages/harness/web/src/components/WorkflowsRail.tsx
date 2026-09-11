@@ -16,7 +16,7 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectSummary,
   StudioWorkspaceSelection,
@@ -114,13 +114,12 @@ interface WorkflowsRailProps {
   activeSessionId: string | null;
   /** The focused agent (or bare folder) path — the single filled selection. */
   focusedAgentPath: string | null;
-  /** Opaque server-issued identities that join project roots to the local
-   * system-graph endpoint without exposing paths in URLs. */
+  /** Server-issued scope keys that join visible roots to durable project IDs. */
   workspaceScopes: AppState["workspaceScopes"];
   /** Presence selects the additive plan-first rail; absence preserves legacy. */
   studioProjects: readonly StudioProjectSummary[] | undefined;
   studioSelection: StudioWorkspaceSelection | null;
-  /** The project whose dependency graph currently owns the full main area. */
+  /** The selected project whose durable identity has not resolved yet. */
   selectedWorkspaceKey: WorkspaceKey | null;
   /** Selects an exact project graph without changing the active session or
    * either preserved agent pane. */

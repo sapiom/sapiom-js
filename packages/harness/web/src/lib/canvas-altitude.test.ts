@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { WorkspaceScopeSummary } from "@shared/system-graph";
+import type { WorkspaceScopeSummary } from "@shared/workspace-scope";
 
 import {
   canvasView,

@@ -1243,20 +1243,22 @@ export class SessionManager {
     }
   }
 
-  /** Replace one stale Claude runtime only when its conversation is resumable. */
+  /** Replace one stale coding-agent runtime when its conversation is resumable. */
   async restartForMcpCredentials(id: string): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     const handle = this.ptys.get(id);
     if (
-      session.harness !== "claude-code" ||
       session.mcpAuthState !== "restart-required" ||
       !handle?.mcpCredentialLaunch ||
       handle.killed
     ) {
       throw new McpSessionRestartUnavailableError();
     }
+    const harnessLabel =
+      listHarnessAdapters().find((adapter) => adapter.id === session.harness)
+        ?.label ?? session.harness;
 
     const runtimeEpoch = handle.runtimeEpoch;
     const restoreRestartRequired = (): void => {
@@ -1272,7 +1274,7 @@ export class SessionManager {
       restoreRestartRequired();
       throw new SessionNotResumeableError(
         id,
-        "Claude Code has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.",
+        `${harnessLabel} has not saved this conversation yet, so it cannot be restarted safely. Start a new session instead.`,
       );
     }
     let resumable: boolean;
@@ -1289,7 +1291,7 @@ export class SessionManager {
       restoreRestartRequired();
       throw new SessionNotResumeableError(
         id,
-        "Claude Code no longer has this conversation, so it cannot be restarted safely. Start a new session instead.",
+        `${harnessLabel} no longer has this conversation, so it cannot be restarted safely. Start a new session instead.`,
       );
     }
     if (this.ptys.get(id) !== handle || handle.killed) {
@@ -1427,6 +1429,11 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Resumes a stored conversation after the adapter confirms it can reopen it.
+   * Claims the starting state before preparation. Setup failures run normal
+   * exit cleanup and preserve the previous last-activity timestamp.
+   */
   async resume(
     id: string,
     trusted: TrustedSessionResumeOptions = {},
@@ -1517,15 +1524,15 @@ export class SessionManager {
     // they must see this lifecycle as starting, not schedule cleanup against
     // files that the resumed process is currently regenerating.
     const lastActiveBeforeResume = session.lastActiveAt;
-    const statusBeforeResume = session.status;
-    const exitCodeBeforeResume = session.exitCode;
     session.status = "starting";
     session.exitCode = null;
     session.lastActiveAt = this.now();
-    let opts: LaunchOpts;
-    let spec: SpawnSpec;
-    let mcpCredentialLaunch: McpCredentialLaunch | undefined;
+    // A failed pre-PTY attempt is not activity; the failure path restores this
+    // timestamp so the dead pane's elapsed time still reflects real work.
     try {
+      await this.persist();
+      this.emitStatus(session);
+      // Preparation belongs to this lifetime so failure runs normal exit cleanup.
       const launchContext =
         trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
           ? {
@@ -1542,34 +1549,12 @@ export class SessionManager {
       const built = await (launchContext
         ? this.buildLaunchOpts(id, session, launchContext)
         : this.buildLaunchOpts(id, session));
-      ({ mcpCredentialLaunch, ...opts } = {
+      const { mcpCredentialLaunch, ...opts } = {
         harnessSessionId: id,
         cwd: session.cwd,
         ...built,
-      });
-      spec = adapter.resume(session.agentSessionId, opts);
-    } catch (error) {
-      // Resume preparation may rotate project capabilities or write generated
-      // launch state before the process exists. No starting state was exposed
-      // or persisted yet, so restore the exact prior record while releasing
-      // any prepared authority.
-      session.status = statusBeforeResume;
-      session.exitCode = exitCodeBeforeResume;
-      session.lastActiveAt = lastActiveBeforeResume;
-      await Promise.resolve(this.onAgentMapSessionExit?.(id)).catch(() => {});
-      throw error;
-    }
-    // The prior value is kept so the failure path below can put it back:
-    // `lastActiveAt` is stamped only to keep sweepDeadSessions() from reaping
-    // this record
-    // during the pre-pty window (it reaps non-exited records with no pty once
-    // they're older than the grace period). If the resume never produces a
-    // pty, that stamp is not activity and must not survive — otherwise a
-    // session idle since last night reports "Ran for 6h 25m" purely because
-    // someone clicked Resume.
-    try {
-      await this.persist();
-      this.emitStatus(session);
+      };
+      const spec = adapter.resume(session.agentSessionId, opts);
       // Schema-aware and strict: the caller leaves a valid current file
       // untouched, translates a valid legacy file, and reconstructs anything
       // missing/invalid from this session plus the live registry. Await it in

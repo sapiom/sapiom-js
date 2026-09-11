@@ -1,10 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 
 export interface StartOpenCodeServerOptions {
   cwd: string;
@@ -22,6 +24,53 @@ export interface OpenCodeServer {
   fetch(path: string, init?: RequestInit): Promise<Response>;
   fetchJson<T>(path: string, init?: RequestInit): Promise<T>;
   close(): Promise<void>;
+}
+
+export type OpenCodeStartupFailureCode =
+  | "executable-not-found"
+  | "permission-denied"
+  | "launch-failed"
+  | "exited"
+  | "timed-out"
+  | "cancelled";
+
+const startupMessages: Record<OpenCodeStartupFailureCode, string> = {
+  "executable-not-found":
+    "Studio's OpenCode runtime is missing. Update or reinstall Studio, then retry.",
+  "permission-denied":
+    "Studio cannot launch its OpenCode runtime because the executable is not permitted. Check the installation permissions or reinstall Studio, then retry.",
+  "launch-failed":
+    "Studio could not launch its OpenCode runtime. Retry, then update or reinstall Studio if the problem continues.",
+  exited:
+    "OpenCode exited before it became ready. Retry, then update or reinstall Studio if the problem continues.",
+  "timed-out": "OpenCode took too long to start. Retry the connection.",
+  cancelled: "OpenCode startup was cancelled.",
+};
+
+const permanentlyBlocked = new Set<OpenCodeStartupFailureCode>([
+  "executable-not-found",
+  "permission-denied",
+]);
+
+/** A credential-free, stable reason for a native runtime startup failure. */
+export class OpenCodeStartupError extends Error {
+  readonly retryable: boolean;
+  readonly exitCode?: number;
+  readonly signal?: NodeJS.Signals;
+
+  constructor(
+    readonly code: OpenCodeStartupFailureCode,
+    termination?: { exitCode: number | null; signal: NodeJS.Signals | null },
+  ) {
+    super(startupMessages[code]);
+    this.name = "OpenCodeStartupError";
+    this.retryable = !permanentlyBlocked.has(code);
+    if (code === "exited") {
+      if (typeof termination?.exitCode === "number")
+        this.exitCode = termination.exitCode;
+      if (termination?.signal) this.signal = termination.signal;
+    }
+  }
 }
 
 /** The caller must retain its state-owner lock when process exit is unconfirmed. */
@@ -57,10 +106,46 @@ function platformEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return result;
 }
 
+const runtimeCredentialKeys = [
+  "OPENCODE_CONFIG_CONTENT",
+  "OPENCODE_SERVER_USERNAME",
+  "OPENCODE_SERVER_PASSWORD",
+] as const;
+const toolHomeKeys = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
+
+async function createCredentialIsolationPlugin(
+  launchRoot: string,
+  toolHomeEnvironment: NodeJS.ProcessEnv,
+): Promise<{ pluginUrl: string; readyPath: string }> {
+  const pluginPath = join(launchRoot, "credential-isolation.mjs");
+  const readyPath = join(launchRoot, "credential-isolation.ready");
+  const source = `import { writeFile } from "node:fs/promises";
+const keys = ${JSON.stringify(runtimeCredentialKeys)};
+const toolHomeKeys = ${JSON.stringify(toolHomeKeys)};
+const toolHomeEnvironment = ${JSON.stringify(toolHomeEnvironment)};
+export const SapiomCredentialIsolation = async () => {
+  for (const key of keys) delete process.env[key];
+  await writeFile(${JSON.stringify(readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
+  return {
+    "shell.env": async (_input, output) => {
+      for (const key of keys) {
+        delete process.env[key];
+        delete output.env[key];
+      }
+      for (const key of toolHomeKeys) delete output.env[key];
+      Object.assign(output.env, toolHomeEnvironment);
+    },
+  };
+};
+`;
+  await writeFile(pluginPath, source, { mode: 0o600 });
+  return { pluginUrl: pathToFileURL(pluginPath).href, readyPath };
+}
+
 export async function startOpenCodeServer(
   options: StartOpenCodeServerOptions,
 ): Promise<OpenCodeServer> {
-  options.signal?.throwIfAborted();
+  if (options.signal?.aborted) throw new OpenCodeStartupError("cancelled");
   const command = options.command ?? {
     executable: join(
       dirname(
@@ -74,73 +159,134 @@ export async function startOpenCodeServer(
   const origin = `http://127.0.0.1:${port}`;
   const password = randomBytes(32).toString("hex");
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
-  const directories = Object.fromEntries(
-    ["config", "data", "cache", "state"].map((name) => [
-      `XDG_${name.toUpperCase()}_HOME`,
-      join(options.stateRoot, name),
-    ]),
+  await mkdir(options.stateRoot, { recursive: true, mode: 0o700 });
+  const launchRoot = await mkdtemp(join(options.stateRoot, "launch-"));
+  const sourceEnvironment = options.environment ?? process.env;
+  const platform = platformEnvironment(sourceEnvironment);
+  const toolHomeEnvironment = Object.fromEntries(
+    toolHomeKeys.flatMap((key) =>
+      sourceEnvironment[key] === undefined
+        ? []
+        : [[key, sourceEnvironment[key]]],
+    ),
   );
+  const resolvedToolHome =
+    sourceEnvironment.HOME ??
+    sourceEnvironment.USERPROFILE ??
+    (sourceEnvironment.HOMEDRIVE && sourceEnvironment.HOMEPATH
+      ? `${sourceEnvironment.HOMEDRIVE}${sourceEnvironment.HOMEPATH}`
+      : userInfo().homedir);
+  toolHomeEnvironment.HOME ??= resolvedToolHome;
+  toolHomeEnvironment.USERPROFILE ??= resolvedToolHome;
+  const { pluginUrl, readyPath } = await createCredentialIsolationPlugin(
+    launchRoot,
+    toolHomeEnvironment,
+  );
+  const isolatedHome = join(launchRoot, "home");
+  const directories = {
+    XDG_CONFIG_HOME: join(launchRoot, "config"),
+    ...Object.fromEntries(
+      ["data", "cache", "state"].map((name) => [
+        `XDG_${name.toUpperCase()}_HOME`,
+        join(options.stateRoot, name),
+      ]),
+    ),
+  };
   await Promise.all(
-    Object.values(directories).map((path) =>
+    [...Object.values(directories), isolatedHome].map((path) =>
       mkdir(path, { recursive: true, mode: 0o700 }),
     ),
   );
-  options.signal?.throwIfAborted();
-  const child = spawn(
-    command.executable,
-    [
-      ...(command.prefixArgs ?? []),
-      "serve",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--pure",
-    ],
-    {
-      cwd: options.cwd,
-      env: {
-        ...platformEnvironment(options.environment ?? process.env),
-        ...directories,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(options.config),
-        OPENCODE_SERVER_USERNAME: "opencode",
-        OPENCODE_SERVER_PASSWORD: password,
-        OPENCODE_DISABLE_CLAUDE_CODE: "1",
-        OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
-        OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
-        OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
-        OPENCODE_DISABLE_PROJECT_CONFIG: "1",
-        OPENCODE_DISABLE_AUTOUPDATE: "1",
-        // Native discovery retains the complete MCP catalog without placing
-        // every remote tool schema in every model request.
-        OPENCODE_EXPERIMENTAL_CODE_MODE: "1",
+  if (options.signal?.aborted) {
+    await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
+    throw new OpenCodeStartupError("cancelled");
+  }
+  let child: ChildProcess;
+  try {
+    child = spawn(
+      command.executable,
+      [
+        ...(command.prefixArgs ?? []),
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+      ],
+      {
+        cwd: options.cwd,
+        env: {
+          ...platform,
+          HOME: isolatedHome,
+          ...(process.platform === "win32"
+            ? { USERPROFILE: isolatedHome }
+            : {}),
+          ...directories,
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...options.config,
+            plugin: [pluginUrl],
+          }),
+          OPENCODE_SERVER_USERNAME: "opencode",
+          OPENCODE_SERVER_PASSWORD: password,
+          OPENCODE_DISABLE_CLAUDE_CODE: "1",
+          OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",
+          OPENCODE_DISABLE_DEFAULT_PLUGINS: "1",
+          OPENCODE_DISABLE_EXTERNAL_SKILLS: "1",
+          OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+          OPENCODE_DISABLE_AUTOUPDATE: "1",
+          // Native discovery retains the complete MCP catalog without placing
+          // every remote tool schema in every model request.
+          OPENCODE_EXPERIMENTAL_CODE_MODE: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        detached: process.platform !== "win32",
       },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      detached: process.platform !== "win32",
-    },
-  );
+    );
+  } catch (error) {
+    await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
+    throw startupLaunchError(error);
+  }
   // Raw diagnostics can contain configuration or provider credentials.
   child.stdout?.resume();
   child.stderr?.resume();
   let exited = false;
+  let termination:
+    | {
+        exitCode: number | null;
+        signal: NodeJS.Signals | null;
+        spawnErrorCode?: string;
+      }
+    | undefined;
   const exit = new Promise<void>((resolve) => {
-    const done = () => {
+    const done = (next: typeof termination) => {
+      if (exited) return;
       exited = true;
+      termination = next;
       resolve();
     };
-    child.once("exit", done);
-    child.once("error", done);
+    child.once("exit", (exitCode, signal) => done({ exitCode, signal }));
+    child.once("error", (error) =>
+      done({
+        exitCode: null,
+        signal: null,
+        spawnErrorCode: (error as NodeJS.ErrnoException).code,
+      }),
+    );
   });
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
-      signalChild(child, "SIGTERM");
-      if (!exited)
+      if (!exited) {
+        signalChild(child, "SIGTERM");
         await Promise.race([exit, delay(options.shutdownTimeoutMs ?? 2000)]);
-      signalChild(child, "SIGKILL");
-      if (!exited) await Promise.race([exit, delay(2000)]);
+      }
+      if (!exited) {
+        signalChild(child, "SIGKILL");
+        await Promise.race([exit, delay(2000)]);
+      }
       if (!exited) throw new OpenCodeShutdownError();
+      await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
     })().catch(() => {
       throw new OpenCodeShutdownError();
     }));
@@ -178,6 +324,60 @@ export async function startOpenCodeServer(
       }
       await delay(50, undefined, { signal });
     }
+    // Loading the instance config also initializes the only allowed external
+    // plugin. Its marker makes credential scrubbing fail closed.
+    const configResponse = await authenticatedFetch("/config", { signal });
+    const configLoaded = configResponse.ok;
+    await configResponse.body?.cancel();
+    if (!configLoaded)
+      throw new Error("OpenCode credential isolation did not initialize");
+    for (;;) {
+      signal.throwIfAborted();
+      try {
+        await access(readyPath);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (exited)
+        throw new Error("OpenCode exited during credential isolation");
+      await delay(25, undefined, { signal });
+    }
+    // OpenCode 1.18.29 snapshots server credentials before loading plugins.
+    // Verify that invariant so a runtime change cannot silently unprotect the
+    // native admin API when the plugin removes its inherited environment.
+    const rejected = await Promise.all([
+      fetch(`${origin}/global/health`, {
+        headers: { "Accept-Encoding": "identity" },
+        redirect: "error",
+        signal,
+      }),
+      fetch(`${origin}/global/health`, {
+        headers: {
+          Authorization: "Basic invalid",
+          "Accept-Encoding": "identity",
+        },
+        redirect: "error",
+        signal,
+      }),
+    ]);
+    for (const response of rejected) {
+      const wasRejected = !response.ok;
+      await response.body?.cancel();
+      if (!wasRejected)
+        throw new Error(
+          "OpenCode credential isolation disabled authentication",
+        );
+    }
+    const protectedHealth = await authenticatedFetch("/global/health", {
+      signal,
+    });
+    const remainsProtected = protectedHealth.ok;
+    await protectedHealth.body?.cancel();
+    if (!remainsProtected)
+      throw new Error(
+        "OpenCode credential isolation invalidated authentication",
+      );
     if (!child.pid || exited) throw new Error("OpenCode exited during startup");
     return {
       pid: child.pid,
@@ -190,10 +390,38 @@ export async function startOpenCodeServer(
         return (await response.json()) as T;
       },
     };
-  } catch {
+  } catch (error) {
+    let startupError: OpenCodeStartupError;
+    if (options.signal?.aborted) {
+      startupError = new OpenCodeStartupError("cancelled");
+    } else if (timeout.aborted) {
+      startupError = new OpenCodeStartupError("timed-out");
+    } else if (exited) {
+      startupError = termination?.spawnErrorCode
+        ? startupLaunchError(termination.spawnErrorCode)
+        : new OpenCodeStartupError("exited", termination);
+    } else {
+      startupError =
+        error instanceof OpenCodeStartupError
+          ? error
+          : new OpenCodeStartupError("launch-failed");
+    }
     await close();
-    throw new Error("OpenCode could not start. Please retry.");
+    await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
+    throw startupError;
   }
+}
+
+function startupLaunchError(error: unknown): OpenCodeStartupError {
+  const code =
+    typeof error === "string"
+      ? error
+      : (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT" || code === "ENOTDIR")
+    return new OpenCodeStartupError("executable-not-found");
+  if (code === "EACCES" || code === "EPERM")
+    return new OpenCodeStartupError("permission-denied");
+  return new OpenCodeStartupError("launch-failed");
 }
 
 function signalChild(child: ChildProcess, signal: NodeJS.Signals): void {

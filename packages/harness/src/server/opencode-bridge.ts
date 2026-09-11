@@ -12,10 +12,6 @@ import type {
   AssistantAccess,
   AssistantGrant,
 } from "../core/assistant-access.js";
-import {
-  fetchOpenCodeModelResponse,
-  openCodeModelCompletionToken,
-} from "./opencode-model-response.js";
 
 type Access = Pick<AssistantAccess, "get" | "subscribe">;
 interface Registration {
@@ -282,19 +278,11 @@ export class OpenCodeBridge {
           ? { "x-sapiom-api-key": key, "x-sapiom-model": this.model }
           : { "x-api-key": key }),
       });
-      // Queued MCP tools close the POST stream and deliver results through
-      // GET replay. Its cursor must survive the credential bridge.
-      for (const name of [
-        "mcp-session-id",
-        "mcp-protocol-version",
-        "last-event-id",
-      ]) {
+      for (const name of ["mcp-session-id", "mcp-protocol-version"]) {
         if (service === "mcp" && req.header(name))
           headers.set(name, req.header(name)!);
       }
       let body = req.method === "POST" ? (req.body as Buffer) : undefined;
-      let streamingModel = false;
-      let completionToken: string | undefined;
       if (service === "llm") {
         let request: Record<string, unknown>;
         try {
@@ -316,24 +304,14 @@ export class OpenCodeBridge {
           return;
         }
         body = Buffer.from(JSON.stringify({ ...request, model: this.model }));
-        streamingModel = request.stream === true;
-        completionToken = openCodeModelCompletionToken(request);
       }
-      const request = () =>
-        fetch(upstream, {
-          method: req.method,
-          headers,
-          body: body as Uint8Array<ArrayBuffer> | undefined,
-          redirect: "error",
-          signal: abort.signal,
-        });
-      const response = streamingModel
-        ? await fetchOpenCodeModelResponse(
-            request,
-            abort.signal,
-            completionToken,
-          )
-        : await request();
+      const response = await fetch(upstream, {
+        method: req.method,
+        headers,
+        body: body as Uint8Array<ArrayBuffer> | undefined,
+        redirect: "error",
+        signal: abort.signal,
+      });
       if (!response.ok) {
         await response.body?.cancel();
         // Preserve status-based client policy, including MCP's optional 405,

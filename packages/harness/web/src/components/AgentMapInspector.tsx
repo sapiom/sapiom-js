@@ -47,7 +47,7 @@ export function AgentMapInspector({
     >
       <div className="agent-map-inspector-heading">
         <div>
-          <p className="system-graph-node-meta">{node.kind}</p>
+          <p className="agent-map-node-meta">{node.kind}</p>
           <h3>{node.name}</h3>
           {deployment && (
             <span

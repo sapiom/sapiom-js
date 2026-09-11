@@ -19,15 +19,8 @@ import type { Locator, Page } from "@playwright/test";
 const ROOT = "/Users/demo/polsia";
 /** `polsia/services/workers` opened as its own project. */
 const NESTED_LABEL = "polsia/services/workers";
-const LEGACY_CONTAINMENT_TEST =
-  "parent and nested project graphs follow their visible containment";
-
-test.beforeEach(async ({ page }, testInfo) => {
-  // A server without durable Studio project summaries remains on the legacy
-  // System Graph path. Every other deep fixture exercises the plan-first path.
-  const studioProjects =
-    testInfo.title === LEGACY_CONTAINMENT_TEST ? "absent" : "present";
-  await page.goto(`/?mockFixtures=deep&mockStudioProjects=${studioProjects}`);
+test.beforeEach(async ({ page }) => {
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });
@@ -362,25 +355,6 @@ test.describe("durable Studio project navigation", () => {
 });
 
 test.describe("multi-root", () => {
-  test(LEGACY_CONTAINMENT_TEST, async ({ page }) => {
-    await page.getByTestId("project-select-polsia").click();
-    await expect(page.getByTestId("system-graph-node-gateway")).toBeVisible();
-    await expect(page.getByTestId("system-graph-node-queue")).toBeVisible();
-    await expect(
-      page.getByTestId("system-graph-node-ads-worker"),
-    ).toBeVisible();
-
-    await page.getByTestId(`project-select-${NESTED_LABEL}`).click();
-    await expect(page.getByTestId("system-graph-node-queue")).toBeVisible();
-    await expect(
-      page.getByTestId("system-graph-node-ads-worker"),
-    ).toBeVisible();
-    await expect(page.getByTestId("system-graph-isolated-label")).toHaveText(
-      "2 agents · no detected relationships",
-    );
-    await expect(page.getByTestId("system-graph-node-gateway")).toHaveCount(0);
-  });
-
   test("an agent files under EVERY open root, and the nested project reads parent/child", async ({
     page,
   }) => {

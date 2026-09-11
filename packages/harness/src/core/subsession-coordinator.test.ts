@@ -496,7 +496,14 @@ describe("SubsessionCoordinator", () => {
       delegationKey, outcome: `Implement ${delegationKey}`,
     })) } };
     const limited = newCoordinator("limited-wait", { readinessTimeoutMs: 250, batchWaitTimeoutMs: 100 });
-    const first = await limited.execute(caller, batch);
+    // Expire the batch after the first child starts, independent of disk speed.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const deadline = Date.now() + 100;
+    const stopClock = manager.onStatusChange((session) => {
+      if (session.id !== caller.sessionId && session.status === "running")
+        vi.setSystemTime(deadline);
+    });
+    const first = await limited.execute(caller, batch).finally(stopClock);
     expect(first.results).toHaveLength(3);
     expect(first.results.map(({ error }) => error?.code)).toEqual(["readiness_timeout", "readiness_timeout", "readiness_timeout"]);
     expect(first.results.map(({ sessionState }) => sessionState)).toEqual(["awaiting-ready", "reserved", "reserved"]);
@@ -528,13 +535,22 @@ describe("SubsessionCoordinator", () => {
     const { manager, caller, newCoordinator, spawnPty, unsubscribe } = await fixture(false, "ready");
     unsubscribe();
     const timers: ReturnType<typeof setTimeout>[] = [];
+    // Expire the shared clock only after readiness, independent of setup I/O.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const deadline = Date.now() + 100;
+    let becameReady = false;
     const stop = manager.onStatusChange((session, context) => {
       if (session.id !== caller.sessionId && session.status === "running" && !session.ready && context.runtimeEpoch)
-        timers.push(setTimeout(() => manager.setReady(session.id, context.runtimeEpoch!), 50));
+        timers.push(setTimeout(() => {
+          manager.setReady(session.id, context.runtimeEpoch!);
+          becameReady = manager.get(session.id)?.ready === true;
+          vi.setSystemTime(deadline);
+        }, 50));
     });
     try {
       const coordinator = newCoordinator("identity-wait", { readinessTimeoutMs: 250, batchWaitTimeoutMs: 100 });
       const result = await coordinator.execute(caller, request);
+      expect(becameReady).toBe(true);
       expect(result.results[0]).toMatchObject({ sessionState: "awaiting-ready",
         error: { code: "readiness_timeout", retryable: true, recovery: "retry" } });
       expect(spawnPty).toHaveBeenCalledTimes(2);
