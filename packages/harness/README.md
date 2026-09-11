@@ -76,6 +76,8 @@ Studio hides its internal completion markers even if the model supplies an
 incorrect turn ID.
 Literal prose and invalid marker syntax remain visible. Incomplete marker
 candidates are hidden while streaming and restored when the response ends.
+After automatic answer recovery, Studio reconnects the conversation's event
+stream to reconcile history and status while keeping the chat and draft visible.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
 keyed by authenticated principal and Studio session above the centre pane, so it

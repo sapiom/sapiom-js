@@ -586,6 +586,67 @@ for (const recovered of [true, false]) {
   });
 }
 
+for (const delivery of ["streamed", "history only"]) {
+  test(`keeps the conversation visible while reconciling a recovered answer (${delivery})`, async ({
+    page,
+  }, testInfo) => {
+    let attachments = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.endsWith("/attach")) attachments++;
+    });
+    await openAssistant(page);
+    const input = page.getByRole("textbox", { name: "Message Assistant" });
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await input.fill("Read the README and explain what's here.");
+    await input.press("Enter");
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    await input.fill("Keep this next question as a draft.");
+    const chat = await page.locator(".studio-chat").elementHandle();
+    const composer = await input.elementHandle();
+    const initialAttachments = attachments;
+    const c = conversations.get("ses_sess_boot")!;
+    endWithoutAnswer(c);
+    await expect.poll(() => c.recoveries.length).toBe(1);
+    await expect(page.locator(".studio-chat-meta")).toContainText(
+      "read · Complete",
+    );
+
+    holdHistory = true;
+    const streams = [...c.streams];
+    if (delivery === "history only") c.streams.clear();
+    recoveryReply!("The project contains a README and a .sapiom folder.");
+    for (const stream of streams) c.streams.add(stream);
+    await expect.poll(() => historyReplies.length).toBeGreaterThan(0);
+    await page.locator(".studio-conversation").screenshot({
+      path: testInfo.outputPath("reconciling-answer.png"),
+    });
+    expect(await chat!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await composer!.evaluate((element) => element.isConnected)).toBe(
+      true,
+    );
+    await expect(page.locator(".studio-chat-meta")).toContainText(
+      "read · Complete",
+    );
+    await expect(input).toHaveValue("Keep this next question as a draft.");
+    await expect(
+      page.getByText("Opening Assistant…", { exact: true }),
+    ).toHaveCount(0);
+
+    holdHistory = false;
+    for (const reply of historyReplies.splice(0)) reply();
+    await expect(status).toHaveText("Finished");
+    await expect(page.locator(".studio-chat-assistant")).toContainText(
+      "The project contains a README and a .sapiom folder.",
+    );
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveValue("Keep this next question as a draft.");
+    expect(attachments).toBe(initialAttachments);
+    expect(c.prompts).toHaveLength(1);
+    expect(c.recoveries).toHaveLength(1);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}
+
 test("preserves an unconfirmed explanation as Stopped after history restoration", async ({
   page,
 }) => {
