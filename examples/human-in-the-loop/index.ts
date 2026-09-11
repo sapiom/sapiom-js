@@ -58,8 +58,9 @@ const CONFIRM_SIGNAL = "candidate.confirm";
  * Explicit deadline for a human gate, one year. A pause with no `timeoutMs`
  * inherits the engine's 7-day default, and a lapsed deadline *terminates* the
  * run rather than resuming it, so the default would hard-fail any approval
- * slower than a week. Long enough that a slow approver never loses the run,
- * finite enough that an abandoned one still reaches a terminal state.
+ * slower than a week. It stays a terminal deadline: an approval that outlives
+ * the year is failed too. The year is picked so no realistic approver reaches
+ * it, while an abandoned gate still lands in a terminal state.
  */
 const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -505,7 +506,11 @@ const offer = defineStep({
       index,
     });
 
-    // Suspend at $0 until this candidate confirms (or a timeout fires the signal).
+    // Suspend at $0 until this candidate confirms. Moving on when a candidate
+    // goes quiet is driven by the signal, not by `timeoutMs`: something external
+    // fires `candidate.confirm` with `{ decision: "timeout" }` and `resolve`
+    // advances to the next candidate. The deadline below is only the terminal
+    // backstop, it fails the run rather than delivering that payload.
     return pauseUntilSignal({
       signal: CONFIRM_SIGNAL,
       resumeStep: "resolve",

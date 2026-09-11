@@ -53,7 +53,7 @@ import { z } from "zod/v4";
  * The gates carry a deliberately long `GATE_PAUSE_TIMEOUT_MS` (one year), and the
  * value is load-bearing. The engine has a paused-run reaper: `timeoutMs` sets
  * `pausedUntil`, and a background sweep *terminates* the run with a
- * `PauseTimeoutError` once it lapses. It does NOT resume the step, so a lapsed
+ * a pause-timeout failure once it lapses. It does NOT resume the step, so a lapsed
  * gate never reaches `decide`/`remind`/`escalate`. Handing a signal pause a
  * `reminderMs`-sized `timeoutMs` (as an earlier version did) would hard-fail any
  * approval slower than the reminder interval, bypassing the graceful `escalate`
@@ -515,7 +515,7 @@ const present = defineStep({
     // it, and the run detail ships one-click Approve/Reject.
     //
     // `GATE_PAUSE_TIMEOUT_MS` is load-bearing, not decoration: a lapsed deadline
-    // *terminates* the run (PauseTimeoutError) rather than resuming it, so the
+    // *terminates* the run (a pause-timeout failure) rather than resuming it, so the
     // engine's 7-day default would silently fail any approval slower than a week
     // and skip `escalate`. The reminder/escalation loop is driven by the
     // `approval.decision` signal (one-click UI, a cron firing `remind`/`timeout`,

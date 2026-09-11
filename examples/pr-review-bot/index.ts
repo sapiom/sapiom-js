@@ -385,7 +385,7 @@ const watch = defineStep({
     // Suspend at $0 until the webhook fires SIGNAL for this correlationId.
     // No `timeoutMs` on purpose: the engine's 7-day default is the right ceiling
     // here. A PR event that has not arrived in a week is not coming, and a
-    // terminal PauseTimeoutError beats a run parked on a dead webhook.
+    // terminal pause-timeout failure beats a run parked on a dead webhook.
     return pauseUntilSignal({
       signal: SIGNAL,
       resumeStep: "review",
