@@ -35,14 +35,25 @@ Edit `.env` and fill in your keys:
 SAPIOM_API_KEY=your-key-from-step-1
 SAPIOM_API_URL=https://api.sapiom.ai
 
-# For axios/fetch/node-http examples:
-DUMMY_SERVER_URL=https://x402-demo.sapiom.ai
+# For axios/fetch/node-http examples (defaults to the local mock server):
+DUMMY_SERVER_URL=http://localhost:3101
 
 # For langchain examples only:
 ANTHROPIC_API_KEY=sk-ant-your-key
 ```
 
-> **Note:** The `DUMMY_SERVER_URL` points to a public demo server that simulates paid API endpoints. The default URL in `.env.example` is ready to use.
+> **Note:** The `axios`/`fetch`/`node-http` examples send their HTTP requests to
+> `DUMMY_SERVER_URL`. The default is the bundled **local mock server** — start it
+> in a separate terminal before running those examples:
+>
+> ```bash
+> cd mock-server && npm install && npm start   # http://localhost:3101
+> ```
+>
+> The original hosted demo, `https://x402-demo.sapiom.ai`, may be unavailable
+> (see [issue #88](https://github.com/sapiom/sapiom-js/issues/88)); the local
+> mock server replaces it. See [`mock-server/README.md`](./mock-server/README.md)
+> for the endpoints and an optional real-x402 (`402`) mode.
 
 ### 3. Run an example
 
@@ -148,7 +159,13 @@ The Sapiom SDK handles all authorization and payment automatically - your code j
 - Make sure you copied `.env.example` to `.env` and filled in your API key
 
 **Connection refused / timeout**
-- Check that `DUMMY_SERVER_URL` is correct and the test server is running
+- Check that `DUMMY_SERVER_URL` is correct and the test server is running. With
+  the default (`http://localhost:3101`), start the bundled mock server first:
+  `cd mock-server && npm install && npm start`.
+
+**`403` from `https://x402-demo.sapiom.ai`**
+- The hosted demo may be unavailable ([issue #88](https://github.com/sapiom/sapiom-js/issues/88)).
+  Use the local mock server (the default `DUMMY_SERVER_URL`) instead.
 
 **AuthorizationDeniedError on first request**
 - Check your Rules in the dashboard - you may have a restrictive policy
