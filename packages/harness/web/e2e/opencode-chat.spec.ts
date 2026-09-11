@@ -387,6 +387,77 @@ for (const reported of ["finished", "failed"] as const) {
   });
 }
 
+for (const [position, reported] of [
+  ["prefix", "finished"],
+  ["prefix", "failed"],
+  ["footer", "finished"],
+  ["footer", "failed"],
+] as const) {
+  test(`hides mismatched markers in a confirmed ${position} ${reported} answer and restored history`, async ({
+    page,
+  }, testInfo) => {
+    await openAssistant(page);
+    await page
+      .getByRole("textbox", { name: "Message Assistant" })
+      .fill("Explain the completion placeholder.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    const token = useCompletionContract(c);
+    const expected = `<!-- studio-result:${token}:${reported} -->`;
+    const mismatched = `<!-- studio-result:00000000-0000-0000-0000-000000000000:${reported === "finished" ? "failed" : "finished"} -->`;
+    const prose =
+      "Document the <!-- studio-result: placeholder used by Studio.";
+    const incomplete =
+      "Incomplete example: <!-- studio-result:00000000-0000-0000-0000-000000000000:finished --";
+    const answer = `Done.\n\n${prose}\n\n${incomplete}`;
+    const text =
+      position === "prefix"
+        ? `${expected}\n${answer}\n\n${mismatched}`
+        : `${mismatched}\n${answer}\n\n${expected}`;
+    const split = text.indexOf(mismatched) + 30;
+    const turn = c.turns.at(-1)!;
+    turn.parts[0].text = text.slice(0, split);
+    turn.parts.push({
+      ...turn.parts[0],
+      id: "prt_answer_tail",
+      text: text.slice(split),
+    });
+    turn.info.finish = "stop";
+    turn.info.time.completed = Date.now();
+    for (const part of turn.parts) emit(c, "message.part.updated", { part });
+    emit(c, "message.updated", { info: turn.info });
+    emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+    const status = page.getByRole("status", { name: "Assistant status" });
+    const response = page.locator(".studio-chat-assistant");
+    await expect(status).toHaveText(
+      reported === "finished" ? "Finished" : "Failed",
+    );
+    await response.screenshot({
+      path: testInfo.outputPath("confirmed-answer.png"),
+    });
+    await expect(response).not.toContainText(mismatched);
+    await expect(response).not.toContainText(expected);
+    for (const paragraph of ["Done.", prose, incomplete])
+      await expect(response.getByText(paragraph, { exact: true })).toHaveCount(
+        1,
+      );
+    await page.reload();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(status).toHaveText(
+      reported === "finished" ? "Finished" : "Failed",
+    );
+    await expect(response).not.toContainText(mismatched);
+    await expect(response).not.toContainText(expected);
+    for (const paragraph of ["Done.", prose, incomplete])
+      await expect(response.getByText(paragraph, { exact: true })).toHaveCount(
+        1,
+      );
+    expect(c.prompts).toHaveLength(1);
+    expect(c.recoveries).toHaveLength(0);
+  });
+}
+
 test("hides a footer split across text parts when the native turn is interrupted", async ({
   page,
 }) => {

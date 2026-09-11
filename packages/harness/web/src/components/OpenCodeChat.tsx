@@ -33,6 +33,7 @@ import {
 import {
   openCodeCompletionTokens,
   openCodeVisibleParts,
+  openCodeVisibleText,
 } from "../../../src/shared/opencode-completion";
 import {
   parseOpenCodeStudioErrorEvent,
@@ -560,7 +561,11 @@ function ChatSurface({
                       />
                     ),
                   )}
-                  {result && <Markdown text={result.answer} />}
+                  {result && (
+                    <Markdown
+                      text={openCodeVisibleText(result.answer, token)}
+                    />
+                  )}
                   <MessagePrimitive.Error>
                     <ErrorPrimitive.Root className="studio-chat-error">
                       <ErrorPrimitive.Message />

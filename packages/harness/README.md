@@ -73,7 +73,7 @@ offer **Reconnect**, which reloads history without resending accepted prompts.
 This first slice includes basic tool status; richer controls arrive separately.
 An unconfirmed response keeps the answer and tool results visible as **Stopped**.
 Studio hides its internal completion markers even if the model supplies an
-incorrect turn ID.
+incorrect turn ID, including extra markers inside a confirmed answer.
 Literal prose and invalid marker syntax remain visible. Incomplete marker
 candidates are hidden while streaming and restored when the response ends.
 After automatic answer recovery, Studio reconnects the conversation's event
