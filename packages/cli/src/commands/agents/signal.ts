@@ -19,7 +19,15 @@ export async function runSignal(
 
     const result = await signal({ executionId, name: opts.name, correlationId: opts.correlationId, payload }, client);
 
-    ok({ matched: result.matched }, [`✓ Signal '${opts.name}' delivered (matched ${result.matched}).`]);
+    // `message` is forwarded, not dropped. `matched` counts the runs that
+    // ACTUALLY resumed, so it under-reports a partial fanout and a 0 does not
+    // prove nothing was waiting — the server sends `message` exactly when the
+    // count needs qualifying, and a CLI that printed only the count would state
+    // the ambiguous half and swallow the half that resolves it.
+    ok({ matched: result.matched, ...(result.message ? { message: result.message } : {}) }, [
+      `✓ Signal '${opts.name}' delivered (matched ${result.matched}).`,
+      ...(result.message ? [`  ${result.message}`] : []),
+    ]);
   } catch (err) {
     if (err instanceof AgentOperationError) throw new CliError(err.toStructured());
     throw err;

@@ -91,6 +91,7 @@ filesystem, environment, and process effects in author code remain real.
 | `sapiom_dev_agents_run`              | ✓                | Start a real cloud execution                                                    |
 | `sapiom_dev_agents_inspect`          | ✓                | Inspect an execution or build (optionally waiting for it)                       |
 | `sapiom_dev_agents_signal`           | ✓                | Resume a paused execution by delivering a signal                                |
+| `sapiom_dev_agents_emit_event`       | ✓                | Emit a custom event; starts a run per active `event` trigger on that type (0..N) |
 | `sapiom_dev_agents_schedule`         | ✓                | Create a trigger: cron, one-off, event (`eventType`), or webhook (URL + secret) |
 | `sapiom_dev_agents_schedule_inspect` | ✓                | Inspect one trigger (with fire history) or list an agent's triggers             |
 | `sapiom_dev_agents_schedule_cancel`  | ✓                | Cancel a trigger of any kind (stops all future fires)                           |
