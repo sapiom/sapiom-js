@@ -195,6 +195,7 @@ import {
 } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
+import { OpenCodeHost } from "../core/opencode-host.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -3529,6 +3530,21 @@ export const startServer = async (
     return { ok: await sessionManager.submitInput(sessionId, text, submit) };
   };
 
+  const openCodeHost = new OpenCodeHost({
+    access: assistantAccess,
+    bridge: openCodeBridge,
+    origin: () => `http://127.0.0.1:${actualPort}`,
+    stateRoot: statePaths.root,
+    authorize: async (id) => {
+      const session = sessionManager.get(id);
+      if (!session || !(await isProjectSessionDispatchAuthorized({
+        session,
+        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
+        resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+      }))) return null;
+      return { harnessSessionId: id, cwd: session.cwd };
+    },
+  });
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
@@ -4259,6 +4275,7 @@ export const startServer = async (
       credentialStoreObserver?.close();
       unsubscribeCredentialChanges();
       assistantAccess.close();
+      await settle(() => openCodeHost.close());
       openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());

@@ -63,6 +63,12 @@ Production uses the Sapiom LLM gateway. Other environments must explicitly set
 `services.llm` to their gateway origin in the matching credentials-file environment
 entry; Studio never falls back from a custom environment to production.
 
+Studio owns each Assistant runtime for the authorized session and working
+directory. Browser detachment leaves it running; sign-out, access revocation,
+and Studio shutdown stop it. Runtime state is isolated by user, organization,
+session, and directory under `~/.sapiom/harness/opencode`. A process lock prevents
+two Studio hosts from opening the same runtime state concurrently.
+
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
 accounts clears this evidence. Retained indicators do not enable cloud runs.
