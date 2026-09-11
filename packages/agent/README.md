@@ -185,14 +185,20 @@ Things to know:
   than a symbol this package exports. The default matches the sandboxed capability's
   resume-token TTL, so for a coding pause a later result could not be accepted anyway.
 
-  **A pause on a dispatched child agent needs no `timeoutMs`.** Its result comes back
-  through stored parent linkage rather than a resume token, and the engine waives the
-  deadline for as long as the child is alive. The waiver is narrow: it covers a
-  dispatch still pending or waiting on the parent, and lapses as soon as the child
-  reaches a terminal state or its run no longer exists.
+  **A pause on a child agent launched now needs no `timeoutMs`.** Its result comes
+  back through stored parent linkage rather than a resume token, and the engine
+  waives the deadline for as long as the child is alive. The waiver is narrow: it
+  covers a dispatch still pending or waiting on the parent, and lapses as soon as the
+  child reaches a terminal state or its run no longer exists.
 
-  Set `timeoutMs` for what the default does not fit: a human gate you expect to
-  outlive a week, or a wait that should give up sooner.
+  **A child scheduled with `at` is the exception.** The parent's deadline runs from
+  the scheduled time rather than from the pause, which covers the wait until the
+  child starts, but the live-child waiver does not apply to it. Pass an explicit
+  `timeoutMs` when a scheduled child can take more than a week once it begins, for
+  instance because it opens a gate of its own.
+
+  Otherwise set `timeoutMs` for what the default does not fit: a human gate you
+  expect to outlive a week, or a wait that should give up sooner.
 
   ```ts
   // A human gate: nothing but this deadline bounds the wait.
