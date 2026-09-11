@@ -7,7 +7,17 @@ import {
   startOpenCodeServer,
   type OpenCodeServer,
 } from "@sapiom/opencode";
-import type { AssistantAccess, AssistantGrant } from "./assistant-access.js";
+import type {
+  AssistantAccess,
+  AssistantAccessFailureCode,
+  AssistantGrant,
+} from "./assistant-access.js";
+import {
+  openCodeStartupReasons,
+  openCodeTransportFailure,
+  type OpenCodeStartupReason,
+  type OpenCodeTransportFailure,
+} from "../shared/opencode-errors.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import type {
   OpenCodeBridge,
@@ -22,6 +32,7 @@ export interface HostedOpenCode extends OpenCodeWorkspace {
   stateRoot: string;
   server: OpenCodeServer;
   signal: AbortSignal;
+  isCurrent: () => boolean;
 }
 interface Managed {
   workspace: OpenCodeWorkspace;
@@ -33,17 +44,34 @@ interface Managed {
   cleanupFailed?: boolean;
 }
 interface Options {
-  access: Pick<AssistantAccess, "get" | "subscribe">;
+  access: Pick<AssistantAccess, "get" | "getFailureCode" | "subscribe">;
   bridge: Pick<OpenCodeBridge, "issue" | "model">;
   origin: () => string;
   stateRoot: string;
   authorize: (id: string) => Promise<OpenCodeWorkspace | null>;
   start?: typeof startOpenCodeServer;
 }
+export class OpenCodeTransportError extends Error {
+  constructor(readonly failure: OpenCodeTransportFailure) {
+    super(failure.message);
+  }
+}
+export class OpenCodeAccessError extends OpenCodeTransportError {
+  constructor(
+    message: string,
+    code: AssistantAccessFailureCode = "access_denied",
+  ) {
+    const failure = openCodeTransportFailure(code);
+    super(failure);
+    this.message = message;
+  }
+}
 const authority = (grant: AssistantGrant) =>
   createHash("sha256")
     .update(
       JSON.stringify([
+        grant.userId,
+        grant.tenantId,
         grant.identityRevision,
         grant.environment.name,
         grant.environment.apiURL,
@@ -66,10 +94,12 @@ export class OpenCodeHost {
         void this.workspace(id)
           .then(async (workspace) => {
             if (this.entries.get(id) !== entry) return;
-            if (workspace.cwd !== entry.workspace.cwd) await this.retire(id);
+            if (workspace.cwd !== entry.workspace.cwd)
+              await this.retire(id, openCodeTransportFailure("access_denied"));
           })
           .catch(() => {
-            if (this.entries.get(id) === entry) void this.retire(id);
+            if (this.entries.get(id) === entry)
+              void this.retire(id, openCodeTransportFailure("access_denied"));
           });
       }
     }, 30000);
@@ -78,7 +108,12 @@ export class OpenCodeHost {
       const grant = options.access.get();
       for (const [id, entry] of this.entries) {
         if (!grant || authority(grant) !== entry.authority)
-          void this.retire(id);
+          void this.retire(
+            id,
+            grant
+              ? openCodeTransportFailure("access_denied")
+              : this.accessFailure(),
+          );
       }
     });
   }
@@ -86,15 +121,23 @@ export class OpenCodeHost {
   async ensure(id: string): Promise<HostedOpenCode> {
     const grant = this.options.access.get();
     if (this.closed || !grant)
-      throw new Error("Assistant access is unavailable");
+      throw this.accessError("Assistant access is unavailable");
     const workspace = await this.workspace(id).catch(async (error) => {
-      await this.retire(id);
+      await this.retire(
+        id,
+        error instanceof OpenCodeTransportError
+          ? error.failure
+          : openCodeTransportFailure("access_denied"),
+      );
       throw error;
     });
     const { cwd } = workspace;
     const current = this.options.access.get();
     if (this.closed || !current || authority(current) !== authority(grant))
-      throw new Error("Assistant access changed. Please retry.");
+      throw new OpenCodeAccessError(
+        "Assistant access changed. Please retry.",
+        current ? "access_denied" : this.options.access.getFailureCode(),
+      );
     const existing = this.entries.get(id);
     if (
       existing &&
@@ -102,7 +145,8 @@ export class OpenCodeHost {
       existing.authority === authority(grant)
     )
       return existing.ready!;
-    if (existing) await this.retire(id);
+    if (existing)
+      await this.retire(id, openCodeTransportFailure("access_denied"));
     // A prior retirement must finish before another process uses its database.
     await Promise.all(this.closing);
     const verified = await this.workspace(id);
@@ -124,11 +168,14 @@ export class OpenCodeHost {
     return entry.ready;
   }
 
-  retire(id: string): Promise<void> {
+  retire(
+    id: string,
+    failure = openCodeTransportFailure("transport_unavailable"),
+  ): Promise<void> {
     const entry = this.entries.get(id);
     if (!entry) return Promise.resolve();
     this.entries.delete(id);
-    entry.abort.abort();
+    entry.abort.abort(new OpenCodeTransportError(failure));
     entry.credential?.revoke();
     const closing = (async () => {
       const hosted = await entry.ready?.catch(() => null);
@@ -177,7 +224,10 @@ export class OpenCodeHost {
       !grant ||
       authority(grant) !== entry.authority
     )
-      throw new Error("Assistant access changed. Please retry.");
+      throw new OpenCodeAccessError(
+        "Assistant access changed. Please retry.",
+        grant ? "access_denied" : this.options.access.getFailureCode(),
+      );
   }
 
   private async unlock(entry: Managed): Promise<void> {
@@ -205,6 +255,7 @@ export class OpenCodeHost {
       .digest("hex");
     const stateRoot = join(this.options.stateRoot, "opencode", scope);
     let server: OpenCodeServer | undefined;
+    let startupAttempted = false;
     try {
       entry.unlock = await new DurableFileLock(join(stateRoot, "runtime"), {
         timeoutMs: 1000,
@@ -220,18 +271,38 @@ export class OpenCodeHost {
         runtimeToken: entry.credential.token,
         model: this.options.bridge.model,
       });
+      startupAttempted = true;
       server = await (this.options.start ?? startOpenCodeServer)({
         cwd: entry.workspace.cwd,
         stateRoot: join(stateRoot, "engine"),
         config,
         signal: entry.abort.signal,
       });
+      void server.exited
+        .then(() => {
+          if (this.entries.get(entry.workspace.harnessSessionId) === entry)
+            return this.retire(
+              entry.workspace.harnessSessionId,
+              openCodeTransportFailure("runtime_exited"),
+            );
+        })
+        .catch(() => {});
       await this.validate(entry);
       return {
         ...entry.workspace,
         stateRoot,
         server,
         signal: entry.abort.signal,
+        isCurrent: () => {
+          const current = this.options.access.get();
+          return (
+            !this.closed &&
+            !entry.abort.signal.aborted &&
+            this.entries.get(entry.workspace.harnessSessionId) === entry &&
+            !!current &&
+            authority(current) === entry.authority
+          );
+        },
       };
     } catch (error) {
       if (this.entries.get(entry.workspace.harnessSessionId) === entry)
@@ -246,7 +317,41 @@ export class OpenCodeHost {
         }
       }
       await this.unlock(entry);
-      throw error;
+      if (error instanceof OpenCodeTransportError) throw error;
+      if (
+        entry.abort.signal.aborted &&
+        entry.abort.signal.reason instanceof OpenCodeTransportError
+      )
+        throw entry.abort.signal.reason;
+      throw new OpenCodeTransportError(
+        startupAttempted
+          ? openCodeTransportFailure(
+              "runtime_start_failed",
+              startupReason(error),
+            )
+          : openCodeTransportFailure("transport_unavailable"),
+      );
     }
   }
+
+  private accessFailure(): OpenCodeTransportFailure {
+    return openCodeTransportFailure(this.options.access.getFailureCode());
+  }
+
+  private accessError(message: string): OpenCodeAccessError {
+    return new OpenCodeAccessError(
+      message,
+      this.options.access.getFailureCode(),
+    );
+  }
+}
+
+function startupReason(error: unknown): OpenCodeStartupReason | undefined {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  return openCodeStartupReasons.includes(code as OpenCodeStartupReason)
+    ? (code as OpenCodeStartupReason)
+    : undefined;
 }

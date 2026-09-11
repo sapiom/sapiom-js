@@ -3,7 +3,7 @@ import { access, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantGrant } from "./assistant-access.js";
-import { OpenCodeHost } from "./opencode-host.js";
+import { OpenCodeHost, OpenCodeTransportError } from "./opencode-host.js";
 
 let root: string;
 let cwd: string;
@@ -16,6 +16,7 @@ const start = vi.fn();
 const revoke = vi.fn();
 const close = vi.fn();
 const issue = vi.fn();
+const neverExited = new Promise<void>(() => {});
 beforeEach(async () => {
   expectShutdownFailure = false;
   root = await mkdtemp(join(tmpdir(), "studio-opencode-host-"));
@@ -45,12 +46,18 @@ beforeEach(async () => {
   close.mockReset().mockResolvedValue(undefined);
   revoke.mockReset();
   issue.mockReset().mockReturnValue({ id: "runtime", token: "scoped", revoke });
-  start
-    .mockReset()
-    .mockResolvedValue({ pid: 123, fetch: vi.fn(), fetchJson: vi.fn(), close });
+  start.mockReset().mockResolvedValue({
+    pid: 123,
+    exited: neverExited,
+    fetch: vi.fn(),
+    fetchJson: vi.fn(),
+    close,
+  });
   host = new OpenCodeHost({
     access: {
       get: () => grant,
+      getFailureCode: () =>
+        grant ? "transport_unavailable" : "authentication_required",
       subscribe: (listener) => {
         changed = listener;
         return () => {};
@@ -112,7 +119,9 @@ describe("Studio-owned OpenCode lifecycle", () => {
 
   it("releases failed startup so retry can acquire the same state", async () => {
     start.mockRejectedValueOnce(new Error("startup failed"));
-    await expect(host.ensure("studio-one")).rejects.toThrow("startup failed");
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: { code: "runtime_start_failed" },
+    });
     expect(revoke).toHaveBeenCalledOnce();
     await host.ensure("studio-one");
     expect(start).toHaveBeenCalledTimes(2);
@@ -137,7 +146,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
       await new Promise<void>((resolve) => {
         finish = resolve;
       });
-      return { pid: 123, close };
+      return { pid: 123, exited: neverExited, close };
     });
     const pending = host.ensure("studio-one");
     const rejected = expect(pending).rejects.toThrow("access changed");
@@ -152,12 +161,15 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(revoke).toHaveBeenCalled();
   });
 
-  it("keeps attachment alive without a browser, revokes on identity changes, and closes idempotently", async () => {
+  it("keeps attachment alive without a browser, revokes on verified-user changes, and closes idempotently", async () => {
     const attachment = await host.ensure("studio-one");
     expect(close).not.toHaveBeenCalled();
-    grant = { ...grant!, identityRevision: "new-user" };
+    grant = { ...grant!, userId: "new-user" };
     changed();
     expect(attachment.signal.aborted).toBe(true);
+    expect(attachment.signal.reason).toMatchObject({
+      failure: { code: "access_denied" },
+    });
     await Promise.all([host.close(), host.close()]);
     expect(close).toHaveBeenCalledOnce();
     await expect(host.ensure("studio-one")).rejects.toThrow("unavailable");
@@ -179,16 +191,16 @@ describe("Studio-owned OpenCode lifecycle", () => {
     grant = null;
     changed();
     close.mockRejectedValue(new Error("still alive"));
-    finish({ pid: 123, close });
+    finish({ pid: 123, exited: neverExited, close });
     await rejected;
     await expect(
       access(join(start.mock.calls[0][0].stateRoot, "..", "runtime.lock")),
     ).resolves.toBeUndefined();
     grant = saved;
     changed();
-    await expect(host.ensure("studio-one")).rejects.toThrow(
-      "another Studio window",
-    );
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: { code: "transport_unavailable" },
+    });
     expect(start).toHaveBeenCalledOnce();
   });
 
@@ -213,7 +225,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
     authorize.mockImplementation(async (id) => ({ harnessSessionId: id, cwd }));
     start.mockImplementationOnce(async () => {
       authorize.mockResolvedValue(null);
-      return { pid: 456, close };
+      return { pid: 456, exited: neverExited, close };
     });
     await expect(host.ensure("studio-two")).rejects.toThrow("workspace");
     expect(close).toHaveBeenCalledTimes(2);
@@ -240,5 +252,43 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(settled).toBe(false);
     finish();
     await rejected;
+  });
+  it("retires a confirmed exited process so retry can reopen the same persistent state", async () => {
+    let exit!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      exit = resolve;
+    });
+    start.mockResolvedValueOnce({ pid: 123, exited, close });
+    const first = await host.ensure("studio-one");
+    exit();
+    await vi.waitFor(() => expect(first.signal.aborted).toBe(true));
+    const restored = await host.ensure("studio-one");
+    expect(restored.stateRoot).toBe(first.stateRoot);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("maps only the bounded native startup reason and suppresses expected cancellation", async () => {
+    start.mockRejectedValueOnce({
+      code: "permission-denied",
+      message: "/private/runtime/path",
+    });
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: {
+        code: "runtime_start_failed",
+        reason: "permission-denied",
+        retryable: false,
+        action: "open_settings",
+      },
+    });
+    start.mockImplementationOnce(async ({ signal }) => {
+      grant = null;
+      changed();
+      signal.throwIfAborted();
+      throw new OpenCodeTransportError({} as never);
+    });
+    await expect(host.ensure("studio-one")).rejects.toMatchObject({
+      failure: { code: "authentication_required" },
+    });
   });
 });
