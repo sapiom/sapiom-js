@@ -1,16 +1,39 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { DurableFileLock } from "./durable-file-lock.js";
 
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
+  );
+});
+
+async function fixture() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "durable-lock-"));
+  roots.push(root);
+  const target = path.join(root, "state.json");
+  return { root, target, lockPath: `${target}.lock` };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("DurableFileLock", () => {
-  it("serializes live owners and reclaims a proven-dead owner", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "durable-lock-"));
-    const target = path.join(root, "state.json");
-    const first = new DurableFileLock(target);
-    const release = await first.acquire();
+  it("serializes live owners and preserves ordinary dead-legacy reclaim", async () => {
+    const { target, lockPath } = await fixture();
+    const release = await new DurableFileLock(target).acquire();
     let secondAcquired = false;
     const second = new DurableFileLock(target).acquire().then((unlock) => {
       secondAcquired = true;
@@ -23,7 +46,7 @@ describe("DurableFileLock", () => {
       await second
     )();
     await fs.writeFile(
-      `${target}.lock`,
+      lockPath,
       `${JSON.stringify({ ownerId: "dead", pid: 999_999_999 })}\n`,
     );
     await (
@@ -31,9 +54,234 @@ describe("DurableFileLock", () => {
         hooks: { isPidAlive: () => false },
       }).acquire()
     )();
-    await expect(fs.access(`${target}.lock`)).rejects.toMatchObject({
-      code: "ENOENT",
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("blocks a dead legacy runtime owner but reclaims versioned prelaunch", async () => {
+    const { target, lockPath } = await fixture();
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ ownerId: "legacy", pid: 999_999_999 })}\n`,
+    );
+    await expect(
+      new DurableFileLock(target, {
+        processGuard: "required",
+        timeoutMs: 5,
+        retryMs: 1,
+        hooks: { isPidAlive: () => false },
+      }).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        ownerId: "prelaunch",
+        pid: 999_999_999,
+        birthId: "old-birth",
+        state: "prelaunch",
+        version: 2,
+      })}\n`,
+    );
+    const release = await new DurableFileLock(target, {
+      processGuard: "required",
+      hooks: { isPidAlive: () => false },
+    }).acquire();
+    await release();
+  });
+
+  it("requires an exact cleanup proof for a guarded dead supervisor", async () => {
+    const { root, target, lockPath } = await fixture();
+    const owner = {
+      ownerId: "guarded",
+      pid: 999_999_999,
+      state: "prelaunch",
+      version: 2,
+    } as const;
+    const proof = {
+      path: path.join(root, "cleanup.json"),
+      token: "p".repeat(32),
+    };
+    await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`);
+    await fs.writeFile(
+      `${lockPath}.guard-${owner.ownerId}`,
+      `${JSON.stringify({
+        ownerId: owner.ownerId,
+        version: 1,
+        pid: 999_999_998,
+        cleanupProof: proof,
+      })}\n`,
+    );
+    const options = {
+      processGuard: "required" as const,
+      timeoutMs: 5,
+      retryMs: 1,
+      hooks: { isPidAlive: () => false },
+    };
+    await expect(
+      new DurableFileLock(target, options).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+    await fs.writeFile(
+      proof.path,
+      `${JSON.stringify({ status: "complete", token: "wrong" })}\n`,
+    );
+    await expect(
+      new DurableFileLock(target, options).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+    await fs.writeFile(
+      proof.path,
+      `${JSON.stringify({ status: "complete", token: proof.token })}\n`,
+    );
+    await (
+      await new DurableFileLock(target, options).acquire()
+    )();
+  });
+
+  it("blocks malformed guards in required mode", async () => {
+    const { target, lockPath } = await fixture();
+    const owner = {
+      ownerId: "malformed",
+      pid: 999_999_999,
+      state: "prelaunch",
+      version: 2,
+    } as const;
+    await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`);
+    await fs.writeFile(`${lockPath}.guard-${owner.ownerId}`, "{partial");
+    await expect(
+      new DurableFileLock(target, {
+        processGuard: "required",
+        timeoutMs: 5,
+        retryMs: 1,
+        hooks: { isPidAlive: () => false },
+      }).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+  });
+
+  it("serializes protection with release and never acknowledges a late permit", async () => {
+    const { root, target, lockPath } = await fixture();
+    const published = deferred();
+    const resume = deferred();
+    const release = await new DurableFileLock(target, {
+      processGuard: "required",
+      hooks: {
+        afterProtectionPublished: async () => {
+          published.resolve();
+          await resume.promise;
+        },
+      },
+    }).acquire();
+    const protecting = release.protectProcess({
+      pid: process.pid,
+      cleanupProof: {
+        path: path.join(root, "cleanup.json"),
+        token: "t".repeat(32),
+      },
     });
-    await fs.rm(root, { recursive: true, force: true });
+    await published.promise;
+    const releasing = release();
+    resume.resolve();
+    await expect(protecting).rejects.toThrow("Storage unavailable");
+    await releasing;
+    await expect(
+      release.protectProcess({
+        pid: process.pid,
+        cleanupProof: {
+          path: path.join(root, "late.json"),
+          token: "l".repeat(32),
+        },
+      }),
+    ).rejects.toThrow("Storage unavailable");
+    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rereads a newly published guard under the reclaim claim", async () => {
+    const { root, target, lockPath } = await fixture();
+    const owner = {
+      ownerId: "racing",
+      pid: 999_999_999,
+      state: "prelaunch",
+      version: 2,
+    } as const;
+    await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`);
+    let changed = false;
+    let rejectedRename = 0;
+    await expect(
+      new DurableFileLock(target, {
+        processGuard: "required",
+        timeoutMs: 10,
+        retryMs: 1,
+        hooks: {
+          isPidAlive: () => false,
+          beforeReclaimRename: async () => {
+            if (changed) return;
+            changed = true;
+            await fs.writeFile(
+              `${lockPath}.guard-${owner.ownerId}`,
+              `${JSON.stringify({
+                ownerId: owner.ownerId,
+                version: 1,
+                pid: 999_999_998,
+                cleanupProof: {
+                  path: path.join(root, "missing-proof.json"),
+                  token: "r".repeat(32),
+                },
+              })}\n`,
+            );
+          },
+          afterObservedOwnerChanged: () => {
+            rejectedRename++;
+          },
+        },
+      }).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+    expect(changed).toBe(true);
+    expect(rejectedRename).toBeGreaterThan(0);
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(owner);
+  });
+
+  it("never restores a tombstone over a competing live owner", async () => {
+    const { target, lockPath } = await fixture();
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ ownerId: "dead", pid: 999_999_999 })}\n`,
+    );
+    const renamed = deferred();
+    const resume = deferred();
+    const reclaiming = new DurableFileLock(target, {
+      timeoutMs: 30,
+      retryMs: 1,
+      hooks: {
+        isPidAlive: (pid) => pid === process.pid,
+        afterReclaimRename: async () => {
+          renamed.resolve();
+          await resume.promise;
+        },
+      },
+    }).acquire();
+    await renamed.promise;
+
+    let competingOwnerId = "";
+    const competingRelease = await new DurableFileLock(target, {
+      hooks: {
+        afterLockAcquired: (ownerId) => {
+          competingOwnerId = ownerId;
+        },
+      },
+    }).acquire();
+    resume.resolve();
+
+    await expect(reclaiming).rejects.toThrow("Storage unavailable");
+    expect(competingOwnerId).not.toBe("");
+    expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+      ownerId: competingOwnerId,
+      pid: process.pid,
+    });
+    await expect(
+      new DurableFileLock(target, {
+        timeoutMs: 5,
+        retryMs: 1,
+      }).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+
+    await competingRelease();
   });
 });
