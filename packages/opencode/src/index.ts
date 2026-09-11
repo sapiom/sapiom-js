@@ -4,6 +4,7 @@ export {
 } from "./config.js";
 export {
   startOpenCodeServer,
+  OpenCodeShutdownError,
   OpenCodeStartupError,
   type OpenCodeServer,
   type OpenCodeStartupFailureCode,

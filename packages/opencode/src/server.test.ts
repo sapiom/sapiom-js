@@ -50,20 +50,40 @@ describe("packaged OpenCode runtime", () => {
     });
     const inspected = await server.fetchJson<{
       cwd: string;
-      config: Record<string, unknown>;
       keys: string[];
+      runtimeKeys: string[];
+      credentialValueInherited: boolean;
+      configChecks: {
+        model: string;
+        modelBridge: boolean;
+        mcpBridge: boolean;
+      };
     }>("/inspect");
     expect(inspected.cwd).toBe(directory);
-    expect(inspected.config).toEqual(config);
-    expect(JSON.stringify(inspected)).not.toContain("sk_private");
+    expect(inspected.keys).toContain("OPENCODE_EXPERIMENTAL_CODE_MODE");
+    expect(inspected.keys).not.toContain("OPENCODE_EXPERIMENTAL");
     for (const key of [
       "SAPIOM_API_KEY",
       "ANTHROPIC_API_KEY",
       "ESBUILD_BINARY_PATH",
+      "OPENCODE_CONFIG_CONTENT",
+      "OPENCODE_SERVER_USERNAME",
+      "OPENCODE_SERVER_PASSWORD",
     ])
-      expect(inspected.keys).not.toContain(key);
-    expect(JSON.stringify(config)).toContain("/llm/v2/openai/v1");
-    expect(JSON.stringify(config)).toContain("/mcp");
+      expect([...inspected.keys, ...inspected.runtimeKeys]).not.toContain(key);
+    expect(inspected.credentialValueInherited).toBe(false);
+    expect(inspected.configChecks).toEqual({
+      model: "sapiom/smart",
+      modelBridge: true,
+      mcpBridge: true,
+    });
+    expect(config.agent).toMatchObject({
+      "sapiom-final-response": { hidden: true, permission: { "*": "deny" } },
+      "sapiom-turn-recovery": { hidden: true, mode: "primary" },
+    });
+    expect(
+      (config.agent as Record<string, unknown>)["sapiom-turn-recovery"],
+    ).not.toHaveProperty("permission");
     await expect(server.fetch("https://other.example/private")).rejects.toThrow(
       "Invalid",
     );
