@@ -146,14 +146,22 @@ export async function emitEvent(
  * Deliberately NOT rejected, though `JSON.stringify` transforms them too:
  * `undefined`, functions and symbols (dropped — JSON has no encoding for them,
  * every other verb in this SDK behaves identically, and an absent key is
- * indistinguishable from one never set), and `toJSON` (invoked — that is how a
- * `Date` becomes an ISO string, which is the useful and expected result).
+ * indistinguishable from one never set), and an array hole, which serializes to
+ * `null` by the same documented mapping.
+ *
+ * The walk mirrors `JSON.stringify`'s own order of operations, which is the
+ * only way it can agree with it: `toJSON` is applied FIRST and the result is
+ * what gets inspected. An object is free to hold a cycle or a BigInt privately
+ * as long as its `toJSON` hands back clean JSON — that is the common shape for
+ * an entity with a parent back-reference, and walking the raw internals would
+ * reject a payload that serializes perfectly.
  *
  * An explicit walk rather than a `JSON.stringify` replacer, even though a
  * replacer would visit the same values: a replacer is handed the immediate key
  * and nothing else, so the most it could say about `{ a: { b: Infinity } }` is
  * `b` — a field the sender cannot locate. The path is the whole value of the
- * message.
+ * message. And inspecting the serialized OUTPUT instead is no help at all: by
+ * then `Infinity` is already the `null` this check exists to catch.
  */
 function findUnserializable(
   value: unknown,
@@ -176,28 +184,64 @@ function findUnserializable(
   }
   if (typeof value !== "object" || value === null) return null;
 
+  // `toJSON` first, exactly as JSON.stringify does, then inspect what it
+  // returned rather than the object that produced it. Called once and not
+  // re-applied to its own result — again matching the serializer.
+  let resolved: object = value;
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+    let produced: unknown;
+    try {
+      produced = (value as { toJSON: () => unknown }).toJSON();
+    } catch (err) {
+      // Would otherwise throw from inside the client's fetch try-block and be
+      // reported as a network failure. Name the field instead.
+      return {
+        path: at,
+        reason: `has a toJSON() that threw: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    // A primitive result needs the scalar checks, not the descent below — a
+    // `toJSON` returning `Infinity` is still an Infinity on the wire.
+    if (typeof produced !== "object" || produced === null) {
+      return findUnserializable(produced, at, seen);
+    }
+    resolved = produced;
+  }
+
   // The guard that keeps a self-referential payload from exhausting the stack.
   // Checked before descending, so the cycle is reported at the edge that closes
   // it rather than wherever the recursion happened to give out.
-  if (seen.has(value)) {
+  if (seen.has(resolved)) {
     return {
       path: at,
       reason: "is a circular reference; JSON cannot carry it.",
     };
   }
-  seen.add(value);
+  seen.add(resolved);
 
-  const entries: [string, unknown][] = Array.isArray(value)
-    ? value.map((entry, index) => [`[${index}]`, entry])
-    : Object.entries(value).map(([key, entry]) => [`.${key}`, entry]);
-  for (const [step, entry] of entries) {
-    const found = findUnserializable(entry, `${at}${step}`, seen);
-    if (found) return found;
+  // Indexed rather than `.map`/`Object.entries` on an array: `.map` preserves
+  // holes, so a sparse array (`new Array(1)`, `[1, , 3]`) yielded an `undefined`
+  // slot that destructuring then choked on. `JSON.stringify` writes a hole as
+  // `null` and moves on, so the walk has to reach every index and accept them.
+  if (Array.isArray(resolved)) {
+    for (let index = 0; index < resolved.length; index += 1) {
+      const found = findUnserializable(
+        resolved[index],
+        `${at}[${index}]`,
+        seen,
+      );
+      if (found) return found;
+    }
+  } else {
+    for (const [key, entry] of Object.entries(resolved)) {
+      const found = findUnserializable(entry, `${at}.${key}`, seen);
+      if (found) return found;
+    }
   }
   // Dropped once its subtree is cleared: a value repeated across sibling
   // branches (the same object under two keys) is fine — JSON writes it twice.
   // Only an ancestor repeating itself is a cycle.
-  seen.delete(value);
+  seen.delete(resolved);
   return null;
 }
 

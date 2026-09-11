@@ -192,6 +192,105 @@ describe("emitEvent", () => {
       expect(calls).toHaveLength(1);
     });
 
+    // The walk has to agree with `JSON.stringify`, so it applies `toJSON`
+    // first and inspects the result — not the object that produced it.
+    describe("toJSON", () => {
+      it("accepts an object whose toJSON hides a cycle and a BigInt", async () => {
+        const { client, calls } = fakeClient();
+        class Entity {
+          readonly big = 10n;
+          parent: Entity = this;
+          constructor(readonly id: string) {}
+          toJSON() {
+            return { id: this.id };
+          }
+        }
+        const payload = { node: new Entity("n1") };
+        // The serializer never sees the internals, so neither should the walk.
+        expect(JSON.stringify(payload)).toBe('{"node":{"id":"n1"}}');
+
+        await emitEvent({ type: "lead.created", payload }, client);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("still catches a non-finite number that toJSON itself returns", async () => {
+        const { client } = fakeClient();
+        const payload = {
+          d: {
+            toJSON() {
+              return { n: Infinity };
+            },
+          },
+        };
+        // Inspecting the serialized output could never catch this: by then the
+        // Infinity is already the `null` the check exists to prevent.
+        expect(JSON.stringify(payload)).toBe('{"d":{"n":null}}');
+
+        await expect(
+          emitEvent({ type: "lead.created", payload }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.d.n`"),
+        });
+      });
+
+      it("reports a throwing toJSON as a payload fault, not a network one", async () => {
+        const { client, calls } = fakeClient();
+        const payload = {
+          b: {
+            toJSON() {
+              throw new Error("boom");
+            },
+          },
+        };
+        await expect(
+          emitEvent({ type: "lead.created", payload }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.b`"),
+        });
+        expect(calls).toEqual([]);
+      });
+    });
+
+    // `.map` preserves holes, so the previous walk handed `for...of` an empty
+    // slot and destructuring threw a raw TypeError on a payload the serializer
+    // writes without complaint.
+    describe("sparse arrays", () => {
+      // Built by assignment rather than as `[1, , 3]` literals: eslint's
+      // no-sparse-arrays forbids the literal form, and the hole is the point.
+      const holeBetweenValues = (): unknown[] => {
+        const items = [1];
+        items[2] = 3;
+        return items;
+      };
+
+      it.each([
+        ["a fully sparse array", () => new Array(1), '{"items":[null]}'],
+        ["a hole between values", holeBetweenValues, '{"items":[1,null,3]}'],
+      ])("accepts %s, as JSON does", async (_label, build, wire) => {
+        const { client, calls } = fakeClient();
+        const payload = { items: build() };
+        expect(JSON.stringify(payload)).toBe(wire);
+
+        await emitEvent({ type: "lead.created", payload }, client);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("still reaches every index past a hole", async () => {
+        const { client } = fakeClient();
+        const items = new Array(2);
+        items[1] = Infinity;
+
+        await expect(
+          emitEvent({ type: "lead.created", payload: { items } }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.items[1]`"),
+        });
+      });
+    });
+
     it("leaves the values JSON transforms rather than corrupts", async () => {
       const { client, calls } = fakeClient();
       await emitEvent(
