@@ -173,19 +173,25 @@ describe("overall OpenCode turn status", () => {
       const footer = `<!-- studio-result:${markerToken}:finished -->`;
       for (let size = 1; size <= footer.length; size++) {
         expect(
-          openCodeVisibleText(`CHAT_OK\n\n${footer.slice(0, size)}`, token),
+          openCodeVisibleText(
+            `CHAT_OK\n\n${footer.slice(0, size)}`,
+            token,
+            true,
+          ),
         ).toBe("CHAT_OK");
         const parts = [
           { type: "text", text: `CHAT_OK\n\n${footer.slice(0, size)}` },
           { type: "tool" },
           { type: "text", text: footer.slice(size) },
         ];
-        expect(openCodeVisibleParts(parts, token)).toEqual([
+        expect(openCodeVisibleParts(parts, token, true)).toEqual([
           "CHAT_OK",
           undefined,
           "",
         ]);
-        expect(openCodeVisibleText(footer.slice(0, size), token)).toBe("");
+        expect(openCodeVisibleText(footer.slice(0, size), token, true)).toBe(
+          "",
+        );
         expect(
           openCodeVisibleParts(
             [
@@ -193,6 +199,7 @@ describe("overall OpenCode turn status", () => {
               { type: "text", text: footer.slice(size) + "\nCHAT_OK" },
             ],
             token,
+            true,
           ),
         ).toEqual(["", "CHAT_OK"]);
       }
@@ -262,6 +269,59 @@ describe("overall OpenCode turn status", () => {
     expect(
       openCodeVisibleText(parts.map((part) => part.text ?? "").join(""), token),
     ).toBe("Checking the README.\n\n\nThe README describes this project.");
+  });
+
+  it.each([
+    "Document the <!-- studio-result: placeholder used by Studio.",
+    "<!-- studio-result:not-a-uuid:finished --> is only an example.",
+    "<!-- studio-result:00000000-0000-0000-0000-00000000000g:finished --> is invalid.",
+    "<!-- studio-result:000000000000-0000-0000-0000-00000000:finished --> is invalid.",
+    "<!-- studio-result:00000000-0000-0000-0000-000000000000:unknown --> is invalid.",
+    "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished without a delimiter.",
+  ])(
+    "preserves invalid marker prose while streaming and after completion: %s",
+    (text) => {
+      const token = "11111111-1111-1111-1111-111111111111";
+      for (const streaming of [true, false]) {
+        expect(openCodeVisibleText(text, token, streaming)).toBe(text);
+        for (let split = 0; split <= text.length; split++) {
+          const parts = [
+            { type: "text", text: text.slice(0, split) },
+            { type: "tool" },
+            { type: "text", text: text.slice(split) },
+          ];
+          expect(
+            openCodeVisibleParts(parts, token, streaming)
+              .filter((part) => part !== undefined)
+              .join(""),
+          ).toBe(text);
+        }
+      }
+    },
+  );
+
+  it("restores incomplete marker candidates when streaming ends", () => {
+    const token = "11111111-1111-1111-1111-111111111111";
+    const marker =
+      "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished -->";
+    for (let size = 1; size < marker.length; size++) {
+      const text = `Example: ${marker.slice(0, size)}`;
+      expect(openCodeVisibleText(text, token, true)).toBe("Example:");
+      expect(openCodeVisibleText(text, token)).toBe(text);
+      expect(openCodeVisibleParts([{ type: "text", text }], token)).toEqual([
+        text,
+      ]);
+    }
+    expect(openCodeVisibleText("Use x <", token)).toBe("Use x <");
+  });
+
+  it("keeps scanning for real markers after invalid prose", () => {
+    const token = "11111111-1111-1111-1111-111111111111";
+    const prose =
+      "Document the <!-- studio-result: placeholder used by Studio.";
+    const marker = `<!-- studio-result:00000000-0000-0000-0000-000000000000:failed -->`;
+    expect(openCodeVisibleText(`${prose}\n\n${marker}`, token)).toBe(prose);
+    expect(openCodeVisibleText(`${marker}\n\n${prose}`, token)).toBe(prose);
   });
 
   it("requires known idle state and a completed final answer", () => {

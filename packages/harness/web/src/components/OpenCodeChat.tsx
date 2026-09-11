@@ -507,7 +507,12 @@ function ChatSurface({
                   ? completionTokens.get(nativeMessage.info.parentID)
                   : undefined;
               const result = openCodeResult(nativeMessage, token);
-              const visibleParts = openCodeVisibleParts(message.content, token);
+              const visibleParts = openCodeVisibleParts(
+                message.content,
+                token,
+                nativeMessage?.info?.role === "assistant" &&
+                  !nativeMessage.info.time.completed,
+              );
               return message.role === "user" &&
                 [finalResponseAgent, turnRecoveryAgent].includes(
                   native.messagesById[message.id]?.info?.agent ?? "",

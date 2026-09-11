@@ -70,33 +70,65 @@ function hasOpenFence(text: string) {
   return !!fence;
 }
 
+const completionMarkerPrefix = "<!-- studio-result:";
+
+/** Match UUID-and-status syntax, including a possible prefix only while streaming. */
+function completionMarkerLength(
+  text: string,
+  index: number,
+  streaming: boolean,
+) {
+  let end = index + completionMarkerPrefix.length;
+  for (const character of "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+    if (end === text.length) return streaming ? end - index : 0;
+    if (character === "-" ? text[end] !== "-" : !/^[a-f0-9]$/i.test(text[end]!))
+      return 0;
+    end++;
+  }
+  for (const ending of [":finished -->", ":failed -->"]) {
+    if (text.startsWith(ending, end)) return end + ending.length - index;
+    if (streaming && ending.startsWith(text.slice(end)))
+      return text.length - index;
+  }
+  return 0;
+}
+
+/** Preserve prose around complete markers and unfinished streamed candidates. */
 function visibleRanges(
   text: string,
   token: string | undefined,
+  streaming: boolean,
 ): [number, number][] {
   if (!token) return [[0, text.length]];
   // A model can emit the wrong turn ID. Hide its bookkeeping too; only
   // parseOpenCodeCompletion may confirm a result against the expected token.
-  const prefix = "<!-- studio-result:";
+  const prefix = completionMarkerPrefix;
   const ranges: [number, number][] = [];
   let start = 0;
-  while (start <= text.length) {
-    const index = text.indexOf(prefix, start);
+  let searchFrom = 0;
+  while (searchFrom <= text.length) {
+    const index = text.indexOf(prefix, searchFrom);
     if (index === -1) {
       let end = text.length;
-      for (let length = prefix.length - 1; length > 0; length--) {
-        if (text.slice(start).endsWith(prefix.slice(0, length))) {
-          end -= length;
-          break;
+      if (streaming) {
+        for (let length = prefix.length - 1; length > 0; length--) {
+          if (text.slice(searchFrom).endsWith(prefix.slice(0, length))) {
+            end -= length;
+            break;
+          }
         }
       }
       ranges.push([start, end]);
       break;
     }
+    const length = completionMarkerLength(text, index, streaming);
+    if (!length) {
+      searchFrom = index + prefix.length;
+      continue;
+    }
     ranges.push([start, index]);
-    const end = text.indexOf("-->", index + prefix.length);
-    if (end === -1) break;
-    start = end + 3;
+    start = index + length;
+    searchFrom = start;
   }
   // Trim the space left by a leading/footer marker, but retain text on both
   // sides of markers in the middle of a merged tool-progress/final response.
@@ -115,22 +147,27 @@ function visibleRanges(
   return ranges;
 }
 
-/** Hide complete and partially streamed bookkeeping without changing other text. */
-export function openCodeVisibleText(text: string, token: string | undefined) {
-  return visibleRanges(text, token)
+/** Hide markers; with streaming enabled, also withhold still-valid partial candidates. */
+export function openCodeVisibleText(
+  text: string,
+  token: string | undefined,
+  streaming = false,
+) {
+  return visibleRanges(text, token, streaming)
     .map((range) => text.slice(...range))
     .join("");
 }
 
-/** Filter across part boundaries, including interrupted or unfinished answers. */
+/** Filter across part boundaries; settled responses retain incomplete marker syntax. */
 export function openCodeVisibleParts(
   parts: readonly { type: string; text?: string }[],
   token: string | undefined,
+  streaming = false,
 ) {
   const text = parts
     .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
     .join("");
-  const ranges = visibleRanges(text, token);
+  const ranges = visibleRanges(text, token, streaming);
   let offset = 0;
   return parts.map((part) => {
     if (part.type !== "text") return undefined;

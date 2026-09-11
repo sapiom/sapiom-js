@@ -470,6 +470,80 @@ for (const position of ["prefix", "footer"]) {
   });
 }
 
+test("restores incomplete marker prose on completion and after reload", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Explain Studio's completion format.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  useCompletionContract(c);
+  const turn = c.turns.at(-1)!;
+  const partial =
+    "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished --";
+  const response = page.locator(`[data-message-id="${turn.info.id}"]`);
+  const delta = `\n\nIncomplete example:\n\n${partial}`;
+  turn.parts[0].text += delta;
+  emit(c, "message.part.delta", {
+    sessionID: c.id,
+    messageID: turn.info.id,
+    partID: turn.parts[0].id,
+    field: "text",
+    delta,
+  });
+  await expect(
+    page.getByText("Incomplete example:", { exact: true }),
+  ).toBeVisible();
+  await expect(response).not.toContainText(partial);
+  finish(c.id, "");
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Stopped");
+  await expect(response).toContainText(partial);
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(response).toContainText(partial);
+  expect(c.prompts).toHaveLength(1);
+  expect(c.recoveries).toHaveLength(0);
+});
+
+test("preserves literal completion-prefix prose during streaming and restored history", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Document the completion placeholder.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  useCompletionContract(c);
+  const turn = c.turns.at(-1)!;
+  const text = "Document the <!-- studio-result: placeholder used by Studio.";
+  const response = page.locator(`[data-message-id="${turn.info.id}"]`);
+  turn.parts[0].text += `\n\n${text}`;
+  emit(c, "message.part.delta", {
+    sessionID: c.id,
+    messageID: turn.info.id,
+    partID: turn.parts[0].id,
+    field: "text",
+    delta: `\n\n${text}`,
+  });
+  await expect(response).toContainText(text);
+  finish(c.id, "");
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Stopped");
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(response).toContainText(text);
+  expect(c.prompts).toHaveLength(1);
+  expect(c.recoveries).toHaveLength(0);
+});
+
 for (const recovered of [true, false]) {
   test(`continues a preamble-only native stop once and then shows ${recovered ? "Finished" : "Stopped"}`, async ({
     page,
