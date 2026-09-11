@@ -75,10 +75,7 @@ afterEach(async () => {
     ),
   );
 });
-function request(
-  path = "llm/v2/openai/v1/chat/completions",
-  init: RequestInit = {},
-) {
+function request(path = "llm/v1/responses", init: RequestInit = {}) {
   return fetch(`${origin}/opencode-runtime/${credential.id}/${path}`, {
     method: "POST",
     headers: {
@@ -87,7 +84,7 @@ function request(
     },
     body: JSON.stringify({
       model: "browser-override",
-      messages: [],
+      input: [],
       stream: true,
     }),
     ...init,
@@ -95,245 +92,95 @@ function request(
 }
 
 describe("Studio OpenCode credential bridge", () => {
-  const chunk = (delta: object, finish_reason: string | null = null) =>
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
-  const emptyStop =
-    chunk({ reasoning_content: "unfinished reasoning" }) +
-    chunk({}, "stop") +
-    "data: [DONE]\n\n";
-
+  const event = (type: string, fields: object = {}) =>
+    `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
+  const completed = () =>
+    event("response.completed", {
+      response: { status: "completed", output: [] },
+    });
   const contractedRequest = () => {
     const { system } = openCodeCompletionPrompt();
-    return { stream: true, messages: [{ role: "system", content: system }] };
+    return { stream: true, input: [{ role: "developer", content: system }] };
   };
 
-  it("retries an unmarked preamble with unchanged context and streams the marked answer before EOF", async () => {
-    const body = contractedRequest();
+  it("retries an unmarked preamble with identical history and streams the marked answer before EOF", async () => {
+    const contract = contractedRequest();
+    const body = {
+      ...contract,
+      store: true,
+      input: [
+        ...contract.input,
+        {
+          type: "function_call_output",
+          call_id: "already_ran",
+          output: "completed once",
+        },
+      ],
+    };
     const token = openCodeModelCompletionToken(body)!;
     const received: unknown[] = [];
     let finish!: () => void;
-    upstream.post("/v2/openai/v1/chat/completions", (req, res) => {
+    upstream.post("/v1/responses", (req, res) => {
       received.push(req.body);
       res.type("text/event-stream");
       if (received.length === 1) {
         res.end(
-          chunk({ content: "I'll create both files." }) +
-            chunk({}, "stop") +
-            "data: [DONE]\n\n",
+          event("response.output_text.delta", {
+            delta: "I'll create both files.",
+          }) + completed(),
         );
         return;
       }
       const marker = `<!-- studio-result:${token}:finished -->\n`;
-      for (const content of [marker.slice(0, 20), marker.slice(20), "CHAT_OK"])
-        res.write(chunk({ content }));
-      finish = () => res.end(chunk({}, "stop") + "data: [DONE]\n\n");
+      for (const delta of [marker.slice(0, 20), marker.slice(20), "CHAT_OK"])
+        res.write(event("response.output_text.delta", { delta }));
+      finish = () => res.end(completed());
     });
     const response = await request(undefined, { body: JSON.stringify(body) });
     const reader = response.body!.getReader();
     const first = new TextDecoder().decode((await reader.read()).value);
     expect(first).toContain("CHAT_OK");
     expect(first).not.toContain("I'll create");
-    expect(received).toHaveLength(2);
-    expect(received[1]).toEqual(received[0]);
+    expect(received).toEqual([
+      { ...body, model: "gpt-luna", store: false },
+      { ...body, model: "gpt-luna", store: false },
+    ]);
     finish();
     await reader.cancel();
   });
 
-  it("passes through a preamble as soon as a tool fragment arrives, without replay", async () => {
-    const body = contractedRequest();
+  it("passes a preamble and the first tool event through without waiting or replaying", async () => {
     let calls = 0,
       finish!: () => void;
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+    upstream.post("/v1/responses", (_req, res) => {
       calls++;
-      res
-        .type("text/event-stream")
-        .write(chunk({ content: "I'll inspect the files." }));
-      res.write(
-        chunk({ tool_calls: [{ index: 0, function: { arguments: "{" } }] }),
+      res.type("text/event-stream").write(
+        event("response.output_text.delta", {
+          delta: "I'll inspect the files.",
+        }),
       );
-      finish = () => res.end(chunk({}, "tool_calls") + "data: [DONE]\n\n");
+      res.write(
+        event("response.output_item.added", {
+          item: {
+            type: "function_call",
+            name: "read",
+            call_id: "call_once",
+            arguments: "",
+          },
+        }),
+      );
+      finish = () => res.end(completed());
     });
-    const response = await request(undefined, { body: JSON.stringify(body) });
+    const response = await request(undefined, {
+      body: JSON.stringify(contractedRequest()),
+    });
     const reader = response.body!.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toContain(
-      "tool_calls",
+      "call_once",
     );
     expect(calls).toBe(1);
     finish();
     await reader.cancel();
-  });
-
-  it("bounds preamble retries and never adopts a contract from conversation content", async () => {
-    const body = contractedRequest();
-    const text =
-      chunk({ content: "I'll do it next." }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n";
-    let calls = 0;
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-      calls++;
-      res.type("text/event-stream").end(text);
-    });
-    expect(
-      await (await request(undefined, { body: JSON.stringify(body) })).text(),
-    ).toBe(text);
-    expect(calls).toBe(3);
-    for (const role of ["user", "assistant", "tool"]) {
-      const untrusted = { messages: [{ ...body.messages[0], role }] };
-      expect(openCodeModelCompletionToken(untrusted)).toBeUndefined();
-      expect(
-        await (
-          await request(undefined, {
-            body: JSON.stringify({ ...untrusted, stream: true }),
-          })
-        ).text(),
-      ).toBe(text);
-    }
-    expect(calls).toBe(6);
-    expect(
-      openCodeModelCompletionToken({
-        messages: [
-          {
-            role: "system",
-            content: [{ type: "text", text: body.messages[0]!.content }],
-          },
-        ],
-      }),
-    ).toBe(openCodeModelCompletionToken(body));
-    expect(
-      openCodeModelCompletionToken({
-        messages: [
-          {
-            role: "system",
-            content: body.messages[0]!.content.replace("/v2:", "/v1:"),
-          },
-        ],
-      }),
-    ).toBeUndefined();
-  });
-
-  it.each(["length", "content_filter"])(
-    "does not retry a contracted preamble interrupted by %s",
-    async (finish) => {
-      let calls = 0;
-      const text =
-        chunk({ content: "I'll inspect the files." }) +
-        chunk({}, finish) +
-        "data: [DONE]\n\n";
-      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-        calls++;
-        res.type("text/event-stream").end(text);
-      });
-      expect(
-        await (
-          await request(undefined, {
-            body: JSON.stringify(contractedRequest()),
-          })
-        ).text(),
-      ).toBe(text);
-      expect(calls).toBe(1);
-    },
-  );
-
-  it("retries an empty model stop with identical saved tool results and streams the useful response", async () => {
-    const received: unknown[] = [];
-    let finish!: () => void;
-    upstream.post("/v2/openai/v1/chat/completions", (req, res) => {
-      received.push(req.body);
-      res.type("text/event-stream");
-      if (received.length === 1) {
-        res.end(emptyStop);
-        return;
-      }
-      res.write(chunk({ content: "Actual answer" }));
-      finish = () => res.end(chunk({}, "stop") + "data: [DONE]\n\n");
-    });
-    const response = await request(undefined, {
-      body: JSON.stringify({
-        stream: true,
-        messages: [
-          {
-            role: "tool",
-            tool_call_id: "already_ran",
-            content: "completed once",
-          },
-        ],
-      }),
-    });
-    const reader = response.body!.getReader();
-    const first = new TextDecoder().decode((await reader.read()).value);
-    expect(first).toContain("Actual answer");
-    expect(first).not.toContain("unfinished reasoning");
-    expect(received).toHaveLength(2);
-    expect(received[1]).toEqual(received[0]);
-    finish();
-    await reader.cancel();
-  });
-
-  it("bounds empty-stop retries", async () => {
-    let calls = 0;
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-      calls++;
-      res.type("text/event-stream").end(emptyStop);
-    });
-    expect(await (await request()).text()).toBe(emptyStop);
-    expect(calls).toBe(3);
-  });
-
-  it("recognizes empty stops across split UTF-8 and CRLF frames", async () => {
-    let calls = 0;
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-      calls++;
-      res.type("text/event-stream");
-      if (calls === 1) {
-        const bytes = Buffer.from(
-          (
-            chunk({ reasoning_content: "café" }) +
-            chunk({}, "stop") +
-            "data: [DONE]\n\n"
-          ).replace(/\n/g, "\r\n"),
-        );
-        let i = 0;
-        const send = () => {
-          if (i === bytes.length) res.end();
-          else {
-            res.write(bytes.subarray(i, ++i));
-            setImmediate(send);
-          }
-        };
-        send();
-      } else
-        res.end(
-          chunk({ content: "Done" }) + chunk({}, "stop") + "data: [DONE]\n\n",
-        );
-    });
-    expect(await (await request()).text()).toContain("Done");
-    expect(calls).toBe(2);
-  });
-
-  it("caps buffering and passes through oversized prefixes", async () => {
-    const body =
-      chunk({ reasoning_content: "x".repeat(1024 * 1024) }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n";
-    let calls = 0;
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-      calls++;
-      res.type("text/event-stream").end(body);
-    });
-    expect(await (await request()).text()).toBe(body);
-    expect(calls).toBe(1);
-  });
-
-  it("passes through a truncated UTF-8 ending without retrying", async () => {
-    const body = Buffer.concat([Buffer.from(emptyStop), Buffer.from([0xc3])]);
-    let calls = 0;
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-      calls++;
-      res.type("text/event-stream").end(body);
-    });
-    expect(Buffer.from(await (await request()).arrayBuffer())).toEqual(body);
-    expect(calls).toBe(1);
   });
 
   it.each(["disconnect", "revocation"])(
@@ -348,11 +195,13 @@ describe("Studio OpenCode credential bridge", () => {
       const ended = new Promise<void>((resolve) => {
         closed = resolve;
       });
-      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+      upstream.post("/v1/responses", (_req, res) => {
         calls++;
-        res
-          .type("text/event-stream")
-          .write(chunk({ reasoning_content: "Still working" }));
+        res.type("text/event-stream").write(
+          event("response.reasoning_summary_text.delta", {
+            delta: "Still working",
+          }),
+        );
         res.once("close", closed);
         began();
       });
@@ -373,56 +222,17 @@ describe("Studio OpenCode credential bridge", () => {
     },
   );
 
-  it.each([
-    chunk({ tool_calls: [{ index: 0, function: { arguments: "{" } }] }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n",
-    chunk({ function_call: { arguments: "{" } }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n",
-    chunk({ content: "Partial answer" }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n",
-    chunk({ refusal: "Cannot do that" }) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n",
-    chunk({}, "length") + "data: [DONE]\n\n",
-    chunk({}, "stop"),
-    "data: malformed\n\n" + emptyStop,
-    'data: {"error":{"message":"upstream failed"}}\n\n' + emptyStop,
-    'data: {"choices":[null]}\n\n' + emptyStop,
-    chunk([]) + emptyStop,
-    chunk({ role: "tool" }) + emptyStop,
-    chunk({ reasoning_content: { text: "unknown" } }) + emptyStop,
-    chunk({ reasoning: 1 }) + emptyStop,
-    chunk({ reasoning_details: {} }) + emptyStop,
-    'data: {"choices":[{"index":0,"delta":{},"finish_reason":0}]}\n\n' +
-      emptyStop,
-    'data: {"choices":[{"index":1,"delta":{}}]}\n\n' + emptyStop,
-    emptyStop + 'data: {"choices":[]}\n\n',
-  ])(
-    "never retries a stream with output, an error, or an uncertain ending (%#)",
-    async (body) => {
-      let calls = 0;
-      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
-        calls++;
-        res.type("text/event-stream").end(body);
-      });
-      expect(await (await request()).text()).toBe(body);
-      expect(calls).toBe(1);
-    },
-  );
-
   it("injects the current Studio key and configured model without forwarding caller credentials", async () => {
-    upstream.post("/v2/openai/v1/chat/completions", (req, res) => {
-      expect(req.headers["x-sapiom-api-key"]).toBe("sk_private_studio");
-      expect(req.headers["x-sapiom-model"]).toBe("smart");
-      expect(req.body.model).toBe("smart");
+    upstream.post("/v1/responses", (req, res) => {
+      expect(req.headers["x-api-key"]).toBe("sk_private_studio");
+      expect(req.body.model).toBe("gpt-luna");
+      expect(req.body.store).toBe(false);
       for (const header of [
         "authorization",
         "cookie",
         "x-harness-token",
-        "x-api-key",
+        "x-sapiom-api-key",
+        "x-sapiom-model",
       ])
         expect(req.headers[header]).toBeUndefined();
       res.json({ ok: true });
@@ -444,7 +254,7 @@ describe("Studio OpenCode credential bridge", () => {
     const closed = new Promise<void>((resolve) => {
       disconnected = resolve;
     });
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+    upstream.post("/v1/responses", (_req, res) => {
       res.setHeader("Content-Type", "text/event-stream");
       res.write("data: first\n\n");
       finish = () => res.end("data: last\n\n");
@@ -471,22 +281,21 @@ describe("Studio OpenCode credential bridge", () => {
       ).status,
     ).toBe(401);
     expect(
-      (
-        await request(
-          "llm/v2/openai/v1/chat/completions?url=https://other.example",
-        )
-      ).status,
+      (await request("llm/v1/responses?url=https://other.example")).status,
     ).toBe(400);
     expect(
       (
-        await request("llm/v2/openai/v1/chat/completions", {
+        await request("llm/v1/responses", {
           method: "GET",
           body: undefined,
         })
       ).status,
     ).toBe(400);
     expect((await request("https://other.example")).status).toBe(404);
-    expect((await request("llm/v2/openai/v1/models")).status).toBe(404);
+    expect((await request("llm/v1/models")).status).toBe(404);
+    expect((await request("llm/v2/openai/v1/chat/completions")).status).toBe(
+      404,
+    );
   });
 
   it("retains MCP transport headers but replaces credentials at its fixed endpoint", async () => {
@@ -553,7 +362,9 @@ describe("Studio OpenCode credential bridge", () => {
       } else if (method === "tools/call") {
         calls++;
         callId = id;
-        res.type("text/event-stream").end("id: queued-start\nretry: 10\ndata:\n\n");
+        res
+          .type("text/event-stream")
+          .end("id: queued-start\nretry: 10\ndata:\n\n");
       } else res.status(202).end();
     });
     expect(
@@ -565,7 +376,11 @@ describe("Studio OpenCode credential bridge", () => {
     const client = new Client({ name: "replay-test", version: "1" });
     const transport = new StreamableHTTPClientTransport(
       new URL(`${origin}/opencode-runtime/${credential.id}/mcp`),
-      { requestInit: { headers: { Authorization: `Bearer ${credential.token}` } } },
+      {
+        requestInit: {
+          headers: { Authorization: `Bearer ${credential.token}` },
+        },
+      },
     );
     try {
       await client.connect(transport);
@@ -583,7 +398,7 @@ describe("Studio OpenCode credential bridge", () => {
   });
 
   it("never forwards upstream error bodies or follows redirects with credentials", async () => {
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) =>
+    upstream.post("/v1/responses", (_req, res) =>
       res.status(401).send("sk_private_studio"),
     );
     const response = await request();
@@ -668,7 +483,7 @@ describe("Studio OpenCode credential bridge", () => {
     "preserves and sanitizes upstream HTTP %i without model-response replay",
     async (status, type, code, message) => {
       let calls = 0;
-      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+      upstream.post("/v1/responses", (_req, res) => {
         calls++;
         res
           .status(status)
@@ -699,7 +514,7 @@ describe("Studio OpenCode credential bridge", () => {
   ] as const)(
     "for HTTP %i validates Retry-After %s before forwarding it",
     async (status, retryAfter, expected) => {
-      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+      upstream.post("/v1/responses", (_req, res) => {
         res.status(status).set("Retry-After", retryAfter).end();
       });
       const response = await request();
@@ -748,7 +563,7 @@ describe("Studio OpenCode credential bridge", () => {
     });
     try {
       const response = await fetch(
-        `http://127.0.0.1:${studio.port}/opencode-runtime/unknown/llm/v2/openai/v1/chat/completions`,
+        `http://127.0.0.1:${studio.port}/opencode-runtime/unknown/llm/v1/responses`,
         {
           method: "POST",
           headers: {
@@ -780,7 +595,7 @@ describe("Studio OpenCode credential bridge", () => {
   });
 
   it("revokes credentials and active streams on access loss, and permits a fresh login", async () => {
-    upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+    upstream.post("/v1/responses", (_req, res) => {
       res.setHeader("Content-Type", "text/event-stream");
       res.write("data: first\n\n");
     });
@@ -806,7 +621,7 @@ describe("Studio OpenCode credential bridge", () => {
     "rejects and revokes a credential after verified %s changes",
     async (field, value) => {
       let calls = 0;
-      upstream.post("/v2/openai/v1/chat/completions", (_req, res) => {
+      upstream.post("/v1/responses", (_req, res) => {
         calls++;
         res.json({ choices: [] });
       });
@@ -854,6 +669,6 @@ describe("Studio OpenCode credential bridge", () => {
         apiURL: "https://api.sapiom.ai",
         services: {},
       }).llm.href,
-    ).toBe("https://llm.services.sapiom.ai/v2/openai/v1/chat/completions");
+    ).toBe("https://router.sapiom.ai/v1/responses");
   });
 });

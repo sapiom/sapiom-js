@@ -76,7 +76,7 @@ beforeEach(async () => {
         return () => {};
       },
     },
-    bridge: { issue, model: "smart" },
+    bridge: { issue, model: "gpt-luna" },
     origin: () => "http://127.0.0.1:1234",
     stateRoot: root,
     authorize,
@@ -102,7 +102,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(first.harnessSessionId).toBe("studio-one");
     expect(first.stateRoot.startsWith(join(root, "opencode"))).toBe(true);
     expect(JSON.stringify(start.mock.calls)).not.toContain("sk_private");
-    expect(start.mock.calls[0][0].config.model).toBe("sapiom/smart");
+    expect(start.mock.calls[0][0].config.model).toBe("sapiom/gpt-luna");
     await host.ensure("studio-two");
     expect(start).toHaveBeenCalledTimes(2);
     expect(start.mock.calls[0][0].stateRoot).not.toBe(

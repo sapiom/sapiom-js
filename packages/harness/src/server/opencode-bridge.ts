@@ -138,7 +138,7 @@ export function assistantUpstreams(env: ResolvedEnvironment): {
   const configured =
     env.services.llm ??
     (env.name === "production" && env.apiURL === "https://api.sapiom.ai"
-      ? "https://llm.services.sapiom.ai"
+      ? "https://router.sapiom.ai"
       : undefined);
   if (!configured)
     throw new Error(
@@ -163,7 +163,7 @@ export function assistantUpstreams(env: ResolvedEnvironment): {
     return url;
   };
   return {
-    llm: new URL("/v2/openai/v1/chat/completions", root(configured)),
+    llm: new URL("/v1/responses", root(configured)),
     mcp: new URL("/v1/mcp", root(env.apiURL)),
   };
 }
@@ -176,7 +176,7 @@ export class OpenCodeBridge {
 
   constructor(
     private readonly access: Access,
-    readonly model = "smart",
+    readonly model = "gpt-luna",
   ) {
     this.unsubscribe = access.subscribe(() => {
       const grant = access.get();
@@ -185,13 +185,9 @@ export class OpenCodeBridge {
       }
     });
     const raw = express.raw({ type: () => true, limit: "4mb" });
-    this.router.all(
-      "/:id/llm/v2/openai/v1/chat/completions",
-      raw,
-      (req, res) => {
-        void this.forward(req, res, "llm");
-      },
-    );
+    this.router.all("/:id/llm/v1/responses", raw, (req, res) => {
+      void this.forward(req, res, "llm");
+    });
     this.router.all("/:id/mcp", raw, (req, res) => {
       void this.forward(req, res, "mcp");
     });
@@ -278,9 +274,7 @@ export class OpenCodeBridge {
         "Accept-Encoding": "identity",
         Accept: req.header("Accept") ?? "application/json",
         "Content-Type": "application/json",
-        ...(service === "llm"
-          ? { "x-sapiom-api-key": key, "x-sapiom-model": this.model }
-          : { "x-api-key": key }),
+        "x-api-key": key,
       });
       // Queued MCP tools close the POST stream and deliver results through
       // GET replay. Its cursor must survive the credential bridge.
@@ -315,7 +309,9 @@ export class OpenCodeBridge {
           });
           return;
         }
-        body = Buffer.from(JSON.stringify({ ...request, model: this.model }));
+        body = Buffer.from(
+          JSON.stringify({ ...request, model: this.model, store: false }),
+        );
         streamingModel = request.stream === true;
         completionToken = openCodeModelCompletionToken(request);
       }

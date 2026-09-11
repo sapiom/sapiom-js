@@ -19,30 +19,36 @@ export async function fetchOpenCodeModelResponse(
   }
 }
 
-/** Native sends the current contract in system text, never user/tool history. */
+/** Responses carries the native contract in instructions or trusted input roles. */
 export function openCodeModelCompletionToken(request: Record<string, unknown>) {
-  if (!Array.isArray(request.messages)) return;
+  const texts: string[] = [];
+  if (typeof request.instructions === "string")
+    texts.push(request.instructions);
+  for (const message of Array.isArray(request.input) ? request.input : []) {
+    if (
+      !message ||
+      (message.type != null && message.type !== "message") ||
+      !["system", "developer"].includes(message.role)
+    )
+      continue;
+    if (typeof message.content === "string") texts.push(message.content);
+    else if (Array.isArray(message.content))
+      for (const part of message.content)
+        if (part?.type === "input_text" && typeof part.text === "string")
+          texts.push(part.text);
+  }
   let token: string | undefined;
-  for (const message of request.messages) {
-    if (!message || message.role !== "system") continue;
-    const content =
-      typeof message.content === "string"
-        ? message.content
-        : Array.isArray(message.content)
-          ? message.content
-              .filter(
-                (part: { type?: string; text?: unknown }) =>
-                  part?.type === "text" && typeof part.text === "string",
-              )
-              .map((part: { text: string }) => part.text)
-              .join("\n")
-          : "";
+  for (const content of texts) {
     for (const match of content.matchAll(
       /(?:^|\n)StudioAssistantResult\/v2:([a-f0-9-]{36})\n/g,
     ))
       token = match[1];
   }
   return token;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 async function inspect(response: Response, completionToken?: string) {
@@ -58,8 +64,38 @@ async function inspect(response: Response, completionToken?: string) {
   let pending = "",
     content = "",
     size = 0,
-    stopped = false,
     ended = false;
+  // A marker commits streaming, not completion: native terminal state still
+  // rejects errors, absent answers, or simultaneous tools.
+  const commitsText = (text: string) =>
+    !!text.trim() &&
+    (!completionToken || !!parseOpenCodeCompletion(text, completionToken));
+  const canBufferPart = (part: unknown): boolean =>
+    record(part) &&
+    part.type === "output_text" &&
+    typeof part.text === "string" &&
+    !commitsText(part.text);
+  const canBufferItem = (item: unknown): boolean => {
+    if (!record(item)) return false;
+    if (item.type === "reasoning")
+      return (
+        Array.isArray(item.summary) &&
+        item.summary.every(
+          (part) =>
+            record(part) &&
+            part.type === "summary_text" &&
+            typeof part.text === "string",
+        )
+      );
+    // Every tool kind (including future ones) commits the stream before native
+    // can execute it. Refusals and unknown output also pass through unchanged.
+    return (
+      item.type === "message" &&
+      item.role === "assistant" &&
+      Array.isArray(item.content) &&
+      item.content.every(canBufferPart)
+    );
+  };
   const replay = (empty = false) => ({
     empty,
     response: new Response(
@@ -100,7 +136,7 @@ async function inspect(response: Response, completionToken?: string) {
         } catch {
           return replay();
         }
-        return replay(stopped && ended && !pending.trim());
+        return replay(ended && !pending.trim());
       }
       prefix.push(next.value);
       size += next.value.byteLength;
@@ -121,64 +157,68 @@ async function inspect(response: Response, completionToken?: string) {
         if (!lines.length) continue;
         const data = lines.map((line) => line.slice(5).trimStart()).join("\n");
         if (ended) return replay();
-        if (data === "[DONE]") {
-          ended = true;
-          continue;
-        }
         let value;
         try {
           value = JSON.parse(data);
         } catch {
           return replay();
         }
-        if (
-          !value ||
-          value.error ||
-          !Array.isArray(value.choices) ||
-          value.choices.length > 1
-        )
-          return replay();
-        for (const choice of value.choices) {
-          if (!choice || typeof choice !== "object" || choice.index !== 0)
+        if (!record(value) || value.error != null) return replay();
+        switch (value.type) {
+          case "response.created":
+          case "response.in_progress":
+          case "response.completed": {
+            const result = value.response;
+            if (
+              !record(result) ||
+              result.error != null ||
+              result.incomplete_details != null ||
+              !Array.isArray(result.output) ||
+              !result.output.every(canBufferItem)
+            )
+              return replay();
+            if (value.type === "response.completed") {
+              if (result.status !== "completed") return replay();
+              ended = true;
+            } else if (result.status !== "in_progress") return replay();
+            break;
+          }
+          case "response.output_item.added":
+          case "response.output_item.done":
+            if (!canBufferItem(value.item)) return replay();
+            break;
+          case "response.content_part.added":
+          case "response.content_part.done":
+            if (!canBufferPart(value.part)) return replay();
+            break;
+          case "response.output_text.delta":
+            if (typeof value.delta !== "string") return replay();
+            content += value.delta;
+            if (commitsText(content)) return replay();
+            break;
+          case "response.output_text.done":
+            if (typeof value.text !== "string" || commitsText(value.text))
+              return replay();
+            break;
+          case "response.reasoning_summary_text.delta":
+          case "response.reasoning_text.delta":
+            if (typeof value.delta !== "string") return replay();
+            break;
+          case "response.reasoning_summary_text.done":
+          case "response.reasoning_text.done":
+            if (typeof value.text !== "string") return replay();
+            break;
+          case "response.reasoning_summary_part.added":
+          case "response.reasoning_summary_part.done":
+            if (
+              !record(value.part) ||
+              value.part.type !== "summary_text" ||
+              typeof value.part.text !== "string"
+            )
+              return replay();
+            break;
+          default:
             return replay();
-          const delta = choice.delta;
-          if (!delta || typeof delta !== "object" || Array.isArray(delta))
-            return replay();
-          if (
-            (delta.role != null && delta.role !== "assistant") ||
-            [delta.reasoning_content, delta.reasoning].some(
-              (value) => value != null && typeof value !== "string",
-            ) ||
-            (delta.reasoning_details != null &&
-              !Array.isArray(delta.reasoning_details)) ||
-            (delta.content != null && typeof delta.content !== "string") ||
-            delta.tool_calls != null ||
-            delta.function_call != null ||
-            delta.refusal != null ||
-            Object.keys(delta).some(
-              (key) =>
-                ![
-                  "role",
-                  "content",
-                  "reasoning_content",
-                  "reasoning",
-                  "reasoning_details",
-                ].includes(key),
-            ) ||
-            (choice.finish_reason != null && choice.finish_reason !== "stop")
-          )
-            return replay();
-          content += delta.content ?? "";
-          // A marker commits streaming, not completion: native terminal state
-          // still rejects errors, absent answers, or simultaneous tools.
-          // Any tool fragment above also commits the stream before execution.
-          if (
-            content.trim() &&
-            (!completionToken ||
-              parseOpenCodeCompletion(content, completionToken))
-          )
-            return replay();
-          if (choice.finish_reason === "stop") stopped = true;
         }
       }
     }

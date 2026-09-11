@@ -101,6 +101,24 @@ describe("packaged OpenCode runtime", () => {
       bridgeUrl: "http://127.0.0.1:1234/opencode-runtime/runtime",
       runtimeToken: "scoped-token",
     });
+    expect(config.provider).toMatchObject({
+      sapiom: {
+        npm: "@ai-sdk/openai",
+        options: {
+          apiKey: "scoped-token",
+          baseURL: "http://127.0.0.1:1234/opencode-runtime/runtime/llm/v1",
+        },
+        models: {
+          "gpt-luna": {
+            options: {
+              store: false,
+              include: ["reasoning.encrypted_content"],
+              reasoningEffort: "low",
+            },
+          },
+        },
+      },
+    });
     server = await startOpenCodeServer({
       ...options(config),
       environment: {
@@ -135,7 +153,7 @@ describe("packaged OpenCode runtime", () => {
       expect([...inspected.keys, ...inspected.runtimeKeys]).not.toContain(key);
     expect(inspected.credentialValueInherited).toBe(false);
     expect(inspected.configChecks).toEqual({
-      model: "sapiom/smart",
+      model: "sapiom/gpt-luna",
       modelBridge: true,
       mcpBridge: true,
     });
