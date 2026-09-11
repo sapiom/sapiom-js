@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { randomBytes, scryptSync } from "node:crypto";
 import {
   access,
   mkdir,
@@ -36,8 +36,8 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function environmentTag(value: string, key: string): string {
-  return createHmac("sha256", key).update(value).digest("hex");
+function environmentTag(value: string, salt: string): string {
+  return scryptSync(value, salt, 32).toString("hex");
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<unknown> {
@@ -194,7 +194,7 @@ describe("pinned OpenCode 1.18.29", () => {
     ]);
 
     const runtimeToken = "synthetic-runtime-token";
-    const tagKey = randomBytes(32).toString("hex");
+    const tagSalt = randomBytes(16).toString("hex");
     const config = {
       ...createSapiomOpenCodeConfig({
         bridgeUrl: "http://127.0.0.1:9/runtime",
@@ -240,9 +240,9 @@ describe("pinned OpenCode 1.18.29", () => {
       body: "{}",
     });
     const inspect = [
-      "const { createHmac } = require('node:crypto');",
-      `const tagKey = ${JSON.stringify(tagKey)};`,
-      "const rows = Object.entries(process.env).map(([key, value]) => [key, createHmac('sha256', tagKey).update(value).digest('hex')]);",
+      "const { scryptSync } = require('node:crypto');",
+      `const tagSalt = ${JSON.stringify(tagSalt)};`,
+      "const rows = Object.entries(process.env).map(([key, value]) => [key, scryptSync(value, tagSalt, 32).toString('hex')]);",
       "console.log(JSON.stringify(rows));",
     ].join("");
     const result = await runtime.fetchJson<{
@@ -264,9 +264,9 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(names).toContain("PATH");
     expect(rows).toContainEqual([
       "COLORTERM",
-      environmentTag("sapiom-native-environment-probe", tagKey),
+      environmentTag("sapiom-native-environment-probe", tagSalt),
     ]);
-    expect(rows).toContainEqual(["HOME", environmentTag(hostileHome, tagKey)]);
+    expect(rows).toContainEqual(["HOME", environmentTag(hostileHome, tagSalt)]);
     for (const key of [
       "OPENCODE_CONFIG_CONTENT",
       "OPENCODE_SERVER_USERNAME",
@@ -287,7 +287,7 @@ describe("pinned OpenCode 1.18.29", () => {
       nativePassword,
       "synthetic-host-key",
       "synthetic-provider-key",
-    ].map((value) => environmentTag(value, tagKey));
+    ].map((value) => environmentTag(value, tagSalt));
     expect(rows.some(([, tag]) => forbiddenTags.includes(tag))).toBe(false);
 
     const [unauthenticated, wrongPassword, authenticated] = await Promise.all([
