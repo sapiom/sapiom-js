@@ -1,6 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  OpenCodeShutdownError,
+  startOpenCodeServer,
+  type OpenCodeProcessIdentity,
+} from "@sapiom/opencode";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DurableFileLock } from "./durable-file-lock.js";
@@ -412,4 +418,108 @@ describe("DurableFileLock", () => {
 
     await competingRelease();
   });
+
+  it.skipIf(process.platform !== "linux")(
+    "blocks replacement when a startup exit leaves detached work",
+    async () => {
+      const { root, target } = await fixture();
+      const release = await new DurableFileLock(target, {
+        processGuard: "required",
+      }).acquire();
+      const writerLog = path.join(root, "startup-writer.log");
+      let identity: OpenCodeProcessIdentity | undefined;
+      let writerPid: number | undefined;
+      let writerBirthId: string | undefined;
+      try {
+        await expect(
+          startOpenCodeServer({
+            cwd: root,
+            stateRoot: path.join(root, "engine"),
+            config: { startupExitWriter: writerLog },
+            command: {
+              executable: process.execPath,
+              prefixArgs: [
+                fileURLToPath(
+                  new URL(
+                    "../../../opencode/src/__fixtures__/server.mjs",
+                    import.meta.url,
+                  ),
+                ),
+              ],
+            },
+            environment: { PATH: process.env.PATH, HOME: root },
+            beforeLaunch: async (nextIdentity) => {
+              identity = nextIdentity;
+              await release.protectProcess(nextIdentity);
+            },
+          }),
+        ).rejects.toEqual(new OpenCodeShutdownError());
+
+        expect(identity).toBeDefined();
+        await expect(
+          fs.readFile(identity!.cleanupProof.path, "utf8"),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        writerPid = Number(
+          await fs.readFile(path.join(root, "runtime.tool.pid"), "utf8"),
+        );
+        writerBirthId = await linuxBirthId(writerPid);
+        expect(writerBirthId).toBeDefined();
+        const firstWrites = (await fs.readFile(writerLog, "utf8")).length;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect((await fs.readFile(writerLog, "utf8")).length).toBeGreaterThan(
+          firstWrites,
+        );
+
+        await expect(
+          new DurableFileLock(target, {
+            processGuard: "required",
+            timeoutMs: 10,
+            retryMs: 1,
+            hooks: { processState: () => "dead" },
+          }).acquire(),
+        ).rejects.toThrow("Storage unavailable");
+      } finally {
+        if (
+          writerPid !== undefined &&
+          (await linuxBirthId(writerPid)) === writerBirthId
+        )
+          process.kill(writerPid, "SIGKILL");
+        if (writerPid !== undefined) await waitUntilStopped(writerPid);
+        await release();
+      }
+    },
+  );
 });
+
+async function linuxBirthId(pid: number): Promise<string | undefined> {
+  try {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  } catch (error) {
+    if (
+      ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")
+    )
+      return undefined;
+    throw error;
+  }
+}
+
+async function waitUntilStopped(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    try {
+      const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+      if (stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] === "Z") return;
+    } catch (error) {
+      if (
+        ["ENOENT", "ESRCH"].includes(
+          (error as NodeJS.ErrnoException).code ?? "",
+        )
+      )
+        return;
+      throw error;
+    }
+    if (Date.now() >= deadline) throw new Error("fixture process did not stop");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
