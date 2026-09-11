@@ -351,8 +351,8 @@ export const App = (): JSX.Element => {
     },
     [harness.getWorkflowInputContract],
   );
-  // The composer-first "new session" home. `composing` is explicit rail
-  // Create-new intent; the workbench tab + starts a sibling directly instead.
+  // The composer-first "new session" home. `composing` holds it open for
+  // explicit Create-new intent or a submission from the automatic home.
   // The home also shows whenever nothing else claims the centre pane.
   const [composing, setComposing] = useState(false);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
@@ -1860,7 +1860,9 @@ export const App = (): JSX.Element => {
     agentHarness: HarnessKind,
     options: CreateSessionAtOptions = {},
   ): Promise<HarnessSession> => {
-    if (!options.keepComposerOpen) setComposing(false);
+    // Activate the automatic home before a scaffold update can replace it;
+    // its local draft and files must survive a later preparation failure.
+    setComposing(options.keepComposerOpen === true);
     setReviewSummary(null);
     // Preserve a same-project selection while the create is in flight. The
     // caller owns the final destination: a project-row create can deliberately
