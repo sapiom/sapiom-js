@@ -111,11 +111,11 @@ export async function emitEvent(
   // nothing wrong — the receipt would record a null the sender never wrote.
   // Every other rule stays the engine's; this one has to run before the
   // serialization that destroys the evidence.
-  const nonFinite = findNonFinitePath(payload);
-  if (nonFinite) {
+  const unserializable = findUnserializable(payload);
+  if (unserializable) {
     throw new AgentOperationError({
       code: "BAD_PAYLOAD",
-      message: `\`${nonFinite}\` is not a finite number; JSON cannot carry it and it would be recorded as null.`,
+      message: `\`${unserializable.path}\` ${unserializable.reason}`,
     });
   }
   return client.post<EmitEventResult>("/events", {
@@ -129,8 +129,25 @@ export async function emitEvent(
 }
 
 /**
- * The path of the first value JSON cannot round-trip (`Infinity`, `-Infinity`,
- * `NaN`), or `null` when the payload survives serialization.
+ * The first value in the payload that `JSON.stringify` cannot carry honestly,
+ * with the path to it, or `null` when the payload survives the round trip.
+ *
+ * Three cases, and only three — each one where the caller would otherwise be
+ * told something untrue:
+ *
+ * - A **non-finite number** (`Infinity`, `NaN`) serializes to `null`, so the
+ *   receipt records a value the sender never wrote.
+ * - A **BigInt** makes `JSON.stringify` throw from inside the client's fetch
+ *   try-block, which reports it as `NETWORK` — "could not reach the host" for
+ *   what is entirely a payload problem.
+ * - A **cycle** does the same, and the walk below would otherwise recurse into
+ *   it until the stack gives out.
+ *
+ * Deliberately NOT rejected, though `JSON.stringify` transforms them too:
+ * `undefined`, functions and symbols (dropped — JSON has no encoding for them,
+ * every other verb in this SDK behaves identically, and an absent key is
+ * indistinguishable from one never set), and `toJSON` (invoked — that is how a
+ * `Date` becomes an ISO string, which is the useful and expected result).
  *
  * An explicit walk rather than a `JSON.stringify` replacer, even though a
  * replacer would visit the same values: a replacer is handed the immediate key
@@ -138,21 +155,49 @@ export async function emitEvent(
  * `b` — a field the sender cannot locate. The path is the whole value of the
  * message.
  */
-function findNonFinitePath(value: unknown, at = "payload"): string | null {
-  if (typeof value === "number") return Number.isFinite(value) ? null : at;
-  if (Array.isArray(value)) {
-    for (const [index, entry] of value.entries()) {
-      const found = findNonFinitePath(entry, `${at}[${index}]`);
-      if (found) return found;
-    }
-    return null;
+function findUnserializable(
+  value: unknown,
+  at = "payload",
+  seen = new WeakSet<object>(),
+): { path: string; reason: string } | null {
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return {
+      path: at,
+      reason:
+        "is not a finite number; JSON cannot carry it and it would be recorded as null.",
+    };
   }
-  if (typeof value === "object" && value !== null) {
-    for (const [key, entry] of Object.entries(value)) {
-      const found = findNonFinitePath(entry, `${at}.${key}`);
-      if (found) return found;
-    }
+  if (typeof value === "bigint") {
+    return {
+      path: at,
+      reason:
+        "is a BigInt; JSON cannot carry it. Send it as a string or a number.",
+    };
   }
+  if (typeof value !== "object" || value === null) return null;
+
+  // The guard that keeps a self-referential payload from exhausting the stack.
+  // Checked before descending, so the cycle is reported at the edge that closes
+  // it rather than wherever the recursion happened to give out.
+  if (seen.has(value)) {
+    return {
+      path: at,
+      reason: "is a circular reference; JSON cannot carry it.",
+    };
+  }
+  seen.add(value);
+
+  const entries: [string, unknown][] = Array.isArray(value)
+    ? value.map((entry, index) => [`[${index}]`, entry])
+    : Object.entries(value).map(([key, entry]) => [`.${key}`, entry]);
+  for (const [step, entry] of entries) {
+    const found = findUnserializable(entry, `${at}${step}`, seen);
+    if (found) return found;
+  }
+  // Dropped once its subtree is cleared: a value repeated across sibling
+  // branches (the same object under two keys) is fine — JSON writes it twice.
+  // Only an ancestor repeating itself is a cycle.
+  seen.delete(value);
   return null;
 }
 

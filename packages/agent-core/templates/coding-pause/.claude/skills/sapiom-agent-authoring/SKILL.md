@@ -540,7 +540,7 @@ type the resumed step's input with optional fields accordingly.
 
 ### Waiting on a user-named signal
 
-The signal name in the object form is yours to choose — `pause_until_signal` takes any
+The signal name in the object form is yours to choose — `pauseUntilSignal` takes any
 string, so a gate needs no capability handle and no registration. What decides the shape is
 the `correlationId`:
 

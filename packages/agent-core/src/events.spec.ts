@@ -136,6 +136,84 @@ describe("emitEvent", () => {
       ).rejects.toMatchObject({ code: "BAD_PAYLOAD" });
     });
 
+    it("rejects a BigInt, naming its path", async () => {
+      const { client, calls } = fakeClient();
+      await expect(
+        emitEvent({ type: "lead.created", payload: { amount: 10n } }, client),
+      ).rejects.toMatchObject({
+        code: "BAD_PAYLOAD",
+        message: expect.stringContaining("`payload.amount`"),
+      });
+      // Without this the throw comes from JSON.stringify inside the client's
+      // fetch try-block, which reports a payload problem as `NETWORK`.
+      expect(calls).toEqual([]);
+    });
+
+    it.each([
+      [
+        "a self-reference",
+        () => {
+          const p: Record<string, unknown> = { a: 1 };
+          p.self = p;
+          return { payload: p, path: "payload.self" };
+        },
+      ],
+      [
+        "a cycle back to an ancestor",
+        () => {
+          const p: Record<string, any> = { a: { b: {} } };
+          p.a.b.back = p.a;
+          return { payload: p, path: "payload.a.b.back" };
+        },
+      ],
+    ])("rejects %s rather than exhausting the stack", async (_label, build) => {
+      const { client, calls } = fakeClient();
+      const { payload, path } = build();
+      // A RangeError here, not an AgentOperationError, is the regression this
+      // guards: callers switch on `code`, and a stack overflow has none.
+      await expect(
+        emitEvent({ type: "lead.created", payload }, client),
+      ).rejects.toMatchObject({
+        code: "BAD_PAYLOAD",
+        message: expect.stringContaining(`\`${path}\``),
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it("allows the same object under two keys — a repeat is not a cycle", async () => {
+      const { client, calls } = fakeClient();
+      const shared = { id: "x" };
+      await emitEvent(
+        { type: "lead.created", payload: { from: shared, to: shared } },
+        client,
+      );
+      // JSON writes it twice and round-trips fine; only an ancestor repeating
+      // itself is a cycle.
+      expect(calls).toHaveLength(1);
+    });
+
+    it("leaves the values JSON transforms rather than corrupts", async () => {
+      const { client, calls } = fakeClient();
+      await emitEvent(
+        {
+          type: "lead.created",
+          payload: {
+            // toJSON: this is how a Date becomes an ISO string — the useful
+            // result, not a corruption.
+            occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+            // Dropped by JSON, like every other verb in this SDK: an absent key
+            // cannot be told apart from one that was never set.
+            absent: undefined,
+          },
+        },
+        client,
+      );
+      expect(calls).toHaveLength(1);
+      expect(
+        JSON.parse(JSON.stringify((calls[0].body as any).payload)),
+      ).toEqual({ occurredAt: "2026-01-01T00:00:00.000Z" });
+    });
+
     it("allows the finite edges JSON can carry", async () => {
       const { client, calls } = fakeClient();
       await emitEvent(
