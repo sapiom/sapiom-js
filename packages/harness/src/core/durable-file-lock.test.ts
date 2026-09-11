@@ -36,6 +36,20 @@ function deferred() {
   return { promise, resolve };
 }
 
+function cleanupProof(root: string, digit: string) {
+  return {
+    path: path.join(root, `cleanup-${digit.repeat(32)}.json`),
+    token: digit.repeat(64),
+  };
+}
+
+function storedProof(root: string, proof: ReturnType<typeof cleanupProof>) {
+  return {
+    relativePath: path.relative(root, proof.path),
+    token: proof.token,
+  };
+}
+
 describe("DurableFileLock", () => {
   it("serializes live owners and preserves ordinary dead-legacy reclaim", async () => {
     const { target, lockPath } = await fixture();
@@ -103,18 +117,15 @@ describe("DurableFileLock", () => {
       state: "prelaunch",
       version: 2,
     } as const;
-    const proof = {
-      path: path.join(root, "cleanup.json"),
-      token: "p".repeat(32),
-    };
+    const proof = cleanupProof(root, "a");
     await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`);
     await fs.writeFile(
       `${lockPath}.guard-${owner.ownerId}`,
       `${JSON.stringify({
         ownerId: owner.ownerId,
-        version: 1,
+        version: 2,
         pid: 999_999_998,
-        cleanupProof: proof,
+        cleanupProof: storedProof(root, proof),
       })}\n`,
     );
     const options = {
@@ -137,9 +148,11 @@ describe("DurableFileLock", () => {
       proof.path,
       `${JSON.stringify({ status: "complete", token: proof.token })}\n`,
     );
-    await (
-      await new DurableFileLock(target, options).acquire()
-    )();
+    const replacement = await new DurableFileLock(target, options).acquire();
+    await expect(fs.access(proof.path)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await replacement();
   });
 
   it("blocks malformed guards in required mode", async () => {
@@ -162,6 +175,130 @@ describe("DurableFileLock", () => {
     ).rejects.toThrow("Storage unavailable");
   });
 
+  it("blocks unsafe persisted descriptors without touching sibling artifacts", async () => {
+    const { root, target, lockPath } = await fixture();
+    const outside = await fs.mkdtemp(
+      path.join(os.tmpdir(), "durable-lock-outside-"),
+    );
+    roots.push(outside);
+    const outsideProof = cleanupProof(outside, "e");
+    const siblingPending = path.join(
+      root,
+      "sibling.lock.guard-owner.pending-artifact",
+    );
+    await fs.writeFile(outsideProof.path, "outside sentinel\n");
+    await fs.writeFile(
+      siblingPending,
+      `${JSON.stringify({ ownerId: "sibling", pid: 999_999_999 })}\n`,
+    );
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        ownerId: "../unsafe",
+        pid: 999_999_999,
+        state: "prelaunch",
+        version: 2,
+      })}\n`,
+    );
+
+    const options = {
+      processGuard: "required" as const,
+      timeoutMs: 5,
+      retryMs: 1,
+      hooks: { isPidAlive: () => false },
+    };
+    await expect(
+      new DurableFileLock(target, options).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+    expect(await fs.readFile(outsideProof.path, "utf8")).toBe(
+      "outside sentinel\n",
+    );
+    expect(await fs.readFile(siblingPending, "utf8")).toContain("sibling");
+
+    const owner = {
+      ownerId: "old-absolute-guard",
+      pid: 999_999_999,
+      state: "prelaunch",
+      version: 2,
+    } as const;
+    await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`);
+    await fs.writeFile(
+      `${lockPath}.guard-${owner.ownerId}`,
+      `${JSON.stringify({
+        ownerId: owner.ownerId,
+        version: 1,
+        pid: 999_999_998,
+        cleanupProof: outsideProof,
+      })}\n`,
+    );
+    await expect(
+      new DurableFileLock(target, options).acquire(),
+    ).rejects.toThrow("Storage unavailable");
+    expect(await fs.readFile(outsideProof.path, "utf8")).toBe(
+      "outside sentinel\n",
+    );
+    expect(await fs.readFile(siblingPending, "utf8")).toContain("sibling");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects proof paths through escaping parents and final symlinks",
+    async () => {
+      const { root, target, lockPath } = await fixture();
+      const outside = await fs.mkdtemp(
+        path.join(os.tmpdir(), "durable-lock-outside-"),
+      );
+      roots.push(outside);
+      const release = await new DurableFileLock(target, {
+        processGuard: "required",
+      }).acquire();
+      const escapingParent = path.join(root, "escaping-parent");
+      await fs.symlink(outside, escapingParent, "dir");
+      await expect(
+        release.protectProcess({
+          pid: process.pid,
+          cleanupProof: {
+            ...cleanupProof(root, "f"),
+            path: path.join(escapingParent, `cleanup-${"f".repeat(32)}.json`),
+          },
+        }),
+      ).rejects.toThrow("Storage unavailable");
+      await release();
+
+      const outsideSentinel = path.join(outside, "proof-sentinel.json");
+      await fs.writeFile(
+        outsideSentinel,
+        `${JSON.stringify({ status: "complete", token: "a".repeat(64) })}\n`,
+      );
+      const linkedProof = cleanupProof(root, "a");
+      await fs.symlink(outsideSentinel, linkedProof.path);
+      const owner = {
+        ownerId: "symlinked-proof",
+        pid: 999_999_999,
+        state: "prelaunch",
+        version: 2,
+      } as const;
+      await fs.writeFile(lockPath, `${JSON.stringify(owner)}\n`);
+      await fs.writeFile(
+        `${lockPath}.guard-${owner.ownerId}`,
+        `${JSON.stringify({
+          ownerId: owner.ownerId,
+          version: 2,
+          pid: 999_999_998,
+          cleanupProof: storedProof(root, linkedProof),
+        })}\n`,
+      );
+      await expect(
+        new DurableFileLock(target, {
+          processGuard: "required",
+          timeoutMs: 5,
+          retryMs: 1,
+          hooks: { isPidAlive: () => false },
+        }).acquire(),
+      ).rejects.toThrow("Storage unavailable");
+      expect(await fs.readFile(outsideSentinel, "utf8")).toContain("complete");
+    },
+  );
+
   it("serializes protection with release and never acknowledges a late permit", async () => {
     const { root, target, lockPath } = await fixture();
     const published = deferred();
@@ -177,10 +314,7 @@ describe("DurableFileLock", () => {
     }).acquire();
     const protecting = release.protectProcess({
       pid: process.pid,
-      cleanupProof: {
-        path: path.join(root, "cleanup.json"),
-        token: "t".repeat(32),
-      },
+      cleanupProof: cleanupProof(root, "b"),
     });
     await published.promise;
     const releasing = release();
@@ -190,10 +324,7 @@ describe("DurableFileLock", () => {
     await expect(
       release.protectProcess({
         pid: process.pid,
-        cleanupProof: {
-          path: path.join(root, "late.json"),
-          token: "l".repeat(32),
-        },
+        cleanupProof: cleanupProof(root, "c"),
       }),
     ).rejects.toThrow("Storage unavailable");
     await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -224,12 +355,9 @@ describe("DurableFileLock", () => {
               `${lockPath}.guard-${owner.ownerId}`,
               `${JSON.stringify({
                 ownerId: owner.ownerId,
-                version: 1,
+                version: 2,
                 pid: 999_999_998,
-                cleanupProof: {
-                  path: path.join(root, "missing-proof.json"),
-                  token: "r".repeat(32),
-                },
+                cleanupProof: storedProof(root, cleanupProof(root, "d")),
               })}\n`,
             );
           },
