@@ -26,6 +26,8 @@ export interface OpenCodeBridgeCredential {
 }
 const digest = (value: string) => createHash("sha256").update(value).digest();
 const sameAuthority = (a: AssistantGrant, b: AssistantGrant) =>
+  a.userId === b.userId &&
+  a.tenantId === b.tenantId &&
   a.identityRevision === b.identityRevision &&
   a.environment.name === b.environment.name &&
   a.environment.apiURL === b.environment.apiURL &&
