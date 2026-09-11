@@ -75,6 +75,66 @@ describe("emitEvent", () => {
     ).resolves.toEqual(RECEIPT);
   });
 
+  // `JSON.stringify` turns a non-finite number into `null`, so the server's own
+  // non-finite rejection would see a null and pass it — the receipt records a
+  // value the sender never wrote. This has to fail before serialization.
+  describe("non-finite numbers", () => {
+    it.each([
+      ["Infinity at the top level", { amount: Infinity }, "payload.amount"],
+      ["-Infinity", { amount: -Infinity }, "payload.amount"],
+      ["NaN", { amount: NaN }, "payload.amount"],
+      [
+        "a nested value",
+        { invoice: { total: Infinity } },
+        "payload.invoice.total",
+      ],
+      ["an array entry", { totals: [1, Infinity] }, "payload.totals[1]"],
+      [
+        "a value nested under an array",
+        { rows: [{ n: 1 }, { n: NaN }] },
+        "payload.rows[1].n",
+      ],
+    ])("rejects %s, naming its path", async (_label, payload, path) => {
+      const { client, calls } = fakeClient();
+      await expect(
+        emitEvent({ type: "lead.created", payload }, client),
+      ).rejects.toMatchObject({
+        code: "BAD_PAYLOAD",
+        message: expect.stringContaining(`\`${path}\``),
+      });
+      // Nothing left the process: the point is to fail before the wire.
+      expect(calls).toEqual([]);
+    });
+
+    it("rejects a non-finite number parsed from JSON text (1e400 is not an error)", async () => {
+      const { client } = fakeClient();
+      const payload = parseEventPayload('{"amount":1e400}');
+      expect(payload.amount).toBe(Infinity);
+      await expect(
+        emitEvent({ type: "lead.created", payload }, client),
+      ).rejects.toMatchObject({ code: "BAD_PAYLOAD" });
+    });
+
+    it("allows the finite edges JSON can carry", async () => {
+      const { client, calls } = fakeClient();
+      await emitEvent(
+        {
+          type: "lead.created",
+          payload: {
+            zero: 0,
+            negative: -1.5,
+            big: Number.MAX_SAFE_INTEGER,
+            nested: { list: [1, 2, 3] },
+            nulls: null,
+            text: "1e400",
+          },
+        },
+        client,
+      );
+      expect(calls).toHaveLength(1);
+    });
+  });
+
   it("passes `unmatched` and `duplicate` through without treating either as an error", async () => {
     const { client } = fakeClient({
       receiptId: "rcpt-2",

@@ -662,10 +662,15 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       // object would reject those at the boundary, before the coercion every
       // other object arg in this module gets. `asEventPayload` re-imposes the
       // object rule after decoding, so nothing is loosened.
+      //
+      // `z.unknown()` also advertises as NOT required in `tools/list`, which is
+      // why an omitted payload defaults to `{}` below rather than failing: the
+      // schema an agent reads has to be the schema the handler honors, and an
+      // event carrying no data is legitimate. Same `?? {}` as the run tool.
       payload: z
         .unknown()
         .describe(
-          "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict).",
+          "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict). Omit it for an event that carries no data.",
         ),
       eventId: z
         .string()
@@ -678,12 +683,14 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
-        return ok(
-          await emitEvent(
-            { type, payload: asEventPayload(coerceJson(payload)), eventId },
-            client,
-          ),
-        );
+        // Only an OMITTED payload defaults. An explicit `null` still fails the
+        // object rule: a client that sent a value meant something by it, and
+        // quietly turning it into an empty event would emit data the caller
+        // never wrote — the same silent substitution the object rule exists to
+        // prevent.
+        const data =
+          payload === undefined ? {} : asEventPayload(coerceJson(payload));
+        return ok(await emitEvent({ type, payload: data, eventId }, client));
       } catch (err) {
         return fail(err);
       }

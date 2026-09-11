@@ -61,6 +61,11 @@ function describeEmit(type: string, result: EmitEventResult): string {
   if (result.outcome === "unmatched") {
     return `✓ Event '${type}' recorded (receipt ${result.receiptId}), but no active event trigger subscribes to it — check the type for a typo, or arm a trigger on it.`;
   }
+  // "fired N trigger(s)", not "started N runs": a fire is not yet a run. The
+  // 202 means the receipt is committed and the fires are queued, and a fire can
+  // still fail before it creates an execution — `sapiom agents logs` is where
+  // you find out which did. Promising runs here would be the one claim this
+  // response cannot support.
   const fires = result.fireIds.length;
-  return `✓ Event '${type}' accepted (receipt ${result.receiptId}); started ${fires} run${fires === 1 ? "" : "s"}.`;
+  return `✓ Event '${type}' accepted (receipt ${result.receiptId}); fired ${fires} trigger${fires === 1 ? "" : "s"}.`;
 }

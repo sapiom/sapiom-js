@@ -124,6 +124,30 @@ describe("sapiom_dev_agents_emit_event", () => {
     });
   });
 
+  // `payload` advertises as not-required in `tools/list` (z.unknown()), so the
+  // handler has to honor an omission rather than contradict its own schema.
+  it("defaults an omitted payload to {} — the advertised schema says it is optional", async () => {
+    vi.mocked(emitEvent).mockResolvedValue({
+      receiptId: "rcpt-1",
+      outcome: "matched",
+      duplicate: false,
+      fireIds: ["fire-1"],
+    } as never);
+    const { server, handlers } = createMockServer();
+    register(server, env);
+
+    const res = await handlers.get("sapiom_dev_agents_emit_event")!({
+      type: "heartbeat.tick",
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(vi.mocked(emitEvent).mock.calls[0][0]).toEqual({
+      type: "heartbeat.tick",
+      payload: {},
+      eventId: undefined,
+    });
+  });
+
   it.each([
     ["an array", [1, 2]],
     ["a scalar", 42],

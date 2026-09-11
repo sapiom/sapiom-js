@@ -93,6 +93,21 @@ export async function emitEvent(
   opts: EmitEventOptions,
   client: GatewayClient,
 ): Promise<EmitEventResult> {
+  // The one check that CANNOT be left to the server, and the reason this
+  // otherwise-passthrough function validates at all. `JSON.parse('{"a":1e400}')`
+  // yields `Infinity` with no error; the `JSON.stringify` on the way out has no
+  // representation for it and emits `null`. So by the time the request arrives,
+  // the number is already a null and the server's own non-finite rejection sees
+  // nothing wrong — the receipt would record a null the sender never wrote.
+  // Every other rule stays the engine's; this one has to run before the
+  // serialization that destroys the evidence.
+  const nonFinite = findNonFinitePath(opts.payload);
+  if (nonFinite) {
+    throw new AgentOperationError({
+      code: "BAD_PAYLOAD",
+      message: `\`${nonFinite}\` is not a finite number; JSON cannot carry it and it would be recorded as null.`,
+    });
+  }
   return client.post<EmitEventResult>("/events", {
     type: opts.type,
     payload: opts.payload,
@@ -101,6 +116,34 @@ export async function emitEvent(
     // absent one, and absent is what "let the server mint a UUID" means.
     ...(opts.eventId !== undefined ? { id: opts.eventId } : {}),
   });
+}
+
+/**
+ * The path of the first value JSON cannot round-trip (`Infinity`, `-Infinity`,
+ * `NaN`), or `null` when the payload survives serialization.
+ *
+ * An explicit walk rather than a `JSON.stringify` replacer, even though a
+ * replacer would visit the same values: a replacer is handed the immediate key
+ * and nothing else, so the most it could say about `{ a: { b: Infinity } }` is
+ * `b` — a field the sender cannot locate. The path is the whole value of the
+ * message.
+ */
+function findNonFinitePath(value: unknown, at = "payload"): string | null {
+  if (typeof value === "number") return Number.isFinite(value) ? null : at;
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      const found = findNonFinitePath(entry, `${at}[${index}]`);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const [key, entry] of Object.entries(value)) {
+      const found = findNonFinitePath(entry, `${at}.${key}`);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 /**
