@@ -4113,144 +4113,8 @@ button.rail-footer-card:hover {
   min-width: 0;
 }
 
-/* Workspace dependency map ----------------------------------------------
-   The project's altitude of the ONE canvas — it fills the right pane beside
-   the coding-agent CLI, not the whole shell. It was a full-main destination, which
-   made selecting a project a mode switch: your chat vanished to show you a
-   picture of it. The field and cards use the design repository's flow geometry
-   and existing Studio tokens; there is deliberately no legend, metrics, status
-   treatment, inspector, or grouping chrome. */
-.workspace-graph-view {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--surface-raised);
-}
-
-.workspace-graph-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  flex: 0 0 auto;
-  height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
-  color: var(--text-dim);
-  border-bottom: 1px solid var(--ui-line);
-  background: var(--surface-raised);
-}
-
-.workspace-graph-title {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: var(--type-label);
-  font-weight: 590;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-graph-lifecycle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.workspace-graph-lifecycle[data-state="degraded"] > .status-tag {
-  color: var(--text-warning);
-}
-
-.workspace-graph-lifecycle[data-state="stale"] > .status-tag {
-  color: var(--text-warning);
-}
-
-.workspace-graph-body,
-.system-graph-canvas,
-.system-graph-viewport {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-graph-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.system-graph-canvas {
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-base);
-}
-
-.system-graph-viewport {
-  touch-action: none;
-  cursor: grab;
-  background-color: var(--surface-base);
-  background-image: radial-gradient(var(--flow-grid-dot) 1px, transparent 1px);
-  background-position: 0 0;
-  background-size: 16px 16px;
-}
-
-.system-graph-viewport.is-panning {
-  cursor: grabbing;
-  user-select: none;
-}
-
-.system-graph-viewport:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
-}
-
-.system-graph-subject {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform-origin: center;
-  will-change: transform;
-}
-
-.system-graph-edges {
-  position: absolute;
-  inset: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.system-graph-edge {
-  fill: none;
-  stroke: var(--text-faint);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
-}
-
-.system-graph-edge.is-async {
-  stroke-dasharray: 5 5;
-}
-
-/* Two systems that touch. Dotted and lighter than the wiring inside a
-   container, because "these two are connected" is a weaker claim than "this is
-   how this system is built" — and these are the only connectors that cross a
-   border, so they must not read as that border being wrong. */
-.system-graph-edge.is-cross-group {
-  stroke: var(--text-faint);
-  stroke-dasharray: 2 4;
-  opacity: 0.75;
-}
-
-.system-graph-arrow {
-  fill: var(--text-faint);
-}
-
-.system-graph-edge-label {
+/* Agent Map viewport, labels and controls. */
+.agent-map-edge-label {
   fill: var(--text-faint);
   stroke: var(--surface-base);
   stroke-width: 4px;
@@ -4260,132 +4124,26 @@ button.rail-footer-card:hover {
   pointer-events: none;
 }
 
-/* A named, bounded container around one system's cards. Behind everything (the
-   edge svg and the cards are later siblings), and NOT interactive: a group is
-   edited in the rail, which is the surface that owns the arrangement. */
-.system-graph-group {
-  position: absolute;
-  box-sizing: border-box;
-  padding: var(--sp2) var(--sp3);
-  border: 1px solid var(--ui-line);
-  border-radius: calc(var(--radius) * 2);
-  background: var(--surface-inset);
-  pointer-events: none;
-}
-
-/* Counter-scaled against the view zoom.
-
-   A container's NAME is the whole thing the container adds, and the map's own
-   arrival zoom on a project with dozens of agents is around 20% — measured
-   there, the label rendered 3.65px tall, and 2.96px after Fit. That is not a
-   label. Growing it as the view shrinks keeps the systems named at
-   exactly the altitude you zoom out to read them from, and the clamp stops
-   there: at 70% and above the cards are legible on their own and the label is
-   1:1. */
-.system-graph-group-label {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  /* FONT-SIZE, not `transform: scale()`. A transform does not affect layout, so
-     a scaled label's on-screen width stays constant as the view shrinks while
-     its container's does not — below ~70% a long group name draws straight past
-     its own box and over its neighbour, and neither `max-width` nor the ellipsis
-     can see it happen. Growing the type re-lays the line out, so both still
-     hold. `GROUP_HEADER` is sized for the largest line this can produce. */
-  font-size: calc(
-    var(--type-meta) * clamp(1, calc(0.7 / var(--system-graph-zoom, 1)), 4)
-  );
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.system-graph-isolated-label {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  margin: 0;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-.system-graph-node {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: var(--sp1);
-  box-sizing: border-box;
-  padding: var(--sp2) var(--sp3);
-  overflow: hidden;
-  appearance: none;
-  color: var(--text);
-  background: var(--surface-raised);
-  border: 1px dashed var(--ui-line-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-xs);
-  font: inherit;
-  text-align: left;
-}
-
-button.system-graph-node.is-navigable {
-  cursor: pointer;
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast),
-    box-shadow var(--transition-fast);
-}
-
-button.system-graph-node.is-navigable:hover {
-  background: var(--surface-hover);
-  border-color: var(--text-faint);
-}
-
-button.system-graph-node.is-navigable:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  button.system-graph-node.is-navigable {
-    transition: none;
-  }
-}
-
-.system-graph-node-label,
-.system-graph-node-meta {
+.agent-map-node-label,
+.agent-map-node-meta {
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.system-graph-node-label {
+.agent-map-node-label {
   font-size: var(--type-label);
   font-weight: 590;
 }
 
-.system-graph-node-meta {
+.agent-map-node-meta {
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: var(--type-meta);
 }
 
-.system-graph-subject[data-semantic-zoom="far"] .system-graph-node-meta,
-.system-graph-subject[data-semantic-zoom="far"] .system-graph-edge-label {
-  display: none;
-}
-
-.system-graph-controls {
+.agent-map-controls {
   position: absolute;
   right: var(--sp3);
   bottom: var(--sp3);
@@ -4400,12 +4158,12 @@ button.system-graph-node.is-navigable:focus-visible {
   box-shadow: var(--shadow-xs);
 }
 
-.system-graph-controls .theme-toggle:disabled {
+.agent-map-controls .theme-toggle:disabled {
   cursor: default;
   opacity: 0.45;
 }
 
-.system-graph-controls .system-graph-zoom-reset {
+.agent-map-controls .agent-map-zoom-reset {
   width: auto;
   min-width: calc(var(--control-h-xs) + var(--sp3));
   padding: 0 var(--sp2);
@@ -4414,28 +4172,12 @@ button.system-graph-node.is-navigable:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-.system-graph-warning {
-  position: absolute;
-  top: var(--sp3);
-  right: var(--sp3);
-  z-index: 2;
-  margin: 0;
-  padding: var(--sp2) var(--sp3);
-  color: var(--text-faint);
-  border: 1px solid var(--ui-line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-xs);
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-}
-
-.system-graph-state {
+.agent-map-state {
   flex: 1;
   min-height: 0;
 }
 
-/* Plan-first Agent Map: the existing graph plane and controls, projected from
+/* Agent Map: a graph plane and controls projected from
    durable proposal state and shared deployment evidence. */
 .agent-map-live,
 .agent-map-live-body,
@@ -4530,7 +4272,7 @@ button.system-graph-node.is-navigable:focus-visible {
   text-rendering: geometricPrecision;
 }
 
-.agent-map-live-header > .system-graph-node-meta {
+.agent-map-live-header > .agent-map-node-meta {
   width: auto;
   flex-shrink: 0;
 }
@@ -8490,6 +8232,11 @@ button.system-graph-node.is-navigable:focus-visible {
   .right-pane-tab {
     padding: 3px var(--sp2);
   }
+
+  /* "Agent Map" shortens to "Map" rather than stacking its two words. */
+  .right-pane-tab-qualifier {
+    display: none;
+  }
 }
 
 /* Segmented control row — same --pane-header-h as the brand header and
@@ -8516,6 +8263,7 @@ button.system-graph-node.is-navigable:focus-visible {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
+  white-space: nowrap;
   transition:
     background-color var(--transition-fast),
     color var(--transition-fast),

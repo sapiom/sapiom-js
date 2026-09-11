@@ -9,7 +9,7 @@ import {
   type StudioProjectId,
   type StudioProjectSummary,
 } from "../shared/agent-map.js";
-import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
+import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
 import { resolveProjectRootForPath } from "../shared/project-roots.js";
 import { pathComparisonKey } from "../shared/paths.js";
 import { canonicalGraphPath } from "./canonical-graph-path.js";

@@ -8,7 +8,7 @@ interface McpAuthRestartNoticeProps {
   onRestart: () => Promise<void>;
 }
 
-/** A scoped, non-blocking recovery action for one stale Claude runtime. */
+/** A scoped, non-blocking recovery action for one stale coding-agent runtime. */
 export function McpAuthRestartNotice({
   restarting,
   onRestart,

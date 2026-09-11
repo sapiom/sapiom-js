@@ -45,6 +45,7 @@ import {
   type SchedulePolicy,
   type StubFile,
 } from "@sapiom/agent-core";
+import { authoringRulesDriftWarnings } from "../authoring-rules-drift.js";
 import { type ResolvedEnvironment } from "../credentials.js";
 import { registerTool } from "../register-tool.js";
 import {
@@ -204,7 +205,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_check",
-    "Validate an agent locally: typecheck, bundle and import index.ts, derive the manifest, and check the step graph. Needs no Sapiom account or service call; author-written top-level side effects still run when the definition is imported. Returns the agent name, step count, the manifest (which contains the full step graph for visualization), and any graph warnings.",
+    "Validate an agent locally: typecheck, bundle and import index.ts, derive the manifest, and check the step graph. Needs no Sapiom account or service call to validate; author-written top-level side effects still run when the definition is imported. Returns the agent name, step count, the manifest (which contains the full step graph for visualization), and any warnings — graph warnings, plus one per project file (AGENTS.md, the sapiom-agent-authoring skill) whose platform-rules stamp differs from the copy the Sapiom API currently serves, from a best-effort anonymous read of that endpoint's headers (skipped when the project carries no stamp, silent when unreachable).",
     {
       dir: z
         .string()
@@ -215,7 +216,13 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     },
     async ({ dir }) => {
       try {
-        return ok(await check({ sourceDir: dir ?? process.cwd() }));
+        const sourceDir = dir ?? process.cwd();
+        const result = await check({ sourceDir });
+        // A scaffolded project's AGENTS.md and skill summarize the served platform
+        // rules and carry the release they were written against; they cannot update
+        // themselves, so this is where a stale copy gets named (SAP-3181).
+        const drift = await authoringRulesDriftWarnings(sourceDir, env);
+        return ok({ ...result, warnings: [...result.warnings, ...drift] });
       } catch (err) {
         return fail(err);
       }

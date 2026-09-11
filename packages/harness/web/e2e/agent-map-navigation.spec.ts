@@ -425,7 +425,7 @@ for (const boundWorkflowPath of ["/Users/demo/acme-app/leasing", null]) {
   test(`ending a session retains its own Canvas with binding ${boundWorkflowPath}`, async ({
     page,
   }) => {
-    await page.goto("/?seed=0&mockStudioProjects=absent");
+    await page.goto("/?seed=0&mockStudioProjects=present");
     await expect(page.getByTestId("session-context")).toBeVisible();
     await updateSession(page, "sess-boot", { boundWorkflowPath });
     await page.getByTestId("session-tab-main-sess-boot").click();

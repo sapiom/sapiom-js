@@ -76,11 +76,12 @@ export interface CodingRunSpec {
   /** Keep the sandbox alive after the run finishes. SDK default: true (the mesh needs it). */
   keepSandbox?: boolean;
   /**
-   * Routing label for the coding agent's LLM calls (e.g. `"smart"`). The
-   * platform resolves it against its configured label set — a raw provider
-   * model id is never honored. Omit to let the platform choose (the
-   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
-   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
+   * Routing label for the coding agent's LLM calls, resolved by the platform
+   * against its configured label set — a raw provider model id is never
+   * honored. Omit it (recommended) to let the platform choose; pass
+   * `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
+   * The full rule is the served platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
+   * (written against release 1.0).
    */
   model?: ModelLabel;
   /**
@@ -602,13 +603,14 @@ export interface ModelRunSpec {
   /** System prompt steering the agent. */
   system?: string;
   /**
-   * Routing label for the run's LLM calls (e.g. `"smart"`). The platform
-   * resolves it against its configured label set — a raw provider model id
-   * is never honored. An unrecognized value is never silently dropped: the
-   * run routes via the platform default and the platform reports it in the
-   * result's `warnings` (SAP-2765). Omit to let the platform choose (the
-   * recommended default). `"smart"` IS that default, so pinning it is a no-op;
-   * pass `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
+   * Routing label for the run's LLM calls, resolved by the platform against
+   * its configured label set — a raw provider model id is never honored. An
+   * unrecognized value is never silently dropped: the run routes via the
+   * platform default and the platform reports it in the result's `warnings`
+   * (SAP-2765). Omit it (recommended) to let the platform choose; pass
+   * `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
+   * The full rule is the served platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
+   * (written against release 1.0).
    */
   model?: ModelLabel;
   /**

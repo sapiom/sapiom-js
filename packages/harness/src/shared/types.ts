@@ -6,11 +6,6 @@
  * integration boundary.
  */
 
-import type {
-  SystemGraphLifecycleState,
-  WorkspaceKey,
-} from "./system-graph.js";
-
 // ---------------------------------------------------------------------------
 // Constants & well-known paths
 // ---------------------------------------------------------------------------
@@ -592,12 +587,6 @@ export type BusMessage =
       target: "prod" | "local";
     }
   | { type: "workflows.changed" }
-  | {
-      type: "system-graph.changed";
-      workspaceKey: WorkspaceKey;
-      revision: number;
-      state: SystemGraphLifecycleState;
-    }
   | {
       type: "agent-map.proposal.changed";
       delta: import("./agent-map.js").AcceptedProposalDelta;
@@ -1331,7 +1320,7 @@ export interface AppState {
   workflows: WorkflowInfo[];
   /** Opaque identities for the workspace folders currently known to Studio.
    * Optional for compatibility with older servers and test fixtures. */
-  workspaceScopes?: import("./system-graph.js").WorkspaceScopeSummary[];
+  workspaceScopes?: import("./workspace-scope.js").WorkspaceScopeSummary[];
   /** Path-free durable project identities for the plan-first Agent Map. */
   studioProjects?: import("./agent-map.js").StudioProjectSummary[];
   macros: MacroDef[];
@@ -1718,6 +1707,12 @@ export interface WorkflowInfo {
     lastConfirmedDeployed: boolean | null;
     unavailable: boolean;
   };
+  /**
+   * Visibility of the linked definition for the signed-in account, from the
+   * tenant-scoped list at serve time. "unavailable" = another account or
+   * deleted. Absent = unknown. Never persisted to workflows.json.
+   */
+  definitionAccess?: "visible" | "unavailable";
   /**
    * Provenance from sapiom.json: the gallery template this project was cloned
    * from. Distinct from `source` below, which records how the REGISTRY learned

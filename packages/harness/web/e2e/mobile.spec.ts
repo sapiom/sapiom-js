@@ -104,9 +104,10 @@ test("right pane opens as a bottom sheet and dismisses from its own collapse con
   await expect(pane).toHaveCount(1);
 });
 
-test("a workspace graph opens in the right sheet, over a workbench that is still there", async ({
+test("Agent Map opens in the right sheet, over a workbench that is still there", async ({
   page,
 }) => {
+  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1");
   // It used to be a full-main destination that hid BOTH panes — the mode
   // switch SAP-2980 removes. On mobile the map is the right pane's map, so it
   // arrives in the sheet, and the conversation is one dismissal away rather
@@ -114,7 +115,7 @@ test("a workspace graph opens in the right sheet, over a workbench that is still
   await page.getByTestId("rail-expand").click();
   await page.getByTestId("project-select-acme-app").click();
 
-  const graph = page.getByTestId("workspace-graph-view");
+  const graph = page.getByTestId("agent-map-frame");
   await expect(graph).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
   await expect(page.locator(".right-pane")).toBeVisible();
@@ -137,7 +138,7 @@ test("a workspace graph opens in the right sheet, over a workbench that is still
   expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBe(812);
 
   const controls = await page
-    .getByTestId("system-graph-controls")
+    .getByRole("group", { name: "Agent Map view controls" })
     .boundingBox();
   expect((controls?.x ?? -1) + (controls?.width ?? 0)).toBeLessThanOrEqual(375);
   expect((controls?.y ?? -1) + (controls?.height ?? 0)).toBeLessThanOrEqual(
@@ -149,12 +150,12 @@ test("a workspace graph opens in the right sheet, over a workbench that is still
   });
   expect(overflow).toBe(0);
   await page.screenshot({
-    path: "web/e2e/screenshots/mobile-workspace-graph.png",
+    path: "web/e2e/screenshots/mobile-agent-map.png",
   });
 
   // Drilling into a node cuts to board altitude; the sheet's own collapse
   // control then hands the whole screen back to the conversation.
-  await page.getByTestId("system-graph-node-leasing").click();
+  await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
   await expect(graph).toHaveCount(0);
   await page.getByTestId("right-collapse").click();
   await expect(page.locator(".center-pane")).toBeVisible();

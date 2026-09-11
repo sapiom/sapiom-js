@@ -12,6 +12,7 @@ import {
   isMockMode,
 } from "./api";
 import { MOCK_ACTIVITY_SESSION_ID } from "./mock-data";
+import { hasKnownBusMessageType } from "./bus-message-type";
 
 export type BusListener = (message: BusMessage) => void;
 export type EventReconnectListener = () => void;
@@ -65,8 +66,11 @@ export function subscribeEvents(
   onMessage: BusListener,
   onReconnect?: EventReconnectListener,
 ): () => void {
+  const deliver = (message: unknown): void => {
+    if (hasKnownBusMessageType(message)) onMessage(message as BusMessage);
+  };
   if (isMockMode()) {
-    mockListeners.add(onMessage);
+    mockListeners.add(deliver);
     if (!mockActivitySimulated) {
       mockActivitySimulated = true;
       // Fixture nicety, not test infrastructure: shows the tab strip's busy
@@ -102,7 +106,7 @@ export function subscribeEvents(
         );
       }, DEMO_RUN_DELAY_MS);
     }
-    return () => mockListeners.delete(onMessage);
+    return () => mockListeners.delete(deliver);
   }
 
   const url = new URL("/ws/events", window.location.href);
@@ -122,7 +126,7 @@ export function subscribeEvents(
     });
     socket.addEventListener("message", (event) => {
       try {
-        onMessage(JSON.parse(event.data as string) as BusMessage);
+        deliver(JSON.parse(event.data as string));
       } catch {
         // Ignore malformed frames rather than tearing down the socket.
       }
