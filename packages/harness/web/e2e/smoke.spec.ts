@@ -2016,7 +2016,11 @@ test.describe("resizable panes", () => {
       (JSON.parse(localStorage.getItem("sapiom-harness-pane-widths") ?? "{}") as { canvas?: number })
         .canvas,
     );
-    expect(stored ?? 0).toBeLessThanOrEqual(Math.ceil(canvasWide) + 1);
+    const renderedPane =
+      (await page.locator(".right-pane").boundingBox())?.width ?? 0;
+    expect(stored).toBeDefined();
+    expect(stored ?? 0).toBeGreaterThanOrEqual(Math.floor(renderedPane) - 1);
+    expect(stored ?? 0).toBeLessThanOrEqual(Math.ceil(renderedPane) + 1);
 
     // The pinned width persists; shrinking the window must clamp the track
     // rather than push the shell into horizontal overflow.
