@@ -192,9 +192,46 @@ describe("emitEvent", () => {
       expect(calls).toHaveLength(1);
     });
 
-    // The walk has to agree with `JSON.stringify`, so it applies `toJSON`
-    // first and inspects the result — not the object that produced it.
-    describe("toJSON", () => {
+    // A value defining `toJSON` is the serializer's business, not this walk's.
+    // Validation must not invoke caller code: it would run the method twice
+    // (here and in `JSON.stringify`), let a non-pure one send data this check
+    // never saw, and force this code to reproduce the serializer's calling
+    // convention — which it got wrong, because the real one passes the key.
+    describe("toJSON is left to the serializer", () => {
+      it("is never invoked by the preflight", async () => {
+        const { client } = fakeClient();
+        let invocations = 0;
+        const payload = {
+          s: {
+            toJSON() {
+              invocations += 1;
+              return { n: invocations };
+            },
+          },
+        };
+
+        await emitEvent({ type: "lead.created", payload }, client);
+        // The walk calls it zero times, so the only invocation left is the
+        // serializer's — what is validated and what is sent cannot diverge.
+        expect(invocations).toBe(0);
+      });
+
+      it("accepts a toJSON that uses the property key JSON hands it", async () => {
+        const { client, calls } = fakeClient();
+        const payload = {
+          field: {
+            toJSON(key: string) {
+              return key.toUpperCase();
+            },
+          },
+        };
+        // Serializes cleanly; calling it with no argument threw instead.
+        expect(JSON.stringify(payload)).toBe('{"field":"FIELD"}');
+
+        await emitEvent({ type: "lead.created", payload }, client);
+        expect(calls).toHaveLength(1);
+      });
+
       it("accepts an object whose toJSON hides a cycle and a BigInt", async () => {
         const { client, calls } = fakeClient();
         class Entity {
@@ -206,15 +243,18 @@ describe("emitEvent", () => {
           }
         }
         const payload = { node: new Entity("n1") };
-        // The serializer never sees the internals, so neither should the walk.
+        // The serializer never sees the internals, so neither does the walk.
         expect(JSON.stringify(payload)).toBe('{"node":{"id":"n1"}}');
 
         await emitEvent({ type: "lead.created", payload }, client);
         expect(calls).toHaveLength(1);
       });
 
-      it("still catches a non-finite number that toJSON itself returns", async () => {
-        const { client } = fakeClient();
+      // The deliberate gap, pinned so it is a decision rather than a surprise:
+      // what a custom toJSON PRODUCES is beyond this check's reach, and
+      // degrades to what every other verb in this SDK already does.
+      it("does not catch a non-finite number that toJSON itself returns", async () => {
+        const { client, calls } = fakeClient();
         const payload = {
           d: {
             toJSON() {
@@ -222,34 +262,10 @@ describe("emitEvent", () => {
             },
           },
         };
-        // Inspecting the serialized output could never catch this: by then the
-        // Infinity is already the `null` the check exists to prevent.
         expect(JSON.stringify(payload)).toBe('{"d":{"n":null}}');
 
-        await expect(
-          emitEvent({ type: "lead.created", payload }, client),
-        ).rejects.toMatchObject({
-          code: "BAD_PAYLOAD",
-          message: expect.stringContaining("`payload.d.n`"),
-        });
-      });
-
-      it("reports a throwing toJSON as a payload fault, not a network one", async () => {
-        const { client, calls } = fakeClient();
-        const payload = {
-          b: {
-            toJSON() {
-              throw new Error("boom");
-            },
-          },
-        };
-        await expect(
-          emitEvent({ type: "lead.created", payload }, client),
-        ).rejects.toMatchObject({
-          code: "BAD_PAYLOAD",
-          message: expect.stringContaining("`payload.b`"),
-        });
-        expect(calls).toEqual([]);
+        await emitEvent({ type: "lead.created", payload }, client);
+        expect(calls).toHaveLength(1);
       });
     });
 

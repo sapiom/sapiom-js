@@ -149,12 +149,9 @@ export async function emitEvent(
  * indistinguishable from one never set), and an array hole, which serializes to
  * `null` by the same documented mapping.
  *
- * The walk mirrors `JSON.stringify`'s own order of operations, which is the
- * only way it can agree with it: `toJSON` is applied FIRST and the result is
- * what gets inspected. An object is free to hold a cycle or a BigInt privately
- * as long as its `toJSON` hands back clean JSON — that is the common shape for
- * an entity with a parent back-reference, and walking the raw internals would
- * reject a payload that serializes perfectly.
+ * Anything defining `toJSON` is left to the serializer entirely — see the
+ * comment at that branch. So the reach of this check stops at code it does not
+ * run, which is the boundary that keeps it side-effect free.
  *
  * An explicit walk rather than a `JSON.stringify` replacer, even though a
  * replacer would visit the same values: a replacer is handed the immediate key
@@ -184,29 +181,24 @@ function findUnserializable(
   }
   if (typeof value !== "object" || value === null) return null;
 
-  // `toJSON` first, exactly as JSON.stringify does, then inspect what it
-  // returned rather than the object that produced it. Called once and not
-  // re-applied to its own result — again matching the serializer.
-  let resolved: object = value;
-  if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
-    let produced: unknown;
-    try {
-      produced = (value as { toJSON: () => unknown }).toJSON();
-    } catch (err) {
-      // Would otherwise throw from inside the client's fetch try-block and be
-      // reported as a network failure. Name the field instead.
-      return {
-        path: at,
-        reason: `has a toJSON() that threw: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
-    // A primitive result needs the scalar checks, not the descent below — a
-    // `toJSON` returning `Infinity` is still an Infinity on the wire.
-    if (typeof produced !== "object" || produced === null) {
-      return findUnserializable(produced, at, seen);
-    }
-    resolved = produced;
-  }
+  // A value that defines `toJSON` is OPAQUE here: not called, not descended
+  // into. The serializer owns it.
+  //
+  // Calling it was worse in three ways at once, and one line could not fix all
+  // three. A validation pass must not invoke caller code: the side effects then
+  // happen twice (once here, once in `JSON.stringify`), a `toJSON` that is not
+  // a pure projection sends data this function never saw, and getting it right
+  // means reproducing the serializer's calling convention exactly — it passes
+  // the property key, and a `toJSON(key)` that uses that key threw here while
+  // serializing perfectly well. Not calling it removes all three.
+  //
+  // The cost is the narrow, deliberate gap documented above: a non-finite
+  // number or a BigInt that a custom `toJSON` *produces* is not caught locally
+  // and degrades to what every other verb in this SDK already does with it.
+  // The object's own author controls that, and this check never claimed reach
+  // into code it does not run.
+  const resolved: object = value;
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return null;
 
   // The guard that keeps a self-referential payload from exhausting the stack.
   // Checked before descending, so the cycle is reported at the edge that closes
