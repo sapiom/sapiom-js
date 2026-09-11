@@ -29,6 +29,7 @@ import {
   type AnalyticsHolder,
 } from "./analytics.js";
 import { VERSION } from "../_generated/version.js";
+import { TransportHttpError, readErrorBody } from "./errors.js";
 
 /**
  * Client marker stamped on EVERY request so the gateway can tell SDK traffic
@@ -290,7 +291,11 @@ export class Transport {
     }
   }
 
-  /** Authenticated JSON request — parses the body and throws on a non-2xx status. */
+  /**
+   * Authenticated JSON request — parses the body and throws on a non-2xx status.
+   * The throw is a {@link TransportHttpError} carrying the status and parsed
+   * body, so a capability can classify the rejection (see `agents.run`).
+   */
   async request<T>(
     url: string,
     init: RequestInit = {},
@@ -308,9 +313,15 @@ export class Transport {
       options,
     );
     if (!res.ok) {
-      throw new Error(
-        `${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`,
-      );
+      const method = init.method ?? "GET";
+      const { text, body } = await readErrorBody(res);
+      throw new TransportHttpError({
+        message: `${method} ${url} → ${res.status} ${text}`,
+        status: res.status,
+        method,
+        url,
+        body,
+      });
     }
     return (await res.json()) as T;
   }
@@ -327,3 +338,5 @@ export {
   resolveCoreBaseUrl,
   type CapabilityCallOptions,
 } from "./capability-call.js";
+
+export { TransportHttpError } from "./errors.js";

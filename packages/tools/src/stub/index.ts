@@ -30,7 +30,8 @@ import type {
   RunHandle,
   RunStatus,
 } from "../models/index.js";
-import { AGENTS_RESULT_SIGNAL } from "../agents/index.js";
+import { AGENTS_RESULT_SIGNAL, AgentDispatchError } from "../agents/index.js";
+import type { ExecutionStatus } from "../agents/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
@@ -40,6 +41,7 @@ import {
 } from "../llm/index.js";
 import type {
   AgentRunResult,
+  AgentRunError,
   RunHandle as AgentRunHandle,
 } from "../agents/index.js";
 import type {
@@ -564,6 +566,57 @@ function stubCodingResult(
   };
 }
 
+/**
+ * Merge an `agents` override over a full default `AgentRunResult`, so a partial
+ * stub (`{ status: "rejected", error }`) still yields every field — the handle
+ * and the schema-validated resume payload both need a complete result.
+ *
+ * `executionId` follows the real client's guarantee rather than the override's
+ * omission: `null` exactly when the dispatch was rejected (no run exists), a
+ * real id on every other status. `output` defaults to `{}` on a completed run
+ * (what a local run has always seen) and `null` otherwise.
+ */
+/** The statuses a live run can report from a status read (see `status()` below). */
+const LIFECYCLE_STATUSES = new Set<string>([
+  "running",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+/** The rejection a partial `{ status: "rejected" }` stub stands in for. */
+const STUB_DISPATCH_REJECTION: AgentRunError = {
+  code: "transport",
+  message: "stubbed dispatch rejection",
+  status: null,
+  details: null,
+};
+
+function stubAgentRunResult(
+  resolved: unknown,
+  generatedId: string,
+): AgentRunResult {
+  const base = (resolved ?? {}) as Partial<AgentRunResult>;
+  const status = base.status ?? "completed";
+  const namesNoRun = status === "rejected" || status === "unknown";
+  return {
+    executionId: base.executionId ?? (namesNoRun ? null : generatedId),
+    status,
+    output:
+      base.output !== undefined
+        ? base.output
+        : status === "completed"
+          ? {}
+          : null,
+    // The public contract says a rejected result carries an AgentRunError, so a
+    // partial stub must too — otherwise `result.error.code` reads fine against
+    // production and throws under the stub.
+    error:
+      base.error ?? (status === "rejected" ? STUB_DISPATCH_REJECTION : null),
+  };
+}
+
 function stubRunHandle(
   overrides: StubOverrides,
   correlationId: string,
@@ -1011,43 +1064,101 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     agents: {
-      run: (spec) =>
-        Promise.resolve(
-          r("agents.run", [spec], () => ({
-            executionId: `stub-exec-${++launchSeq}`,
-            status: "completed" as const,
-            output: {},
-            error: null,
-          })) as AgentRunResult,
+      // An override may be a function returning a PROMISE (every other
+      // capability supports that, since they hand `r()`'s value straight back).
+      // Await it before normalizing, or a promise reads as `{}` — no `status` —
+      // and silently becomes the completed default.
+      run: async (spec) =>
+        stubAgentRunResult(
+          await Promise.resolve(
+            r("agents.run", [spec], () => ({ status: "completed" as const })),
+          ),
+          `stub-exec-${++launchSeq}`,
         ),
-      launch: (spec) => {
-        const executionId = `stub-exec-${++launchSeq}`;
-        const result: AgentRunResult = {
-          executionId,
-          status: "completed",
-          output: {},
-          error: null,
-        };
+      launch: async (spec) => {
+        const generatedId = `stub-exec-${++launchSeq}`;
+        // `launch()` honors the key matching the call the author wrote
+        // (`agents.launch`) first, then the shared `agents.run` that controls
+        // both paths — the same precedence as `models.coding`. Before this the
+        // handle was built unconditionally as a success, so the
+        // try/catch the README and the authoring skill both require was
+        // impossible to cover in a local run.
+        const result = stubAgentRunResult(
+          await Promise.resolve(
+            r(dispatchedKeys("agents"), [spec], () => ({
+              status: "completed" as const,
+            })),
+          ),
+          generatedId,
+        );
+
+        // A rejected dispatch created no child, so there is no pausable handle
+        // to hand back. Mirror the real client and THROW, so a local run
+        // exercises the same try/catch the author writes against production.
+        if (result.status === "rejected") {
+          throw new AgentDispatchError(
+            (result.error ?? STUB_DISPATCH_REJECTION) as AgentRunError,
+          );
+        }
+
+        // A DELAYED dispatch (`spec.at`) has no child until the scheduled time,
+        // so production returns `executionId: null` and correlates on the
+        // trigger id, not a run id. Mirror both, or a local run of a scheduled
+        // child takes a different branch than the deployed one.
+        const delayed = spec.at !== undefined;
+        const executionId = delayed
+          ? null
+          : (result.executionId ?? generatedId);
+        const correlationId = delayed
+          ? `trigger-stub-${generatedId}`
+          : (result.executionId ?? generatedId);
         const handle: AgentRunHandle = {
           executionId,
           dispatch: {
-            correlationId: executionId,
+            correlationId,
             resultSignal: AGENTS_RESULT_SIGNAL,
           },
-          status: () => Promise.resolve("completed" as const),
+          // `status()` reports a LIFECYCLE status. `"unknown"`/`"timed_out"` are
+          // `wait()` outcomes, not lifecycle states, and both describe a run
+          // that exists and isn't known-terminal — so they read as "running"
+          // here while `wait()` still resolves them verbatim.
+          status: () =>
+            Promise.resolve(
+              LIFECYCLE_STATUSES.has(result.status)
+                ? (result.status as ExecutionStatus)
+                : "running",
+            ),
           wait: () => Promise.resolve(result),
         };
-        // Register the resume payload so a local `pauseUntilSignal` on this handle
-        // resolves with an AgentRunResultPayload.
-        return dispatchable(handle, opts.signals, () => ({
-          status: "completed" as const,
-          executionId,
-          definition: spec.definition,
-          version: "stub",
-          output: {},
-          startedAt: "2099-01-01T00:00:00.000Z",
-          finishedAt: "2099-01-01T00:00:00.000Z",
-        }));
+        // Register the resume payload so a local `pauseUntilSignal` on this
+        // handle resolves with an AgentRunResultPayload. That union is
+        // completed|failed only, so a stub of any OTHER non-completed status
+        // resumes as `failed` — the branch an author writes for a bad child.
+        const at = "2099-01-01T00:00:00.000Z";
+        // The payload's executionId is required, and a delayed child's real id
+        // isn't knowable at launch — use the correlation key the resume lands on.
+        const payloadExecutionId = executionId ?? correlationId;
+        return dispatchable(handle, opts.signals, () =>
+          result.status === "completed"
+            ? {
+                status: "completed" as const,
+                executionId: payloadExecutionId,
+                definition: spec.definition,
+                version: "stub",
+                output: result.output,
+                startedAt: at,
+                finishedAt: at,
+              }
+            : {
+                status: "failed" as const,
+                executionId: payloadExecutionId,
+                definition: spec.definition,
+                version: "stub",
+                error: result.error,
+                startedAt: at,
+                finishedAt: at,
+              },
+        );
       },
     },
     llm: {

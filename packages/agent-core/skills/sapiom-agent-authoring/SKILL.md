@@ -391,10 +391,14 @@ Read it before the first `llm.*` / `models.run` / `agents.run` call. Customer gu
 `defineAgent(...)` export" rule is a statement about a PROJECT, not about your system: a
 multi-stage system is several small agents, each its own project, deployed separately, composed
 by a thin coordinator that dispatches them by slug with `ctx.sapiom.agents.run`. `agents.run`
-resolves on ANY terminal status and does NOT throw — branch on
-`research.status !== "completed"` or a failed stage silently feeds `null` downstream. For a
+reports failure as DATA and never throws — one branch on `research.status !== "completed"`
+covers a failed child, a refused dispatch (`"rejected"`) and a wait timeout alike, and skipping
+it lets a bad stage silently feed `null` downstream. Only `"rejected"` proves nothing is
+running, so it is the only status you may re-dispatch on without an `idempotencyKey`. For a
 long-running child use `ctx.sapiom.agents.launch` and pause the calling step on the handle
-(`pauseUntilSignal`, below) so the coordinator's step doesn't time out. Deploy bottom-up —
+(`pauseUntilSignal`, below) so the coordinator's step doesn't time out — `launch` is the one
+that THROWS: it owes you a pausable handle and a refused dispatch has none, so catch
+`AgentDispatchError` and `fail()` the step. Deploy bottom-up —
 children first, the coordinator last, since it dispatches them by their slugs. The worked
 example is the served section
 [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
@@ -625,6 +629,12 @@ Stub naming rules:
   `models.launch()`'s inline result and its resume payload. A partial value (e.g.
   `{ "output": "..." }`) is merged over the built-in defaults, so the result stays a full
   `ModelRunResult`.
+- Child dispatch works the same: `agents.run` (or `agents.launch`) controls both the inline
+  result and the resume payload, merged over the defaults. This is how you cover the branches
+  a coordinator must have — `{ "status": "failed" }` for a child that ran and failed, and
+  `{ "status": "rejected", "error": { "code": "not_found", "message": "…" } }` for a dispatch
+  that was refused. A stubbed rejection follows the real split: `agents.run` returns it as
+  data, `agents.launch` throws `AgentDispatchError`, so your try/catch runs locally too.
 - `run_local` reports `unusedStubs` (key matched nothing — usually a typo or plural/singular
   slip) and `stubWarnings` (key matched but wrong shape). A green run with either non-empty
   means the stub silently didn't apply.

@@ -72,8 +72,25 @@ export * as schedules from "./schedules/index.js";
 // The shape a step resumed from `pauseUntilSignal(agentHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { AgentRunResultPayload } from "./agents/index.js";
+// The dispatch + result vocabulary, top-level like the `models` equivalents:
+// `AgentRunStatus` is what `status` can be, `AgentRunError` is the structured
+// `error` a non-completed result carries (`"rejected"`, `"unknown"`,
+// `"timed_out"`). `RunHandle` is spelled `AgentRunHandle` here — `models` has
+// its own `RunHandle`.
+export type {
+  AgentRunSpec,
+  AgentRunResult,
+  AgentRunStatus,
+  AgentRunError,
+  AgentRunErrorCode,
+  ExecutionStatus as AgentExecutionStatus,
+  RunHandle as AgentRunHandle,
+} from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
 export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
+// Thrown by `agents.launch` when the dispatch is refused (`agents.run` returns
+// the same rejection as data instead). Catch it to `fail()` a step cleanly.
+export { AgentDispatchError } from "./agents/index.js";
 
 // llm — routed LLM calls through the gateway's /v2 routing front-end: `run`
 // (synchronous direct), `submit` (deferred-start; pausable handle), `redeem`,
