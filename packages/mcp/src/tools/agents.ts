@@ -61,6 +61,18 @@ import { webappRunUrl } from "./webapp-url.js";
  * serialize object-valued args) back into a value. A non-JSON string is
  * returned as-is (a legitimately string-valued input).
  */
+/**
+ * Run ids are numeric (bigint server-side). A bare `z.string()` let a model pass a step name or a
+ * variable (`result`, `child-expert-1`) and get back "execution not found" — which reads as "the run
+ * is gone" rather than "that is not an id", so the mistake was never self-correcting (SAP-3337).
+ */
+const executionIdSchema = z
+  .string()
+  .regex(
+    /^\d+$/,
+    'executionId must be the numeric execution id from run/launch or a listed execution (e.g. "4821"), not a step name or variable.',
+  );
+
 function coerceJson(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
@@ -492,7 +504,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "Project directory (for build inspection, which needs the linked id).",
         ),
-      executionId: z.string().optional().describe("Execution to inspect."),
+      executionId: executionIdSchema.optional().describe("Execution to inspect."),
       buildRunId: z
         .string()
         .optional()
@@ -620,7 +632,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     "sapiom_dev_agents_signal",
     "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId).",
     {
-      executionId: z.string().describe("The paused execution."),
+      executionId: executionIdSchema.describe("The paused execution."),
       name: z.string().describe("Signal name to deliver."),
       correlationId: z.string().describe("Signal correlation id."),
       payload: z
