@@ -13,7 +13,11 @@ await server.close();
 ```
 
 The bridge URL must be loopback. Only its revocable credential enters the model
-and remote MCP configuration. The runtime inherits an allowlist of platform
+and remote MCP configuration. The default model is `sapiom/gpt-luna`, using
+the bundled Responses provider at the bridge's `/llm/v1/responses` route.
+Low reasoning effort, encrypted reasoning history, and `store: false` keep
+reasoning and tool use compatible with the Sapiom router across turns.
+The runtime inherits an allowlist of platform
 environment variables; provider keys and the Electron esbuild pin are excluded
 from the runtime. A controlled native plugin removes the bridge configuration
 and runtime-admin credential from the runtime environment before tool execution,

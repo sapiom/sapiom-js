@@ -46,6 +46,11 @@ async function readRequestBody(request: IncomingMessage): Promise<unknown> {
   return body ? (JSON.parse(body) as unknown) : undefined;
 }
 
+interface ModelRequest extends Record<string, unknown> {
+  tools?: Array<{ type: string; name: string }>;
+  input?: Array<{ type?: string; [key: string]: unknown }>;
+}
+
 async function startSyntheticBridge(token: string) {
   const state = {
     valid: true,
@@ -53,6 +58,8 @@ async function startSyntheticBridge(token: string) {
     mcpAuthorized: 0,
     rejected: 0,
     requests: [] as string[],
+    modelRequests: [] as ModelRequest[],
+    toolCalls: [] as unknown[],
   };
   bridge = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -81,7 +88,11 @@ async function startSyntheticBridge(token: string) {
       const message = (await readRequestBody(request)) as {
         id?: string | number;
         method?: string;
-        params?: { protocolVersion?: string };
+        params?: {
+          protocolVersion?: string;
+          name?: string;
+          arguments?: { a: number; b: number };
+        };
       };
       if (message.id === undefined) {
         response.writeHead(202).end();
@@ -95,44 +106,156 @@ async function startSyntheticBridge(token: string) {
               serverInfo: { name: "synthetic", version: "1" },
             }
           : message.method === "tools/list"
-            ? { tools: [] }
-            : {};
+            ? {
+                tools: [
+                  {
+                    name: "probe_add",
+                    description: "Add two integers",
+                    inputSchema: {
+                      type: "object",
+                      properties: {
+                        a: { type: "integer" },
+                        b: { type: "integer" },
+                      },
+                      required: ["a", "b"],
+                    },
+                  },
+                ],
+              }
+            : message.method === "tools/call"
+              ? {
+                  content: [
+                    {
+                      type: "text",
+                      text: String(
+                        (message.params?.arguments?.a ?? 0) +
+                          (message.params?.arguments?.b ?? 0),
+                      ),
+                    },
+                  ],
+                }
+              : {};
+      if (message.method === "tools/call") state.toolCalls.push(message.params);
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
       return;
     }
-    if (url.pathname.endsWith("/chat/completions")) {
+    if (url.pathname.endsWith("/responses")) {
       state.modelAuthorized++;
-      await readRequestBody(request);
+      const body = (await readRequestBody(request)) as ModelRequest;
+      state.modelRequests.push(body);
       response.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
       });
-      response.write(
-        `data: ${JSON.stringify({
-          id: "chatcmpl_synthetic",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "smart",
-          choices: [
+      const emit = (type: string, fields: object) =>
+        response.write(
+          `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`,
+        );
+      const id = `resp_${state.modelAuthorized}`;
+      const reasonId = `rs_${state.modelAuthorized}`;
+      const reason = {
+        id: reasonId,
+        type: "reasoning",
+        summary: [{ type: "summary_text", text: "Synthetic reasoning" }],
+        encrypted_content: "encrypted-synthetic-reasoning",
+        status: "completed",
+      };
+      const base = { id, object: "response", created_at: 1, model: "gpt-luna" };
+      emit("response.created", {
+        response: { ...base, status: "in_progress", output: [] },
+      });
+      emit("response.output_item.added", {
+        output_index: 0,
+        item: { ...reason, status: "in_progress", summary: [] },
+      });
+      emit("response.reasoning_summary_part.added", {
+        item_id: reasonId,
+        output_index: 0,
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      });
+      emit("response.reasoning_summary_text.delta", {
+        item_id: reasonId,
+        output_index: 0,
+        summary_index: 0,
+        delta: "Synthetic reasoning",
+      });
+      emit("response.reasoning_summary_text.done", {
+        item_id: reasonId,
+        output_index: 0,
+        summary_index: 0,
+        text: "Synthetic reasoning",
+      });
+      emit("response.output_item.done", { output_index: 0, item: reason });
+      const tool = body.tools?.find(
+        (tool: { type: string; name: string }) =>
+          tool.type === "function" && tool.name === "execute",
+      );
+      const hasResult = body.input?.some(
+        (item: { type?: string }) => item.type === "function_call_output",
+      );
+      let output;
+      if (tool && !hasResult && body.tool_choice !== "none") {
+        output = {
+          id: "fc_once",
+          type: "function_call",
+          call_id: "call_once",
+          name: tool.name,
+          arguments: JSON.stringify({
+            code: "return await tools.sapiom.probe_add({a:2,b:3})",
+          }),
+          status: "completed",
+        };
+        emit("response.output_item.added", {
+          output_index: 1,
+          item: { ...output, arguments: "", status: "in_progress" },
+        });
+        emit("response.function_call_arguments.delta", {
+          item_id: output.id,
+          output_index: 1,
+          delta: output.arguments,
+        });
+        emit("response.function_call_arguments.done", {
+          item_id: output.id,
+          output_index: 1,
+          arguments: output.arguments,
+        });
+      } else {
+        output = {
+          id: `msg_${state.modelAuthorized}`,
+          type: "message",
+          role: "assistant",
+          content: [
             {
-              index: 0,
-              delta: { role: "assistant", content: "synthetic native reply" },
-              finish_reason: null,
+              type: "output_text",
+              text: "synthetic native reply",
+              annotations: [],
             },
           ],
-        })}\n\n`,
-      );
-      response.write(
-        `data: ${JSON.stringify({
-          id: "chatcmpl_synthetic",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "smart",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        })}\n\n`,
-      );
-      response.end("data: [DONE]\n\n");
+          status: "completed",
+        };
+        emit("response.output_item.added", {
+          output_index: 1,
+          item: { ...output, content: [], status: "in_progress" },
+        });
+        emit("response.output_text.delta", {
+          item_id: output.id,
+          output_index: 1,
+          content_index: 0,
+          delta: "synthetic native reply",
+        });
+      }
+      emit("response.output_item.done", { output_index: 1, item: output });
+      emit("response.completed", {
+        response: {
+          ...base,
+          status: "completed",
+          output: [reason, output],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      });
+      response.end();
       return;
     }
     response.writeHead(404).end();
@@ -317,7 +440,7 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(nativeConfig.plugin?.[0]).toContain("credential-isolation.mjs");
   }, 60_000);
 
-  it("authenticates model and MCP requests and rejects a revoked runtime credential", async () => {
+  it("uses Luna Responses for a complete MCP tool round trip and rejects a revoked runtime credential", async () => {
     const token = "synthetic-bridge-grant";
     const synthetic = await startSyntheticBridge(token);
     runtime = await startOpenCodeServer({
@@ -358,6 +481,47 @@ describe("pinned OpenCode 1.18.29", () => {
       }),
     );
     expect(synthetic.state.modelAuthorized).toBeGreaterThan(0);
+    expect(
+      synthetic.state.toolCalls,
+      JSON.stringify(
+        synthetic.state.modelRequests.map((body) =>
+          body.tools?.map((tool) => tool.name),
+        ),
+      ),
+    ).toEqual([
+      expect.objectContaining({ name: "probe_add", arguments: { a: 2, b: 3 } }),
+    ]);
+    for (const body of synthetic.state.modelRequests) {
+      expect(body).toMatchObject({
+        model: "gpt-luna",
+        reasoning: { effort: "low", summary: "auto" },
+        store: false,
+        include: ["reasoning.encrypted_content"],
+      });
+      expect(body).not.toHaveProperty("previous_response_id");
+    }
+    const continued = synthetic.state.modelRequests.find((body) =>
+      body.input?.some(
+        (item: { type?: string }) => item.type === "function_call_output",
+      ),
+    );
+    expect(continued?.input).toContainEqual(
+      expect.objectContaining({
+        type: "function_call_output",
+        call_id: "call_once",
+      }),
+    );
+    expect(continued?.input).toContainEqual(
+      expect.objectContaining({
+        type: "reasoning",
+        encrypted_content: "encrypted-synthetic-reasoning",
+      }),
+    );
+    expect(
+      synthetic.state.requests.some((path) =>
+        path.endsWith("/chat/completions"),
+      ),
+    ).toBe(false);
 
     synthetic.state.valid = false;
     const disconnected = await runtime.fetch(`/mcp/sapiom/disconnect`, {

@@ -135,6 +135,8 @@ export function createOpenCodeRouter(
               body: JSON.stringify({
                 ...req.body,
                 ...openCodeCompletionPrompt(),
+                // Saved conversations may still remember a retired model.
+                model: hosted.model,
               }),
             }
           : {}),
@@ -150,7 +152,7 @@ export function createOpenCodeRouter(
           openCodeTransportFailure(
             upstream.status === 404 && conversation
               ? "native_history_missing"
-            : "transport_unavailable",
+              : "transport_unavailable",
           ),
         );
         return;

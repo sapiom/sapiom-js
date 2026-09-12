@@ -20,6 +20,7 @@ beforeEach(async () => {
   abort = new AbortController();
   dispatch.mockReset().mockResolvedValue(new Response("{}"));
   hosted = {
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
     stateRoot: await mkdtemp(join(tmpdir(), "opencode-final-")),
     signal: abort.signal,
     server: {
@@ -61,18 +62,21 @@ it.each([
   ["ses_test", "msg_"],
   ["ses_test", `msg_${"a".repeat(129)}`],
   ["ses_test", ["msg_empty"]],
-])("rejects invalid recovery IDs before storage or native requests: %j / %j", async (sessionId, messageId) => {
-  await expect(
-    new OpenCodeFinalResponse().recover(
-      hosted,
-      sessionId as string,
-      messageId as string,
-    ),
-  ).rejects.toThrow("Invalid Assistant recovery identifiers");
-  expect(await readdir(hosted.stateRoot)).toEqual([]);
-  expect(hosted.server.fetchJson).not.toHaveBeenCalled();
-  expect(dispatch).not.toHaveBeenCalled();
-});
+])(
+  "rejects invalid recovery IDs before storage or native requests: %j / %j",
+  async (sessionId, messageId) => {
+    await expect(
+      new OpenCodeFinalResponse().recover(
+        hosted,
+        sessionId as string,
+        messageId as string,
+      ),
+    ).rejects.toThrow("Invalid Assistant recovery identifiers");
+    expect(await readdir(hosted.stateRoot)).toEqual([]);
+    expect(hosted.server.fetchJson).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  },
+);
 
 it("coalesces recovery and never resends it after a host restart", async () => {
   const recovery = new OpenCodeFinalResponse();
@@ -85,6 +89,7 @@ it("coalesces recovery and never resends it after a host restart", async () => {
   expect(path).toBe("/session/ses_test/message");
   expect(JSON.parse(init.body)).toMatchObject({
     agent: "sapiom-turn-recovery",
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
     system: expect.stringContaining("StudioAssistantResult/v2:"),
   });
   expect(JSON.parse(init.body)).not.toHaveProperty("tools");

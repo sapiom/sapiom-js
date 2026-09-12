@@ -21,7 +21,7 @@ export function createSapiomOpenCodeConfig(
     throw new Error("OpenCode requires a private loopback credential bridge");
   }
   const base = bridge.href.replace(/\/+$/, "");
-  const model = options.model ?? "smart";
+  const model = options.model ?? "gpt-luna";
   return {
     $schema: "https://opencode.ai/config.json",
     model: `sapiom/${model}`,
@@ -41,13 +41,26 @@ export function createSapiomOpenCodeConfig(
     },
     provider: {
       sapiom: {
-        npm: "@ai-sdk/openai-compatible",
+        npm: "@ai-sdk/openai",
         name: "Sapiom",
         options: {
           apiKey: options.runtimeToken,
-          baseURL: `${base}/llm/v2/openai/v1`,
+          baseURL: `${base}/llm/v1`,
         },
-        models: { [model]: { name: `Sapiom · ${model}` } },
+        models: {
+          [model]: {
+            name: `Sapiom · ${model}`,
+            limit: { context: 400_000, output: 128_000 },
+            options: {
+              reasoningEffort: "low",
+              reasoningSummary: "auto",
+              // Carry reasoning with the conversation through Studio's saved
+              // history; never depend on a vendor-side previous_response_id.
+              store: false,
+              include: ["reasoning.encrypted_content"],
+            },
+          },
+        },
       },
     },
     mcp: {

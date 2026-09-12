@@ -106,9 +106,7 @@ if (!config.startupExitWriter)
             configChecks: {
               model: config.model,
               modelBridge:
-                config.provider?.sapiom?.options?.baseURL?.endsWith(
-                  "/llm/v2/openai/v1",
-                ),
+                config.provider?.sapiom?.options?.baseURL?.endsWith("/llm/v1"),
               mcpBridge: config.mcp?.sapiom?.url?.endsWith("/mcp"),
             },
           }),

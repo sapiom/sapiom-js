@@ -99,9 +99,13 @@ native conversation.
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
 Studio adds the Sapiom key only when forwarding to the configured services.
-Production uses the Sapiom LLM gateway. Other environments must explicitly set
-`services.llm` to their gateway origin in the matching credentials-file environment
-entry; Studio never falls back from a custom environment to production.
+Production sends Responses API requests to `https://router.sapiom.ai/v1/responses`
+with the explicit `gpt-luna` model and the signed-in account's `x-api-key`. Luna uses
+low reasoning effort and streams both tool calls and answers. Responses are not
+stored by the provider; encrypted reasoning travels with native conversation
+history. Other environments must explicitly set `services.llm` to a router origin
+that supports `/v1/responses` in the matching credentials-file environment entry;
+Studio never falls back from a custom environment to production.
 
 Studio owns each Assistant runtime for the authorized session and working
 directory. Browser detachment leaves it running; sign-out, access revocation,
