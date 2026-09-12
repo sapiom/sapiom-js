@@ -70,6 +70,9 @@ selected initially. Assistant sends prompts and streams Sapiom responses in the
 selected project. Returning to a session reopens its OpenCode conversation;
 switching views detaches the display while execution continues. Connection errors
 offer **Reconnect**, which reloads history without resending accepted prompts.
+Initial attachment and reconnect synchronize status after a real native event
+frame. Newer activity wins over old status snapshots; disconnecting or detaching
+the display invalidates outstanding status/history reads.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
