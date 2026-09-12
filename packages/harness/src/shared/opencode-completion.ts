@@ -70,52 +70,113 @@ function hasOpenFence(text: string) {
   return !!fence;
 }
 
-function visibleRange(
+const completionMarkerPrefix = "<!-- studio-result:";
+
+/** Match UUID-and-status syntax, including a possible prefix only while streaming. */
+function completionMarkerLength(
+  text: string,
+  index: number,
+  streaming: boolean,
+) {
+  let end = index + completionMarkerPrefix.length;
+  for (const character of "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+    if (end === text.length) return streaming ? end - index : 0;
+    if (character === "-" ? text[end] !== "-" : !/^[a-f0-9]$/i.test(text[end]!))
+      return 0;
+    end++;
+  }
+  for (const ending of [":finished -->", ":failed -->"]) {
+    if (text.startsWith(ending, end)) return end + ending.length - index;
+    if (streaming && ending.startsWith(text.slice(end)))
+      return text.length - index;
+  }
+  return 0;
+}
+
+/** Preserve prose around complete markers and unfinished streamed candidates. */
+function visibleRanges(
   text: string,
   token: string | undefined,
-): [number, number] {
-  if (!token) return [0, text.length];
-  const prefix = "<!-- studio-result:" + token + ":";
-  const leading = text.length - text.trimStart().length;
-  if (text.slice(leading).startsWith(prefix)) {
-    const end = text.indexOf("-->", leading + prefix.length);
-    if (end === -1) return [text.length, text.length];
-    const start = text.length - text.slice(end + 3).trimStart().length;
-    const duplicate = text.indexOf(prefix, start);
-    return [start, duplicate === -1 ? text.length : duplicate];
+  streaming: boolean,
+): [number, number][] {
+  if (!token) return [[0, text.length]];
+  // A model can emit the wrong turn ID. Hide its bookkeeping too; only
+  // parseOpenCodeCompletion may confirm a result against the expected token.
+  const prefix = completionMarkerPrefix;
+  const ranges: [number, number][] = [];
+  let start = 0;
+  let searchFrom = 0;
+  while (searchFrom <= text.length) {
+    const index = text.indexOf(prefix, searchFrom);
+    if (index === -1) {
+      let end = text.length;
+      if (streaming) {
+        for (let length = prefix.length - 1; length > 0; length--) {
+          if (text.slice(searchFrom).endsWith(prefix.slice(0, length))) {
+            end -= length;
+            break;
+          }
+        }
+      }
+      ranges.push([start, end]);
+      break;
+    }
+    const length = completionMarkerLength(text, index, streaming);
+    if (!length) {
+      searchFrom = index + prefix.length;
+      continue;
+    }
+    ranges.push([start, index]);
+    start = index + length;
+    searchFrom = start;
   }
-  if (prefix.startsWith(text.slice(leading))) return [text.length, text.length];
-  const index = text.indexOf(prefix);
-  if (index !== -1) return [0, text.slice(0, index).trimEnd().length];
-  for (let length = prefix.length - 1; length > 0; length--) {
-    if (text.endsWith(prefix.slice(0, length)))
-      return [0, text.slice(0, -length).trimEnd().length];
+  // Trim the space left by a leading/footer marker, but retain text on both
+  // sides of markers in the middle of a merged tool-progress/final response.
+  while (ranges.length && !text.slice(...ranges[0]!).trim()) ranges.shift();
+  const first = ranges[0];
+  if (first && first[0] > 0) {
+    const value = text.slice(...first);
+    first[0] += value.length - value.trimStart().length;
   }
-  return [0, text.length];
+  while (ranges.length && !text.slice(...ranges.at(-1)!).trim()) ranges.pop();
+  const last = ranges.at(-1);
+  if (last && last[1] < text.length) {
+    const value = text.slice(...last);
+    last[1] -= value.length - value.trimEnd().length;
+  }
+  return ranges;
 }
 
-/** Hide complete and partially streamed bookkeeping without changing other text. */
-export function openCodeVisibleText(text: string, token: string | undefined) {
-  return text.slice(...visibleRange(text, token));
+/** Hide markers; with streaming enabled, also withhold still-valid partial candidates. */
+export function openCodeVisibleText(
+  text: string,
+  token: string | undefined,
+  streaming = false,
+) {
+  return visibleRanges(text, token, streaming)
+    .map((range) => text.slice(...range))
+    .join("");
 }
 
-/** Filter across part boundaries, including interrupted or unfinished answers. */
+/** Filter across part boundaries; settled responses retain incomplete marker syntax. */
 export function openCodeVisibleParts(
   parts: readonly { type: string; text?: string }[],
   token: string | undefined,
+  streaming = false,
 ) {
   const text = parts
     .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
     .join("");
-  const [visibleStart, visibleEnd] = visibleRange(text, token);
+  const ranges = visibleRanges(text, token, streaming);
   let offset = 0;
   return parts.map((part) => {
     if (part.type !== "text") return undefined;
     const start = offset;
     offset += part.text?.length ?? 0;
-    return text.slice(
-      Math.max(start, visibleStart),
-      Math.min(offset, visibleEnd),
-    );
+    return ranges
+      .map(([visibleStart, visibleEnd]) =>
+        text.slice(Math.max(start, visibleStart), Math.min(offset, visibleEnd)),
+      )
+      .join("");
   });
 }

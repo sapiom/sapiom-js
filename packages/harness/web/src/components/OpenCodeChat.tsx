@@ -33,6 +33,7 @@ import {
 import {
   openCodeCompletionTokens,
   openCodeVisibleParts,
+  openCodeVisibleText,
 } from "../../../src/shared/opencode-completion";
 import {
   parseOpenCodeStudioErrorEvent,
@@ -194,6 +195,13 @@ function RuntimeChat({
   );
   const [actionError, setActionError] = useState<RecoveryNotice | null>(null);
   const [connected, setConnected] = useState(false);
+  const eventAbort = useRef<AbortController | null>(null);
+  const reconcile = useCallback(() => {
+    // The adapter reconnects this display stream and reloads history/status.
+    // Keep its controller mounted so answers, tool output, and drafts stay put.
+    setConnected(false);
+    eventAbort.current?.abort();
+  }, []);
   const onError = useCallback(() => setActionError(requestError), []);
   const onTypedError = useCallback((failure: OpenCodeTransportFailure) => {
     setConnected(false);
@@ -228,17 +236,22 @@ function RuntimeChat({
     });
     const subscribe = client.event.subscribe.bind(client.event);
     client.event.subscribe = async (parameters, options) => {
+      const abort = new AbortController();
+      eventAbort.current = abort;
       const result = await subscribe(parameters, {
         ...options,
+        signal: options?.signal
+          ? AbortSignal.any([options.signal, abort.signal])
+          : abort.signal,
         onSseError(error) {
           options?.onSseError?.(error);
-          if (!options?.signal?.aborted) {
+          if (!options?.signal?.aborted && !abort.signal.aborted) {
             setConnected(false);
             setTransportError(connectionError);
           }
         },
         onSseEvent(event) {
-          if (!options?.signal?.aborted) {
+          if (!options?.signal?.aborted && !abort.signal.aborted) {
             const failure = parseOpenCodeStudioErrorEvent(event.data);
             if (failure) {
               onTypedError(failure);
@@ -270,9 +283,10 @@ function RuntimeChat({
           try {
             yield* result.stream;
           } finally {
+            if (eventAbort.current === abort) eventAbort.current = null;
             if (!options?.signal?.aborted) {
               setConnected(false);
-              setTransportError(connectionError);
+              if (!abort.signal.aborted) setTransportError(connectionError);
             }
           }
         })(),
@@ -295,6 +309,7 @@ function RuntimeChat({
         bootToken={bootToken}
         conversationId={conversationId}
         connected={connected}
+        reconcile={reconcile}
         error={actionError ?? transportError}
         retry={retry}
         composer={runtime.thread.composer}
@@ -332,6 +347,7 @@ function ChatSurface({
   bootToken,
   conversationId,
   connected,
+  reconcile,
   error,
   retry,
   composer,
@@ -345,6 +361,7 @@ function ChatSurface({
   bootToken: string;
   conversationId: string;
   connected: boolean;
+  reconcile: () => void;
   error: RecoveryNotice | null;
   retry: () => void;
   composer: ThreadComposerRuntime;
@@ -436,7 +453,7 @@ function ChatSurface({
           }
           throw new Error("Final response failed");
         }
-        retry(); // Reconcile history even if the last text event was missed.
+        reconcile(); // Catch up on missed final events without resetting chat.
       })
       .catch(() => {
         if (!abort.signal.aborted) setRecoveryFailed(true);
@@ -454,7 +471,7 @@ function ChatSurface({
     missing,
     pending,
     ready,
-    retry,
+    reconcile,
     running,
     onTypedError,
   ]);
@@ -507,7 +524,12 @@ function ChatSurface({
                   ? completionTokens.get(nativeMessage.info.parentID)
                   : undefined;
               const result = openCodeResult(nativeMessage, token);
-              const visibleParts = openCodeVisibleParts(message.content, token);
+              const visibleParts = openCodeVisibleParts(
+                message.content,
+                token,
+                nativeMessage?.info?.role === "assistant" &&
+                  !nativeMessage.info.time.completed,
+              );
               return message.role === "user" &&
                 [finalResponseAgent, turnRecoveryAgent].includes(
                   native.messagesById[message.id]?.info?.agent ?? "",
@@ -539,7 +561,11 @@ function ChatSurface({
                       />
                     ),
                   )}
-                  {result && <Markdown text={result.answer} />}
+                  {result && (
+                    <Markdown
+                      text={openCodeVisibleText(result.answer, token)}
+                    />
+                  )}
                   <MessagePrimitive.Error>
                     <ErrorPrimitive.Root className="studio-chat-error">
                       <ErrorPrimitive.Message />
