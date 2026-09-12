@@ -75,6 +75,9 @@ frame. Newer activity wins over old status snapshots; disconnecting or detaching
 the display invalidates outstanding status/history reads.
 History catch-up uses one active read and bounded follow-ups. Disconnecting the
 display cancels queued reads; failed or malformed reads preserve visible history.
+Native updates and removals received during a history read survive its response.
+Queued stream frames preserve completed content, and history merging preserves
+newer execution status.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
