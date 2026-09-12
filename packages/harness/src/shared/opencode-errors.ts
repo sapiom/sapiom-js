@@ -5,6 +5,7 @@ export const openCodeTransportErrorCodes = [
   "runtime_start_failed",
   "runtime_exited",
   "native_history_missing",
+  "context_unavailable",
   "transport_unavailable",
 ] as const;
 export type OpenCodeTransportErrorCode =
@@ -80,6 +81,13 @@ const fixedFailures = {
     code: "transport_unavailable",
     message:
       "Assistant is temporarily unavailable. Reconnect before sending another message.",
+    retryable: true,
+    action: "reconnect",
+  },
+  context_unavailable: {
+    code: "context_unavailable",
+    message:
+      "Assistant context is unavailable. Select an agent in this session's project or restore its guidance, then reconnect and send a new message.",
     retryable: true,
     action: "reconnect",
   },

@@ -19,7 +19,20 @@ const FETCH_TIMEOUT_MS = 5000;
  * Mirrors `fetchInstructions` in `@sapiom/mcp` (packages/mcp/src/instructions-fetch.ts),
  * deliberately: the two are the same mechanism on the two client surfaces.
  */
-export async function fetchSystemPrompt(env: ResolvedEnvironment): Promise<string> {
+export async function fetchSystemPrompt(
+  env: ResolvedEnvironment,
+): Promise<string> {
+  return (await fetchSystemPromptWithSource(env)).text;
+}
+
+/** Same fallback as Terminal, with provenance for Assistant's context revision. */
+export async function fetchSystemPromptWithSource(
+  env: ResolvedEnvironment,
+): Promise<{ text: string; source: string }> {
+  const fallback = {
+    text: DEFAULT_SYSTEM_PROMPT,
+    source: "bundled:studio-profile",
+  };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -27,11 +40,13 @@ export async function fetchSystemPrompt(env: ResolvedEnvironment): Promise<strin
       headers: { Accept: "text/markdown, text/plain" },
       signal: controller.signal,
     });
-    if (!response.ok) return DEFAULT_SYSTEM_PROMPT;
+    if (!response.ok) return fallback;
     const body = (await response.text()).trim();
-    return body.length > 0 ? body : DEFAULT_SYSTEM_PROMPT;
+    return body.length > 0
+      ? { text: body, source: `${env.apiURL}/v1/harness/system-prompt` }
+      : fallback;
   } catch {
-    return DEFAULT_SYSTEM_PROMPT;
+    return fallback;
   } finally {
     clearTimeout(timeout);
   }
