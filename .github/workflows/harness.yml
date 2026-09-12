@@ -63,10 +63,15 @@ jobs:
   # The live/real-pty tiers (e2e:live, sim) are opt-in local only; nothing here
   # invokes them — they require real agent binaries and credentials not in CI.
   playwright-mock:
+    name: playwright-mock (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
-    # The expanded mock suite has over 680 cases, followed by canvas checks.
-    # Keep the existing per-test deadlines; allow both suites to finish.
+    # Split the growing suite across runners to leave time for canvas checks.
+    # Keep the existing per-test and job deadlines.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     # Single Node version is enough — the mock tier tests browser behaviour,
     # not Node version compat; that's covered by the matrix job in test.yml.
     steps:
@@ -106,22 +111,21 @@ jobs:
         run: pnpm --filter @sapiom/harness exec playwright install-deps chromium
 
       - name: Run Playwright mock-mode suite
-        # The default two workers exceed this job's budget as the suite grows.
-        # Four workers retain the per-test deadlines and leave time for canvas.
-        run: pnpm --filter @sapiom/harness test:ui --workers=4
+        run: pnpm --filter @sapiom/harness test:ui --workers=2 --shard=${{ matrix.shard }}/2
 
       # The canvas suite renders the generated diagram documents in the same
       # chromium this job already installed. It was previously opt-in only, so
       # nothing verified in CI that a canvas the renderer produces actually
       # paints — a rendering regression could only be caught by hand.
       - name: Run Playwright canvas suite
+        if: matrix.shard == 1
         run: pnpm --filter @sapiom/harness test:canvas
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: packages/harness/web/e2e/playwright-report/
           retention-days: 7
 
