@@ -286,11 +286,16 @@ describe("OpenCode absolute history merging through public exports", () => {
     expect(f.controller.getState().runState.type).toBe("idle");
   });
 
-  it.each(["full", "delta"])(
+  it.each(["full", "delta", "completed"])(
     "fences an old status snapshot after a newer %s part",
     async (kind) => {
       const f = fixture();
       await f.ready();
+      if (kind === "completed") {
+        f.snapshot([message("Complete", true)]);
+        await f.controller.refresh();
+        f.emit("session.idle");
+      }
       let finish!: (value: never) => void;
       f.client.session.status.mockImplementationOnce(
         () =>
@@ -299,11 +304,15 @@ describe("OpenCode absolute history merging through public exports", () => {
           }),
       );
       f.emit("stream.reconnected");
-      if (kind === "full") f.part("current");
-      else f.delta("current");
-      finish({ data: {} } as never);
+      if (kind === "delta") f.delta("current");
+      else f.part("current", kind === "completed");
+      finish({
+        data: kind === "completed" ? { "session-a": { type: "busy" } } : {},
+      } as never);
       await flush();
-      expect(f.controller.getState().sessionStatus?.type).toBe("busy");
+      expect(f.controller.getState().sessionStatus?.type).toBe(
+        kind === "completed" ? "idle" : "busy",
+      );
     },
   );
 });
