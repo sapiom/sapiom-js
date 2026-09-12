@@ -1079,6 +1079,43 @@ test("shows stream loss and reconnects without replaying an accepted prompt", as
   expect(c.prompts).toEqual(["A single request"]);
 });
 
+test("keeps a partial answer visible while reconnect catches up a missing middle delta", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("One streamed request");
+  await input.press("Enter");
+  const answer = page.locator('[data-message-id="msg_assistant_1"]');
+  await expect(answer).toContainText("First chunk");
+  const c = conversations.get("ses_sess_boot")!;
+  failEvents = true;
+  for (const stream of c.streams) stream.end();
+  await expect(page.getByRole("alert")).toContainText("Connection lost");
+  // Match pinned native persistence: an active history part remains empty.
+  const part = c.turns.at(-1)!.parts[0];
+  part.text = "";
+  failEvents = false;
+  await expect.poll(() => c.streams.size).toBe(1);
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(status).toHaveText("Catching up…");
+  emit(c, "message.part.delta", {
+    sessionID: c.id,
+    messageID: part.messageID,
+    partID: part.id,
+    field: "text",
+    delta: " suffix",
+  });
+  await expect(answer).toContainText("First chunk");
+  await expect(answer).not.toContainText("First chunk suffix");
+  expect(c.prompts).toEqual(["One streamed request"]);
+  part.text = "First chunk missing middle";
+  finish(c.id, " suffix");
+  await expect(answer).toContainText("First chunk missing middle suffix");
+  await expect(status).toHaveText("Finished");
+  expect(c.prompts).toHaveLength(1);
+});
+
 test("surfaces a rejected prompt POST and reconnects without replaying it", async ({
   page,
 }) => {
