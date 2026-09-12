@@ -84,6 +84,8 @@ Disconnecting also cancels outstanding catch-up requests before reconnection.
 Attachment and reconnect also reconcile pending permissions and questions.
 Assistant shows **Waiting for input** for current pending requests; failed request
 reads retain last-known state while the status remains uncertain.
+Event transport scopes each frame to the authorized conversation and cancels
+its reader and status catch-up when the browser connection ends.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
