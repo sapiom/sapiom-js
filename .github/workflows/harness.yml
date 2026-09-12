@@ -64,7 +64,7 @@ jobs:
   # invokes them — they require real agent binaries and credentials not in CI.
   playwright-mock:
     runs-on: ubuntu-latest
-    # The expanded mock suite has over 560 cases, followed by canvas checks.
+    # The expanded mock suite has over 680 cases, followed by canvas checks.
     # Keep the existing per-test deadlines; allow both suites to finish.
     timeout-minutes: 20
     # Single Node version is enough — the mock tier tests browser behaviour,
@@ -106,7 +106,9 @@ jobs:
         run: pnpm --filter @sapiom/harness exec playwright install-deps chromium
 
       - name: Run Playwright mock-mode suite
-        run: pnpm --filter @sapiom/harness test:ui
+        # The default two workers exceed this job's budget as the suite grows.
+        # Four workers retain the per-test deadlines and leave time for canvas.
+        run: pnpm --filter @sapiom/harness test:ui --workers=4
 
       # The canvas suite renders the generated diagram documents in the same
       # chromium this job already installed. It was previously opt-in only, so
