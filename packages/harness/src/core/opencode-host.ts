@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import type {
   AssistantAccess,
   AssistantAccessFailureCode,
   AssistantGrant,
+  AssistantAccessProjection,
 } from "./assistant-access.js";
 import {
   openCodeStartupReasons,
@@ -27,6 +28,21 @@ import type {
   OpenCodeBridgeCredential,
 } from "../server/opencode-bridge.js";
 
+import type { OpenCodeObserver } from "./opencode-observer.js";
+import {
+  isConversationId,
+  type AssistantObservation,
+  type AssistantSessionSummary,
+  type AssistantStateSnapshot,
+} from "../shared/assistant-state.js";
+
+type ObserverHandle = Pick<OpenCodeObserver, "start" | "dispose">;
+interface ObservationBinding {
+  conversationId: string;
+  observer?: ObserverHandle;
+  failure?: OpenCodeTransportFailure;
+}
+
 export interface OpenCodeWorkspace {
   harnessSessionId: string;
   cwd: string;
@@ -42,17 +58,27 @@ interface Managed {
   authority: string;
   abort: AbortController;
   ready?: Promise<HostedOpenCode>;
+  hosted?: HostedOpenCode;
+  observation?: ObservationBinding;
   credential?: OpenCodeBridgeCredential;
   unlock?: DurableFileLockRelease;
   cleanupFailed?: boolean;
 }
 interface Options {
-  access: Pick<AssistantAccess, "get" | "getFailureCode" | "subscribe">;
+  access: Pick<
+    AssistantAccess,
+    "get" | "getFailureCode" | "getBrowserState" | "subscribe"
+  >;
   bridge: Pick<OpenCodeBridge, "issue" | "model">;
   origin: () => string;
   stateRoot: string;
   authorize: (id: string) => Promise<OpenCodeWorkspace | null>;
   start?: typeof startOpenCodeServer;
+  createObserver: (
+    hosted: HostedOpenCode,
+    id: string,
+    update: (state: AssistantObservation) => void,
+  ) => ObserverHandle;
 }
 export class OpenCodeTransportError extends Error {
   constructor(readonly failure: OpenCodeTransportFailure) {
@@ -85,6 +111,11 @@ const authority = (grant: AssistantGrant) =>
 
 /** Owned by startServer, not by React mounts or browser connections. */
 export class OpenCodeHost {
+  private readonly hostInstanceId = randomUUID();
+  private assistantRevision = 0;
+  private assistantAccess: AssistantAccessProjection;
+  private readonly summaries = new Map<string, AssistantSessionSummary>();
+  private readonly assistantListeners = new Set<() => void>();
   private entries = new Map<string, Managed>();
   private closing = new Set<Promise<void>>();
   private closed = false;
@@ -92,6 +123,7 @@ export class OpenCodeHost {
   private workspaceTimer: ReturnType<typeof setInterval>;
   private unsubscribe: () => void;
   constructor(private readonly options: Options) {
+    this.assistantAccess = options.access.getBrowserState();
     this.workspaceTimer = setInterval(() => {
       for (const [id, entry] of this.entries) {
         void this.workspace(id)
@@ -109,6 +141,7 @@ export class OpenCodeHost {
     this.workspaceTimer.unref?.();
     this.unsubscribe = options.access.subscribe(() => {
       const grant = options.access.get();
+      this.syncAssistantAccess();
       for (const [id, entry] of this.entries) {
         if (!grant || authority(grant) !== entry.authority)
           void this.retire(
@@ -119,6 +152,119 @@ export class OpenCodeHost {
           );
       }
     });
+  }
+
+  /** Read derived state only; never start or inspect an inactive native runtime. */
+  getAssistantState(): AssistantStateSnapshot {
+    this.syncAssistantAccess();
+    return {
+      hostInstanceId: this.hostInstanceId,
+      authorityRevision: this.assistantAccess.authorityRevision,
+      revision: this.assistantRevision,
+      enabled: this.assistantAccess.enabled,
+      sessions: [...this.summaries.values()].map((summary) => ({ ...summary })),
+    };
+  }
+  subscribeAssistantState(listener: () => void): () => void {
+    this.assistantListeners.add(listener);
+    return () => {
+      this.assistantListeners.delete(listener);
+    };
+  }
+  private assistantChanged(): void {
+    this.assistantRevision++;
+    for (const listener of this.assistantListeners) {
+      try {
+        listener();
+      } catch {
+        /* Isolate state subscribers from runtime ownership. */
+      }
+    }
+  }
+  private syncAssistantAccess(): void {
+    // getBrowserState can synchronously revoke access and reenter this owner.
+    const projection = this.options.access.getBrowserState();
+    const next = { ...projection, enabled: !this.closed && projection.enabled };
+    if (
+      next.enabled === this.assistantAccess.enabled &&
+      next.authorityRevision === this.assistantAccess.authorityRevision
+    )
+      return;
+    this.assistantAccess = next;
+    this.summaries.clear();
+    this.assistantChanged();
+  }
+  private removeSummary(id: string): void {
+    if (this.summaries.delete(id)) this.assistantChanged();
+  }
+  observe(hosted: HostedOpenCode, conversationId: string): void {
+    const id = hosted.harnessSessionId;
+    const entry = this.entries.get(id);
+    if (
+      !entry ||
+      entry.hosted !== hosted ||
+      entry.abort.signal !== hosted.signal ||
+      !hosted.isCurrent()
+    ) {
+      if (hosted.signal.reason instanceof OpenCodeTransportError)
+        throw hosted.signal.reason;
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("transport_unavailable"),
+      );
+    }
+    if (
+      !isConversationId(conversationId) ||
+      conversationId === id ||
+      (entry.observation && entry.observation.conversationId !== conversationId)
+    )
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("native_history_missing"),
+      );
+    if (entry.observation) {
+      if (entry.observation.failure)
+        throw new OpenCodeTransportError(entry.observation.failure);
+      return;
+    }
+    const binding: ObservationBinding = { conversationId };
+    entry.observation = binding;
+    try {
+      binding.observer = this.options.createObserver(
+        hosted,
+        conversationId,
+        (state) => {
+          if (
+            this.entries.get(id) !== entry ||
+            entry.hosted !== hosted ||
+            entry.observation !== binding ||
+            !hosted.isCurrent()
+          )
+            return;
+          binding.failure =
+            state.freshness === "unavailable" ? state.failure : undefined;
+          const summary: AssistantSessionSummary = {
+            harnessSessionId: id,
+            conversationId,
+            activity: state.activity,
+            pendingPermissions: state.pendingPermissions,
+            pendingQuestions: state.pendingQuestions,
+            freshness: state.freshness,
+            ...(state.failure ? { failure: state.failure } : {}),
+          };
+          if (
+            JSON.stringify(this.summaries.get(id)) === JSON.stringify(summary)
+          )
+            return;
+          this.summaries.set(id, summary);
+          this.assistantChanged();
+        },
+      );
+      binding.observer.start();
+    } catch (error) {
+      entry.observation = undefined;
+      this.removeSummary(id);
+      binding.observer?.dispose();
+      throw error;
+    }
   }
 
   async ensure(id: string): Promise<HostedOpenCode> {
@@ -178,8 +324,6 @@ export class OpenCodeHost {
     const entry = this.entries.get(id);
     if (!entry) return Promise.resolve();
     this.entries.delete(id);
-    entry.abort.abort(new OpenCodeTransportError(failure));
-    entry.credential?.revoke();
     const closing = (async () => {
       const hosted = await entry.ready?.catch(() => null);
       try {
@@ -193,11 +337,20 @@ export class OpenCodeHost {
     })();
     this.closing.add(closing);
     void closing.finally(() => this.closing.delete(closing)).catch(() => {});
+    // Own cleanup before removal notifies listeners that may reenter close().
+    // The first await above defers native cleanup until this retirement is fenced.
+    const binding = entry.observation;
+    entry.observation = undefined;
+    this.removeSummary(id);
+    binding?.observer?.dispose();
+    entry.abort.abort(new OpenCodeTransportError(failure));
+    entry.credential?.revoke();
     return closing;
   }
 
   async close(): Promise<void> {
     this.closed = true;
+    this.syncAssistantAccess();
     clearInterval(this.workspaceTimer);
     this.unsubscribe();
     for (const id of this.entries.keys()) void this.retire(id);
@@ -296,7 +449,7 @@ export class OpenCodeHost {
         })
         .catch(() => {});
       await this.validate(entry);
-      return {
+      const hosted: HostedOpenCode = {
         ...entry.workspace,
         stateRoot,
         server,
@@ -312,6 +465,8 @@ export class OpenCodeHost {
           );
         },
       };
+      entry.hosted = hosted;
+      return hosted;
     } catch (error) {
       if (this.entries.get(entry.workspace.harnessSessionId) === entry)
         this.entries.delete(entry.workspace.harnessSessionId);

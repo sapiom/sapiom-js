@@ -197,6 +197,7 @@ import {
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { OpenCodeHost } from "../core/opencode-host.js";
+import { OpenCodeObserver } from "../core/opencode-observer.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -3533,6 +3534,8 @@ export const startServer = async (
 
   const openCodeHost = new OpenCodeHost({
     access: assistantAccess,
+    createObserver: (hosted, id, update) =>
+      new OpenCodeObserver(hosted, id, update),
     bridge: openCodeBridge,
     origin: () => `http://127.0.0.1:${actualPort}`,
     stateRoot: statePaths.root,

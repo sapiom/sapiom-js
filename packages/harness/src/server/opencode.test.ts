@@ -29,6 +29,7 @@ const requests: {
   body: unknown;
 }[] = [];
 const ensure = vi.fn();
+const observe = vi.fn();
 const close = vi.fn();
 async function listen(app: express.Express): Promise<string> {
   const server = createServer(app);
@@ -45,6 +46,7 @@ beforeEach(async () => {
   hosts.clear();
   aborts.clear();
   close.mockReset();
+  observe.mockReset();
   const engine = express();
   engine.use(express.json());
   engine.use((req, _res, next) => {
@@ -126,7 +128,7 @@ beforeEach(async () => {
       throw new OpenCodeAccessError("unavailable");
     return hosts.get(id)!;
   });
-  router = createOpenCodeRouter({ ensure }, "boot-token");
+  router = createOpenCodeRouter({ ensure, observe }, "boot-token");
   const app = express();
   app.use("/opencode", (req, res, next) => router(req, res, next));
   origin = await listen(app);
@@ -235,6 +237,7 @@ describe("Studio-scoped OpenCode transport", () => {
       403,
     );
     expect(created).toBe(0);
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("coalesces attach and restores the same separate conversation after remount and host restart", async () => {
@@ -244,7 +247,7 @@ describe("Studio-scoped OpenCode transport", () => {
     expect(await attach("studio-b")).not.toBe(a);
     expect(created).toBe(2);
     hosts.set("studio-a", { ...hosts.get("studio-a")! });
-    router = createOpenCodeRouter({ ensure }, "boot-token");
+    router = createOpenCodeRouter({ ensure, observe }, "boot-token");
     expect(await attach()).toBe(a);
     expect(created).toBe(2);
   });
@@ -252,7 +255,9 @@ describe("Studio-scoped OpenCode transport", () => {
   it("rejects cross-session IDs and scope/configuration overrides before forwarding", async () => {
     const a = await attach();
     const b = await attach("studio-b");
+    observe.mockClear();
     expect((await request(`studio-a/session/${b}/message`)).status).toBe(403);
+    expect(observe).not.toHaveBeenCalled();
     for (const path of [
       "config",
       "provider",
@@ -376,7 +381,8 @@ describe("Studio-scoped OpenCode transport", () => {
   it("preserves a missing or corrupt association as a visible error instead of replacing history", async () => {
     const id = await attach();
     sessions.delete(id);
-    router = createOpenCodeRouter({ ensure }, "boot-token");
+    observe.mockClear();
+    router = createOpenCodeRouter({ ensure, observe }, "boot-token");
     const missing = await request("studio-a/attach", { method: "POST" });
     expect(missing.status).toBe(410);
     expect(await missing.json()).toEqual({
@@ -392,6 +398,7 @@ describe("Studio-scoped OpenCode transport", () => {
       error: openCodeTransportFailure("native_history_missing"),
     });
     expect(created).toBe(1);
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("returns exact typed access and startup failures without exposing diagnostics", async () => {
@@ -537,4 +544,28 @@ describe("Studio-scoped OpenCode transport", () => {
     expect(terminal).not.toContain("private");
     expect(await reader.read()).toEqual({ done: true, value: undefined });
   });
+});
+
+it("binds an authorized association even when its browser disconnects during attachment", async () => {
+  const abort = new AbortController();
+  let release!: (hosted: HostedOpenCode) => void;
+  ensure.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = request("studio-a/attach", {
+    method: "POST",
+    signal: abort.signal,
+  });
+  const rejected = expect(pending).rejects.toThrow();
+  await vi.waitFor(() => expect(ensure).toHaveBeenCalledOnce());
+  abort.abort();
+  await rejected;
+  const hosted = hosts.get("studio-a")!;
+  release(hosted);
+  await vi.waitFor(() => expect(observe).toHaveBeenCalledWith(hosted, "ses_1"));
+  expect(hosted.signal.aborted).toBe(false);
+  expect(close).not.toHaveBeenCalled();
 });

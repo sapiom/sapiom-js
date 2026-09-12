@@ -17,7 +17,7 @@ import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
 import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 
 export function createOpenCodeRouter(
-  host: Pick<OpenCodeHost, "ensure">,
+  host: Pick<OpenCodeHost, "ensure" | "observe">,
   bootToken: string,
 ): Router {
   const router = express.Router();
@@ -95,14 +95,15 @@ export function createOpenCodeRouter(
     try {
       const hosted = await host.ensure(id);
       const nativeId = await associations.ensure(hosted);
-      const signal = AbortSignal.any([hosted.signal, disconnected.signal]);
-      signal.throwIfAborted();
       if (conversation && conversation[1] !== nativeId) {
         res.status(403).json({
           error: "Conversation does not belong to this Studio session",
         });
         return;
       }
+      host.observe(hosted, nativeId);
+      const signal = AbortSignal.any([hosted.signal, disconnected.signal]);
+      signal.throwIfAborted();
       if (attach) {
         res.json({ conversationId: nativeId });
         return;
@@ -150,7 +151,7 @@ export function createOpenCodeRouter(
           openCodeTransportFailure(
             upstream.status === 404 && conversation
               ? "native_history_missing"
-            : "transport_unavailable",
+              : "transport_unavailable",
           ),
         );
         return;
