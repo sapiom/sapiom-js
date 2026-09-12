@@ -15,6 +15,8 @@ with your coding agent (Claude Code or Codex) running in an embedded
 terminal — pre-wired with the Sapiom MCP servers and an agent-authoring
 system prompt, in whatever project directory you choose.
 
+Assistant summaries use the existing `/api/state` seed and `/ws/events` full snapshots. The browser preserves the last known state as uncertain until a validated current socket snapshot arrives; account changes clear it immediately. Summaries contain activity and pending counts only.
+
 ## What you get
 
 - **Terminal sessions** — your agent, your subscription, your machine; the

@@ -187,6 +187,22 @@ describe("createRestRouter", () => {
   });
 
   describe("GET /state", () => {
+    it("reads the Assistant projection after asynchronous inventory finishes", async () => {
+      let release!: () => void;
+      const inventory = new Promise<void>(resolve => { release = resolve; });
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      let revision = 1;
+      const getAssistantState = vi.fn(() => ({ hostInstanceId: "host", authorityRevision: "auth", revision, enabled: false, sessions: [] }));
+      start({ getAssistantState, listWorkflows: async () => { entered(); await inventory; return []; } });
+      const response = fetch(`${baseUrl}/state`);
+      await started;
+      expect(getAssistantState).not.toHaveBeenCalled();
+      revision = 2;
+      release();
+      expect((await (await response).json() as { assistant: unknown }).assistant).toEqual(getAssistantState());
+    });
+
     it("reports unauthenticated with empty workflows/macros/sessions by default", async () => {
       start();
       const res = await fetch(`${baseUrl}/state`);
