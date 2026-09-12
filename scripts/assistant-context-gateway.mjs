@@ -258,7 +258,7 @@ try {
           file,
           text.replace(
             "...completionHooks,",
-            `...completionHooks, 'experimental.chat.system.transform': async (_input, output) => { if ((await readProjectionFlag(${JSON.stringify(modeFile)}, 'utf8')) === '1') output.system.splice(0, output.system.length, ...output.system.map(projectStudioSystem)); },`,
+            `...completionHooks, 'experimental.chat.system.transform': async (_input, output) => { if ((await readProjectionFlag(new URL('../../projection-enabled', import.meta.url), 'utf8')) === '1') output.system.splice(0, output.system.length, ...output.system.map(projectStudioSystem)); },`,
           ) +
             `\nimport { readFile as readProjectionFlag } from 'node:fs/promises';\n${projectStudioSystem.toString()}\n`,
         );
