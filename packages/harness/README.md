@@ -17,6 +17,8 @@ system prompt, in whatever project directory you choose.
 
 Assistant summaries use the existing `/api/state` seed and `/ws/events` full snapshots. The browser preserves the last known state as uncertain until a validated current socket snapshot arrives; account changes clear it immediately. Summaries contain activity and pending counts only.
 
+Session tabs and retained-session rows show independent Assistant activity. Hover or use the accessible label for Working, Waiting for input, Checking status or Unavailable. Terminal output keeps its existing pulse; an idle Assistant has no success badge. See the [native acceptance record](docs/assistant-background-acceptance.md) for the combined integration checks.
+
 ## What you get
 
 - **Terminal sessions** — your agent, your subscription, your machine; the
