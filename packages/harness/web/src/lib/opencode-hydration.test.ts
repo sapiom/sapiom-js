@@ -206,13 +206,17 @@ describe("OpenCode absolute history merging through public exports", () => {
     next.info.id = "msg-b";
     next.parts[0]!.id = "part-b";
     next.parts[0]!.messageID = "msg-b";
-    f.emit("message.updated", { info: next.info });
+    f.emit("message.updated", { info: { ...next.info, time: { created: 1 } } });
     f.emit("message.part.updated", { part: next.parts[0] });
+    f.emit("message.updated", { info: next.info });
     resolve([message("first", true)]);
     await loading;
     expect(f.controller.getState().session?.title).toBe("new title");
     expect(f.controller.getState().messagesById["msg-b"]?.parts).toEqual(
       next.parts,
+    );
+    expect(f.controller.getState().messagesById["msg-b"]?.info).toEqual(
+      next.info,
     );
   });
 

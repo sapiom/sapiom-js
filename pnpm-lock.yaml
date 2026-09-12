@@ -9,7 +9,7 @@ overrides:
 
 patchedDependencies:
   '@assistant-ui/react-opencode@0.2.22':
-    hash: ffd509c0aaaa78b7e661b560baf3032d5e40ba32ebb07d9baacfb2596110af5c
+    hash: a703089a87a560700917bb7adb7e6bf013bb82f43cb61c2d36671bd1ef51449a
     path: patches/@assistant-ui__react-opencode@0.2.22.patch
 
 importers:
@@ -430,7 +430,7 @@ importers:
         version: 0.15.18(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@assistant-ui/react-opencode':
         specifier: 0.2.22
-        version: 0.2.22(patch_hash=ffd509c0aaaa78b7e661b560baf3032d5e40ba32ebb07d9baacfb2596110af5c)(@assistant-ui/react@0.15.18(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@assistant-ui/tap@0.9.16(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.43)(react@19.2.7)
+        version: 0.2.22(patch_hash=a703089a87a560700917bb7adb7e6bf013bb82f43cb61c2d36671bd1ef51449a)(@assistant-ui/react@0.15.18(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@assistant-ui/tap@0.9.16(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.43)(react@19.2.7)
       '@opencode-ai/sdk':
         specifier: 1.18.29
         version: 1.18.29
@@ -6658,7 +6658,7 @@ snapshots:
       - ioredis
       - redis
 
-  '@assistant-ui/react-opencode@0.2.22(patch_hash=ffd509c0aaaa78b7e661b560baf3032d5e40ba32ebb07d9baacfb2596110af5c)(@assistant-ui/react@0.15.18(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@assistant-ui/tap@0.9.16(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.43)(react@19.2.7)':
+  '@assistant-ui/react-opencode@0.2.22(patch_hash=a703089a87a560700917bb7adb7e6bf013bb82f43cb61c2d36671bd1ef51449a)(@assistant-ui/react@0.15.18(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@assistant-ui/tap@0.9.16(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.43)(react@19.2.7)':
     dependencies:
       '@assistant-ui/core': 0.3.17(@assistant-ui/store@0.3.12(@assistant-ui/tap@0.9.16(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@assistant-ui/tap@0.9.16(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(assistant-cloud@0.1.43)(react@19.2.7)
       '@assistant-ui/react': 0.15.18(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
