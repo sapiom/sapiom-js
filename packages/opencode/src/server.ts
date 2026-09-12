@@ -50,6 +50,38 @@ interface SupervisorProcessIdentity {
 }
 
 /** @internal Shared verbatim with the generated supervisor for deterministic tests. */
+export async function readLinuxProcessTable(
+  listEntries: () => Promise<readonly string[]>,
+  readStat: (entry: string) => Promise<string>,
+): Promise<
+  Map<number, SupervisorProcessIdentity & { ppid: number; pgid: number }>
+> {
+  const processes = new Map<
+    number,
+    SupervisorProcessIdentity & { ppid: number; pgid: number }
+  >();
+  for (const entry of await listEntries()) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const stat = await readStat(entry);
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      processes.set(Number(entry), {
+        pid: Number(entry),
+        ppid: Number(fields[1]),
+        pgid: Number(fields[2]),
+        state: fields[0],
+        birthId: fields[19],
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      // A process can vanish before opening its stat file or while reading it.
+      if (code !== "ENOENT" && code !== "ESRCH") throw error;
+    }
+  }
+  return processes;
+}
+
+/** @internal Shared verbatim with the generated supervisor for deterministic tests. */
 export function evaluateTrackedClosure(
   tracked: ReadonlyMap<
     string,
@@ -228,6 +260,7 @@ import { dirname } from "node:path";
 const cleanupPath = ${JSON.stringify(cleanupProof.path)};
 const cleanupToken = ${JSON.stringify(cleanupProof.token)};
 const shutdownTimeoutMs = ${JSON.stringify(shutdownTimeoutMs)};
+const readLinuxProcessTable = ${readLinuxProcessTable.toString()};
 const evaluateTrackedClosure = ${evaluateTrackedClosure.toString()};
 const evaluateWindowsCleanup = ${evaluateWindowsCleanup.toString()};
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -257,24 +290,10 @@ async function publishCleanupProof() {
   } finally { await rm(pending, { force: true }).catch(() => {}); }
 }
 async function linuxProcesses() {
-  const processes = new Map();
-  for (const entry of await readdir("/proc")) {
-    if (!/^\\d+$/.test(entry)) continue;
-    try {
-      const stat = await readFile("/proc/" + entry + "/stat", "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      processes.set(Number(entry), {
-        pid: Number(entry),
-        ppid: Number(fields[1]),
-        pgid: Number(fields[2]),
-        state: fields[0],
-        birthId: fields[19],
-      });
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-  return processes;
+  return readLinuxProcessTable(
+    () => readdir("/proc"),
+    (entry) => readFile("/proc/" + entry + "/stat", "utf8"),
+  );
 }
 function darwinProcesses() {
   const result = spawnSync("ps", ["-axo", "pid=,ppid=,pgid=,stat=,lstart="], { encoding: "utf8" });
