@@ -16,6 +16,7 @@ type Conversation = {
   prompts: string[];
   busy: boolean;
   recoveries: string[];
+  pending: Record<"permission" | "question", Array<Record<string, unknown>>>;
 };
 let server: Server;
 let origin: string;
@@ -103,6 +104,7 @@ test.beforeEach(async ({ page }) => {
         prompts: [],
         busy: false,
         recoveries: [],
+        pending: { permission: [], question: [] },
       };
       conversations.set(id, c);
     }
@@ -138,7 +140,7 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === "permission" || path === "question") {
-      res.json([]);
+      res.json(c.pending[path]);
       return;
     }
     if (path === "session/status") {
@@ -1307,3 +1309,52 @@ test("shows a rejected inspector command without leaving Assistant or losing its
   expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
   expect(errors).toEqual([]);
 });
+
+for (const kind of ["permission", "question"] as const) {
+  test(`restores pending ${kind} and clears it when settled during a stream gap`, async ({
+    page,
+  }) => {
+    await openAssistant(page);
+    await page
+      .getByRole("textbox", { name: "Message Assistant" })
+      .fill("Start a task.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    // A pending tool request follows a finished text part while the task stays busy.
+    c.turns.at(-1)!.parts[0].time = { start: 1, end: 2 };
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    c.pending[kind] = [
+      {
+        id: "request-a",
+        sessionID: c.id,
+        ...(kind === "permission"
+          ? {
+              permission: "read",
+              patterns: ["file.txt"],
+              always: [],
+              metadata: {},
+            }
+          : {
+              questions: [
+                {
+                  question: "Continue?",
+                  header: "Continue",
+                  options: [{ label: "Yes", description: "Continue the task" }],
+                },
+              ],
+            }),
+      },
+    ];
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await expect(status).toHaveText("Waiting for input");
+    failEvents = true;
+    for (const stream of c.streams) stream.end();
+    await expect(page.getByRole("alert")).toContainText("Connection lost");
+    c.pending[kind] = [];
+    failEvents = false;
+    await expect(status).toHaveText("Working");
+    expect(c.prompts).toHaveLength(1);
+  });
+}

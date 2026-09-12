@@ -462,7 +462,18 @@ function ChatSurface({
     (s) => s.loadState.type === "error" || s.runState.type === "error",
   );
   const visibleError = error ?? (failed ? runError : null);
-  const checking = !connected || !ready || loading || turn.status === "unknown";
+  const requestsCurrent =
+    native.sync.permissionsCurrent && native.sync.questionsCurrent;
+  const waiting =
+    requestsCurrent &&
+    (Object.keys(native.interactions.permissions.pending).length > 0 ||
+      Object.keys(native.interactions.questions.pending).length > 0);
+  const checking =
+    !connected ||
+    !ready ||
+    !requestsCurrent ||
+    loading ||
+    turn.status === "unknown";
   const catchingUp =
     connected &&
     !ready &&
@@ -481,15 +492,17 @@ function ChatSurface({
       ? catchingUp
         ? "Catching up…"
         : "Checking status…"
-      : working
-        ? "Working"
-        : turn.status === "finished"
-          ? "Finished"
-          : turn.status === "failed" || recoveryFailed
-            ? "Failed"
-            : turn.status === "stopped"
-              ? "Stopped"
-              : "Ready";
+      : waiting
+        ? "Waiting for input"
+        : working
+          ? "Working"
+          : turn.status === "finished"
+            ? "Finished"
+            : turn.status === "failed" || recoveryFailed
+              ? "Failed"
+              : turn.status === "stopped"
+                ? "Stopped"
+                : "Ready";
   return (
     <ThreadPrimitive.Root
       className="studio-chat"

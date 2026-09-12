@@ -81,6 +81,9 @@ newer execution status.
 After a stream gap, Assistant retains visible output and shows **Catching up…**
 until native history or a complete stream update repairs its text baseline.
 Disconnecting also cancels outstanding catch-up requests before reconnection.
+Attachment and reconnect also reconcile pending permissions and questions.
+Assistant shows **Waiting for input** for current pending requests; failed request
+reads retain last-known state while the status remains uncertain.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
