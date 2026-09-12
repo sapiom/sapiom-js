@@ -133,6 +133,11 @@ describe("bounded native history reads through the consumed adapter", () => {
     [null],
     [{ info: {}, parts: [] }],
     ...[
+      { id: "msg-b" },
+      { id: "msg-b", role: "other" },
+      { id: "msg-b", role: "assistant", time: { created: "bad" } },
+    ].map((info) => [{ info, parts: [] }]),
+    ...[
       null,
       [],
       {},
