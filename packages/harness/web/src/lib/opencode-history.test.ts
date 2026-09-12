@@ -101,6 +101,9 @@ describe("bounded native history reads through the consumed adapter", () => {
     const calls = f.messages.mock.calls.length;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(f.messages).toHaveBeenCalledTimes(calls);
+    f.delta();
+    await flush();
+    expect(f.messages).toHaveBeenCalledTimes(calls + 1);
   });
 
   it.each(["dispose", "unsubscribe", "disconnect"])(
@@ -124,7 +127,28 @@ describe("bounded native history reads through the consumed adapter", () => {
     },
   );
 
-  it.each([undefined, {}, [null], [{ info: {}, parts: [] }]])(
+  it.each([
+    undefined,
+    {},
+    [null],
+    [{ info: {}, parts: [] }],
+    ...[
+      null,
+      [],
+      {},
+      { id: "part-a" },
+      { id: "part-a", type: "reasoning", text: 42 },
+      { id: "part-a", type: "file", mime: 42 },
+      { id: "part-a", type: "text", text: "ok", time: { start: "bad" } },
+      {
+        id: "part-a",
+        type: "tool",
+        tool: "task",
+        callID: "call-a",
+        state: null,
+      },
+    ].map((part) => [{ info: history[0]!.info, parts: [part] }]),
+  ])(
     "rejects malformed history while preserving visible messages (%j)",
     async (data) => {
       const f = fixture();
@@ -133,7 +157,7 @@ describe("bounded native history reads through the consumed adapter", () => {
       await expect(f.controller.refresh()).rejects.toThrow(
         "Invalid OpenCode history",
       );
-      expect(f.controller.getState().messagesById["msg-a"]).toBeDefined();
+      expect(f.controller.getState().messagesById["msg-a"]?.parts).toEqual([]);
       expect(f.controller.getState().sessionStatus?.type).toBe("busy");
       await f.controller.refresh();
       expect(f.controller.getState().loadState.type).toBe("ready");
