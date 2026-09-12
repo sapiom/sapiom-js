@@ -73,6 +73,8 @@ offer **Reconnect**, which reloads history without resending accepted prompts.
 Initial attachment and reconnect synchronize status after a real native event
 frame. Newer activity wins over old status snapshots; disconnecting or detaching
 the display invalidates outstanding status/history reads.
+History catch-up uses one active read and bounded follow-ups. Disconnecting the
+display cancels queued reads; failed or malformed reads preserve visible history.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
