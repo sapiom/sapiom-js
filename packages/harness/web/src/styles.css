@@ -2705,6 +2705,20 @@ button.rail-footer-card:hover {
 }
 
 
+/* Native Assistant state is separate from the Terminal output pulse. */
+.assistant-activity {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.assistant-activity[data-state="waiting"],
+.assistant-activity[data-state="unavailable"] {
+  color: var(--text-warning);
+}
+.assistant-activity[data-state="working"] {
+  color: var(--accent);
+}
+
 /* Subtle pulse — the active session produced output in roughly the last 3s. */
 .session-busy {
   width: 6px;
