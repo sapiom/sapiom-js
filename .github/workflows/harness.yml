@@ -62,11 +62,14 @@ jobs:
   # Playwright mock-mode tier — harness web/e2e specs (VITE_MOCK=1, chromium only).
   # The live/real-pty tiers (e2e:live, sim) are opt-in local only; nothing here
   # invokes them — they require real agent binaries and credentials not in CI.
-  playwright-mock:
+  playwright-shards:
     runs-on: ubuntu-latest
-    # The expanded mock suite has over 560 cases, followed by canvas checks.
-    # Keep the existing per-test deadlines; allow both suites to finish.
+    # Split the growing suite while preserving the per-job and per-test limits.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     # Single Node version is enough — the mock tier tests browser behaviour,
     # not Node version compat; that's covered by the matrix job in test.yml.
     steps:
@@ -106,22 +109,34 @@ jobs:
         run: pnpm --filter @sapiom/harness exec playwright install-deps chromium
 
       - name: Run Playwright mock-mode suite
-        run: pnpm --filter @sapiom/harness test:ui
+        run: pnpm --filter @sapiom/harness test:ui --shard=${{ matrix.shard }}/2
 
       # The canvas suite renders the generated diagram documents in the same
       # chromium this job already installed. It was previously opt-in only, so
       # nothing verified in CI that a canvas the renderer produces actually
       # paints — a rendering regression could only be caught by hand.
       - name: Run Playwright canvas suite
-        run: pnpm --filter @sapiom/harness test:canvas
+        run: pnpm --filter @sapiom/harness test:canvas --shard=${{ matrix.shard }}/2
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: packages/harness/web/e2e/playwright-report/
           retention-days: 7
+
+  # Preserve the existing required check and require every shard to succeed.
+  playwright-mock:
+    runs-on: ubuntu-latest
+    needs: playwright-shards
+    if: always()
+    timeout-minutes: 1
+    steps:
+      - name: Require all browser shards
+        env:
+          SHARD_RESULT: ${{ needs.playwright-shards.result }}
+        run: test "$SHARD_RESULT" = success
 
   # Desktop app: does the PACKAGED bundle still launch?
   #
