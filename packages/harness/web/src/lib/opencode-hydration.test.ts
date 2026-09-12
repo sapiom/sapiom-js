@@ -263,6 +263,8 @@ describe("OpenCode absolute history merging through public exports", () => {
         f.emit("session.error", { error: "failed" });
       else await f.controller.cancel();
       const current = f.controller.getState();
+      // The idle-triggered follow-up is separate from this in-flight merge.
+      f.holdRead();
       await vi.advanceTimersByTimeAsync(20);
       resolve([message("old answer")]);
       await loading;

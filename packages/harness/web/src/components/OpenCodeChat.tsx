@@ -463,6 +463,11 @@ function ChatSurface({
   );
   const visibleError = error ?? (failed ? runError : null);
   const checking = !connected || !ready || loading || turn.status === "unknown";
+  const catchingUp =
+    connected &&
+    !ready &&
+    native.loadState.type === "loading" &&
+    native.messageOrder.length > 0;
   const working =
     !visibleError &&
     (running ||
@@ -473,7 +478,9 @@ function ChatSurface({
   const status = visibleError
     ? "Failed"
     : checking
-      ? "Checking status…"
+      ? catchingUp
+        ? "Catching up…"
+        : "Checking status…"
       : working
         ? "Working"
         : turn.status === "finished"

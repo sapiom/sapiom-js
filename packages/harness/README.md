@@ -78,6 +78,8 @@ display cancels queued reads; failed or malformed reads preserve visible history
 Native updates and removals received during a history read survive its response.
 Queued stream frames preserve completed content, and history merging preserves
 newer execution status.
+After a stream gap, Assistant retains visible output and shows **Catching up…**
+until native history or a complete stream update repairs its text baseline.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is

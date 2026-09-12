@@ -180,6 +180,10 @@ describe("bounded native history reads through the consumed adapter", () => {
     expect(f.controller.getState().messagesById["msg-a"]).toBeDefined();
     f.delta();
     await vi.advanceTimersByTimeAsync(5_000);
+    // The read recovered; the missing active part still needs a full baseline.
+    expect(f.controller.getState().loadState.type).toBe("loading");
+    f.emit("session.idle");
+    await flush();
     expect(f.controller.getState().loadState.type).toBe("ready");
   });
 });
