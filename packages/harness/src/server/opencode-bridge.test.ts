@@ -92,6 +92,52 @@ function request(path = "llm/v1/responses", init: RequestInit = {}) {
 }
 
 describe("Studio OpenCode credential bridge", () => {
+  it("bounds failed authentication across model, MCP, and rotating credential IDs", async () => {
+    const forwarded = vi.fn();
+    upstream.use((_req, res) => {
+      forwarded();
+      res.json({ ok: true });
+    });
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const path = attempt % 2 ? "mcp" : "llm/v1/responses";
+      const response = await fetch(
+        `${origin}/opencode-runtime/unknown-${attempt}/${path}`,
+        { method: "POST", headers: { Authorization: "Bearer invalid" } },
+      );
+      expect(response.status).toBe(401);
+      await response.arrayBuffer();
+    }
+    for (const path of ["mcp", "llm/v1/responses"]) {
+      const response = await request(path);
+      expect(response.status).toBe(429);
+      expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+      expect(await response.json()).toEqual({
+        error: {
+          message:
+            "Too many failed Assistant authentication attempts. Try again shortly.",
+          type: "rate_limit_error",
+          code: "assistant_runtime_rate_limited",
+        },
+      });
+    }
+    expect(forwarded).not.toHaveBeenCalled();
+  });
+
+  it("does not spend the authentication budget on valid traffic or service failures", async () => {
+    let calls = 0;
+    upstream.use((_req, res) => {
+      calls++;
+      res.status(calls % 2 ? 200 : 503).json({ ok: calls % 2 === 1 });
+    });
+    for (let attempt = 0; attempt < 125; attempt++) {
+      const response = await request(attempt % 2 ? "mcp" : undefined);
+      expect(response.status).toBe(attempt % 2 ? 503 : 200);
+      await response.arrayBuffer();
+    }
+    expect(calls).toBe(125);
+  });
+
   const event = (type: string, fields: object = {}) =>
     `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
   const completed = () =>

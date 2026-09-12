@@ -7,6 +7,7 @@ import {
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import express, { type Request, type Response, type Router } from "express";
+import rateLimit, { MemoryStore } from "express-rate-limit";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type {
   AssistantAccess,
@@ -172,6 +173,7 @@ export function assistantUpstreams(env: ResolvedEnvironment): {
 export class OpenCodeBridge {
   readonly router: Router = express.Router();
   private registrations = new Map<string, Registration>();
+  private readonly authenticationAttempts = new MemoryStore();
   private unsubscribe: () => void;
 
   constructor(
@@ -184,11 +186,37 @@ export class OpenCodeBridge {
         if (!grant || !sameAuthority(entry.grant, grant)) this.revoke(id);
       }
     });
-    const raw = express.raw({ type: () => true, limit: "4mb" });
-    this.router.all("/:id/llm/v1/responses", raw, (req, res) => {
-      void this.forward(req, res, "llm");
+    // Share the peer-IP budget across both routes so rotating runtime IDs cannot
+    // bypass it. Completed authorized requests and service outages do not spend
+    // the authentication budget, including long-lived MCP/model streams.
+    const authenticationRateLimit = rateLimit({
+      windowMs: 60_000,
+      max: 120,
+      store: this.authenticationAttempts,
+      standardHeaders: true,
+      legacyHeaders: false,
+      skipSuccessfulRequests: true,
+      requestWasSuccessful: (_req, res) =>
+        res.statusCode !== 401 && res.statusCode !== 403,
+      handler: (_req, res) => {
+        sendBridgeError(res, 429, {
+          message:
+            "Too many failed Assistant authentication attempts. Try again shortly.",
+          type: "rate_limit_error",
+          code: "assistant_runtime_rate_limited",
+        });
+      },
     });
-    this.router.all("/:id/mcp", raw, (req, res) => {
+    const raw = express.raw({ type: () => true, limit: "4mb" });
+    this.router.all(
+      "/:id/llm/v1/responses",
+      authenticationRateLimit,
+      raw,
+      (req, res) => {
+        void this.forward(req, res, "llm");
+      },
+    );
+    this.router.all("/:id/mcp", authenticationRateLimit, raw, (req, res) => {
       void this.forward(req, res, "mcp");
     });
     this.router.use((_req, res) => {
@@ -213,6 +241,7 @@ export class OpenCodeBridge {
   close(): void {
     this.unsubscribe();
     for (const id of this.registrations.keys()) this.revoke(id);
+    this.authenticationAttempts.shutdown();
   }
 
   private revoke(id: string): void {
