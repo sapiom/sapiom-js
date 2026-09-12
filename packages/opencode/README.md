@@ -43,6 +43,8 @@ cleanup proof. A missing proof fails closed so another runtime cannot write the
 same state. The proof remains outside the ephemeral launch directory until the
 runtime lock consumes it. Windows uses its native process-tree termination for
 normal close; installed-platform validation remains tracked by SAP-3297.
+Linux process scans tolerate entries that disappear during the read; unreadable
+entries still fail cleanup, and a missing tracked process cannot prove it stopped.
 Binary paths inside `app.asar` resolve to their unpacked counterparts; the
 generated supervisor needs no source loader and runs under Electron with
 `ELECTRON_RUN_AS_NODE` without forwarding that variable to native or tools.
