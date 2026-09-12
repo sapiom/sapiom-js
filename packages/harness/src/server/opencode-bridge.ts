@@ -187,8 +187,8 @@ export class OpenCodeBridge {
       }
     });
     // Share the peer-IP budget across both routes so rotating runtime IDs cannot
-    // bypass it. Completed authorized requests and service outages do not spend
-    // the authentication budget, including long-lived MCP/model streams.
+    // bypass it. Count only local runtime credential rejection: upstream denials
+    // must still reach sign-in recovery, including on long-lived MCP streams.
     const authenticationRateLimit = rateLimit({
       windowMs: 60_000,
       max: 120,
@@ -197,7 +197,7 @@ export class OpenCodeBridge {
       legacyHeaders: false,
       skipSuccessfulRequests: true,
       requestWasSuccessful: (_req, res) =>
-        res.statusCode !== 401 && res.statusCode !== 403,
+        res.locals.assistantRuntimeAuthenticationFailed !== true,
       handler: (_req, res) => {
         sendBridgeError(res, 429, {
           message:
@@ -263,6 +263,7 @@ export class OpenCodeBridge {
       token.length > 256 ||
       !timingSafeEqual(entry.digest, digest(token))
     ) {
+      res.locals.assistantRuntimeAuthenticationFailed = true;
       sendBridgeError(res, 401, {
         message: "Invalid Assistant runtime credential.",
         type: "authentication_error",
@@ -272,6 +273,7 @@ export class OpenCodeBridge {
     }
     if (!grant || !sameAuthority(entry.grant, grant)) {
       this.revoke(req.params.id!);
+      res.locals.assistantRuntimeAuthenticationFailed = true;
       sendBridgeError(res, 403, {
         message: "Assistant access is unavailable.",
         type: "permission_error",

@@ -138,6 +138,23 @@ describe("Studio OpenCode credential bridge", () => {
     expect(calls).toBe(125);
   });
 
+  it.each([401, 403])(
+    "does not spend the runtime authentication budget on upstream HTTP %i",
+    async (status) => {
+      let calls = 0;
+      upstream.use((_req, res) => {
+        calls++;
+        res.status(status).json({ error: "Upstream credential rejected" });
+      });
+      for (let attempt = 0; attempt < 125; attempt++) {
+        const response = await request(attempt % 2 ? "mcp" : undefined);
+        expect(response.status).toBe(status);
+        await response.arrayBuffer();
+      }
+      expect(calls).toBe(125);
+    },
+  );
+
   const event = (type: string, fields: object = {}) =>
     `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
   const completed = () =>
