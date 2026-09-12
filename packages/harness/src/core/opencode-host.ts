@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   createSapiomOpenCodeConfig,
   OpenCodeShutdownError,
@@ -52,6 +52,11 @@ interface Options {
   origin: () => string;
   stateRoot: string;
   authorize: (id: string) => Promise<OpenCodeWorkspace | null>;
+  /** Materialize versioned, managed skill directories inside this private root. */
+  prepareSkills?: (
+    workspace: Readonly<OpenCodeWorkspace>,
+    stateRoot: string,
+  ) => Promise<string[]>;
   start?: typeof startOpenCodeServer;
 }
 export class OpenCodeTransportError extends Error {
@@ -272,12 +277,38 @@ export class OpenCodeHost {
       }).acquire();
       entry.unlock = release;
       await this.validate(entry);
+      const prepared =
+        (await this.options.prepareSkills?.(
+          { ...entry.workspace },
+          stateRoot,
+        )) ?? [];
+      const skillPaths = await Promise.all(
+        prepared.map((path) => realpath(path)),
+      );
+      const canonicalRoot = await realpath(stateRoot);
+      for (const path of skillPaths) {
+        const child = relative(canonicalRoot, path);
+        if (
+          !child ||
+          child === ".." ||
+          child.startsWith(`..${sep}`) ||
+          isAbsolute(child) ||
+          !(await stat(path)).isDirectory()
+        )
+          throw new OpenCodeTransportError(
+            openCodeTransportFailure("context_unavailable"),
+          );
+      }
+      await this.validate(entry);
       entry.credential = this.options.bridge.issue();
-      const config = createSapiomOpenCodeConfig({
-        bridgeUrl: `${this.options.origin()}/opencode-runtime/${entry.credential.id}`,
-        runtimeToken: entry.credential.token,
-        model: this.options.bridge.model,
-      });
+      const config = {
+        ...createSapiomOpenCodeConfig({
+          bridgeUrl: `${this.options.origin()}/opencode-runtime/${entry.credential.id}`,
+          runtimeToken: entry.credential.token,
+          model: this.options.bridge.model,
+        }),
+        ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
+      };
       startupAttempted = true;
       server = await (this.options.start ?? startOpenCodeServer)({
         cwd: entry.workspace.cwd,
