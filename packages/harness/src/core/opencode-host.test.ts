@@ -11,9 +11,47 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { OpenCodeShutdownError } from "@sapiom/opencode";
+import type { HostedOpenCode } from "./opencode-host.js";
+import type { AssistantObservation } from "../shared/assistant-state.js";
+import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import type { AssistantGrant } from "./assistant-access.js";
 import { OpenCodeHost, OpenCodeTransportError } from "./opencode-host.js";
 
+const initial: AssistantObservation = {
+  activity: "unknown",
+  pendingPermissions: null,
+  pendingQuestions: null,
+  freshness: "connecting",
+};
+const observers: Array<{
+  hosted: HostedOpenCode;
+  id: string;
+  update: (state: AssistantObservation) => void;
+  dispose: ReturnType<typeof vi.fn>;
+  start: ReturnType<typeof vi.fn>;
+}> = [];
+const createObserver = vi.fn(
+  (
+    hosted: HostedOpenCode,
+    id: string,
+    update: (state: AssistantObservation) => void,
+  ) => {
+    const observer = {
+      hosted,
+      id,
+      update,
+      start: vi.fn(() => update(initial)),
+      dispose: vi.fn(),
+    };
+    observers.push(observer);
+    return observer;
+  },
+);
+let browserRevision: string;
+const getBrowserState = vi.fn(() => ({
+  enabled: !!grant,
+  authorityRevision: browserRevision,
+}));
 let root: string;
 let cwd: string;
 let host: OpenCodeHost;
@@ -32,6 +70,10 @@ const cleanupProofFor = (stateRoot: string, hex: string) => ({
 });
 beforeEach(async () => {
   expectShutdownFailure = false;
+  observers.length = 0;
+  createObserver.mockClear();
+  getBrowserState.mockClear();
+  browserRevision = "authority-a";
   root = await mkdtemp(join(tmpdir(), "studio-opencode-host-"));
   cwd = join(root, "project");
   await mkdir(cwd);
@@ -67,8 +109,10 @@ beforeEach(async () => {
     close,
   });
   host = new OpenCodeHost({
+    createObserver,
     access: {
       get: () => grant,
+      getBrowserState,
       getFailureCode: () =>
         grant ? "transport_unavailable" : "authentication_required",
       subscribe: (listener) => {
@@ -365,8 +409,8 @@ describe("Studio-owned OpenCode lifecycle", () => {
 
   it("waits for every runtime cleanup even when one shutdown fails", async () => {
     expectShutdownFailure = true;
-    await host.ensure("studio-one");
-    await host.ensure("studio-two");
+    host.observe(await host.ensure("studio-one"), "ses_one");
+    host.observe(await host.ensure("studio-two"), "ses_two");
     let finish!: () => void;
     close.mockRejectedValueOnce(new Error("still alive"));
     close.mockImplementationOnce(
@@ -379,6 +423,13 @@ describe("Studio-owned OpenCode lifecycle", () => {
     const shutdown = host.close().finally(() => {
       settled = true;
     });
+    expect(host.getAssistantState()).toMatchObject({
+      enabled: false,
+      sessions: [],
+    });
+    expect(
+      observers.every((observer) => observer.dispose.mock.calls.length === 1),
+    ).toBe(true);
     const rejected = expect(shutdown).rejects.toThrow("shutdown");
     await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2));
     expect(settled).toBe(false);
@@ -393,8 +444,11 @@ describe("Studio-owned OpenCode lifecycle", () => {
     });
     start.mockResolvedValueOnce({ pid: 123, exited, close });
     const first = await host.ensure("studio-one");
+    host.observe(first, "ses_one");
     exit();
     await vi.waitFor(() => expect(first.signal.aborted).toBe(true));
+    expect(host.getAssistantState().sessions).toEqual([]);
+    expect(observers[0]!.dispose).toHaveBeenCalledOnce();
     const restored = await host.ensure("studio-one");
     expect(restored.stateRoot).toBe(first.stateRoot);
     expect(start).toHaveBeenCalledTimes(2);
@@ -423,5 +477,241 @@ describe("Studio-owned OpenCode lifecycle", () => {
     await expect(host.ensure("studio-one")).rejects.toMatchObject({
       failure: { code: "authentication_required" },
     });
+  });
+});
+
+describe("host-owned Assistant observation", () => {
+  it("reads/subscribes without native startup and exposes only public identity", () => {
+    const listener = vi.fn();
+    const unsubscribe = host.subscribeAssistantState(listener);
+    const first = host.getAssistantState();
+    expect(host.getAssistantState()).toEqual(first);
+    expect(first).toMatchObject({
+      enabled: true,
+      authorityRevision: browserRevision,
+      revision: 0,
+      sessions: [],
+    });
+    expect(first.hostInstanceId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(start).not.toHaveBeenCalled();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(createObserver).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(JSON.stringify(first)).not.toMatch(/sk_private|scoped|user|cwd/);
+    unsubscribe();
+  });
+
+  it("gives each host a fresh public instance identifier", async () => {
+    const other = new OpenCodeHost({
+      access: {
+        get: () => grant,
+        getFailureCode: () => "transport_unavailable",
+        getBrowserState,
+        subscribe: () => () => {},
+      },
+      bridge: { issue, model: "smart" },
+      origin: () => "http://127.0.0.1:1234",
+      stateRoot: root,
+      authorize,
+      start,
+      createObserver,
+    });
+    expect(other.getAssistantState().hostInstanceId).not.toBe(
+      host.getAssistantState().hostInstanceId,
+    );
+    await other.close();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("binds before synchronous start and observes an exact association only once", async () => {
+    const hosted = await host.ensure("studio-a");
+    host.observe(hosted, "ses_a");
+    host.observe(hosted, "ses_a");
+    expect(createObserver).toHaveBeenCalledOnce();
+    expect(observers[0]!.start).toHaveBeenCalledOnce();
+    expect(host.getAssistantState().sessions).toEqual([
+      { harnessSessionId: "studio-a", conversationId: "ses_a", ...initial },
+    ]);
+    for (const invalid of ["ses_b", "../escape", "studio-a"])
+      expect(() => host.observe(hosted, invalid)).toThrow(
+        "saved Assistant conversation",
+      );
+    expect(() => host.observe({ ...hosted }, "ses_a")).toThrow(
+      "temporarily unavailable",
+    );
+    expect(createObserver).toHaveBeenCalledOnce();
+  });
+
+  it("keeps same-folder sessions independent and publishes only changed summaries", async () => {
+    const a = await host.ensure("studio-a");
+    const b = await host.ensure("studio-b");
+    host.observe(a, "ses_a");
+    host.observe(b, "ses_b");
+    const listener = vi.fn();
+    host.subscribeAssistantState(() => {
+      throw new Error("subscriber failure");
+    });
+    host.subscribeAssistantState(listener);
+    const busy: AssistantObservation = {
+      activity: "busy",
+      pendingPermissions: 1,
+      pendingQuestions: 0,
+      freshness: "current",
+    };
+    observers[0]!.update(busy);
+    observers[0]!.update(busy);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(host.getAssistantState().sessions).toEqual([
+      { harnessSessionId: "studio-a", conversationId: "ses_a", ...busy },
+      { harnessSessionId: "studio-b", conversationId: "ses_b", ...initial },
+    ]);
+    expect(a.cwd).toBe(b.cwd);
+  });
+
+  it("removes a summary before disposal and before pending native cleanup", async () => {
+    const hosted = await host.ensure("studio-a");
+    host.observe(hosted, "ses_a");
+    let finish!: () => void;
+    close.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    observers[0]!.dispose.mockImplementation(() => {
+      expect(host.getAssistantState().sessions).toEqual([]);
+      observers[0]!.update({ ...initial, activity: "busy" });
+    });
+    const before = host.getAssistantState().revision;
+    const retiring = host.retire("studio-a");
+    expect(host.getAssistantState()).toMatchObject({
+      revision: before + 1,
+      sessions: [],
+    });
+    expect(observers[0]!.dispose).toHaveBeenCalledOnce();
+    expect(hosted.signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    finish();
+    await retiring;
+  });
+
+  it("waits for native cleanup when a retirement listener closes the host", async () => {
+    host.observe(await host.ensure("studio-a"), "ses_a");
+    let release!: () => void;
+    close.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    let shutdown!: Promise<void>;
+    let resolved = false;
+    const unsubscribe = host.subscribeAssistantState(() => {
+      unsubscribe();
+      shutdown = host.close().then(() => {
+        resolved = true;
+      });
+    });
+    const retiring = host.retire("studio-a");
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setImmediate(resolve));
+    try {
+      expect(resolved).toBe(false);
+    } finally {
+      release();
+      await retiring;
+      await shutdown;
+    }
+    expect(resolved).toBe(true);
+  });
+
+  it("rejects a late association and old callbacks after the same Studio session is replaced", async () => {
+    const old = await host.ensure("studio-a");
+    host.observe(old, "ses_a");
+    const oldObserver = observers[0]!;
+    await host.retire("studio-a");
+    const current = await host.ensure("studio-a");
+    host.observe(current, "ses_a");
+    const snapshot = host.getAssistantState();
+    expect(() => host.observe(old, "ses_a")).toThrow(OpenCodeTransportError);
+    oldObserver.update({ ...initial, activity: "busy" });
+    oldObserver.dispose();
+    expect(host.getAssistantState()).toEqual(snapshot);
+    expect(observers).toHaveLength(2);
+  });
+
+  it.each(["disable", "crossover"])(
+    "clears the authority-scoped set once before %s retirement",
+    async (mode) => {
+      host.observe(await host.ensure("studio-a"), "ses_a");
+      host.observe(await host.ensure("studio-b"), "ses_b");
+      const snapshots: ReturnType<OpenCodeHost["getAssistantState"]>[] = [];
+      host.subscribeAssistantState(() =>
+        snapshots.push(host.getAssistantState()),
+      );
+      const before = host.getAssistantState();
+      grant = mode === "disable" ? null : { ...grant!, userId: "other-user" };
+      browserRevision = "new-authority";
+      changed();
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]).toMatchObject({
+        hostInstanceId: before.hostInstanceId,
+        authorityRevision: "new-authority",
+        revision: before.revision + 1,
+        sessions: [],
+        enabled: mode !== "disable",
+      });
+      expect(
+        observers.every((observer) => observer.dispose.mock.calls.length === 1),
+      ).toBe(true);
+    },
+  );
+
+  it("advances empty authority and shutdown barriers without startup or duplicate revisions", async () => {
+    const initialState = host.getAssistantState();
+    browserRevision = "another-authority";
+    changed();
+    expect(host.getAssistantState().revision).toBe(initialState.revision + 1);
+    changed();
+    expect(host.getAssistantState().revision).toBe(initialState.revision + 1);
+    await host.close();
+    expect(host.getAssistantState()).toMatchObject({
+      enabled: false,
+      revision: initialState.revision + 2,
+      sessions: [],
+    });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("handles synchronous access revocation while a snapshot getter is running", async () => {
+    host.observe(await host.ensure("studio-a"), "ses_a");
+    getBrowserState.mockImplementationOnce(() => {
+      grant = null;
+      browserRevision = "revoked";
+      changed();
+      return { enabled: false, authorityRevision: browserRevision };
+    });
+    expect(host.getAssistantState()).toMatchObject({
+      enabled: false,
+      authorityRevision: "revoked",
+      sessions: [],
+    });
+    expect(observers[0]!.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("retains an unavailable association after native history disappears", async () => {
+    const hosted = await host.ensure("studio-a");
+    host.observe(hosted, "ses_a");
+    const failure = openCodeTransportFailure("native_history_missing");
+    observers[0]!.update({ ...initial, freshness: "unavailable", failure });
+    expect(() => host.observe(hosted, "ses_a")).toThrow(failure.message);
+    expect(createObserver).toHaveBeenCalledOnce();
+    expect(host.getAssistantState().sessions[0]).toMatchObject({
+      conversationId: "ses_a",
+      freshness: "unavailable",
+      failure,
+    });
+    expect(hosted.signal.aborted).toBe(false);
+    expect(close).not.toHaveBeenCalled();
   });
 });

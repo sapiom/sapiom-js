@@ -20,3 +20,6 @@ export type AssistantObservation = Omit<
   AssistantSessionSummary,
   "harnessSessionId" | "conversationId"
 >;
+
+export const isConversationId = (id: unknown): id is string =>
+  typeof id === "string" && /^ses_[A-Za-z0-9_-]{1,128}$/.test(id);
