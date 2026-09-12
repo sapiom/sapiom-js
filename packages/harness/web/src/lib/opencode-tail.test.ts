@@ -167,6 +167,26 @@ describe("OpenCode stream tail recovery through public exports", () => {
     expect(f.controller.getState().loadState.type).toBe("ready");
   });
 
+  it("repairs a delayed reconnect snapshot when cached status and repeated events are idle", async () => {
+    const f = fixture();
+    await f.ready();
+    f.client.session.status.mockResolvedValue({
+      data: { "session-a": { type: "idle" } },
+    });
+    f.emit("session.idle");
+    await flush();
+    f.emit("stream.disconnected");
+    const finish = f.holdRead();
+    f.emit("stream.reconnected");
+    await flush();
+    f.emit("session.idle");
+    f.snapshot([message("Hello big world", true)]);
+    finish([message("", false)]);
+    await flush();
+    expect(f.text()).toBe("Hello big world");
+    expect(f.controller.getState().loadState.type).toBe("ready");
+  });
+
   it("keeps an event baseline separate from a partial overlapping snapshot", async () => {
     const f = fixture();
     await f.ready();
