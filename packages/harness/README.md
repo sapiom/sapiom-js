@@ -86,6 +86,8 @@ Assistant shows **Waiting for input** for current pending requests; failed reque
 reads retain last-known state while the status remains uncertain.
 Event transport scopes each frame to the authorized conversation and cancels
 its reader and status catch-up when the browser connection ends.
+The shared observer module derives activity and pending-request counts without
+storing transcript content or issuing execution commands.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
