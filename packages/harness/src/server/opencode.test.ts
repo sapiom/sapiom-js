@@ -10,6 +10,10 @@ import {
   type HostedOpenCode,
 } from "../core/opencode-host.js";
 import { createOpenCodeRouter } from "./opencode.js";
+import {
+  resolveStudioAssistantContext,
+  assistantContextUnavailable,
+} from "../core/studio-assistant-context.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { scopedOpenCodeEvent } from "./opencode-events.js";
 
@@ -29,6 +33,7 @@ const requests: {
   body: unknown;
 }[] = [];
 const ensure = vi.fn();
+const resolveContext = vi.fn();
 const close = vi.fn();
 async function listen(app: express.Express): Promise<string> {
   const server = createServer(app);
@@ -39,6 +44,39 @@ async function listen(app: express.Express): Promise<string> {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "studio-opencode-route-"));
   enabled = true;
+  await Promise.all(["cedar", "orchid"].map((name) => mkdir(join(root, name))));
+  resolveContext.mockReset().mockImplementation((hosted, selectedAgentPath) =>
+    resolveStudioAssistantContext({
+      hosted,
+      selectedAgentPath,
+      session: {
+        id: hosted.harnessSessionId,
+        cwd: root,
+        projectId: "project-a",
+        boundAgentPath: join(root, "cedar"),
+      },
+      workflows: ["cedar", "orchid"].map((name) => ({
+        name,
+        path: join(root, name),
+        definitionId: null,
+        definitionSlug: null,
+        source: "scan",
+      })),
+      environment: "fixture",
+      capabilities: [],
+      guidance: [
+        {
+          id: "fixture-profile",
+          kind: "profile",
+          status: "available",
+          required: true,
+          source: "fixture",
+          revision: "1",
+          text: "STUDIO_GUIDANCE_MARKER",
+        },
+      ],
+    }),
+  );
   created = 0;
   requests.length = streams.length = 0;
   sessions.clear();
@@ -73,7 +111,16 @@ beforeEach(async () => {
       requests.some(
         (request) => request.path === `/session/${req.params.id}/prompt_async`,
       )
-        ? [{ info: { id: "msg_admitted", role: "user", time: {} }, parts: [] }]
+        ? [
+            {
+              info: {
+                id: `msg_admitted_${requests.filter((request) => request.path.endsWith("/prompt_async")).length}`,
+                role: "user",
+                time: {},
+              },
+              parts: [],
+            },
+          ]
         : [],
     );
   });
@@ -126,7 +173,7 @@ beforeEach(async () => {
       throw new OpenCodeAccessError("unavailable");
     return hosts.get(id)!;
   });
-  router = createOpenCodeRouter({ ensure }, "boot-token");
+  router = createOpenCodeRouter({ ensure }, "boot-token", resolveContext);
   const app = express();
   app.use("/opencode", (req, res, next) => router(req, res, next));
   origin = await listen(app);
@@ -172,6 +219,68 @@ async function readUntil(
 }
 
 describe("Studio-scoped OpenCode transport", () => {
+  it("delivers session-owned context and validated selection without forwarding browser overrides", async () => {
+    for (const studio of ["studio-a", "studio-b"]) {
+      const native = await attach(studio);
+      const selectedAgentPath = join(
+        root,
+        studio === "studio-a" ? "orchid" : "cedar",
+      );
+      const response = await request(
+        `${studio}/session/${native}/prompt_async`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            selectedAgentPath,
+            parts: [{ type: "text", text: "Explain this agent" }],
+          }),
+        },
+      );
+      expect(response.status).toBe(204);
+      const body = [...requests]
+        .reverse()
+        .find((item) => item.path.endsWith("/prompt_async"))!.body as {
+        system: string;
+      };
+      expect(body).not.toHaveProperty("selectedAgentPath");
+      expect(body.system).toMatch(/^StudioAssistantResult\/v2:/);
+      expect(body.system).toContain("STUDIO_GUIDANCE_MARKER");
+      const context = JSON.parse(body.system.split("\n").at(-1)!);
+      expect(context.session.id).toBe(studio);
+      expect(context.selectedAgent.agent.path).toBe(selectedAgentPath);
+      expect(context.boundAgent.agent.path).toBe(join(root, "cedar"));
+    }
+  });
+
+  it("does not submit when selected context or required guidance cannot resolve", async () => {
+    const native = await attach();
+    const path = `studio-a/session/${native}/prompt_async`;
+    const body = { parts: [{ type: "text", text: "Change this agent" }] };
+    for (const selectedAgentPath of [
+      "/outside-project",
+      { system: "override" },
+    ]) {
+      const response = await request(path, {
+        method: "POST",
+        body: JSON.stringify({ ...body, selectedAgentPath }),
+      });
+      expect(response.status).toBe(
+        typeof selectedAgentPath === "string" ? 503 : 400,
+      );
+    }
+    resolveContext.mockRejectedValueOnce(assistantContextUnavailable());
+    const response = await request(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    expect(await response.json()).toEqual({
+      error: openCodeTransportFailure("context_unavailable"),
+    });
+    expect(requests.some((item) => item.path.endsWith("/prompt_async"))).toBe(
+      false,
+    );
+  });
+
   it("authenticates and scopes final-answer recovery without exposing native overrides", async () => {
     const id = await attach("studio-b");
     const path = `studio-b/session/${id}/final-response`;
@@ -244,7 +353,7 @@ describe("Studio-scoped OpenCode transport", () => {
     expect(await attach("studio-b")).not.toBe(a);
     expect(created).toBe(2);
     hosts.set("studio-a", { ...hosts.get("studio-a")! });
-    router = createOpenCodeRouter({ ensure }, "boot-token");
+    router = createOpenCodeRouter({ ensure }, "boot-token", resolveContext);
     expect(await attach()).toBe(a);
     expect(created).toBe(2);
   });
@@ -376,7 +485,7 @@ describe("Studio-scoped OpenCode transport", () => {
   it("preserves a missing or corrupt association as a visible error instead of replacing history", async () => {
     const id = await attach();
     sessions.delete(id);
-    router = createOpenCodeRouter({ ensure }, "boot-token");
+    router = createOpenCodeRouter({ ensure }, "boot-token", resolveContext);
     const missing = await request("studio-a/attach", { method: "POST" });
     expect(missing.status).toBe(410);
     expect(await missing.json()).toEqual({
