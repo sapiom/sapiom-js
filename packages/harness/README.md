@@ -80,6 +80,7 @@ Queued stream frames preserve completed content, and history merging preserves
 newer execution status.
 After a stream gap, Assistant retains visible output and shows **Catching up…**
 until native history or a complete stream update repairs its text baseline.
+Disconnecting also cancels outstanding catch-up requests before reconnection.
 This first slice includes basic tool status; richer controls arrive separately.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
