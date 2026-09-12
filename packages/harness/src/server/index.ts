@@ -3549,6 +3549,10 @@ export const startServer = async (
       return { harnessSessionId: id, cwd: session.cwd };
     },
   });
+  const getAssistantState = () => openCodeHost.getAssistantState();
+  const unsubscribeAssistant = openCodeHost.subscribeAssistantState(() =>
+    bus.publish({ type: "assistant.state", snapshot: getAssistantState() }),
+  );
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
@@ -3578,6 +3582,7 @@ export const startServer = async (
   app.use(
     "/api",
     createRestRouter({
+      getAssistantState,
       sessionManager,
       adapters,
       version: readVersion(),
@@ -4253,7 +4258,7 @@ export const startServer = async (
     {
       path: "/ws/events",
       wss: eventsWss,
-      onConnection: createEventsWebSocketHandler(bus, options.bootToken),
+      onConnection: createEventsWebSocketHandler(bus, options.bootToken, getAssistantState),
     },
   ]);
 
@@ -4281,6 +4286,7 @@ export const startServer = async (
       unsubscribeCredentialChanges();
       assistantAccess.close();
       await settle(() => openCodeHost.close());
+      unsubscribeAssistant();
       openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());

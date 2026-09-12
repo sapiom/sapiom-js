@@ -1,3 +1,4 @@
+import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -135,6 +136,7 @@ export interface PendingWorkspace {
 }
 
 export interface HarnessStateHook {
+  assistant: AssistantProjection;
   authRevision: number;
   state: AppState | null;
   loading: boolean;
@@ -417,6 +419,8 @@ export interface HarnessStateHook {
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
+  const assistantOrder = useRef(new AssistantStateOrder()).current;
+  const [assistant, setAssistant] = useState(() => assistantOrder.current());
   useEffect(() => {
     if (!state) return;
     const projectIds = new Set(
@@ -1128,6 +1132,7 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     let cancelled = false;
     const workflowRequest = workflowProjectionOrder.begin();
+    const assistantRequest = assistantOrder.beginHttp();
     // A retry re-enters the loading state and clears the prior failure so the
     // shell shows "reconnecting", not a stale error, while the refetch runs.
     if (reloadSeq > 0) {
@@ -1149,7 +1154,9 @@ export function useHarnessState(): HarnessStateHook {
         const workflows = bootWorkflowsAccepted
           ? appState.workflows
           : [...(workflowProjectionOrder.current() ?? [])];
-        setState({ ...appState, workflows });
+        const { assistant: assistantSeed, ...shell } = appState;
+        setAssistant(assistantOrder.http(assistantRequest, assistantSeed));
+        setState({ ...shell, workflows });
         // Baseline the built-agents metric: everything present at load already
         // existed, so seed it into the seen-set and never count it as built.
         const seenAtLoad = (seenAgentPathsRef.current ??= new Set<string>());
@@ -1227,7 +1234,11 @@ export function useHarnessState(): HarnessStateHook {
 
   useEffect(() => {
     return subscribeEvents(
-      (message) => {
+      (message, generation) => {
+        if (message.type === "assistant.state") {
+          setAssistant(assistantOrder.socket(generation, message.snapshot));
+          return;
+        }
         // SessionRecord invalidations have a targeted listener below. Keeping
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.
@@ -1352,6 +1363,7 @@ export function useHarnessState(): HarnessStateHook {
             }, BUSY_WINDOW_MS),
           );
         } else if (message.type === "auth.changed") {
+          setAssistant(assistantOrder.authChanged());
           // Accept a barrier synchronously: merely issuing the refresh cannot
           // stop an older in-flight success from restoring another account.
           const workflows = (workflowProjectionOrder.current() ?? workflowsRef.current)
@@ -1382,8 +1394,9 @@ export function useHarnessState(): HarnessStateHook {
         eventReconnectListeners.current.forEach((listener) => listener());
         void refreshWorkflows().catch(() => undefined);
       },
+      connection => setAssistant(assistantOrder.transport(connection)),
     );
-  }, [refreshWorkflows, startRunPolling]);
+  }, [refreshWorkflows, startRunPolling, assistantOrder]);
 
   /**
    * Loads history for `cwds` and folds it into the store via `mergeHistory`,
@@ -2399,6 +2412,7 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   return {
+    assistant,
     state,
     authRevision,
     loading,

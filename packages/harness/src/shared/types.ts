@@ -1,3 +1,4 @@
+import type { AssistantStateSnapshot } from "./assistant-state.js";
 /**
  * Sapiom Harness — shared interface contract.
  *
@@ -560,6 +561,7 @@ export type TerminalControlMessage = TerminalResizeMessage;
 // ---------------------------------------------------------------------------
 
 export type BusMessage =
+  | { type: "assistant.state"; snapshot: AssistantStateSnapshot }
   | { type: "session.status"; session: HarnessSession }
   /**
    * A prompt or completed turn is now durable in the local event store.
@@ -1276,6 +1278,7 @@ export interface HarnessWorkspaceContext {
 }
 
 export interface AppState {
+  assistant?: AssistantStateSnapshot;
   version: string;
   authenticated: boolean;
   userId: string | null;
