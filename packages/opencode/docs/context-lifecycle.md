@@ -19,6 +19,7 @@ All 16 inspected native source files match upstream commit
 Source paths below are relative to its `packages/opencode/src/` unless prefixed with `SDK`.
 Native probes passed **24 checks / 14 model requests**, on both main's fixture envelope and the actual draft
 composer. The combined candidate passed **37 focused harness tests**; projection has **3 focused tests**.
+Another **3 focused tests** reject incomplete source/provider observations while accepting unavailable cache fields.
 This does not replace final browser/session-control parity acceptance.
 
 ## Capability map

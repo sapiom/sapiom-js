@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { projectStudioSystem } from "./assistant-context-projection.mjs";
+import { measurementFailures } from "./assistant-context-measurements.mjs";
 
 assert.equal(
   process.env.SAPIOM_CONTEXT_GATEWAY_PROBE,
@@ -358,6 +359,7 @@ try {
       }),
     );
   }
+  failures.push(...measurementFailures({ sourceReads, sources, calls }));
   assert.deepEqual(
     failures,
     [],
