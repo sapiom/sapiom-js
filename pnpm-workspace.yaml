@@ -21,3 +21,5 @@ onlyBuiltDependencies:
 # cross-platform rebuild HANG that the bare node-gyp override caused.
 overrides:
   "@electron/rebuild": ^3.7.0
+patchedDependencies:
+  "@assistant-ui/react-opencode@0.2.22": patches/@assistant-ui__react-opencode@0.2.22.patch
