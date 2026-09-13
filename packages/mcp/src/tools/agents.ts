@@ -57,11 +57,6 @@ import { fail, gatewayClient, NOT_AUTHED, ok } from "./shared.js";
 import { webappRunUrl } from "./webapp-url.js";
 
 /**
- * Coerce a tool argument that may arrive as a JSON string (some MCP clients
- * serialize object-valued args) back into a value. A non-JSON string is
- * returned as-is (a legitimately string-valued input).
- */
-/**
  * Run ids are numeric (bigint server-side). A bare `z.string()` let a model pass a step name or a
  * variable (`result`, `child-expert-1`) and get back "execution not found" — which reads as "the run
  * is gone" rather than "that is not an id", so the mistake was never self-correcting (SAP-3337).
@@ -73,6 +68,11 @@ const executionIdSchema = z
     'executionId must be the numeric execution id from run/launch or a listed execution (e.g. "4821"), not a step name or variable.',
   );
 
+/**
+ * Coerce a tool argument that may arrive as a JSON string (some MCP clients
+ * serialize object-valued args) back into a value. A non-JSON string is
+ * returned as-is (a legitimately string-valued input).
+ */
 function coerceJson(value: unknown): unknown {
   if (typeof value !== "string") return value;
   try {
