@@ -20,6 +20,17 @@ test("missing or rejected source measurements cannot certify success", () => {
   }
 });
 
+test("HTTP source failures cannot certify a completed provider response", () => {
+  for (const status of [404, 500, 503]) {
+    const sources = [{ ...receipt.sources[0], status }];
+    assert.deepEqual(
+      measurementFailures({ ...receipt, sources }),
+      ["source-observations"],
+      `HTTP ${status}`,
+    );
+  }
+});
+
 test("provider observation failure remains a failure after a completed event", () => {
   const calls = [{ ...receipt.calls[0], observationError: "SyntaxError" }];
   assert.deepEqual(measurementFailures({ ...receipt, calls }), [
