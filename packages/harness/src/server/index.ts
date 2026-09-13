@@ -159,6 +159,7 @@ import {
   resolveManifestName,
 } from "../core/definition-name.js";
 import { createBootTokenMiddleware } from "./auth.js";
+import { createOpenCodeRouter } from "./opencode.js";
 import {
   createApiKeyProvider,
   staticApiKeyProvider,
@@ -194,6 +195,9 @@ import {
   ProjectBootstrapCoordinatorClosedError,
 } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
+import { AssistantAccess } from "../core/assistant-access.js";
+import { OpenCodeHost } from "../core/opencode-host.js";
+import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
 import { createEventsWebSocketHandler } from "./events-ws.js";
@@ -699,6 +703,13 @@ export const startServer = async (
         onKeyChanged: deploymentAuthChanged,
       })
     : staticApiKeyProvider(null);
+
+  const assistantAccess = new AssistantAccess({
+    enabled: authEnabled,
+    harnessVersion: readVersion(),
+    getApiKey: () => apiKeyProvider.getKey(),
+  });
+  const openCodeBridge = new OpenCodeBridge(assistantAccess);
 
   // Mutable auth state — seeded from the boot-time identity and updated by the
   // in-app auth routes (POST /api/auth/start, POST /api/auth/disconnect). The
@@ -1766,7 +1777,10 @@ export const startServer = async (
     if (!authEnabled || credentialStoreObserver) return;
     credentialStoreObserver = observeCredentialStore(
       credentialsFilePath(),
-      () => apiKeyProvider.refresh().then(() => {}),
+      async () => {
+        await apiKeyProvider.refresh();
+        await assistantAccess.refresh();
+      },
       {
         onError: (error) => {
           if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
@@ -1783,6 +1797,8 @@ export const startServer = async (
   };
   const unsubscribeCredentialChanges = apiKeyProvider.subscribe(
     ({ apiKey, generation }) => {
+      assistantAccess.clear();
+      void assistantAccess.refresh();
       sessionManager.reconcileMcpCredentialGeneration(generation);
       if (apiKey !== null) {
         // First-run sign-in creates the directory after the boot-time watch
@@ -3515,8 +3531,25 @@ export const startServer = async (
     return { ok: await sessionManager.submitInput(sessionId, text, submit) };
   };
 
+  const openCodeHost = new OpenCodeHost({
+    access: assistantAccess,
+    bridge: openCodeBridge,
+    origin: () => `http://127.0.0.1:${actualPort}`,
+    stateRoot: statePaths.root,
+    authorize: async (id) => {
+      const session = sessionManager.get(id);
+      if (!session || !(await isProjectSessionDispatchAuthorized({
+        session,
+        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
+        resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+      }))) return null;
+      return { harnessSessionId: id, cwd: session.cwd };
+    },
+  });
   const app: Express = express();
   app.disable("x-powered-by");
+  app.use("/opencode-runtime", openCodeBridge.router);
+  app.use("/opencode", createOpenCodeRouter(openCodeHost, options.bootToken));
 
   // Everything under /api requires the boot token; mounted as middleware
   // (not a router) so it also gates the workflows/macros routers below,
@@ -3535,6 +3568,10 @@ export const startServer = async (
     createBootTokenMiddleware(options.bootToken),
     express.json({ limit: JSON_BODY_LIMIT_BYTES }),
   );
+  app.get("/api/assistant/access", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(assistantAccess.getBrowserState());
+  });
   app.use(
     "/api",
     createRestRouter({
@@ -3924,6 +3961,8 @@ export const startServer = async (
       authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
       onProjectUserChanged: (userId) => {
+        assistantAccess.clear();
+        void assistantAccess.refresh();
         deploymentAuthChanged();
         projectUserId = userId;
         for (const session of sessionManager.list()) {
@@ -4237,6 +4276,9 @@ export const startServer = async (
 
       credentialStoreObserver?.close();
       unsubscribeCredentialChanges();
+      assistantAccess.close();
+      await settle(() => openCodeHost.close());
+      openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
@@ -4354,6 +4396,7 @@ export const startServer = async (
     actualPort =
       typeof address === "object" && address ? address.port : options.port;
     agentMapMcpUrl = `http://${host}:${actualPort}/mcp/agent-map`;
+    void assistantAccess.refresh();
     // Covers the ephemeral `port: 0` case where only the bound address is real.
     portDetector.addExcludedPort(actualPort);
     await options.projectBootstrapTestHooks?.afterListenBeforeRecovery?.(

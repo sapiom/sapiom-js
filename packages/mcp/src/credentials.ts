@@ -32,11 +32,19 @@ function canonicalEnvironmentName(name: string): string {
   return ENVIRONMENT_ALIASES[name] ?? name;
 }
 
+/** Delegated user tokens for Studio's host only; never expose to MCP tools. */
+export interface StudioCredentials {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+}
+
 export interface CredentialEntry {
   apiKey: string;
   tenantId: string;
   organizationName: string;
   apiKeyId: string;
+  studioCredentials?: StudioCredentials;
 }
 
 export interface EnvironmentConfig {

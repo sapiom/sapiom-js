@@ -36,6 +36,103 @@ system prompt, in whatever project directory you choose.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
 
+Studio browser sign-in also stores a renewable user credential for internal
+Assistant eligibility checks. Existing organization-only logins keep working for
+Terminal; sign out and sign in again to obtain the user credential. It stays in
+the shared local credential store and is never returned by Studio's browser auth
+API. Sign-out clears it locally and attempts to revoke its token family remotely.
+
+The Studio host refreshes the internal Assistant capability at most every 30
+seconds and expires an enabled decision within 60 seconds. Missing identity,
+offline startup, unsupported backends, and unavailable flags leave it off.
+These access checks are independent of optional telemetry and never prevent
+ordinary Terminal startup. The browser receives only the resolved boolean and a
+random, process-memory `authorityRevision`; it never receives principal fields,
+credentials, identity hashes, or grant diagnostics. The revision stays stable
+through polling, reconnects, transient retention, and renewed leases for the
+same authority. A verified principal crossover or actual revocation, denial,
+expiry, or sign-out rotates it before the new state is observable. Disabled
+responses carry the current retirement barrier, and repeated disabled polls do
+not rotate it. Browser draft stores use this opaque boundary to prevent text
+from crossing authorities without persisting it.
+
+After a successful check, timeout, network, or HTTP 5xx failures from credential
+or capability refresh may retain that exact grant only while its original lease
+and observed user credential remain unexpired. A transient failure never moves
+either expiry. Sign-out, credential expiry, API key/environment/tenant/user
+change, an authentication rejection, an explicit `assistant: false`, or a
+malformed/ambiguous response revokes the grant. Thus an offline first launch
+cannot invent eligibility, while a short outage does not interrupt an unchanged
+verified principal before the server-issued lease ends.
+
+Eligible internal users see a **Terminal | Assistant** switch, with Terminal
+selected initially. Assistant sends prompts and streams Sapiom responses in the
+selected project. Returning to a session reopens its OpenCode conversation;
+switching views detaches the display while execution continues. Connection errors
+offer **Reconnect**, which reloads history without resending accepted prompts.
+This first slice includes basic tool status; richer controls arrive separately.
+Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
+rejected send shows its error and keeps the selected view. Unsent chat text is
+keyed by authenticated principal and Studio session above the centre pane, so it
+survives Terminal/Assistant and session switches, reconnects, exited-session
+views, and temporary New Session or past-session review navigation. It is never
+persisted: actual Assistant-access retirement, authority crossover, sign-out,
+session deletion, and page/app reload clear the applicable in-memory draft.
+Same-authority renewals, polls, and reconnects retain it. Conversation view is
+a separate, unpersisted mount-local preference: Terminal is the initial/reset
+view, while a foreground CLI prompt accepted by Studio explicitly reveals it.
+Background actions keep the selected view. A failed UI access poll retains the
+open draft for at most 60 seconds after the last success; explicit
+revocation/sign-out takes effect immediately when observed. The host continues
+enforcing its own capability expiry independently.
+
+The current `@assistant-ui/react-opencode` integration stays behind
+`OpenCodeChat`, the host-to-UI adapter. The host exposes only the shared,
+strictly parsed transport-error contract; the adapter selects trusted static
+copy and maps its bounded actions to the existing sign-in, Settings, Terminal,
+or reconnect surfaces. Replacing the pinned UI library means replacing that
+adapter, not changing the host association/runtime protocol or adopting native
+events directly. Confirmed missing native history leaves the Studio session and
+record intact and opens Terminal; it never fabricates Continue/Resume or a new
+native conversation.
+
+The Assistant's model and remote MCP requests use a Studio-owned local bridge.
+Its short-lived runtime credential is separate from browser authentication;
+Studio adds the Sapiom key only when forwarding to the configured services.
+Production uses the Sapiom LLM gateway. Other environments must explicitly set
+`services.llm` to their gateway origin in the matching credentials-file environment
+entry; Studio never falls back from a custom environment to production.
+
+Studio owns each Assistant runtime for the authorized session and working
+directory. Browser detachment leaves it running; sign-out, access revocation,
+and Studio shutdown stop it. Runtime state is isolated by user, organization,
+session, and directory under `~/.sapiom/harness/opencode`. A process lock prevents
+two Studio hosts from opening the same runtime state concurrently.
+
+Transport failures use fixed, credential-free codes and copy. HTTP responses
+carry a nested typed error; an already-open event stream receives the same error
+as a host-generated `studio.error` before closing when possible. Native events
+cannot claim that host-only type. Ordinary native events require matching
+session IDs, including every nested ID. The only session-less native failure
+converted to a terminal Studio error is a Sapiom provider-auth error received
+from the currently bound runtime and authority with an exact authorized-directory
+envelope; unknown, conflicting, stale-runtime, and differently scoped events are
+dropped. Reconnect reattaches and reloads history; it never replays an accepted
+prompt or tool call.
+
+The Studio session record remains authoritative for session identity, project,
+and working directory. Its authority-scoped runtime directory owns a versioned
+`association.json` sidecar that maps that Studio session to one native
+conversation. The host serializes creation and atomic commit under the same
+lifecycle that owns the native runtime; browser mounts do not own the mapping.
+Retirement, sign-out, missing native history, and transient lookup failures do
+not delete or replace it. A native 404 is reported as confirmed unavailable,
+while network and other transport failures remain retryable; neither path
+creates a second conversation. There is no implicit legacy scan or cleanup in
+this correction: a future migration adapter must validate both identities,
+commit a versioned mapping atomically, preserve the old history until verified,
+and make cleanup an explicit post-migration operation.
+
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
 accounts clears this evidence. Retained indicators do not enable cloud runs.

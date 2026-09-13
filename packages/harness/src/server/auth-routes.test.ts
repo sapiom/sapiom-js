@@ -39,6 +39,11 @@ import {
   writeCredentials,
 } from "@sapiom/mcp/auth";
 
+vi.mock("../core/studio-credentials.js", () => ({
+  withStudioCredentialLock: (operation: () => Promise<unknown>) => operation(),
+  revokeStudioCredentials: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -297,6 +302,11 @@ describe("POST /api/auth/start — success", () => {
       tenantId: string;
       organizationName: string;
       apiKeyId: string;
+      studioCredentials?: {
+        accessToken: string;
+        refreshToken: string;
+        expiresAt: string;
+      };
     };
 
     let capturedResolve!: (v: AuthResult) => void;
@@ -334,11 +344,17 @@ describe("POST /api/auth/start — success", () => {
     expect(authState.get().authenticated).toBe(false);
 
     // Simulate the browser completing OAuth.
+    const studioCredentials = {
+      accessToken: "sat_user",
+      refreshToken: "srt_user",
+      expiresAt: "2026-10-01T00:00:00Z",
+    };
     capturedResolve({
       apiKey: "sk-fresh-key",
       tenantId: "tenant-1",
       organizationName: "Acme Corp",
       apiKeyId: "key-1",
+      studioCredentials,
     });
 
     // Give the async chain a tick to settle.
@@ -360,6 +376,7 @@ describe("POST /api/auth/start — success", () => {
         tenantId: "tenant-1",
         organizationName: "Acme Corp",
         apiKeyId: "key-1",
+        studioCredentials,
       },
     );
 

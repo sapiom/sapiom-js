@@ -1962,6 +1962,100 @@ test.describe("resizable panes", () => {
     expect((canvasAfter?.width ?? 0) - canvasBefore.width).toBeGreaterThan(60);
   });
 
+  test("dragging the handle while the Secrets tab is shown resizes from the pane's live width", async ({
+    page,
+  }) => {
+    // The board stays mounted but display:none behind Secrets, so the drag
+    // must measure the grid column, not the hidden board — otherwise the
+    // pane would snap to zero-plus-drag on the first move.
+    await page.getByTestId("right-tab-secrets").click();
+    await expect(page.getByTestId("right-panel-secrets")).toBeVisible();
+    const pane = page.locator(".right-pane");
+    const handle = page.getByTestId("resize-handle-canvas");
+    const before = await pane.boundingBox();
+    const handleBox = await handle.boundingBox();
+    if (!before || !handleBox) throw new Error("expected bounding boxes");
+
+    const y = handleBox.y + handleBox.height / 2;
+    await page.mouse.move(handleBox.x + handleBox.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 - 80, y, {
+      steps: 5,
+    });
+    await page.mouse.up();
+
+    const after = await pane.boundingBox();
+    const grew = (after?.width ?? 0) - before.width;
+    expect(grew).toBeGreaterThan(60);
+    expect(grew).toBeLessThan(100);
+  });
+
+  test("the canvas pane grows past 720px, stopping only at the terminal's floor, and a wide saved width does not overflow a narrower window", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1800, height: 800 });
+    const handle = page.getByTestId("resize-handle-canvas");
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("expected bounding box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x - 2000, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+
+    const app = page.locator(".app");
+    const terminalWidth =
+      (await page.locator(".center-pane").boundingBox())?.width ?? 0;
+    const canvasWide =
+      (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasWide).toBeGreaterThan(720);
+    expect(terminalWidth).toBeGreaterThanOrEqual(318); // CANVAS_MIN = 320 is also the terminal's floor
+    expect(terminalWidth).toBeLessThan(335);
+    // Overdrag past the terminal's floor must not bank invisible excess: the
+    // stored width is the rendered width, not the pointer's travel.
+    const stored = await page.evaluate(() =>
+      (JSON.parse(localStorage.getItem("sapiom-harness-pane-widths") ?? "{}") as { canvas?: number })
+        .canvas,
+    );
+    const renderedPane =
+      (await page.locator(".right-pane").boundingBox())?.width ?? 0;
+    expect(stored).toBeDefined();
+    expect(stored ?? 0).toBeGreaterThanOrEqual(Math.floor(renderedPane) - 1);
+    expect(stored ?? 0).toBeLessThanOrEqual(Math.ceil(renderedPane) + 1);
+
+    // The pinned width persists; shrinking the window must clamp the track
+    // rather than push the shell into horizontal overflow.
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await page.reload();
+    await expect(page.locator(".canvas-pane")).toBeVisible();
+    const narrowApp = await app.boundingBox();
+    if (!narrowApp) throw new Error("expected bounding box");
+    const scrollWidth = await app.evaluate((el) => el.scrollWidth);
+    expect(scrollWidth).toBeLessThanOrEqual(Math.ceil(narrowApp.width) + 1);
+    const canvasNarrow =
+      (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasNarrow).toBeLessThan(canvasWide);
+    const terminalNarrow =
+      (await page.locator(".center-pane").boundingBox())?.width ?? 0;
+    expect(terminalNarrow).toBeGreaterThanOrEqual(318);
+
+    // A short drag back right shrinks the pane immediately — the drag starts
+    // from the rendered edge, not from the wider stored number.
+    const narrowHandle = await handle.boundingBox();
+    if (!narrowHandle) throw new Error("expected bounding box");
+    await page.mouse.move(
+      narrowHandle.x + narrowHandle.width / 2,
+      narrowHandle.y + narrowHandle.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(narrowHandle.x + 100, narrowHandle.y + narrowHandle.height / 2, {
+      steps: 5,
+    });
+    await page.mouse.up();
+    const canvasShrunk =
+      (await page.locator(".canvas-pane").boundingBox())?.width ?? 0;
+    expect(canvasShrunk).toBeLessThan(canvasNarrow - 60);
+  });
+
   test("rail and canvas widths cannot be dragged past their min-width floors", async ({
     page,
   }) => {
