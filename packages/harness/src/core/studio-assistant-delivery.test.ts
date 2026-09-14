@@ -42,7 +42,7 @@ function fixture() {
     cwd: root,
     stateRoot: root,
     contextAuthorityScope: sourceScope,
-    model: "smart",
+    model: { providerID: "sapiom", modelID: "smart" },
     signal: abort.signal,
     isCurrent: () => !abort.signal.aborted,
     server: {

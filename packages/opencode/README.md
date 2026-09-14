@@ -15,7 +15,11 @@ await server.close();
 ```
 
 The bridge URL must be loopback. Only its revocable credential enters the model
-and remote MCP configuration. The runtime inherits an allowlist of platform
+and remote MCP configuration. The default model is `sapiom/gpt-luna`, using
+the bundled Responses provider at the bridge's `/llm/v1/responses` route.
+Low reasoning effort, encrypted reasoning history, and `store: false` keep
+reasoning and tool use compatible with the Sapiom router across turns.
+The runtime inherits an allowlist of platform
 environment variables; provider keys and the Electron esbuild pin are excluded
 from the runtime. A controlled native plugin removes the bridge configuration
 and runtime-admin credential from the runtime environment before tool execution,
@@ -88,11 +92,12 @@ restore the original saved contract before capture, including later tool-loop st
 
 Projection replaces only the exact terminal saved system, preserves native prefix
 bytes and mutates the existing system array. Per-request validation failures stay
-sticky until runtime disposal and are thrown at the provider boundary using the fixed
+sticky through the active native execution and are thrown at the provider boundary using the fixed
 message `Studio assistant context could not be verified`. Native serializes it as an
 `UnknownError` without triggering overload retries. Calling without an authority scope
-retains completion-only behavior. Launcher/host activation and the corrected artifact
-are separate stack prerequisites; this API alone does not enable accepted delivery.
+retains completion-only behavior. Scoped ordinary and synthetic requests require
+accepted context/v2 or valid inline context/v1; unclaimed helpers remain unchanged.
+Studio host activation and the corrected artifact are separate stack prerequisites.
 
 The managed launcher installs this consumer through its existing credential-isolation
 plugin when given `assistantContext: { authorityScope }`. The generated plugin uses
@@ -109,5 +114,8 @@ maps only that exact error shape inside the authorized conversation event scope.
 The full saved-text cache is bounded independently of successful capture proofs.
 Pending ordinary requests and native retries can reload evicted captures only
 when the saved bytes match their original fingerprint. Changing a saved user ID's
-context fails closed. Native session deletion retires its cached data and prevents
-delayed requests from reviving it.
+context fails closed during that execution. Native idle/deletion retires its capture
+and proof epoch, so saved history does not accumulate in process memory. Historical
+titles still verify their exact saved user. Deletion guards live only while a system
+callback is in flight and reject callbacks that race deletion. Ordinary callbacks
+from a retired execution require a new native messages capture.

@@ -153,7 +153,7 @@ beforeEach(async () => {
     };
     hosts.set(id, {
       contextAuthorityScope: "a".repeat(64),
-      model: "smart",
+      model: { providerID: "sapiom", modelID: "gpt-luna" },
       harnessSessionId: id,
       cwd: root,
       stateRoot,
@@ -416,6 +416,7 @@ describe("Studio-scoped OpenCode transport", () => {
     )!;
     expect(native.body).toEqual({
       ...body,
+      model: { providerID: "sapiom", modelID: "gpt-luna" },
       system: expect.stringContaining("StudioAssistantResult/v2:"),
     });
     expect(native.body).not.toHaveProperty("format");

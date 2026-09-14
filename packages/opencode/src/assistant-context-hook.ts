@@ -21,6 +21,11 @@ interface CapturedUser {
   system: unknown;
   failed: boolean;
 }
+interface CaptureEpoch {
+  captured: Map<string, CapturedUser>;
+  failures: Set<string>;
+  fingerprints: Map<string, string>;
+}
 /** The owned native runtime supplies the actual LLM request identity, including helpers. */
 export interface AssistantSystemTransformInput {
   sessionID?: string;
@@ -29,7 +34,14 @@ export interface AssistantSystemTransformInput {
 }
 interface StudioAssistantContextHooks {
   event?: (input: {
-    event: { type: string; properties?: { info?: { id?: unknown } } };
+    event: {
+      type: string;
+      properties?: {
+        info?: { id?: unknown };
+        sessionID?: unknown;
+        status?: { type?: unknown };
+      };
+    };
   }) => Promise<void>;
   "experimental.chat.messages.transform": (
     input: Record<string, never>,
@@ -56,18 +68,13 @@ export function createStudioAssistantContextHooks(
   if (authorityScope === undefined) return completion;
   contextCheck(/^[a-f0-9]{64}$/.test(authorityScope));
   const scope = authorityScope;
-  const captured = new Map<string, CapturedUser>();
-  const failures = new Set<string>();
-  const deleted = new Set<string>();
-  // Keep compact capture proofs beyond the bounded full-text cache. Provider
-  // retries can reconstruct the same user without another messages transform.
-  const fingerprints = new Map<string, string>();
+  // Retain proofs only for active native execution, not the saved session's lifetime.
+  const epochs = new Map<string, CaptureEpoch>();
+  const pending = new Map<string, Set<{ deleted: boolean }>>();
   const fingerprint = (system: unknown) =>
     assistantContentHash(
       system === undefined ? "undefined" : `string:${String(system)}`,
     );
-  const keyOf = (sessionID: string, messageID: string) =>
-    `${sessionID}:${messageID}`;
   const parse = (system: unknown, sessionID: string) =>
     parseStudioAssistantSystem(system, {
       authorityScope: scope,
@@ -79,24 +86,36 @@ export function createStudioAssistantContextHooks(
     if (
       info?.role !== "user" ||
       typeof info.id !== "string" ||
-      typeof info.sessionID !== "string" ||
-      deleted.has(info.sessionID)
+      typeof info.sessionID !== "string"
     )
       return;
+    let epoch = epochs.get(info.sessionID);
+    if (!epoch) {
+      epoch = {
+        captured: new Map(),
+        failures: new Set(),
+        fingerprints: new Map(),
+      };
+      epochs.set(info.sessionID, epoch);
+    }
+    const { captured, failures, fingerprints } = epoch;
+    const key = info.id;
     let failed = false;
     try {
       // A failed completion restoration must not turn required continuation into generic work.
       if (isSyntheticContinuation(message) && info.system === undefined)
         throw new AssistantContextError();
-      parse(info.system, info.sessionID);
-      const key = keyOf(info.sessionID, info.id);
+      const parsed = parse(info.system, info.sessionID);
+      if (!isCompactionControl(message))
+        contextCheck(
+          parsed.kind === "accepted-v2" || parsed.kind === "legacy-inline-v1",
+        );
       const digest = fingerprint(info.system);
       contextCheck(!fingerprints.has(key) || fingerprints.get(key) === digest);
       fingerprints.set(key, digest);
     } catch {
       failed = true;
     }
-    const key = keyOf(info.sessionID, info.id);
     if (failed) failures.add(key);
     captured.delete(key);
     captured.set(key, {
@@ -111,8 +130,9 @@ export function createStudioAssistantContextHooks(
   async function savedUser(
     sessionID: string,
     messageID: string,
+    epoch?: CaptureEpoch,
   ): Promise<CapturedUser | undefined> {
-    const active = captured.get(keyOf(sessionID, messageID));
+    const active = epoch?.captured.get(messageID);
     if (active?.messageID === messageID) return active;
     // Title generation can precede messages.transform, or finish after a newer turn.
     // The native request ID selects its own saved user, never the latest capture.
@@ -147,12 +167,19 @@ export function createStudioAssistantContextHooks(
 
   return {
     async event({ event }) {
-      const id = event.properties?.info?.id;
-      if (event.type !== "session.deleted" || typeof id !== "string") return;
-      deleted.add(id);
-      for (const keys of [captured, fingerprints, failures])
-        for (const key of keys.keys())
-          if (key.startsWith(`${id}:`)) keys.delete(key);
+      const deleted = event.type === "session.deleted";
+      const idle =
+        event.type === "session.idle" ||
+        (event.type === "session.status" &&
+          event.properties?.status?.type === "idle");
+      const id = deleted
+        ? event.properties?.info?.id
+        : event.properties?.sessionID;
+      if ((!deleted && !idle) || typeof id !== "string") return;
+      epochs.delete(id);
+      // Only in-flight callbacks need a deletion guard; no permanent tombstone table.
+      if (deleted)
+        for (const guard of pending.get(id) ?? []) guard.deleted = true;
     },
     async "experimental.chat.messages.transform"(
       input: Record<string, never>,
@@ -172,6 +199,8 @@ export function createStudioAssistantContextHooks(
       input: AssistantSystemTransformInput,
       output: { system: string[] },
     ): Promise<void> {
+      const guard = { deleted: false };
+      let requests: Set<typeof guard> | undefined;
       try {
         if (!input.sessionID || !input.messageID || !input.agent) {
           contextCheck(!output.system.some(claimed));
@@ -181,25 +210,30 @@ export function createStudioAssistantContextHooks(
           /^ses_[A-Za-z0-9_-]{1,128}$/.test(input.sessionID) &&
             /^msg_[A-Za-z0-9_-]{1,128}$/.test(input.messageID),
         );
-        const key = keyOf(input.sessionID, input.messageID);
-        contextCheck(!deleted.has(input.sessionID) && !failures.has(key));
+        const key = input.messageID;
+        const epoch = epochs.get(input.sessionID);
+        contextCheck(!epoch?.failures.has(key));
         const helper = ["title", "compaction", "project-copy-name"].includes(
           input.agent,
         );
-        if (!captured.has(key)) {
+        if (!epoch?.captured.has(key)) {
           if (helper && !output.system.some(claimed)) return;
-          contextCheck(helper || fingerprints.has(key));
+          contextCheck(helper || epoch?.fingerprints.has(key));
         }
-        const saved = await savedUser(input.sessionID, input.messageID);
-        contextCheck(!deleted.has(input.sessionID) && !failures.has(key));
+        requests = pending.get(input.sessionID) ?? new Set();
+        pending.set(input.sessionID, requests);
+        requests.add(guard);
+        const saved = await savedUser(input.sessionID, input.messageID, epoch);
+        contextCheck(!guard.deleted && !epoch?.failures.has(key));
+        contextCheck(helper || epochs.get(input.sessionID) === epoch);
         if (!saved) {
           contextCheck(!output.system.some(claimed));
           return;
         }
         contextCheck(!saved.failed);
         contextCheck(
-          !fingerprints.has(key) ||
-            fingerprints.get(key) === fingerprint(saved.system),
+          !epoch?.fingerprints.has(key) ||
+            epoch.fingerprints.get(key) === fingerprint(saved.system),
         );
         const parsed = parse(saved.system, input.sessionID);
         if (parsed.kind === "generic") return;
@@ -221,6 +255,10 @@ export function createStudioAssistantContextHooks(
         );
       } catch {
         throw new AssistantContextError();
+      } finally {
+        requests?.delete(guard);
+        if (requests?.size === 0 && input.sessionID)
+          pending.delete(input.sessionID);
       }
     },
   };
