@@ -1,0 +1,15 @@
+{
+  "name": "@sapiom/example-mock-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local mock of the x402 demo server for the axios/fetch/node-http examples",
+  "scripts": {
+    "start": "npx tsx index.ts",
+    "typecheck": "npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.2"
+  }
+}
