@@ -19,6 +19,7 @@ import {
 import * as esbuild from "esbuild";
 
 import { describeBundleFailure } from "../bundle-error.js";
+import { bundleFileUrl } from "../bundle-url.js";
 import { AgentOperationError } from "../errors.js";
 
 const LOCAL_SDK_VERSION = "0.0.0-local";
@@ -67,7 +68,7 @@ export async function loadDefinition(
     }
 
     const mod: Record<string, unknown> = await import(
-      `file://${bundlePath}?t=${Date.now()}`
+      bundleFileUrl(bundlePath)
     );
     const defs = Object.values(mod).filter(isAgentDefinition);
     if (defs.length === 0) {
