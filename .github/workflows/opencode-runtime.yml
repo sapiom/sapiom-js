@@ -31,8 +31,7 @@ jobs:
       - run: python3 scripts/opencode-runtime/build.py --work-dir "$RUNNER_TEMP/opencode-build"
       - run: |
           python3 scripts/opencode-runtime/pack.py --work-dir "$RUNNER_TEMP/opencode-build" --output-dir "$RUNNER_TEMP/runtime-artifacts" --download-cache "$RUNNER_TEMP/opencode-build/downloads"
-          tar -xOf "$RUNNER_TEMP/runtime-artifacts/opencode-ai-1.18.29-sapiom.3328.2.tgz" package/postinstall.mjs > "$RUNNER_TEMP/postinstall.mjs"
-          node scripts/opencode-runtime/installer.test.mjs "$RUNNER_TEMP/postinstall.mjs"
+          node scripts/opencode-runtime/installer.test.mjs "$RUNNER_TEMP/runtime-artifacts/postinstall.mjs"
       - uses: actions/upload-artifact@v4
         with:
           name: opencode-runtime-candidate

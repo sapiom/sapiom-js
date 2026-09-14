@@ -2,7 +2,7 @@
 +++ b/packages/opencode/script/postinstall.mjs
 @@ -1,6 +1,7 @@
  #!/usr/bin/env node
- 
+
  import childProcess from "child_process"
 +import { createHash } from "node:crypto"
  import fs from "fs"
@@ -11,7 +11,7 @@
 @@ -123,28 +124,59 @@
    return binaryPath
  }
- 
+
 +class RuntimeArtifactError extends Error {}
 +
 +function pinnedArtifact(name) {
@@ -39,7 +39,7 @@
 +  ].find((file) => file && path.basename(file) === "npm-cli.js" && fs.existsSync(file))
 +  if (!npmCLI && platform === "windows")
 +    throw new RuntimeArtifactError("Could not locate the npm CLI for the pinned OpenCode runtime install.")
- 
+
    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-install-"))
    try {
      const result = childProcess.spawnSync(
@@ -59,7 +59,7 @@
      fs.rmSync(temp, { recursive: true, force: true })
    }
  }
- 
+
 -function copyBinary(source, target) {
 -  if (!fs.existsSync(source)) throw new Error(`Binary not found at ${source}`)
 +function copyBinary(name, source, target) {

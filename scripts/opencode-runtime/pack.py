@@ -108,6 +108,7 @@ def pack(work, output, cache):
     artifacts["opencode-ai"] = archive(output / f"opencode-ai-{version}.tgz", files)
     result = {**provenance, "baseURL": base, "artifacts": artifacts}
     (output / "release-proof.json").write_bytes(encoded(result))
+    (output / "postinstall.mjs").write_bytes(files["postinstall.mjs"][0])
     print(json.dumps({"proof": str(output / "release-proof.json"), "artifacts": len(artifacts)}))
     return result
 
