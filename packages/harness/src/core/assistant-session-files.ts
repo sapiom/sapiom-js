@@ -68,12 +68,15 @@ export async function readAssistantJson(
       await handle.close();
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return file.endsWith(".previous")
+        ? null
+        : readAssistantJson(`${file}.previous`, limit);
     throw new AssistantStorageError();
   }
 }
 
-/** fsync before rename; a failed write never truncates the previous checkpoint. */
+/** Caller holds the record lock. Keep a durable prior generation through publication failure. */
 export async function writeAssistantJson(
   directory: string,
   name: string,
@@ -81,6 +84,12 @@ export async function writeAssistantJson(
   signal?: AbortSignal,
 ): Promise<void> {
   const temporary = join(directory, `${name}.pending-${randomUUID()}`);
+  const destination = join(directory, name);
+  const previous = `${destination}.previous`;
+  const backup = `${temporary}.backup`,
+    rollback = `${temporary}.rollback`;
+  let retained = false,
+    published = false;
   try {
     const file = await fs.open(temporary, "wx", 0o600);
     try {
@@ -90,10 +99,36 @@ export async function writeAssistantJson(
       await file.close();
     }
     signal?.throwIfAborted();
-    await fs.rename(temporary, join(directory, name));
+    try {
+      await fs.link(destination, backup);
+      retained = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (retained) {
+      await fs.rename(backup, previous);
+      await syncDirectory(directory);
+    }
+    signal?.throwIfAborted();
+    await fs.rename(temporary, destination);
+    published = true;
     await syncDirectory(directory);
+  } catch (error) {
+    if (published && retained) {
+      // The backup remains recoverable even if the filesystem also refuses rollback.
+      try {
+        await fs.link(previous, rollback);
+        await fs.rename(rollback, destination);
+        await syncDirectory(directory);
+      } catch {
+        /* Preserve both generations for a later successful read. */
+      }
+    }
+    throw error;
   } finally {
-    await fs.rm(temporary, { force: true });
+    await Promise.all(
+      [temporary, backup, rollback].map((file) => fs.rm(file, { force: true })),
+    );
   }
 }
 
