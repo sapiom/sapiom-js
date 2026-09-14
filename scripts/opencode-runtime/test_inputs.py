@@ -2,7 +2,9 @@ import hashlib
 import io
 import tarfile
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 from inputs import catalog, compiler, download, extract_source, member_bytes
@@ -56,6 +58,26 @@ class InputBoundaryTests(unittest.TestCase):
         target.symlink_to(real)
         with self.assertRaises(RuntimeError):
             compiler({"bytes": 7, "sha256": hashlib.sha256(b"trusted").hexdigest()}, target, self.root)
+
+    def test_concurrent_downloads_publish_one_verified_artifact(self):
+        item = {"url": "https://example.invalid/pinned", "sha256": hashlib.sha256(b"trusted").hexdigest()}
+        barrier = threading.Barrier(2, timeout=2)
+
+        class Response(io.BytesIO):
+            url = item["url"]
+
+            def read(self, size=-1):
+                if self.tell() == 0:
+                    barrier.wait()
+                return super().read(size)
+
+        with patch("urllib.request.urlopen", side_effect=lambda *a, **kw: Response(b"trusted")):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(download, item, self.root) for _ in range(2)]
+                results = [future.result() for future in futures]
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0].read_bytes(), b"trusted")
+        self.assertEqual(list(self.root.iterdir()), [results[0]])
 
     def test_preserves_internal_source_links_after_regular_files(self):
         archive = self.archive([("source/icon", b"", "assets/icon"),

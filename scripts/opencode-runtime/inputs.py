@@ -2,9 +2,11 @@
 import base64
 import hashlib
 import json
+import os
 import shutil
 import stat
 import tarfile
+import tempfile
 import urllib.request
 from pathlib import Path, PurePosixPath
 
@@ -40,18 +42,21 @@ def download(item, cache):
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / hashlib.sha256(item["url"].encode()).hexdigest()
     if not target.exists() and not target.is_symlink():
-        temporary = target.with_suffix(".pending")
+        descriptor, name = tempfile.mkstemp(prefix=target.name + ".pending-", dir=cache)
+        temporary = Path(name)
         try:
-            with urllib.request.urlopen(item["url"], timeout=90) as response:
+            with os.fdopen(descriptor, "wb") as output, urllib.request.urlopen(item["url"], timeout=90) as response:
                 require(response.url.startswith("https://"), "Insecure redirect")
-                with temporary.open("xb") as output:
-                    total = 0
-                    for chunk in iter(lambda: response.read(1024 * 1024), b""):
-                        total += len(chunk)
-                        require(total <= 512 * 1024 * 1024, "Oversized archive")
-                        output.write(chunk)
+                total = 0
+                for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                    total += len(chunk)
+                    require(total <= 512 * 1024 * 1024, "Oversized archive")
+                    output.write(chunk)
             verified(temporary, item)
-            temporary.rename(target)
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                pass  # Verify the winner below; never replace another cached input.
         finally:
             temporary.unlink(missing_ok=True)
     return verified(target, item)
