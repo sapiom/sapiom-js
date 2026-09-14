@@ -375,7 +375,7 @@ describe("createRestRouter", () => {
 
   it("starts only the known dormant Terminal without browser launch overrides", async () => {
     const sessionManager = fakeSessionManager([exitedSession()]);
-    sessionManager.activateDormant.mockResolvedValue({ ...exitedSession(), status: "running" });
+    vi.mocked(sessionManager.activateDormant).mockResolvedValue({ ...exitedSession(), status: "running" });
     start({ sessionManager });
     const request = (body: unknown = {}) => fetch(`${baseUrl}/sessions/sess-1/terminal/start`, { method: "POST", headers: { ...TOKEN_HEADER, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     expect((await request({ cwd: "/other" })).status).toBe(400);
@@ -387,10 +387,10 @@ describe("createRestRouter", () => {
     expect(sessionManager.create).not.toHaveBeenCalled();
     expect(sessionManager.resume).not.toHaveBeenCalled();
     for (const error of [new SessionNotDormantError(), new SessionPreparationCancelledError(), new SessionCleanupUnconfirmedError()]) {
-      sessionManager.activateDormant.mockRejectedValueOnce(error);
+      vi.mocked(sessionManager.activateDormant).mockRejectedValueOnce(error);
       expect((await request()).status).toBe(409);
     }
-    sessionManager.activateDormant.mockRejectedValueOnce(new UnknownSessionError("sess-1"));
+    vi.mocked(sessionManager.activateDormant).mockRejectedValueOnce(new UnknownSessionError("sess-1"));
     expect((await request()).status).toBe(404);
   });
 
