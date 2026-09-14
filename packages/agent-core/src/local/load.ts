@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   type AgentDefinition,
@@ -67,7 +68,7 @@ export async function loadDefinition(
     }
 
     const mod: Record<string, unknown> = await import(
-      `file://${bundlePath}?t=${Date.now()}`
+      `${pathToFileURL(bundlePath).href}?t=${Date.now()}`
     );
     const defs = Object.values(mod).filter(isAgentDefinition);
     if (defs.length === 0) {
