@@ -106,6 +106,13 @@ the extension boundary for project rules, skills and lifecycle integration.
 Those loaders are separate work; unavailable guidance and tools are identified
 as unavailable rather than claimed as loaded or connected.
 
+An unconfirmed response keeps the answer and tool results visible as **Stopped**.
+Studio hides its internal completion markers even if the model supplies an
+incorrect turn ID, including extra markers inside a confirmed answer.
+Literal prose and invalid marker syntax remain visible. Incomplete marker
+candidates are hidden while streaming and restored when the response ends.
+After automatic answer recovery, Studio reconnects the conversation's event
+stream to reconcile history and status while keeping the chat and draft visible.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
 keyed by authenticated principal and Studio session above the centre pane, so it
@@ -134,9 +141,13 @@ native conversation.
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
 Studio adds the Sapiom key only when forwarding to the configured services.
-Production uses the Sapiom LLM gateway. Other environments must explicitly set
-`services.llm` to their gateway origin in the matching credentials-file environment
-entry; Studio never falls back from a custom environment to production.
+Production sends Responses API requests to `https://router.sapiom.ai/v1/responses`
+with the explicit `gpt-luna` model and the signed-in account's `x-api-key`. Luna uses
+low reasoning effort and streams both tool calls and answers. Responses are not
+stored by the provider; encrypted reasoning travels with native conversation
+history. Other environments must explicitly set `services.llm` to a router origin
+that supports `/v1/responses` in the matching credentials-file environment entry;
+Studio never falls back from a custom environment to production.
 
 Studio owns each Assistant runtime for the authorized session and working
 directory. Browser detachment leaves it running; sign-out, access revocation,
