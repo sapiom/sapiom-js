@@ -356,13 +356,22 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
   // public npm. Skipped for the default registry so a real customer's project
   // stays clean. Only meaningful when scaffold itself resolved the versions;
   // an explicit `opts.versions` caller manages its own registry.
+  //
+  // Appends to (rather than overwrites) any .npmrc the template already
+  // produced from a `_npmrc` file, so template-authored registry config,
+  // auth tokens, etc. survive alongside the dev-loop registry line.
   if (!opts.versions) {
     const sapiomRegistry = registryFor("@sapiom/tools");
     if (sapiomRegistry !== DEFAULT_REGISTRY) {
-      writeFileSync(
-        path.join(targetDir, ".npmrc"),
-        `@sapiom:registry=${sapiomRegistry}\n`,
-      );
+      const npmrcPath = path.join(targetDir, ".npmrc");
+      const registryLine = `@sapiom:registry=${sapiomRegistry}\n`;
+      const existing = existsSync(npmrcPath)
+        ? readFileSync(npmrcPath, "utf8")
+        : "";
+      if (!existing.includes("@sapiom:registry=")) {
+        const separator = existing && !existing.endsWith("\n") ? "\n" : "";
+        writeFileSync(npmrcPath, existing + separator + registryLine);
+      }
     }
   }
 
