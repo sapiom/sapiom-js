@@ -13,6 +13,7 @@
  *
  * Run: npm start
  */
+import { assertDemoServerReachable } from "../shared/check-demo-server";
 import { createClient, config } from "./client";
 
 // ANSI colors for terminal output
@@ -77,6 +78,8 @@ async function main() {
   logInfo("• Free endpoints (no payment required)");
   logInfo("• Authorization-only endpoints");
   logInfo("• Usage tracking in Sapiom dashboard");
+
+  await assertDemoServerReachable(config.dummyServerUrl);
 
   // Create client
   const client = createClient();
