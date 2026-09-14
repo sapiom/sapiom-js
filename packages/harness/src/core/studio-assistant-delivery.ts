@@ -16,6 +16,7 @@ import {
 import { assistantContextUnavailable } from "./studio-assistant-context.js";
 import {
   acceptedAssistantRecord,
+  validateAssistantMaterials,
   type AssistantContextCandidate,
 } from "./assistant-sources.js";
 import type {
@@ -119,7 +120,7 @@ export function createAssistantContextDelivery(
       .storeFor(hosted)
       .readAccepted(ref, authority(hosted, ref.conversationId), signal);
     await current(hosted, signal);
-    const { accepted, sources } = retained;
+    const { accepted } = retained;
     validateAcceptedAssistantContext(accepted);
     checkFacts(hosted, accepted);
     if (
@@ -129,6 +130,15 @@ export function createAssistantContextDelivery(
       throw assistantContextUnavailable();
     await options.prepareRuntime(hosted, retained, signal);
     await current(hosted, signal);
+    return materializedSystem(hosted, retained, ref, token, completionSystem);
+  }
+  function materializedSystem(
+    hosted: HostedOpenCode,
+    { accepted, sources }: RetainedAssistantContext,
+    ref: AcceptedContextRef,
+    token: string,
+    completionSystem = studioAssistantCompletionSystem(token),
+  ) {
     const inline = accepted.instructionSet.sources.flatMap((source) => {
       if (source.status !== "available" || source.format === "skill-package")
         return [];
@@ -192,6 +202,20 @@ export function createAssistantContextDelivery(
           randomUUID(),
         );
         checkFacts(hosted, accepted);
+        // UUID attempts have fixed width; validate actual envelope overhead before retention.
+        materializedSystem(
+          hosted,
+          {
+            accepted,
+            sources: validateAssistantMaterials(
+              candidate.instructionSet,
+              candidate.materials,
+              hosted.contextAuthorityScope,
+            ),
+          },
+          referenceOf(accepted),
+          accepted.acceptanceId,
+        );
         await options
           .storeFor(hosted)
           .retainAccepted(
