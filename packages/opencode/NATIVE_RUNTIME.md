@@ -62,3 +62,13 @@ remains until the existing managed launcher explicitly runs postinstall.
 baseline retry, cross-device copying and failure boundaries. These simulations
 are separate from actual installation and native execution on target operating
 systems. The CI artifact contains an explicit candidate proof, not a publishing step.
+
+The platform workflow executes Linux, macOS and Windows on both x64 and arm64.
+Each job verifies every candidate archive, rehosts only root metadata URLs on a
+loopback fixture, and exercises pnpm 10.34.3 fresh install, disabled-script/manual
+bootstrap, wrong hash, missing hash and missing archive. It then runs the production
+context plugin against the installed binary and accepted-source filesystem tests.
+`native-platform-<runner>` records the selected binary hash/version, root archive
+hash, requested archives and command results. Foreign-platform simulations and a
+green cross-compile are insufficient: all target execution gates must pass before
+claiming support. A failed durability gate remains a release blocker.
