@@ -168,8 +168,26 @@ describe("request-bound native Assistant projection", () => {
     });
     release();
     await expect(delayed).rejects.toThrow(AssistantContextError);
-    await f.messages([user("msg_first", save())]);
     await expect(f.system(save())).rejects.toThrow(AssistantContextError);
+  });
+  it("releases completed execution proofs while allowing verified historical titles and new native work", async () => {
+    const f = fixture([user("msg_first", save())]);
+    await f.messages([user("msg_first", save())]);
+    await f.hooks.event!({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_fixture", status: { type: "idle" } },
+      },
+    });
+    await expect(f.system(save())).rejects.toThrow(AssistantContextError);
+    expect(f.load).not.toHaveBeenCalled();
+    expect(
+      (await f.system(save(), input("msg_first", "ses_fixture", "title")))[2],
+    ).toBe("Profile\r\nexact bytes");
+    await f.messages([user("msg_next", save())]);
+    expect((await f.system(save(), input("msg_next")))[2]).toBe(
+      "Profile\r\nexact bytes",
+    );
   });
   it("permits a first title before message capture using its exact persisted user", async () => {
     const saved = save();
