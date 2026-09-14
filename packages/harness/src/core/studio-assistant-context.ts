@@ -75,6 +75,8 @@ export async function resolveStudioAssistantContext(input: {
     boundAgentPath: string | null;
   };
   selectedAgentPath?: string | null;
+  /** Trusted active project roots; omitted for a single-cwd context. */
+  projectRoots?: readonly string[];
   workflows: readonly WorkflowInfo[];
   environment: string;
   capabilities: AssistantCapability[];
@@ -86,12 +88,22 @@ export async function resolveStudioAssistantContext(input: {
     (await realpath(session.cwd).catch(() => null)) !== hosted.cwd
   )
     throw assistantContextUnavailable();
+  const roots = (
+    await Promise.all(
+      (input.projectRoots ?? [hosted.cwd]).map((path) =>
+        realpath(path).catch(() => null),
+      ),
+    )
+  ).filter((path): path is string => path !== null);
+  const authorizedPath = (path: string) =>
+    roots.some((root) => within(root, path));
+  if (!authorizedPath(hosted.cwd)) throw assistantContextUnavailable();
   const agents: AssistantContextAgent[] = [];
   for (const workflow of input.workflows) {
     const path = await realpath(workflow.path).catch(() => null);
     if (
       !path ||
-      !within(hosted.cwd, path) ||
+      !authorizedPath(path) ||
       agents.some((agent) => agent.path === path)
     )
       continue;
@@ -110,10 +122,9 @@ export async function resolveStudioAssistantContext(input: {
     if (path === null) return { status: "none" };
     if (!isAbsolute(path)) throw assistantContextUnavailable();
     const canonical = await realpath(path).catch(() => null);
-    // Existing aliases are safe only when their destination is in this cwd.
+    // Existing aliases are safe only inside the trusted active project roots.
     // A missing target must itself remain within that authorized scope.
-    if (!within(hosted.cwd, canonical ?? path))
-      throw assistantContextUnavailable();
+    if (!authorizedPath(canonical ?? path)) throw assistantContextUnavailable();
     const agent = agents.find((agent) => agent.path === canonical);
     return agent
       ? { status: "available", agent }

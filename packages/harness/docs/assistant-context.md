@@ -15,9 +15,12 @@ not supply authoritative context to conversations sharing a directory.
 - Capability availability and instruction provenance, revisions and load status.
 
 The browser can submit a selected agent path as intent. The host validates it
-against the authorized canonical cwd and registry; it does not accept arbitrary
-system prompts, workspace overrides or capability claims. Definition IDs are
+against the active canonical roots of its server-owned project and registry.
+It does not accept arbitrary system prompts, workspace overrides or capability claims. Definition IDs are
 included only when the registry marks their cloud definition visible.
+Sibling roots share project context while the native process keeps its original
+cwd. Missing roots, escaping aliases, and changed session/project authority fail
+validation. Agent Map sends an explicit empty agent selection.
 
 Selection is sampled at Send. `available`, `none`, `not-provided` and `unavailable`
 are distinct states. Only an omitted selection falls back to the conversation's
