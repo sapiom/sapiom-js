@@ -58,3 +58,18 @@ generated supervisor needs no source loader and runs under Electron with
 `pnpm` must allow the `opencode-ai` install script so the platform binary exists
 before Studio starts. The workspace allowlist includes it. No UI is bundled in
 this package.
+
+## Accepted Studio context
+
+The exported context contract validates host-owned accepted records before storage
+or native prompt composition. Source hashes cover exact bytes (including CRLF),
+while descriptor revisions cover identity, provenance, applicability and content.
+An instruction set retains explicit scope, skill and MCP manifests even when empty.
+Its accepted reference binds the immutable facts and instruction set to one native
+conversation and a stable, secret-free host authority scope. It is not an access grant.
+
+Required sources must be available; an optional source's recorded absence is explicit.
+Validation rejects unknown fields, foreign references and inconsistent revisions.
+The 4 MiB serialized-record, 4,096-entry and 24-level limits reject oversized data;
+they never truncate required guidance. This contract does not enable context delivery,
+source fetching or caching on its own.
