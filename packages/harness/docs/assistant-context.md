@@ -122,3 +122,23 @@ legacy work fails clearly. The coordinator owns no dispatch lock or native reque
 the existing admission and recovery owners are connected in the activation increment.
 Runtime readiness is a required injected contract, not a claim that package-generation
 acquisition or refresh is implemented by this service.
+
+## Retained provider boundary
+
+`createAssistantContextCandidateResolver` adapts the existing authorized selection,
+profile and capability resolution into retained source materials. Its optional
+guidance loader returns `{ metadata, version, material }`; mutable locations cannot
+stand in for complete packages. The default project/skill sources still explicitly
+record that their loaders are not connected. Real acquisition belongs to those loaders.
+
+Admission cancellation reaches profile overrides/fetch, workflow/capability discovery
+and guidance providers. Caller cancellation propagates; ordinary network/empty-profile
+failures retain the bundled offline policy and explicit fallback provenance. A fallback
+and an intentionally bundled profile can share exact content while having different
+source revisions. Legacy inline records can carry that optional, validated provenance.
+
+`assertAssistantRuntimeReady` currently supports verified retained text and catalogs.
+It rejects accepted skill packages until a runtime can prove their managed generation
+is materialized, including packages originally marked optional. Existing host startup
+skill containment remains in force. This boundary does not implement generation
+acquisition, refresh or lifecycle retention.

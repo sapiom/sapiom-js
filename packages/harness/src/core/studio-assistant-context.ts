@@ -30,6 +30,7 @@ export interface AssistantGuidance {
   text?: string;
   location?: string;
   reason?: string;
+  fallback?: { fromSource: string; reason: string };
 }
 export interface AssistantCapability {
   name: string;
@@ -50,6 +51,7 @@ export interface StudioAssistantContext {
 export type ResolveAssistantContext = (
   hosted: HostedOpenCode,
   selectedAgentPath?: string | null,
+  signal?: AbortSignal,
 ) => Promise<StudioAssistantContext>;
 
 export const assistantContextDigest = (value: string): string =>
@@ -207,6 +209,10 @@ const snapshotSchema = z
           text: z.string().optional(),
           location: z.string().optional(),
           reason: z.string().optional(),
+          fallback: z
+            .object({ fromSource: z.string(), reason: z.string() })
+            .strict()
+            .optional(),
         })
         .strict(),
     ),

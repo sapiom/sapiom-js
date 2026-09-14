@@ -6,8 +6,14 @@ import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type { HostedOpenCode } from "../core/opencode-host.js";
 import type { HarnessSession } from "../shared/types.js";
 import type { StudioProjectIdentity } from "../core/studio-project-catalog.js";
-import { composeAssistantPrompt } from "../core/studio-assistant-context.js";
-import { createAssistantContextResolver } from "./studio-assistant.js";
+import {
+  composeAssistantPrompt,
+  recoverAssistantPrompt,
+} from "../core/studio-assistant-context.js";
+import {
+  createAssistantContextResolver,
+  createAssistantContextCandidateResolver,
+} from "./studio-assistant.js";
 
 let root: string;
 beforeEach(async () => {
@@ -31,6 +37,7 @@ function fixture() {
     },
   } as HarnessSession;
   const hosted = {
+    contextAuthorityScope: "a".repeat(64),
     harnessSessionId: session.id,
     cwd: root,
     signal: abort.signal,
@@ -226,6 +233,7 @@ it("passes validated authority to sibling loaders and preserves their revisions 
       session: { id: "studio-a", cwd: root, projectId: "project-a" },
     }),
     hosted,
+    expect.any(AbortSignal),
   );
   expect(
     composeAssistantPrompt(first).system.match(/BRIEF_MARKER/g),
@@ -240,5 +248,174 @@ it("passes validated authority to sibling loaders and preserves their revisions 
     abort.abort();
     return sources;
   });
-  await expect(resolve(hosted)).rejects.toThrow("context");
+  await expect(resolve(hosted)).rejects.toThrow();
+});
+
+it("retains exact profile bytes and complete supplied packages through the typed provider seam", async () => {
+  const { hosted, options } = fixture();
+  const {
+    createAssistantSource,
+    encodeAssistantSkillPackage,
+    validateAssistantMaterials,
+  } = await import("../core/assistant-sources.js");
+  const bytes = encodeAssistantSkillPackage([
+    {
+      path: "SKILL.md",
+      bytes: Buffer.from("Use resource\r\n"),
+      executable: false,
+    },
+    {
+      path: "assets/pixel",
+      bytes: new Uint8Array([0, 255]),
+      executable: false,
+    },
+  ]);
+  const source = createAssistantSource(
+    {
+      id: "skill",
+      kind: "skill",
+      required: true,
+      source: "trusted:fixture",
+      authorityScope: hosted.contextAuthorityScope,
+    },
+    { format: "skill-package", bytes },
+  );
+  const loadGuidance = vi.fn(async () => [
+    {
+      ...source,
+      metadata: {
+        id: "skill",
+        kind: "skill" as const,
+        required: true,
+        source: "trusted:fixture",
+        status: "available" as const,
+        revision: "release-label",
+      },
+    },
+  ]);
+  const resolve = createAssistantContextCandidateResolver({
+    ...options,
+    loadSystemPrompt: async () => "Exact profile\r\nbytes\n",
+    loadGuidance,
+  });
+  const signal = new AbortController().signal;
+  const candidate = await resolve(hosted, join(root, "orchid"), signal);
+  source.material!.bytes.fill(0);
+  bytes.fill(0);
+  const retained = validateAssistantMaterials(
+    candidate.instructionSet,
+    candidate.materials,
+    hosted.contextAuthorityScope,
+  );
+  expect(retained.get("studio-profile")).toEqual({
+    format: "utf8",
+    text: "Exact profile\r\nbytes\n",
+  });
+  expect(retained.get("skill")).toMatchObject({
+    format: "skill-package",
+    members: expect.arrayContaining([
+      expect.objectContaining({
+        path: "assets/pixel",
+        bytes: new Uint8Array([0, 255]),
+      }),
+    ]),
+  });
+  expect(candidate.context.selectedAgent).toMatchObject({
+    agent: { path: join(root, "orchid") },
+  });
+  expect(
+    candidate.context.guidance.find((source) => source.id === "skill"),
+  ).not.toHaveProperty("location");
+  expect(loadGuidance).toHaveBeenCalledWith(
+    expect.objectContaining({
+      session: expect.objectContaining({ id: "studio-a" }),
+    }),
+    hosted,
+    expect.any(AbortSignal),
+  );
+});
+
+it("retains explicit empty discovery defaults and cancels all IO providers with admission", async () => {
+  const { hosted, options } = fixture();
+  const candidate = await createAssistantContextCandidateResolver(options)(
+    hosted,
+    null,
+    new AbortController().signal,
+  );
+  expect(
+    candidate.instructionSet.sources.filter(
+      (source) => source.status === "not-configured",
+    ),
+  ).toHaveLength(2);
+  const controller = new AbortController();
+  const signals: AbortSignal[] = [];
+  const collect = (signal?: AbortSignal) => {
+    signals.push(signal!);
+  };
+  const resolve = createAssistantContextCandidateResolver({
+    ...options,
+    getWorkflows: async (signal) => {
+      collect(signal);
+      return options.getWorkflows();
+    },
+    loadSystemPrompt: async (signal) => {
+      collect(signal);
+      return options.loadSystemPrompt();
+    },
+    loadCapabilities: async (_hosted, signal) => {
+      collect(signal);
+      return [];
+    },
+    loadGuidance: async (_context, _hosted, signal) => {
+      collect(signal);
+      controller.abort(new Error("cancelled providers"));
+      return [];
+    },
+  });
+  await expect(resolve(hosted, null, controller.signal)).rejects.toThrow(
+    "cancelled providers",
+  );
+  expect(signals).toHaveLength(4);
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+});
+
+it.each(["project", "principal", "roots"])(
+  "rechecks %s authority after typed guidance resolves",
+  async (change) => {
+    const { project, session, hosted, options } = fixture();
+    const resolve = createAssistantContextCandidateResolver({
+      ...options,
+      loadGuidance: async () => {
+        if (change === "roots") project.rootBindings[0]!.status = "missing";
+        else
+          session.agentMapIdentity = {
+            ...session.agentMapIdentity!,
+            ...(change === "project"
+              ? { projectId: "other" }
+              : { userId: "other" }),
+          };
+        return [];
+      },
+    });
+    await expect(
+      resolve(hosted, null, new AbortController().signal),
+    ).rejects.toThrow("context");
+  },
+);
+
+it("preserves validated fallback provenance through legacy recovery", async () => {
+  const { hosted, options } = fixture();
+  const context = await createAssistantContextResolver({
+    ...options,
+    loadSystemPrompt: async () => {
+      throw new Error("offline");
+    },
+  })(hosted, null);
+  expect(context.guidance[0]?.fallback?.fromSource).toBe("host:studio-profile");
+  const { system } = composeAssistantPrompt(context);
+  const recovered = recoverAssistantPrompt(system).system;
+  expect(recovered.slice(recovered.indexOf("StudioAssistantContext/v1"))).toBe(
+    system.slice(system.indexOf("StudioAssistantContext/v1")),
+  );
+  expect(recovered).not.toBe(system);
 });

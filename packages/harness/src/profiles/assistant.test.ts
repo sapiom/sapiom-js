@@ -52,3 +52,57 @@ it("uses the host's supplied profile and keeps an empty/failed override recovera
   expect(role.text).toContain("ordinary writable coding agent");
   expect(role.text).not.toContain("this project has sapiom");
 });
+
+it("records fallback provenance separately from content and preserves it in accepted versions", async () => {
+  const { retainAssistantGuidance } =
+    await import("../core/assistant-sources.js");
+  const scope = "a".repeat(64);
+  vi.stubEnv("SAPIOM_HARNESS_PROMPT_FETCH_DISABLED", "1");
+  const deliberate = retainAssistantGuidance(
+    await assistantProfile(environment),
+    scope,
+  );
+  vi.stubEnv("SAPIOM_HARNESS_PROMPT_FETCH_DISABLED", "0");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new Error("private failure details")),
+  );
+  const fallback = retainAssistantGuidance(
+    await assistantProfile(environment),
+    scope,
+  );
+  expect(fallback.version.contentHash).toBe(deliberate.version.contentHash);
+  expect(fallback.version.revision).not.toBe(deliberate.version.revision);
+  expect(fallback.version.fallback).toEqual({
+    fromSource: "http://127.0.0.1:3000/v1/harness/system-prompt",
+    reason: "Profile endpoint did not supply usable guidance",
+  });
+  expect(JSON.stringify(fallback)).not.toContain("private failure details");
+});
+
+it.each(["fetch", "override"])(
+  "propagates cancellation during %s rather than selecting a fallback",
+  async (mode) => {
+    vi.stubEnv("SAPIOM_HARNESS_PROMPT_FETCH_DISABLED", "0");
+    const controller = new AbortController();
+    const cancelled = new Error("cancelled profile");
+    const wait = (signal?: AbortSignal) =>
+      new Promise<string>((_resolve, reject) =>
+        signal!.addEventListener("abort", () => reject(signal!.reason), {
+          once: true,
+        }),
+      );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url, init) => wait(init.signal)),
+    );
+    const pending = assistantProfile(
+      environment,
+      mode === "override" ? wait : undefined,
+      controller.signal,
+    );
+    const rejected = expect(pending).rejects.toBe(cancelled);
+    controller.abort(cancelled);
+    await rejected;
+  },
+);

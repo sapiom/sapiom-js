@@ -49,7 +49,7 @@ const unvalidated = (value: unknown) =>
   studioAssistantCompletionSystem(fixtureToken) +
   acceptedContextHeader +
   encodeAssistantContext(value);
-function legacyFixture() {
+function legacyFixture(fallback?: unknown) {
   const context = {
     schemaVersion: 1,
     ...fixtureAccepted().context,
@@ -62,6 +62,7 @@ function legacyFixture() {
         source: "bundled",
         revision: "old-label",
         text: "Saved inline profile",
+        ...(fallback === undefined ? {} : { fallback }),
       },
     ],
   };
@@ -210,6 +211,24 @@ describe("saved Studio system envelope", () => {
     expect(
       parseStudioAssistantSystem(studioAssistantCompletionSystem(fixtureToken)),
     ).toMatchObject({ kind: "legacy-v2", completionToken: fixtureToken });
+  });
+  it("keeps optional legacy fallback provenance explicit and validates its shape", () => {
+    const fallback = {
+      fromSource: "host:profile",
+      reason: "No usable guidance",
+    };
+    expect(parseStudioAssistantSystem(legacyFixture(fallback))).toMatchObject({
+      kind: "legacy-inline-v1",
+      context: { guidance: [{ fallback }] },
+    });
+    for (const invalid of [
+      { ...fallback, reason: "" },
+      { ...fallback, extra: true },
+      { fromSource: 1, reason: "missing" },
+    ])
+      expect(() => parseStudioAssistantSystem(legacyFixture(invalid))).toThrow(
+        AssistantContextError,
+      );
   });
   it("validates exact legacy inline history instead of fetching or migrating it", () => {
     const system = legacyFixture();

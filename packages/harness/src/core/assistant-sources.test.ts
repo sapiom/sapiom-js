@@ -49,6 +49,29 @@ const identity = {
 };
 
 describe("retained Assistant source artifacts", () => {
+  it.each(["metadata-only", "version-only", "different"])(
+    "rejects inconsistent %s fallback provenance",
+    (mode) => {
+      const context = sourceContext();
+      const fallback = { fromSource: "host:a", reason: "empty" };
+      const guidance = retainAssistantGuidance(
+        {
+          ...context.guidance[0]!,
+          ...(mode === "metadata-only" ? {} : { fallback }),
+        },
+        sourceScope,
+      );
+      if (mode === "version-only") delete guidance.metadata.fallback;
+      else
+        guidance.metadata.fallback =
+          mode === "different"
+            ? { fromSource: "host:b", reason: "offline" }
+            : fallback;
+      expect(() =>
+        createAssistantContextCandidate(context, sourceScope, [guidance]),
+      ).toThrow(AssistantContextError);
+    },
+  );
   it("copies the same bounded bytes reference that passed the aggregate preflight", () => {
     const context = sourceContext();
     const guidance = retainAssistantGuidance(context.guidance[0]!, sourceScope);
