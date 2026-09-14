@@ -186,4 +186,22 @@ describe("accepted context contract", () => {
       encodeAssistantContext("x".repeat(4 * 1024 * 1024 - 2)),
     ).toHaveLength(4 * 1024 * 1024);
   });
+  it("rejects sparse arrays before hashing or accepting a record", () => {
+    expect(() => encodeAssistantContext(Array(1))).toThrow(
+      AssistantContextError,
+    );
+    const facts = fixtureAccepted().context;
+    facts.capabilities = [
+      { name: "tools", status: "available", tools: Array(1) },
+    ];
+    expect(() => validateAssistantFacts(facts)).toThrow(AssistantContextError);
+  });
+  it("bounds object entries as well as array entries", () => {
+    const object = Object.fromEntries(
+      Array.from({ length: 4097 }, (_, index) => [String(index), true]),
+    );
+    expect(() => encodeAssistantContext(object)).toThrow(AssistantContextError);
+    delete object["4096"];
+    expect(() => encodeAssistantContext(object)).not.toThrow();
+  });
 });
