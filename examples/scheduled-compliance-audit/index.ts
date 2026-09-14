@@ -58,6 +58,16 @@ const MAX_BODY_CHARS = 2000;
 /** The signal a human fires to approve or reject the attestation. */
 const SIGNOFF_SIGNAL = "attestation.signoff";
 
+/**
+ * Explicit deadline for a human gate, one year. A pause with no `timeoutMs`
+ * inherits the engine's 7-day default, and a lapsed deadline *terminates* the
+ * run rather than resuming it, so the default would hard-fail any approval
+ * slower than a week. It stays a terminal deadline: an approval that outlives
+ * the year is failed too. The year is picked so no realistic approver reaches
+ * it, while an abandoned gate still lands in a terminal state.
+ */
+const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
+
 // ─────────────────────────────────────────────────────────────── shapes ──
 /** A resource whose current state should be audited against the policy. */
 interface ResourceRef {
@@ -397,6 +407,7 @@ const review = defineStep({
       signal: SIGNOFF_SIGNAL,
       resumeStep: "onSignoff",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });
