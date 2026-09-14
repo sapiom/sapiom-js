@@ -898,6 +898,24 @@ async function openAssistant(page: Page) {
   ).toBeEnabled();
 }
 
+test("Agent Map submits an explicit empty agent selection", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present");
+  await page.getByTestId("project-select-acme-app").click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Explain this project");
+  const sent = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      new URL(request.url()).pathname.endsWith("/prompt_async"),
+  );
+  await page.getByRole("button", { name: "Send message" }).click();
+  expect((await sent).postDataJSON().selectedAgentPath).toBeNull();
+});
+
 test("defaults to Terminal and keeps Assistant unavailable when access is off", async ({
   page,
 }) => {
