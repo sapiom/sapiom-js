@@ -23,9 +23,9 @@ export function createOpenCodeRouter(
   host: Pick<OpenCodeHost, "ensure" | "observe">,
   bootToken: string,
   resolveContext: ResolveAssistantContext,
+  associations = new OpenCodeAssociations(),
 ): Router {
   const router = express.Router();
-  const associations = new OpenCodeAssociations();
   const finalResponse = new OpenCodeFinalResponse();
   router.use(
     createBootTokenMiddleware(bootToken),

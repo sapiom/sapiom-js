@@ -196,6 +196,8 @@ import {
 } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
+import { AssistantSessionStore } from "../core/assistant-session-store.js";
+import { OpenCodeAssociations } from "../core/opencode-association.js";
 import { OpenCodeHost } from "../core/opencode-host.js";
 import { OpenCodeObserver } from "../core/opencode-observer.js";
 import { createAssistantContextResolver } from "./studio-assistant.js";
@@ -3569,6 +3571,7 @@ export const startServer = async (
         getEnvironment: () => assistantAccess.get()?.environment ?? null,
         loadSystemPrompt: options.loadSystemPrompt,
       }),
+      new OpenCodeAssociations(new AssistantSessionStore(statePaths.root)),
     ),
   );
 

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   OpenCodeTransportError,
   type HostedOpenCode,
 } from "./opencode-host.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
+import type { AssistantSessionStore } from "./assistant-session-store.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 
 import { isConversationId } from "../shared/assistant-state.js";
@@ -13,6 +14,8 @@ export { isConversationId } from "../shared/assistant-state.js";
 
 /** One native conversation per Studio session; the host holds the owner lock. */
 export class OpenCodeAssociations {
+  constructor(private readonly store?: AssistantSessionStore) {}
+
   private pending = new WeakMap<HostedOpenCode, Promise<string>>();
 
   ensure(hosted: HostedOpenCode): Promise<string> {
@@ -27,6 +30,29 @@ export class OpenCodeAssociations {
   }
 
   private async load(hosted: HostedOpenCode): Promise<string> {
+    if (this.store) {
+      const saved = await this.store.associate(
+        hosted,
+        basename(hosted.stateRoot),
+        async () => {
+          const created = await hosted.server.fetchJson<{ id: string }>(
+            "/session",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+              signal: AbortSignal.any([
+                hosted.signal,
+                AbortSignal.timeout(15000),
+              ]),
+            },
+          );
+          return created.id;
+        },
+        hosted.signal,
+      );
+      return this.verify(hosted, saved!.conversationId);
+    }
     const file = join(hosted.stateRoot, "association.json");
     // Held through commit even if the runtime retires during filesystem I/O.
     // A replacement host must finish this transaction before reading a mapping.
@@ -59,43 +85,7 @@ export class OpenCodeAssociations {
         throw new OpenCodeTransportError(
           openCodeTransportFailure("native_history_missing"),
         );
-      // Missing history is an error, never permission to silently replace it.
-      let response: Response;
-      try {
-        response = await hosted.server.fetch(
-          `/session/${saved.conversationId}`,
-          { signal },
-        );
-      } catch {
-        if (signal.reason instanceof OpenCodeTransportError)
-          throw signal.reason;
-        throw new OpenCodeTransportError(
-          openCodeTransportFailure("transport_unavailable"),
-        );
-      }
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new OpenCodeTransportError(
-          openCodeTransportFailure(
-            response.status === 404
-              ? "native_history_missing"
-              : "transport_unavailable",
-          ),
-        );
-      }
-      let session: { id?: unknown };
-      try {
-        session = (await response.json()) as { id?: unknown };
-      } catch {
-        throw new OpenCodeTransportError(
-          openCodeTransportFailure("transport_unavailable"),
-        );
-      }
-      if (session.id !== saved.conversationId)
-        throw new OpenCodeTransportError(
-          openCodeTransportFailure("transport_unavailable"),
-        );
-      return saved.conversationId;
+      return this.verify(hosted, saved.conversationId);
     }
     const session = await hosted.server.fetchJson<{ id: string }>("/session", {
       method: "POST",
@@ -118,5 +108,47 @@ export class OpenCodeAssociations {
       await rm(temporary, { force: true });
     }
     return session.id;
+  }
+
+  private async verify(
+    hosted: HostedOpenCode,
+    conversationId: string,
+  ): Promise<string> {
+    const signal = AbortSignal.any([hosted.signal, AbortSignal.timeout(15000)]);
+    // Missing history is an error, never permission to silently replace it.
+    let response: Response;
+    try {
+      response = await hosted.server.fetch(`/session/${conversationId}`, {
+        signal,
+      });
+    } catch {
+      if (signal.reason instanceof OpenCodeTransportError) throw signal.reason;
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("transport_unavailable"),
+      );
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure(
+          response.status === 404
+            ? "native_history_missing"
+            : "transport_unavailable",
+        ),
+      );
+    }
+    let session: { id?: unknown };
+    try {
+      session = (await response.json()) as { id?: unknown };
+    } catch {
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("transport_unavailable"),
+      );
+    }
+    if (session.id !== conversationId)
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("transport_unavailable"),
+      );
+    return conversationId;
   }
 }

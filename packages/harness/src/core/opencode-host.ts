@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  contextAuthorityScope,
+  nativeAuthorityScope,
+} from "./assistant-authority.js";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -116,39 +120,6 @@ const authority = (grant: AssistantGrant) =>
       ]),
     )
     .digest("hex");
-
-function contextAuthorityScope(
-  grant: AssistantGrant,
-  workspace: OpenCodeWorkspace,
-): string {
-  let api: URL;
-  try {
-    api = new URL(grant.environment.apiURL);
-  } catch {
-    throw new OpenCodeAccessError("Assistant environment is invalid");
-  }
-  if (
-    !["http:", "https:"].includes(api.protocol) ||
-    api.username ||
-    api.password ||
-    api.search ||
-    api.hash
-  )
-    throw new OpenCodeAccessError("Assistant environment is invalid");
-  api.pathname = api.pathname.replace(/\/+$/, "") || "/";
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        grant.userId,
-        grant.tenantId,
-        grant.environment.name,
-        api.href,
-        workspace.cwd,
-        workspace.harnessSessionId,
-      ]),
-    )
-    .digest("hex");
-}
 
 /** Owned by startServer, not by React mounts or browser connections. */
 export class OpenCodeHost {
@@ -461,16 +432,7 @@ export class OpenCodeHost {
     entry: Managed,
     grant: AssistantGrant,
   ): Promise<HostedOpenCode> {
-    const scope = createHash("sha256")
-      .update(
-        JSON.stringify([
-          grant.userId,
-          grant.tenantId,
-          entry.workspace.harnessSessionId,
-          entry.workspace.cwd,
-        ]),
-      )
-      .digest("hex");
+    const scope = nativeAuthorityScope(grant, entry.workspace);
     const stateRoot = join(this.options.stateRoot, "opencode", scope);
     let server: OpenCodeServer | undefined;
     let startupAttempted = false;
@@ -508,7 +470,12 @@ export class OpenCodeHost {
           );
       }
       await this.validate(entry);
-      const contextScope = contextAuthorityScope(grant, entry.workspace);
+      let contextScope: string;
+      try {
+        contextScope = contextAuthorityScope(grant, entry.workspace);
+      } catch {
+        throw new OpenCodeAccessError("Assistant environment is invalid");
+      }
       const model = this.options.bridge.model;
       entry.credential = this.options.bridge.issue();
       const config = {
