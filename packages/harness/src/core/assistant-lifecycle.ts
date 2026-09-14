@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
+import { z } from "zod";
 import type { AssistantLifecycle } from "../shared/assistant-session.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import {
   AssistantSessionRevisionError,
+  assistantResumeBindingDigest,
+  type AssistantAssociation,
   type AssistantSessionStore,
 } from "./assistant-session-store.js";
 import {
   OpenCodeTransportError,
+  OpenCodeAccessError,
   type HostedOpenCode,
   type OpenCodeHost,
 } from "./opencode-host.js";
@@ -25,11 +30,21 @@ export interface AssistantEndFence {
   readonly id: string;
   readonly generation: number;
 }
+export interface AssistantResumePreparation {
+  authorize(signal: AbortSignal): Promise<AssistantAssociation>;
+  read(
+    hosted: HostedOpenCode,
+    binding: AssistantAssociation,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+}
 interface Options {
   inspectionTimeoutMs?: number;
+  resumeTimeoutMs?: number;
   /** Continue keeps an allocated child closed to ordinary Attach until seed preparation commits. */
   canAttach?: (id: string) => Promise<boolean>;
-  store: Pick<AssistantSessionStore, "lifecycle" | "transition">;
+  store: Pick<AssistantSessionStore, "lifecycle" | "transition"> &
+    Partial<Pick<AssistantSessionStore, "resumeState" | "commitResume">>;
   host: Pick<
     OpenCodeHost,
     | "ensure"
@@ -89,7 +104,16 @@ export class AssistantLifecycleCoordinator {
   private readonly states = new Map<string, AssistantLifecycle>();
   private readonly generations = new Map<string, number>();
   private readonly ending = new Set<string>();
-  private readonly inspections = new Map<string, AbortController>();
+  private readonly preparations = new Map<string, AbortController>();
+  private readonly resumes = new Map<
+    string,
+    {
+      operationId: string;
+      revision: number;
+      promise: Promise<AssistantAttachment>;
+    }
+  >();
+  private readonly publications = new WeakMap<HostedOpenCode, Promise<void>>();
   private readonly pending = new Map<
     string,
     { revision: number; promise: Promise<AssistantAttachment> }
@@ -158,7 +182,7 @@ export class AssistantLifecycleCoordinator {
   attach(id: string, expectedRevision: number): Promise<AssistantAttachment> {
     if (
       this.closed ||
-      this.inspections.has(id) ||
+      this.preparations.has(id) ||
       !Number.isSafeInteger(expectedRevision) ||
       expectedRevision < 0
     )
@@ -240,6 +264,263 @@ export class AssistantLifecycleCoordinator {
     return { conversationId, lease, lifecycle: { ...lifecycle } };
   }
 
+  /** Explicit same-ID Resume. Preparation may only read the authorized saved
+   * conversation; association creation is never a fallback here. */
+  resume(
+    id: string,
+    expectedRevision: number,
+    operationId: string,
+    preparation: AssistantResumePreparation,
+    callerSignal?: AbortSignal,
+  ): Promise<AssistantAttachment> {
+    if (
+      this.closed ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0 ||
+      !z.string().uuid().safeParse(operationId).success
+    )
+      return Promise.reject(failure("lifecycle_changed"));
+    const pending = this.resumes.get(id);
+    if (pending)
+      return pending.operationId === operationId &&
+        pending.revision === expectedRevision
+        ? pending.promise
+        : Promise.reject(failure("lifecycle_changed"));
+    if (this.pending.has(id) || this.preparations.has(id))
+      return Promise.reject(failure("lifecycle_changed"));
+    const fence = { id, generation: this.generation(id) },
+      controller = new AbortController();
+    this.preparations.set(id, controller);
+    const promise = Promise.resolve()
+      .then(() =>
+        this.resumeRuntime(
+          fence,
+          expectedRevision,
+          operationId,
+          preparation,
+          controller,
+          callerSignal,
+        ),
+      )
+      .catch((error: unknown) => {
+        throw error instanceof AssistantSessionRevisionError
+          ? failure("lifecycle_changed")
+          : error;
+      })
+      .finally(() => {
+        if (this.resumes.get(id)?.promise === promise) this.resumes.delete(id);
+        if (this.preparations.get(id) === controller)
+          this.preparations.delete(id);
+      });
+    this.resumes.set(id, { operationId, revision: expectedRevision, promise });
+    return promise;
+  }
+
+  private async resumeRuntime(
+    fence: AssistantEndFence,
+    expectedRevision: number,
+    operationId: string,
+    preparation: AssistantResumePreparation,
+    controller: AbortController,
+    callerSignal?: AbortSignal,
+  ): Promise<AssistantAttachment> {
+    const { id } = fence,
+      { store, host } = this.options;
+    if (!store.resumeState || !store.commitResume)
+      throw inspectionFailure("transport_unavailable");
+    let signal = callerSignal
+      ? AbortSignal.any([controller.signal, callerSignal])
+      : controller.signal;
+    const timer = setTimeout(
+      () => controller.abort(inspectionFailure("transport_unavailable")),
+      this.options.resumeTimeoutMs ?? 15_000,
+    );
+    const check = () => {
+      signal.throwIfAborted();
+      this.check(fence);
+    };
+    const wait = <T>(work: Promise<T>) =>
+      awaitAssistantInspection(work, signal);
+    let hosted: HostedOpenCode | undefined,
+      provisional = false,
+      started = false,
+      complete = false;
+    try {
+      check();
+      const binding = Object.freeze({
+        ...(await wait(preparation.authorize(signal))),
+      });
+      if (binding.harnessSessionId !== id || binding.conversationId === id)
+        throw new OpenCodeAccessError("Assistant binding changed");
+      const bindingDigest = assistantResumeBindingDigest(binding);
+      const request = { operationId, expectedRevision, bindingDigest };
+      check();
+      const state = await wait(store.resumeState(id));
+      check();
+      const current = state.lifecycle ?? initial(id),
+        proof = state.resumeOperation;
+      const retry = proof?.operationId === operationId;
+      if (
+        current.lifecycle === "ending" ||
+        (retry
+          ? proof.expectedRevision !== expectedRevision ||
+            proof.bindingDigest !== bindingDigest ||
+            proof.committedRevision !== current.revision ||
+            current.lifecycle !== "open"
+          : current.revision !== expectedRevision)
+      )
+        throw failure("lifecycle_changed");
+      if (this.options.canAttach) {
+        const allowed = await wait(this.options.canAttach(id));
+        check();
+        if (!allowed) throw failure("lifecycle_changed");
+      }
+      hosted = host.current(id) ?? undefined;
+      provisional = !hosted;
+      if (!hosted) {
+        started = true;
+        const starting = host.ensure(id);
+        void starting.then(
+          (late) => {
+            if (signal.aborted || this.preparations.get(id) !== controller)
+              void host.retireExact(late).catch(() => {});
+          },
+          () => {},
+        );
+        hosted = await wait(starting);
+      }
+      check();
+      signal = AbortSignal.any([signal, hosted.signal]);
+      if (
+        hosted.harnessSessionId !== id ||
+        hosted.cwd !== binding.cwd ||
+        hosted.contextAuthorityScope !== binding.contextAuthorityScope ||
+        basename(hosted.stateRoot) !== binding.nativeScope
+      )
+        throw new OpenCodeAccessError("Assistant binding changed");
+      await wait(host.assertCurrent(hosted));
+      check();
+      const candidate = this.leases.get(id);
+      if (
+        candidate?.hosted === hosted &&
+        candidate.conversationId !== binding.conversationId
+      )
+        throw new OpenCodeAccessError("Assistant binding changed");
+      const liveLease = () => {
+        const lease = this.leases.get(id);
+        return lease &&
+          lease.hosted === hosted &&
+          lease.lifecycle.revision === current.revision &&
+          current.lifecycle === "open"
+          ? lease
+          : undefined;
+      };
+      await wait(preparation.read(hosted, binding, signal));
+      check();
+      const authorized = async () => {
+        check();
+        const fresh = await wait(preparation.authorize(signal));
+        check();
+        if (assistantResumeBindingDigest(fresh) !== bindingDigest)
+          throw new OpenCodeAccessError("Assistant binding changed");
+        await wait(host.assertCurrent(hosted!));
+        check();
+      };
+      await authorized();
+      const before = await wait(store.resumeState(id));
+      check();
+      if (
+        (before.lifecycle?.revision ?? 0) !== current.revision ||
+        before.lifecycle?.lifecycle === "ending"
+      )
+        throw failure("lifecycle_changed");
+      const existing = liveLease();
+      if (retry && existing) {
+        complete = true;
+        return this.publicLease(existing);
+      }
+
+      // Publish the durable revision and update the same live lease as one
+      // coordinator operation. Existing execution waits through this boundary.
+      const runtime = hosted;
+      return await this.publishRuntime(runtime, signal, async () => {
+        check();
+        await authorized();
+        const live = liveLease();
+        // Keep publication ownership until the exact write/rollback and lock
+        // release settle. Cancellation cannot make a still-pending write vanish.
+        const lifecycle = await store.commitResume!(
+          id,
+          current.revision,
+          request,
+          live?.lifecycle.execution ?? "paused",
+          signal,
+        );
+        check();
+        await authorized();
+        const saved = await wait(store.lifecycle(id));
+        check();
+        if (
+          saved?.revision !== lifecycle.revision ||
+          saved.lifecycle !== "open"
+        )
+          throw failure("lifecycle_changed");
+        const lease: Lease = live ?? {
+          hosted: runtime,
+          conversationId: binding.conversationId,
+          lease: randomUUID(),
+          lifecycle,
+        };
+        lease.lifecycle = lifecycle;
+        this.leases.set(id, lease);
+        this.remember(lifecycle);
+        check();
+        if (!live) host.observe(runtime, binding.conversationId);
+        check();
+        complete = true;
+        return this.publicLease(lease);
+      });
+    } finally {
+      try {
+        if (!complete && provisional && started) {
+          if (
+            this.preparations.get(id) === controller &&
+            this.generation(id) === fence.generation
+          )
+            await this.cleanInspection(id, hosted);
+          else if (hosted) void host.retireExact(hosted).catch(() => {});
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private async publishRuntime<T>(
+    hosted: HostedOpenCode,
+    signal: AbortSignal,
+    write: () => Promise<T>,
+  ): Promise<T> {
+    for (;;) {
+      const pending = this.publications.get(hosted);
+      if (!pending) break;
+      await awaitAssistantInspection(pending, signal);
+    }
+    signal.throwIfAborted();
+    let release!: () => void;
+    const publication = new Promise<void>((done) => {
+      release = done;
+    });
+    this.publications.set(hosted, publication);
+    try {
+      return await write();
+    } finally {
+      if (this.publications.get(hosted) === publication)
+        this.publications.delete(hosted);
+      release();
+    }
+  }
+
   /** Exclusive temporary ownership, shared with Attach, Continue and Resume. Never
    * creates an association or grants execution. Callback results stay private;
    * the caller revalidates its saved binding after provisional cleanup. */
@@ -260,7 +541,13 @@ export class AssistantLifecycleCoordinator {
     prepare: (hosted: HostedOpenCode, signal: AbortSignal) => Promise<T>,
     callerSignal?: AbortSignal,
   ): Promise<T> {
-    return this.prepareRuntime(id, expectedRevision, prepare, true, callerSignal);
+    return this.prepareRuntime(
+      id,
+      expectedRevision,
+      prepare,
+      true,
+      callerSignal,
+    );
   }
 
   private async prepareRuntime<T>(
@@ -273,7 +560,7 @@ export class AssistantLifecycleCoordinator {
     if (
       this.closed ||
       this.pending.has(id) ||
-      this.inspections.has(id) ||
+      this.preparations.has(id) ||
       !Number.isSafeInteger(expectedRevision) ||
       expectedRevision < 0
     )
@@ -281,7 +568,7 @@ export class AssistantLifecycleCoordinator {
     const fence = { id, generation: this.generation(id) };
     this.check(fence);
     const controller = new AbortController();
-    this.inspections.set(id, controller);
+    this.preparations.set(id, controller);
     const signal = callerSignal
       ? AbortSignal.any([controller.signal, callerSignal])
       : controller.signal;
@@ -319,7 +606,7 @@ export class AssistantLifecycleCoordinator {
         // exact old host. Never retire by ID from this late continuation.
         void starting.then(
           (late) => {
-            if (signal.aborted || this.inspections.get(id) !== controller)
+            if (signal.aborted || this.preparations.get(id) !== controller)
               void this.options.host.retireExact(late).catch(() => {});
           },
           () => {},
@@ -349,7 +636,7 @@ export class AssistantLifecycleCoordinator {
       try {
         if (provisional && started && !(complete && retain)) {
           if (
-            this.inspections.get(id) === controller &&
+            this.preparations.get(id) === controller &&
             this.generation(id) === fence.generation
           ) {
             // With no returned host yet, this exact slot owns pending ensure.
@@ -362,8 +649,8 @@ export class AssistantLifecycleCoordinator {
         if (complete && !retain) await revision();
       } finally {
         clearTimeout(timer);
-        if (this.inspections.get(id) === controller)
-          this.inspections.delete(id);
+        if (this.preparations.get(id) === controller)
+          this.preparations.delete(id);
       }
     }
   }
@@ -424,16 +711,28 @@ export class AssistantLifecycleCoordinator {
         throw failure("execution_paused");
     };
     check();
-    await this.options.host.assertCurrent(hosted);
-    check();
-    const saved = await this.options.store.lifecycle(id);
-    check();
-    if (
-      !saved ||
-      saved.revision !== lease!.lifecycle.revision ||
-      saved.lifecycle !== "open"
-    )
-      throw failure("lifecycle_changed");
+    for (;;) {
+      const publication = this.publications.get(hosted);
+      if (publication)
+        await awaitAssistantInspection(publication, hosted.signal);
+      check();
+      await this.options.host.assertCurrent(hosted);
+      check();
+      const snapshot = lease!.lifecycle;
+      const saved = await this.options.store.lifecycle(id);
+      check();
+      // A read started before publication may have returned the old durable
+      // snapshot after the same exact lease advanced. Re-read after its commit.
+      if (this.publications.has(hosted) || lease!.lifecycle !== snapshot)
+        continue;
+      if (
+        !saved ||
+        saved.revision !== snapshot.revision ||
+        saved.lifecycle !== "open"
+      )
+        throw failure("lifecycle_changed");
+      return;
+    }
   }
 
   /** Called inside the existing dispatch admission, after explicit user context preparation. */
@@ -443,16 +742,23 @@ export class AssistantLifecycleCoordinator {
     const lease = this.leases.get(id)!;
     if (lease.lifecycle.execution === "enabled") return;
     const fence = { id, generation: this.generation(id) };
-    const state = await this.options.store.transition(
-      id,
-      lease.lifecycle.revision,
-      { lifecycle: "open", execution: "enabled" },
-      hosted.signal,
-    );
-    this.check(fence);
-    if (this.leases.get(id) !== lease) throw failure("lifecycle_changed");
-    lease.lifecycle = state;
-    this.remember(state);
+    await this.publishRuntime(hosted, hosted.signal, async () => {
+      this.check(fence);
+      if (this.leases.get(id) !== lease) throw failure("lifecycle_changed");
+      if (lease.lifecycle.execution === "enabled") return;
+      await this.options.host.assertCurrent(hosted);
+      this.check(fence);
+      const state = await this.options.store.transition(
+        id,
+        lease.lifecycle.revision,
+        { lifecycle: "open", execution: "enabled" },
+        hosted.signal,
+      );
+      this.check(fence);
+      if (this.leases.get(id) !== lease) throw failure("lifecycle_changed");
+      lease.lifecycle = state;
+      this.remember(state);
+    });
   }
 
   /** Fences execution and requests process termination before any persistence await.
@@ -465,8 +771,9 @@ export class AssistantLifecycleCoordinator {
     this.ending.add(id);
     this.leases.delete(id);
     this.pending.delete(id);
-    this.inspections.get(id)?.abort(failure("lifecycle_changed"));
-    this.inspections.delete(id);
+    this.resumes.delete(id);
+    this.preparations.get(id)?.abort(failure("lifecycle_changed"));
+    this.preparations.delete(id);
     const native = this.options.host.retireWithResult(id);
     const persistence = beforePersistence
       ? beforePersistence.then(() => this.persistEnd(fence, "ending"))
@@ -508,9 +815,10 @@ export class AssistantLifecycleCoordinator {
     this.closed = true;
     this.leases.clear();
     this.pending.clear();
-    for (const inspection of this.inspections.values())
+    this.resumes.clear();
+    for (const inspection of this.preparations.values())
       inspection.abort(failure("lifecycle_changed"));
-    this.inspections.clear();
+    this.preparations.clear();
     this.options.host.beginShutdown();
     this.changed();
   }

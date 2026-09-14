@@ -48,6 +48,13 @@ so a successful GET can return an older `capturedAt`. Disposal and authority los
 cancel capture; opening a retained record never resumes execution.
 # Selected native availability
 
+The Resume coordinator claims the same operation slot as Attach and inspection.
+It preserves a running exact lease and execution state; restored runtimes get a
+new paused lease. Lifecycle publication and live-lease updates share a barrier
+so in-flight execution cannot observe half of a Resume commit. End requests
+process retirement immediately, while durable commit/rollback retains its lock
+and publication ownership until its IO actually settles.
+
 Resume commits its operation UUID and exact saved-binding digest atomically with
 the lifecycle header. The private proof is excluded from public state. An exact
 retry can reconcile a lost acknowledgement; a later lifecycle revision, End or
