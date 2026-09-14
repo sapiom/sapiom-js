@@ -725,6 +725,15 @@ export class SessionCleanupUnconfirmedError extends Error {
   }
 }
 
+/** Start Terminal applies only to allocated sessions whose first PTY has not run. */
+export class SessionNotDormantError extends Error {
+  readonly code = "SESSION_NOT_DORMANT";
+  constructor() {
+    super("this Studio session is not awaiting its first Terminal start");
+    this.name = "SessionNotDormantError";
+  }
+}
+
 export type AdapterIdentityState =
   | "not-required"
   | "pending"
@@ -1025,6 +1034,13 @@ export class SessionManager {
   private readonly confirmedCleanupEpochs = new Map<string, string>();
   private readonly dormantAllocations = new Map<string, string>();
   private dormantAllocationsLoaded = false;
+  private readonly dormantActivations = new Map<
+    string,
+    {
+      generation: number;
+      promise: Promise<HarnessSession>;
+    }
+  >();
   private readonly retiringKillRetries = new WeakMap<
     PtyHandle,
     Promise<void>
@@ -1618,6 +1634,147 @@ export class SessionManager {
     });
   }
 
+  /** Explicit first Terminal start; duplicate requests share this exact generation. */
+  activateDormant(id: string): Promise<HarnessSession> {
+    if (this.closing) return Promise.reject(new SessionManagerClosingError());
+    const generation = this.closeGenerations.get(id) ?? 0;
+    const existing = this.dormantActivations.get(id);
+    if (existing)
+      return existing.generation === generation
+        ? existing.promise
+        : Promise.reject(new SessionPreparationCancelledError());
+    const promise = this.activateDormantPrepared(id, generation);
+    const entry = { generation, promise };
+    this.dormantActivations.set(id, entry);
+    const forget = (): void => {
+      if (this.dormantActivations.get(id) === entry)
+        this.dormantActivations.delete(id);
+    };
+    void promise.then(forget, forget);
+    return promise;
+  }
+
+  private async activateDormantPrepared(
+    id: string,
+    generation: number,
+  ): Promise<HarnessSession> {
+    this.assertAdmission(id, generation);
+    const session = this.sessions.get(id);
+    if (!session) throw new UnknownSessionError(id);
+    const { cwd, harness } = session;
+    const identity = session.agentMapIdentity && {
+      ...session.agentMapIdentity,
+    };
+    const check = (): void => {
+      this.assertAdmission(id, generation);
+      if (
+        !identity ||
+        !this.resolveAgentMapIdentity ||
+        identity.sessionId !== id ||
+        this.sessions.get(id) !== session ||
+        session.cwd !== cwd ||
+        session.harness !== harness ||
+        !session.agentMapIdentity ||
+        !sameProjectAgent(session.agentMapIdentity, identity) ||
+        this.rejectedProjectSessionMetadata.has(id)
+      )
+        throw new ProjectSessionScopeUnavailableError(id);
+    };
+    const authorize = async (): Promise<void> => {
+      check();
+      await this.revalidateAgentMapIdentity(id, cwd, identity);
+      check();
+    };
+    await this.loadDormantAllocations();
+    check();
+    if (
+      !this.dormantAllocations.has(id) ||
+      this.subsessionBindings.has(id) ||
+      session.projectBootstrap
+    )
+      throw new SessionNotDormantError();
+    const live = this.ptys.get(id);
+    if (live && !live.killed && session.terminalState === undefined) {
+      await authorize();
+      if (this.ptys.get(id) !== live || live.killed)
+        throw new SessionNotDormantError();
+      return session;
+    }
+    if (
+      session.terminalState !== "not-started" ||
+      session.agentSessionId !== null
+    )
+      throw new SessionNotDormantError();
+    return this.prepareSession(
+      id,
+      async () => {
+        await authorize();
+        const previousActivity = session.lastActiveAt;
+        session.status = "starting";
+        session.ready = false;
+        session.exitCode = null;
+        session.lastActiveAt = this.now();
+        try {
+          await this.persist();
+          check();
+          this.emitStatus(session);
+          // The existing resume preparation flag skips first-request scaffolding
+          // and rotates capabilities. The adapter still receives a fresh launch.
+          const { mcpCredentialLaunch, ...opts } = await this.buildLaunchOpts(
+            id,
+            {
+              cwd,
+              harness,
+              ...(session.theme ? { theme: session.theme } : {}),
+            },
+            { agentMapIdentity: identity, resume: true },
+          );
+          check();
+          delete opts.initialPrompt;
+          delete opts.rehydratedFrom;
+          const spec = this.getAdapter(harness).launch({
+            ...opts,
+            harnessSessionId: id,
+            cwd,
+          });
+          await this.writeWorkspaceContext(session);
+          check();
+          await this.ensureCanvasTemplate(cwd);
+          check();
+          await this.spawn(
+            session,
+            spec,
+            generation,
+            mcpCredentialLaunch,
+            async () => {
+              await authorize();
+              if (
+                session.terminalState !== "not-started" ||
+                session.agentSessionId !== null
+              )
+                throw new SessionNotDormantError();
+            },
+          );
+          check();
+          return session;
+        } catch (error) {
+          // Preparation ownership excludes a replacement until this finally settles.
+          // If spawn succeeded but its durable publication failed, stop only our PTY.
+          const owned = this.ptys.get(id);
+          if (owned) await this.killIfRuntime(id, owned.runtimeEpoch);
+          if (session.terminalState === "not-started") {
+            session.lastActiveAt = previousActivity;
+            await this.transitionExited(session, null, {
+              stampLastActive: false,
+            }).catch(() => {});
+          }
+          throw error;
+        }
+      },
+      generation,
+    );
+  }
+
   private async loadDormantAllocations(): Promise<void> {
     if (this.dormantAllocationsLoaded) return;
     const value = await readAssistantJson(
@@ -1733,7 +1890,8 @@ export class SessionManager {
     if (this.closing) throw new SessionManagerClosingError();
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
-    if (!session.agentSessionId) throw new SessionNotResumeableError(id);
+    if (session.terminalState === "not-started" || !session.agentSessionId)
+      throw new SessionNotResumeableError(id);
     return this.prepareSession(id, (generation) =>
       this.resumePrepared(id, trusted, generation),
     );
@@ -3268,6 +3426,7 @@ export class SessionManager {
     this.confirmedCleanupEpochs.delete(session.id);
     this.ptys.set(session.id, handle);
 
+    delete session.terminalState;
     session.status = "running";
     session.mcpAuthState =
       mcpCredentialLaunch && this.currentCredentialGeneration
@@ -3278,10 +3437,9 @@ export class SessionManager {
     // way (trust dialogs can reappear, e.g. under different sandbox flags).
     session.ready = false;
     session.lastActiveAt = this.now();
-    await this.persist();
-    this.emitStatus(session);
 
     pty.onData((chunk) => {
+      if (this.ptys.get(session.id) !== handle) return;
       handle.bracketedPaste = trackBracketedPaste(handle.bracketedPaste, chunk);
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       this.recordReadinessOutput(handle, chunk, adapter);
@@ -3291,6 +3449,8 @@ export class SessionManager {
 
     pty.onExit(({ exitCode }) => this.markExited(session.id, handle, exitCode));
 
+    await this.persist();
+    this.emitStatus(session);
     this.armReadyFallback(session.id, handle);
   }
 
