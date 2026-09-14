@@ -342,14 +342,14 @@ const NO_PTY_SWEEP_GRACE_MS = 30_000;
  * OS-level "does this process exist" check — the same probe `kill()`'s
  * missed-exit fallback has always used, factored out so the liveness sweep
  * shares it. EPERM means the process exists but isn't ours to signal, i.e.
- * alive; anything else (ESRCH) means it's gone.
+ * alive. Only ESRCH proves the process is gone; other failures are unknown.
  */
 const defaultIsPidAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
   }
 };
 
@@ -653,7 +653,7 @@ interface PtyHandle {
     refreshOnInput: boolean;
   } | null;
   /**
-   * Resolves when this specific pty handle's session has fully exited —
+   * Resolves when this specific pty handle's live registry entry is retired —
    * either via node-pty's real `onExit` event OR a synthesized exit (kill()'s
    * escalation fallback, sweepDeadSessions, or pre-pty failure reconciliation).
    * `markExited()` is the single convergence point for all three paths, so
@@ -675,6 +675,29 @@ interface PtyHandle {
    * which would otherwise be mistaken for an abnormal exit worth a tail.
    */
   killed: boolean;
+  /** Real onExit or a successful OS absence probe, never registry synthesis. */
+  cleanupConfirmed: boolean;
+}
+
+export type TerminalCleanupResult = Readonly<{
+  state: "confirmed" | "absent" | "unconfirmed";
+  runtimeEpoch: string | null;
+}>;
+
+export class SessionPreparationCancelledError extends Error {
+  readonly code = "SESSION_PREPARATION_CANCELLED";
+  constructor() {
+    super("session was closed while terminal startup was being prepared");
+    this.name = "SessionPreparationCancelledError";
+  }
+}
+
+export class SessionCleanupUnconfirmedError extends Error {
+  readonly code = "SESSION_CLEANUP_UNCONFIRMED";
+  constructor() {
+    super("the previous terminal process has not been confirmed stopped");
+    this.name = "SessionCleanupUnconfirmedError";
+  }
 }
 
 export type AdapterIdentityState =
@@ -968,6 +991,47 @@ export class SessionManager {
   }
 
   private closing = false;
+  private readonly closeGenerations = new Map<string, number>();
+  private readonly pendingPreparations = new Set<string>();
+  /** A synthesized registry exit must not discard an unresolved process. */
+  private readonly retiringPtys = new Map<string, PtyHandle>();
+  /** Matching positive evidence remains available after its handle is released. */
+  private readonly confirmedCleanupEpochs = new Map<string, string>();
+
+  private assertAdmission(id: string, generation: number): void {
+    if (this.closing) throw new SessionManagerClosingError();
+    if ((this.closeGenerations.get(id) ?? 0) !== generation)
+      throw new SessionPreparationCancelledError();
+    const retiring = this.retiringPtys.get(id);
+    if (retiring && this.isPtyGone(retiring)) this.markExited(id, retiring, null);
+    if (this.retiringPtys.has(id)) throw new SessionCleanupUnconfirmedError();
+  }
+
+  private async prepareSession<T>(
+    id: string,
+    operation: (generation: number) => Promise<T>,
+    generation = this.closeGenerations.get(id) ?? 0,
+  ): Promise<T> {
+    this.assertAdmission(id, generation);
+    if (this.pendingPreparations.has(id) || this.ptys.has(id))
+      throw new SessionAlreadyLiveError(id);
+    this.pendingPreparations.add(id);
+    try {
+      return await operation(generation);
+    } finally {
+      this.pendingPreparations.delete(id);
+    }
+  }
+
+  private isPtyGone(handle: PtyHandle): boolean {
+    const pid = handle.pty.pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    try {
+      return !this.isPidAlive(pid);
+    } catch {
+      return false;
+    }
+  }
 
   /** Handle-local poison from a partial write whose composer cleanup could not
    * be proven. A replacement PTY is clean by construction; the same handle
@@ -1246,6 +1310,7 @@ export class SessionManager {
   /** Replace one stale coding-agent runtime when its conversation is resumable. */
   async restartForMcpCredentials(id: string): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
+    const closeGeneration = this.closeGenerations.get(id) ?? 0;
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     const handle = this.ptys.get(id);
@@ -1316,6 +1381,7 @@ export class SessionManager {
 
     // markExited() clears runtime-only MCP state. Keep the action observable
     // while the ordinary resume path performs its own final checks and spawn.
+    this.assertAdmission(id, closeGeneration);
     session.mcpAuthState = "restarting";
     this.emitStatus(session);
     try {
@@ -1438,15 +1504,22 @@ export class SessionManager {
     id: string,
     trusted: TrustedSessionResumeOptions = {},
   ): Promise<HarnessSession> {
+    // Preserve the public validation order before claiming preparation.
     if (this.closing) throw new SessionManagerClosingError();
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
-    if (!session.agentSessionId) {
-      throw new SessionNotResumeableError(id);
-    }
-    if (this.ptys.has(id)) {
-      throw new SessionAlreadyLiveError(id);
-    }
+    if (!session.agentSessionId) throw new SessionNotResumeableError(id);
+    return this.prepareSession(id, (generation) =>
+      this.resumePrepared(id, trusted, generation),
+    );
+  }
+
+  private async resumePrepared(
+    id: string,
+    trusted: TrustedSessionResumeOptions,
+    closeGeneration: number,
+  ): Promise<HarnessSession> {
+    const session = this.sessions.get(id)!;
     if (this.rejectedProjectSessionMetadata.has(id)) {
       throw new ProjectSessionScopeUnavailableError(id);
     }
@@ -1486,7 +1559,7 @@ export class SessionManager {
     // and leave the user on a dead pane offering Resume all over again.
     // Failing here instead keeps the record exactly as it was — unspawned,
     // and (see below) with its real lastActiveAt intact.
-    if (!(await adapter.canResume(session.agentSessionId, session.cwd))) {
+    if (!(await adapter.canResume(session.agentSessionId!, session.cwd))) {
       const label =
         listHarnessAdapters().find((a) => a.id === session.harness)?.label ??
         session.harness;
@@ -1496,6 +1569,7 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
+    this.assertAdmission(id, closeGeneration);
     if (bindingTransition) {
       const current = this.subsessionBindings.get(id)!;
       // A failed spawn may leave the exact next marker durably committed.
@@ -1554,7 +1628,7 @@ export class SessionManager {
         cwd: session.cwd,
         ...built,
       };
-      const spec = adapter.resume(session.agentSessionId, opts);
+      const spec = adapter.resume(session.agentSessionId!, opts);
       // Schema-aware and strict: the caller leaves a valid current file
       // untouched, translates a valid legacy file, and reconstructs anything
       // missing/invalid from this session plus the live registry. Await it in
@@ -1568,6 +1642,7 @@ export class SessionManager {
       await this.spawn(
         session,
         spec,
+        closeGeneration,
         mcpCredentialLaunch,
         () =>
           this.revalidateAgentMapIdentity(
@@ -1623,6 +1698,7 @@ export class SessionManager {
    * transitioned to exited.
    */
   async close(id: string): Promise<boolean> {
+    this.closeGenerations.set(id, (this.closeGenerations.get(id) ?? 0) + 1);
     const binding = this.subsessionBindings.get(id);
     if (binding) {
       this.userClosedSubsessions.add(id);
@@ -1667,6 +1743,24 @@ export class SessionManager {
     return killed;
   }
 
+  /** End's process result is separate from legacy registry exit bookkeeping.
+   * A later call can reconcile only the retained exact handle's exit evidence.
+   * Binding persistence failures still reject, as they do for close(). */
+  async closeWithResult(id: string): Promise<TerminalCleanupResult> {
+    const handle = this.ptys.get(id) ?? this.retiringPtys.get(id);
+    await this.close(id);
+    if (!handle) {
+      const runtimeEpoch = this.confirmedCleanupEpochs.get(id) ?? null;
+      return { state: runtimeEpoch ? "confirmed" : "absent", runtimeEpoch };
+    }
+    if (!handle.cleanupConfirmed && this.isPtyGone(handle))
+      this.markExited(id, handle, null);
+    return {
+      state: handle.cleanupConfirmed ? "confirmed" : "unconfirmed",
+      runtimeEpoch: handle.runtimeEpoch,
+    };
+  }
+
   /** Close only when the caller proves the exact coordinator-owned binding. */
   async closeBound(expected: TrustedSubsessionBindingMarker): Promise<boolean> {
     const parsed = parseTrustedSubsessionBindingMarker(
@@ -1688,33 +1782,14 @@ export class SessionManager {
     return next;
   }
 
-  /**
-   * Signals the session's pty to exit and returns a Promise that resolves
-   * once the process is **actually gone** — not fire-and-forget.
-   *
-   * Resolution source (either one unblocks the promise):
-   *   1. node-pty's own `onExit` event → markExited() → `handle.exited` resolves.
-   *   2. Synthesized exit: kill()'s escalation fallback (SIGTERM → SIGKILL →
-   *      pid liveness check) → markExited() → `handle.exited` resolves.
-   *   3. Synthesized exit from an external `sweepDeadSessions()` call that
-   *      happens to run during the escalation window → same path.
-   *
-   * The promise is bounded: after `KILL_ESCALATION_MS` the escalation sends
-   * SIGKILL; after a further `KILL_ESCALATION_CONFIRM_MS` it synthesizes the
-   * exit from an OS-level pid check regardless of node-pty's event. So the
-   * worst-case resolution time is `KILL_ESCALATION_MS + KILL_ESCALATION_CONFIRM_MS`
-   * (2500 ms at current constants), never infinite.
-   *
-   * Existing fire-and-forget callers keep working: an unawaited Promise is
-   * fine and produces no floating-promise lint warnings when suppressed with
-   * `void`.
-   *
-   * Returns false (resolved immediately) when the session has no live pty.
-   * Returns true (resolved on actual death) when a pty was signalled.
-   */
+  /** Bounded legacy registry cleanup, also used by internal Terminal restarts.
+   * True means a live/stale row was retired, not proof its OS process stopped.
+   * Use closeWithResult() for End's truthful cleanup outcome. */
   kill(id: string): Promise<boolean> {
     const handle = this.ptys.get(id);
     if (!handle) {
+      const retiring = this.retiringPtys.get(id);
+      if (retiring && this.isPtyGone(retiring)) this.markExited(id, retiring, null);
       // A non-exited record with no pty behind it has nothing left to kill —
       // it's a ghost (its pty died without the exit ever being recorded).
       // Reconcile it here so closing the tab actually closes it, instead of
@@ -1726,10 +1801,15 @@ export class SessionManager {
       }
       return Promise.resolve(false);
     }
+    if (handle.killed) return handle.exited.then(() => true);
     // Mark before signalling so markExited() (whichever path reports the death)
     // knows this exit was intentional and skips the exit-tail capture.
     handle.killed = true;
-    handle.pty.kill();
+    try {
+      handle.pty.kill();
+    } catch {
+      // A failed signal is not exit evidence; keep the bounded probe below.
+    }
     // Root-caused via instrumented real-process runs: node-pty's `onExit`
     // can simply never fire for a pty killed within milliseconds of being
     // spawned — confirmed by `process.kill(pid, 0)` throwing ESRCH (no such
@@ -1744,27 +1824,26 @@ export class SessionManager {
     // as a real escalation before the same check.
     const escalate = setTimeout(() => {
       if (this.ptys.get(id) !== handle) return;
-      const pid = handle.pty.pid;
-      if (this.isPidAlive(pid)) handle.pty.kill("SIGKILL");
+      if (!this.isPtyGone(handle)) {
+        try {
+          handle.pty.kill("SIGKILL");
+        } catch {
+          // EPERM and other signal failures remain cleanup-unconfirmed.
+        }
+      }
       setTimeout(() => {
-        // Synthesize unconditionally: SIGKILL was already sent; after the
-        // confirm window the session is over regardless of isPidAlive. An
-        // EPERM-alive zombie (a process that exists but can't be signalled)
-        // would leave handle.exited pending forever if we gated on liveness.
-        if (this.ptys.get(id) === handle) this.markExited(id, handle, null);
+        if (this.ptys.get(id) === handle)
+          this.markExited(id, handle, null, this.isPtyGone(handle));
       }, KILL_ESCALATION_CONFIRM_MS).unref?.();
     }, KILL_ESCALATION_MS);
     escalate.unref?.();
-    // Return a promise that resolves on actual death — either the real onExit
-    // event or a synthesized exit from the escalation above or sweepDeadSessions.
-    // `handle.exited` is resolved by markExited(), which is the single
-    // convergence point for all three paths — it never hangs.
+    void handle.exited.then(() => clearTimeout(escalate));
     return handle.exited.then(() => true);
   }
 
   /**
    * Kills every currently-live pty and returns a Promise that resolves when
-   * all of them have actually exited (real or synthesized). Bounded by the
+   * all of their registry rows have exited (real or synthesized). Bounded by the
    * same escalation window as `kill()` — never hangs.
    *
    * Call this on server shutdown so the process actually exits instead of
@@ -1790,13 +1869,16 @@ export class SessionManager {
    * live pty) until something reconciles it.
    */
   sweepDeadSessions(): void {
+    for (const [id, handle] of this.retiringPtys) {
+      if (this.isPtyGone(handle)) this.markExited(id, handle, null);
+    }
     for (const session of [...this.sessions.values()]) {
       if (session.status === "exited") continue;
       const handle = this.ptys.get(session.id);
       if (handle) {
         // Guard against non-numeric pids (test fakes) — never probe the OS
         // with a garbage value, and never declare a session dead on one.
-        if (typeof handle.pty.pid === "number" && !this.isPidAlive(handle.pty.pid)) {
+        if (this.isPtyGone(handle)) {
           this.markExited(session.id, handle, null);
         }
         continue;
@@ -2796,10 +2878,11 @@ export class SessionManager {
   private async spawn(
     session: HarnessSession,
     spec: SpawnSpec,
+    closeGeneration: number,
     mcpCredentialLaunch?: McpCredentialLaunch,
     revalidateAdmission?: () => Promise<void>,
   ): Promise<void> {
-    if (this.closing) throw new SessionManagerClosingError();
+    this.assertAdmission(session.id, closeGeneration);
     const adapter = this.getAdapter(session.harness);
     const spawnFn = this.spawnPty ?? (await this.loadSpawnPty());
     // Loading node-pty is lazy and asynchronous. Revalidate the project
@@ -2808,7 +2891,7 @@ export class SessionManager {
     // authorization await and then admission remains synchronous, so
     // beginShutdown/killAll cannot miss a newly admitted process either.
     await revalidateAdmission?.();
-    if (this.closing) throw new SessionManagerClosingError();
+    this.assertAdmission(session.id, closeGeneration);
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined) env[key] = value;
@@ -2862,7 +2945,8 @@ export class SessionManager {
       // project/user scope, credential generation, and shutdown admission once
       // more after that await.
       await revalidateAdmission?.();
-      if (this.closing) throw new SessionManagerClosingError();
+      this.assertAdmission(session.id, closeGeneration);
+      if (this.ptys.has(session.id)) throw new SessionAlreadyLiveError(session.id);
       if (
         mcpCredentialLaunch &&
         this.currentCredentialGeneration &&
@@ -2925,8 +3009,10 @@ export class SessionManager {
       exited,
       resolveExited,
       killed: false,
+      cleanupConfirmed: false,
     };
     this.retiredRuntimeEpochs.delete(session.id);
+    this.confirmedCleanupEpochs.delete(session.id);
     this.ptys.set(session.id, handle);
 
     session.status = "running";
@@ -3046,15 +3132,25 @@ export class SessionManager {
    * racing to be the one that reports a given pty's death, so this is
    * idempotent: a stale/duplicate call (`this.ptys.get(id) !== handle`,
    * i.e. this handle was already replaced or already reported exited) is a
-   * silent no-op rather than double-transitioning or clobbering a newer
-   * session/handle that's since taken its place (e.g. a resume).
+   * silent no-op for session state rather than clobbering a newer handle.
+   * A late positive event can still confirm this exact retired handle.
    */
   private markExited(
     id: string,
     handle: PtyHandle,
     exitCode: number | null,
+    confirmed = true,
   ): void {
-    if (this.ptys.get(id) !== handle) return;
+    const current = this.ptys.get(id) === handle;
+    const retiring = this.retiringPtys.get(id) === handle;
+    if (confirmed) {
+      handle.cleanupConfirmed = true;
+      if (current || retiring)
+        this.confirmedCleanupEpochs.set(id, handle.runtimeEpoch);
+      if (retiring) this.retiringPtys.delete(id);
+    }
+    if (!current) return;
+    if (!confirmed) this.retiringPtys.set(id, handle);
     // Preserve the tail of output BEFORE the handle (and its buffer) is dropped
     // — this is the only chance to keep the agent's own error line. Worth it
     // only for a genuine, unprompted non-zero exit: a clean exit (0) has
@@ -3494,12 +3590,15 @@ export class SessionManager {
     markerInput: TrustedSubsessionBindingMarker,
     trusted: TrustedSessionCreateOptions,
   ): Promise<HarnessSession> {
+    const closeGeneration = this.closeGenerations.get(reservedSessionId) ?? 0;
+    this.assertAdmission(reservedSessionId, closeGeneration);
     const marker = parseTrustedSubsessionBindingMarker(
       markerInput,
       reservedSessionId,
     );
     if (!marker) throw new SubsessionBindingMismatchError();
     const operation = async (): Promise<HarnessSession> => {
+      this.assertAdmission(reservedSessionId, closeGeneration);
       const existingMarker = this.subsessionBindings.get(reservedSessionId);
       const existingSession = this.sessions.get(reservedSessionId);
       if (existingMarker) {
@@ -3519,7 +3618,13 @@ export class SessionManager {
           throw error;
         }
       }
-      return this.createWithId(reservedSessionId, req, trusted, marker);
+      return this.createWithId(
+        reservedSessionId,
+        req,
+        trusted,
+        marker,
+        closeGeneration,
+      );
     };
     const next = this.subsessionBindingQueue.catch(() => {}).then(operation);
     this.subsessionBindingQueue = next.then(
@@ -3563,6 +3668,28 @@ export class SessionManager {
     req: CreateSessionRequest,
     trusted: TrustedSessionCreateOptions,
     expectedSubsessionBinding?: TrustedSubsessionBindingMarker,
+    closeGeneration = this.closeGenerations.get(id) ?? 0,
+  ): Promise<HarnessSession> {
+    return this.prepareSession(
+      id,
+      (generation) =>
+        this.createPrepared(
+          id,
+          req,
+          trusted,
+          generation,
+          expectedSubsessionBinding,
+        ),
+      closeGeneration,
+    );
+  }
+
+  private async createPrepared(
+    id: string,
+    req: CreateSessionRequest,
+    trusted: TrustedSessionCreateOptions,
+    closeGeneration: number,
+    expectedSubsessionBinding?: TrustedSubsessionBindingMarker,
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
     const marker = this.subsessionBindings.get(id);
@@ -3584,7 +3711,7 @@ export class SessionManager {
       // A project create may have been waiting behind another publication
       // when shutdown closed admission. Refuse it before claiming bootstrap,
       // issuing capabilities, or writing generated session state.
-      if (this.closing) throw new SessionManagerClosingError();
+      this.assertAdmission(id, closeGeneration);
       let preparedProjectSession:
         | Awaited<
             ReturnType<
@@ -3691,6 +3818,7 @@ export class SessionManager {
         await this.spawn(
           session,
           spec,
+          closeGeneration,
           mcpCredentialLaunch,
           () =>
             this.revalidateAgentMapIdentity(
@@ -3736,6 +3864,26 @@ export class SessionManager {
     nextInput: TrustedSubsessionBindingMarker,
     trusted: TrustedSessionCreateOptions,
     hasRecordedTurns: (sessionId: string) => Promise<boolean>,
+  ): Promise<HarnessSession> {
+    return this.prepareSession(id, (generation) =>
+      this.restartFreshPrepared(
+        id,
+        expected,
+        nextInput,
+        trusted,
+        hasRecordedTurns,
+        generation,
+      ),
+    );
+  }
+
+  private async restartFreshPrepared(
+    id: string,
+    expected: TrustedSubsessionBindingMarker,
+    nextInput: TrustedSubsessionBindingMarker,
+    trusted: TrustedSessionCreateOptions,
+    hasRecordedTurns: (sessionId: string) => Promise<boolean>,
+    closeGeneration: number,
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
     const currentExpected = parseTrustedSubsessionBindingMarker(expected, id);
@@ -3847,6 +3995,7 @@ export class SessionManager {
       await this.spawn(
         session,
         spec,
+        closeGeneration,
         mcpCredentialLaunch,
         () =>
           this.revalidateAgentMapIdentity(id, session.cwd, agentMapIdentity),
