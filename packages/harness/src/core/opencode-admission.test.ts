@@ -129,6 +129,44 @@ it("reconciles lost-dispatch uncertainty before resolving another context", asyn
   expect(dispatch).toHaveBeenCalledTimes(2);
 });
 
+it.each([400, 401, 404])(
+  "allows recovery after native pre-dispatch rejection %s",
+  async (status) => {
+    const delivery = new OpenCodeFinalResponse({
+      recoverPrompt: async () => ({ system: "retained recovery" }),
+    });
+    dispatch.mockResolvedValueOnce(new Response(null, { status }));
+    expect(
+      (await delivery.send(hosted, "ses_test", async () => prepared())).status,
+    ).toBe(status);
+    await delivery.recover(hosted, "ses_test", "msg_missing");
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("retains exact acknowledgement uncertainty after an unclassified HTTP failure", async () => {
+  const delivery = new OpenCodeFinalResponse();
+  dispatch.mockResolvedValueOnce(new Response(null, { status: 500 }));
+  expect(
+    (await delivery.send(hosted, "ses_test", async () => prepared())).status,
+  ).toBe(500);
+  await expect(
+    delivery.recover(hosted, "ses_test", "msg_missing"),
+  ).rejects.toThrow("reconciled");
+  const resolve = vi.fn(async () => prepared("next attempt"));
+  await expect(delivery.send(hosted, "ses_test", resolve)).rejects.toThrow(
+    "reconciled",
+  );
+  expect(resolve).not.toHaveBeenCalled();
+  messages.push(user("msg_accepted", "accepted attempt"));
+  dispatch.mockImplementation(async () => {
+    messages.push(user("msg_next", "next attempt"));
+    return new Response(null, { status: 204 });
+  });
+  await delivery.send(hosted, "ses_test", resolve);
+  expect(resolve).toHaveBeenCalledOnce();
+});
+
 it("does not prepare context after a native history failure", async () => {
   const resolve = vi.fn(async () => prepared());
   const failure = new OpenCodeTransportError(

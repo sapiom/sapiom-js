@@ -127,7 +127,13 @@ export class OpenCodeFinalResponse {
         { ...request, signal: dispatchSignal },
       );
       if (!response.ok) {
-        this.awaiting.delete(hosted.stateRoot);
+        // The pinned local native route rejects invalid input, authentication
+        // and missing sessions before forking prompt work. Other HTTP failures
+        // retain uncertainty until native history proves exact acknowledgement.
+        if ([400, 401, 404].includes(response.status)) {
+          this.awaiting.delete(hosted.stateRoot);
+          this.uncertain.delete(hosted.stateRoot);
+        }
         return response;
       }
       // A native 204 means scheduled. Keep admission closed until the user
