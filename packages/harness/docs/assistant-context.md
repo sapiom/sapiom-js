@@ -67,3 +67,19 @@ Missing optional sources are explicit. Required missing sources block dispatch.
 The foundation does not itself implement the project instruction loader, managed
 skill materializer, queue transitions, Resume/Continue UI or complete tool parity.
 Those integrations must preserve this contract and the existing access gate.
+
+## Retained source artifacts
+
+The source codec records the Studio policy, exact guidance bytes and explicit scope,
+skill and MCP manifests. Content hashes preserve UTF-8 bytes, BOMs and line endings;
+source revisions additionally include identity, provenance, applicability and fallback.
+Candidates detach provider buffers and facts before asynchronous acceptance work.
+The shared 4 MiB bound also caps aggregate retained material before copying it.
+
+Complete supplied skill artifacts contain `SKILL.md` plus sorted resource members,
+their exact bytes, hashes and executable flags. The codec rejects missing entrypoints,
+invalid encodings, links, traversing or nonportable paths, case collisions and file/
+directory conflicts. It does not collect or materialize a live skill directory.
+Every accepted available source must have verified material, even when optional;
+recorded absence remains explicit. Constructing a record does not commit it to disk
+or prove native acceptance. Source acquisition and generation refresh remain separate.
