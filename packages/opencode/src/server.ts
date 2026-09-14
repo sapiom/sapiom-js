@@ -20,6 +20,8 @@ export interface StartOpenCodeServerOptions {
   cwd: string;
   stateRoot: string;
   config: Record<string, unknown>;
+  /** Host-owned scope; requires the owned runtime's system-request identity capability. */
+  assistantContext?: { authorityScope: string };
   signal?: AbortSignal;
   environment?: NodeJS.ProcessEnv;
   command?: { executable: string; prefixArgs?: string[] };
@@ -201,18 +203,21 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 async function createCredentialIsolationPlugin(
   launchRoot: string,
   toolHomeEnvironment: NodeJS.ProcessEnv,
+  authorityScope?: string,
 ): Promise<{ pluginUrl: string; readyPath: string }> {
   const pluginPath = join(launchRoot, "credential-isolation.mjs");
   const readyPath = join(launchRoot, "credential-isolation.ready");
   const compiledHook = fileURLToPath(
-    new URL("./completion-hook.js", import.meta.url),
+    new URL("./assistant-context-hook.js", import.meta.url),
   );
   let hookPath = compiledHook;
   try {
     await access(hookPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    hookPath = fileURLToPath(new URL("./completion-hook.ts", import.meta.url));
+    hookPath = fileURLToPath(
+      new URL("./assistant-context-hook.ts", import.meta.url),
+    );
     await access(hookPath);
   }
   hookPath = hookPath.replace(
@@ -220,19 +225,19 @@ async function createCredentialIsolationPlugin(
     "$1app.asar.unpacked$2",
   );
   const source = `import { writeFile } from "node:fs/promises";
-import { createStudioCompletionHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
+import { createStudioAssistantContextHooks } from ${JSON.stringify(pathToFileURL(hookPath).href)};
 const keys = ${JSON.stringify(runtimeCredentialKeys)};
 const toolHomeKeys = ${JSON.stringify(toolHomeKeys)};
 const toolHomeEnvironment = ${JSON.stringify(toolHomeEnvironment)};
 export const SapiomCredentialIsolation = async (input) => {
   for (const key of keys) delete process.env[key];
-  const completionHooks = createStudioCompletionHooks(async (sessionID) => {
+  const assistantHooks = createStudioAssistantContextHooks(async (sessionID) => {
     const response = await input.client.session.messages({ path: { id: sessionID } });
     return response.data ?? [];
-  });
+  }, ${JSON.stringify(authorityScope) ?? "undefined"});
   await writeFile(${JSON.stringify(readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
   return {
-    ...completionHooks,
+    ...assistantHooks,
     "shell.env": async (_input, output) => {
       for (const key of keys) {
         delete process.env[key];
@@ -502,6 +507,11 @@ export async function startOpenCodeServer(
   options: StartOpenCodeServerOptions,
 ): Promise<OpenCodeServer> {
   if (options.signal?.aborted) throw new OpenCodeStartupError("cancelled");
+  if (
+    options.assistantContext &&
+    !/^[a-f0-9]{64}$/.test(options.assistantContext.authorityScope)
+  )
+    throw new OpenCodeStartupError("launch-failed");
   const command = options.command ?? {
     executable: join(
       dirname(
@@ -537,6 +547,7 @@ export async function startOpenCodeServer(
   const { pluginUrl, readyPath } = await createCredentialIsolationPlugin(
     launchRoot,
     toolHomeEnvironment,
+    options.assistantContext?.authorityScope,
   );
   const isolatedHome = join(launchRoot, "home");
   const directories = {

@@ -95,9 +95,22 @@ bytes and mutates the existing system array. Per-request validation failures sta
 sticky through the active native execution and are thrown at the provider boundary using the fixed
 message `Studio assistant context could not be verified`. Native serializes it as an
 `UnknownError` without triggering overload retries. Calling without an authority scope
-retains completion-only behavior. Launcher/host activation and the corrected artifact
-are separate stack prerequisites; this API alone does not enable accepted delivery.
+retains completion-only behavior. Scoped ordinary and synthetic requests require
+accepted context/v2 or valid inline context/v1; unclaimed helpers remain unchanged.
+Studio host activation and the corrected artifact are separate stack prerequisites.
 
+The managed launcher installs this consumer through its existing credential-isolation
+plugin when given `assistantContext: { authorityScope }`. The generated plugin uses
+the compiled hook, including the desktop unpacked path, and still awaits native
+plugin readiness. Omitting the option preserves completion-only launches. Studio
+host activation depends on the corrected runtime artifact.
+
+`SAPIOM_OPENCODE_CONTEXT_TEST_BINARY=/absolute/path/to/corrected/opencode pnpm test`
+runs the actual consumer test through the generated plugin and a controlled local
+model endpoint. It covers tools, titles, compaction/continuation, recovery, legacy
+inline context, isolated sessions, and malformed required context. Native errors
+are checked for a fixed message without stack paths or provider retries; Studio
+maps only that exact error shape inside the authorized conversation event scope.
 The full saved-text cache is bounded independently of successful capture proofs.
 Pending ordinary requests and native retries can reload evicted captures only
 when the saved bytes match their original fingerprint. Changing a saved user ID's
