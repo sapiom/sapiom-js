@@ -116,11 +116,28 @@ const typed = (system: string) => {
   return parsed.wire;
 };
 describe("accepted Assistant context delivery", () => {
+  it("rejects a valid acceptance from another active conversation before retained IO", async () => {
+    const f = fixture();
+    const accepted = await f.accept();
+    const read = vi.spyOn(f.store, "readAccepted");
+    await expect(
+      f.delivery.compose(
+        f.hosted,
+        "ses_other",
+        accepted,
+        { attemptToken: acceptanceId },
+        f.signal,
+      ),
+    ).rejects.toMatchObject({ failure: { code: "context_unavailable" } });
+    expect(read).not.toHaveBeenCalled();
+    expect(f.prepareRuntime).not.toHaveBeenCalled();
+  });
   it("retains selection and exact source bytes across new sends, store restart and recovery", async () => {
     const f = fixture();
     const accepted = await f.accept();
     const first = await f.delivery.compose(
       f.hosted,
+      "ses_fixture",
       accepted,
       { attemptToken: acceptanceId },
       f.signal,
@@ -179,6 +196,7 @@ describe("accepted Assistant context delivery", () => {
     const accepted = await f.accept();
     const prompt = await f.delivery.compose(
       f.hosted,
+      "ses_fixture",
       accepted,
       { attemptToken: acceptanceId },
       f.signal,
@@ -199,6 +217,7 @@ describe("accepted Assistant context delivery", () => {
     const accepted = await f.accept();
     const { system } = await f.delivery.compose(
       f.hosted,
+      "ses_fixture",
       accepted,
       { attemptToken: acceptanceId },
       f.signal,
@@ -226,6 +245,7 @@ describe("accepted Assistant context delivery", () => {
     const accepted = await f.accept();
     const { system } = await f.delivery.compose(
       f.hosted,
+      "ses_fixture",
       accepted,
       { attemptToken: acceptanceId },
       f.signal,
@@ -285,6 +305,7 @@ describe("accepted Assistant context delivery", () => {
       await expect(
         f.delivery.compose(
           f.hosted,
+          "ses_fixture",
           accepted,
           { attemptToken: acceptanceId },
           f.signal,
@@ -308,6 +329,7 @@ describe("accepted Assistant context delivery", () => {
     await expect(
       f.delivery.compose(
         f.hosted,
+        "ses_fixture",
         accepted,
         { attemptToken: acceptanceId },
         controller.signal,
@@ -325,6 +347,7 @@ describe("accepted Assistant context delivery", () => {
     await expect(
       f.delivery.compose(
         f.hosted,
+        "ses_fixture",
         accepted,
         { attemptToken: acceptanceId },
         f.signal,
