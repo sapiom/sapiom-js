@@ -124,3 +124,7 @@ and content hash. Only that exact no-reply seed is excluded from human task stat
 and archive counts; arbitrary synthetic messages and unexpected answers retain
 ordinary task semantics. Opening or reloading it does not trigger recovery.
 Missing native history offers a separate action to review the retained record.
+
+Brief reduction preserves the newest useful Assistant state and the user's task
+context, with explicit omission markers. Sibling legacy associations that claim
+the same native scope with contradictory workspaces fail closed before creation.

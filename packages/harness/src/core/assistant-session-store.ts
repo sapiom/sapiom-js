@@ -301,7 +301,10 @@ export class AssistantSessionStore {
             parsed.data.conversationId === key.harnessSessionId
           )
             throw new AssistantStorageError();
-          if (parsed.data.nativeScope === nativeScope) alreadyImported = true;
+          if (parsed.data.nativeScope === nativeScope) {
+            if (parsed.data.cwd !== key.cwd) throw new AssistantStorageError();
+            alreadyImported = true;
+          }
         }
       }
       let conversationId: string | undefined;

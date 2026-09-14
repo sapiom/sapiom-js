@@ -119,6 +119,52 @@ it("rejects contradictory identities while scanning other bindings before legacy
   expect(create).not.toHaveBeenCalled();
 });
 
+it("rejects a sibling claiming the same native scope for a different workspace without replacing history", async () => {
+  const nativeRoot = await legacy();
+  const other = {
+    ...key,
+    contextAuthorityScope: "c".repeat(64),
+    cwd: "/other",
+  };
+  const directory = await assistantDirectory(
+    root,
+    key.harnessSessionId,
+    other.contextAuthorityScope,
+  );
+  const saved = {
+    version: 1,
+    ...other,
+    nativeScope,
+    conversationId: "ses_other",
+    createdAt: 1,
+  };
+  await writeAssistantJson(directory, "association.json", saved);
+  await expect(store.associate(key, nativeScope, undefined)).rejects.toThrow();
+  await expect(store.associate(key, nativeScope, create)).rejects.toThrow();
+  expect(create).not.toHaveBeenCalled();
+  expect(await store.association(key)).toBeNull();
+  expect(await store.association(other)).toEqual(saved);
+  expect(
+    JSON.parse(await readFile(join(nativeRoot, "association.json"), "utf8")),
+  ).toEqual({ version: 1, conversationId: "ses_original" });
+});
+
+it("imports the requested native scope when a sibling belongs to a different workspace and native scope", async () => {
+  await legacy();
+  const other = {
+    ...key,
+    contextAuthorityScope: "c".repeat(64),
+    cwd: "/other",
+  };
+  const saved = await store.associate(other, "d".repeat(64), create);
+  create.mockClear();
+  expect(
+    (await store.associate(key, nativeScope, create))?.conversationId,
+  ).toBe("ses_original");
+  expect(create).not.toHaveBeenCalled();
+  expect(await store.association(other)).toEqual(saved);
+});
+
 it("keeps the previous durable checkpoint when cancellation interrupts a write", async () => {
   const ended = await store.transition(key.harnessSessionId, 0, {
     lifecycle: "ended",

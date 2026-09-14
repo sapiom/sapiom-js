@@ -78,17 +78,87 @@ it("bounds an oversized final turn without dropping the honesty block", () => {
         {
           id: `prt_long_${index}`,
           type: "text" as const,
-          text: "data ".repeat(240),
+          text: `Reply ${index}: ${"data ".repeat(235)}`,
           truncated: false,
         },
       ],
     })),
   );
   record.messageCount = 31;
+  const original = JSON.stringify(record);
   const frozen = buildAssistantContinuationBrief(record);
   expect(frozen.estimatedTokens).toBeLessThanOrEqual(6000);
-  expect(frozen.text).toContain("excerpt truncated");
+  expect(frozen.text).toContain("Assistant messages omitted from this excerpt");
   expect(frozen.text).toContain("Record revision 7");
+  expect(frozen.text).toContain("Task 0: preserve current work.");
+  expect(frozen.text).toContain("Assistant msg_reply_29:");
+  expect(frozen.text).toContain("Reply 29:");
+  expect(frozen.text).not.toContain("Assistant msg_reply_0:");
+  expect(frozen).toEqual(buildAssistantContinuationBrief(record));
+  expect(JSON.stringify(record)).toBe(original);
+});
+it("reserves user context and the newest Assistant parts when both messages are oversized", () => {
+  const record = fixture();
+  const parts = (prefix: string, count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `prt_${prefix}_${index}`,
+      type: "text" as const,
+      text: `${prefix} state ${index}: ${"data ".repeat(235)}`,
+      truncated: false,
+    }));
+  record.turns[0]!.messages[0]!.parts = parts("user", 12);
+  record.turns[0]!.messages.push({
+    id: "msg_reply",
+    role: "assistant",
+    parentId: "msg_user_0",
+    createdAt: 2,
+    completedAt: null,
+    parts: parts("assistant", 13),
+  });
+  record.messageCount = 2;
+  const frozen = buildAssistantContinuationBrief(record);
+  expect(frozen.estimatedTokens).toBeLessThanOrEqual(6000);
+  expect(frozen.text).toContain("user state 0:");
+  expect(frozen.text).toContain("excerpt truncated");
+  expect(frozen.text).toContain("assistant state 12:");
+  expect(frozen.text).not.toContain("assistant state 0:");
+  expect(frozen.text).toContain("1 earlier parts omitted.");
+  expect(frozen.text).toContain("incomplete; do not assume success");
+});
+it("keeps the newest useful Assistant state ahead of later empty native messages", () => {
+  const record = fixture();
+  record.turns[0]!.messages.push(
+    {
+      id: "msg_state",
+      role: "assistant",
+      parentId: "msg_user_0",
+      createdAt: 2,
+      completedAt: null,
+      parts: [
+        {
+          id: "prt_state",
+          type: "text",
+          text: "Latest useful state: implementation ready; verification still pending.",
+          truncated: false,
+        },
+      ],
+    },
+    ...Array.from({ length: 200 }, (_, index) => ({
+      id: `msg_empty_${index}_${"x".repeat(100)}`,
+      role: "assistant" as const,
+      parentId: "msg_user_0",
+      createdAt: index + 3,
+      completedAt: null,
+      parts: [],
+    })),
+  );
+  record.messageCount = 202;
+  const frozen = buildAssistantContinuationBrief(record);
+  expect(frozen.estimatedTokens).toBeLessThanOrEqual(6000);
+  expect(frozen.text).toContain(
+    "Latest useful state: implementation ready; verification still pending.",
+  );
+  expect(frozen.text).toContain("Assistant messages omitted from this excerpt");
 });
 it("fails without usable public history or with corrupt binding metadata", () => {
   const empty = fixture(0);

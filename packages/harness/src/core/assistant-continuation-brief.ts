@@ -43,7 +43,11 @@ export function buildAssistantContinuationBrief(
     .slice(-RESUME_BRIEF_DEFAULT_MAX_TURNS)
     .map((turn) => {
       const messages = turn.messages.map((message) => {
-        const parts = message.parts.slice(0, 12).map((part) => {
+        const selected =
+          message.role === "assistant"
+            ? message.parts.slice(-12)
+            : message.parts.slice(0, 12);
+        const parts = selected.map((part) => {
           switch (part.type) {
             case "text":
               return clamp(part.text, 1_200);
@@ -55,11 +59,25 @@ export function buildAssistantContinuationBrief(
               return `Omitted ${part.nativeType} part.`;
           }
         });
-        if (message.parts.length > 12)
-          parts.push(`${message.parts.length - 12} further parts omitted.`);
-        return `${message.role === "user" ? "User" : "Assistant"} ${message.id}:\n${parts.join("\n")}`;
+        if (message.parts.length > 12) {
+          const omitted = `${message.parts.length - 12} ${message.role === "assistant" ? "earlier" : "further"} parts omitted.`;
+          if (message.role === "assistant") parts.unshift(omitted);
+          else parts.push(omitted);
+        }
+        return {
+          text: `${message.role === "user" ? "User" : "Assistant"} ${message.id}:\n${parts.join("\n")}`,
+          useful: message.parts.some(
+            (part) =>
+              part.type !== "omitted" &&
+              (part.type !== "text" || part.text.trim().length > 0),
+          ),
+        };
       });
-      return `Turn ${turn.id} (${turn.incomplete ? "incomplete; do not assume success" : "recorded as complete"})\n${messages.join("\n\n")}`;
+      return {
+        heading: `Turn ${turn.id} (${turn.incomplete ? "incomplete; do not assume success" : "recorded as complete"})`,
+        messages,
+        omittedMessages: 0,
+      };
     });
   const render = () =>
     [
@@ -69,7 +87,18 @@ export function buildAssistantContinuationBrief(
       `Workspace: ${clamp(record.binding.cwd, 400)}. Record revision ${record.revision}, captured ${record.capturedAt}.`,
       `Retained ${turns.length} of ${record.turnCount} recorded turns; ${record.turnCount - turns.length} omitted. Text and tool fields are excerpts.`,
       `Record limitations: ${record.limitations.length ? record.limitations.join(", ") : "none reported; this remains a reconstruction"}.`,
-      ...turns,
+      ...turns.map((turn) =>
+        [
+          turn.heading,
+          turn.messages[0]!.text,
+          ...(turn.omittedMessages
+            ? [
+                `${turn.omittedMessages} Assistant messages omitted from this excerpt.`,
+              ]
+            : []),
+          ...turn.messages.slice(1).map((message) => message.text),
+        ].join("\n\n"),
+      ),
     ].join("\n\n");
   let text = render();
   while (
@@ -80,17 +109,22 @@ export function buildAssistantContinuationBrief(
     text = render();
   }
   if (estimateBriefTokens(text) > RESUME_BRIEF_DEFAULT_MAX_TOKENS) {
-    // Keep the honesty/provenance block, and explicitly mark an oversized final turn.
-    turns[0] = clamp(
-      turns[0]!,
-      Math.max(
-        1,
-        RESUME_BRIEF_DEFAULT_MAX_TOKENS * 4 -
-          (text.length - turns[0]!.length) -
-          40,
-      ),
-    );
+    // Reserve user context, then remove empty/old Assistant messages. Never
+    // prefix-clamp the whole turn: the newest useful state is at its end.
+    const newest = turns[0]!;
+    newest.messages[0]!.text = clamp(newest.messages[0]!.text, 1_200);
     text = render();
+    while (
+      newest.messages.length > 2 &&
+      estimateBriefTokens(text) > RESUME_BRIEF_DEFAULT_MAX_TOKENS
+    ) {
+      const empty = newest.messages.findIndex(
+        (message, index) => index > 0 && !message.useful,
+      );
+      newest.messages.splice(empty > 0 ? empty : 1, 1);
+      newest.omittedMessages++;
+      text = render();
+    }
   }
   if (estimateBriefTokens(text) > RESUME_BRIEF_DEFAULT_MAX_TOKENS)
     throw new Error(
