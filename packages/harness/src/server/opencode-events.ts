@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { AssistantContextError } from "@sapiom/opencode";
 import type { Response } from "express";
 import {
   OpenCodeTransportError,
@@ -44,6 +45,21 @@ export function scopedOpenCodeEvent(
   )
     ids.push(info.id);
   const present = ids.filter((value) => value !== undefined);
+  const error = record(properties.error);
+  const data = record(error.data);
+  if (
+    event.type === "session.error" &&
+    present.length > 0 &&
+    present.every((value) => value === id) &&
+    error.name === "UnknownError" &&
+    Object.keys(error).length === 2 &&
+    Object.keys(data).length === 1 &&
+    data.message === new AssistantContextError().message
+  )
+    return {
+      type: "studio.error",
+      properties: openCodeTransportFailure("context_unavailable"),
+    };
   if (
     event.type === "session.error" &&
     record(properties.error).name === "ProviderAuthError" &&

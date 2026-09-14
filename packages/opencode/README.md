@@ -93,3 +93,16 @@ message `Studio assistant context could not be verified`. Native serializes it a
 `UnknownError` without triggering overload retries. Calling without an authority scope
 retains completion-only behavior. Launcher/host activation and the corrected artifact
 are separate stack prerequisites; this API alone does not enable accepted delivery.
+
+The managed launcher installs this consumer through its existing credential-isolation
+plugin when given `assistantContext: { authorityScope }`. The generated plugin uses
+the compiled hook, including the desktop unpacked path, and still awaits native
+plugin readiness. Omitting the option preserves completion-only launches. Studio
+host activation depends on the corrected runtime artifact.
+
+`SAPIOM_OPENCODE_CONTEXT_TEST_BINARY=/absolute/path/to/corrected/opencode pnpm test`
+runs the actual consumer test through the generated plugin and a controlled local
+model endpoint. It covers tools, titles, compaction/continuation, recovery, legacy
+inline context, isolated sessions, and malformed required context. Native errors
+are checked for a fixed message without stack paths or provider retries; Studio
+maps only that exact error shape inside the authorized conversation event scope.

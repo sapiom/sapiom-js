@@ -1,66 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AssistantContextError,
-  assistantRevision,
   assistantContentHash,
 } from "./assistant-context-contract.js";
 import { createStudioAssistantContextHooks } from "./assistant-context-hook.js";
-import {
-  serializeAcceptedAssistantSystem,
-  studioAssistantCompletionSystem,
-} from "./assistant-context-wire.js";
+import { studioAssistantCompletionSystem } from "./assistant-context-wire.js";
 import {
   fixtureAccepted,
   fixtureScope,
-  fixtureSource,
+  fixtureSystem as save,
   fixtureToken,
 } from "./__fixtures__/assistant-context.js";
 import type { CompletionMessage } from "./completion-hook.js";
 
 const nextToken = "22222222-2222-4222-8222-222222222222";
-function save(
-  sessionID = "ses_fixture",
-  token = fixtureToken,
-  text = "Profile\r\nexact bytes",
-) {
-  const original = fixtureAccepted();
-  const instructions = {
-    ...original.instructionSet,
-    sources: original.instructionSet.sources.map((source) =>
-      source.id === "profile"
-        ? fixtureSource("profile", "profile", text)
-        : source,
-    ),
-  };
-  instructions.revision = assistantRevision(instructions);
-  const record = {
-    ...original,
-    conversationId: sessionID,
-    instructionSet: instructions,
-  };
-  record.revision = assistantRevision(record);
-  const { context, instructionSet, ...accepted } = record;
-  return serializeAcceptedAssistantSystem(
-    studioAssistantCompletionSystem(token),
-    {
-      schemaVersion: 2,
-      accepted,
-      context,
-      attemptToken: token,
-      stable: {
-        policy: { sourceId: "policy", text: "Studio policy" },
-        guidance: [{ sourceId: "profile", text }],
-        manifests: instructionSet.sources
-          .filter(
-            (source) =>
-              source.status === "available" && source.format === "json",
-          )
-          .map((source) => ({ sourceId: source.id, text: "[]" })),
-        sourceManifest: instructionSet,
-      },
-    },
-  );
-}
+
 const user = (
   id: string,
   system: unknown,

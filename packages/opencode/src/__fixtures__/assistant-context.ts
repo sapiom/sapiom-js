@@ -1,4 +1,8 @@
 import {
+  serializeAcceptedAssistantSystem,
+  studioAssistantCompletionSystem,
+} from "../assistant-context-wire.js";
+import {
   assistantContentHash,
   assistantRevision,
   assistantManifestFields,
@@ -62,4 +66,48 @@ export function fixtureAccepted(): AcceptedAssistantContext {
     },
   };
   return { ...accepted, revision: assistantRevision(accepted) };
+}
+
+export function fixtureSystem(
+  sessionID = "ses_fixture",
+  token = fixtureToken,
+  text = "Profile\r\nexact bytes",
+) {
+  const original = fixtureAccepted();
+  const instructions = {
+    ...original.instructionSet,
+    sources: original.instructionSet.sources.map((source) =>
+      source.id === "profile"
+        ? fixtureSource("profile", "profile", text)
+        : source,
+    ),
+  };
+  instructions.revision = assistantRevision(instructions);
+  const record = {
+    ...original,
+    conversationId: sessionID,
+    instructionSet: instructions,
+  };
+  record.revision = assistantRevision(record);
+  const { context, instructionSet, ...accepted } = record;
+  return serializeAcceptedAssistantSystem(
+    studioAssistantCompletionSystem(token),
+    {
+      schemaVersion: 2,
+      accepted,
+      context,
+      attemptToken: token,
+      stable: {
+        policy: { sourceId: "policy", text: "Studio policy" },
+        guidance: [{ sourceId: "profile", text }],
+        manifests: instructionSet.sources
+          .filter(
+            (source) =>
+              source.status === "available" && source.format === "json",
+          )
+          .map((source) => ({ sourceId: source.id, text: "[]" })),
+        sourceManifest: instructionSet,
+      },
+    },
+  );
 }

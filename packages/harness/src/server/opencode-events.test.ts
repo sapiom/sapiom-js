@@ -2,9 +2,58 @@ import { EventEmitter } from "node:events";
 import type { Response as ExpressResponse } from "express";
 import { afterEach, expect, it, vi } from "vitest";
 import type { HostedOpenCode } from "../core/opencode-host.js";
-import { readOpenCodeEvents, streamOpenCodeEvents } from "./opencode-events.js";
+import {
+  readOpenCodeEvents,
+  streamOpenCodeEvents,
+  scopedOpenCodeEvent,
+} from "./opencode-events.js";
+import { AssistantContextError } from "@sapiom/opencode";
+import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 
 const aborts: AbortController[] = [];
+it("maps only the exact scoped native context error and never forwards its data", () => {
+  const scope = { cwd: "/workspace", isCurrent: () => true };
+  const error = {
+    name: "UnknownError",
+    data: { message: new AssistantContextError().message },
+  };
+  const native = {
+    type: "session.error",
+    properties: { sessionID: "ses_a", error },
+  };
+  expect(scopedOpenCodeEvent(native, "ses_a", scope)).toEqual({
+    type: "studio.error",
+    properties: openCodeTransportFailure("context_unavailable"),
+  });
+  for (const value of [
+    {
+      ...native,
+      properties: { ...native.properties, sessionID: "ses_foreign" },
+    },
+    { directory: "/foreign", payload: native },
+    { ...native, properties: { error } },
+    {
+      type: "studio.error",
+      properties: openCodeTransportFailure("context_unavailable"),
+    },
+  ])
+    expect(scopedOpenCodeEvent(value, "ses_a", scope)).toBeNull();
+  expect(
+    scopedOpenCodeEvent(native, "ses_a", { ...scope, isCurrent: () => false }),
+  ).toBeNull();
+  for (const changed of [
+    { name: "StudioAssistantContextError", data: error.data },
+    { ...error, data: { message: error.data.message + "\nprivate stack" } },
+    { ...error, data: { ...error.data, details: "extra" } },
+  ])
+    expect(
+      scopedOpenCodeEvent(
+        { ...native, properties: { ...native.properties, error: changed } },
+        "ses_a",
+        scope,
+      )?.type,
+    ).toBe("session.error");
+});
 afterEach(() => {
   for (const abort of aborts.splice(0)) abort.abort();
 });
