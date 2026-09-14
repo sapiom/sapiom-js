@@ -48,6 +48,13 @@ so a successful GET can return an older `capturedAt`. Disposal and authority los
 cancel capture; opening a retained record never resumes execution.
 # Selected native availability
 
+Resume commits its operation UUID and exact saved-binding digest atomically with
+the lifecycle header. The private proof is excluded from public state. An exact
+retry can reconcile a lost acknowledgement; a later lifecycle revision, End or
+changed binding invalidates it. A runtime restored after a crash revalidates
+native history and original accepted context, then commits a paused lifecycle.
+No runtime lease or saved system prompt is persisted in the operation proof.
+
 Open an Assistant entry from Studio's existing session history to read its saved
 messages and tool excerpts. Mixed Terminal and Assistant entries are grouped by
 Studio session ID. Sessions that have never started a Terminal remain visible.
