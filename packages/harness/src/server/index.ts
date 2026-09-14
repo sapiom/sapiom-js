@@ -3564,6 +3564,7 @@ export const startServer = async (
       options.bootToken,
       createAssistantContextResolver({
         getSession: (id) => sessionManager.get(id),
+        resolveProject: (id) => studioProjectCatalog.resolveIdentity(id),
         getWorkflows: readPublicWorkflows,
         getEnvironment: () => assistantAccess.get()?.environment ?? null,
         loadSystemPrompt: options.loadSystemPrompt,
