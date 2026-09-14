@@ -137,7 +137,7 @@ it("authorizes sibling roots without changing native cwd or exposing foreign pat
   await expect(resolve(hosted, null)).rejects.toThrow("context");
 });
 
-it.each(["project", "principal", "roots"])(
+it.each(["project", "principal", "roots", "version", "binding", "repository"])(
   "rejects %s changes while providers resolve",
   async (change) => {
     const { project, session, hosted, options } = fixture();
@@ -145,6 +145,10 @@ it.each(["project", "principal", "roots"])(
       ...options,
       loadSystemPrompt: async () => {
         if (change === "roots") project.rootBindings[0]!.status = "missing";
+        else if (change === "version") project.identityVersion += 1;
+        else if (change === "binding") project.rootBindings[0]!.id = "other";
+        else if (change === "repository")
+          project.rootBindings[0]!.repositoryId = "other";
         else
           session.agentMapIdentity = {
             ...session.agentMapIdentity!,
@@ -156,6 +160,30 @@ it.each(["project", "principal", "roots"])(
       },
     });
     await expect(resolve(hosted)).rejects.toThrow("context");
+  },
+);
+
+it.each(["before", "during"])(
+  "rejects an active root that disappears %s guidance loads",
+  async (when) => {
+    const { project, hosted, session, options } = fixture();
+    session.cwd = hosted.cwd = join(root, "cedar");
+    project.rootBindings.push({
+      id: "sibling",
+      repositoryId: null,
+      localRootRef: join(root, "orchid"),
+      status: "active",
+    });
+    const remove = () => rm(join(root, "orchid"), { recursive: true });
+    if (when === "before") await remove();
+    const resolve = createAssistantContextResolver({
+      ...options,
+      loadGuidance: async () => {
+        if (when === "during") await remove();
+        return [];
+      },
+    });
+    await expect(resolve(hosted, null)).rejects.toThrow("context");
   },
 );
 

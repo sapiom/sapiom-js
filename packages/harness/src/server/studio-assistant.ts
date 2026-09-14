@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type { HarnessSession, WorkflowInfo } from "../shared/types.js";
 import type { HostedOpenCode } from "../core/opencode-host.js";
@@ -72,10 +73,25 @@ export function createAssistantContextResolver(
       projectId: current.agentMapIdentity?.projectId ?? null,
       boundAgentPath: current.boundWorkflowPath,
     };
-    const projectRoots = async () => {
+    const projectAuthority = async () => {
       const project = session.projectId
         ? await options.resolveProject(session.projectId).catch(() => null)
         : null;
+      const revision = project
+        ? JSON.stringify([project.identityVersion, project.rootBindings])
+        : null;
+      const roots = await Promise.all(
+        (project
+          ? project.rootBindings
+              .filter((root) => root.status === "active")
+              .map((root) => root.localRootRef)
+          : [hosted.cwd]
+        ).map(async (path) => {
+          const canonical = await realpath(path).catch(() => null);
+          if (!canonical) throw assistantContextUnavailable();
+          return canonical;
+        }),
+      );
       const live = options.getSession(session.id);
       if (
         !live ||
@@ -87,14 +103,9 @@ export function createAssistantContextResolver(
         (session.projectId && project?.projectId !== session.projectId)
       )
         throw assistantContextUnavailable();
-      return project
-        ? project.rootBindings
-            .filter((root) => root.status === "active")
-            .map((root) => root.localRootRef)
-            .sort()
-        : [hosted.cwd];
+      return { roots: roots.sort(), revision };
     };
-    const roots = await projectRoots();
+    const authority = await projectAuthority();
     const [workflows, profile, capabilities] = await Promise.all([
       options.getWorkflows(),
       assistantProfile(environment, options.loadSystemPrompt),
@@ -104,7 +115,7 @@ export function createAssistantContextResolver(
       hosted,
       session,
       selectedAgentPath,
-      projectRoots: roots,
+      projectRoots: authority.roots,
       workflows,
       environment: environment.name,
       capabilities,
@@ -138,7 +149,7 @@ export function createAssistantContextResolver(
           },
         ];
     if (
-      JSON.stringify(await projectRoots()) !== JSON.stringify(roots) ||
+      JSON.stringify(await projectAuthority()) !== JSON.stringify(authority) ||
       !hosted.isCurrent() ||
       hosted.signal.aborted
     )
