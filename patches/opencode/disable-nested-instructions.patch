@@ -1,0 +1,46 @@
+--- a/packages/opencode/src/session/instruction.ts
++++ b/packages/opencode/src/session/instruction.ts
+@@ -181,6 +181,7 @@
+       filepath: string,
+       messageID: MessageID,
+     ) {
++      if (Flag.OPENCODE_DISABLE_PROJECT_CONFIG) return []
+       const sys = yield* systemPaths()
+       const already = extract(messages)
+       const results: { filepath: string; content: string }[] = []
+--- a/packages/opencode/test/session/instruction.test.ts
++++ b/packages/opencode/test/session/instruction.test.ts
+@@ -262,3 +262,33 @@
+     }),
+   )
+ })
++
++
++describe("Instruction.resolve project configuration isolation", () => {
++  for (const name of ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]) {
++    it.live(`honors the project disable flag before discovering or claiming ${name}`, () =>
++      withFiles(
++        { [`nested/${name}`]: "Nested ambient rule", "nested/file.ts": "task content" },
++        (dir) => Effect.gen(function* () {
++          const svc = yield* Instruction.Service
++          const prior = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
++          const id = MessageID.make("msg_disabled-nested-rule")
++          const filepath = path.join(dir, "nested", "file.ts")
++          try {
++            process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1"
++            expect(yield* svc.resolve([], filepath, id)).toEqual([])
++            process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "0"
++            const loaded = yield* svc.resolve([], filepath, id)
++            expect(loaded).toHaveLength(1)
++            expect(loaded[0].filepath).toBe(path.join(dir, "nested", name))
++            expect(loaded[0].content).toContain("Nested ambient rule")
++            expect(yield* svc.resolve([], filepath, id)).toEqual([])
++          } finally {
++            if (prior === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG
++            else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = prior
++          }
++        }),
++      ),
++    )
++  }
++})
