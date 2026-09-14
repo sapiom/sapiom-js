@@ -92,6 +92,47 @@ it("reconciles crash-after-commit with a paused CAS from the proved committed re
   });
 });
 
+it("rejects an exact original-base replay that requests different execution", async () => {
+  const saved = await store.commitResume(id, 1, request, "paused");
+  await expect(store.commitResume(id, 1, request, "enabled")).rejects.toThrow(
+    "changed",
+  );
+  expect(await store.lifecycle(id)).toEqual(saved);
+});
+
+it("reconciles the original Resume proof after publication and rollback both fail", async () => {
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  let published = false;
+  vi.mocked(fs.rename).mockImplementation(async (from, to) => {
+    if (String(from).endsWith(".rollback"))
+      throw Object.assign(new Error("rollback refused"), { code: "EIO" });
+    await actual.rename(from, to);
+    if (to === document()) published = true;
+  });
+  vi.mocked(fs.open).mockImplementation(async (file, flags, mode) => {
+    if (published && flags === "r")
+      throw Object.assign(new Error("durability unknown"), { code: "EIO" });
+    return actual.open(file, flags, mode);
+  });
+  await expect(
+    store.commitResume(id, 1, request, "paused"),
+  ).rejects.toMatchObject({ code: "ASSISTANT_STORAGE_COMMIT_UNCONFIRMED" });
+  vi.mocked(fs.open).mockImplementation(actual.open);
+  vi.mocked(fs.rename).mockImplementation(actual.rename);
+  const previous = JSON.parse(await readFile(`${document()}.previous`, "utf8"));
+  expect(previous).toMatchObject({ revision: 1, lifecycle: "ended" });
+  const restarted = new AssistantSessionStore(root);
+  expect(await restarted.commitResume(id, 1, request, "paused")).toMatchObject({
+    revision: 2,
+    lifecycle: "open",
+    execution: "paused",
+  });
+  expect((await restarted.resumeState(id)).resumeOperation).toMatchObject({
+    operationId: request.operationId,
+    committedRevision: 2,
+  });
+});
+
 it.each(["ending", "ended", "enabled"] as const)(
   "preserves proof but rejects operation replay after a later %s transition",
   async (next) => {

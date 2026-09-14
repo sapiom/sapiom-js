@@ -110,9 +110,7 @@ export class AssistantSessionStore {
   }
 
   /** Read the public header and private operation proof from one atomic generation. */
-  async resumeState(
-    id: string,
-  ): Promise<{
+  async resumeState(id: string): Promise<{
     lifecycle: AssistantLifecycle | null;
     resumeOperation: AssistantResumeOperation | null;
   }> {
@@ -191,8 +189,11 @@ export class AssistantSessionStore {
           current?.lifecycle !== "open")
       )
         throw new AssistantSessionRevisionError();
-      if (retry && expected === request.expectedRevision)
+      if (retry && expected === request.expectedRevision) {
+        if (current!.execution !== execution)
+          throw new AssistantSessionRevisionError();
         return publicLifecycle(current!);
+      }
       if (
         revision !== expected ||
         (!retry && revision !== request.expectedRevision) ||

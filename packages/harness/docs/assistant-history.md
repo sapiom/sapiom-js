@@ -138,3 +138,8 @@ Compaction provenance follows native control-message semantics: user compaction
 parts or text parts with literal synthetic and continuation markers. Tool/file
 parts and truthy non-boolean markers cannot inherit an earlier accepted context,
 completion token, Resume preflight or recovery request.
+
+If publication and rollback both fail, metadata reports an unconfirmed commit;
+the new valid generation may already be readable and the previous generation is
+retained. Resume reconciles its exact durable operation proof after restart.
+An original-base replay cannot change the operation's committed execution state.

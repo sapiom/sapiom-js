@@ -10,6 +10,11 @@ export class AssistantStorageError extends Error {
     super("Assistant history storage is unavailable");
   }
 }
+/** Publication may be readable despite a failed durability/rollback acknowledgement.
+ * Callers must reconcile their operation proof; absence of success is not rollback. */
+export class AssistantStorageCommitUnconfirmedError extends AssistantStorageError {
+  readonly code = "ASSISTANT_STORAGE_COMMIT_UNCONFIRMED";
+}
 
 /** Only server-derived identifiers may select private directories. Reject symlink escapes. */
 export async function assistantDirectory(
@@ -114,16 +119,20 @@ export async function writeAssistantJson(
     published = true;
     await syncDirectory(directory);
   } catch (error) {
+    let restored = false;
     if (published && retained) {
       // The backup remains recoverable even if the filesystem also refuses rollback.
       try {
         await fs.link(previous, rollback);
         await fs.rename(rollback, destination);
         await syncDirectory(directory);
+        restored = true;
       } catch {
         /* Preserve both generations for a later successful read. */
       }
     }
+    if (published && !restored)
+      throw new AssistantStorageCommitUnconfirmedError();
     throw error;
   } finally {
     await Promise.all(
