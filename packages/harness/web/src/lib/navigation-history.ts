@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import type { SessionSummary } from "@shared/types";
+import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import type { WorkspaceKey } from "@shared/workspace-scope";
 import type { StudioProjectId } from "@shared/agent-map";
 
@@ -22,6 +23,7 @@ export type NavigationVisit =
       label: string;
     }
   | { kind: "review"; summary: SessionSummary }
+  | { kind: "assistant-review"; entry: AssistantHistoryEntry; authority: string }
   | { kind: "composer" }
   | { kind: "templates" };
 
@@ -54,6 +56,8 @@ export function sameNavigationVisit(
   if (a.kind === "review" && b.kind === "review") {
     return a.summary.agentSessionId === b.summary.agentSessionId;
   }
+  if (a.kind === "assistant-review" && b.kind === "assistant-review")
+    return a.entry.harnessSessionId === b.entry.harnessSessionId && a.authority === b.authority;
   return a.kind === b.kind;
 }
 

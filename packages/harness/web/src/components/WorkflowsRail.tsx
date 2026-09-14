@@ -1,4 +1,5 @@
 import { AssistantActivity } from "./AssistantActivity";
+import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import type { AssistantProjection } from "../lib/assistant-state";
 import {
   useCallback,
@@ -158,6 +159,9 @@ interface WorkflowsRailProps {
   onNewSession: () => void;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
+  onReviewAssistant: (entry: AssistantHistoryEntry) => void;
+  assistantHistory: AssistantHistoryEntry[];
+  assistantHistoryUnavailable: boolean;
   history: SessionSummary[];
   historyLoading: boolean;
   onOpenHistory: (cwds: string[]) => void;
@@ -418,7 +422,7 @@ function PastSessionRow({
   assistant?: AssistantProjection;
   sessionId?: string;
   testid: string;
-  harness: HarnessKind;
+  harness?: HarnessKind;
   title: string;
   meta: string;
   cwd: string;
@@ -444,7 +448,7 @@ function PastSessionRow({
       {...trackingAttrs({ object: "session" })}
     >
       <span className="session-item-icon">
-        <HarnessBrandIcon kind={harness} size={13} />
+        {harness ? <HarnessBrandIcon kind={harness} size={13} /> : <Icon name="MessageSquare" size={13} />}
       </span>
       <span className="session-item-copy">
         <span className="session-item-title">{title}</span>
@@ -489,6 +493,9 @@ export function WorkflowsRail({
   onSelectOverview,
   onNewSession,
   onReviewSummary,
+  onReviewAssistant,
+  assistantHistory,
+  assistantHistoryUnavailable,
   history,
   historyLoading,
   onOpenHistory,
@@ -642,6 +649,7 @@ export function WorkflowsRail({
   const exitedSessions = sessions.filter(
     (session) => session.status === "exited",
   );
+  const assistantByStudio = new Map(assistantHistory.map((entry) => [entry.harnessSessionId, entry]));
 
   const toggleHistory = (): void => {
     const next = !historyOpen;
@@ -670,16 +678,17 @@ export function WorkflowsRail({
       ) && !registryAgentIds.has(summary.agentSessionId),
   );
   const pastRows = [
-    ...exitedSessions.map((session) => ({
+    ...exitedSessions.filter((session) => !assistantByStudio.has(session.id)).map((session) => ({
       kind: "exited" as const,
       at: session.lastActiveAt,
       session,
     })),
-    ...pastSummaries.map((summary) => ({
+    ...pastSummaries.filter((summary) => !summary.harnessSessionId || !assistantByStudio.has(summary.harnessSessionId)).map((summary) => ({
       kind: "summary" as const,
       at: summary.lastActiveAt,
       summary,
     })),
+    ...assistantHistory.map((entry) => ({ kind: "assistant" as const, at: entry.updatedAt, entry })),
   ].sort((a, b) => b.at.localeCompare(a.at));
 
   // Exited registry rows render from the session record (it carries live status
@@ -1181,6 +1190,19 @@ export function WorkflowsRail({
                     data-testid="past-sessions-card"
                   >
                     {pastRows.map((row) => {
+                      if (row.kind === "assistant") {
+                        const terminal = sessions.find((session) => session.id === row.entry.harnessSessionId);
+                        return <PastSessionRow
+                          key={row.entry.harnessSessionId}
+                          testid={`assistant-history-${row.entry.harnessSessionId}`}
+                          title={row.entry.title}
+                          meta={`${terminal && terminal.terminalState !== "not-started" ? "Terminal + Assistant" : "Assistant"} · ${row.entry.history === "available" ? "saved record" : row.entry.history === "partial" ? "partial record" : "record " + row.entry.history}`}
+                          cwd={row.entry.cwd}
+                          resumeMode={undefined}
+                          isSelected={false}
+                          onOpen={() => { onReviewAssistant(row.entry); closeHistory(); }}
+                        />;
+                      }
                       if (row.kind === "exited") {
                         // No agentSessionId at all: the agent never established
                         // a session, so there is provably nothing to resume —
@@ -1250,6 +1272,7 @@ export function WorkflowsRail({
                     {historyLoading && (
                       <div className="session-dropdown-empty">Loading…</div>
                     )}
+                    {assistantHistoryUnavailable && <div className="session-dropdown-empty">Assistant history is unavailable. Reopen history to retry.</div>}
                     {!historyLoading && pastRows.length === 0 && (
                       <div className="session-dropdown-empty">
                         No past sessions yet

@@ -9,6 +9,7 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface DeadSessionPaneProps {
   session: HarnessSession;
+  terminalOnly?: boolean;
   /**
    * Server-verified resumability for this session, from its history row.
    * Undefined while that lookup is still in flight — Resume stays available in
@@ -74,6 +75,7 @@ function resumeBlockedReason(session: HarnessSession): string {
  */
 export function DeadSessionPane({
   session,
+  terminalOnly = false,
   resumeMode,
   loadRecord,
   onResume,
@@ -107,7 +109,7 @@ export function DeadSessionPane({
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
         </span>
-        <div className="dead-session-title">Session exited</div>
+        <div className="dead-session-title">{terminalOnly ? "Terminal exited" : "Session exited"}</div>
         <div className="dead-session-meta">
           {session.cwd}
           {session.exitCode != null && ` · exit code ${session.exitCode}`}

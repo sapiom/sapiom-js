@@ -1,4 +1,6 @@
 import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
+import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
+import { readAssistantHistory } from "./assistant-history-client";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -137,6 +139,9 @@ export interface PendingWorkspace {
 
 export interface HarnessStateHook {
   assistant: AssistantProjection;
+  assistantHistory: AssistantHistoryEntry[];
+  assistantHistoryAuthority: string | null;
+  assistantHistoryUnavailable: boolean;
   endingSessionIds: ReadonlySet<string>;
   authRevision: number;
   state: AppState | null;
@@ -422,6 +427,16 @@ export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
   const assistantOrder = useRef(new AssistantStateOrder()).current;
   const [assistant, setAssistant] = useState(() => assistantOrder.current());
+  const authoritySequence = useRef(0);
+  const assistantAuthorityKey = useCallback(() => {
+    const snapshot = assistantOrder.current().snapshot;
+    return snapshot?.enabled
+      ? `${authoritySequence.current}/${snapshot.hostInstanceId}/${snapshot.authorityRevision}`
+      : null;
+  }, [assistantOrder]);
+  const [assistantHistory, setAssistantHistory] = useState<{
+    authority: string | null; entries: AssistantHistoryEntry[]; unavailable: boolean;
+  }>({ authority: null, entries: [], unavailable: false });
   const endingSessions = useRef(new Set<string>());
   const [endingSessionIds, setEndingSessionIds] = useState<ReadonlySet<string>>(
     new Set(),
@@ -513,7 +528,9 @@ export function useHarnessState(): HarnessStateHook {
   const [historyLoading, setHistoryLoading] = useState(false);
   // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
   // affects the render, and both are read/written within a single call.
-  const inFlightHistory = useRef<Map<string, Promise<SessionSummary[]>>>(
+  const inFlightHistory = useRef<Map<string, Promise<{
+    terminal: SessionSummary[] | null; assistant: AssistantHistoryEntry[] | null;
+  }>>>(
     new Map(),
   );
   const historyLoads = useRef(0);
@@ -1368,6 +1385,7 @@ export function useHarnessState(): HarnessStateHook {
             }, BUSY_WINDOW_MS),
           );
         } else if (message.type === "auth.changed") {
+          authoritySequence.current++;
           setAssistant(assistantOrder.authChanged());
           // Accept a barrier synchronously: merely issuing the refresh cannot
           // stop an older in-flight success from restoring another account.
@@ -1424,13 +1442,21 @@ export function useHarnessState(): HarnessStateHook {
     // deduplicates concurrent callers, it is NOT a cache, so a later open
     // still re-reads the directory.
     const unique = Array.from(new Set(cwds));
+    const authority = assistantAuthorityKey();
     const requests = unique.map((cwd) => {
-      const pending = inFlightHistory.current.get(cwd);
+      const key = `${authority ?? "terminal"}:${cwd}`;
+      const pending = inFlightHistory.current.get(key);
       if (pending) return pending;
-      const request = api.sessionHistory(cwd).finally(() => {
-        inFlightHistory.current.delete(cwd);
-      });
-      inFlightHistory.current.set(cwd, request);
+      const request = Promise.allSettled([
+        api.sessionHistory(cwd),
+        authority
+          ? readAssistantHistory(cwd, getBootToken(), AbortSignal.timeout(5000))
+          : Promise.resolve([]),
+      ]).then(([terminal, assistant]) => ({
+        terminal: terminal.status === "fulfilled" ? terminal.value : null,
+        assistant: assistant.status === "fulfilled" ? assistant.value : null,
+      })).finally(() => inFlightHistory.current.delete(key));
+      inFlightHistory.current.set(key, request);
       return request;
     });
 
@@ -1444,17 +1470,34 @@ export function useHarnessState(): HarnessStateHook {
       const results = await Promise.allSettled(requests);
       const refreshed: SessionSummary[] = [];
       const refreshedCwds = new Set<string>();
+      const assistantEntries: AssistantHistoryEntry[] = [];
+      const assistantCwds = new Set<string>();
+      let unavailable = false;
       results.forEach((result, index) => {
         if (result.status !== "fulfilled") return;
-        refreshedCwds.add(unique[index]!);
-        refreshed.push(...result.value);
+        if (result.value.terminal) {
+          refreshedCwds.add(unique[index]!);
+          refreshed.push(...result.value.terminal);
+        }
+        if (result.value.assistant) {
+          assistantCwds.add(unique[index]!);
+          assistantEntries.push(...result.value.assistant);
+        } else unavailable = true;
       });
       setHistory((prev) => mergeHistory(prev, refreshed, refreshedCwds));
+      if (authority && authority === assistantAuthorityKey()) {
+        setAssistantHistory((prev) => ({ authority, unavailable, entries: [
+          ...new Map([
+            ...(prev.authority === authority ? prev.entries.filter((entry) => !assistantCwds.has(entry.cwd)) : []),
+            ...assistantEntries,
+          ].map((entry) => [entry.harnessSessionId, entry])).values(),
+        ] }));
+      }
     } finally {
       historyLoads.current -= 1;
       if (historyLoads.current === 0) setHistoryLoading(false);
     }
-  }, []);
+  }, [assistantAuthorityKey]);
 
   /** Refresh only the server-issued project identities after a root mutation.
    * Replacing the full AppState here could overwrite newer session/workflow bus
@@ -1765,6 +1808,8 @@ export function useHarnessState(): HarnessStateHook {
       endingSessions.current.add(id);
       setEndingSessionIds(new Set(endingSessions.current));
       const selectionAtStart = switchSeqRef.current;
+      const authorityAtStart = assistantAuthorityKey();
+      const authAtStart = authoritySequence.current;
       const lifecycleAtStart = assistantOrder
         .current()
         .snapshot?.lifecycles?.find((row) => row.harnessSessionId === id);
@@ -1782,6 +1827,7 @@ export function useHarnessState(): HarnessStateHook {
         endingSessions.current.delete(id);
         setEndingSessionIds(new Set(endingSessions.current));
       }
+      if (authAtStart !== authoritySequence.current || authorityAtStart !== assistantAuthorityKey()) return;
       const lifecycles = assistantOrder.current().snapshot?.lifecycles ?? [];
       const lifecycle = lifecycles.find((row) => row.harnessSessionId === id);
       // A newer Resume can finish before this older End response arrives.
@@ -1828,7 +1874,7 @@ export function useHarnessState(): HarnessStateHook {
         selectSession(nextRunning ? nextRunning.id : null);
       }
     },
-    [assistantOrder, activeSessionId, selectSession],
+    [assistantOrder, assistantAuthorityKey, activeSessionId, selectSession],
   );
 
   const connectWorkflow = useCallback(
@@ -2453,6 +2499,9 @@ export function useHarnessState(): HarnessStateHook {
 
   return {
     assistant,
+    assistantHistory: assistantHistory.authority === assistantAuthorityKey() ? assistantHistory.entries : [],
+    assistantHistoryAuthority: assistantAuthorityKey(),
+    assistantHistoryUnavailable: assistantHistory.authority === assistantAuthorityKey() && assistantHistory.unavailable,
     endingSessionIds,
     state,
     authRevision,

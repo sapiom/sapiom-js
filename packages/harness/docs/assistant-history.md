@@ -48,6 +48,14 @@ so a successful GET can return an older `capturedAt`. Disposal and authority los
 cancel capture; opening a retained record never resumes execution.
 # Selected native availability
 
+Open an Assistant entry from Studio's existing session history to read its saved
+messages and tool excerpts. Mixed Terminal and Assistant entries are grouped by
+Studio session ID. Sessions that have never started a Terminal remain visible.
+The pane labels reconstructed, shortened and incomplete content, supports Back,
+and discards results after an account, project or navigation change. Viewing a
+record starts no native runtime. Native availability and Resume are separate
+explicit actions.
+
 Native inspection is explicit and separate from metadata listing. It validates
 the authorized saved Studio/native association, reads only that native session
 and its bounded history, and checks the saved execution context through the

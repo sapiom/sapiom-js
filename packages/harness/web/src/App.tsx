@@ -86,6 +86,8 @@ import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
 import { AssistantPane } from "./components/AssistantPane";
+import { AssistantHistoryPane } from "./components/AssistantHistoryPane";
+import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
 import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
@@ -731,9 +733,18 @@ export const App = (): JSX.Element => {
   // A PAST session under review: picked from the history menu, shown
   // in the terminal slot as a review pane — resuming/starting is the pane's
   // explicit action, never a side effect of the click that got here.
-  const [reviewSummary, setReviewSummary] = useState<SessionSummary | null>(
+  const [reviewSummary, setTerminalReviewSummary] = useState<SessionSummary | null>(
     null,
   );
+  const [assistantReview, setAssistantReview] = useState<{
+    entry: AssistantHistoryEntry; authority: string; navigation: number;
+  } | null>(null);
+  const setReviewSummary = useCallback((summary: SessionSummary | null) => {
+    setAssistantReview(null);
+    setTerminalReviewSummary(summary);
+  }, []);
+  const activeAssistantReview = assistantReview?.authority === harness.assistantHistoryAuthority &&
+    assistantReview.navigation === studioRestoreGenerationRef.current ? assistantReview : null;
   // Template gallery opened from the command palette (browse is reachable
   // from anywhere, not only the add dialog / welcome panel entries).
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -1239,6 +1250,8 @@ export const App = (): JSX.Element => {
       });
     } else if (templatesOpen) {
       recordVisit({ kind: "templates" });
+    } else if (activeAssistantReview) {
+      recordVisit({ kind: "assistant-review", entry: activeAssistantReview.entry, authority: activeAssistantReview.authority });
     } else if (reviewSummary) {
       recordVisit({ kind: "review", summary: reviewSummary });
     } else if (composing) {
@@ -1261,6 +1274,7 @@ export const App = (): JSX.Element => {
     effectiveStudioSelection,
     templatesOpen,
     reviewSummary,
+    activeAssistantReview,
     composing,
     activeSessionIdForNav,
     focusedAgentPath,
@@ -1280,10 +1294,12 @@ export const App = (): JSX.Element => {
       setTemplatesOpen(visit.kind === "templates");
       setComposing(visit.kind === "composer");
       setReviewSummary(visit.kind === "review" ? visit.summary : null);
+      if (visit.kind === "assistant-review")
+        setAssistantReview({ entry: visit.entry, authority: visit.authority, navigation: studioRestoreGenerationRef.current });
       if (
         visit.kind === "templates" ||
         visit.kind === "composer" ||
-        visit.kind === "review"
+        visit.kind === "review" || visit.kind === "assistant-review"
       ) {
         setStudioSelection(null);
       }
@@ -1600,7 +1616,7 @@ export const App = (): JSX.Element => {
         )
       ? null
       : activeSession;
-  const showReview = reviewSummary != null;
+  const showReview = reviewSummary != null || activeAssistantReview != null;
   const showDead = !showReview && conversationSession?.status === "exited";
   // An agent selected with no session that can WORK on it: honest absence, and
   // opening one lands on the "start a session" state.
@@ -2476,6 +2492,19 @@ export const App = (): JSX.Element => {
     setSelectedProject(null);
     closeMobileDrawer();
   };
+  const reviewAssistant = (entry: AssistantHistoryEntry): void => {
+    const authority = harness.assistantHistoryAuthority;
+    if (!authority) return;
+    studioRestoreGenerationRef.current++;
+    setReviewSummary(null);
+    setAssistantReview({ entry, authority, navigation: studioRestoreGenerationRef.current });
+    setStudioSelection(null);
+    setSelectedProject(null);
+    setComposing(false);
+    setTemplatesOpen(false);
+    setOverviewOpen(false);
+    closeMobileDrawer();
+  };
 
   // Jump from the Studio to the real code, in the editor the user picked.
   const openInEditor = (path: string): void => {
@@ -2969,6 +2998,9 @@ export const App = (): JSX.Element => {
               setOverviewOpen(false);
             }}
             onReviewSummary={reviewPastSession}
+            onReviewAssistant={reviewAssistant}
+            assistantHistory={harness.assistantHistory}
+            assistantHistoryUnavailable={harness.assistantHistoryUnavailable}
             history={harness.history}
             historyLoading={harness.historyLoading}
             onOpenHistory={(cwds) => void harness.loadHistory(cwds)}
@@ -3199,7 +3231,7 @@ export const App = (): JSX.Element => {
               openedAgentName={
                 showAgentEmpty ? (focusedWorkflow?.name ?? null) : null
               }
-              reviewTitle={reviewSummary ? reviewSummary.title : null}
+              reviewTitle={activeAssistantReview?.entry.title ?? reviewSummary?.title ?? null}
               // With no active CLI the centre still offers the ordinary
               // composer, but a selected project map must keep its real
               // session tabs visible so the user can activate one. Treating
@@ -3347,7 +3379,19 @@ export const App = (): JSX.Element => {
               )}
 
             <div className="terminal-slot">
-              {showReview && reviewSummary ? (
+              {activeAssistantReview ? (
+                <AssistantHistoryPane
+                  key={`${activeAssistantReview.authority}:${activeAssistantReview.entry.harnessSessionId}`}
+                  entry={activeAssistantReview.entry}
+                  bootToken={harness.bootToken}
+                  onClose={() => setAssistantReview(null)}
+                  terminalNotStarted={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started"}
+                  terminalLabel={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.status !== "exited" ? "Open Terminal" : "View Terminal history"}
+                  onOpenTerminal={state.sessions.some((session) => session.id === activeAssistantReview.entry.harnessSessionId && session.terminalState !== "not-started")
+                    ? () => openSession(activeAssistantReview.entry.harnessSessionId)
+                    : undefined}
+                />
+              ) : showReview && reviewSummary ? (
                 <PastSessionPane
                   summary={reviewSummary}
                   loadRecord={harness.sessionRecord}
@@ -3379,6 +3423,7 @@ export const App = (): JSX.Element => {
                 >
                   <DeadSessionPane
                     session={conversationSession}
+                    terminalOnly={assistantNeedsEnd(conversationSession.id)}
                     resumeMode={deadResumeMode}
                     loadRecord={harness.sessionRecord}
                     onResume={() =>
