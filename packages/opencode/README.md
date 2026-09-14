@@ -91,8 +91,9 @@ bytes and mutates the existing system array. Per-request validation failures sta
 sticky through the active native execution and are thrown at the provider boundary using the fixed
 message `Studio assistant context could not be verified`. Native serializes it as an
 `UnknownError` without triggering overload retries. Calling without an authority scope
-retains completion-only behavior. Launcher/host activation and the corrected artifact
-are separate stack prerequisites; this API alone does not enable accepted delivery.
+retains completion-only behavior. Scoped ordinary and synthetic requests require
+accepted context/v2 or valid inline context/v1; unclaimed helpers remain unchanged.
+Studio host activation and the corrected artifact are separate stack prerequisites.
 
 The managed launcher installs this consumer through its existing credential-isolation
 plugin when given `assistantContext: { authorityScope }`. The generated plugin uses
