@@ -72,3 +72,8 @@ context plugin against the installed binary and accepted-source filesystem tests
 hash, requested archives and command results. Foreign-platform simulations and a
 green cross-compile are insufficient: all target execution gates must pass before
 claiming support. A failed durability gate remains a release blocker.
+
+The install receipt identifies the actual requested platform archive and verifies
+its installed binary hash. Hashes alone do not identify an archive: the Windows
+x64 regular and baseline outputs can contain identical executable bytes. The
+fixture still rejects unexpected targets, extra downloads and mismatched bytes.

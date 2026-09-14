@@ -14,6 +14,7 @@ import {
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { selectedArtifact } from "./install-selection.mjs";
 
 const artifacts = resolve(process.argv[2]);
 const work = resolve(process.argv[3]);
@@ -188,16 +189,14 @@ try {
       );
     }
     const binarySha256 = await sha(binary);
-    selected = Object.keys(proof.artifacts).find(
-      (name) => proof.artifacts[name].binarySha256 === binarySha256,
-    );
-    assert.ok(selected, "Installed binary must match a verified build output");
     const platforms = [
       ...new Set(
         requests.slice(begin).filter((path) => path !== `/${name}.tgz`),
       ),
     ];
-    assert.deepEqual(platforms, [`/${proof.artifacts[selected].artifact}`]);
+    selected = selectedArtifact(
+      proof.artifacts, platforms, binarySha256, process.platform, process.arch,
+    );
     assert.equal(
       await sha(join(installed, "postinstall.mjs")),
       proof.packaging.postinstallSha256,
