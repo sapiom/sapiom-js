@@ -168,6 +168,7 @@ export class OpenCodeFinalResponse {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...prompt,
+            model: hosted.model,
             agent: turnRecoveryAgent,
             parts: [
               {

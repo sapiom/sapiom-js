@@ -160,42 +160,168 @@ describe("overall OpenCode turn status", () => {
     ).toEqual({ status: "finished" });
   });
 
-  it("hides the result footer throughout streaming and preserves ordinary text", () => {
-    const currentUser = {
-      ...user,
-      info: { ...user.info!, ...openCodeCompletionPrompt() },
-    };
-    const token = openCodeCompletionTokens([currentUser]).get("msg_user")!;
-    const footer = `<!-- studio-result:${token}:finished -->`;
-    for (let size = 1; size <= footer.length; size++) {
+  it.each(["current", "different"])(
+    "hides a %s turn's result marker throughout streaming and preserves ordinary text",
+    (turn) => {
+      const currentUser = {
+        ...user,
+        info: { ...user.info!, ...openCodeCompletionPrompt() },
+      };
+      const token = openCodeCompletionTokens([currentUser]).get("msg_user")!;
+      const markerToken =
+        turn === "current" ? token : "00000000-0000-0000-0000-000000000000";
+      const footer = `<!-- studio-result:${markerToken}:finished -->`;
+      for (let size = 1; size <= footer.length; size++) {
+        expect(
+          openCodeVisibleText(
+            `CHAT_OK\n\n${footer.slice(0, size)}`,
+            token,
+            true,
+          ),
+        ).toBe("CHAT_OK");
+        const parts = [
+          { type: "text", text: `CHAT_OK\n\n${footer.slice(0, size)}` },
+          { type: "tool" },
+          { type: "text", text: footer.slice(size) },
+        ];
+        expect(openCodeVisibleParts(parts, token, true)).toEqual([
+          "CHAT_OK",
+          undefined,
+          "",
+        ]);
+        expect(openCodeVisibleText(footer.slice(0, size), token, true)).toBe(
+          "",
+        );
+        expect(
+          openCodeVisibleParts(
+            [
+              { type: "text", text: footer.slice(0, size) },
+              { type: "text", text: footer.slice(size) + "\nCHAT_OK" },
+            ],
+            token,
+            true,
+          ),
+        ).toEqual(["", "CHAT_OK"]);
+      }
+      expect(openCodeVisibleText("Use x < y in the condition", token)).toBe(
+        "Use x < y in the condition",
+      );
+      expect(openCodeVisibleText("CHAT_OK", undefined)).toBe("CHAT_OK");
       expect(
-        openCodeVisibleText(`CHAT_OK\n\n${footer.slice(0, size)}`, token),
-      ).toBe("CHAT_OK");
-      const parts = [
-        { type: "text", text: `CHAT_OK\n\n${footer.slice(0, size)}` },
-        { type: "tool" },
-        { type: "text", text: footer.slice(size) },
-      ];
-      expect(openCodeVisibleParts(parts, token)).toEqual([
-        "CHAT_OK",
-        undefined,
-        "",
-      ]);
-      expect(openCodeVisibleText(footer.slice(0, size), token)).toBe("");
-      expect(
-        openCodeVisibleParts(
-          [
-            { type: "text", text: footer.slice(0, size) },
-            { type: "text", text: footer.slice(size) + "\nCHAT_OK" },
-          ],
+        openCodeVisibleText(
+          "Keep <!-- ordinary comment --> in the example",
           token,
         ),
-      ).toEqual(["", "CHAT_OK"]);
+      ).toBe("Keep <!-- ordinary comment --> in the example");
+      expect(openCodeVisibleText(footer, undefined)).toBe(footer);
+    },
+  );
+
+  it.each(["finished", "failed"])(
+    "hides a mismatched %s marker without confirming the recovered turn",
+    (status) => {
+      const currentUser = {
+        ...user,
+        info: {
+          ...user.info!,
+          agent: turnRecoveryAgent,
+          ...openCodeCompletionPrompt(),
+        },
+      };
+      const token = openCodeCompletionTokens([currentUser]).get("msg_user")!;
+      const marker = `<!-- studio-result:00000000-0000-0000-0000-000000000000:${status} -->`;
+      for (const text of [
+        `${marker}\nThe tool call completed.`,
+        `The tool call completed.\n\n${marker}`,
+      ]) {
+        const message = answer(text, { agent: turnRecoveryAgent });
+        expect(openCodeVisibleText(text, token)).toBe(
+          "The tool call completed.",
+        );
+        expect(openCodeResult(message, token)).toBeUndefined();
+        expect(openCodeTurn([currentUser, message], "idle")).toEqual({
+          status: "stopped",
+        });
+      }
+    },
+  );
+
+  it("preserves progress and the answer around multiple markers across tool parts", () => {
+    const token = "11111111-1111-1111-1111-111111111111";
+    const marker =
+      "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished -->";
+    const parts = [
+      { type: "text", text: "Checking the README.\n\n" + marker.slice(0, 30) },
+      { type: "tool" },
+      {
+        type: "text",
+        text:
+          marker.slice(30) +
+          "\nThe README describes this project.\n\n" +
+          marker,
+      },
+    ];
+    expect(openCodeVisibleParts(parts, token)).toEqual([
+      "Checking the README.\n\n",
+      undefined,
+      "\nThe README describes this project.",
+    ]);
+    expect(
+      openCodeVisibleText(parts.map((part) => part.text ?? "").join(""), token),
+    ).toBe("Checking the README.\n\n\nThe README describes this project.");
+  });
+
+  it.each([
+    "Document the <!-- studio-result: placeholder used by Studio.",
+    "<!-- studio-result:not-a-uuid:finished --> is only an example.",
+    "<!-- studio-result:00000000-0000-0000-0000-00000000000g:finished --> is invalid.",
+    "<!-- studio-result:000000000000-0000-0000-0000-00000000:finished --> is invalid.",
+    "<!-- studio-result:00000000-0000-0000-0000-000000000000:unknown --> is invalid.",
+    "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished without a delimiter.",
+  ])(
+    "preserves invalid marker prose while streaming and after completion: %s",
+    (text) => {
+      const token = "11111111-1111-1111-1111-111111111111";
+      for (const streaming of [true, false]) {
+        expect(openCodeVisibleText(text, token, streaming)).toBe(text);
+        for (let split = 0; split <= text.length; split++) {
+          const parts = [
+            { type: "text", text: text.slice(0, split) },
+            { type: "tool" },
+            { type: "text", text: text.slice(split) },
+          ];
+          expect(
+            openCodeVisibleParts(parts, token, streaming)
+              .filter((part) => part !== undefined)
+              .join(""),
+          ).toBe(text);
+        }
+      }
+    },
+  );
+
+  it("restores incomplete marker candidates when streaming ends", () => {
+    const token = "11111111-1111-1111-1111-111111111111";
+    const marker =
+      "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished -->";
+    for (let size = 1; size < marker.length; size++) {
+      const text = `Example: ${marker.slice(0, size)}`;
+      expect(openCodeVisibleText(text, token, true)).toBe("Example:");
+      expect(openCodeVisibleText(text, token)).toBe(text);
+      expect(openCodeVisibleParts([{ type: "text", text }], token)).toEqual([
+        text,
+      ]);
     }
-    expect(openCodeVisibleText("Use x < y in the condition", token)).toBe(
-      "Use x < y in the condition",
-    );
-    expect(openCodeVisibleText("CHAT_OK", undefined)).toBe("CHAT_OK");
+    expect(openCodeVisibleText("Use x <", token)).toBe("Use x <");
+  });
+
+  it("keeps scanning for real markers after invalid prose", () => {
+    const token = "11111111-1111-1111-1111-111111111111";
+    const prose =
+      "Document the <!-- studio-result: placeholder used by Studio.";
+    const marker = `<!-- studio-result:00000000-0000-0000-0000-000000000000:failed -->`;
+    expect(openCodeVisibleText(`${prose}\n\n${marker}`, token)).toBe(prose);
+    expect(openCodeVisibleText(`${marker}\n\n${prose}`, token)).toBe(prose);
   });
 
   it("requires known idle state and a completed final answer", () => {
