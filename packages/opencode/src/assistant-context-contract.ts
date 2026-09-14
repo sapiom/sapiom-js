@@ -136,7 +136,10 @@ export function contextUuid(value: unknown): asserts value is string {
 }
 export function contextList(value: unknown): unknown[] {
   contextCheck(
-    Array.isArray(value) && value.length <= assistantContextLimits.entries,
+    Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Array.prototype &&
+      value.length <= assistantContextLimits.entries &&
+      Reflect.ownKeys(value).length === value.length + 1,
   );
   for (let index = 0; index < value.length; index++)
     contextCheck(Object.prototype.hasOwnProperty.call(value, index));

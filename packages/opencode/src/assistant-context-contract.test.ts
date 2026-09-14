@@ -204,6 +204,14 @@ describe("accepted context contract", () => {
     delete object["4096"];
     expect(() => encodeAssistantContext(object)).not.toThrow();
   });
+  it("rejects custom array iteration instead of hashing a different JSON value", () => {
+    const tools = ["actual"];
+    tools[Symbol.iterator] = () => ["substituted"].values();
+    expect(() => encodeAssistantContext(tools)).toThrow(AssistantContextError);
+    const facts = fixtureAccepted().context;
+    facts.capabilities = [{ name: "mcp", status: "available", tools }];
+    expect(() => validateAssistantFacts(facts)).toThrow(AssistantContextError);
+  });
   it("rejects aggregate catalog size before walking every capability semantically", () => {
     const accepted = fixtureAccepted();
     const tools = Array.from(
