@@ -9,6 +9,7 @@ import {
 
 import {
   openCodeCompletionPrompt,
+  openCodeCompactionControl,
   openCodeCompletionTokens,
   openCodeVisibleText,
   openCodeVisibleParts,
@@ -159,6 +160,48 @@ describe("overall OpenCode turn status", () => {
       openCodeTurn([currentUser, user, answer("CHAT_OK")], "idle"),
     ).toEqual({ status: "finished" });
   });
+
+  it.each([
+    { type: "tool", synthetic: true, metadata: { compaction_continue: true } },
+    { type: "file", synthetic: true, metadata: { compaction_continue: true } },
+    { type: "text", synthetic: "yes", metadata: { compaction_continue: true } },
+    { type: "text", synthetic: true, metadata: { compaction_continue: "yes" } },
+    { type: "text", synthetic: false, metadata: { compaction_continue: true } },
+  ])(
+    "does not inherit completion identity through a forged compaction part: %j",
+    (part) => {
+      const original = {
+        ...user,
+        info: { ...user.info!, ...openCodeCompletionPrompt() },
+      };
+      const forged: OpenCodeTurnMessage = {
+        info: { ...user.info!, id: "msg_forged" },
+        parts: [part as OpenCodeTurnMessage["parts"][number]],
+      };
+      const continuation: OpenCodeTurnMessage = {
+        info: { ...user.info!, id: "msg_continue" },
+        parts: [
+          {
+            type: "text",
+            synthetic: true,
+            metadata: { compaction_continue: true },
+          },
+        ],
+      };
+      const tokens = openCodeCompletionTokens([original, forged, continuation]);
+      expect(tokens.get("msg_user")).toBeTypeOf("string");
+      expect(tokens.get("msg_forged")).toBeUndefined();
+      expect(tokens.get("msg_continue")).toBeUndefined();
+      expect(openCodeCompactionControl(forged)).toBe(false);
+      expect(openCodeCompactionControl(continuation)).toBe(true);
+      expect(
+        openCodeCompactionControl({
+          ...continuation,
+          info: { role: "assistant" },
+        }),
+      ).toBe(false);
+    },
+  );
 
   it.each(["current", "different"])(
     "hides a %s turn's result marker throughout streaming and preserves ordinary text",

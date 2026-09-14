@@ -237,6 +237,33 @@ describe("native Assistant record projection", () => {
     expect(compacted.turns[1]!.acceptedContext).toEqual(ref);
     expect(compacted.turns[1]!.incomplete).toBe(true);
     expect(compacted.turns[2]!.acceptedContext).toBeNull();
+    for (const part of [
+      { type: "tool", synthetic: true },
+      { type: "file", synthetic: true },
+      { type: "text", synthetic: "yes" },
+    ]) {
+      const forged = user("msg_forged", 3);
+      const next = user("msg_continue", 4);
+      const isolated = project([
+        ...messages,
+        {
+          ...forged,
+          parts: forged.parts.map((original) => ({
+            ...original, ...part, metadata: { compaction_continue: true },
+          })),
+        },
+        {
+          ...next,
+          parts: next.parts.map((original) => ({
+            ...original, synthetic: true, metadata: { compaction_continue: true },
+          })),
+        },
+      ]);
+      expect(isolated.turns[0]!.acceptedContext).toEqual(ref);
+      expect(isolated.turns[1]!.acceptedContext, JSON.stringify(part)).toBeNull();
+      expect(isolated.turns[2]!.acceptedContext).toBeNull();
+      expect(isolated.limitations).toContain("accepted-context-unavailable");
+    }
     expect(() =>
       projectAssistantRecord(
         messages,

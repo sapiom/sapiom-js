@@ -13,6 +13,7 @@ import type {
   AssistantRecordPart,
 } from "../shared/assistant-record.js";
 import {
+  openCodeCompactionControl,
   openCodeCompletionTokens,
   openCodeVisibleParts,
 } from "../shared/opencode-completion.js";
@@ -315,13 +316,7 @@ export function projectAssistantRecord(
         acceptedContext = { ...accepted };
       } else if (
         info.system === undefined &&
-        parts.some(
-          (part) =>
-            part.type === "compaction" ||
-            (part.synthetic &&
-              part.metadata != null &&
-              object(part.metadata).compaction_continue === true),
-        )
+        openCodeCompactionControl({ info, parts })
       ) {
         acceptedContext = currentAccepted;
       }

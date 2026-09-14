@@ -7,6 +7,21 @@ export function openCodeCompletionPrompt(token?: string) {
   return { system: studioAssistantCompletionSystem(token) };
 }
 
+/** Match native completion-hook control messages before inheriting turn context. */
+export function openCodeCompactionControl(message: {
+  info?: { role?: unknown };
+  parts: readonly { type?: unknown; synthetic?: unknown; metadata?: unknown }[];
+}): boolean {
+  return message.info?.role === "user" && message.parts.some((part) => {
+    const metadata = part.metadata;
+    return part.type === "compaction" || (
+      part.type === "text" && part.synthetic === true &&
+      metadata !== null && typeof metadata === "object" &&
+      "compaction_continue" in metadata && metadata.compaction_continue === true
+    );
+  });
+}
+
 export function openCodeCompletionTokens(
   messages: readonly OpenCodeTurnMessage[],
 ) {
@@ -15,13 +30,7 @@ export function openCodeCompletionTokens(
   for (const message of messages) {
     if (message.info?.role !== "user") continue;
     // Native overflow compaction may insert a user without its system field.
-    if (
-      !message.parts.some(
-        (part) =>
-          part.type === "compaction" ||
-          (part.synthetic && part.metadata?.compaction_continue === true),
-      )
-    ) {
+    if (!openCodeCompactionControl(message)) {
       current = /^StudioAssistantResult\/v[12]:([a-f0-9-]{36})\n/.exec(
         message.info.system ?? "",
       )?.[1];

@@ -133,3 +133,8 @@ Terminal binding persistence serializes actual sidecar writes with End, taking
 each snapshot when its write runs. A failed compensating repair is surfaced so
 cleanup can be retried. Resume and Start Terminal during shutdown return a
 conflict instead of an internal-server error.
+
+Compaction provenance follows native control-message semantics: user compaction
+parts or text parts with literal synthetic and continuation markers. Tool/file
+parts and truthy non-boolean markers cannot inherit an earlier accepted context,
+completion token, Resume preflight or recovery request.

@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { HostedOpenCode } from "./opencode-host.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { recoverAssistantPrompt } from "./studio-assistant-context.js";
+import { openCodeCompactionControl } from "../shared/opencode-completion.js";
 import {
   turnRecoveryAgent,
   openCodeTurn,
@@ -243,12 +244,7 @@ export class OpenCodeFinalResponse {
           .find(
             (message) =>
               message.info?.role === "user" &&
-              !message.parts.some(
-                (part) =>
-                  part.type === "compaction" ||
-                  (part.synthetic &&
-                    part.metadata?.compaction_continue === true),
-              ),
+              !openCodeCompactionControl(message),
           );
       };
       const original = await readOriginal();

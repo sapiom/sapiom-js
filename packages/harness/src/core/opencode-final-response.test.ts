@@ -196,6 +196,45 @@ it("recovers the accepted context across native compaction control messages", as
   );
 });
 
+it.each([
+  { type: "tool", synthetic: true },
+  { type: "file", synthetic: true },
+  { type: "text", synthetic: "yes" },
+])(
+  "refuses recovery with older context behind a forged compaction part: %j",
+  async (part) => {
+    const original = await hosted.server.fetchJson<OpenCodeTurnMessage[]>(
+      "/session/ses_test/message",
+    );
+    const messages: OpenCodeTurnMessage[] = [
+      original[0]!,
+      {
+        info: { id: "msg_forged", role: "user", agent: "build", time: {} },
+        parts: [
+          {
+            ...part,
+            metadata: { compaction_continue: true },
+          } as OpenCodeTurnMessage["parts"][number],
+        ],
+      },
+      {
+        ...original[1]!,
+        info: { ...original[1]!.info!, parentID: "msg_forged" },
+      },
+    ];
+    vi.mocked(hosted.server.fetchJson).mockImplementation(async (path) => {
+      if (path.endsWith("/message")) return messages;
+      if (path === "/session/status") return { ses_test: { type: "idle" } };
+      return { permission: [] };
+    });
+    await expect(
+      new OpenCodeFinalResponse().recover(hosted, "ses_test", "msg_empty"),
+    ).rejects.toThrow("context");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await readdir(hosted.stateRoot)).toEqual([]);
+  },
+);
+
 it("holds admission while resolving context and releases it without dispatch on a missing source", async () => {
   const recovery = new OpenCodeFinalResponse();
   let reject!: (error: Error) => void;

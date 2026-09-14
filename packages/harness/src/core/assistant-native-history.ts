@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
+import { openCodeCompactionControl } from "../shared/opencode-completion.js";
 import {
   openCodeTransportFailure,
   type OpenCodeTransportFailure,
@@ -333,16 +334,8 @@ export class AssistantNativeHistory {
       .sort((a, b) => a.created - b.created);
     const source = messages
       .reverse()
-      .find(
-        ({ info, parts }) =>
-          info.role === "user" &&
-          !parts.some(
-            (part) =>
-              part.type === "compaction" ||
-              (part.synthetic &&
-                part.metadata &&
-                object(part.metadata).compaction_continue === true),
-          ),
+      .find((message) =>
+        message.info.role === "user" && !openCodeCompactionControl(message),
       );
     if (!source) throw contextUnavailable();
     return { id: source.info.id as string, system: source.info.system };
