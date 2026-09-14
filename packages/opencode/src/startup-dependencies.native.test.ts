@@ -10,8 +10,22 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, it } from "vitest";
-import { startOpenCodeServer, type OpenCodeServer } from "./server.js";
+import { expect, it, vi } from "vitest";
+import {
+  OpenCodeStartupError,
+  startOpenCodeServer,
+  type OpenCodeServer,
+} from "./server.js";
+
+interface StartupTiming {
+  attempt: string;
+  beforeLaunchMs?: number;
+  healthOkMs?: number;
+  configResponseMs?: number;
+  readyMs?: number;
+  settledMs?: number;
+  outcome?: string;
+}
 
 it("opens two fresh native sessions within the default deadline without a package registry", async () => {
   const root = await mkdtemp(join(tmpdir(), "opencode-startup-dependencies-"));
@@ -28,6 +42,26 @@ it("opens two fresh native sessions within the default deadline without a packag
   if (!address || typeof address === "string")
     throw new Error("registry unavailable");
   const starts: number[] = [];
+  const timings: StartupTiming[] = [];
+  let active: { timing: StartupTiming; startedAt: number } | undefined;
+  const nativeFetch = globalThis.fetch;
+  const fetchSpy = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input, init) => {
+      const current = active;
+      const response = await nativeFetch(input, init);
+      if (current) {
+        const path =
+          input instanceof URL
+            ? input.pathname
+            : new URL(typeof input === "string" ? input : input.url).pathname;
+        const elapsed = Math.round(performance.now() - current.startedAt);
+        if (path === "/global/health" && response.ok)
+          current.timing.healthOkMs ??= elapsed;
+        if (path === "/config") current.timing.configResponseMs ??= elapsed;
+      }
+      return response;
+    });
   let cleanup: PromiseSettledResult<void>[] = [];
   try {
     const conversations: string[] = [];
@@ -35,6 +69,9 @@ it("opens two fresh native sessions within the default deadline without a packag
       const stateRoot = join(root, name);
       let configDirectory = "";
       const startedAt = performance.now();
+      const timing: StartupTiming = { attempt: name };
+      timings.push(timing);
+      active = { timing, startedAt };
       const runtime = await startOpenCodeServer({
         command: process.env.SAPIOM_OPENCODE_CONTEXT_TEST_BINARY
           ? { executable: process.env.SAPIOM_OPENCODE_CONTEXT_TEST_BINARY }
@@ -54,8 +91,27 @@ it("opens two fresh native sessions within the default deadline without a packag
             join(configDirectory, ".npmrc"),
             `registry=http://127.0.0.1:${address.port}\n`,
           );
+          timing.beforeLaunchMs = Math.round(performance.now() - startedAt);
         },
-      });
+      })
+        .then(
+          (runtime) => {
+            timing.readyMs = Math.round(performance.now() - startedAt);
+            timing.outcome = "ready";
+            return runtime;
+          },
+          (error: unknown) => {
+            timing.outcome =
+              error instanceof OpenCodeStartupError
+                ? error.code
+                : "other-error";
+            throw error;
+          },
+        )
+        .finally(() => {
+          timing.settledMs = Math.round(performance.now() - startedAt);
+          active = undefined;
+        });
       starts.push(performance.now() - startedAt);
       runtimes.push(runtime);
       // The installer fast path must be backed by the real shipped dependency.
@@ -92,6 +148,18 @@ it("opens two fresh native sessions within the default deadline without a packag
     expect(registryRequests).toEqual([]);
     expect(starts.every((elapsed) => elapsed < 15_000)).toBe(true);
   } finally {
+    fetchSpy.mockRestore();
+    // Only bounded phase names/timings: no headers, URLs, config, or native logs.
+    // Failed settledMs includes the existing bounded cleanup after the deadline.
+    console.info(
+      "Native startup timing",
+      JSON.stringify({
+        platform: process.platform,
+        arch: process.arch,
+        deadlineMs: 15_000,
+        timings,
+      }),
+    );
     cleanup = await Promise.allSettled(
       runtimes.map((runtime) => runtime.close()),
     );

@@ -96,7 +96,9 @@ jobs:
           node "$PNPM_SCRIPT" install --frozen-lockfile
           node "$PNPM_SCRIPT" --filter "@sapiom/harness..." build
       - name: Execute the installed runtime with the production context plugin
-        run: node "$PNPM_SCRIPT" --filter @sapiom/opencode exec vitest run src/assistant-context.native.test.ts src/startup-dependencies.native.test.ts src/runtime-identity.test.ts src/desktop-runtime-identity.test.ts
+        # Keep unrelated native work out of the strict fresh-start deadline test.
+        # That test still keeps two independent runtimes alive together.
+        run: node "$PNPM_SCRIPT" --filter @sapiom/opencode exec vitest run --no-file-parallelism src/assistant-context.native.test.ts src/startup-dependencies.native.test.ts src/runtime-identity.test.ts src/desktop-runtime-identity.test.ts
       - name: Verify desktop signing boundaries
         run: node --test packages/harness-desktop/scripts/opencode-after-pack.check.cjs
       - name: Verify accepted-source retention on the target filesystem
