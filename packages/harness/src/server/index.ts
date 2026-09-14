@@ -204,6 +204,7 @@ import { OpenCodeHost, type HostedOpenCode } from "../core/opencode-host.js";
 import { AssistantRecordStore } from "../core/assistant-record-store.js";
 import { AssistantRecordCapture } from "../core/assistant-record-capture.js";
 import { assistantHistoryAccess } from "../core/assistant-history-access.js";
+import { AssistantHistory } from "../core/assistant-history.js";
 import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
 import { createAssistantRecordsRouter } from "./assistant-records.js";
 import { OpenCodeObserver } from "../core/opencode-observer.js";
@@ -3622,10 +3623,13 @@ export const startServer = async (
     res.setHeader("Cache-Control", "no-store");
     res.json(assistantAccess.getBrowserState());
   });
+  const authorizeAssistantHistory = assistantHistoryAccess({ access: assistantAccess, authorize: authorizeAssistantWorkspace, store: assistantSessions });
+  const assistantHistory = new AssistantHistory({ sessions: sessionManager, authorize: authorizeAssistantHistory, records: assistantRecords, lifecycle: assistantLifecycle });
   app.use("/api", createAssistantRecordsRouter({
     bootToken: options.bootToken,
     store: assistantRecords,
-    authorize: assistantHistoryAccess({ access: assistantAccess, authorize: authorizeAssistantWorkspace, store: assistantSessions }),
+    authorize: authorizeAssistantHistory,
+    history: assistantHistory,
   }));
   app.use(
     "/api",

@@ -1,5 +1,14 @@
 # Retained Assistant history
 
+`GET /api/sessions/assistant-history?cwd=<absolute-workspace>` returns
+`{ entries: AssistantHistoryEntry[] }`, ordered by latest retained activity.
+It requires the current boot token and workspace/Assistant authority. Entries
+use Studio IDs, including sessions whose Terminal never started, and initially
+report `nativeResume: "unchecked"`. Listing never launches or queries native
+runtimes. Missing, partial and unreadable checkpoints have distinct states.
+Account changes during listing discard the result. Malformed metadata returns
+503 rather than silently substituting a different conversation.
+
 `GET /api/sessions/:id/assistant/record` returns `{ record: AssistantRecord }`
 for the currently authorized Studio session and Assistant binding. Supply the
 current boot token in `X-Harness-Token`. The server checks current Assistant

@@ -3,14 +3,36 @@ import { createBootTokenMiddleware } from "./auth.js";
 import type { AssistantAssociation } from "../core/assistant-session-store.js";
 import type { AssistantRecordStore } from "../core/assistant-record-store.js";
 import { OpenCodeAccessError } from "../core/opencode-host.js";
+import type { AssistantHistory } from "../core/assistant-history.js";
 
 export function createAssistantRecordsRouter(options: {
   bootToken: string;
   authorize: (id: string) => Promise<AssistantAssociation | null>;
   store: Pick<AssistantRecordStore, "read">;
+  history?: Pick<AssistantHistory, "list">;
 }): Router {
   const router = express.Router();
   router.use(createBootTokenMiddleware(options.bootToken));
+  if (options.history)
+    router.get("/sessions/assistant-history", (req, res) => {
+      void (async () => {
+        res.setHeader("Cache-Control", "no-store");
+        if (
+          Object.keys(req.query).length !== 1 ||
+          typeof req.query.cwd !== "string"
+        ) {
+          res.status(400).json({ error: "Select a workspace" });
+          return;
+        }
+        try {
+          res.json({ entries: await options.history!.list(req.query.cwd) });
+        } catch (error) {
+          res
+            .status(error instanceof OpenCodeAccessError ? 403 : 503)
+            .json({ error: "Assistant history unavailable" });
+        }
+      })();
+    });
   router.get("/sessions/:id/assistant/record", (req, res) => {
     void (async () => {
       res.setHeader("Cache-Control", "no-store");

@@ -17,6 +17,7 @@ const binding: AssistantAssociation = {
 };
 const authorize = vi.fn(),
   read = vi.fn();
+const list = vi.fn();
 const request = (token = "boot") =>
   fetch(`${origin}/sessions/studio-a/assistant/record`, {
     headers: { "X-Harness-Token": token },
@@ -24,12 +25,16 @@ const request = (token = "boot") =>
 beforeEach(async () => {
   authorize.mockReset().mockResolvedValue(binding);
   read.mockReset().mockResolvedValue({ reconstructed: true });
+  list
+    .mockReset()
+    .mockResolvedValue([{ kind: "assistant", harnessSessionId: "studio-a" }]);
   const app = express();
   app.use(
     createAssistantRecordsRouter({
       bootToken: "boot",
       authorize,
       store: { read },
+      history: { list },
     }),
   );
   server = createServer(app);
@@ -57,12 +62,10 @@ it("requires boot authorization and reads only the exact current binding without
 });
 
 it("does not return content when authority changes during a read", async () => {
-  authorize
-    .mockResolvedValueOnce(binding)
-    .mockResolvedValueOnce({
-      ...binding,
-      contextAuthorityScope: "c".repeat(64),
-    });
+  authorize.mockResolvedValueOnce(binding).mockResolvedValueOnce({
+    ...binding,
+    contextAuthorityScope: "c".repeat(64),
+  });
   expect((await request()).status).toBe(403);
   authorize.mockRejectedValueOnce(new OpenCodeAccessError("expired"));
   expect((await request()).status).toBe(403);
@@ -75,4 +78,25 @@ it("distinguishes missing history from failed reads without exposing diagnostics
   const response = await request();
   expect(response.status).toBe(503);
   expect(await response.text()).not.toContain("private diagnostic");
+});
+
+it("gates metadata listing and rejects ambiguous workspace queries", async () => {
+  const url = `${origin}/sessions/assistant-history?cwd=%2Fworkspace`;
+  expect((await fetch(url)).status).toBe(401);
+  expect(list).not.toHaveBeenCalled();
+  const headers = { "X-Harness-Token": "boot" };
+  const response = await fetch(url, { headers });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual({
+    entries: [{ kind: "assistant", harnessSessionId: "studio-a" }],
+  });
+  expect(list).toHaveBeenCalledWith("/workspace");
+  expect((await fetch(`${url}&cwd=%2Fother`, { headers })).status).toBe(400);
+  list.mockRejectedValueOnce(new OpenCodeAccessError("private"));
+  expect((await fetch(url, { headers })).status).toBe(403);
+  list.mockRejectedValueOnce(new Error("private"));
+  const failed = await fetch(url, { headers });
+  expect(failed.status).toBe(503);
+  expect(await failed.text()).not.toContain("private");
 });
