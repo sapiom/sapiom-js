@@ -198,6 +198,7 @@ import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { OpenCodeHost } from "../core/opencode-host.js";
 import { OpenCodeObserver } from "../core/opencode-observer.js";
+import { createAssistantContextResolver } from "./studio-assistant.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -3556,7 +3557,20 @@ export const startServer = async (
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
-  app.use("/opencode", createOpenCodeRouter(openCodeHost, options.bootToken));
+  app.use(
+    "/opencode",
+    createOpenCodeRouter(
+      openCodeHost,
+      options.bootToken,
+      createAssistantContextResolver({
+        getSession: (id) => sessionManager.get(id),
+        resolveProject: (id) => studioProjectCatalog.resolveIdentity(id),
+        getWorkflows: readPublicWorkflows,
+        getEnvironment: () => assistantAccess.get()?.environment ?? null,
+        loadSystemPrompt: options.loadSystemPrompt,
+      }),
+    ),
+  );
 
   // Everything under /api requires the boot token; mounted as middleware
   // (not a router) so it also gates the workflows/macros routers below,

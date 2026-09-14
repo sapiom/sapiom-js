@@ -14,11 +14,15 @@ import {
   type OpenCodeTransportFailure,
 } from "../shared/opencode-errors.js";
 import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
-import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
+import {
+  composeAssistantPrompt,
+  type ResolveAssistantContext,
+} from "../core/studio-assistant-context.js";
 
 export function createOpenCodeRouter(
   host: Pick<OpenCodeHost, "ensure" | "observe">,
   bootToken: string,
+  resolveContext: ResolveAssistantContext,
 ): Router {
   const router = express.Router();
   const associations = new OpenCodeAssociations();
@@ -131,20 +135,19 @@ export function createOpenCodeRouter(
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        ...(prompt
-          ? {
-              body: JSON.stringify({
-                ...req.body,
-                ...openCodeCompletionPrompt(),
-                // Saved conversations may still remember a retired model.
-                model: hosted.model,
-              }),
-            }
-          : {}),
         signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
       };
       const upstream = prompt
-        ? await finalResponse.send(hosted, nativeId, init)
+        ? await finalResponse.send(hosted, nativeId, async () => ({
+            ...init,
+            body: JSON.stringify({
+              parts: req.body.parts,
+              model: hosted.model,
+              ...composeAssistantPrompt(
+                await resolveContext(hosted, req.body.selectedAgentPath),
+              ),
+            }),
+          }))
         : await hosted.server.fetch(`/${nativePath}`, init);
       if (!upstream.ok) {
         await upstream.body?.cancel();
@@ -207,7 +210,14 @@ function validPrompt(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const body = value as Record<string, unknown>;
   return (
-    Object.keys(body).every((key) => key === "parts") &&
+    Object.keys(body).every((key) =>
+      ["parts", "selectedAgentPath"].includes(key),
+    ) &&
+    (body.selectedAgentPath === undefined ||
+      body.selectedAgentPath === null ||
+      (typeof body.selectedAgentPath === "string" &&
+        body.selectedAgentPath.length > 0 &&
+        body.selectedAgentPath.length <= 4096)) &&
     Array.isArray(body.parts) &&
     body.parts.length > 0 &&
     body.parts.length <= 32 &&

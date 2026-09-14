@@ -3333,6 +3333,9 @@ export const App = (): JSX.Element => {
               ) : showDead && conversationSession ? (
                 <AssistantPane
                   sessionId={conversationSession.id}
+                    selectedAgentPath={
+                      atMapAltitude ? null : effectiveFocusedAgentPath
+                    }
                   bootToken={harness.bootToken}
                   authRevision={harness.authRevision}
                   drafts={assistantDrafts}
@@ -3430,6 +3433,9 @@ export const App = (): JSX.Element => {
                   <div className="agent-view-panel" id="agent-panel-terminal">
                     <AssistantPane
                       sessionId={conversationSession.id}
+                    selectedAgentPath={
+                      atMapAltitude ? null : effectiveFocusedAgentPath
+                    }
                       bootToken={harness.bootToken}
                       authRevision={harness.authRevision}
                       drafts={assistantDrafts}

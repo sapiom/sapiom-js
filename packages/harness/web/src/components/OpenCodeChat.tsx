@@ -48,6 +48,7 @@ export interface ChatDraft {
 /** In-memory only: App owns one store for the current authenticated principal. */
 export type ChatDraftStore = Map<string, ChatDraft>;
 interface Props {
+  selectedAgentPath?: string | null;
   harnessSessionId: string;
   bootToken: string;
   draft: ChatDraft;
@@ -94,6 +95,7 @@ async function responseFailure(
 
 export function OpenCodeChat({
   harnessSessionId,
+  selectedAgentPath,
   bootToken,
   draft,
   onSignIn,
@@ -148,6 +150,7 @@ export function OpenCodeChat({
       baseUrl={baseUrl}
       bootToken={bootToken}
       conversationId={conversationId}
+      selectedAgentPath={selectedAgentPath}
       retry={retry}
       draft={draft}
       onSignIn={onSignIn}
@@ -173,6 +176,7 @@ export function OpenCodeChat({
 
 function RuntimeChat({
   baseUrl,
+  selectedAgentPath,
   bootToken,
   conversationId,
   retry,
@@ -182,6 +186,7 @@ function RuntimeChat({
   onOpenTerminal,
 }: {
   baseUrl: string;
+  selectedAgentPath?: string | null;
   bootToken: string;
   conversationId: string;
   retry: () => void;
@@ -190,6 +195,11 @@ function RuntimeChat({
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
 }) {
+  // Selection changes must not recreate the conversation/runtime or its draft.
+  const selection = useRef(selectedAgentPath);
+  useLayoutEffect(() => {
+    selection.current = selectedAgentPath;
+  }, [selectedAgentPath]);
   const [transportError, setTransportError] = useState<RecoveryNotice | null>(
     null,
   );
@@ -213,9 +223,16 @@ function RuntimeChat({
       headers: { "X-Harness-Token": bootToken },
       credentials: "omit",
       fetch: async (input, init) => {
-        const request = new Request(input, init);
+        let request = new Request(input, init);
         const path = new URL(request.url).pathname;
         const root = new URL(`${baseUrl}/session/${conversationId}`).pathname;
+        if (request.method === "POST" && path === `${root}/prompt_async`) {
+          const selectedAgentPath = selection.current;
+          const body = await request.clone().json();
+          request = new Request(request, {
+            body: JSON.stringify({ ...body, selectedAgentPath }),
+          });
+        }
         const required =
           path === root ||
           path === `${root}/message` ||

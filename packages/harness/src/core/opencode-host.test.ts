@@ -60,6 +60,7 @@ let changed: () => void;
 let expectShutdownFailure = false;
 const authorize = vi.fn();
 const start = vi.fn();
+const prepareSkills = vi.fn();
 const revoke = vi.fn();
 const close = vi.fn();
 const issue = vi.fn();
@@ -108,6 +109,7 @@ beforeEach(async () => {
     fetchJson: vi.fn(),
     close,
   });
+  prepareSkills.mockReset().mockResolvedValue([]);
   host = new OpenCodeHost({
     createObserver,
     access: {
@@ -124,6 +126,7 @@ beforeEach(async () => {
     origin: () => "http://127.0.0.1:1234",
     stateRoot: root,
     authorize,
+    prepareSkills,
     start,
   });
 });
@@ -135,6 +138,37 @@ afterEach(async () => {
 });
 
 describe("Studio-owned OpenCode lifecycle", () => {
+  it("accepts only host-prepared skill directories in private session state", async () => {
+    prepareSkills.mockImplementationOnce(async (_workspace, stateRoot) => {
+      const skills = join(stateRoot, "skills-v1");
+      await mkdir(skills);
+      return [skills];
+    });
+    const hosted = await host.ensure("studio-skills");
+    expect(start.mock.calls[0][0].config.skills).toEqual({
+      paths: [join(hosted.stateRoot, "skills-v1")],
+    });
+    prepareSkills.mockResolvedValueOnce([cwd]);
+    await expect(host.ensure("studio-outside")).rejects.toThrow("context");
+    prepareSkills.mockImplementationOnce(async (_workspace, stateRoot) => {
+      const file = join(stateRoot, "not-a-skill-directory");
+      await writeFile(file, "fixture");
+      return [file];
+    });
+    await expect(host.ensure("studio-file")).rejects.toThrow("context");
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("revalidates access after skill preparation before issuing a runtime credential", async () => {
+    prepareSkills.mockImplementationOnce(async () => {
+      grant = null;
+      return [];
+    });
+    await expect(host.ensure("studio-skills")).rejects.toThrow();
+    expect(issue).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("coalesces attachments and uses only the authorized cwd and private state", async () => {
     const [first, second] = await Promise.all([
       host.ensure("studio-one"),

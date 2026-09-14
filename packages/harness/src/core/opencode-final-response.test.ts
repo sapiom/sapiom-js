@@ -4,12 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostedOpenCode } from "./opencode-host.js";
 import { OpenCodeFinalResponse } from "./opencode-final-response.js";
+import {
+  composeAssistantPrompt,
+  assistantContextDigest,
+} from "./studio-assistant-context.js";
+import type { OpenCodeTurnMessage } from "../shared/opencode-turn.js";
 
 let hosted: HostedOpenCode;
 let permission: unknown[];
 let state: string;
 let agent: string;
 let text: string;
+let system: string | undefined;
 let abort: AbortController;
 const dispatch = vi.fn();
 beforeEach(async () => {
@@ -17,6 +23,30 @@ beforeEach(async () => {
   state = "idle";
   agent = "build";
   text = "";
+  const context = {
+    schemaVersion: 1 as const,
+    session: { id: "studio-a", cwd: tmpdir(), projectId: null },
+    environment: "dev",
+    selectedAgent: { status: "none" as const },
+    boundAgent: { status: "none" as const },
+    agents: [],
+    capabilities: [],
+    guidance: [
+      {
+        id: "profile",
+        kind: "profile" as const,
+        required: true,
+        source: "fixture",
+        status: "available" as const,
+        revision: "1",
+        text: "SAVED_CONTEXT_REVISION",
+      },
+    ],
+  };
+  system = composeAssistantPrompt({
+    ...context,
+    revision: assistantContextDigest(JSON.stringify(context)),
+  }).system;
   abort = new AbortController();
   dispatch.mockReset().mockResolvedValue(new Response("{}"));
   hosted = {
@@ -30,7 +60,13 @@ beforeEach(async () => {
         if (path.endsWith("/message"))
           return [
             {
-              info: { id: "msg_user", role: "user", agent: "build", time: {} },
+              info: {
+                id: "msg_user",
+                role: "user",
+                agent: "build",
+                system,
+                time: {},
+              },
               parts: [],
             },
             {
@@ -93,10 +129,94 @@ it("coalesces recovery and never resends it after a host restart", async () => {
     system: expect.stringContaining("StudioAssistantResult/v2:"),
   });
   expect(JSON.parse(init.body)).not.toHaveProperty("tools");
+  expect(JSON.parse(init.body).system).toContain("SAVED_CONTEXT_REVISION");
   await expect(
     new OpenCodeFinalResponse().recover(hosted, "ses_test", "msg_empty"),
   ).rejects.toThrow();
   expect(dispatch).toHaveBeenCalledOnce();
+});
+
+it.each([
+  undefined,
+  "StudioAssistantResult/v2:broken\n\nStudioAssistantContext/v1\n{",
+])("refuses missing or malformed original context: %s", async (saved) => {
+  system = saved;
+  await expect(
+    new OpenCodeFinalResponse().recover(hosted, "ses_test", "msg_empty"),
+  ).rejects.toThrow("context");
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await readdir(hosted.stateRoot)).toEqual([]);
+});
+
+it("recovers the accepted context across native compaction control messages", async () => {
+  const original = await hosted.server.fetchJson<OpenCodeTurnMessage[]>(
+    "/session/ses_test/message",
+  );
+  const messages: OpenCodeTurnMessage[] = [
+    original[0]!,
+    {
+      info: { id: "msg_compact", role: "user", agent: "build", time: {} },
+      parts: [{ type: "compaction" }],
+    },
+    {
+      info: {
+        id: "msg_summary",
+        role: "assistant",
+        parentID: "msg_compact",
+        summary: true,
+        time: { completed: 1 },
+      },
+      parts: [{ type: "text", text: "Recorded task context" }],
+    },
+    {
+      info: { id: "msg_continue", role: "user", agent: "build", time: {} },
+      parts: [
+        {
+          type: "text",
+          text: "Continue",
+          synthetic: true,
+          metadata: { compaction_continue: true },
+        },
+      ],
+    },
+    {
+      ...original[1]!,
+      info: { ...original[1]!.info!, parentID: "msg_continue" },
+    },
+  ];
+  vi.mocked(hosted.server.fetchJson).mockImplementation(async (path) => {
+    if (path.endsWith("/message")) return messages;
+    if (path === "/session/status") return { ses_test: { type: "idle" } };
+    return { permission: [] };
+  });
+  await new OpenCodeFinalResponse().recover(hosted, "ses_test", "msg_empty");
+  expect(JSON.parse(dispatch.mock.calls[0]![1].body).system).toContain(
+    "SAVED_CONTEXT_REVISION",
+  );
+});
+
+it("holds admission while resolving context and releases it without dispatch on a missing source", async () => {
+  const recovery = new OpenCodeFinalResponse();
+  let reject!: (error: Error) => void;
+  const sending = recovery.send(
+    hosted,
+    "ses_test",
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  await expect(recovery.send(hosted, "ses_test", {})).rejects.toThrow(
+    "admitted",
+  );
+  await expect(
+    recovery.recover(hosted, "ses_test", "msg_empty"),
+  ).rejects.toThrow("reconciled");
+  expect(dispatch).not.toHaveBeenCalled();
+  reject(new Error("Required context missing"));
+  await expect(sending).rejects.toThrow("Required context missing");
+  expect(recovery.isRunning(hosted)).toBe(false);
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 it("never dispatches for busy, answered, stale, or already recovered turns", async () => {
@@ -109,7 +229,10 @@ it("never dispatches for busy, answered, stale, or already recovered turns", asy
     "plan",
   ]) {
     state = scenario === "busy" ? "busy" : "idle";
-    text = scenario === "answered" ? "Final answer" : "";
+    text =
+      scenario === "answered"
+        ? `<!-- studio-result:${system!.split("\n")[0]!.split(":")[1]}:finished -->\nFinal answer`
+        : "";
     agent =
       scenario === "recovered"
         ? "sapiom-final-response"
