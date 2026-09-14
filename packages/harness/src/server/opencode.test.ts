@@ -152,6 +152,7 @@ beforeEach(async () => {
       return fetch(`${nativeOrigin}${path}`, { ...init, headers });
     };
     hosts.set(id, {
+      model: { providerID: "sapiom", modelID: "gpt-luna" },
       harnessSessionId: id,
       cwd: root,
       stateRoot,
@@ -414,6 +415,7 @@ describe("Studio-scoped OpenCode transport", () => {
     )!;
     expect(native.body).toEqual({
       ...body,
+      model: { providerID: "sapiom", modelID: "gpt-luna" },
       system: expect.stringContaining("StudioAssistantResult/v2:"),
     });
     expect(native.body).not.toHaveProperty("format");

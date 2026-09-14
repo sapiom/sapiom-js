@@ -7,6 +7,7 @@ import {
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import express, { type Request, type Response, type Router } from "express";
+import rateLimit, { MemoryStore } from "express-rate-limit";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type {
   AssistantAccess,
@@ -138,7 +139,7 @@ export function assistantUpstreams(env: ResolvedEnvironment): {
   const configured =
     env.services.llm ??
     (env.name === "production" && env.apiURL === "https://api.sapiom.ai"
-      ? "https://llm.services.sapiom.ai"
+      ? "https://router.sapiom.ai"
       : undefined);
   if (!configured)
     throw new Error(
@@ -163,7 +164,7 @@ export function assistantUpstreams(env: ResolvedEnvironment): {
     return url;
   };
   return {
-    llm: new URL("/v2/openai/v1/chat/completions", root(configured)),
+    llm: new URL("/v1/responses", root(configured)),
     mcp: new URL("/v1/mcp", root(env.apiURL)),
   };
 }
@@ -172,11 +173,12 @@ export function assistantUpstreams(env: ResolvedEnvironment): {
 export class OpenCodeBridge {
   readonly router: Router = express.Router();
   private registrations = new Map<string, Registration>();
+  private readonly authenticationAttempts = new MemoryStore();
   private unsubscribe: () => void;
 
   constructor(
     private readonly access: Access,
-    readonly model = "smart",
+    readonly model = "gpt-luna",
   ) {
     this.unsubscribe = access.subscribe(() => {
       const grant = access.get();
@@ -184,15 +186,37 @@ export class OpenCodeBridge {
         if (!grant || !sameAuthority(entry.grant, grant)) this.revoke(id);
       }
     });
+    // Share the peer-IP budget across both routes so rotating runtime IDs cannot
+    // bypass it. Count only local runtime credential rejection: upstream denials
+    // must still reach sign-in recovery, including on long-lived MCP streams.
+    const authenticationRateLimit = rateLimit({
+      windowMs: 60_000,
+      max: 120,
+      store: this.authenticationAttempts,
+      standardHeaders: true,
+      legacyHeaders: false,
+      skipSuccessfulRequests: true,
+      requestWasSuccessful: (_req, res) =>
+        res.locals.assistantRuntimeAuthenticationFailed !== true,
+      handler: (_req, res) => {
+        sendBridgeError(res, 429, {
+          message:
+            "Too many failed Assistant authentication attempts. Try again shortly.",
+          type: "rate_limit_error",
+          code: "assistant_runtime_rate_limited",
+        });
+      },
+    });
     const raw = express.raw({ type: () => true, limit: "4mb" });
     this.router.all(
-      "/:id/llm/v2/openai/v1/chat/completions",
+      "/:id/llm/v1/responses",
+      authenticationRateLimit,
       raw,
       (req, res) => {
         void this.forward(req, res, "llm");
       },
     );
-    this.router.all("/:id/mcp", raw, (req, res) => {
+    this.router.all("/:id/mcp", authenticationRateLimit, raw, (req, res) => {
       void this.forward(req, res, "mcp");
     });
     this.router.use((_req, res) => {
@@ -217,6 +241,7 @@ export class OpenCodeBridge {
   close(): void {
     this.unsubscribe();
     for (const id of this.registrations.keys()) this.revoke(id);
+    this.authenticationAttempts.shutdown();
   }
 
   private revoke(id: string): void {
@@ -238,6 +263,7 @@ export class OpenCodeBridge {
       token.length > 256 ||
       !timingSafeEqual(entry.digest, digest(token))
     ) {
+      res.locals.assistantRuntimeAuthenticationFailed = true;
       sendBridgeError(res, 401, {
         message: "Invalid Assistant runtime credential.",
         type: "authentication_error",
@@ -247,6 +273,7 @@ export class OpenCodeBridge {
     }
     if (!grant || !sameAuthority(entry.grant, grant)) {
       this.revoke(req.params.id!);
+      res.locals.assistantRuntimeAuthenticationFailed = true;
       sendBridgeError(res, 403, {
         message: "Assistant access is unavailable.",
         type: "permission_error",
@@ -278,9 +305,7 @@ export class OpenCodeBridge {
         "Accept-Encoding": "identity",
         Accept: req.header("Accept") ?? "application/json",
         "Content-Type": "application/json",
-        ...(service === "llm"
-          ? { "x-sapiom-api-key": key, "x-sapiom-model": this.model }
-          : { "x-api-key": key }),
+        "x-api-key": key,
       });
       // Queued MCP tools close the POST stream and deliver results through
       // GET replay. Its cursor must survive the credential bridge.
@@ -315,7 +340,9 @@ export class OpenCodeBridge {
           });
           return;
         }
-        body = Buffer.from(JSON.stringify({ ...request, model: this.model }));
+        body = Buffer.from(
+          JSON.stringify({ ...request, model: this.model, store: false }),
+        );
         streamingModel = request.stream === true;
         completionToken = openCodeModelCompletionToken(request);
       }
