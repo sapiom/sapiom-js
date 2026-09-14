@@ -54,7 +54,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  * // Auto-handles 402 payment errors and authorization
  * const response = await client.request({
  *   method: 'GET',
- *   url: 'https://api.example.com/premium-endpoint',
+ *   url: '[https://api.example.com/premium-endpoint](https://api.example.com/premium-endpoint)',
  *   headers: { 'Content-Type': 'application/json' }
  * });
  * ```
@@ -72,7 +72,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  *
  * const response = await client.request({
  *   method: 'POST',
- *   url: 'https://api.example.com/data',
+ *   url: '[https://api.example.com/data](https://api.example.com/data)',
  *   headers: { 'Content-Type': 'application/json' },
  *   body: { key: 'value' }
  * });
@@ -92,7 +92,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  * // Per-request override via __sapiom property
  * await client.request({
  *   method: 'POST',
- *   url: 'https://api.example.com/resource',
+ *   url: '[https://api.example.com/resource](https://api.example.com/resource)',
  *   headers: { 'Content-Type': 'application/json' },
  *   body: { data: 'test' },
  *   __sapiom: {
@@ -104,7 +104,7 @@ export interface SapiomNodeHttpConfig extends BaseSapiomIntegrationConfig {
  * // Disable Sapiom for specific request
  * await client.request({
  *   method: 'GET',
- *   url: 'https://api.example.com/public',
+ *   url: '[https://api.example.com/public](https://api.example.com/public)',
  *   headers: {},
  *   __sapiom: { enabled: false }
  * });
@@ -125,7 +125,10 @@ export function createClient(
     defaultMetadata.traceExternalId = config.traceExternalId;
   if (config?.enabled !== undefined) defaultMetadata.enabled = config.enabled;
 
-  const failureMode = config?.failureMode ?? "open";
+  // SECURITY FIX: SDK Authorization Fail-Open Prevention.
+  // Default failureMode changed from "open" to "closed" to ensure governance boundaries
+  // are strictly enforced by default during control-plane outages.
+  const failureMode = config?.failureMode ?? "closed";
 
   const authConfig: AuthorizationConfig = { sapiomClient, failureMode, polling: config?.polling };
   const paymentConfig: PaymentConfig = { sapiomClient, failureMode, polling: config?.polling };

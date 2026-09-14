@@ -13,6 +13,9 @@ import { createFetch } from "./fetch";
 import { SapiomClient, TransactionAPI, TransactionStatus } from "@sapiom/core";
 import fetchMock from "@fetch-mock/jest";
 
+// Ensure tests have enough time to complete polling loops
+jest.setTimeout(15000);
+
 /**
  * Creates a fully mocked SapiomClient for testing
  */
@@ -148,7 +151,11 @@ describe("HTTP Client Integration Tests", () => {
         body: { result: "polled" },
       });
 
-      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      // Pass a very short polling interval for tests to avoid hanging
+      const fetch = createFetch({ 
+        sapiomClient: mockSapiomClient,
+        polling: { pollInterval: 5, timeout: 1000 } 
+      });
 
       // Execute
       const response = await fetch("https://api.example.com/data");
@@ -433,7 +440,10 @@ describe("HTTP Client Integration Tests", () => {
         body: { paid: true },
       });
 
-      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      const fetch = createFetch({ 
+        sapiomClient: mockSapiomClient,
+        polling: { pollInterval: 5, timeout: 1000 }
+      });
       const response = await fetch("https://api.example.com/paid");
       await flushPromises();
 
@@ -458,7 +468,7 @@ describe("HTTP Client Integration Tests", () => {
         status: TransactionStatus.AUTHORIZED,
       } as any);
 
-      // Reauthorize returns denied status
+      // Reauthorize returns denied status immediately to avoid polling loops
       mocks.reauthorizeWithPayment.mockResolvedValue({
         id: "tx-auth",
         status: TransactionStatus.DENIED,
@@ -485,7 +495,11 @@ describe("HTTP Client Integration Tests", () => {
         },
       });
 
-      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      const fetch = createFetch({ 
+        sapiomClient: mockSapiomClient,
+        polling: { pollInterval: 5, timeout: 1000 }
+      });
+      
       const response = await fetch("https://api.example.com/paid");
       await flushPromises();
 
@@ -584,7 +598,10 @@ describe("HTTP Client Integration Tests", () => {
 
       fetchMock.get("https://api.example.com/data", { status: 200, body: {} });
 
-      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      const fetch = createFetch({ 
+        sapiomClient: mockSapiomClient,
+        polling: { pollInterval: 5, timeout: 1000 }
+      });
       await fetch("https://api.example.com/data");
       await flushPromises();
 

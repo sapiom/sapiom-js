@@ -115,7 +115,7 @@ describe("handlePayment on-demand transaction creation (402 cascade fix)", () =>
     );
   });
 
-  it("should return raw 402 when on-demand creation also fails in failureMode open", async () => {
+  it("should throw error when on-demand creation fails even in failureMode open (secure default override)", async () => {
     mockTransactionAPI.create.mockRejectedValue(server500Error());
 
     fetchMock.get("https://api.example.com/premium", {
@@ -125,11 +125,12 @@ describe("handlePayment on-demand transaction creation (402 cascade fix)", () =>
 
     const fetch = createFetch({
       sapiomClient: mockSapiomClient,
-      failureMode: "open",
+      failureMode: "open", // Will be forcibly overridden to "closed" by the 402 payment handler
     });
 
-    const response = await fetch("https://api.example.com/premium");
-    expect(response.status).toBe(402);
+    await expect(fetch("https://api.example.com/premium")).rejects.toThrow(
+      "Request failed with status 500: Internal Server Error"
+    );
   });
 
   it("should throw when creation fails in failureMode closed", async () => {

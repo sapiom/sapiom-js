@@ -106,6 +106,15 @@ export async function handleAuthorization(
   config: AuthorizationConfig,
   defaultMetadata?: Record<string, any>,
 ): Promise<Request> {
+  const requestMetadata = (request as any).__sapiom || {};
+  const userMetadata = { ...defaultMetadata, ...requestMetadata };
+
+  // SECURITY FIX: Disable fail-open opt-in entirely for payment-protected endpoints.
+  // If the endpoint or the call metadata explicitly denotes a protected status, 
+  // we strictly enforce a 'closed' failure mode regardless of global config.
+  const isPaymentProtected = userMetadata?.paymentProtected === true;
+  const effectiveFailureMode = isPaymentProtected ? "closed" : config.failureMode;
+
   const existingTransactionId = getHeader(
     request.headers,
     "X-Sapiom-Transaction-Id",
@@ -125,7 +134,7 @@ export async function handleAuthorization(
         existingTransactionId,
       );
     } catch (error) {
-      if (config.failureMode === "closed") throw error;
+      if (effectiveFailureMode === "closed") throw error;
       console.error(
         "[Sapiom] Failed to get transaction, allowing request:",
         error,
@@ -145,7 +154,7 @@ export async function handleAuthorization(
         try {
           authResult = await poller.waitForAuthorization(existingTransactionId);
         } catch (error) {
-          if (config.failureMode === "closed") throw error;
+          if (effectiveFailureMode === "closed") throw error;
           console.error(
             "[Sapiom] Failed to poll transaction, allowing request:",
             error,
@@ -176,9 +185,6 @@ export async function handleAuthorization(
         );
     }
   }
-
-  const requestMetadata = (request as any).__sapiom || {};
-  const userMetadata = { ...defaultMetadata, ...requestMetadata };
 
   const method = request.method.toUpperCase();
   const url = request.url;
@@ -251,7 +257,7 @@ export async function handleAuthorization(
       },
     });
   } catch (error) {
-    if (config.failureMode === "closed") throw error;
+    if (effectiveFailureMode === "closed") throw error;
     console.error(
       "[Sapiom] Failed to create transaction, allowing request:",
       error,
@@ -271,7 +277,7 @@ export async function handleAuthorization(
       try {
         authResult = await poller.waitForAuthorization(transaction.id);
       } catch (error) {
-        if (config.failureMode === "closed") throw error;
+        if (effectiveFailureMode === "closed") throw error;
         console.error(
           "[Sapiom] Failed to poll transaction, allowing request:",
           error,
@@ -325,6 +331,11 @@ export async function handlePayment(
   if (response.status !== 402) {
     return response;
   }
+
+  // SECURITY FIX: Payment flows (402 handlers) inherently mean the endpoint is payment-protected.
+  // We explicitly disable fail-open bypass behavior here. Any failure to process 
+  // the payment must result in a closed/thrown state.
+  const effectiveFailureMode = "closed";
 
   const errorResponse = response.clone();
   const errorBody = await errorResponse.text();
@@ -424,7 +435,7 @@ export async function handlePayment(
       // request headers) can complete this on-demand transaction.
       setHeader(request.headers, "X-Sapiom-Transaction-Id", existingTransactionId);
     } catch (error) {
-      if (config.failureMode === "closed") throw error;
+      if (effectiveFailureMode === "closed") throw error;
       console.error(
         "[Sapiom] Failed to create on-demand transaction for payment, returning 402:",
         error,
@@ -451,7 +462,7 @@ export async function handlePayment(
       },
     );
   } catch (error) {
-    if (config.failureMode === "closed") throw error;
+    if (effectiveFailureMode === "closed") throw error;
     console.error(
       "[Sapiom] Failed to reauthorize transaction with payment, returning 402:",
       error,
@@ -467,7 +478,7 @@ export async function handlePayment(
     try {
       authResult = await poller.waitForAuthorization(transaction.id);
     } catch (error) {
-      if (config.failureMode === "closed") throw error;
+      if (effectiveFailureMode === "closed") throw error;
       console.error(
         "[Sapiom] Failed to poll payment transaction, returning 402:",
         error,
