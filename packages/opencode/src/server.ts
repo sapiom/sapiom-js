@@ -27,6 +27,8 @@ export interface StartOpenCodeServerOptions {
   command?: { executable: string; prefixArgs?: string[] };
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  /** Publish ownership for this exact supervisor. May finish after cancellation;
+   * callers must serialize guard publication/release and scope writes to this identity. */
   beforeLaunch?: (identity: OpenCodeProcessIdentity) => void | Promise<void>;
 }
 export interface OpenCodeCleanupProof {
@@ -512,12 +514,26 @@ export async function startOpenCodeServer(
     !/^[a-f0-9]{64}$/.test(options.assistantContext.authorityScope)
   )
     throw new OpenCodeStartupError("launch-failed");
+  const timeout = AbortSignal.timeout(options.startupTimeoutMs ?? 15000);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeout])
+    : timeout;
+  const interrupted = () =>
+    new OpenCodeStartupError(
+      options.signal?.aborted
+        ? "cancelled"
+        : timeout.aborted
+          ? "timed-out"
+          : "launch-failed",
+    );
   const command: NonNullable<StartOpenCodeServerOptions["command"]> =
     options.command ??
-    (await resolveRuntimeCommand().catch(() => {
-      throw new OpenCodeStartupError("launch-failed");
+    (await waitForStartupBoundary(resolveRuntimeCommand(), signal).catch(() => {
+      throw interrupted();
     }));
+  if (signal.aborted) throw interrupted();
   const port = await reservePort();
+  if (signal.aborted) throw interrupted();
   const origin = `http://127.0.0.1:${port}`;
   const password = randomBytes(32).toString("hex");
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
@@ -568,9 +584,9 @@ export async function startOpenCodeServer(
     await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
     throw new OpenCodeStartupError("launch-failed");
   }
-  if (options.signal?.aborted) {
+  if (signal.aborted) {
     await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
-    throw new OpenCodeStartupError("cancelled");
+    throw interrupted();
   }
   const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 2000;
   const cleanupProof: OpenCodeCleanupProof = {
@@ -632,7 +648,7 @@ export async function startOpenCodeServer(
   child.stderr?.resume();
   let exited = false;
   let disconnected = false;
-  let protectionAcknowledged = false;
+  let protectionAttempted = false;
   let termination:
     | {
         exitCode: number | null;
@@ -710,7 +726,9 @@ export async function startOpenCodeServer(
       if (!exited || !(await cleanupConfirmed()))
         throw new OpenCodeShutdownError();
       await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
-      if (!protectionAcknowledged)
+      // A pending/rejected callback may already have published a guard. Its
+      // cleanup proof must survive cancellation and a later owner-process crash.
+      if (!protectionAttempted)
         await rm(cleanupProof.path, { force: true }).catch(() => {});
     })().catch(() => {
       throw new OpenCodeShutdownError();
@@ -727,22 +745,27 @@ export async function startOpenCodeServer(
     headers.set("Accept-Encoding", "identity");
     return fetch(url, { ...init, headers, redirect: "error" });
   };
-  const timeout = AbortSignal.timeout(options.startupTimeoutMs ?? 15000);
-  const signal = options.signal
-    ? AbortSignal.any([options.signal, timeout])
-    : timeout;
   try {
     if (!child.pid) throw new OpenCodeStartupError("launch-failed");
-    const birthId = await processBirthId(child.pid);
+    const birthId = await waitForStartupBoundary(
+      processBirthId(child.pid),
+      signal,
+    );
     if (options.beforeLaunch) {
-      await options.beforeLaunch({
-        pid: child.pid,
-        ...(birthId === undefined ? {} : { birthId }),
-        cleanupProof,
-      });
-      protectionAcknowledged = true;
+      signal.throwIfAborted();
+      protectionAttempted = true;
+      await waitForStartupBoundary(
+        Promise.resolve(
+          options.beforeLaunch({
+            pid: child.pid,
+            ...(birthId === undefined ? {} : { birthId }),
+            cleanupProof,
+          }),
+        ),
+        signal,
+      );
     }
-    if (options.signal?.aborted) throw new OpenCodeStartupError("cancelled");
+    signal.throwIfAborted();
     if (exited || disconnected || !child.connected)
       throw new OpenCodeStartupError("launch-failed");
     await sendToChild(child, {
@@ -827,6 +850,7 @@ export async function startOpenCodeServer(
     if (!child.pid || exited || disconnected || !child.connected)
       throw new Error("OpenCode exited during startup");
     await sendToChild(child, { type: "ready" });
+    signal.throwIfAborted();
     if (exited) throw new Error("OpenCode exited during startup");
     return {
       pid: child.pid,
@@ -859,6 +883,33 @@ export async function startOpenCodeServer(
     await rm(launchRoot, { recursive: true, force: true }).catch(() => {});
     throw startupError;
   }
+}
+
+/** Race read-only work or exact-owner guard publication, never shared-state preparation.
+ * Keep both completion handlers after abort so late rejection is consumed and
+ * the abandoned operation cannot resume this startup or launch its native child. */
+function waitForStartupBoundary<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+    if (signal.aborted) {
+      signal.removeEventListener("abort", onAbort);
+      onAbort();
+    }
+  });
 }
 
 function startupLaunchError(error: unknown): OpenCodeStartupError {
