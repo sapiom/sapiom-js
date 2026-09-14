@@ -195,3 +195,8 @@ the same Studio. An uncertain Assistant Resume keeps its original revision and
 operation ID across its own lifecycle event and Close/Back navigation; Retry
 Resume reconciles that request. Only a verified lifecycle conflict permits a new
 availability check.
+
+After a verified Continue lifecycle conflict, Review latest record fetches and
+displays saved history without creating work. A separate Start a new continuation
+action replaces the rejected request only if its saved tuple is still unchanged.
+Uncertain failures and reloads continue to reconcile the original operation.

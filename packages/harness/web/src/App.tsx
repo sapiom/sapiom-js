@@ -3403,7 +3403,7 @@ export const App = (): JSX.Element => {
                   entry={activeAssistantReview.entry}
                   bootToken={harness.bootToken}
                   onClose={() => setAssistantReview(null)}
-                  actions={(record) => <><AssistantHistoryActions
+                  actions={(record, refreshRecord) => <><AssistantHistoryActions
                     entry={activeAssistantReview.entry}
                     lifecycle={assistantLifecycles.find((row) => row.harnessSessionId === activeAssistantReview.entry.harnessSessionId)}
                     bootToken={harness.bootToken}
@@ -3418,7 +3418,8 @@ export const App = (): JSX.Element => {
                     }}
                   /><AssistantContinueAction
                     entry={{ ...activeAssistantReview.entry, lifecycle: assistantLifecycles.find((row) => row.harnessSessionId === activeAssistantReview.entry.harnessSessionId && row.revision >= activeAssistantReview.entry.lifecycle.revision) ?? activeAssistantReview.entry.lifecycle }}
-                    recordRevision={record?.turns.length ? record.revision : null}
+                    record={record}
+                    onRefreshRecord={refreshRecord}
                     bootToken={harness.bootToken}
                     onContinue={async (entry, request, signal) => {
                       const review = activeAssistantReview;

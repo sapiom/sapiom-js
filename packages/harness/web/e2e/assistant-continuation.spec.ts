@@ -42,7 +42,7 @@ const source = (
   },
   continuationScope: scope,
 });
-const record = (revision: number) => ({
+const record = (revision: number, text = "Original saved task") => ({
   schemaVersion: 1,
   reconstructed: true,
   revision,
@@ -66,7 +66,7 @@ const record = (revision: number) => ({
             {
               id: "part1",
               type: "text",
-              text: "Original saved task",
+              text,
               truncated: false,
             },
           ],
@@ -139,6 +139,7 @@ async function setup(page: Page) {
     hold: false,
     fail: false,
     missingRecord: false,
+    recordText: "Original saved task",
     missingNative: false,
     prompts: [] as Route[],
     messages: [] as any[],
@@ -222,7 +223,7 @@ async function setup(page: Page) {
     route.fulfill(
       probe.missingRecord
         ? { status: 404, json: {} }
-        : { json: { record: record(probe.revision) } },
+        : { json: { record: record(probe.revision, probe.recordText) } },
     ),
   );
   await page.route(
@@ -238,7 +239,7 @@ async function setup(page: Page) {
           json: { error: openCodeTransportFailure("native_history_missing") },
         });
       const attachment = response(
-        probe.requests[0]?.request().postDataJSON() ?? {
+        probe.requests.at(-1)?.request().postDataJSON() ?? {
           operationId: "22222222-2222-4222-8222-222222222222",
           expectedRecordRevision: 1,
         },
@@ -911,3 +912,148 @@ for (const field of ["project", "user", "harness", "source-rebound"]) {
     },
   );
 }
+
+const reviewLatest = (page: Page) =>
+  page.getByRole("button", { name: "Review latest record", exact: true });
+const startNew = (page: Page) =>
+  page.getByRole("button", { name: "Start a new continuation", exact: true });
+async function rejectedContinuation(page: Page) {
+  const probe = await setup(page);
+  probe.hold = true;
+  await review(page);
+  await button(page).click();
+  await expect.poll(() => probe.requests.length).toBe(1);
+  const original = probe.requests[0]!.request().postDataJSON();
+  await probe.requests[0]!.fulfill({
+    status: 409,
+    json: { failure: openCodeTransportFailure("lifecycle_changed") },
+  });
+  await expect(reviewLatest(page)).toBeEnabled();
+  return Object.assign(probe, { original });
+}
+
+test("a definite Continue conflict requires refreshed displayed history and an explicit new operation", async ({
+  page,
+}, info) => {
+  const probe = await rejectedContinuation(page);
+  await expect(startNew(page)).toHaveCount(0);
+  await page.screenshot({
+    path: info.outputPath("continue-conflict-before-review.png"),
+  });
+  probe.revision = 2;
+  probe.recordText = "Latest recorded task after the source changed";
+  await project(page, 2, "account-a", [
+    { ...lifecycle(sourceId, 3), lifecycle: "ended" },
+  ]);
+  await expect(reviewLatest(page)).toBeEnabled();
+  await reviewLatest(page).click();
+  await expect(page.getByTestId("assistant-transcript")).toContainText(
+    probe.recordText,
+  );
+  await expect(startNew(page)).toBeEnabled();
+  expect(probe.requests).toHaveLength(1);
+  await page.screenshot({
+    path: info.outputPath("continue-conflict-reviewed.png"),
+  });
+  await startNew(page).click();
+  await expect.poll(() => probe.requests.length).toBe(2);
+  const current = probe.requests[1]!.request().postDataJSON();
+  expect(current).toMatchObject({
+    expectedRevision: 3,
+    expectedRecordRevision: 2,
+  });
+  expect(current.operationId).not.toBe(probe.original.operationId);
+  await probe.requests[1]!.fulfill({ json: probe.response(current) });
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  expect(
+    probe.calls.filter((url) => /prompt_async|final-response/.test(url)),
+  ).toEqual([]);
+});
+
+for (const mode of ["unknown409", "503", "unconfirmed409"] as const) {
+  test(`Continue keeps the original request after ${mode} without offering replacement`, async ({
+    page,
+  }) => {
+    const probe = await setup(page);
+    probe.hold = true;
+    await review(page);
+    await button(page).click();
+    await expect.poll(() => probe.requests.length).toBe(1);
+    const original = probe.requests[0]!.request().postDataJSON();
+    await probe.requests[0]!.fulfill({
+      status: mode === "503" ? 503 : 409,
+      json: {
+        failure:
+          mode === "unknown409"
+            ? { code: "lifecycle_changed" }
+            : openCodeTransportFailure(
+                mode === "503"
+                  ? "lifecycle_changed"
+                  : "continuation_unconfirmed",
+              ),
+      },
+    });
+    await expect(button(page)).toHaveText("Retry Continue");
+    await expect(reviewLatest(page)).toHaveCount(0);
+    await expect(startNew(page)).toHaveCount(0);
+    await button(page).click();
+    await expect.poll(() => probe.requests.length).toBe(2);
+    expect(probe.requests[1]!.request().postDataJSON()).toEqual(original);
+    await probe.requests[1]!.fulfill({ status: 503, json: {} });
+  });
+}
+
+test("new Continue cannot replace a receipt changed by another tab", async ({
+  page,
+}) => {
+  const probe = await rejectedContinuation(page);
+  await reviewLatest(page).click();
+  await expect(startNew(page)).toBeEnabled();
+  await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((key) =>
+      key.startsWith("studio.assistant-continue."),
+    )!;
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        ...JSON.parse(localStorage.getItem(key)!),
+        operationId: crypto.randomUUID(),
+      }),
+    );
+  });
+  await startNew(page).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "saved continuation request changed",
+  );
+  expect(probe.requests).toHaveLength(1);
+});
+
+test("a missing fresh record cannot authorize a new continuation", async ({
+  page,
+}) => {
+  const probe = await rejectedContinuation(page);
+  probe.missingRecord = true;
+  await reviewLatest(page).click();
+  await expect(
+    page.getByText("No Assistant conversation was recorded for this session."),
+  ).toBeVisible();
+  await expect(startNew(page)).toHaveCount(0);
+  expect(probe.requests).toHaveLength(1);
+  probe.missingRecord = false;
+  await reviewLatest(page).click();
+  await expect(startNew(page)).toBeEnabled();
+});
+
+test("reload after a definite Continue conflict still retries the original request first", async ({
+  page,
+}) => {
+  const probe = await rejectedContinuation(page);
+  await page.reload();
+  await project(page);
+  await review(page);
+  await expect(reviewLatest(page)).toHaveCount(0);
+  await button(page).click();
+  await expect.poll(() => probe.requests.length).toBe(2);
+  expect(probe.requests[1]!.request().postDataJSON()).toEqual(probe.original);
+  await probe.requests[1]!.fulfill({ status: 503, json: {} });
+});

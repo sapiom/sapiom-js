@@ -42,9 +42,20 @@ export function savedContinueRequest(
 function prepare(
   entry: AssistantHistoryEntry,
   recordRevision: number | null,
+  rejected?: ContinueRequest,
 ): ContinueRequest {
   const saved = savedContinueRequest(entry);
-  if (saved) return saved;
+  if (
+    rejected &&
+    (!saved ||
+      saved.operationId !== rejected.operationId ||
+      saved.expectedRevision !== rejected.expectedRevision ||
+      saved.expectedRecordRevision !== rejected.expectedRecordRevision)
+  )
+    throw new Error(
+      "The saved continuation request changed. Retry its current request before starting another.",
+    );
+  if (saved && !rejected) return saved;
   if (recordRevision === null)
     throw new Error("No readable Assistant record is available to continue.");
   const request = requestSchema.parse({
@@ -65,10 +76,12 @@ function prepare(
 export async function prepareContinueRequest(
   entry: AssistantHistoryEntry,
   recordRevision: number | null,
+  /** Only an explicit new-operation action after a confirmed lifecycle conflict. */
+  rejected?: ContinueRequest,
 ): Promise<ContinueRequest> {
   if (!navigator.locks) throw storageError();
   return navigator.locks.request(key(entry), () =>
-    prepare(entry, recordRevision),
+    prepare(entry, recordRevision, rejected),
   );
 }
 export function completeContinueRequest(
