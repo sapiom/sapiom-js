@@ -158,3 +158,8 @@ event. Runtime activation remains an explicit capability from its existing owner
 Inspection and Resume responses recheck the complete opaque history scope after
 asynchronous work. A changed project, account, harness or native binding invalidates
 the result even when the workspace path and lifecycle revision are unchanged.
+
+Continue allows up to 45 seconds total for cold startup and frozen preparation.
+Selected inspection retains its separate 15-second limit. The caller's remaining
+deadline and End can cancel either operation sooner; provisional cleanup remains
+bound to the exact runtime that the operation started.

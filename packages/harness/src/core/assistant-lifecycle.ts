@@ -41,6 +41,8 @@ export interface AssistantResumePreparation {
 interface Options {
   inspectionTimeoutMs?: number;
   resumeTimeoutMs?: number;
+  /** Total startup and frozen-context/seed preparation budget; defaults to 45 seconds. */
+  continuationTimeoutMs?: number;
   /** Continue keeps an allocated child closed to ordinary Attach until seed preparation commits. */
   canAttach?: (id: string) => Promise<boolean>;
   store: Pick<AssistantSessionStore, "lifecycle" | "transition"> &
@@ -574,7 +576,9 @@ export class AssistantLifecycleCoordinator {
       : controller.signal;
     const timer = setTimeout(
       () => controller.abort(inspectionFailure("transport_unavailable")),
-      this.options.inspectionTimeoutMs ?? 15_000,
+      retain
+        ? (this.options.continuationTimeoutMs ?? 45_000)
+        : (this.options.inspectionTimeoutMs ?? 15_000),
     );
     const check = () => {
       signal.throwIfAborted();
