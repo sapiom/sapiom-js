@@ -1,6 +1,7 @@
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type { HarnessSession, WorkflowInfo } from "../shared/types.js";
 import type { HostedOpenCode } from "../core/opencode-host.js";
+import type { StudioProjectIdentity } from "../core/studio-project-catalog.js";
 import {
   assistantContextDigest,
   assistantContextUnavailable,
@@ -19,6 +20,7 @@ interface Options {
   getSession: (id: string) => HarnessSession | undefined | null;
   getWorkflows: () => Promise<WorkflowInfo[]>;
   getEnvironment: () => ResolvedEnvironment | null;
+  resolveProject: (projectId: string) => Promise<StudioProjectIdentity | null>;
   loadSystemPrompt?: () => Promise<string>;
   /** Epic 3 supplies connection/catalog facts, never a browser-provided list. */
   loadCapabilities?: (hosted: HostedOpenCode) => Promise<AssistantCapability[]>;
@@ -60,6 +62,9 @@ export function createAssistantContextResolver(
     const current = options.getSession(hosted.harnessSessionId);
     const environment = options.getEnvironment();
     if (!current || !environment) throw assistantContextUnavailable();
+    const identity = current.agentMapIdentity && {
+      ...current.agentMapIdentity,
+    };
     // Capture binding before any asynchronous provider can observe a rebind.
     const session = {
       id: current.id,
@@ -67,6 +72,29 @@ export function createAssistantContextResolver(
       projectId: current.agentMapIdentity?.projectId ?? null,
       boundAgentPath: current.boundWorkflowPath,
     };
+    const projectRoots = async () => {
+      const project = session.projectId
+        ? await options.resolveProject(session.projectId).catch(() => null)
+        : null;
+      const live = options.getSession(session.id);
+      if (
+        !live ||
+        live.id !== session.id ||
+        live.cwd !== session.cwd ||
+        live.agentMapIdentity?.projectId !== identity?.projectId ||
+        live.agentMapIdentity?.userId !== identity?.userId ||
+        live.agentMapIdentity?.sessionId !== identity?.sessionId ||
+        (session.projectId && project?.projectId !== session.projectId)
+      )
+        throw assistantContextUnavailable();
+      return project
+        ? project.rootBindings
+            .filter((root) => root.status === "active")
+            .map((root) => root.localRootRef)
+            .sort()
+        : [hosted.cwd];
+    };
+    const roots = await projectRoots();
     const [workflows, profile, capabilities] = await Promise.all([
       options.getWorkflows(),
       assistantProfile(environment, options.loadSystemPrompt),
@@ -76,6 +104,7 @@ export function createAssistantContextResolver(
       hosted,
       session,
       selectedAgentPath,
+      projectRoots: roots,
       workflows,
       environment: environment.name,
       capabilities,
@@ -108,7 +137,11 @@ export function createAssistantContextResolver(
               "The managed authoring skill loader is not connected yet. Use the installed SDK documentation; do not claim this skill was loaded.",
           },
         ];
-    if (!hosted.isCurrent() || hosted.signal.aborted)
+    if (
+      JSON.stringify(await projectRoots()) !== JSON.stringify(roots) ||
+      !hosted.isCurrent() ||
+      hosted.signal.aborted
+    )
       throw assistantContextUnavailable();
     const serialized = JSON.stringify({
       ...context,
