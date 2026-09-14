@@ -45,8 +45,8 @@ beforeEach(async () => {
 });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
 const signer = async () => ({ identity: "fixture-cert", keychainFile: "/private/fixture.keychain" });
-async function sign(command, args) {
-  calls.push({ command, args });
+async function sign(command, args, options) {
+  calls.push({ command, args, options });
   if (args.includes("--sign")) await fs.writeFile(args.at(-1), "signed binary bytes");
 }
 test("verifies, detaches a copied hardlink, signs once and records the sealed identity", async () => {
@@ -58,7 +58,8 @@ test("verifies, detaches a copied hardlink, signs once and records the sealed id
   assert.equal(receipt.signedSha256, hash("signed binary bytes"));
   assert.equal(receipt.executable, path.relative(resources, binary).split(path.sep).join("/"));
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[1], { command: "/usr/bin/codesign", args: ["--verify", "--strict", binary] });
+  assert.deepEqual(calls[1], { command: "/usr/bin/codesign", args: ["--verify", "--strict", binary], options: { windowsHide: true } });
+  assert.deepEqual(calls[0].options, { windowsHide: true });
   assert(calls[0].args.includes("--entitlements"));
   assert(calls[0].args.includes("--timestamp"));
   const filters = context.packager.platformSpecificBuildOptions.signIgnore;
@@ -101,7 +102,7 @@ test("afterSign verifies the containing seal without changing the native receipt
   const original = await fs.readFile(receiptPath);
   const outer = [];
   await require("./opencode-after-sign.cjs")(context, async (...args) => { outer.push(args); });
-  assert.deepEqual(outer, [["/usr/bin/codesign", ["--verify", "--deep", "--strict", path.join(root, "Studio.app")]]]);
+  assert.deepEqual(outer, [["/usr/bin/codesign", ["--verify", "--deep", "--strict", path.join(root, "Studio.app")], { windowsHide: true }]]);
   assert.deepEqual(await fs.readFile(receiptPath), original);
 });
 test("afterSign rejects native re-signing or changes after receipt creation", async () => {

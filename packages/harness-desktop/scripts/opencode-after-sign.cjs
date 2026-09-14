@@ -15,5 +15,5 @@ module.exports = async (context, execute = promisify(execFile)) => {
   const binary = path.resolve(resources, parsed.executable);
   if (!binary.startsWith(resources + path.sep) || await digest(binary) !== parsed.signedSha256)
     throw new Error("Outer signing changed the verified native binary");
-  await execute("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
+  await execute("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], { windowsHide: true });
 };

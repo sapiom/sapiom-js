@@ -87,8 +87,8 @@ async function prepare(context, dependencies = {}) {
   const args = ["--force", "--sign", signer.identity, "--options", "runtime", "--timestamp",
     "--entitlements", path.join(__dirname, "../assets/entitlements.mac.plist")];
   if (signer.keychainFile) args.push("--keychain", signer.keychainFile);
-  await execute("/usr/bin/codesign", [...args, executable]);
-  await execute("/usr/bin/codesign", ["--verify", "--strict", executable]);
+  await execute("/usr/bin/codesign", [...args, executable], { windowsHide: true });
+  await execute("/usr/bin/codesign", ["--verify", "--strict", executable], { windowsHide: true });
   const receipt = {
     schemaVersion: 1, version: metadata.sapiomNativeRuntime.version,
     pluginVersion: pin.pluginVersion, sourceCommit: metadata.sapiomNativeRuntime.sourceCommit,
