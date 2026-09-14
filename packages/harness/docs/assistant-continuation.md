@@ -19,3 +19,13 @@ and recovery continue to read the exact retained acceptance through the shared
 delivery coordinator. Missing committed material remains an execution error.
 Native creation, synthetic no-reply seeding, operation receipts, and the public
 Continue action are separate lifecycle consumers of these primitives.
+
+The private operation receipt lives beside the source binding, outside native
+engine storage. It freezes source revisions, child identity, brief, native
+creation marker, seed IDs and pending acceptance input. Creation and seeding
+intent are recorded before native mutations; an uncertain phase cannot reset.
+An operation lock serializes external steps, while receipt updates use a
+separate revision lock. A private child lookup is durable before allocation;
+ordinary attachment is blocked until the linked receipt is verified prepared.
+Missing or corrupt linked receipts fail closed. An existing receipt is read
+before newer source history, so retries use the same frozen record and child.
