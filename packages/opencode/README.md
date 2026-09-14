@@ -106,3 +106,8 @@ model endpoint. It covers tools, titles, compaction/continuation, recovery, lega
 inline context, isolated sessions, and malformed required context. Native errors
 are checked for a fixed message without stack paths or provider retries; Studio
 maps only that exact error shape inside the authorized conversation event scope.
+The full saved-text cache is bounded independently of successful capture proofs.
+Pending ordinary requests and native retries can reload evicted captures only
+when the saved bytes match their original fingerprint. Changing a saved user ID's
+context fails closed. Native session deletion retires its cached data and prevents
+delayed requests from reviving it.

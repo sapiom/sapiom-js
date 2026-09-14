@@ -122,6 +122,55 @@ describe("request-bound native Assistant projection", () => {
       expect(synthetic.info!.system).toBeUndefined();
     }
   });
+  it("reconstructs evicted pending captures and retries only from the exact accepted bytes", async () => {
+    const history = Array.from({ length: 17 }, (_, i) =>
+      user(`msg_${i}`, save()),
+    );
+    const f = fixture(history);
+    for (const message of history) await f.messages([message]);
+    for (let retry = 0; retry < 2; retry++)
+      expect((await f.system(save(), input("msg_0")))[2]).toBe(
+        "Profile\r\nexact bytes",
+      );
+    history[0] = user(
+      "msg_0",
+      save("ses_fixture", nextToken, "Changed guidance"),
+    );
+    await expect(
+      f.system(String(history[0].info!.system), input("msg_0")),
+    ).rejects.toThrow(AssistantContextError);
+  });
+  it("does not recapture different bytes under an already accepted native user identity", async () => {
+    const f = fixture();
+    await f.messages([user("msg_first", save())]);
+    const changed = save("ses_fixture", nextToken);
+    await f.messages([user("msg_first", changed)]);
+    await expect(f.system(changed)).rejects.toThrow(AssistantContextError);
+  });
+  it("retires deleted session captures and rejects delayed callbacks after history reads", async () => {
+    const f = fixture([user("msg_first", save())]);
+    let release!: () => void;
+    f.load.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [user("msg_first", save())];
+    });
+    const delayed = f.system(
+      save(),
+      input("msg_first", "ses_fixture", "title"),
+    );
+    await f.hooks.event!({
+      event: {
+        type: "session.deleted",
+        properties: { info: { id: "ses_fixture" } },
+      },
+    });
+    release();
+    await expect(delayed).rejects.toThrow(AssistantContextError);
+    await f.messages([user("msg_first", save())]);
+    await expect(f.system(save())).rejects.toThrow(AssistantContextError);
+  });
   it("permits a first title before message capture using its exact persisted user", async () => {
     const saved = save();
     const f = fixture([user("msg_first", saved)]);
@@ -225,8 +274,12 @@ describe("request-bound native Assistant projection", () => {
       "generic instructions",
       studioAssistantCompletionSystem(fixtureToken),
     ]) {
-      await f.messages([user("msg_first", saved)]);
-      expect(await f.system(saved)).toEqual(["Native prefix\n" + saved]);
+      const id =
+        saved === "generic instructions" ? "msg_generic" : "msg_completion";
+      await f.messages([user(id, saved)]);
+      expect(await f.system(saved, input(id))).toEqual([
+        "Native prefix\n" + saved,
+      ]);
     }
     expect(
       createStudioAssistantContextHooks(async () => []),
