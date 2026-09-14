@@ -88,7 +88,7 @@ restore the original saved contract before capture, including later tool-loop st
 
 Projection replaces only the exact terminal saved system, preserves native prefix
 bytes and mutates the existing system array. Per-request validation failures stay
-sticky until runtime disposal and are thrown at the provider boundary using the fixed
+sticky through the active native execution and are thrown at the provider boundary using the fixed
 message `Studio assistant context could not be verified`. Native serializes it as an
 `UnknownError` without triggering overload retries. Calling without an authority scope
 retains completion-only behavior. Launcher/host activation and the corrected artifact
@@ -97,5 +97,8 @@ are separate stack prerequisites; this API alone does not enable accepted delive
 The full saved-text cache is bounded independently of successful capture proofs.
 Pending ordinary requests and native retries can reload evicted captures only
 when the saved bytes match their original fingerprint. Changing a saved user ID's
-context fails closed. Native session deletion retires its cached data and prevents
-delayed requests from reviving it.
+context fails closed during that execution. Native idle/deletion retires its capture
+and proof epoch, so saved history does not accumulate in process memory. Historical
+titles still verify their exact saved user. Deletion guards live only while a system
+callback is in flight and reject callbacks that race deletion. Ordinary callbacks
+from a retired execution require a new native messages capture.
