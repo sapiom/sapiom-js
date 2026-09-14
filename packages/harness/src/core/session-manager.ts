@@ -701,11 +701,13 @@ interface PtyHandle {
   cleanupConfirmed: boolean;
 }
 
+/** Exact-runtime exit evidence; registry retirement alone remains unconfirmed. */
 export type TerminalCleanupResult = Readonly<{
   state: "confirmed" | "absent" | "unconfirmed";
   runtimeEpoch: string | null;
 }>;
 
+/** End invalidated an in-flight Terminal preparation before it could finish. */
 export class SessionPreparationCancelledError extends Error {
   readonly code = "SESSION_PREPARATION_CANCELLED";
   constructor() {
@@ -714,6 +716,7 @@ export class SessionPreparationCancelledError extends Error {
   }
 }
 
+/** A prior PTY still lacks positive exit evidence and blocks replacement. */
 export class SessionCleanupUnconfirmedError extends Error {
   readonly code = "SESSION_CLEANUP_UNCONFIRMED";
   constructor() {
@@ -791,6 +794,7 @@ export class SessionInputIsolationError extends Error {
 }
 
 
+/** Shutdown permanently closed Terminal admission for this manager instance. */
 export class SessionManagerClosingError extends Error {
   readonly code = "SESSION_MANAGER_CLOSING";
 
@@ -1021,6 +1025,10 @@ export class SessionManager {
   private readonly confirmedCleanupEpochs = new Map<string, string>();
   private readonly dormantAllocations = new Map<string, string>();
   private dormantAllocationsLoaded = false;
+  private readonly retiringKillRetries = new WeakMap<
+    PtyHandle,
+    Promise<void>
+  >();
 
   private assertAdmission(id: string, generation: number): void {
     if (this.closing) throw new SessionManagerClosingError();
@@ -2059,9 +2067,9 @@ export class SessionManager {
   }
 
   /**
-   * Kills every currently-live pty and returns a Promise that resolves when
-   * all of their registry rows have exited (real or synthesized). Bounded by the
-   * same escalation window as `kill()` — never hangs.
+   * Retires current PTYs and retries retained unconfirmed handles, bounded by
+   * kill()'s escalation window. Completion is not proof every OS process exited;
+   * closeWithResult() retains each exact runtime's confirmed/unconfirmed result.
    *
    * Call this on server shutdown so the process actually exits instead of
    * waiting on orphaned claude/codex children. A bounded timeout can be layered
@@ -2070,7 +2078,35 @@ export class SessionManager {
    */
   async killAll(): Promise<void> {
     const kills = [...this.ptys.keys()].map((id) => this.kill(id));
-    await Promise.all(kills);
+    const retired = [...this.retiringPtys].map(([id, handle]) =>
+      this.retryRetiringPty(id, handle),
+    );
+    await Promise.all([...kills, ...retired]);
+  }
+
+  private retryRetiringPty(id: string, handle: PtyHandle): Promise<void> {
+    const existing = this.retiringKillRetries.get(handle);
+    if (existing) return existing;
+    const operation = async (): Promise<void> => {
+      if (this.retiringPtys.get(id) !== handle) return;
+      if (!this.isPtyGone(handle)) {
+        try {
+          handle.pty.kill("SIGKILL");
+        } catch {
+          /* Keep unresolved ownership. */
+        }
+        await sleep(KILL_ESCALATION_CONFIRM_MS);
+      }
+      if (this.retiringPtys.get(id) === handle && this.isPtyGone(handle))
+        this.markExited(id, handle, null);
+    };
+    const retry = operation();
+    this.retiringKillRetries.set(handle, retry);
+    const forget = (): void => {
+      this.retiringKillRetries.delete(handle);
+    };
+    void retry.then(forget, forget);
+    return retry;
   }
 
   /**
@@ -4142,20 +4178,27 @@ export class SessionManager {
       throw new SubsessionBindingMismatchError();
     }
     const adapter = this.getAdapter(session.harness);
-    if (
-      (session.agentSessionId !== null &&
-        (await adapter.canResume(session.agentSessionId, session.cwd))) ||
-      (await hasRecordedTurns(id))
-    ) {
-      throw new SubsessionFreshRestartForbiddenError();
-    }
+    const resumable =
+      session.agentSessionId !== null &&
+      (await adapter.canResume(session.agentSessionId, session.cwd));
+    this.assertAdmission(id, closeGeneration);
+    if (resumable) throw new SubsessionFreshRestartForbiddenError();
+    const recordedTurns = await hasRecordedTurns(id);
+    this.assertAdmission(id, closeGeneration);
+    if (recordedTurns) throw new SubsessionFreshRestartForbiddenError();
 
     if (!sameSubsessionBinding(current, next)) {
       this.subsessionBindings.set(id, next);
       try {
         await this.persistSubsessionBindings();
+        this.assertAdmission(id, closeGeneration);
       } catch (error) {
-        this.subsessionBindings.set(id, current);
+        if (
+          (this.closeGenerations.get(id) ?? 0) === closeGeneration &&
+          this.subsessionBindings.get(id) === next
+        )
+          this.subsessionBindings.set(id, current);
+        await this.persistSubsessionBindings().catch(() => {});
         throw error;
       }
     }
@@ -4164,6 +4207,7 @@ export class SessionManager {
     const agentMapIdentity = this.resolveAgentMapIdentity
       ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
       : trustedIdentity;
+    this.assertAdmission(id, closeGeneration);
     if (
       !agentMapIdentity ||
       agentMapIdentity.projectId !== next.projectId ||
