@@ -1,6 +1,8 @@
+import { realpath } from "node:fs/promises";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type { HarnessSession, WorkflowInfo } from "../shared/types.js";
 import type { HostedOpenCode } from "../core/opencode-host.js";
+import type { StudioProjectIdentity } from "../core/studio-project-catalog.js";
 import {
   assistantContextDigest,
   assistantContextUnavailable,
@@ -26,6 +28,7 @@ interface Options {
   getSession: (id: string) => HarnessSession | undefined | null;
   getWorkflows: (signal?: AbortSignal) => Promise<WorkflowInfo[]>;
   getEnvironment: () => ResolvedEnvironment | null;
+  resolveProject: (projectId: string) => Promise<StudioProjectIdentity | null>;
   loadSystemPrompt?: (signal?: AbortSignal) => Promise<string>;
   /** Epic 3 supplies connection/catalog facts, never a browser-provided list. */
   loadCapabilities?: (
@@ -77,6 +80,9 @@ export function createAssistantContextResolver(
     const current = options.getSession(hosted.harnessSessionId);
     const environment = options.getEnvironment();
     if (!current || !environment) throw assistantContextUnavailable();
+    const identity = current.agentMapIdentity && {
+      ...current.agentMapIdentity,
+    };
     // Capture binding before any asynchronous provider can observe a rebind.
     const session = {
       id: current.id,
@@ -84,6 +90,42 @@ export function createAssistantContextResolver(
       projectId: current.agentMapIdentity?.projectId ?? null,
       boundAgentPath: current.boundWorkflowPath,
     };
+    const projectAuthority = async () => {
+      signal.throwIfAborted();
+      const project = session.projectId
+        ? await options.resolveProject(session.projectId).catch(() => null)
+        : null;
+      signal.throwIfAborted();
+      const revision = project
+        ? JSON.stringify([project.identityVersion, project.rootBindings])
+        : null;
+      const roots = await Promise.all(
+        (project
+          ? project.rootBindings
+              .filter((root) => root.status === "active")
+              .map((root) => root.localRootRef)
+          : [hosted.cwd]
+        ).map(async (path) => {
+          const canonical = await realpath(path).catch(() => null);
+          if (!canonical) throw assistantContextUnavailable();
+          return canonical;
+        }),
+      );
+      signal.throwIfAborted();
+      const live = options.getSession(session.id);
+      if (
+        !live ||
+        live.id !== session.id ||
+        live.cwd !== session.cwd ||
+        live.agentMapIdentity?.projectId !== identity?.projectId ||
+        live.agentMapIdentity?.userId !== identity?.userId ||
+        live.agentMapIdentity?.sessionId !== identity?.sessionId ||
+        (session.projectId && project?.projectId !== session.projectId)
+      )
+        throw assistantContextUnavailable();
+      return { roots: roots.sort(), revision };
+    };
+    const authority = await projectAuthority();
     const [workflows, profile, capabilities] = await Promise.all([
       options.getWorkflows(signal),
       assistantProfile(environment, options.loadSystemPrompt, signal),
@@ -94,6 +136,7 @@ export function createAssistantContextResolver(
       hosted,
       session,
       selectedAgentPath,
+      projectRoots: authority.roots,
       workflows,
       environment: environment.name,
       capabilities,
@@ -127,9 +170,13 @@ export function createAssistantContextResolver(
               "The managed authoring skill loader is not connected yet. Use the installed SDK documentation; do not claim this skill was loaded.",
           },
         ];
-    signal.throwIfAborted();
-    if (!hosted.isCurrent() || hosted.signal.aborted)
+    if (
+      JSON.stringify(await projectAuthority()) !== JSON.stringify(authority) ||
+      !hosted.isCurrent() ||
+      hosted.signal.aborted
+    )
       throw assistantContextUnavailable();
+    signal.throwIfAborted();
     const serialized = JSON.stringify({
       ...context,
       revision: undefined,
@@ -153,16 +200,21 @@ export function createAssistantContextCandidateResolver(
   },
 ): ResolveAssistantCandidate {
   const { loadGuidance, ...base } = options;
-  const resolve = createAssistantContextResolver({
-    ...base,
-    ...(loadGuidance ? { loadGuidance: async () => [] } : {}),
-  });
   return async (hosted, selection, admissionSignal) => {
     const signal = AbortSignal.any([hosted.signal, admissionSignal]);
+    let extra: ResolvedAssistantGuidance[] = [];
+    const resolve = createAssistantContextResolver({
+      ...base,
+      ...(loadGuidance
+        ? {
+            loadGuidance: async (context, current, signal) => {
+              extra = await loadGuidance(context, current, signal);
+              return [];
+            },
+          }
+        : {}),
+    });
     const context = await resolve(hosted, selection, signal);
-    const extra = loadGuidance
-      ? await loadGuidance(context, hosted, signal)
-      : [];
     signal.throwIfAborted();
     if (!hosted.isCurrent()) throw assistantContextUnavailable();
     const guidance = [

@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostedOpenCode } from "./opencode-host.js";
 import { OpenCodeFinalResponse } from "./opencode-final-response.js";
-import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
+import {
+  composeAssistantPrompt,
+  assistantContextDigest,
+} from "./studio-assistant-context.js";
 import type { OpenCodeTurnMessage } from "../shared/opencode-turn.js";
 
 let hosted: HostedOpenCode;
@@ -20,9 +23,30 @@ beforeEach(async () => {
   state = "idle";
   agent = "build";
   text = "";
-  system =
-    openCodeCompletionPrompt().system +
-    "\n\nStudioAssistantContext/v1\nSAVED_CONTEXT_REVISION";
+  const context = {
+    schemaVersion: 1 as const,
+    session: { id: "studio-a", cwd: tmpdir(), projectId: null },
+    environment: "dev",
+    selectedAgent: { status: "none" as const },
+    boundAgent: { status: "none" as const },
+    agents: [],
+    capabilities: [],
+    guidance: [
+      {
+        id: "profile",
+        kind: "profile" as const,
+        required: true,
+        source: "fixture",
+        status: "available" as const,
+        revision: "1",
+        text: "SAVED_CONTEXT_REVISION",
+      },
+    ],
+  };
+  system = composeAssistantPrompt({
+    ...context,
+    revision: assistantContextDigest(JSON.stringify(context)),
+  }).system;
   abort = new AbortController();
   dispatch.mockReset().mockResolvedValue(new Response("{}"));
   hosted = {
@@ -112,8 +136,11 @@ it("coalesces recovery and never resends it after a host restart", async () => {
   expect(dispatch).toHaveBeenCalledOnce();
 });
 
-it("preserves old history but refuses to recover without its original context", async () => {
-  system = undefined;
+it.each([
+  undefined,
+  "StudioAssistantResult/v2:broken\n\nStudioAssistantContext/v1\n{",
+])("refuses missing or malformed original context: %s", async (saved) => {
+  system = saved;
   await expect(
     new OpenCodeFinalResponse().recover(hosted, "ses_test", "msg_empty"),
   ).rejects.toThrow("context");
