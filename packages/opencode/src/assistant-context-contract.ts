@@ -6,15 +6,18 @@ export interface AssistantContextAgent {
   path: string;
   definitionId: number | null;
 }
+/** An explicit selection state; only not-provided permits a binding fallback. */
 export type AssistantAgentContext =
   | { status: "available"; agent: AssistantContextAgent }
   | { status: "none" | "not-provided" }
   | { status: "unavailable"; path: string };
+/** Host-observed connection and tool-catalog facts; configured is not usable. */
 export interface AssistantCapability {
   name: string;
   status: "available" | "configured" | "unavailable";
   tools: string[];
 }
+/** Authorized per-submission facts, without duplicated guidance bodies. */
 export interface AssistantContextFacts {
   session: { id: string; cwd: string; projectId: string | null };
   environment: string;
@@ -23,6 +26,7 @@ export interface AssistantContextFacts {
   agents: AssistantContextAgent[];
   capabilities: AssistantCapability[];
 }
+/** Immutable provenance and byte identity, or an explicit optional absence. */
 export type SourceVersion = Readonly<
   {
     id: string;
@@ -48,6 +52,7 @@ export type SourceVersion = Readonly<
       }
   )
 >;
+/** Ordered source versions and retained discovery/catalog manifest revisions. */
 export interface InstructionSet {
   readonly revision: string;
   readonly sources: readonly SourceVersion[];
@@ -56,6 +61,7 @@ export interface InstructionSet {
   readonly mcpInstructionRevision: string;
   readonly mcpCatalogRevision: string;
 }
+/** Reference to one accepted record; never a substitute for current authorization. */
 export interface AcceptedContextRef {
   readonly schemaVersion: 1;
   readonly acceptanceId: string;
@@ -63,6 +69,7 @@ export interface AcceptedContextRef {
   readonly conversationId: string;
   readonly revision: string;
 }
+/** Retained facts and instruction references bound to one native conversation. */
 export interface AcceptedAssistantContext extends AcceptedContextRef {
   readonly context: AssistantContextFacts;
   readonly instructionSet: InstructionSet;
@@ -75,6 +82,7 @@ export const assistantContextLimits = {
   entries: 4096,
   depth: 24,
 };
+/** Safe context failure; deliberately contains no paths, credentials or source text. */
 export class AssistantContextError extends Error {
   constructor() {
     super("Studio assistant context unavailable");
@@ -90,6 +98,7 @@ export function contextObject(value: unknown): Record<string, unknown> {
   );
   const prototype = Object.getPrototypeOf(value);
   contextCheck(prototype === Object.prototype || prototype === null);
+  contextCheck(Object.keys(value).length <= assistantContextLimits.entries);
   return value as Record<string, unknown>;
 }
 export function contextKeys(
@@ -130,6 +139,8 @@ export function contextList(value: unknown): unknown[] {
   contextCheck(
     Array.isArray(value) && value.length <= assistantContextLimits.entries,
   );
+  for (let index = 0; index < value.length; index++)
+    contextCheck(Object.prototype.hasOwnProperty.call(value, index));
   return value;
 }
 export function contextUnique(values: readonly unknown[]) {
@@ -138,33 +149,61 @@ export function contextUnique(values: readonly unknown[]) {
 /** Deterministic JSON only; text/byte hashing never changes line endings. */
 export function encodeAssistantContext(value: unknown): string {
   let nodes = 0;
+  let bytes = 0;
+  const count = (text: string) => {
+    bytes += Buffer.byteLength(text);
+    contextCheck(bytes <= assistantContextLimits.bytes);
+  };
+  const countString = (text: string) => {
+    contextCheck(Buffer.byteLength(text) <= assistantContextLimits.bytes);
+    count(JSON.stringify(text));
+  };
   const visit = (item: unknown, depth: number): unknown => {
     contextCheck(
       depth <= assistantContextLimits.depth &&
         ++nodes <= assistantContextLimits.entries * 32,
     );
-    if (item === null || typeof item === "string" || typeof item === "boolean")
-      return item;
-    if (typeof item === "number") {
-      contextCheck(Number.isFinite(item));
+    if (typeof item === "string") {
+      countString(item);
       return item;
     }
-    if (Array.isArray(item))
-      return contextList(item).map((child) => visit(child, depth + 1));
+    if (item === null || typeof item === "boolean") {
+      count(JSON.stringify(item));
+      return item;
+    }
+    if (typeof item === "number") {
+      contextCheck(Number.isFinite(item));
+      count(JSON.stringify(item));
+      return item;
+    }
+    if (Array.isArray(item)) {
+      const entries = contextList(item);
+      count("[]" + ",".repeat(Math.max(0, entries.length - 1)));
+      return Array.from(entries, (child) => visit(child, depth + 1));
+    }
+    const entries = Object.entries(contextObject(item));
+    count("{}" + ",".repeat(Math.max(0, entries.length - 1)));
     return Object.fromEntries(
-      Object.entries(contextObject(item))
+      entries
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, child]) => [key, visit(child, depth + 1)]),
+        .map(([key, child]) => {
+          countString(key);
+          count(":");
+          return [key, visit(child, depth + 1)];
+        }),
     );
   };
   const encoded = JSON.stringify(visit(value, 0));
   contextCheck(Buffer.byteLength(encoded) <= assistantContextLimits.bytes);
   return encoded;
 }
+/** SHA-256 of exact bytes (strings use UTF-8), with no newline normalization. */
 export const assistantContentHash = (bytes: string | Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
+/** SHA-256 of bounded deterministic JSON, including provenance and applicability. */
 export const assistantDescriptorHash = (value: unknown): string =>
   assistantContentHash(encodeAssistantContext(value));
+/** Hash the complete descriptor excluding only its own revision field. */
 export function assistantRevision<T extends { readonly revision: string }>(
   value: T,
 ) {
@@ -175,6 +214,7 @@ export function assistantRevision<T extends { readonly revision: string }>(
   );
 }
 
+/** Reject malformed, unavailable-required, foreign-scope or misidentified sources. */
 export function validateSourceVersion(
   value: unknown,
   authorityScope: string,
@@ -230,12 +270,14 @@ export function validateSourceVersion(
   contextCheck(source.revision === assistantRevision(value as SourceVersion));
 }
 
+/** Required references to retained scope, skill and MCP discovery/catalog records. */
 export const assistantManifestFields = [
   "scopeManifestRevision",
   "skillCatalogRevision",
   "mcpInstructionRevision",
   "mcpCatalogRevision",
 ] as const;
+/** Validate every source and retained manifest, then reconstruct the set revision. */
 export function validateInstructionSet(
   value: unknown,
   authorityScope: string,
@@ -286,6 +328,7 @@ function validateAgent(value: unknown): asserts value is AssistantContextAgent {
         Number(agent.definitionId) > 0),
   );
 }
+/** Validate fact shapes, unique inventory/tools and selected/bound membership. */
 export function validateAssistantFacts(
   value: unknown,
 ): asserts value is AssistantContextFacts {
@@ -351,6 +394,7 @@ export function validateAssistantFacts(
     ),
   );
 }
+/** Validate the opaque acceptance/conversation identifiers and SHA-256 fields. */
 export function validateAcceptedContextRef(
   value: unknown,
 ): asserts value is AcceptedContextRef {
@@ -370,6 +414,7 @@ export function validateAcceptedContextRef(
       /^ses_[A-Za-z0-9_-]{1,128}$/.test(ref.conversationId),
   );
 }
+/** Validate the complete bounded record and recompute its accepted revision. */
 export function validateAcceptedAssistantContext(
   value: unknown,
 ): asserts value is AcceptedAssistantContext {
