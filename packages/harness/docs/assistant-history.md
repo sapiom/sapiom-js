@@ -109,3 +109,11 @@ an operation UUID; Continue includes the displayed record revision. Responses
 project public session/lifecycle/provenance fields only. Continue retry storage
 uses an opaque server-projected scope stable across restarts and separated by
 authorized account, workspace, project, harness and native binding.
+
+An explicitly supplied verified context runtime activates one delivery consumer
+for Send, recovery, Resume and Continue. It stores accepted sources beside the
+native engine under the exact host scope; removing the engine does not remove
+accepted context. Every later explicit child Send includes the frozen recorded
+brief with freshly resolved current guidance. With no activation supplied,
+ordinary legacy delivery remains available, legacy inline history can preflight,
+and accepted-context Continue fails before reserving or allocating a child.

@@ -56,6 +56,7 @@ const getBrowserState = vi.fn(() => ({
 let root: string;
 let cwd: string;
 let host: OpenCodeHost;
+let hostOptions: ConstructorParameters<typeof OpenCodeHost>[0];
 let grant: AssistantGrant | null;
 let changed: () => void;
 let expectShutdownFailure = false;
@@ -122,7 +123,7 @@ beforeEach(async () => {
     close,
   });
   prepareSkills.mockReset().mockResolvedValue([]);
-  host = new OpenCodeHost({
+  hostOptions = {
     createObserver,
     access: {
       get: () => grant,
@@ -140,7 +141,8 @@ beforeEach(async () => {
     authorize,
     prepareSkills,
     start,
-  });
+  };
+  host = new OpenCodeHost(hostOptions);
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -151,6 +153,82 @@ afterEach(async () => {
 });
 
 describe("Studio-owned OpenCode lifecycle", () => {
+  it("uses only the activated owner's verified launcher and exact context scope", async () => {
+    await host.close();
+    const legacy = vi.fn(),
+      assertAvailable = vi.fn(async () => {});
+    host = new OpenCodeHost({
+      ...hostOptions,
+      start: legacy,
+      contextRuntime: { start, assertAvailable },
+    });
+    const hosted = await host.ensure("studio-a");
+    expect(assertAvailable).toHaveBeenCalledOnce();
+    expect(legacy).not.toHaveBeenCalled();
+    const options = start.mock.calls[0]![0];
+    expect(options.assistantContext).toEqual({
+      authorityScope: hosted.contextAuthorityScope,
+    });
+    expect(options.stateRoot).toBe(join(hosted.stateRoot, "engine"));
+    expect(options.beforeLaunch).toBeTypeOf("function");
+    expect(options.signal).toBe(hosted.signal);
+    expect(assertAvailable.mock.invocationCallOrder[0]).toBeLessThan(
+      issue.mock.invocationCallOrder[0]!,
+    );
+  });
+  it("refuses inactive context ownership before issuing credentials or launching native", async () => {
+    await host.close();
+    const assertAvailable = vi.fn(async () => {
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("context_unavailable"),
+      );
+    });
+    host = new OpenCodeHost({
+      ...hostOptions,
+      contextRuntime: { start, assertAvailable },
+    });
+    await expect(host.ensure("studio-a")).rejects.toMatchObject({
+      failure: { code: "context_unavailable" },
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(issue).not.toHaveBeenCalled();
+  });
+  it("End settles held context availability and its late result cannot launch over a replacement", async () => {
+    await host.close();
+    let release!: () => void;
+    const assertAvailable = vi
+      .fn(async () => {})
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+    host = new OpenCodeHost({
+      ...hostOptions,
+      contextRuntime: { start, assertAvailable },
+    });
+    const pending = host.ensure("studio-a");
+    const rejected = expect(pending).rejects.toMatchObject({
+      failure: { code: "transport_unavailable" },
+    });
+    await vi.waitFor(() => expect(assertAvailable).toHaveBeenCalledOnce());
+    try {
+      expect(await host.retireWithResult("studio-a", 500)).toEqual({
+        state: "confirmed",
+      });
+      await rejected;
+      expect(start).not.toHaveBeenCalled();
+      expect(issue).not.toHaveBeenCalled();
+      const replacement = await host.ensure("studio-a");
+      release();
+      await Promise.resolve();
+      expect(host.current("studio-a")).toBe(replacement);
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
   it("keeps accepted scope stable across credential rotation and runtime restart", async () => {
     const original = await host.ensure("studio-a");
     expect(original.contextAuthorityScope).toMatch(/^[a-f0-9]{64}$/);
@@ -160,6 +238,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
     });
     expect(Object.isFrozen(original.model)).toBe(true);
     expect(Object.isFrozen(original)).toBe(true);
+    expect(start.mock.calls[0]![0]).not.toHaveProperty("assistantContext");
     grant = {
       ...grant!,
       identityRevision: "new-revision",
@@ -615,7 +694,12 @@ describe("Studio-owned OpenCode lifecycle", () => {
 
   it("a stale workspace authorization rejection cannot retire a replacement after End", async () => {
     let reject!: (reason: unknown) => void;
-    authorize.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    authorize.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
     const stale = host.ensure("studio-a");
     const rejected = expect(stale).rejects.toThrow("old authorization failed");
     await host.retireWithResult("studio-a");

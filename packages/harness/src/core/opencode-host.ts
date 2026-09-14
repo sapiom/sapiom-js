@@ -66,6 +66,12 @@ export interface HostedOpenCode extends OpenCodeWorkspace {
 export interface OpenCodeRetirement {
   state: "confirmed" | "absent" | "unconfirmed";
 }
+/** The context owner verifies its selected runtime/plugin before activation.
+ * Availability is read-only; the launcher retains normal process-guard ownership. */
+export interface OpenCodeContextRuntime {
+  readonly start: typeof startOpenCodeServer;
+  assertAvailable(): Promise<void>;
+}
 interface Managed {
   workspace: OpenCodeWorkspace;
   authority: string;
@@ -92,6 +98,8 @@ interface Options {
     stateRoot: string,
   ) => Promise<string[]>;
   start?: typeof startOpenCodeServer;
+  /** Explicit server capability; absent leaves the current production launcher unchanged. */
+  contextRuntime?: OpenCodeContextRuntime;
   createObserver: (
     hosted: HostedOpenCode,
     id: string,
@@ -581,6 +589,30 @@ export class OpenCodeHost {
     let server: OpenCodeServer | undefined;
     let startupAttempted = false;
     try {
+      const contextRuntime = this.options.contextRuntime;
+      if (contextRuntime) {
+        if (
+          typeof contextRuntime.start !== "function" ||
+          typeof contextRuntime.assertAvailable !== "function"
+        )
+          throw new OpenCodeTransportError(
+            openCodeTransportFailure("context_unavailable"),
+          );
+        const signal = entry.abort.signal;
+        let abort!: () => void;
+        const cancelled = new Promise<never>((_resolve, reject) => {
+          abort = () => reject(signal.reason);
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        });
+        try {
+          // Cancellation can race this read-only capability check; it cannot launch native work.
+          await Promise.race([contextRuntime.assertAvailable(), cancelled]);
+        } finally {
+          signal.removeEventListener("abort", abort);
+        }
+        await this.validate(entry);
+      }
       const release = await new DurableFileLock(join(stateRoot, "runtime"), {
         timeoutMs: 1000,
         processGuard: "required",
@@ -631,12 +663,19 @@ export class OpenCodeHost {
         ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
       };
       startupAttempted = true;
-      server = await (this.options.start ?? startOpenCodeServer)({
+      server = await (
+        contextRuntime?.start ??
+        this.options.start ??
+        startOpenCodeServer
+      )({
         cwd: entry.workspace.cwd,
         stateRoot: join(stateRoot, "engine"),
         config,
         signal: entry.abort.signal,
         beforeLaunch: (identity) => release.protectProcess(identity),
+        ...(contextRuntime
+          ? { assistantContext: { authorityScope: contextScope } }
+          : {}),
       });
       void server.exited.then(() => this.retireExited(entry)).catch(() => {});
       await this.validate(entry);

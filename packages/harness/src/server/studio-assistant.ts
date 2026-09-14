@@ -43,6 +43,32 @@ interface Options {
   ) => Promise<AssistantGuidance[]>;
 }
 
+/** Preserve explicit missing-loader facts when another trusted source is appended. */
+export function defaultAssistantGuidance(): AssistantGuidance[] {
+  return [
+    {
+      id: "project-instructions",
+      kind: "project",
+      required: false,
+      source: "host",
+      revision: null,
+      status: "not-configured",
+      reason:
+        "The trusted project instruction loader is not connected yet. Inspect applicable AGENTS.md (or CLAUDE.md fallback) before editing files.",
+    },
+    {
+      id: "sapiom-agent-authoring",
+      kind: "skill",
+      required: false,
+      source: "bundled",
+      revision: null,
+      status: "not-configured",
+      reason:
+        "The managed authoring skill loader is not connected yet. Use the installed SDK documentation; do not claim this skill was loaded.",
+    },
+  ];
+}
+
 async function currentCapabilities(
   hosted: HostedOpenCode,
   signal: AbortSignal,
@@ -148,28 +174,7 @@ export function createAssistantContextResolver(
     signal.throwIfAborted();
     const sources = options.loadGuidance
       ? await options.loadGuidance(context, hosted, signal)
-      : [
-          {
-            id: "project-instructions",
-            kind: "project" as const,
-            required: false,
-            source: "host",
-            revision: null,
-            status: "not-configured" as const,
-            reason:
-              "The trusted project instruction loader is not connected yet. Inspect applicable AGENTS.md (or CLAUDE.md fallback) before editing files.",
-          },
-          {
-            id: "sapiom-agent-authoring",
-            kind: "skill" as const,
-            required: false,
-            source: "bundled",
-            revision: null,
-            status: "not-configured" as const,
-            reason:
-              "The managed authoring skill loader is not connected yet. Use the installed SDK documentation; do not claim this skill was loaded.",
-          },
-        ];
+      : defaultAssistantGuidance();
     if (
       JSON.stringify(await projectAuthority()) !== JSON.stringify(authority) ||
       !hosted.isCurrent() ||
