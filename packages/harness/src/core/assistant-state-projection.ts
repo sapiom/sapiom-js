@@ -38,6 +38,7 @@ export function createAssistantStateProjection(
   const stopLifecycle = lifecycle.subscribe(changed);
   return {
     get,
+    invalidate: changed,
     dispose: () => {
       stopHost();
       stopLifecycle();

@@ -49,6 +49,7 @@ import {
 import type { AssistantGrant } from "../core/assistant-access.js";
 import type { HostedOpenCode } from "../core/opencode-host.js";
 import type { AssistantHistoryEntry } from "../shared/assistant-history.js";
+import type { AssistantStateSnapshot } from "../shared/assistant-state.js";
 import type {
   HarnessAdapter,
   HarnessSession,
@@ -251,6 +252,29 @@ async function entries(): Promise<AssistantHistoryEntry[]> {
 }
 async function header(id = parentId) {
   return json(`/opencode/${id}/lifecycle`);
+}
+async function socketSnapshot(): Promise<AssistantStateSnapshot> {
+  const observer = new WebSocket(
+    `ws://127.0.0.1:${studio!.port}/ws/events?token=${token}`,
+  );
+  return new Promise((resolve, reject) => {
+    observer.once("message", (raw) => {
+      observer.terminate();
+      resolve(JSON.parse(raw.toString()).snapshot as AssistantStateSnapshot);
+    });
+    observer.once("error", reject);
+  });
+}
+async function terminalRejection(id: string, credential = token) {
+  const observer = new WebSocket(
+    `ws://127.0.0.1:${studio!.port}/ws/terminal?session=${id}&token=${credential}`,
+  );
+  return new Promise<{ code: number; reason: string }>((resolve, reject) => {
+    observer.once("close", (code, reason) =>
+      resolve({ code, reason: reason.toString() }),
+    );
+    observer.once("error", reject);
+  });
 }
 function owner(): ActivatedAssistantContextRuntime {
   return { start: vi.fn(nativeStart), assertAvailable: vi.fn(async () => {}) };
@@ -805,6 +829,20 @@ it("shares retained context across Continue, later Send and Resume while Termina
 }, 20_000);
 
 it("hides an allocated but unprepared child across reboot and blocks attach before another native start", async () => {
+  const workflow = join(cwd, "example-agent");
+  await mkdir(workflow);
+  await writeFile(
+    join(workflow, "sapiom.json"),
+    JSON.stringify({ definitionId: null }),
+  );
+  await writeFile(
+    join(workflow, "package.json"),
+    JSON.stringify({ name: "example-agent" }),
+  );
+  const canvas = join(cwd, ".sapiom", "canvas");
+  await mkdir(canvas, { recursive: true });
+  await writeFile(join(canvas, "index.html"), "<html>Authored canvas</html>");
+  await writeFile(join(canvas, "asset.txt"), "Authored asset");
   const activated = {
     ...owner(),
     loadGuidance: async () => {
@@ -822,6 +860,9 @@ it("hides an allocated but unprepared child across reboot and blocks attach befo
   const receipt = (await stores.continuations.read(binding, operationId))!;
   expect(receipt.phase).toBe("associated");
   const assertPrivate = async () => {
+    expect(await json("/api/workflows")).toContainEqual(
+      expect.objectContaining({ path: workflow }),
+    );
     const state = await json("/api/state");
     expect(JSON.stringify(state)).not.toContain(receipt.childStudioId);
     expect(await json("/api/sessions")).not.toContainEqual(
@@ -847,6 +888,57 @@ it("hides an allocated but unprepared child across reboot and blocks attach befo
         ).status,
         `${method} ${suffix}`,
       ).toBe(404);
+    for (const [path, method, body] of [
+      [
+        "/api/macros/describe/run",
+        "POST",
+        {
+          harnessSessionId: receipt.childStudioId,
+          workflowPath: workflow,
+          subject: "Must not run",
+        },
+      ],
+      [
+        "/api/macros/run_local/run",
+        "POST",
+        { harnessSessionId: receipt.childStudioId, workflowPath: workflow },
+      ],
+      [
+        "/api/macros/visualize/run",
+        "POST",
+        { harnessSessionId: receipt.childStudioId },
+      ],
+      [`/api/canvas/${receipt.childStudioId}/render`, "POST", {}],
+      [`/canvas/${receipt.childStudioId}`, "GET", undefined],
+      [`/canvas/${receipt.childStudioId}/asset.txt`, "GET", undefined],
+    ] as const)
+      expect(
+        (await request(path, method, body)).status,
+        `${method} ${path}`,
+      ).toBe(404);
+    expect((await request(`/canvas/${parentId}`)).status).toBe(200);
+    expect((await request(`/canvas/${parentId}/asset.txt`)).status).toBe(200);
+    expect(await terminalRejection(receipt.childStudioId)).toEqual({
+      code: 4004,
+      reason: "session not found",
+    });
+    expect(
+      await terminalRejection(receipt.childStudioId, "wrong-token"),
+    ).toEqual({ code: 4001, reason: "unauthorized" });
+    const unavailable = vi
+      .spyOn(AssistantContinuationStore.prototype, "readChild")
+      .mockRejectedValue(new Error("Index unavailable"));
+    try {
+      expect(
+        (await request(`/api/sessions/${receipt.childStudioId}/record`)).status,
+      ).toBe(404);
+      expect(
+        (await request(`/api/sessions/${receipt.childStudioId}`, "DELETE"))
+          .status,
+      ).toBe(404);
+    } finally {
+      unavailable.mockRestore();
+    }
     expect(JSON.stringify(events)).not.toContain(receipt.childStudioId);
   };
   await assertPrivate();
@@ -888,8 +980,201 @@ it("hides an allocated but unprepared child across reboot and blocks attach befo
   ).toBe(404);
   expect(launches).toHaveLength(before);
   expect(terminal).not.toHaveBeenCalled();
+  expect(background).not.toHaveBeenCalled();
   expect(
     calls.filter(({ path }) => path.endsWith("/prompt_async")),
   ).toHaveLength(0);
   expect(providerRequests).toEqual([]);
+}, 20_000);
+
+it("ends only the selected live Terminal despite an unreadable continuation index", async () => {
+  await boot(owner());
+  const selected = await studio!.sessionManager.create({
+    cwd,
+    harness: "claude-code",
+  });
+  const neighbor = await studio!.sessionManager.create({
+    cwd,
+    harness: "claude-code",
+  });
+  const directory = join(root, "assistant-sessions", selected.id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, "continuation-preparation.json"), "not-json");
+  expect(await json("/api/sessions")).not.toContainEqual(
+    expect.objectContaining({ id: selected.id }),
+  );
+  expect(
+    (
+      await request(`/api/sessions/${selected.id}/input`, "POST", {
+        text: "must not run",
+      })
+    ).status,
+  ).toBe(404);
+  const response = await request(`/api/sessions/${selected.id}`, "DELETE");
+  expect(response.status).toBe(200);
+  expect(studio!.sessionManager.isLive(selected.id)).toBe(false);
+  expect(studio!.sessionManager.isLive(neighbor.id)).toBe(true);
+  expect(studio!.sessionManager.get(selected.id)).toBeDefined();
+}, 20_000);
+
+it("keeps a prepared continuation visible after an older pending read finishes", async () => {
+  const activated = {
+    ...owner(),
+    loadGuidance: async () => {
+      throw new Error("Unavailable");
+    },
+  };
+  await boot(activated);
+  const operationId = randomUUID();
+  const input = { expectedRevision: 1, expectedRecordRevision: 1, operationId };
+  expect(
+    (
+      await request(
+        `/api/sessions/${parentId}/assistant/continue`,
+        "POST",
+        input,
+      )
+    ).status,
+  ).toBe(503);
+  const receipt = (await stores.continuations.read(binding, operationId))!;
+  Object.assign(activated, { loadGuidance: undefined });
+  const read = AssistantContinuationStore.prototype.readChild;
+  let enter!: () => void,
+    release!: () => void,
+    held = false;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const spy = vi
+    .spyOn(AssistantContinuationStore.prototype, "readChild")
+    .mockImplementation(async function (this: AssistantContinuationStore, id) {
+      const saved = await read.call(this, id);
+      if (
+        !held &&
+        id === receipt.childStudioId &&
+        saved?.phase !== "prepared"
+      ) {
+        held = true;
+        enter();
+        await wait;
+      }
+      return saved;
+    });
+  let pending: Promise<Response> | undefined;
+  try {
+    pending = request(`/api/sessions/${receipt.childStudioId}/record`);
+    await entered;
+    const completed = await json(
+      `/api/sessions/${parentId}/assistant/continue`,
+      "POST",
+      input,
+    );
+    expect(completed.session.id).toBe(receipt.childStudioId);
+    expect((await stores.continuations.read(binding, operationId))!.phase).toBe(
+      "prepared",
+    );
+    release();
+    expect((await pending).status).toBe(404);
+    expect((await socketSnapshot()).lifecycles).toContainEqual(
+      expect.objectContaining({ harnessSessionId: receipt.childStudioId }),
+    );
+  } finally {
+    release();
+    await pending;
+    spy.mockRestore();
+  }
+}, 20_000);
+
+it("publishes a new Assistant revision when visibility alone changes", async () => {
+  await boot(owner());
+  const before = await socketSnapshot();
+  expect(before.lifecycles).toContainEqual(
+    expect.objectContaining({ harnessSessionId: parentId }),
+  );
+  const read = AssistantContinuationStore.prototype.readChild;
+  let unreadable = true;
+  const spy = vi
+    .spyOn(AssistantContinuationStore.prototype, "readChild")
+    .mockImplementation(async function (this: AssistantContinuationStore, id) {
+      if (id === parentId && unreadable) throw new Error("Read unavailable");
+      return read.call(this, id);
+    });
+  try {
+    await json("/api/sessions");
+    await vi.waitFor(() =>
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "assistant.state",
+          snapshot: expect.objectContaining({
+            revision: before.revision + 1,
+            lifecycles: [],
+          }),
+        }),
+      ),
+    );
+    const hidden = await socketSnapshot();
+    unreadable = false;
+    await json("/api/sessions");
+    await vi.waitFor(() =>
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "assistant.state",
+          snapshot: expect.objectContaining({
+            revision: hidden.revision + 1,
+            lifecycles: before.lifecycles,
+          }),
+        }),
+      ),
+    );
+  } finally {
+    spy.mockRestore();
+  }
+}, 20_000);
+
+it("publishes completed visibility reads while a newer refresh is still pending", async () => {
+  await boot(owner());
+  const read = AssistantContinuationStore.prototype.readChild;
+  const entered: (() => void)[] = [],
+    release: (() => void)[] = [];
+  const starts = [0, 1].map(
+    () => new Promise<void>((resolve) => entered.push(resolve)),
+  );
+  const gates = [0, 1].map(
+    () => new Promise<void>((resolve) => release.push(resolve)),
+  );
+  let calls = 0;
+  const spy = vi
+    .spyOn(AssistantContinuationStore.prototype, "readChild")
+    .mockImplementation(async function (this: AssistantContinuationStore, id) {
+      if (id !== parentId || calls > 1) return read.call(this, id);
+      const index = calls++;
+      entered[index]!();
+      await gates[index];
+      if (index === 0) throw new Error("Index unavailable");
+      return read.call(this, id);
+    });
+  const pending: Promise<Response>[] = [];
+  try {
+    pending.push(request("/api/sessions"));
+    await starts[0];
+    pending.push(request("/api/sessions"));
+    await starts[1];
+    release[0]!();
+    expect(await (await pending[0]!).json()).toEqual([]);
+    expect((await socketSnapshot()).lifecycles).toEqual([]);
+    release[1]!();
+    expect(await (await pending[1]!).json()).toContainEqual(
+      expect.objectContaining({ id: parentId }),
+    );
+    expect((await socketSnapshot()).lifecycles).toContainEqual(
+      expect.objectContaining({ harnessSessionId: parentId }),
+    );
+  } finally {
+    release.forEach((resolve) => resolve());
+    await Promise.allSettled(pending);
+    spy.mockRestore();
+  }
 }, 20_000);

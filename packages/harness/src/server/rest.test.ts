@@ -404,6 +404,47 @@ describe("createRestRouter", () => {
   });
 
   describe("DELETE /sessions/:id", () => {
+    it("requests End synchronously without waiting on an unreadable visibility index", async () => {
+      const sessionManager = fakeSessionManager([exitedSession()]);
+      const endSession = vi.fn().mockResolvedValue({ ok: true });
+      const isSessionVisible = vi.fn(() => new Promise<boolean>(() => {}));
+      start({
+        sessionManager,
+        endSession,
+        isSessionVisible,
+        isSessionEndAllowed: () => true,
+      });
+      const res = await fetch(`${baseUrl}/sessions/sess-1`, {
+        method: "DELETE",
+        headers: TOKEN_HEADER,
+        signal: AbortSignal.timeout(1_000),
+      });
+      expect(res.status).toBe(200);
+      expect(endSession).toHaveBeenCalledExactlyOnceWith("sess-1");
+      expect(isSessionVisible).not.toHaveBeenCalled();
+    });
+
+    it("keeps positively pending children private while gating other methods and descendants", async () => {
+      const sessionManager = fakeSessionManager([exitedSession()]);
+      const endSession = vi.fn();
+      const isSessionVisible = vi.fn().mockResolvedValue(false);
+      const isSessionEndAllowed = vi.fn().mockReturnValue(false);
+      start({ sessionManager, endSession, isSessionVisible, isSessionEndAllowed });
+      const call = (suffix: string, method: string) =>
+        fetch(`${baseUrl}/sessions/sess-1${suffix}`, {
+          method,
+          headers: TOKEN_HEADER,
+        });
+      expect((await call("", "DELETE")).status).toBe(404);
+      expect(isSessionVisible).not.toHaveBeenCalled();
+      expect(endSession).not.toHaveBeenCalled();
+      isSessionEndAllowed.mockReturnValue(true);
+      expect((await call("/input", "POST")).status).toBe(404);
+      expect((await call("/record", "DELETE")).status).toBe(404);
+      expect(isSessionVisible).toHaveBeenCalledTimes(2);
+      expect(sessionManager.submitInput).not.toHaveBeenCalled();
+    });
+
     it("keeps the legacy close path when no End coordinator is installed", async () => {
       const sessionManager = fakeSessionManager([exitedSession()]);
       start({ sessionManager });

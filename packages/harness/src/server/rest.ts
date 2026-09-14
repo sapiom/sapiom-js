@@ -200,6 +200,8 @@ async function agentHoldsConversation(
 export interface RestRouterOptions {
   /** Keep unfinished continuation allocations private without removing internal registry rows. */
   isSessionVisible?: (id: string) => Promise<boolean>;
+  /** Cached pending proof only: exact boot-authorized End must not wait on index I/O. */
+  isSessionEndAllowed?: (id: string) => boolean;
   getAssistantState?: () => AssistantStateSnapshot;
   /** Complete selected-session End, including native and Terminal cleanup.
    * Uses the route's boot authorization independently of Assistant grant expiry. */
@@ -370,7 +372,14 @@ export function createRestRouter(options: RestRouterOptions): Router {
   };
   router.use("/sessions/:id", async (req, res, next) => {
     try {
-      if (options.isSessionVisible && sessionManager.get(req.params.id) && !(await options.isSessionVisible(req.params.id))) {
+      const exactEnd = req.method === "DELETE" && req.path === "/";
+      const allowed =
+        exactEnd && options.isSessionEndAllowed
+          ? options.isSessionEndAllowed(req.params.id)
+          : !options.isSessionVisible ||
+            !sessionManager.get(req.params.id) ||
+            (await options.isSessionVisible(req.params.id));
+      if (!allowed) {
         res.status(404).json({ error: "session not found" });
         return;
       }

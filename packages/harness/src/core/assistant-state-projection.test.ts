@@ -117,6 +117,33 @@ it("keeps private continuation runtimes and lifecycle headers out of every snaps
   projection.dispose();
 });
 
+it("publishes visibility changes on the same clock without a runtime or lifecycle event", () => {
+  let visible = false;
+  const publish = vi.fn();
+  const projection = createAssistantStateProjection(
+    {
+      getAssistantState: () => runtime,
+      subscribeAssistantState: () => () => {},
+    },
+    { snapshot: () => [state], subscribe: () => () => {} },
+    publish,
+    () => visible,
+  );
+  const before = projection.get();
+  visible = true;
+  projection.invalidate();
+  const shown = publish.mock.lastCall![0] as AssistantStateSnapshot;
+  expect(shown.revision).toBeGreaterThan(before.revision);
+  expect(shown.lifecycles).toEqual([state]);
+  visible = false;
+  projection.invalidate();
+  expect(publish.mock.lastCall![0]).toMatchObject({
+    revision: shown.revision + 1,
+    lifecycles: [],
+  });
+  projection.dispose();
+});
+
 it.each([
   [{ ...state, lease: "private" }],
   [{ ...state, execution: "enabled" }],

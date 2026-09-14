@@ -158,7 +158,10 @@ import {
 import {
   resolveManifestName,
 } from "../core/definition-name.js";
-import { createBootTokenMiddleware } from "./auth.js";
+import {
+  createBootTokenMiddleware,
+  timingSafeEqualString,
+} from "./auth.js";
 import { createOpenCodeRouter } from "./opencode.js";
 import {
   createApiKeyProvider,
@@ -3558,11 +3561,38 @@ export const startServer = async (
   const assistantSessions = new AssistantSessionStore(statePaths.root);
   const assistantRecords = new AssistantRecordStore(statePaths.root);
   const assistantContinuations = new AssistantContinuationStore(statePaths.root);
+  // Keep the last positive pending proof through read failures. Unknown/corrupt
+  // indexes still deny discovery and execution, but cannot block ordinary End.
+  const pendingAssistantSessions = new Set<string>();
+  const publishedVisibilityReads = new Map<string, number>();
+  let visibilityReadRevision = 0;
+  const visibilityProjection: { invalidate?: () => void } = {};
   const isAssistantSessionVisible = async (id: string): Promise<boolean> => {
-    const visible = await assistantContinuations.canAttach(id);
-    if (visible) hiddenAssistantSessions.delete(id);
-    else hiddenAssistantSessions.add(id);
-    return visible;
+    const read = ++visibilityReadRevision;
+    let status: "visible" | "pending" | "unavailable";
+    try {
+      const receipt = await assistantContinuations.readChild(id);
+      status =
+        receipt === null || receipt.phase === "prepared" ? "visible" : "pending";
+    } catch {
+      status = "unavailable";
+    }
+    // Publish completed evidence immediately; a later in-flight read is not
+    // evidence yet, and an older completion cannot replace a newer publication.
+    if (read > (publishedVisibilityReads.get(id) ?? 0)) {
+      publishedVisibilityReads.set(id, read);
+      const wasHidden = hiddenAssistantSessions.has(id);
+      if (status === "visible") {
+        hiddenAssistantSessions.delete(id);
+        pendingAssistantSessions.delete(id);
+      } else {
+        hiddenAssistantSessions.add(id);
+        if (status === "pending") pendingAssistantSessions.add(id);
+      }
+      if (wasHidden !== hiddenAssistantSessions.has(id))
+        visibilityProjection.invalidate?.();
+    }
+    return status === "visible";
   };
   const restoredSessionIds = sessionManager.list().map((session) => session.id);
   for (let offset = 0; offset < restoredSessionIds.length; offset += 8)
@@ -3615,6 +3645,7 @@ export const startServer = async (
     bus.publish({ type: "assistant.state", snapshot }),
     (id) => !hiddenAssistantSessions.has(id),
   );
+  visibilityProjection.invalidate = assistantProjection.invalidate;
   const getAssistantState = assistantProjection.get;
   const assistantContext = createAssistantContextRuntime({
     activated: options.assistantContextRuntime,
@@ -3688,6 +3719,35 @@ export const startServer = async (
     createBootTokenMiddleware(options.bootToken),
     express.json({ limit: JSON_BODY_LIMIT_BYTES }),
   );
+  // These session actions live outside /sessions/:id. Resolve their body/path
+  // target through the same admission check before any task or file operation.
+  const requireVisibleSession = (
+    select: (req: express.Request) => unknown,
+  ): express.RequestHandler =>
+    async (req, res, next) => {
+      try {
+        const id = select(req);
+        if (
+          typeof id === "string" &&
+          sessionManager.get(id) &&
+          !(await isAssistantSessionVisible(id))
+        ) {
+          res.status(404).json({ error: "session not found" });
+          return;
+        }
+        next();
+      } catch (error) {
+        next(error);
+      }
+    };
+  app.post(
+    "/api/macros/:id/run",
+    requireVisibleSession((req) => req.body?.harnessSessionId),
+  );
+  app.post(
+    "/api/canvas/:sessionId/render",
+    requireVisibleSession((req) => req.params.sessionId),
+  );
   app.get("/api/assistant/access", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(assistantAccess.getBrowserState());
@@ -3716,6 +3776,7 @@ export const startServer = async (
     "/api",
     createRestRouter({
       isSessionVisible: isAssistantSessionVisible,
+      isSessionEndAllowed: (id) => !pendingAssistantSessions.has(id),
       getAssistantState,
       endSession: (id) => assistantEnd.end(id),
       sessionManager,
@@ -4352,6 +4413,10 @@ export const startServer = async (
   // Canvas is intentionally unauthenticated (see canvas.ts) — served straight
   // off the session's cwd, no boot token required.
   app.use(
+    "/canvas/:harnessSessionId",
+    requireVisibleSession((req) => req.params.harnessSessionId),
+  );
+  app.use(
     createCanvasRouter((harnessSessionId) => {
       const session = sessionManager.get(harnessSessionId);
       return session
@@ -4381,14 +4446,26 @@ export const startServer = async (
 
   const terminalWss = new WebSocketServer({ noServer: true });
   const eventsWss = new WebSocketServer({ noServer: true });
+  const terminalConnection = createTerminalWebSocketHandler(
+    sessionManager,
+    options.bootToken,
+  );
   attachWebSocketRouters(httpServer, [
     {
       path: "/ws/terminal",
       wss: terminalWss,
-      onConnection: createTerminalWebSocketHandler(
-        sessionManager,
-        options.bootToken,
-      ),
+      onConnection: (ws, req, params) => {
+        // The cache is hydrated before listening and before child allocation.
+        // Preserve auth precedence without disk I/O ahead of the byte handler.
+        if (
+          timingSafeEqualString(params.get("token") ?? "", options.bootToken) &&
+          hiddenAssistantSessions.has(params.get("session") ?? "")
+        ) {
+          ws.close(4004, "session not found");
+          return;
+        }
+        terminalConnection(ws, req, params);
+      },
     },
     {
       path: "/ws/events",

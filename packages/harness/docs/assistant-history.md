@@ -46,6 +46,7 @@ lifecycle and idle checkpoints can flush immediately. Native reads are capped at
 16 MiB and have a three-second timeout. Failure preserves the previous record,
 so a successful GET can return an older `capturedAt`. Disposal and authority loss
 cancel capture; opening a retained record never resumes execution.
+
 # Selected native availability
 
 The Resume coordinator claims the same operation slot as Attach and inspection.
@@ -200,3 +201,9 @@ After a verified Continue lifecycle conflict, Review latest record fetches and
 displays saved history without creating work. A separate Start a new continuation
 action replaces the rejected request only if its saved tuple is still unchanged.
 Uncertain failures and reloads continue to reconcile the original operation.
+
+Pending-child admission also covers macros, Canvas and Terminal connections.
+Visibility changes publish on the existing Assistant state revision clock, and
+an older read cannot overwrite newer completed evidence. An unreadable index
+blocks discovery and execution while exact authorized End remains available;
+previously verified pending children remain private during that failure.
