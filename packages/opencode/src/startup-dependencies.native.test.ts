@@ -36,6 +36,9 @@ it("opens two fresh native sessions within the default deadline without a packag
       let configDirectory = "";
       const startedAt = performance.now();
       const runtime = await startOpenCodeServer({
+        command: process.env.SAPIOM_OPENCODE_CONTEXT_TEST_BINARY
+          ? { executable: process.env.SAPIOM_OPENCODE_CONTEXT_TEST_BINARY }
+          : undefined,
         cwd: root,
         stateRoot,
         config: {},

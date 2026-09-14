@@ -8,6 +8,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readRuntimePin } from "./runtime-identity.js";
 
 const name = "@opencode-ai/plugin";
 
@@ -45,18 +46,8 @@ export async function prepareRuntimeDependencies(
     version?: string;
     dependencies?: Record<string, string>;
   };
-  const owner = JSON.parse(
-    await readFile(new URL("../package.json", import.meta.url), "utf8"),
-  ) as {
-    dependencies?: Record<string, string>;
-  };
-  const version = owner.dependencies?.["opencode-ai"];
-  if (
-    !version ||
-    owner.dependencies?.[name] !== version ||
-    installed.name !== name ||
-    installed.version !== version
-  )
+  const { pluginVersion: version } = await readRuntimePin();
+  if (installed.name !== name || installed.version !== version)
     throw new Error(
       "The installed OpenCode plugin does not match the pinned runtime",
     );
