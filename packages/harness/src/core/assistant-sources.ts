@@ -336,7 +336,12 @@ export function createAssistantContextCandidate(
         item.metadata.status === item.version.status &&
         item.metadata.required === item.version.required &&
         item.metadata.source === item.version.source &&
-        item.metadata.scope === item.version.scope,
+        item.metadata.scope === item.version.scope &&
+        (item.metadata.fallback === undefined
+          ? item.version.fallback === undefined
+          : item.version.fallback !== undefined &&
+            encodeAssistantContext(item.metadata.fallback) ===
+              encodeAssistantContext(item.version.fallback)),
     );
   }
   const sources = [policy.version, ...guidance.map((item) => item.version)];
