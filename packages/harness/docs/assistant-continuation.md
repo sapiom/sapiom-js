@@ -37,3 +37,10 @@ End preempts preparation; ordinary attachment follows verified preparation.
 If a previous acceptance already committed, a retry validates its original
 manifest and material before any writes. Pending receipt input cannot repair
 lost committed material, including after a lost acceptance acknowledgement.
+
+Native preparation writes intent before creation or seeding. A retry reconciles
+the exact operation marker and native identity, then verifies one synthetic
+no-reply message against both native read APIs, including its accepted system,
+receipt IDs, text/hash and flags. Missing or ambiguous outcomes remain uncertain;
+stable native message IDs are mutable and are never blindly resubmitted.
+Preparing or reopening the child does not invoke a model or replay tools.
