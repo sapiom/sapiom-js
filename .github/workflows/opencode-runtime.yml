@@ -3,7 +3,12 @@ name: Owned OpenCode runtime
 on:
   pull_request:
     paths:
-      - "packages/opencode/native-runtime.json"
+      - "packages/opencode/**"
+      - "packages/harness/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
       - "patches/opencode/**"
       - "scripts/opencode-runtime/**"
       - ".github/workflows/opencode-runtime.yml"
@@ -21,21 +26,82 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24.15.0"
-      - run: python3 -m unittest discover -s scripts/opencode-runtime -p 'test_*.py'
+      - run: |
+          python3 -m unittest discover -s scripts/opencode-runtime -p 'test_*.py'
+          node --test scripts/opencode-runtime/install-selection.test.mjs
       - run: python3 scripts/opencode-runtime/build.py --work-dir "$RUNNER_TEMP/opencode-build"
       - run: |
           python3 scripts/opencode-runtime/pack.py --work-dir "$RUNNER_TEMP/opencode-build" --output-dir "$RUNNER_TEMP/runtime-artifacts" --download-cache "$RUNNER_TEMP/opencode-build/downloads"
           node scripts/opencode-runtime/installer.test.mjs "$RUNNER_TEMP/runtime-artifacts/postinstall.mjs"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: opencode-runtime-candidate
           path: ${{ runner.temp }}/runtime-artifacts
           compression-level: 0
           if-no-files-found: error
+          retention-days: 7
+
+  platform:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          [
+            ubuntu-latest,
+            ubuntu-24.04-arm,
+            macos-15-intel,
+            macos-15,
+            windows-latest,
+            windows-11-arm,
+          ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.15.0"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: opencode-runtime-candidate
+          path: ${{ runner.temp }}/runtime-artifacts
+      - run: |
+          npm install --prefix "$RUNNER_TEMP/pnpm-cli" --ignore-scripts --no-audit --no-fund pnpm@10.34.3
+          echo "PNPM_SCRIPT=$RUNNER_TEMP/pnpm-cli/node_modules/pnpm/bin/pnpm.cjs" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/pnpm-cli/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Fresh selected-platform installation and failure boundaries
+        run: node scripts/opencode-runtime/install-proof.mjs "$RUNNER_TEMP/runtime-artifacts" "$RUNNER_TEMP/install-proof"
+      - name: Build production plugin and harness dependencies
+        run: |
+          node "$PNPM_SCRIPT" install --frozen-lockfile
+          node "$PNPM_SCRIPT" --filter "@sapiom/harness..." build
+      - name: Execute the installed runtime with the production context plugin
+        run: node "$PNPM_SCRIPT" --filter @sapiom/opencode exec vitest run src/assistant-context.native.test.ts
+      - name: Verify accepted-source retention on the target filesystem
+        run: node "$PNPM_SCRIPT" --filter @sapiom/harness exec vitest run src/core/assistant-source-store.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: native-platform-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/install-proof/install-proof.json
+            ${{ runner.temp }}/install-proof/commands.log
+          if-no-files-found: warn
           retention-days: 7
