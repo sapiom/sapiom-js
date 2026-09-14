@@ -285,5 +285,18 @@ describe('link', () => {
   it('throws NOT_FOUND when not found and create=false', async () => {
     mockFetch([{ status: 200, body: [] }]);
     await expect(link({ name: 'missing' }, client)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  
+
+  describe("parseExecInput edge cases", () => {
+    it("throws BAD_INPUT when provided an empty string or empty object json", () => {
+      expect(() => parseExecInput("")).toThrow();
+      expect(() => parseExecInput("{}")).toEqual({});
+    });
+
+    it("throws BAD_INPUT when provided invalid non-string non-object values", () => {
+      expect(() => parseExecInput("123")).toThrow();
+      expect(() => parseExecInput("true")).toThrow();
+    });
   });
+});
 });
