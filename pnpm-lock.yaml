@@ -503,6 +503,9 @@ importers:
       '@sapiom/harness':
         specifier: workspace:^
         version: link:../harness
+      '@sapiom/opencode':
+        specifier: workspace:^
+        version: link:../opencode
       electron-updater:
         specifier: ^6.8.9
         version: 6.8.9

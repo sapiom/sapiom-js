@@ -294,10 +294,12 @@ test.beforeEach(async ({ page }) => {
       json: { enabled, authorityRevision: accessAuthorityRevision },
     });
   });
-  await page.route((url) => url.pathname.startsWith("/opencode/"), (route) =>
-    route.continue({
-      url: `${origin}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}`,
-    }),
+  await page.route(
+    (url) => url.pathname.startsWith("/opencode/"),
+    (route) =>
+      route.continue({
+        url: `${origin}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}`,
+      }),
   );
 });
 
@@ -962,6 +964,24 @@ test("sibling selection survives mounted recovery and reaches each accepted send
       .selectedAgentPath,
   ).toBe("/Users/demo/polsia/backend/src/agents/ads");
   expect(c.recoveries).toHaveLength(1);
+});
+
+test("Agent Map submits an explicit empty agent selection", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present");
+  await page.getByTestId("project-select-acme-app").click();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Explain this project");
+  const sent = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      new URL(request.url()).pathname.endsWith("/prompt_async"),
+  );
+  await page.getByRole("button", { name: "Send message" }).click();
+  expect((await sent).postDataJSON().selectedAgentPath).toBeNull();
 });
 
 test("defaults to Terminal and keeps Assistant unavailable when access is off", async ({

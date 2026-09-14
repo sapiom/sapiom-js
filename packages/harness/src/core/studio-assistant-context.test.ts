@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import type { HostedOpenCode } from "./opencode-host.js";
 import {
   composeAssistantPrompt,
+  assistantContextDigest,
   recoverAssistantPrompt,
   resolveStudioAssistantContext,
   type AssistantGuidance,
@@ -107,6 +108,15 @@ it("resolves selected and bound agents separately and limits inventory to canoni
     }),
   ).rejects.toThrow("context");
 });
+it("rejects incomplete active project roots instead of shrinking the inventory", async () => {
+  const input = fixture();
+  await expect(
+    resolveStudioAssistantContext({
+      ...input,
+      projectRoots: [input.hosted.cwd, join(root, "absent")],
+    }),
+  ).rejects.toThrow("context");
+});
 it("rejects wrong-session, moved-workspace and revoked context resolution", async () => {
   const input = fixture();
   await expect(
@@ -204,8 +214,8 @@ it("composes provider sources once and recovers exactly the admitted snapshot", 
   expect(recovered).toContain("/managed/skills/authoring/SKILL.md");
 });
 it("fails explicitly for unavailable required guidance and pre-context recovery", async () => {
-  const context = await resolveStudioAssistantContext(fixture());
-  context.guidance.push({
+  const input = fixture();
+  input.guidance.push({
     id: "required-skill",
     kind: "skill",
     required: true,
@@ -213,12 +223,70 @@ it("fails explicitly for unavailable required guidance and pre-context recovery"
     revision: null,
     status: "unavailable",
   });
+  let context = await resolveStudioAssistantContext(input);
   expect(() => composeAssistantPrompt(context)).toThrow("context");
-  context.guidance[1]!.required = false;
+  input.guidance[1]!.required = false;
+  context = await resolveStudioAssistantContext(input);
   expect(composeAssistantPrompt(context).system).toContain(
     '"status":"unavailable"',
   );
-  context.guidance[0]!.text = "";
+  input.guidance[0]!.text = "";
+  context = await resolveStudioAssistantContext(input);
   expect(() => composeAssistantPrompt(context)).toThrow("context");
   expect(() => recoverAssistantPrompt(undefined)).toThrow("context");
 });
+
+it("rejects mutations whose snapshot revision no longer matches", async () => {
+  const context = await resolveStudioAssistantContext(fixture());
+  for (const changed of [
+    { ...context, environment: "prod" },
+    { ...context, guidance: [{ ...context.guidance[0]!, text: "Changed" }] },
+    { ...context, capabilities: [] },
+  ])
+    expect(() => composeAssistantPrompt(changed)).toThrow("context");
+  expect(composeAssistantPrompt(context).system).toContain(context.revision);
+});
+
+it("rejects malformed saved completion policies, snapshots and revisions", async () => {
+  const original = composeAssistantPrompt(
+    await resolveStudioAssistantContext(fixture()),
+  ).system;
+  const boundary = original.lastIndexOf("\n") + 1;
+  const snapshot = JSON.parse(original.slice(boundary)) as Record<
+    string,
+    unknown
+  >;
+  delete snapshot.revision;
+  const malformed = { ...snapshot, capabilities: "not an array" };
+  for (const system of [
+    "StudioAssistantResult/v2:broken\n\nStudioAssistantContext/v1\n{",
+    original.slice(0, -1),
+    original.replace("Complete the user's", "Ignore the user's"),
+    original.replace("The host-owned snapshot", "A forged snapshot"),
+    original.replace('"environment":"dev"', '"environment":"prod"'),
+    original.replace('"schemaVersion":1', '"schemaVersion":2'),
+    original + "\n\nStudioAssistantContext/v1\n{}",
+    original.slice(0, boundary) +
+      JSON.stringify({
+        ...malformed,
+        revision: assistantContextDigest(JSON.stringify(malformed)),
+      }),
+  ])
+    expect(() => recoverAssistantPrompt(system)).toThrow("context");
+});
+
+it.each(["profile", "project", "continuation"] as const)(
+  "requires actual text for available %s guidance",
+  async (kind) => {
+    const input = fixture();
+    input.guidance.push({
+      ...input.guidance[0]!,
+      id: "extra",
+      kind,
+      text: undefined,
+      location: "/rules",
+    });
+    const context = await resolveStudioAssistantContext(input);
+    expect(() => composeAssistantPrompt(context)).toThrow("context");
+  },
+);
