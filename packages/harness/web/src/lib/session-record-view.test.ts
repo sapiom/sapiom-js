@@ -65,14 +65,17 @@ describe("formatClockTime", () => {
     const iso = "2026-07-01T10:00:00.000Z";
     const formatted = formatClockTime(iso, new Date(iso).getTime());
     expect(formatted).toMatch(/^\d{1,2}:\d{2}/);
-    expect(formatted).not.toMatch(/Jul/);
   });
 
   it("adds the date for a turn from another day, so a multi-day session has boundaries", () => {
-    // Same clock time, three days earlier — indistinguishable without a date.
-    const formatted = formatClockTime("2026-07-01T10:00:00.000Z", Date.parse("2026-07-04T10:00:00.000Z"));
-    expect(formatted).toMatch(/Jul/);
-    expect(formatted).toMatch(/\d{1,2}:\d{2}/);
+    const iso = "2026-07-01T10:00:00.000Z";
+    const sameDay = formatClockTime(iso, Date.parse(iso));
+    // Same clock time, three days later — indistinguishable without a date.
+    const otherDay = formatClockTime(iso, Date.parse("2026-07-04T10:00:00.000Z"));
+    // How the date itself reads is the locale's business; what matters is that
+    // it's prepended to the exact clock time today's turn would have shown.
+    expect(otherDay).toContain(`, ${sameDay}`);
+    expect(otherDay).toMatch(/\d{1,2}:\d{2}/);
   });
 });
 
