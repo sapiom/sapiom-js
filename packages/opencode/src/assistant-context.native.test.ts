@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +51,7 @@ async function until(check: () => Promise<boolean>) {
 it.skipIf(!binary)(
   "runs the generated context plugin through native ordinary, tool, title, compaction, recovery and error paths",
   async () => {
-    const root = await mkdtemp(join(tmpdir(), "native-context-"));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "native-context-")));
     const cwd = join(root, "project");
     await mkdir(join(cwd, "child"), { recursive: true });
     const task = join(cwd, "child", "task.txt");
