@@ -73,5 +73,30 @@
     "file": "media/1038/after.png",
     "bytes": 96135,
     "sha256": "c0d9f06c6fbfccb4d8bb9d9f4efd6271d5d57dc1bdf650447300cd2520d96fef"
+  },
+  {
+    "file": "media/1040/directory-before.png",
+    "bytes": 105939,
+    "sha256": "2560d13d8643e12b41236248237c18ff10c4780de50fc1ee714895d2d93a195c"
+  },
+  {
+    "file": "media/1040/directory-after.png",
+    "bytes": 126865,
+    "sha256": "529dd6f23672a9d1dd9ffd14668187e560014e501cbf3652e8f947c5d82c108e"
+  },
+  {
+    "file": "media/1040/assistant-record.png",
+    "bytes": 92672,
+    "sha256": "d6d1d5ac2d04e89b0ca86174244096cb8cdc4b91a7d936a5769391ab74816ebb"
+  },
+  {
+    "file": "media/1040/terminal-record.png",
+    "bytes": 101169,
+    "sha256": "7c1f04c47c51d5b40858ad8cf810b80c2899e51a9025f074a9c2727b2074cdb5"
+  },
+  {
+    "file": "media/1037/retry.png",
+    "bytes": 97443,
+    "sha256": "36b0f9ef4d201d312d84d39cd6bcde12f973b11295b05a1c9c1160f09dd01a8f"
   }
 ]
