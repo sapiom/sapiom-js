@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/harness",
-  "version": "0.14.0",
+  "version": "0.17.0",
   "description": "Agent Studio — a CLI-launched local web app that runs your coding agent (Claude Code or Codex) in a Sapiom-configured environment: MCP pre-wired, agents tracked, one-click deploy/run, and a live canvas for previews.",
   "keywords": [
     "sapiom",
@@ -63,11 +63,12 @@
     "e2e:live": "tsx scripts/e2e-live.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@sapiom/agent": "workspace:^",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/mcp": "workspace:^",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@sapiom/opencode": "workspace:^",
     "ajv": "^8.12.0",
     "express": "^4.21.0",
     "express-rate-limit": "^7.4.0",
@@ -92,13 +93,17 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
+    "elkjs": "0.12.0",
     "lucide-react": "^1.23.0",
     "posthog-js": "^1.363.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tsx": "^4.19.0",
     "vite": "^6.0.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "@assistant-ui/react": "0.15.18",
+    "@assistant-ui/react-opencode": "0.2.22",
+    "@opencode-ai/sdk": "1.18.29"
   },
   "engines": {
     "node": ">=20.0.0"

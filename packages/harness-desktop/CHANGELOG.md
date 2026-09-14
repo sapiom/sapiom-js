@@ -1,5 +1,154 @@
 # @sapiom/harness-desktop
 
+## 0.4.7
+
+### Patch Changes
+
+- Updated dependencies [758ba40]
+- Updated dependencies [7776065]
+- Updated dependencies [c39980b]
+- Updated dependencies [ad9789a]
+- Updated dependencies [b260034]
+- Updated dependencies [3a60ca7]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [6c96a5b]
+- Updated dependencies [a56328d]
+- Updated dependencies [d26b29b]
+- Updated dependencies [5602d4e]
+- Updated dependencies [4da9937]
+- Updated dependencies [84f5767]
+- Updated dependencies [e28f255]
+- Updated dependencies [768d9e4]
+- Updated dependencies [d72433a]
+- Updated dependencies [ec252d3]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [ed89616]
+- Updated dependencies [e6e510e]
+- Updated dependencies [4b1ebc5]
+- Updated dependencies [93fa8df]
+- Updated dependencies [66542da]
+- Updated dependencies [4936ce9]
+- Updated dependencies [df39da5]
+- Updated dependencies [d775192]
+- Updated dependencies [1a33894]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fc8b07b]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [49e82a9]
+- Updated dependencies [cf3e872]
+- Updated dependencies [f618e7e]
+- Updated dependencies [5602d4e]
+- Updated dependencies [e40920e]
+- Updated dependencies [0f28c4e]
+- Updated dependencies [d07acd9]
+- Updated dependencies [d2be8aa]
+- Updated dependencies [f13cad3]
+- Updated dependencies [2b9f75e]
+- Updated dependencies [c343fd1]
+- Updated dependencies [b177f49]
+- Updated dependencies [48ab09f]
+- Updated dependencies [bcd6167]
+- Updated dependencies [9ddb57c]
+- Updated dependencies [981c940]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [b460c9a]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [42fcacc]
+- Updated dependencies [7776065]
+- Updated dependencies [9b957ca]
+- Updated dependencies [c2128f6]
+- Updated dependencies [e59da42]
+  - @sapiom/harness@0.17.0
+
+## 0.4.6
+
+### Patch Changes
+
+- 908b72c: The canvas Render-failed state shows one message instead of two drawn on top of each other. The app's card and the rendered document both painted the failure reason, and the card is a transparent layer over the document, so the short reason and the long one overlapped and neither was readable. The document now stands its prose down while it is embedded, the same way it already hides its title, badge and legend as chrome the app draws instead. Opened on its own, or embedded somewhere that never takes the message over, the document keeps its prose and is still the only message, so a failure never ends as an empty board.
+- f6dd638: Pack disconnected vertical Agent Maps to the viewport while retaining manual pan, zoom, and selection across map updates. Focusing an off-screen node reveals it; relationship labels render consistently at fit scale.
+- fd9ec19: A project row in the rail now shows a green dot when the project has live coding-agent sessions, so which projects are active reads at a glance without opening them. The dot names its own count, "1 live session" or "3 live sessions", in its tooltip and to a screen reader, and it disappears when the last of those sessions ends. Group headers carry the same dot for the agents filed under them. Project and group counts use the same durable project identity as the session tabs, keeping nested projects separate and including a project's sessions across roots. Older servers without Studio project identities retain folder-based membership. Agent rows are unchanged, and the rail still lists no sessions.
+- 6707366: Add a vertical Agent Map layout using a bundled ELK worker. The renderer bundles a 1.6 MB worker and pins ELK for repeatable output.
+- Updated dependencies [b4d6067]
+- Updated dependencies [3d96d32]
+- Updated dependencies [908b72c]
+- Updated dependencies [f6dd638]
+- Updated dependencies [fd9ec19]
+- Updated dependencies [674ba1d]
+- Updated dependencies [6468ead]
+- Updated dependencies [e690f7c]
+- Updated dependencies [55630a9]
+- Updated dependencies [ff414ff]
+- Updated dependencies [6707366]
+  - @sapiom/harness@0.16.0
+
+## 0.4.5
+
+### Patch Changes
+
+- 56c4cdc: Install and verify isolated coding-provider versions using the bundled runtime,
+  with bounded installer processes and cancellation. Keep Electron's runtime
+  startup flag out of commands launched by managed providers.
+- 50f982a: Update installed Claude Code and Codex before desktop sessions start. Verify
+  each new executable before selecting it and retain the working version when
+  updates fail or the device is offline. Preserve provider configuration and history.
+  Remove unpublished installation files from failed or cancelled update attempts.
+- 73e7f46: Keep new-agent composer submissions in their standalone coding session instead of automatically switching to Plan Agents.
+- 30dce20: Studio's dialogs now behave the same as each other. Add existing agents, Add a project, Create an agent, Use a template, Remove project, End session and Clone agent share one shell, so Tab stays inside the open dialog instead of walking into the rail behind it, the page behind the dialog stops taking clicks and screen-reader attention while it is up, and focus opens on the dialog's subject rather than its close button. Closing a dialog hands focus back to the control that opened it — through the close button, the backdrop and Cancel, not only Escape — wherever that control is still on screen to receive it. Enter submits from a single-line field and Cmd/Ctrl+Enter from a text area, one rule everywhere, and the three confirmation dialogs take neither, so a removal is never one stray Return away. Dialog titles are one size instead of the two they had drifted into.
+- 1cc232a: The project-row `+` now starts an ordinary coding-agent session at that project root. Sessions can create agents and work on the shared Agent Map; Plan Agents is an ordinary session without exclusive creation authority.
+- cf2369c: Unify Agent Studio project sessions around one ordinary coding-agent identity, make the project name open the shared Agent Map, and seed new projects through a durable, retry-safe bootstrap in the first `Plan Agents` session.
+
+  **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
+  `HarnessSession.agentMapIdentity` is now the role-neutral
+  `ProjectAgentSession { projectId, userId, sessionId }`; `role` and `assignment`
+  are no longer present. `AgentMapToolEvent.role` is also removed; telemetry
+  consumers use neutral project/session/tool/outcome fields. Valid persisted pre-upgrade session metadata is migrated
+  into the optional `projectBootstrap` lifecycle field and then removed. Retired
+  project-session HTTP aliases and public API names are removed; live clients use
+  the generic session routes.
+
+  **Migration:** stop branching on `agentMapIdentity.role` or `.assignment`, read
+  optional `projectBootstrap` only for bootstrap status, and use the generic
+  session routes. An
+  embedder that already owns a new session's first prompt should send
+  `initialUserInputPending: true` in the same `CreateSessionRequest`, so automatic
+  bootstrap yields before launch. New telemetry consumers should recognize the
+  neutral `project_agent.*` and `project_bootstrap.*` events. Valid legacy state
+  keeps its session/provider IDs, cwd, title, transcript, and Canvas; malformed or
+  conflicting authority is retained and fails closed. Released infrastructure
+  bootstrap event markers remain read-compatible so their private control prompt
+  never becomes a human transcript turn after upgrade. Downgrading does not
+  restore the superseded session authority model.
+
+- Updated dependencies [7d947b1]
+- Updated dependencies [d10f605]
+- Updated dependencies [2b5ee34]
+- Updated dependencies [aad9500]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [58fb5cf]
+- Updated dependencies [fe9d7d5]
+- Updated dependencies [74884b1]
+- Updated dependencies [d5c26ae]
+- Updated dependencies [4622f40]
+- Updated dependencies [9fadbae]
+- Updated dependencies [73e7f46]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [143787a]
+- Updated dependencies [30dce20]
+- Updated dependencies [69f2a6e]
+- Updated dependencies [3d105bc]
+- Updated dependencies [4aa4784]
+- Updated dependencies [2168491]
+- Updated dependencies [1cc232a]
+- Updated dependencies [0cbdd86]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [40fe3e8]
+- Updated dependencies [cf2369c]
+- Updated dependencies [4af416a]
+  - @sapiom/harness@0.15.0
+
 ## 0.4.4
 
 ### Patch Changes

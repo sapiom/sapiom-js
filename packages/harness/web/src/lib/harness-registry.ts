@@ -7,6 +7,8 @@
 import type { HarnessEntry, HarnessKind } from "@shared/types";
 import { SPAWNABLE_HARNESS_KINDS } from "@shared/types";
 
+export const DEFAULT_HARNESS: HarnessKind = "claude-code";
+
 /** Fallback shown until (or in case) the registry fetch resolves — the two
  *  embedded adapters every install ships, assumed selectable so demo mode
  *  and older servers behave exactly as before. Labels mirror the upstream

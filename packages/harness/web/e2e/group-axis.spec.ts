@@ -132,28 +132,6 @@ async function dragAgent(
 }
 
 test.describe("derivation", () => {
-  test("project selection opens its graph without folding the Group axis", async ({
-    page,
-  }) => {
-    const project = page.getByTestId(POLSIA);
-    await expect(project.getByTestId("group-agent-gateway")).toBeVisible();
-
-    await page.getByTestId("project-select-polsia").click();
-
-    await expect(page.getByTestId("workspace-graph-view")).toBeVisible();
-    await expect(page.getByTestId("system-graph-node-gateway")).toBeVisible();
-    await expect(project.getByTestId("group-agent-gateway")).toBeVisible();
-    await expect(page.getByTestId("project-row-polsia")).toHaveClass(
-      /is-selected/,
-    );
-
-    await page.getByTestId("system-graph-node-gateway").click();
-    await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
-    await expect(
-      project.getByTestId("group-agent-gateway").locator(".workflow-item"),
-    ).toHaveClass(/is-focused/);
-  });
-
   test("launch-connected agents form one group named for its HEAD, with Ungrouped last", async ({
     page,
   }) => {

@@ -393,6 +393,13 @@ export function bootCanvasOverview(): void {
  * panel embeds `{ title, reason }` in `#sapiom-render-error`; without this
  * bridge the app's actionable error overlay can never appear and the iframe
  * is left showing only static prose.
+ *
+ * A successful post marks the root `data-canvas-error-posted`. That marker is
+ * what lets the head script withdraw its optimistic `data-canvas-embedded`
+ * flag at load time, so the in-document prose only stands down when something
+ * has actually stood up in its place (SAP-3199). Every path that does NOT post
+ * leaves the marker unset, which is why the `catch` below can still promise to
+ * keep the panel visible.
  */
 export function bootCanvasError(): void {
   function post(): void {
@@ -408,6 +415,7 @@ export function bootCanvasError(): void {
         },
         "*",
       );
+      document.documentElement.setAttribute("data-canvas-error-posted", "");
     } catch {
       /* malformed payload — keep the in-document error panel visible */
     }

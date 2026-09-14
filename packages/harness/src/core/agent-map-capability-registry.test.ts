@@ -1,23 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
 import {
   AgentMapCapabilityError,
   AgentMapCapabilityRegistry,
 } from "./agent-map-capability-registry.js";
 
-const identity = (sessionId = "session-1"): PlanningSessionIdentity => ({
+const identity = (sessionId = "session-1"): ProjectAgentSession => ({
   projectId: "project-a",
   sessionId,
   userId: "user-a",
-  role: "agent-builder",
-  assignment: { kind: "unplanned" },
 });
 
 describe("AgentMapCapabilityRegistry", () => {
   it("stores only a digest and rotates one generation per session", () => {
     const tokens = ["a".repeat(43), "b".repeat(43)];
-    const registry = new AgentMapCapabilityRegistry({ randomToken: () => tokens.shift()! });
+    const registry = new AgentMapCapabilityRegistry({
+      randomToken: () => tokens.shift()!,
+    });
     const first = registry.issue(identity());
     expect(registry.resolve(first.token).identity).toEqual(identity());
     const second = registry.rotate(identity());
@@ -25,6 +25,21 @@ describe("AgentMapCapabilityRegistry", () => {
     expect(() => registry.resolve(first.token)).toThrowError(
       expect.objectContaining({ code: "revoked_capability" }),
     );
+  });
+
+  it("copies only the neutral identity fields into live capability authority", () => {
+    const identityWithUntrustedExtras = {
+      ...identity(),
+      untrustedContext: { assignmentId: "assignment-1" },
+    };
+    const registry = new AgentMapCapabilityRegistry({
+      randomToken: () => "legacy-session-token",
+    });
+
+    const issued = registry.issue(identityWithUntrustedExtras);
+
+    expect(issued.identity).toEqual(identity());
+    expect(issued.identity).not.toHaveProperty("untrustedContext");
   });
 
   it("fails closed for expired, revoked and unknown tokens without emitting material", () => {
@@ -38,11 +53,14 @@ describe("AgentMapCapabilityRegistry", () => {
     });
     const issued = registry.issue(identity());
     now = 15;
-    expect(() => registry.resolve(issued.token)).toThrowError(AgentMapCapabilityError);
+    expect(() => registry.resolve(issued.token)).toThrowError(
+      AgentMapCapabilityError,
+    );
     expect(() => registry.resolve("other")).toThrowError(
       expect.objectContaining({ code: "invalid_capability" }),
     );
     expect(JSON.stringify(onEvent.mock.calls)).not.toContain("secret-token");
+    expect(JSON.stringify(onEvent.mock.calls)).not.toContain("role");
   });
 
   it("slides expiry on authenticated use but remains bounded by lifecycle revocation", () => {

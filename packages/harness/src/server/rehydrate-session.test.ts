@@ -35,7 +35,12 @@ const PRIOR_AGENT_SESSION = "prior-agent-session";
  *  is real and killable. Declares `launch-flag` exactly as both shipped
  *  adapters do, so the delivery channel under test is the production one. */
 function fakeAdapter(harness: HarnessKind): HarnessAdapter {
-  const spec = (opts: LaunchOpts): SpawnSpec => ({ command: "bash", args: [], env: {}, cwd: opts.cwd });
+  const spec = (opts: LaunchOpts): SpawnSpec => ({
+    command: "bash",
+    args: [],
+    env: {},
+    cwd: opts.cwd,
+  });
   return {
     id: harness,
     eventSource: harness === "codex" ? "transcript-tail" : "hooks",
@@ -79,7 +84,12 @@ describe("portable continue — rehydrating a fresh session", () => {
     // Retried: a session's exit-time `removeGeneratedSessionDir` is
     // fire-and-forget, so it can still be deleting inside `generated/` while
     // this tears the whole scratch root down (ENOTEMPTY).
-    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
   });
 
   /** Seed events.ndjson with a prior session the harness recorded itself —
@@ -105,11 +115,20 @@ describe("portable continue — rehydrating a fresh session", () => {
       n: number,
       type: AnalyticsEventType,
       payload: Record<string, unknown>,
-    ): AnalyticsEvent => ({ ...base, eventId: `event-${n}`, seq: n, ts: at(n), type, payload });
+    ): AnalyticsEvent => ({
+      ...base,
+      eventId: `event-${n}`,
+      seq: n,
+      ts: at(n),
+      type,
+      payload,
+    });
 
     const events: AnalyticsEvent[] = [
       event(1, "session.start", { source: "startup", cwd }),
-      event(2, "prompt.submitted", { prompt: "make the retry backoff jittered" }),
+      event(2, "prompt.submitted", {
+        prompt: "make the retry backoff jittered",
+      }),
       event(3, "tool.call", {
         toolName: "Edit",
         toolInput: JSON.stringify({ file_path: join(cwd, "src/retry.ts") }),
@@ -120,7 +139,9 @@ describe("portable continue — rehydrating a fresh session", () => {
         toolInput: JSON.stringify({ command: "pnpm build" }),
         toolResponseSummary: "built",
       }),
-      event(5, "turn.completed", { assistantText: "Jitter is in; the tests still need updating." }),
+      event(5, "turn.completed", {
+        assistantText: "Jitter is in; the tests still need updating.",
+      }),
       event(6, "session.end", { reason: "exit" }),
     ];
     await mkdir(dir, { recursive: true });
@@ -143,7 +164,10 @@ describe("portable continue — rehydrating a fresh session", () => {
   }
 
   async function systemPrompt(harnessSessionId: string): Promise<string> {
-    return readFile(join(generatedRoot, harnessSessionId, "system-prompt.txt"), "utf8");
+    return readFile(
+      join(generatedRoot, harnessSessionId, "system-prompt.txt"),
+      "utf8",
+    );
   }
 
   // The acceptance criterion "same code path works for claude-code and codex"
@@ -177,7 +201,9 @@ describe("portable continue — rehydrating a fresh session", () => {
         expect(prompt).toContain("reconstruction, not restored context");
         // What the session was doing.
         expect(prompt).toContain("make the retry backoff jittered");
-        expect(prompt).toContain("Jitter is in; the tests still need updating.");
+        expect(prompt).toContain(
+          "Jitter is in; the tests still need updating.",
+        );
         expect(prompt).toContain("src/retry.ts");
         expect(prompt).toContain("pnpm build");
         expect(prompt).toContain(cwd);
@@ -196,7 +222,9 @@ describe("portable continue — rehydrating a fresh session", () => {
           rehydrateFrom: PRIOR_AGENT_SESSION,
         });
         expect(session.rehydratedFrom).toBe(PRIOR_AGENT_SESSION);
-        expect(await systemPrompt(session.id)).toContain("make the retry backoff jittered");
+        expect(await systemPrompt(session.id)).toContain(
+          "make the retry backoff jittered",
+        );
       });
 
       it("includes the rolling summary when one was produced, and degrades without it", async () => {
@@ -208,7 +236,9 @@ describe("portable continue — rehydrating a fresh session", () => {
           harness,
           rehydrateFrom: PRIOR_SESSION,
         });
-        expect(await systemPrompt(withoutSummary.id)).not.toContain("Rolling summary");
+        expect(await systemPrompt(withoutSummary.id)).not.toContain(
+          "Rolling summary",
+        );
 
         await mkdir(join(generatedRoot, PRIOR_SESSION), { recursive: true });
         await writeFile(
@@ -247,7 +277,9 @@ describe("portable continue — rehydrating a fresh session", () => {
         server = await boot(harness);
         const session = await server.sessionManager.create({ cwd, harness });
         expect(session.rehydratedFrom).toBeNull();
-        expect(await systemPrompt(session.id)).not.toContain("reconstruction, not restored context");
+        expect(await systemPrompt(session.id)).not.toContain(
+          "reconstruction, not restored context",
+        );
       });
     });
   }
@@ -257,7 +289,10 @@ describe("portable continue — rehydrating a fresh session", () => {
      *  is the proof that a future harness with no prompt flag gets working
      *  rehydration from one line in its adapter rather than silence. */
     function promptFlaglessAdapter(): HarnessAdapter {
-      return { ...fakeAdapter("claude-code"), systemPromptDelivery: "post-ready-injection" };
+      return {
+        ...fakeAdapter("claude-code"),
+        systemPromptDelivery: "post-ready-injection",
+      };
     }
 
     async function bootFlagless(): Promise<HarnessServer> {
@@ -284,7 +319,9 @@ describe("portable continue — rehydrating a fresh session", () => {
       // A brief exists and will be delivered, so the session says so — but not
       // through a file this adapter never reads.
       expect(session.rehydratedFrom).toBe(PRIOR_SESSION);
-      expect(await systemPrompt(session.id)).not.toContain("reconstruction, not restored context");
+      expect(await systemPrompt(session.id)).not.toContain(
+        "reconstruction, not restored context",
+      );
       // Nothing injected yet: the pty is running but not `ready`, which is the
       // state a TUI sitting on a trust prompt is in.
       expect(submitInput).not.toHaveBeenCalled();
@@ -321,37 +358,70 @@ describe("portable continue — rehydrating a fresh session", () => {
       expect(submitInput).toHaveBeenCalledTimes(1);
     });
 
-    it("injects nothing for a session that was never rehydrated", async () => {
+    it("injects no rehydration brief for a session that was never rehydrated", async () => {
       server = await bootFlagless();
       const submitInput = vi.spyOn(server.sessionManager, "submitInput");
-      const session = await server.sessionManager.create({ cwd, harness: "claude-code" });
+      const session = await server.sessionManager.create({
+        cwd,
+        harness: "claude-code",
+      });
       server.sessionManager.setReady(session.id);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(submitInput).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(submitInput).toHaveBeenCalledTimes(1));
+      expect(submitInput.mock.calls[0]?.[1]).toContain(
+        "Agent Studio project bootstrap",
+      );
+      expect(submitInput.mock.calls[0]?.[1]).not.toContain(
+        "reconstruction, not restored context",
+      );
     });
   });
 
   it("is reachable over POST /api/sessions", async () => {
     await seedPriorSession("claude-code");
     server = await boot("claude-code");
-    const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-harness-token": "test-token" },
-      body: JSON.stringify({ cwd, harness: "claude-code", rehydrateFrom: PRIOR_SESSION }),
-    });
+    const response = await fetch(
+      `http://127.0.0.1:${server.port}/api/sessions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-harness-token": "test-token",
+        },
+        body: JSON.stringify({
+          cwd,
+          harness: "claude-code",
+          rehydrateFrom: PRIOR_SESSION,
+        }),
+      },
+    );
     expect(response.status).toBe(201);
-    const session = (await response.json()) as { id: string; rehydratedFrom: string | null };
+    const session = (await response.json()) as {
+      id: string;
+      rehydratedFrom: string | null;
+    };
     expect(session.rehydratedFrom).toBe(PRIOR_SESSION);
-    expect(await systemPrompt(session.id)).toContain("make the retry backoff jittered");
+    expect(await systemPrompt(session.id)).toContain(
+      "make the retry backoff jittered",
+    );
   });
 
   it("rejects an empty rehydrateFrom rather than silently ignoring it", async () => {
     server = await boot("claude-code");
-    const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-harness-token": "test-token" },
-      body: JSON.stringify({ cwd, harness: "claude-code", rehydrateFrom: "" }),
-    });
+    const response = await fetch(
+      `http://127.0.0.1:${server.port}/api/sessions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-harness-token": "test-token",
+        },
+        body: JSON.stringify({
+          cwd,
+          harness: "claude-code",
+          rehydrateFrom: "",
+        }),
+      },
+    );
     expect(response.status).toBe(400);
   });
 });

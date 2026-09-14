@@ -18,6 +18,8 @@
  * sees with zero indication why).
  */
 
+import { fileURLToPath } from "node:url";
+import { unpackedPath } from "../asar-path.js";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
@@ -33,6 +35,7 @@ import type {
   SpawnSpec,
 } from "../../shared/types.js";
 import { stripAnsi } from "../strip-ansi.js";
+import { buildCodexMcpConfig } from "./codex-mcp.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -147,6 +150,9 @@ function hasBlockingPromptFragment(rendered: string): boolean {
 export interface CodexAdapterOptions {
   /** Overridable for tests. */
   binary?: string;
+  /** Host-supplied interpreter/entry script for a managed CLI (e.g. Electron-as-Node). */
+  binaryArgs?: string[];
+  binaryEnv?: Record<string, string>;
   /** Overridable for tests. Defaults to the real home directory. */
   homeDir?: string;
 }
@@ -277,16 +283,22 @@ export class CodexAdapter implements HarnessAdapter {
    *  too and neither adapter needs a rehydration-specific code path. */
   readonly systemPromptDelivery = "launch-flag" as const;
   private readonly binary: string;
+  private readonly binaryArgs: string[];
+  private readonly binaryEnv: Record<string, string>;
   private readonly homeDir: string;
 
   constructor(options: CodexAdapterOptions = {}) {
     this.binary = options.binary ?? "codex";
+    this.binaryArgs = options.binaryArgs ?? [];
+    this.binaryEnv = options.binaryEnv ?? {};
     this.homeDir = options.homeDir ?? homedir();
   }
 
   async doctor(): Promise<DoctorCheck[]> {
     try {
-      const { stdout } = await execFileAsync(this.binary, ["--version"], { timeout: 5_000, windowsHide: true });
+      const { stdout } = await execFileAsync(this.binary, [...this.binaryArgs, "--version"], {
+        timeout: 5_000, windowsHide: true, env: { ...process.env, ...this.binaryEnv },
+      });
       return [{ name: "codex", ok: true, detail: stdout.trim() || "installed" }];
     } catch {
       return [
@@ -299,26 +311,34 @@ export class CodexAdapter implements HarnessAdapter {
     }
   }
 
+  readonly supportsCodingTasks = false;
+
+  launchTask(opts: LaunchOpts): SpawnSpec {
+    if (!opts.prompt || !opts.structuredInference) throw new Error("Codex background tasks require structured inference mode");
+    return { command: process.execPath,
+      args: [unpackedPath(fileURLToPath(new URL("../codex-structured-inference.js", import.meta.url))), this.binary, ...this.binaryArgs],
+      cwd: opts.cwd, env: { ...this.binaryEnv, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) },
+      stdin: JSON.stringify({ prompt: opts.prompt, systemPrompt: opts.structuredInference.systemPrompt, schema: opts.structuredInference.schema }) };
+  }
+
   launch(opts: LaunchOpts): SpawnSpec {
+    const mcp = buildCodexMcpConfig(opts);
+    const args = [...buildConfigArgs(opts, mcp.instructions), ...mcp.args];
+    if (opts.initialPrompt) args.push("--", opts.initialPrompt);
     return {
       command: this.binary,
-      args: buildConfigArgs(opts),
-      // Codex has no analog to Claude's CLAUDECODE nested-agent guard; no env
-      // overrides are needed for a fresh launch.
-      env: opts.agentMapMcp
-        ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
-        : {},
+      args: [...this.binaryArgs, ...args],
+      env: { ...this.binaryEnv, ...mcp.env },
       cwd: opts.cwd,
     };
   }
 
   resume(agentSessionId: string, opts: LaunchOpts): SpawnSpec {
+    const mcp = buildCodexMcpConfig(opts);
     return {
       command: this.binary,
-      args: ["resume", agentSessionId, ...buildConfigArgs(opts)],
-      env: opts.agentMapMcp
-        ? { SAPIOM_AGENT_MAP_CAPABILITY: opts.agentMapMcp.bearerToken }
-        : {},
+      args: [...this.binaryArgs, "resume", agentSessionId, ...buildConfigArgs(opts, mcp.instructions), ...mcp.args],
+      env: { ...this.binaryEnv, ...mcp.env },
       cwd: opts.cwd,
     };
   }
@@ -420,12 +440,9 @@ export class CodexAdapter implements HarnessAdapter {
 }
 
 /**
- * Codex has no single-flag equivalent to Claude's `--append-system-prompt` /
- * `--mcp-config` — MCP servers are registered globally via `codex mcp add`
- * (a persistent config.toml mutation, which the harness's "zero config
- * mutation" design deliberately avoids), so `opts.mcpConfigFile` /
- * `opts.settingsFile` are intentionally unused here. System-prompt injection
- * uses the generic `-c key=value` override mechanism instead.
+ * System-prompt injection uses Codex's generic `-c key=value` overrides.
+ * The MCP overrides are built separately by buildCodexMcpConfig; the
+ * Claude-only hook settings in opts.settingsFile remain unused.
  *
  * Confirmed against a locally installed codex-cli 0.134.0: `-c
  * model_instructions_file=<path>` is a real, recognized key — but if that
@@ -446,7 +463,7 @@ export class CodexAdapter implements HarnessAdapter {
  * one rather than passing a broken reference that's guaranteed to kill the
  * process on startup.
  */
-function buildConfigArgs(opts: LaunchOpts): string[] {
+function buildConfigArgs(opts: LaunchOpts, mcpInstructions?: string): string[] {
   const args = [
     "-c",
     "check_for_update_on_startup=false",
@@ -466,23 +483,20 @@ function buildConfigArgs(opts: LaunchOpts): string[] {
     "-c",
     'sandbox_mode="workspace-write"',
   ];
-  if (opts.agentMapMcp) {
-    args.push(
-      "-c",
-      `mcp_servers.agent-map.url=${JSON.stringify(opts.agentMapMcp.url)}`,
-      "-c",
-      'mcp_servers.agent-map.bearer_token_env_var="SAPIOM_AGENT_MAP_CAPABILITY"',
-    );
-  }
+  const instructions: string[] = [];
   if (opts.systemPromptFile) {
     try {
       const prompt = readFileSync(opts.systemPromptFile, "utf8");
-      args.push("-c", `developer_instructions=${JSON.stringify(prompt)}`);
+      instructions.push(prompt);
     } catch (err) {
       console.error(
         `[codex adapter] could not read systemPromptFile "${opts.systemPromptFile}" — launching without an injected system prompt: ${(err as Error).message}`,
       );
     }
+  }
+  if (mcpInstructions) instructions.push(mcpInstructions);
+  if (instructions.length > 0) {
+    args.push("-c", `developer_instructions=${JSON.stringify(instructions.join("\n\n"))}`);
   }
   return args;
 }

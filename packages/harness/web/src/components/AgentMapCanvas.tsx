@@ -16,27 +16,40 @@ import type {
   PlanNodeKind,
 } from "@shared/agent-map";
 
-import { layoutDirectedGraph } from "../lib/directed-graph-layout";
+import {
+  agentMapDeploymentLabel,
+  agentMapDeploymentTitle,
+  type AgentMapDeployments,
+} from "../lib/agent-map-deployment";
+import { useAgentMapLayout } from "../lib/use-agent-map-layout";
 import {
   GRAPH_DEFAULT_MIN_ZOOM,
   GRAPH_MAX_ZOOM,
   GRAPH_ZOOM_STEP,
   clampGraphZoom,
   fitGraphView,
+  graphViewIntersectsViewport,
   panGraphViewWithKeyboard,
   resetGraphView,
+  revealGraphRect,
   wheelGraphView,
   type GraphArrowKey,
   type GraphView,
+  type GraphViewportStore,
+  type GraphRect,
 } from "../lib/graph-viewport";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { Icon, type IconName } from "./Icon";
 
 interface AgentMapCanvasProps {
+  viewportStore: GraphViewportStore;
   proposal: MapChangeProposal;
+  deployments: AgentMapDeployments;
   selectedNodeId: PlanNodeId | null;
-  onSelectNode: (nodeId: PlanNodeId) => void;
+  onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  pendingNodeId: PlanNodeId | null;
 }
 
 const KIND_ICON: Record<PlanNodeKind, IconName> = {
@@ -54,35 +67,26 @@ interface DragState {
   origin: GraphView;
 }
 
+// Long authored chains must fit as a whole before the user chooses a closer view.
+const AGENT_MAP_MIN_ZOOM = 0.001;
+
 export function AgentMapCanvas({
+  viewportStore,
   proposal,
+  deployments,
   selectedNodeId,
   onSelectNode,
+  onInspectNode,
+  pendingNodeId,
 }: AgentMapCanvasProps): JSX.Element {
-  const computed = useMemo(() => {
-    try {
-      return {
-        failed: false,
-        layout: layoutDirectedGraph(
-          proposal.nodes,
-          proposal.relationships.map((relationship) => ({
-            id: relationship.id,
-            from: relationship.fromNodeId,
-            to: relationship.toNodeId,
-            label: `${relationship.kind}${relationship.executionMode ? ` · ${relationship.executionMode}` : ""}`,
-          })),
-        ),
-      } as const;
-    } catch {
-      return { failed: true, layout: null } as const;
-    }
-  }, [proposal.nodes, proposal.relationships]);
   const [view, setView] = useState<GraphView>(resetGraphView);
   const [minZoom, setMinZoom] = useState(GRAPH_DEFAULT_MIN_ZOOM);
   const [panning, setPanning] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const computed = useAgentMapLayout(proposal, viewportRef);
   const dragRef = useRef<DragState | null>(null);
-  const fittedProposalRef = useRef<string | null>(null);
+  const fittedProjectRef = useRef<string | null>(null);
+  const followsUpdates = useRef(true);
   const markerId = `agent-map-arrow-${useId().replace(/:/g, "")}`;
   const layout = computed.layout;
   const nodesById = useMemo(
@@ -90,40 +94,82 @@ export function AgentMapCanvas({
     [proposal.nodes],
   );
 
-  const fit = useCallback((): void => {
+  const commitView = useCallback(
+    (next: GraphView | ((current: GraphView) => GraphView)) => {
+      setView((current) => {
+        const resolved = typeof next === "function" ? next(current) : next;
+        // Only manual views need restoring. Auto-fit must keep following new
+        // layouts and pane sizes after navigating away and back.
+        if (followsUpdates.current) viewportStore.delete(proposal.projectId);
+        else viewportStore.set(proposal.projectId, resolved);
+        return resolved;
+      });
+    },
+    [proposal.projectId, viewportStore],
+  );
+
+  const measureFit = useCallback(() => {
     const viewport = viewportRef.current;
-    if (!viewport || !layout) return;
+    if (!viewport || !layout) return null;
     const rect = viewport.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
     const root = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
-    const next = fitGraphView(
+    return fitGraphView(
       layout.bounds,
       { width: rect.width, height: rect.height },
       Number.isFinite(root) ? root : 16,
+      AGENT_MAP_MIN_ZOOM,
     );
-    setMinZoom(next.minZoom);
-    setView({ zoom: Math.min(1, next.zoom), x: 0, y: 0 });
   }, [layout]);
+
+  const fit = useCallback((): void => {
+    followsUpdates.current = true;
+    const next = measureFit();
+    if (!next) return;
+    setMinZoom(next.minZoom);
+    commitView({ zoom: Math.min(1, next.zoom), x: 0, y: 0 });
+  }, [commitView, measureFit]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport || !layout) return;
     const measure = (): void => {
-      if (
-        fittedProposalRef.current === proposal.id ||
-        viewport.getBoundingClientRect().width <= 0
-      )
-        return;
-      fittedProposalRef.current = proposal.id;
-      fit();
+      const next = measureFit();
+      if (!next) return;
+      setMinZoom(next.minZoom);
+      if (fittedProjectRef.current !== proposal.projectId) {
+        fittedProjectRef.current = proposal.projectId;
+        const saved = viewportStore.get(proposal.projectId);
+        const restored = saved && {
+          ...saved,
+          zoom: clampGraphZoom(saved.zoom, next.minZoom, AGENT_MAP_MIN_ZOOM),
+        };
+        followsUpdates.current = true;
+        if (
+          restored &&
+          graphViewIntersectsViewport(
+            restored,
+            layout.bounds,
+            { width: viewport.clientWidth, height: viewport.clientHeight },
+            layout.nodes,
+          )
+        ) {
+          followsUpdates.current = false;
+          commitView(restored);
+          return;
+        }
+      }
+      if (followsUpdates.current)
+        commitView({ zoom: Math.min(1, next.zoom), x: 0, y: 0 });
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [fit, layout, proposal.id]);
+  }, [commitView, layout, measureFit, proposal.projectId, viewportStore]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -132,8 +178,9 @@ export function AgentMapCanvas({
       if ((event.target as Element | null)?.closest(".agent-map-controls"))
         return;
       event.preventDefault();
+      followsUpdates.current = false;
       const rect = viewport.getBoundingClientRect();
-      setView((current) =>
+      commitView((current) =>
         wheelGraphView(
           current,
           event.deltaY,
@@ -142,12 +189,13 @@ export function AgentMapCanvas({
             y: event.clientY - rect.top - rect.height / 2,
           },
           minZoom,
+          AGENT_MAP_MIN_ZOOM,
         ),
       );
     };
     viewport.addEventListener("wheel", wheel, { passive: false });
     return () => viewport.removeEventListener("wheel", wheel);
-  }, [minZoom]);
+  }, [commitView, minZoom]);
 
   const startPan = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if ((event.target as Element).closest("button")) return;
@@ -163,7 +211,9 @@ export function AgentMapCanvas({
   const movePan = (event: ReactPointerEvent<HTMLDivElement>): void => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    setView({
+    if (event.clientX !== drag.x || event.clientY !== drag.y)
+      followsUpdates.current = false;
+    commitView({
       ...drag.origin,
       x: drag.origin.x + event.clientX - drag.x,
       y: drag.origin.y + event.clientY - drag.y,
@@ -174,26 +224,38 @@ export function AgentMapCanvas({
     setPanning(false);
   };
 
-  if (computed.failed || !layout) {
-    return (
-      <EmptyState
-        className="system-graph-state"
-        testId="agent-map-layout-error"
-        icon="TriangleAlert"
-        title="Agent Map couldn't be arranged"
-        body="The proposal is safe. Retry after the next update."
-      />
-    );
-  }
+  const revealNode = (node: GraphRect): void => {
+    const viewport = viewportRef.current;
+    if (!viewport || !layout) return;
+    commitView((current) => {
+      const next = revealGraphRect(
+        current,
+        layout.bounds,
+        {
+          width: viewport.clientWidth,
+          height: viewport.clientHeight,
+        },
+        node,
+      );
+      if (next.x === current.x && next.y === current.y) return current;
+      followsUpdates.current = false;
+      return next;
+    });
+  };
 
   return (
-    <div className="agent-map-canvas" data-testid="agent-map-canvas">
+    <div
+      className="agent-map-canvas"
+      data-testid="agent-map-canvas"
+      data-layout-engine="elk"
+      data-layout-state={computed.state}
+    >
       <div
         ref={viewportRef}
         className={`agent-map-viewport${panning ? " is-panning" : ""}`}
         data-testid="agent-map-viewport"
         role="region"
-        aria-label="Proposed Agent Map. Use arrow keys to pan and Tab to inspect nodes."
+        aria-label="Agent Map. Use arrow keys to pan and Tab to inspect nodes."
         tabIndex={0}
         onKeyDown={(event) => {
           if (
@@ -203,7 +265,8 @@ export function AgentMapCanvas({
           )
             return;
           event.preventDefault();
-          setView((current) =>
+          followsUpdates.current = false;
+          commitView((current) =>
             panGraphViewWithKeyboard(current, event.key as GraphArrowKey),
           );
         }}
@@ -215,22 +278,55 @@ export function AgentMapCanvas({
           if (!(event.target as Element).closest("button")) fit();
         }}
       >
+        {!layout && (
+          <EmptyState
+            className="agent-map-state"
+            testId={
+              computed.state === "error"
+                ? "agent-map-layout-error"
+                : "agent-map-layout-loading"
+            }
+            icon={computed.state === "error" ? "TriangleAlert" : "Workflow"}
+            title={
+              computed.state === "error"
+                ? "Agent Map couldn't be arranged"
+                : "Arranging Agent Map…"
+            }
+            body={
+              computed.state === "error"
+                ? "Your map is safe. Try arranging it again."
+                : undefined
+            }
+            cta={
+              computed.state === "error" ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={computed.retry}
+                >
+                  Retry layout
+                </button>
+              ) : undefined
+            }
+          />
+        )}
         <div
           className="agent-map-subject"
           data-testid="agent-map-subject"
           style={{
-            width: layout.bounds.width,
-            height: layout.bounds.height,
+            width: layout?.bounds.width ?? 0,
+            height: layout?.bounds.height ?? 0,
             transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
           }}
           role="group"
-          aria-label="Proposed architecture"
+          aria-hidden={!layout}
+          aria-label="Agent architecture"
         >
           <svg
             className="agent-map-edges"
-            width={layout.bounds.width}
-            height={layout.bounds.height}
-            viewBox={`0 0 ${layout.bounds.width} ${layout.bounds.height}`}
+            width={layout?.bounds.width ?? 0}
+            height={layout?.bounds.height ?? 0}
+            viewBox={`0 0 ${layout?.bounds.width ?? 0} ${layout?.bounds.height ?? 0}`}
             aria-hidden="true"
           >
             <defs>
@@ -245,7 +341,7 @@ export function AgentMapCanvas({
                 <path d="M 0 0 L 8 4 L 0 8 z" className="agent-map-arrow" />
               </marker>
             </defs>
-            {layout.edges.map((edge) => (
+            {layout?.edges.map((edge) => (
               <g key={edge.id} data-testid={`agent-map-edge-${edge.id}`}>
                 <path
                   className="agent-map-edge"
@@ -253,7 +349,7 @@ export function AgentMapCanvas({
                   markerEnd={`url(#${markerId})`}
                 />
                 <text
-                  className="system-graph-edge-label agent-map-edge-label"
+                  className="agent-map-edge-label"
                   x={edge.labelX}
                   y={edge.labelY}
                   textAnchor="middle"
@@ -263,22 +359,20 @@ export function AgentMapCanvas({
               </g>
             ))}
           </svg>
-          {layout.nodes.map((placed) => {
+          {layout?.nodes.map((placed) => {
             const node = nodesById.get(placed.id as PlanNodeId)!;
             const owner = node.ownerAgentId
               ? nodesById.get(node.ownerAgentId)
               : null;
+            const opensAgent =
+              node.kind === "agent" || node.kind === "subagent";
+            const deployment = deployments.get(node.id);
             // Every map-node name is user-authored. Keep the privacy marker
             // on a USER_NAMED_OBJECTS value even when node.kind is not agent.
             return (
-              <button
+              <div
                 key={node.id}
-                type="button"
-                className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
-                data-testid={`agent-map-node-${node.id}`}
-                data-node-kind={node.kind}
-                data-proposal-state="proposed"
-                {...trackingAttrs({ object: "agent" })}
+                className={`agent-map-node-wrap${opensAgent ? " has-info" : ""}`}
                 style={
                   {
                     left: placed.x,
@@ -287,45 +381,105 @@ export function AgentMapCanvas({
                     height: placed.height,
                   } satisfies CSSProperties
                 }
-                aria-pressed={selectedNodeId === node.id}
-                aria-label={`${node.name}, ${node.kind}, Proposed`}
-                onClick={() => onSelectNode(node.id)}
+                onFocus={() => revealNode(placed)}
               >
-                <span className="agent-map-node-heading">
-                  <Icon name={KIND_ICON[node.kind]} size={14} />
-                  <span className="system-graph-node-label">{node.name}</span>
-                </span>
-                <span className="system-graph-node-meta">
-                  {node.kind} · Proposed
-                  {owner ? ` · owned by ${owner.name}` : ""}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className={`agent-map-node${selectedNodeId === node.id ? " is-selected" : ""}`}
+                  data-testid={`agent-map-node-${node.id}`}
+                  data-node-kind={node.kind}
+                  data-deployment-state={deployment?.indicator ?? undefined}
+                  data-deployment-unavailable={deployment?.unavailable}
+                  title={
+                    deployment ? agentMapDeploymentTitle(deployment) : undefined
+                  }
+                  {...trackingAttrs({ object: "agent" })}
+                  aria-pressed={selectedNodeId === node.id}
+                  aria-label={`${node.name}, ${node.kind}${deployment ? `, ${agentMapDeploymentLabel(deployment)}` : ""}`}
+                  aria-busy={pendingNodeId === node.id}
+                  onClick={(event) =>
+                    onSelectNode(node.id, event.currentTarget)
+                  }
+                >
+                  <span className="agent-map-node-heading">
+                    <Icon name={KIND_ICON[node.kind]} size={14} />
+                    <span className="agent-map-node-label">{node.name}</span>
+                  </span>
+                  <span className="agent-map-node-meta">
+                    {deployment && (
+                      <>
+                        <span
+                          className="agent-map-deployment"
+                          data-deployment-state={
+                            deployment.indicator ?? undefined
+                          }
+                        >
+                          {agentMapDeploymentLabel(deployment, true)}
+                        </span>{" "}
+                        ·{" "}
+                      </>
+                    )}
+                    {node.kind}
+                    {pendingNodeId === node.id ? " · Opening…" : ""}
+                    {owner ? ` · owned by ${owner.name}` : ""}
+                  </span>
+                </button>
+                {opensAgent && (
+                  <button
+                    type="button"
+                    className="theme-toggle agent-map-node-info"
+                    data-testid={`agent-map-info-${node.id}`}
+                    aria-label={`Inspect ${node.name}`}
+                    aria-expanded={selectedNodeId === node.id}
+                    {...trackingAttrs({ object: "agent" })}
+                    onClick={(event) =>
+                      onInspectNode(node.id, event.currentTarget)
+                    }
+                  >
+                    <Icon name="Info" size={14} />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
         <div
-          className="system-graph-controls agent-map-controls"
+          className="agent-map-controls"
+          style={!layout ? { display: "none" } : undefined}
           role="group"
           aria-label="Agent Map view controls"
         >
+          {computed.state !== "ready" && (
+            <span className="agent-map-node-meta" role="status">
+              Arranging…
+            </span>
+          )}
           <button
             type="button"
             className="theme-toggle"
             aria-label="Zoom out"
-            onClick={() =>
-              setView((current) => ({
+            onClick={() => {
+              followsUpdates.current = false;
+              commitView((current) => ({
                 ...current,
-                zoom: clampGraphZoom(current.zoom - GRAPH_ZOOM_STEP, minZoom),
-              }))
-            }
+                zoom: clampGraphZoom(
+                  current.zoom - GRAPH_ZOOM_STEP,
+                  minZoom,
+                  AGENT_MAP_MIN_ZOOM,
+                ),
+              }));
+            }}
           >
             <Icon name="ZoomOut" size={14} />
           </button>
           <button
             type="button"
-            className="theme-toggle system-graph-zoom-reset"
+            className="theme-toggle agent-map-zoom-reset"
             aria-label="Reset Agent Map view"
-            onClick={() => setView(resetGraphView())}
+            onClick={() => {
+              followsUpdates.current = false;
+              commitView(resetGraphView());
+            }}
           >
             {Math.round(view.zoom * 100)}%
           </button>
@@ -334,12 +488,17 @@ export function AgentMapCanvas({
             className="theme-toggle"
             aria-label="Zoom in"
             disabled={view.zoom >= GRAPH_MAX_ZOOM}
-            onClick={() =>
-              setView((current) => ({
+            onClick={() => {
+              followsUpdates.current = false;
+              commitView((current) => ({
                 ...current,
-                zoom: clampGraphZoom(current.zoom + GRAPH_ZOOM_STEP, minZoom),
-              }))
-            }
+                zoom: clampGraphZoom(
+                  current.zoom + GRAPH_ZOOM_STEP,
+                  minZoom,
+                  AGENT_MAP_MIN_ZOOM,
+                ),
+              }));
+            }}
           >
             <Icon name="ZoomIn" size={14} />
           </button>

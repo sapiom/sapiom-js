@@ -10,11 +10,18 @@ import type { SessionManager } from "../core/session-manager.js";
 import type { TerminalControlMessage } from "../shared/types.js";
 import { timingSafeEqualString } from "./auth.js";
 
+const TERMINAL_INPUT_FAILURE_CODE = 1011;
+const TERMINAL_INPUT_FAILURE_REASON = "terminal input unavailable";
+
 function parseControlMessage(text: string): TerminalControlMessage | undefined {
   if (!text.startsWith("{")) return undefined;
   try {
     const parsed = JSON.parse(text) as Partial<TerminalControlMessage>;
-    if (parsed.type === "resize" && typeof parsed.cols === "number" && typeof parsed.rows === "number") {
+    if (
+      parsed.type === "resize" &&
+      typeof parsed.cols === "number" &&
+      typeof parsed.rows === "number"
+    ) {
       return { type: "resize", cols: parsed.cols, rows: parsed.rows };
     }
   } catch {
@@ -23,8 +30,15 @@ function parseControlMessage(text: string): TerminalControlMessage | undefined {
   return undefined;
 }
 
-export function createTerminalWebSocketHandler(sessionManager: SessionManager, bootToken: string) {
-  return (ws: WebSocket, _req: IncomingMessage, params: URLSearchParams): void => {
+export function createTerminalWebSocketHandler(
+  sessionManager: SessionManager,
+  bootToken: string,
+) {
+  return (
+    ws: WebSocket,
+    _req: IncomingMessage,
+    params: URLSearchParams,
+  ): void => {
     const sessionId = params.get("session");
     const token = params.get("token") ?? "";
 
@@ -49,7 +63,16 @@ export function createTerminalWebSocketHandler(sessionManager: SessionManager, b
       return;
     }
 
+    let detached = false;
+    let inputClosed = false;
+    const detachOnce = (): void => {
+      if (detached) return;
+      detached = true;
+      detach();
+    };
+
     ws.on("message", (data, isBinary) => {
+      if (inputClosed) return;
       const text = data.toString("utf8");
       if (!isBinary) {
         const control = parseControlMessage(text);
@@ -58,10 +81,21 @@ export function createTerminalWebSocketHandler(sessionManager: SessionManager, b
           return;
         }
       }
-      sessionManager.write(sessionId, text);
+      try {
+        sessionManager.write(sessionId, text);
+      } catch {
+        // A partial PTY write can deliberately fence the composer until it is
+        // reset. Never let that synchronous safety failure escape EventEmitter
+        // as an uncaught exception, and never expose input or provider details
+        // in the close frame. The client may reconnect and retry once the
+        // handle's non-submitting reset succeeds.
+        inputClosed = true;
+        detachOnce();
+        ws.close(TERMINAL_INPUT_FAILURE_CODE, TERMINAL_INPUT_FAILURE_REASON);
+      }
     });
 
-    ws.on("close", () => detach());
-    ws.on("error", () => detach());
+    ws.on("close", detachOnce);
+    ws.on("error", detachOnce);
   };
 }

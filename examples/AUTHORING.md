@@ -18,6 +18,14 @@ The path is five steps:
 If you only remember one thing: **write for the person deciding whether to use this, not
 for the person who built it.** Plain, concrete, second-person. No pitch.
 
+The platform rules a template must respect — which capability calls an LLM, database lifetime,
+trigger kinds, App Link webhooks — are served live at
+<https://api.sapiom.ai/v1/agents/authoring-rules> and are not restated in this guide; where a
+step below touches one, it points at the served section. This guide was
+written against release 1.0 of that text.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+
 ---
 
 ## 1. Develop
@@ -256,9 +264,11 @@ run, and secrets are read at step dispatch.
    order.
 5. **Get the capability ids right.** The `capabilities` array and each `steps[].capability`
    must be the exact `ctx.sapiom.*` ids your code actually calls — see
-   [Capability ids](#capability-ids-correctness-not-style). One-shot LLM work uses
-   `llm.run`; managed multi-turn loops use `models.run`, and coding agents use
-   `models.coding`. The runtime path is **not** `llm.generate`.
+   [Capability ids](#capability-ids-correctness-not-style). Which of `llm.run`, `models.run`
+   and `models.coding` a step should call is the served rule
+   ([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface));
+   the manifest names whichever one the code actually calls. The runtime path is **not**
+   `llm.generate`.
 6. **Keep the manifest runnable, not just honest.** The `examples` you list must be real
    `{ input, output }` pairs the code produces — don't invent fields. And `examples[0].input`
    must **produce a terminal run when deployed**: in particular it must not name a resource (a
@@ -450,14 +460,15 @@ offending word.
 
 ### `examples/<slug>/template.json` — the rich manifest (detail page)
 
-| Field             | Shows up as                      | Write it as                                                                                                                     |
-| ----------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `whatItDoes`      | "What it does" (the card's lead) | ≤320 chars, about three sentences, **verb first**. "Create a cited account brief…", never "For turning a…". See "What it does". |
-| `longDescription` | "About"                          | 2–4 short paragraphs. The fuller story. Plain first; name the mechanism once, casually.                                         |
-| `useCases`        | "Use cases" (chips)              | Exactly 3, each ≤40 chars. Short noun phrases — "Relationship graph", not a sentence.                                           |
-| `notes`           | "Notes"                          | **How to run it.** Easy path first (Use this template), advanced path second. See "How to run it".                              |
-| `examples`        | "Examples"                       | Real `{ input, output }` pairs. Keep these accurate to the code; don't invent fields.                                           |
-| `author`          | "By …"                           | `{ "name": "Sapiom", "url": "https://sapiom.ai/" }` for first-party.                                                            |
+| Field             | Shows up as                          | Write it as                                                                                                                                                                                                  |
+| ----------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `whatItDoes`      | "What it does" (the card's lead)     | ≤320 chars, about three sentences, **verb first**. "Create a cited account brief…", never "For turning a…". See "What it does".                                                                              |
+| `longDescription` | "About"                              | 2–4 short paragraphs. The fuller story. Plain first; name the mechanism once, casually.                                                                                                                      |
+| `useCases`        | "Use cases" (chips)                  | Exactly 3, each ≤40 chars. Short noun phrases — "Relationship graph", not a sentence.                                                                                                                        |
+| `notes`           | "Notes"                              | **How to run it.** Easy path first (Use this template), advanced path second. See "How to run it".                                                                                                           |
+| `examples`        | "Examples"                           | Real `{ input, output }` pairs. Keep these accurate to the code; don't invent fields.                                                                                                                        |
+| `author`          | "By …"                               | `{ "name": "Sapiom", "url": "https://sapiom.ai/" }` for first-party.                                                                                                                                         |
+| `app`             | The dashboard card, and the App Link | Only if your template **ships a dashboard**. `{ name, entry, start, port, build?, preview }` — see [Shipping a dashboard](#app-shipping-a-dashboard-optional) below. Most templates have none; leave it out. |
 
 #### What the template needs to run (all optional, all machine-read)
 
@@ -466,13 +477,13 @@ A declaration says what a thing **is**, never where it is stored — there is no
 `connectorId`, no `store`, and there never will be. Storage belongs to the resolver, which is what
 lets it change without touching your template.
 
-| Field             | Shows up as                                                                        | Write it as                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resources`       | "Sapiom will provision" in the setup panel, and the cost/lifetime line on the card | The managed things a run creates — a Postgres, a sandbox, a repo, an inbox. Each needs a `kind` and a `handle` (the slug your step code passes to `ctx.sapiom.database.get()`; unique within a template). `duration` is postgres-only, caps at **7d, and there is no renew verb** — if your template needs state that outlives that, say so in `notes` and set `ephemeral: false`. `seed` is read-side only; see below.                             |
-| `requiredSecrets` | The credential dialog on "Use this template"                                       | Only credentials **Sapiom cannot broker** — a Slack token, the customer's own DB. Never a Sapiom API key, never a non-secret value. Each needs `key`, `label`, `provider`; `key` follows process-env rules — not `PATH`, not `SAPIOM_*`, not `WORKFLOWS_*`. Mark `optional: true` only when the run still reaches a terminal state without it and says what it skipped.                                                                             |
-| `settings`        | Ordinary form fields, merged into the run input                                    | Non-secret config — a recipient, a lookback window, a row cap. **This is where a `RECIPIENT` belongs, not the vault**, which can't be listed, validated, or prompted for. `default` is required: a setting without one can't support a zero-interaction run, which is the point.                                                                                                                                                                    |
-| `defaultInput`    | The one-click Run path                                                             | The input a run starts with when the user supplies nothing. Merged **under** the user's input and under `settings` defaults, so an explicit value always wins. **Not the same as `examples[0].input`**, which is documentation and may legitimately hold a repo slug or a live URL that won't work on a fresh tenant. It never overrides your code's own defaults.                                                                                  |
-| `zeroSetup`       | The shelf's "runs with no setup" claim                                             | What an unconfigured run actually reaches: a `terminalState`, optional `expect[]` assertions over the terminal artifact (`nonEmptyArray`, `nonEmptyString`, `minLength`, `matches`, `equals`, `absent`), and a one-sentence `narrative`. Assert that the pattern **demonstrably ran and the output is honest about it** — not that the result is production-grade. The narrative renders verbatim, so it must never imply a send that won't happen. |
+| Field             | Shows up as                                                                        | Write it as                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resources`       | "Sapiom will provision" in the setup panel, and the cost/lifetime line on the card | The managed things a run creates — a Postgres, a sandbox, a repo, an inbox. Each needs a `kind` and a `handle` (the slug your step code passes to `ctx.sapiom.database.get()`; unique within a template). `duration` is a legacy postgres-only field the platform no longer reads — a Sapiom Postgres is permanent and metered by slot, per the served rule ([Database lifecycle](https://api.sapiom.ai/v1/agents/authoring-rules#database-lifecycle)); omit it in a new template. `seed` is read-side only; see below. |
+| `requiredSecrets` | The credential dialog on "Use this template"                                       | Only credentials **Sapiom cannot broker** — a Slack token, the customer's own DB. Never a Sapiom API key, never a non-secret value. Each needs `key`, `label`, `provider`; `key` follows process-env rules — not `PATH`, not `SAPIOM_*`, not `WORKFLOWS_*`. Mark `optional: true` only when the run still reaches a terminal state without it and says what it skipped.                                                                                                                                                 |
+| `settings`        | Ordinary form fields, merged into the run input                                    | Non-secret config — a recipient, a lookback window, a row cap. **This is where a `RECIPIENT` belongs, not the vault**, which can't be listed, validated, or prompted for. `default` is required: a setting without one can't support a zero-interaction run, which is the point.                                                                                                                                                                                                                                        |
+| `defaultInput`    | The one-click Run path                                                             | The input a run starts with when the user supplies nothing. Merged **under** the user's input and under `settings` defaults, so an explicit value always wins. **Not the same as `examples[0].input`**, which is documentation and may legitimately hold a repo slug or a live URL that won't work on a fresh tenant. It never overrides your code's own defaults.                                                                                                                                                      |
+| `zeroSetup`       | The shelf's "runs with no setup" claim                                             | What an unconfigured run actually reaches: a `terminalState`, optional `expect[]` assertions over the terminal artifact (`nonEmptyArray`, `nonEmptyString`, `minLength`, `matches`, `equals`, `absent`), and a one-sentence `narrative`. Assert that the pattern **demonstrably ran and the output is honest about it** — not that the result is production-grade. The narrative renders verbatim, so it must never imply a send that won't happen.                                                                     |
 
 #### `seed`: only seed what your template READS
 
@@ -495,6 +506,88 @@ labelled "sample" that really posts to Slack is a hazard. A real resource with r
 means a real run — nothing pretends.
 
 `pnpm examples:check` fails if a declared `seed` file isn't in the example directory.
+
+#### `app`: shipping a dashboard (optional)
+
+A template can ship a **dashboard** — a small web page, published beside the agent when
+someone clones the template, that shows what the agent produced. Declare it with one `app`
+block in `template.json`; put its source in a directory of your template; commit a screenshot.
+That is the whole contract. The template page shows the screenshot as a card ("Ships with a
+dashboard") before anyone clones, and on clone Sapiom publishes the source as an App Link the
+user can open. A template with no `app` block has no dashboard region — nothing else changes.
+
+```json
+"app": {
+  "name": "Insight report dashboard",
+  "entry": "app/",
+  "start": "node server.mjs",
+  "port": 4173,
+  "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/scheduled-db-insight-report/preview.png"
+}
+```
+
+| Field     | Write it as                                                                                                                                                                                                                                                          |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`    | The **dashboard's** name, not the template's — it is the card's heading under the template's title. "Insight report dashboard", not "Scheduled Metrics Report".                                                                                                      |
+| `entry`   | The directory holding the dashboard source, relative to your template directory, **with a trailing slash** (`"app/"`). It is the subtree Sapiom uploads and the working directory `build` and `start` run in. Must exist; `pnpm examples:check` fails if it doesn't. |
+| `start`   | The command that serves the page, run inside `entry`. It must listen on `port` and keep running. Because it runs inside `entry`, write `node server.mjs`, not `node app/server.mjs`.                                                                                 |
+| `port`    | The TCP port `start` listens on. Pick something that is not `3000` — that is where a local Sapiom backend usually is, and a collision there means your screenshot is of the wrong app.                                                                               |
+| `build`   | Optional: a command run once inside `entry` before `start` (`npm install`, a bundler). Omit it when there is nothing to build — `null` and `""` mean the same. **Prefer no build step**: a dependency-free page starts faster and cannot fail on an install.         |
+| `preview` | The `https://` URL of a **real screenshot** of the rendered dashboard, hosted in this repo — see below. Never a drawn mock, never a live embed, never an empty state.                                                                                                |
+
+**What the dashboard must do.** Render **this template's own output** — the thing its
+zero-setup run produces — so that the first thing a user sees after cloning is real content,
+not an empty table. Read the data the way the run leaves it: the run's terminal output over
+the Sapiom API (`GET /v1/workflows/executions?definitionId=…&status=completed&limit=1`, then
+`GET /v1/workflows/executions/{id}` → `output`), or the database the template writes to. Read
+`SAPIOM_API_KEY` and `SAPIOM_DEFINITION_ID` (and `SAPIOM_API_URL` when not production) from
+`process.env` — the environment the publish step is expected to inject when it puts the
+dashboard on an App Link — and **fall back to a captured run** when they are absent, so the
+page is never blank: the pilot commits `app/sample-report.json`, the verbatim output of one
+real zero-setup run, and its page labels which source it is showing. Keep the source small and dependency-free where
+you can: one Node server (`node:http`), one HTML page, no framework. Copy
+`examples/scheduled-db-insight-report/app/` — it is the reference.
+
+**Is it worth shipping?** A dashboard earns its card when the template's output has a shape
+a page shows better than a run's JSON does: a report to read, a table of results to scan, a
+chart, a list with status. Ask what the screenshot will show on a **first, zero-setup run**.
+If the honest answer is a header and an empty list — because the interesting output needs a
+real credential or a real repo — do not ship one. A screenshot of an empty dashboard is the
+failure this block exists to prevent, and the schema will not stop you; only you can.
+
+**The screenshot, and where it lives.** `preview` must be a real capture of your dashboard
+rendering real output, at the **1200×760** aspect the card renders it at. Host it in this
+repo: commit it as `examples/<id>/preview.png` (beside `template.json`, outside `entry`, so
+it clones with the template but is not uploaded into the running dashboard) and point
+`preview` at its raw URL on `main`:
+
+```text
+https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/<id>/preview.png
+```
+
+This is the same host and ref production already reads `registry.json` and every
+`template.json` from, so no new bucket, credential, or CDN is involved; the URL resolves the
+moment your PR merges, which is also the moment the manifest that references it goes live.
+Capture it with the helper, which starts your dashboard exactly as the publish step will
+(`build`, then `start`, inside `entry`) and captures the viewport at 2× device pixels:
+
+```bash
+pnpm exec playwright install chromium                          # once
+pnpm examples:app:screenshot <id>                              # writes examples/<id>/preview.png
+```
+
+Have your page set `<body data-ready="true">` once its data has rendered — the helper waits
+for it, so the capture is of content rather than a loading state. Look at the PNG before you
+commit it: it should read as a real product screen with real numbers in it. Regenerate it
+whenever the page changes.
+
+**What CI checks.** `pnpm examples:check` fails an `app` block that is missing a required
+field, carries a field the schema does not declare, has an `entry` without a trailing slash
+or not on disk, a `port` outside 1–65535, a `build` that is neither a string nor `null`, or a `preview` that
+is not an absolute `https://` URL. It accepts a manifest with no `app` block. The schema is a
+hand-maintained mirror of the backend's parser; a block that passes here is carried to the
+template page intact, and a block that would fail there is rejected here instead of being
+dropped silently on the wire.
 
 ---
 
@@ -592,9 +685,10 @@ The `capabilities` array and each `steps[].capability` **must be the real `ctx.s
 the source calls.** Mismatches make the gallery advertise a capability the deployed run never
 uses, and skew the estimated cost.
 
-- One-shot LLM work uses **`llm.run`**. Use `models.run` only for a managed
-  multi-turn loop, and `models.coding` for a coding agent. None of these runtime
-  paths is `llm.generate`, a catalog id that reads `coming_soon`.
+- Which of `llm.run`, `models.run` and `models.coding` a step should call is the served
+  rule ([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface));
+  name the one the code calls. None of these runtime paths is `llm.generate`, a catalog id that
+  reads `coming_soon`.
 - Cross-check against `index.ts`: grep for `ctx.sapiom.<x>` and list exactly those ids.
 - Don't add a capability to the array that no step calls.
 
@@ -603,6 +697,10 @@ uses, and skew the estimated cost.
 ## Reading a model reply (correctness, not style)
 
 **Need data back from a model? Declare the shape. Never slice JSON out of prose.**
+
+This is the template-authoring view of the served rule
+([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface));
+if the two ever disagree, the served text wins.
 
 ```ts
 const REVIEW_TOOL = "emit_review";
@@ -702,6 +800,7 @@ Never present the MCP path as the only way to build and run — the webapp does 
 - [ ] One `complexity`, picked by counting judgment points — not by counting steps.
 - [ ] A `kind` on every step, and `checkpoint: true` only on a real human approval gate.
 - [ ] `pnpm examples:sort` then `pnpm examples:check` both clean.
+- [ ] If it ships a dashboard: `app` declared, source under `entry`, `preview.png` captured with `pnpm examples:app:screenshot` from a real run — not empty, not a mock.
 
 **Copy**
 

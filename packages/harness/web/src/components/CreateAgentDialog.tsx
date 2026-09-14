@@ -60,9 +60,8 @@ export function CreateAgentDialog({
   /** Leaves for the template gallery — the clone journey this dialog does not
    *  own. Omitted, the link is not rendered. */
   onBrowseTemplates?: () => void;
-  /* NO `triggerRef`. Every door into this dialog is a control that unmounts
-     when it is used — the project row's popover menu closes on click, the
-     empty-project row is replaced by the agent it creates — so a ref handed in
+  /* NO `triggerRef`. The project row's popover menu closes on click,
+     so a ref to the menu item handed in
      here would point at a detached node and Escape would restore focus to
      <body> anyway, only less obviously. Same reason the rail's remove-confirm
      takes the `⋮` itself rather than the menu item. */
@@ -120,10 +119,8 @@ export function CreateAgentDialog({
          per private project name (lib/analytics/before-send.ts,
          USER_NAMED_OBJECTS). */
       tracking={{ dialog: "create_agent", object: "workspace" }}
-      /* NO `triggerRef`. Every door into this dialog is a control that unmounts
-         when it is used — the project row's popover menu closes on click, the
-         empty-project row is replaced by the agent it creates — so a ref handed
-         in here would point at a detached node. */
+      /* NO `triggerRef`. The project row's popover menu closes on click,
+         so a ref to the menu item would point at a detached node. */
       actions={
         <>
           <button className="btn-ghost" disabled={busy} onClick={onCancel}>

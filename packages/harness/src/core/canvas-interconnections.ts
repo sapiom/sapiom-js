@@ -25,9 +25,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import ts from "typescript";
 
-import type { AgentInvocationMode } from "../shared/system-graph.js";
-
-export type { AgentInvocationMode } from "../shared/system-graph.js";
+/** Invocation modes displayed by an individual agent's Canvas. */
+export type AgentInvocationMode = "blocking" | "async";
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -170,8 +169,15 @@ export async function listSourceFilesWithObservations(
     }
     for (const entry of entries) {
       const candidate = path.join(dir, entry.name);
+      // Ignored dependency/build/metadata roots are outside owned source scope
+      // even when package managers or workspaces represent them as symlinks.
+      // Other links remain opaque below; never follow them to gather evidence.
+      if (
+        (entry.isDirectory() || entry.isSymbolicLink()) &&
+        SKIP_DIR_NAMES.has(entry.name)
+      )
+        continue;
       if (entry.isDirectory()) {
-        if (SKIP_DIR_NAMES.has(entry.name)) continue;
         if (depth >= maxDepth) {
           complete = false;
           continue;
@@ -493,7 +499,7 @@ export interface DetectedLaunch {
   fromStepId: string | null;
 }
 
-/** Internal source evidence. It never crosses the system-graph HTTP boundary. */
+/** Private syntax evidence for per-agent Canvas extraction. */
 export interface SourceEvidence {
   /** POSIX path relative to the caller's source root. */
   file: string;

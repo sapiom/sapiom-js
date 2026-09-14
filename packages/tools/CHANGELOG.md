@@ -1,5 +1,59 @@
 # @sapiom/tools
 
+## 0.36.1
+
+### Patch Changes
+
+- 4c9bafb: Stop restating the platform rules in npm-shipped files; point at the served copy
+  and stamp the pointer (SAP-3181).
+
+  The rules that are true of Sapiom regardless of the installed SDK — one-off call
+  vs agent, the capability catalog, database lifetime, trigger kinds, App Links,
+  which capability calls an LLM, composing deployed agents, platform vocabulary —
+  are served by the Sapiom API at `GET /v1/agents/authoring-rules`. Every copy
+  this repo used to ship of them was frozen at publish or scaffold time and could
+  never be corrected; that is how the 7-day database claim and the two-kind
+  trigger list reached customers.
+
+  - The `sapiom-agent-authoring` skill's platform chapters are now a short
+    summary plus a pointer to the served section, bracketed by
+    `<!-- section: … -->` markers so a Studio session can splice the served text
+    in. The authoring mechanics (step model, directives, `ctx.shared`,
+    pause/resume, stubs) are unchanged.
+  - Every scaffolded `AGENTS.md` (both `@sapiom/agent-core` templates, the
+    `@sapiom/cli` template and all gallery examples) and `examples/AUTHORING.md`
+    carry a one-paragraph pointer and a stamp:
+    `<!-- sapiom-authoring-rules release=… digest=… -->`.
+  - `@sapiom/tools`' JSDoc on the `model` field of `llm.run`, `llm.submit`,
+    `models.run` and `models.coding.run` points at the served rule instead of
+    restating it.
+  - `sapiom_dev_agents_check` reads the stamps in the project's `AGENTS.md` and
+    skill, makes one best-effort anonymous read of the served endpoint's
+    `X-Sapiom-Content-*` headers, and warns when a stamp differs from the served
+    copy. No stamp means no request; unreachable means no warning. The wording is
+    "differs from", never "older than" — digests do not order.
+  - `@sapiom/agent-core` exports the stamp vocabulary
+    (`AUTHORING_RULES_*`, `parseAuthoringRulesStamp`,
+    `renderAuthoringRulesStamp`, `authoringRulesDriftWarning`), and
+    `node scripts/authoring-rules-stamp.mjs --from-served` moves every stamp in
+    the repo to the current release at once.
+
+## 0.36.0
+
+### Minor Changes
+
+- 6ab81d9: Coding runs and model runs take an optional `deadlineMinutes` — how long you're willing to wait — sent on the wire as `deadline_minutes`. It is the deadline half of the label + deadline vocabulary: you state the kind of call (`model`) and how long you can wait, and the platform derives the billing lane from that rather than you naming one. **In this release the field is accepted and sent on the wire only; lane derivation lands in a later platform release, so a deadline does not yet change how a run is dispatched or priced.** Omitting it is unchanged behavior — the key never reaches the wire and the run dispatches immediately.
+
+  `RunStatus` and `ModelRunStatus` gain `awaiting_capacity`, the non-terminal state a deferred run reports while it waits for a lane. `run()` and a `launch()` handle keep polling through it rather than resolving with no result, and `wait()`'s default poll budget now widens to cover the deadline you asked for (an explicit `timeoutMs` still wins). While a run is parked, polling backs off — doubling up to a minute between checks — and returns to the caller's interval as soon as the run is moving, so a long deadline costs a few hundred requests rather than thousands.
+
+  Note for consumers who `switch` exhaustively over `RunStatus` or `ModelRunStatus`: a new union member is a compile error against a `default: assertNever(status)` arm. Handle `awaiting_capacity` as non-terminal — the run is still in flight.
+
+- 7eb17c5: `llm`: the session deferred lane now exports its resume-boundary contract from the package root, matching the async lane (SAP-3184).
+
+  A step paused on `llm.createSession(...)` and resumed on `LLM_SESSION_READY_SIGNAL` receives an `LlmSessionReadyPayload` as input — an `LlmSession` narrowed to the two shapes the engine delivers: `state: "ready"` (hand it to `callSession`; `baseUrls` carries the session-scoped URLs when reported), or `state: "failed"` with the gateway's structured reason (`deadline_exhausted`, `grant_mint_failed`, `session_ready_failed`, `session_unsupported`). Validate it at the resume boundary with `llmSessionReadySchema.parse(...)`, which throws `LlmSessionReadySchemaError` on a malformed payload — the same shape of API as `llmRouteResultSchema` / `LlmRouteResultSchemaError`. All three are importable from `@sapiom/tools` with no subpath.
+
+  Also re-exported from the root while closing the same gap: the `LlmSession` and `LlmSessionState` types, `RoutingLabel` and `ModelLabel`, and the serving-disclosure reader `readDisclosure` with its `LlmDisclosureResult` type. Purely additive — no existing export changes shape or name.
+
 ## 0.35.0
 
 ### Minor Changes

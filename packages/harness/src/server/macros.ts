@@ -12,7 +12,7 @@
 import * as path from "node:path";
 import { Router, type Router as ExpressRouter } from "express";
 import { CANVAS_INDEX, type MacroDef, type RunMacroRequest, type WorkflowInfo } from "../shared/types.js";
-import { ExternalHarnessError } from "../core/errors.js";
+import { ExternalHarnessError, McpCredentialGenerationChangedError } from "../core/errors.js";
 import { MacroValidationError, resolveMacro } from "../core/macro-runner.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
 import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
@@ -36,7 +36,8 @@ export interface MacrosRouterDeps {
    *  against the same workflow dedupe per-workflow rather than per-session.
    *  May throw TaskNotSupportedError (session's harness has no headless
    *  mode → 400) or TaskAlreadyRunningError (same macro already in flight
-   *  for this target → 409). */
+   *  for this target → 409), or McpCredentialGenerationChangedError
+   *  (credentials changed while the task was preparing → 409). */
   runBackgroundTask(harnessSessionId: string, macro: MacroDef, prompt: string, workflowPath: string | null): Promise<void>;
   /** Opens a URL in the user's default browser (the `open` package). */
   openUrl(url: string): Promise<void>;
@@ -104,9 +105,13 @@ export function createMacrosRouter(deps: MacrosRouterDeps): ExpressRouter {
       if (
         err instanceof SessionNotReadyError ||
         err instanceof TaskAlreadyRunningError ||
+        err instanceof McpCredentialGenerationChangedError ||
         err instanceof ExternalHarnessError
       ) {
-        res.status(409).json({ error: err.message });
+        res.status(409).json({
+          error: err.message,
+          ...(err instanceof McpCredentialGenerationChangedError ? { code: err.code } : {}),
+        });
         return;
       }
       res.status(500).json({ error: (err as Error).message });

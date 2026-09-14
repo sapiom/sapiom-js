@@ -32,11 +32,19 @@ function canonicalEnvironmentName(name: string): string {
   return ENVIRONMENT_ALIASES[name] ?? name;
 }
 
+/** Delegated user tokens for Studio's host only; never expose to MCP tools. */
+export interface StudioCredentials {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+}
+
 export interface CredentialEntry {
   apiKey: string;
   tenantId: string;
   organizationName: string;
   apiKeyId: string;
+  studioCredentials?: StudioCredentials;
 }
 
 export interface EnvironmentConfig {
@@ -59,7 +67,8 @@ export interface ResolvedEnvironment {
   credentials: CredentialEntry | null;
 }
 
-function getCredentialsPath(): string {
+/** Absolute path of the credential store shared by CLI, MCP, and Studio. */
+export function credentialsFilePath(): string {
   return path.join(os.homedir(), ".sapiom", "credentials.json");
 }
 
@@ -80,7 +89,7 @@ function isMissingCredentialsFile(error: unknown): boolean {
  */
 async function readCredentialsFileOrThrow(): Promise<CredentialsFile | null> {
   try {
-    const content = await fs.readFile(getCredentialsPath(), "utf-8");
+    const content = await fs.readFile(credentialsFilePath(), "utf-8");
     return JSON.parse(content) as CredentialsFile;
   } catch (error) {
     if (isMissingCredentialsFile(error)) return null;
@@ -99,7 +108,7 @@ async function readCredentialsFile(): Promise<CredentialsFile | null> {
 }
 
 async function writeCredentialsFile(file: CredentialsFile): Promise<void> {
-  const filePath = getCredentialsPath();
+  const filePath = credentialsFilePath();
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   await fs.writeFile(filePath, JSON.stringify(file, null, 2) + "\n", {
     mode: 0o600,

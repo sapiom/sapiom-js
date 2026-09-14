@@ -67,3 +67,15 @@ describe("WorkflowProjectionOrder", () => {
     expect(order.current()).toEqual(["connected"]);
   });
 });
+
+it("an accepted auth barrier rejects older success and failure while a new list is pending", () => {
+  const order = new WorkflowProjectionOrder<string>();
+  order.accept(order.begin(), ["ready"]);
+  const old = order.begin();
+  order.accept(order.begin(), ["unknown"]);
+  const refresh = order.begin();
+  expect(order.accept(old, ["old account"])).toBe(false);
+  expect(order.accept(old, ["retained error"])).toBe(false);
+  expect(order.current()).toEqual(["unknown"]);
+  expect(order.accept(refresh, ["new account"])).toBe(true);
+});

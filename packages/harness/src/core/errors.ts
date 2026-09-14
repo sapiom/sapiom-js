@@ -8,7 +8,9 @@
  *   SessionNotReadyError      → 409
  *   SessionAlreadyLiveError   → 409
  *   SessionNotResumeableError → 409
+ *   McpSessionRestartUnavailableError → 409
  *   AgentSessionIdentityReservedError → 409
+ *   McpCredentialGenerationChangedError → 409
  *   AdapterNotFoundError      → 400
  *   SpawnTargetError          → 400
  *   ExternalHarnessError      → 409
@@ -82,6 +84,15 @@ export class SessionAlreadyLiveError extends HarnessError {
   }
 }
 
+/** A live session is not eligible for the credential-scoped restart action. */
+export class McpSessionRestartUnavailableError extends HarnessError {
+  constructor(
+    reason = "This session is not waiting for a Sapiom connection restart",
+  ) {
+    super("MCP_SESSION_RESTART_UNAVAILABLE", reason);
+  }
+}
+
 /**
  * Thrown when generic adoption tries to claim a vendor conversation identity
  * that this installation has already assigned to a different registry row or
@@ -92,6 +103,30 @@ export class AgentSessionIdentityReservedError extends HarnessError {
     super(
       "AGENT_SESSION_IDENTITY_RESERVED",
       "This conversation identity is already owned by a local session",
+    );
+  }
+}
+
+/**
+ * A server-owned reserved session ID did not carry the exact private
+ * coordinator marker. Manual sessions can never satisfy this check by
+ * matching cwd, title, assignment, or any other public field.
+ */
+export class SubsessionBindingMismatchError extends HarnessError {
+  constructor() {
+    super(
+      "SUBSESSION_BINDING_MISMATCH",
+      "The reserved subsession is not owned by this coordinator binding",
+    );
+  }
+}
+
+/** A same-ID fresh start lacked one of its required zero-turn proofs. */
+export class SubsessionFreshRestartForbiddenError extends HarnessError {
+  constructor() {
+    super(
+      "SUBSESSION_FRESH_RESTART_FORBIDDEN",
+      "The reserved subsession cannot be restarted as a fresh conversation",
     );
   }
 }
@@ -116,6 +151,19 @@ export class AdapterNotFoundError extends HarnessError {
 export class SpawnTargetError extends HarnessError {
   constructor(message: string) {
     super("SPAWN_TARGET", message);
+  }
+}
+
+/**
+ * Generated MCP configuration lost its credential identity before spawn.
+ * Maps to HTTP 409.
+ */
+export class McpCredentialGenerationChangedError extends HarnessError {
+  constructor() {
+    super(
+      "MCP_CREDENTIAL_GENERATION_CHANGED",
+      "The Sapiom credential changed while preparing this process",
+    );
   }
 }
 

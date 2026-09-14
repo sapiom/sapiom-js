@@ -1,0 +1,240 @@
+# Shared build-plan versions
+
+Agent Studio stores one project Agent Map and one project build plan as
+immutable version histories. Every ordinary project session receives the same
+map and build-plan MCP tools. Trusted `{ projectId, userId, sessionId }` scope
+comes only from the private session capability; tool input cannot select or
+override it.
+
+## Coding-agent guidance and discovery
+
+Agent delivery remains the priority: scaffold/check/local testing and runtime
+capability guidance are not replaced by project coordination. The shared
+`profiles/project-agent.ts` appendix teaches all nine project tools to every
+ordinary writable project session, including focused children. MCP descriptions
+and schema field descriptions carry the detailed request/reference contracts so
+the startup prompt need not reproduce full schemas.
+
+The Agent Map is distinct from the automatic per-agent Canvas. During
+implementation, establish a real initial map once boundaries are clear and keep
+meaningful agents, contracts, artifacts, and data flow current. Saving a new
+`summary.md`, for example, warrants an artifact and writes/reads relationships
+even without adding an agent. Read, validate, propose, and verify the saved map
+before claiming it is current; validation alone does not persist anything.
+Read-only requests still authorize no project-state mutation.
+
+Use a build plan when coordination needs assignments, sequencing, or acceptance
+criteria, not as a prerequisite for a small edit. Obtain exact references from
+`build_plan_read({kind: "current"})`, not the compatibility map snapshot. Plan
+tool input references omit `projectId`; delegation focus references include it.
+After a map-version change, rebase an existing plan before applying plan edits.
+Canonical brief refresh is already attempted after apply/rebase and can be
+retried independently of the accepted plan.
+
+Delegated sessions are writable execution contexts sharing the parent's cwd,
+not automatically isolated worktrees. Specify disjoint ownership and written
+deliverables. A ready session or acknowledged kickoff is not proof the task is
+finished; inspect/test its deliverables. Creating a map node, plan, or brief
+does not automatically delegate work.
+
+Startup materialization upgrades only the exact known legacy base-prompt
+revision pinned by `profiles/fixtures/legacy-system-prompt.md`; unknown/custom
+remote prompts remain untouched. This prevents the old two-MCP, sample-project,
+and stop-for-an-invitation orientation from returning while a backend still
+serves that revision. The common project appendix also states current
+orientation precedence. Keep the current fallback digest and backend served
+copy synchronized when publishing; the fixture's historical digest must not
+move with the current prompt pin. Local delivery tests do not prove a backend
+deployment or that a model consistently follows the instructions.
+
+## Digests and exact references
+
+`GraphContentDigest` identifies canonical graph semantics without project,
+version, author, or timestamp metadata. An `AgentMapVersionRef` adds the exact
+project and immutable version identity. Build-plan semantic digests cover only
+normalized plan content, while version-record digests also cover exact map
+binding, ancestry, authorship, origin, and creation time.
+
+Current reads and historical reads are distinct. Historical reads require the
+logical plan ID, immutable version ID, and semantic digest. No omitted version
+is interpreted as “latest.” Restoring an old map or plan appends a new
+`changeKind: "restored"` version; it never rewinds a current pointer or mutates
+history.
+
+## Authoring and concurrency
+
+`build_plan_validate` executes the apply parser, deterministic ID mapping,
+source checks, reducer, and contract validation without writing a receipt or
+moving a pointer. `build_plan_apply` persists a semantic change, current
+pointer, and complete replay receipt in one locked atomic replacement. An exact
+semantic no-op stores only its receipt.
+
+Request identity is scoped by the trusted project, user, session, and request
+ID. Retrying identical content returns the original result; changing content
+under the same request ID fails. Concurrent same-source edits merge only when
+their stable touch sets are disjoint. Overlaps return stable conflict IDs and
+paths. A map-version change always requires `build_plan_rebase`, including
+explicit resolutions for every invalidated assignment, repository intent, or
+dependency; intent is never silently dropped.
+
+Immutable map and plan histories are each bounded at 1,024 versions and are
+never silently trimmed. Exhaustion returns terminal `quota_exceeded` with
+`manual_intervention` recovery so callers do not retry forever; an operator
+must preserve/archive the project history before a future storage migration can
+raise or replace the bound.
+
+Validation warnings such as missing assignments, missing briefs, or unresolved
+decisions are diagnostic. They do not restrict coding, tool discovery, or
+session creation.
+
+## Reserved focused-brief seam
+
+SAP-3149 established append-only brief histories for focused-context work. A
+brief has a stable logical ID and a neutral focus
+scope: either a canonical workstream or an ad-hoc delegation whose parent scope
+may identify nested delegation. Each scope has an explicit active or retired
+pointer. Retirement preserves history, and reactivation appends the next
+version against that retained history. New and migrated aggregates start with
+empty brief histories.
+
+## Focused brief compilation and refresh
+
+`build_plan_brief_refresh` deterministically joins one exact current map version
+and one exact current plan version. It compiles either the canonical top-level
+workstreams or explicit ad-hoc/nested delegation scopes, appends only changed
+brief versions, and retains explicit retired pointers and immutable history.
+Plan apply and rebase commit before their best-effort canonical refresh, so a
+bounded compiler diagnostic never rolls back accepted plan intent; the refresh
+tool can be retried independently and idempotently.
+
+Each logical brief retains at most 1,024 immutable versions; exhausting that
+history returns terminal `quota_exceeded` with `manual_intervention` recovery.
+The newest 256 brief-refresh receipts remain replayable, while older receipts
+expire into tombstones and return `request_id_expired`, requiring a new request
+ID instead of replaying the original result.
+
+Brief fingerprints separate owned nodes, relevant nodes, input/output
+contracts, relationships, resources, milestones, shared plan content, and
+assignment content. Impact and freshness are diagnostic only. They never
+change tools, session writability, or implementation authority.
+
+The optional focused-session prompt overlay is an allowlisted, deterministic,
+size-bounded projection. Authored strings are delimited as untrusted data,
+delimiter-shaped and Unicode format characters are escaped, sensitive/path-like
+values are redacted, and oversized collections are truncated with a diagnostic.
+A project session without an overlay receives the common project-agent prompt
+byte-for-byte unchanged and keeps the same tool surface.
+
+The package exports `compileCanonicalWorkstreamBriefs`, `projectFocusedBriefs`
+(and its supported `compileAgentBriefs` alias), `DeterministicAgentBriefCompiler`,
+`evaluateAgentBriefImpact`, and `serializeFocusedSessionContext` for exact-version
+compilation, impact inspection, and safe context composition. Check the serializer's
+discriminated result before using its branded `projection`. The exported
+`AgentBriefService` runs the same refresh and projection pipeline when supplied a
+compatible planning store.
+
+Studio attaches this projection through its internal `SessionManager` and trusted
+create/resume options. Those session controls are not package exports; external
+hosts use `startServer` to run Studio's complete session and MCP surface. Focused
+context is rejected outside a trusted project-agent identity.
+
+Automatic post-write refresh uses a trusted `harness-internal:brief:` receipt
+namespace. Caller-supplied map, plan and explicit brief request IDs cannot use that
+prefix; existing `brief-planv_*` caller IDs remain valid. Automatic failure results
+use the same recovery advice as explicit refresh: correct input, reread sources,
+use a new explicit refresh request, retry transient storage, or request manual
+intervention for permanent limits.
+
+## Writable project subsessions
+
+Every ordinary project session discovers `project_subsession_delegate` beside
+the shared map, plan, and brief tools. The operation creates, reuses, or
+releases one to sixteen ordinary writable sessions. Each child receives the same common
+project-agent prompt, coding capabilities, project tools, and delegation tool,
+so nested delegation follows the same path. An exact assignment, map node, or
+brief may focus the child, but focus never changes its tools or authority.
+Delegation is bounded to four levels and 64 active or explicitly re-referenced
+coordinator-owned sessions per project. Dormant exited or failed bindings retain
+their exact resume identity without holding an active slot until they are
+re-referenced. A parent can idempotently release its own child bindings by
+delegation key to close their real Harness sessions and recover capacity; it
+cannot name arbitrary session IDs or release another parent's or a manual
+session. Unknown or expired keys converge as already released without exposing
+a session identity.
+
+Callers provide both a request key and a delegation key. Identity is scoped by
+the private session capability to the trusted project and parent session.
+Identical retries converge on the same durable binding and real Harness session
+ID until an explicit project-wide dormant eviction; changing canonical request
+or binding content under an existing key otherwise fails explicitly. All binding
+IDs and session IDs for a bounded batch are reserved in one durable transaction
+before the first process is spawned.
+Older request receipts compact into bounded key tombstones. User-closed
+bindings compact into bounded ownership tombstones once no retained receipt
+references them; an explicit release finalizes immediately to the same
+tombstone while its receipt retains deterministic replay. Exited and failed
+bindings remain available for the coordinator's ordinary resume and recovery
+paths until explicitly released. Once the durable coordinator close succeeds,
+SessionManager prunes the exact private ownership marker and close tombstone; a
+failed final cleanup retains that proof for the next idempotent retry. The
+oldest tombstones expire as the retention window advances, so routine
+delegation, release, and focused-context refreshes cannot permanently exhaust a
+project.
+Proven acknowledged or unsent delivery epochs are likewise pruned when a newer
+focused-context delivery replaces them; ambiguous delivery evidence is retained.
+
+If exited or failed bindings fill durable binding history, any current project
+session may explicitly invoke the bounded `release-dormant` operation. The
+coordinator selects at most sixteen eligible records inside the
+capability-derived project; the request accepts no session IDs and never selects
+active bindings or manual sessions. Parent liveness is intentionally irrelevant:
+this explicit project-wide destructive operation relinquishes dormant delegation
+resume identity even when the original parent is active. It retains the ordinary
+Harness conversation/session history, but compacts the coordinator binding and
+ends automatic resume through that binding. The sweep remains idempotent and
+restart-safe, while prior request receipts referencing an evicted binding become
+bounded expiry tombstones. Retrying one of those keys returns
+`request_key_expired` with `new_request_key`; a fresh request key may atomically
+create one new binding/session for the same delegation key. Durable-history
+capacity errors expose the explicit `release_dormant` recovery code; an
+all-active live cap continues to require session inspection instead of suggesting
+an inapplicable dormant cleanup. A bounded private-marker cleanup error may
+accompany an already-`released` result because eviction is durable first. Exact
+cleanup proof remains available until the private close completes. After the
+original sweep receipt expires, a fresh bounded `release-dormant` request also
+retries unfinished cleanup without changing the release outcome or emitting a
+second release event.
+
+The coordinator shares a 30-second readiness wait budget across a whole delegation
+batch and both readiness and adapter-identity phases. On exhaustion it returns
+partial `readiness_timeout` / `retry` results, retaining completed children and
+reserved IDs for the rest. It stops processing later items and starts no background
+continuation; an explicit retry of the same request reconciles the same bindings.
+The budget bounds readiness waiting; in-flight durable writes and process creation
+finish before their result is reported. Trusted tests or hosts can lower the budget
+with `batchWaitTimeoutMs`, but cannot increase it beyond 30 seconds.
+
+The coordinator waits for canonical adapter readiness and uses fenced spawn and
+delivery epochs to submit one kickoff. Fresh Codex produces its rollout only after
+that first turn, so an exact privately owned Codex runtime with a pending first
+kickoff can submit before transcript discovery. The host prefixes that prompt
+with a non-secret runtime digest marker; its rollout broker requires the same
+marker before attributing the transcript. Ordinary pending runtimes cannot claim
+marked child rollouts, and metadata-only files remain unassigned until the real
+first user turn is available. Existing or ambiguous identities retain the usual
+gates. A submitted kickoff restarts collection if an idle runtime outlived the
+initial discovery window; it never starts another kickoff.
+Delivery states distinguish pending, claimed, submitted without acknowledgement,
+acknowledged, and uncertain. An uncertain delivery is never resent blindly.
+Exact focused references are checked before delivery, and stale context returns
+an explicit refresh path without closing the session or changing writability.
+
+Coordinator recovery starts from its own two-sided private binding marker. It
+does not infer ownership from cwd, title, assignment, map membership, or process
+similarity, and it never adopts, renames, resumes, closes, or removes an
+unrelated manual session. Tabs remain projections of ordinary live sessions,
+deduplicated by the real session ID and exact server-derived project identity.
+
+Delegation telemetry contains only event names, project/session identifiers,
+and bounded error codes. Task text, kickoff context, focused prose, source,
+paths, secrets, credentials, and raw adapter output are excluded.

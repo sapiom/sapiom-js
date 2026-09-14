@@ -1,0 +1,245 @@
+{
+  "revision": "cab477b541b0485f22a4948075d2921ba1a3434c",
+  "harnessVersion": "0.16.0",
+  "desktopVersion": "0.4.6",
+  "electronVersion": "33.4.11",
+  "platform": "linux-x64",
+  "appImage": "sapiom-0.4.6-x86_64.AppImage",
+  "appImageSha256": "e63fb39419b54edc828814a7195faca6814edfe99b1f7f6c675c89752a3293ad",
+  "checks": [
+    {
+      "file": "dist/server/index.js",
+      "sha256": "de6c34771a6fb703f96e1a03c19983b7e5f192398232fbc7f23f3d92334d872d"
+    },
+    {
+      "file": "dist/web/index.html",
+      "sha256": "c4da1b63ffaddaf29781f6857d1a0c865c7565523898edfd40a13028fce07d8f"
+    },
+    {
+      "file": "dist/web/assets/index-BZtXtN0s.js",
+      "sha256": "304ecd5579eebacac3db002ac524c27fd4f06bc981e9b42a1b16a7edbeab8719"
+    }
+  ],
+  "retiredGraphFilesInPackagedDist": 0,
+  "byteMatchedRuntimeFiles": 195,
+  "nativeWorkspaceBinariesUnchanged": true,
+  "date": "2026-09-09",
+  "validation": {
+    "build": "passed after cleaning Harness dist",
+    "typecheck": "passed",
+    "lint": "passed with existing unrelated warnings",
+    "rootTest": {
+      "result": "failed",
+      "test": "agent-core/src/bundle-error.spec.ts: unreadable project directory",
+      "baseline": "same failure on unchanged prior code in the Node 24 VM"
+    },
+    "harnessUnit": {
+      "passed": 3840,
+      "skipped": 2,
+      "filesPassed": 239,
+      "filesSkipped": 1
+    },
+    "harnessPerformance": {
+      "passed": 10
+    },
+    "browser": {
+      "uniqueCases": 627,
+      "fullRunPassed": 625,
+      "fullRunCrashed": 2,
+      "focusedFilePassed": 23,
+      "focusedFile": "web/e2e/template-harness.spec.ts",
+      "note": "Two Chrome target crashes; the full affected file passed unchanged with two workers."
+    },
+    "canvas": {
+      "passed": 15
+    },
+    "remainingPackages": {
+      "mcpPassed": 179,
+      "mcpSkipped": 3,
+      "cliPassed": 73,
+      "desktopPassed": 205
+    },
+    "rootScriptTests": {
+      "passed": 178
+    },
+    "terminology": "passed",
+    "providerCopy": "passed",
+    "prTemplateAndSecurityChecks": "passed",
+    "linuxUnpackedSmoke": {
+      "passed": 16,
+      "skipped": 1,
+      "skippedCheck": "Windows-only agent-shim"
+    },
+    "appImageSmoke": {
+      "initialPassed": 15,
+      "initialFailed": 1,
+      "initialSkipped": 1,
+      "initialFailure": "session-create: HTTP 409 PROJECT_SESSION_SCOPE_UNAVAILABLE",
+      "isolatedPassed": 16,
+      "isolatedSkipped": 1,
+      "artifactChanged": false,
+      "smokeCoverageChanged": false
+    },
+    "agentMapSmoke": {
+      "legacyReadRequests": 0,
+      "legacyRefreshRequests": 0,
+      "legacyNavigationRequests": 0,
+      "directRetiredRouteStatuses": [
+        404,
+        404,
+        404
+      ],
+      "savedMapAndHistoryUnchanged": true
+    }
+  },
+  "limitations": [
+    "Initial AppImage run exposed a preexisting session-scope retention gap between pendingProjectCwds and pendingCreates. It predates this cleanup; no admission checks or smoke coverage were weakened. A clean rerun does not fix the race.",
+    "Node 24 VM root test failure is recorded separately from successful retained package tests.",
+    "Linux evidence does not validate a signed/notarized macOS installer or installed-version upgrade. SAP-3086 retains those release gates."
+  ],
+  "reviewFixes": {
+    "date": "2026-09-10",
+    "sourceRevision": "5bfed981be12701e523e9096bdd0ab498aff0f20",
+    "builtAssets": [
+      {
+        "file": "server/index.js",
+        "sha256": "158275759366835e841e023b64aa4cbfb76d6fab3d85e31de9694b0915938ab1"
+      },
+      {
+        "file": "web/index.html",
+        "sha256": "58c37a75d1758897225daefb4dd6f343529bb8c82fc95c3154c94bb41a3c0456"
+      },
+      {
+        "file": "web/assets/index-C-d3Neif.js",
+        "sha256": "9eebc5cf2d76dbff7e45c50514fe676f55aaac38d11038d81cf245e36c756f05"
+      },
+      {
+        "file": "web/assets/index-xp2ouk6y.css",
+        "sha256": "917059001d832523c198c9e1cc36db5fa389db5a3abfcd4263a8c445c1f0d61b"
+      }
+    ],
+    "retiredGraphFilesInBuiltDist": 0,
+    "integratedMain": "8679d7457a8c4a1f40b2137da9e677de01b62a53",
+    "scope": [
+      "Resolve the main auth mock conflict with the complete partial mock.",
+      "Restore manual project map viewports across project and agent navigation, with auth isolation, offscreen recovery and retained auto-fit.",
+      "Restore cross-agent project tab coverage and clarify the unreachable browser compatibility cleanup changeset.",
+      "Restore muted monospace Agent Map metadata, cover computed light/dark styles and record mock before/after screenshots.",
+      "Remove the stale mock graph failure comment.",
+      "Reconcile both retirement changesets to the final authenticated JSON 404 contract for every unknown API path."
+    ],
+    "validation": {
+      "harnessAndDependencyBuild": "passed",
+      "harnessTypecheck": "passed",
+      "harnessLint": "passed",
+      "terminology": "passed",
+      "providerCopy": "passed",
+      "mainIntegrationTests": {
+        "passed": 263
+      },
+      "harnessUnit": {
+        "passed": 3845,
+        "skipped": 2,
+        "filesPassed": 239,
+        "filesSkipped": 1,
+        "workers": 2
+      },
+      "initialHarnessUnitRun": {
+        "passed": 3844,
+        "failed": 1,
+        "skipped": 2,
+        "workers": 3,
+        "failure": "record-archive-wiring: keeps a session readable after its events are swept; turns[0] was undefined",
+        "unchangedFocusedFileRerun": {
+          "passed": 8
+        },
+        "note": "The subsequent complete two-worker run passed unchanged; the initial failure is retained rather than omitted."
+      },
+      "harnessPerformance": {
+        "passed": 10
+      },
+      "browser": {
+        "passed": 634,
+        "workers": 2,
+        "browser": "installed Google Chrome"
+      },
+      "canvas": {
+        "passed": 15
+      },
+      "focusedBrowser": {
+        "passed": 16,
+        "regressionsFailedBeforeFix": [
+          "project viewport restoration",
+          "metadata computed styles in light and dark"
+        ]
+      },
+      "isolatedPrHeads": [
+        {
+          "number": 892,
+          "head": "c614bc3a457991348a3b754fcceba5cf15c3e295",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0,
+            "auth-mock": 0
+          }
+        },
+        {
+          "number": 893,
+          "head": "1b8934720686cc46490b85cc17e9c69d46051547",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0
+          }
+        },
+        {
+          "number": 907,
+          "head": "22452e67fb85dfd4f95af54876f65f1f3ec0efde",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0,
+            "browser-contracts": 0
+          }
+        },
+        {
+          "number": 908,
+          "head": "62c2ffd79feca85d277e709053b17f44827b4d5b",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0
+          }
+        },
+        {
+          "number": 909,
+          "head": "b43e79cb8effc33d6a0ad028e5c12f93b919586c",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0
+          }
+        },
+        {
+          "number": 910,
+          "head": "5a1b979c0dede92bcd711ddd3ef65e6fb5ecdba2",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0
+          }
+        },
+        {
+          "number": 912,
+          "head": "184c4e301cc9525545e4298934b310e0f990b851",
+          "checks": {
+            "server-typecheck": 0,
+            "web-typecheck": 0
+          }
+        }
+      ]
+    },
+    "screenshots": [
+      ".github/screenshots/SAP-3090/metadata-before-light.png",
+      ".github/screenshots/SAP-3090/metadata-after-light.png",
+      ".github/screenshots/SAP-3090/metadata-before-dark.png",
+      ".github/screenshots/SAP-3090/metadata-after-dark.png"
+    ],
+    "packagingScope": "The AppImage hashes and packaged smoke results above belong to the original 2026-09-09 deletion revision. These review-fix results validate the current source and build; signed macOS installer/upgrade validation remains SAP-3086."
+  }
+}

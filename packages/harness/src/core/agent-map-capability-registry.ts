@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { PlanningSessionIdentity } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "../shared/agent-map.js";
 
 export type AgentMapCapabilityRejection =
   | "invalid_capability"
@@ -15,7 +15,7 @@ export class AgentMapCapabilityError extends Error {
 }
 
 export interface ResolvedAgentMapCapability {
-  identity: PlanningSessionIdentity;
+  identity: ProjectAgentSession;
   generation: number;
   expiresAt: number;
 }
@@ -30,7 +30,6 @@ export interface AgentMapCapabilityEvent {
     | "agent_map.capability.rotated"
     | "agent_map.capability.revoked"
     | "agent_map.capability.rejected";
-  role?: PlanningSessionIdentity["role"];
   reason?: AgentMapCapabilityRejection;
 }
 
@@ -45,6 +44,15 @@ interface Entry extends ResolvedAgentMapCapability {
   digest: string;
 }
 
+/** Drop any legacy role/assignment properties before they enter authority. */
+const neutralPrincipal = (
+  identity: ProjectAgentSession,
+): ProjectAgentSession => ({
+  projectId: identity.projectId,
+  userId: identity.userId,
+  sessionId: identity.sessionId,
+});
+
 const DEFAULT_TTL_MS = 12 * 60 * 60 * 1_000;
 const MAX_REVOKED_DIGESTS = 4_096;
 
@@ -58,38 +66,41 @@ export class AgentMapCapabilityRegistry {
   private readonly now: () => number;
   private readonly randomToken: () => string;
 
-  constructor(private readonly options: AgentMapCapabilityRegistryOptions = {}) {
+  constructor(
+    private readonly options: AgentMapCapabilityRegistryOptions = {},
+  ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.now = options.now ?? Date.now;
     this.randomToken =
       options.randomToken ?? (() => randomBytes(32).toString("base64url"));
   }
 
-  issue(identity: PlanningSessionIdentity): IssuedAgentMapCapability {
-    this.revokeSession(identity.sessionId);
+  issue(identity: ProjectAgentSession): IssuedAgentMapCapability {
+    const principal = neutralPrincipal(identity);
+    this.revokeSession(principal.sessionId);
     const token = this.randomToken();
     const digest = this.digest(token);
     if (!token || this.active.has(digest) || this.revoked.has(digest)) {
       throw new AgentMapCapabilityError("invalid_capability");
     }
-    const generation = (this.generations.get(identity.sessionId) ?? 0) + 1;
-    this.generations.set(identity.sessionId, generation);
+    const generation = (this.generations.get(principal.sessionId) ?? 0) + 1;
+    this.generations.set(principal.sessionId, generation);
     const entry: Entry = {
       digest,
-      identity: structuredClone(identity),
+      identity: principal,
       generation,
       expiresAt: this.now() + this.ttlMs,
     };
     this.active.set(digest, entry);
-    this.currentBySession.set(identity.sessionId, digest);
-    this.emit({ name: "agent_map.capability.issued", role: identity.role });
+    this.currentBySession.set(principal.sessionId, digest);
+    this.emit({ name: "agent_map.capability.issued" });
     return { token, ...this.publicEntry(entry) };
   }
 
-  rotate(identity: PlanningSessionIdentity): IssuedAgentMapCapability {
+  rotate(identity: ProjectAgentSession): IssuedAgentMapCapability {
     this.revokeSession(identity.sessionId);
     const issued = this.issue(identity);
-    this.emit({ name: "agent_map.capability.rotated", role: identity.role });
+    this.emit({ name: "agent_map.capability.rotated" });
     return issued;
   }
 
@@ -121,18 +132,19 @@ export class AgentMapCapabilityRegistry {
   revokeSession(sessionId: string): void {
     const digest = this.currentBySession.get(sessionId);
     if (!digest) return;
-    const entry = this.active.get(digest);
     this.active.delete(digest);
     this.currentBySession.delete(sessionId);
     this.revoked.add(digest);
     this.pruneRevoked();
-    this.emit({ name: "agent_map.capability.revoked", role: entry?.identity.role });
+    this.emit({ name: "agent_map.capability.revoked" });
   }
 
   isGenerationLive(sessionId: string, generation: number): boolean {
     const digest = this.currentBySession.get(sessionId);
     const entry = digest ? this.active.get(digest) : undefined;
-    return !!entry && entry.generation === generation && entry.expiresAt > this.now();
+    return (
+      !!entry && entry.generation === generation && entry.expiresAt > this.now()
+    );
   }
 
   private publicEntry(entry: Entry): ResolvedAgentMapCapability {

@@ -1,5 +1,116 @@
 # @sapiom/agent-studio
 
+## 0.1.26
+
+### Patch Changes
+
+- Updated dependencies [758ba40]
+- Updated dependencies [7776065]
+- Updated dependencies [c39980b]
+- Updated dependencies [ad9789a]
+- Updated dependencies [b260034]
+- Updated dependencies [3a60ca7]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [6c96a5b]
+- Updated dependencies [a56328d]
+- Updated dependencies [d26b29b]
+- Updated dependencies [5602d4e]
+- Updated dependencies [4da9937]
+- Updated dependencies [84f5767]
+- Updated dependencies [e28f255]
+- Updated dependencies [768d9e4]
+- Updated dependencies [d72433a]
+- Updated dependencies [ec252d3]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [ed89616]
+- Updated dependencies [e6e510e]
+- Updated dependencies [4b1ebc5]
+- Updated dependencies [93fa8df]
+- Updated dependencies [66542da]
+- Updated dependencies [4936ce9]
+- Updated dependencies [df39da5]
+- Updated dependencies [d775192]
+- Updated dependencies [1a33894]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fc8b07b]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [49e82a9]
+- Updated dependencies [cf3e872]
+- Updated dependencies [f618e7e]
+- Updated dependencies [5602d4e]
+- Updated dependencies [e40920e]
+- Updated dependencies [0f28c4e]
+- Updated dependencies [d07acd9]
+- Updated dependencies [d2be8aa]
+- Updated dependencies [f13cad3]
+- Updated dependencies [2b9f75e]
+- Updated dependencies [c343fd1]
+- Updated dependencies [b177f49]
+- Updated dependencies [48ab09f]
+- Updated dependencies [bcd6167]
+- Updated dependencies [9ddb57c]
+- Updated dependencies [981c940]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [b460c9a]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [42fcacc]
+- Updated dependencies [7776065]
+- Updated dependencies [9b957ca]
+- Updated dependencies [c2128f6]
+- Updated dependencies [e59da42]
+  - @sapiom/harness@0.17.0
+
+## 0.1.25
+
+### Patch Changes
+
+- Updated dependencies [b4d6067]
+- Updated dependencies [3d96d32]
+- Updated dependencies [908b72c]
+- Updated dependencies [f6dd638]
+- Updated dependencies [fd9ec19]
+- Updated dependencies [674ba1d]
+- Updated dependencies [6468ead]
+- Updated dependencies [e690f7c]
+- Updated dependencies [55630a9]
+- Updated dependencies [ff414ff]
+- Updated dependencies [6707366]
+  - @sapiom/harness@0.16.0
+
+## 0.1.24
+
+### Patch Changes
+
+- Updated dependencies [7d947b1]
+- Updated dependencies [d10f605]
+- Updated dependencies [2b5ee34]
+- Updated dependencies [aad9500]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [58fb5cf]
+- Updated dependencies [fe9d7d5]
+- Updated dependencies [74884b1]
+- Updated dependencies [d5c26ae]
+- Updated dependencies [4622f40]
+- Updated dependencies [9fadbae]
+- Updated dependencies [73e7f46]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [143787a]
+- Updated dependencies [30dce20]
+- Updated dependencies [69f2a6e]
+- Updated dependencies [3d105bc]
+- Updated dependencies [4aa4784]
+- Updated dependencies [2168491]
+- Updated dependencies [1cc232a]
+- Updated dependencies [0cbdd86]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [e0c1f47]
+- Updated dependencies [40fe3e8]
+- Updated dependencies [cf2369c]
+- Updated dependencies [4af416a]
+  - @sapiom/harness@0.15.0
+
 ## 0.1.23
 
 ### Patch Changes

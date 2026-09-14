@@ -11,6 +11,9 @@ import type { RailAxis, RailSort } from "./project-tree";
  */
 
 export interface UiPrefs {
+  /** Explicit conversation selection, including an archived session. Restored
+   * only when the server still lists this ID; never resumes its runtime. */
+  activeSessionId?: string | null;
   railCollapsed?: boolean;
   rightCollapsed?: boolean;
   /**

@@ -5,7 +5,11 @@ import type { WorkflowInfo } from "@shared/types";
 import { Icon } from "./Icon";
 import { displayAgentName } from "../lib/agent-name";
 import { prefixIsPathTail } from "../lib/project-tree";
-import { workflowDeploymentState } from "../lib/workflow-deployment";
+import {
+  workflowDeploymentState,
+  workflowDeploymentIndicator,
+  workflowDeploymentTitle,
+} from "../lib/workflow-deployment";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
@@ -93,17 +97,8 @@ export function WorkflowRow({
     rowRef.current?.scrollIntoView({ block: "nearest" });
   }, [isFocused]);
   const deploymentState = workflowDeploymentState(workflow);
-  const deployed = deploymentState === "ready";
-  const statusTitle =
-    deploymentState === "ready"
-      ? "Deployed to Sapiom with a ready build."
-      : deploymentState === "building"
-        ? "Cloud build in progress."
-        : deploymentState === "failed"
-          ? "Cloud build failed."
-          : deploymentState === "linked"
-            ? "Linked to Sapiom; no ready build confirmed."
-            : "Draft. Not deployed to Sapiom yet.";
+  const display = workflowDeploymentIndicator(workflow);
+  const deployed = display.indicator === "deployed";
   return (
     <div
       ref={rowRef}
@@ -168,11 +163,15 @@ export function WorkflowRow({
         <span
           className="workflow-status"
           data-deployed={deployed}
+          data-deployment-unavailable={display.unavailable}
           data-deployment-state={deploymentState}
           data-testid={`workflow-status-${workflow.path}`}
-          title={statusTitle}
+          title={workflowDeploymentTitle(workflow)}
         >
-          <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />
+          <Icon
+            name={display.indicator === "draft" ? "CloudOff" : "Cloud"}
+            size={13}
+          />
         </span>
       </button>
     </div>

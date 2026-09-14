@@ -36,22 +36,49 @@ const SCANNED_EXTENSIONS = new Set([
   ...TEXT_EXTENSIONS,
   ".json",
 ]);
-const SKIPPED_PATH_PARTS = new Set([
+const ALWAYS_SKIPPED_PATH_PARTS = new Set([
+  "dist",
+  "node_modules",
+  "release",
+]);
+const WORKFLOW_SKIPPED_PATH_PARTS = new Set([
   "__fixtures__",
   "__snapshots__",
   "__tests__",
-  "dist",
   "e2e",
-  "node_modules",
-  "release",
   "test",
   "tests",
 ]);
 const TEST_FILE_RE = /(?:^|\/)[^/]+\.(?:spec|test)\.[cm]?[jt]sx?$/;
-const WORKFLOW_TOKEN_RE = /workflows?/giu;
+const TERMINOLOGY_RULES = [
+  {
+    id: "workflow",
+    label: "Human-readable Workflow terminology",
+    regex: /workflows?/giu,
+    appliesTo: (sourcePath) => {
+      const normalized = toPosix(sourcePath);
+      const parts = normalized.split("/");
+      return (
+        !normalized.startsWith("docs/") &&
+        !normalized.startsWith(".changeset/") &&
+        !parts.some((part) => WORKFLOW_SKIPPED_PATH_PARTS.has(part)) &&
+        !TEST_FILE_RE.test(normalized)
+      );
+    },
+  },
+  {
+    id: "unified-agent-model",
+    label: "Retired project-agent authority terminology",
+    regex:
+      /map-planner|agent-builder|PlanningSessionIdentity|planning-readonly|BuilderPlanningSubmission|planning_result_submit|implementationEligible|source-not-confirmed|BUILDER_BOOTSTRAP_|assertPlanner|forbidden_role|plannerOrigin/giu,
+    appliesTo: () => true,
+  },
+];
 
 const STATIC_TARGETS = [
   ".github/workflows/desktop-release.yml",
+  ".changeset",
+  "docs",
   "package.json",
   "packages/agent-core/package.json",
   "packages/agent-core/src",
@@ -70,6 +97,7 @@ const STATIC_TARGETS = [
   "packages/harness/web/index.html",
   "packages/harness/web/public",
   "packages/harness/web/src",
+  "packages/harness/web/e2e",
   "packages/harness-desktop/electron-builder.yml",
   "packages/harness-desktop/package.json",
   "packages/harness-desktop/src",
@@ -83,8 +111,7 @@ function toPosix(value) {
 function isScannable(relativePath) {
   const normalized = toPosix(relativePath);
   const parts = normalized.split("/");
-  if (parts.some((part) => SKIPPED_PATH_PARTS.has(part))) return false;
-  if (TEST_FILE_RE.test(normalized)) return false;
+  if (parts.some((part) => ALWAYS_SKIPPED_PATH_PARTS.has(part))) return false;
   return SCANNED_EXTENSIONS.has(path.extname(normalized).toLowerCase());
 }
 
@@ -104,7 +131,7 @@ async function collectFiles(rootDir, relativeTarget) {
   for (const entry of entries) {
     const child = path.join(relativeTarget, entry.name);
     if (entry.isDirectory()) {
-      if (!SKIPPED_PATH_PARTS.has(entry.name))
+      if (!ALWAYS_SKIPPED_PATH_PARTS.has(entry.name))
         files.push(...(await collectFiles(rootDir, child)));
     } else if (entry.isFile() && isScannable(child)) {
       files.push(toPosix(child));
@@ -381,11 +408,21 @@ function compileAllowlist(entries) {
   return entries.map((entry, index) => {
     if (!entry || typeof entry !== "object")
       throw new Error(`allowlist entry ${index + 1} is not an object`);
-    const { id, path: entryPath, pattern, reason, occurrences } = entry;
+    const {
+      id,
+      rule = "workflow",
+      path: entryPath,
+      pattern,
+      reason,
+      occurrences,
+    } = entry;
     if (typeof id !== "string" || id.trim() === "")
       throw new Error(`allowlist entry ${index + 1} has no id`);
     if (ids.has(id)) throw new Error(`duplicate allowlist id: ${id}`);
     ids.add(id);
+    if (!TERMINOLOGY_RULES.some((candidate) => candidate.id === rule)) {
+      throw new Error(`allowlist entry ${id} has unknown rule ${rule}`);
+    }
     if (typeof entryPath !== "string" || entryPath.trim() === "") {
       throw new Error(`allowlist entry ${id} has no exact path`);
     }
@@ -405,7 +442,7 @@ function compileAllowlist(entries) {
         `allowlist entry ${id} must declare a positive occurrence count`,
       );
     }
-    return { ...entry, regex: new RegExp(pattern, "giu"), used: 0 };
+    return { ...entry, rule, regex: new RegExp(pattern, "giu"), used: 0 };
   });
 }
 
@@ -445,12 +482,15 @@ export function auditSources({ sources, allowlist = [] }) {
 
   for (const source of sources) {
     for (const segment of sourceSegments(source)) {
-      WORKFLOW_TOKEN_RE.lastIndex = 0;
-      for (const match of segment.value.matchAll(WORKFLOW_TOKEN_RE)) {
+      for (const rule of TERMINOLOGY_RULES) {
+        if (!rule.appliesTo(source.path)) continue;
+        rule.regex.lastIndex = 0;
+        for (const match of segment.value.matchAll(rule.regex)) {
         const tokenStart = match.index;
         const tokenEnd = tokenStart + match[0].length;
         const allowed = compiled.find(
           (entry) =>
+            entry.rule === rule.id &&
             entry.path === source.path &&
             patternCovers(entry, segment.value, tokenStart, tokenEnd),
         );
@@ -463,9 +503,11 @@ export function auditSources({ sources, allowlist = [] }) {
           path: source.path,
           line: position.line,
           column: position.column,
+          rule: rule.id,
           token: match[0],
           context: segment.jsonPath ?? contextAt(segment.value, tokenStart),
         });
+        }
       }
     }
   }
@@ -502,10 +544,10 @@ export async function auditRepository({
 function formatFailure(result) {
   const lines = [];
   if (result.violations.length > 0) {
-    lines.push("Human-readable Workflow terminology found:");
+    lines.push("Disallowed Agent Studio terminology found:");
     for (const violation of result.violations) {
       lines.push(
-        `  ${violation.path}:${violation.line}:${violation.column} ${violation.token} — ${violation.context}`,
+        `  [${violation.rule}] ${violation.path}:${violation.line}:${violation.column} ${violation.token} — ${violation.context}`,
       );
     }
   }
@@ -513,7 +555,7 @@ function formatFailure(result) {
     lines.push("Stale terminology allowlist entries found:");
     for (const entry of result.unusedAllowlist) {
       lines.push(
-        `  ${entry.id} — ${entry.path} / ${entry.pattern} (expected ${entry.occurrences}, matched ${entry.used})`,
+        `  ${entry.id} [${entry.rule}] — ${entry.path} / ${entry.pattern} (expected ${entry.occurrences}, matched ${entry.used})`,
       );
     }
   }

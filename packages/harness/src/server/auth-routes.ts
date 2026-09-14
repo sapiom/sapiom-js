@@ -34,6 +34,10 @@ import {
 } from "@sapiom/mcp/auth";
 
 import type { EventBus } from "../core/event-bus.js";
+import {
+  withStudioCredentialLock,
+  revokeStudioCredentials,
+} from "../core/studio-credentials.js";
 
 // ---------------------------------------------------------------------------
 // Mutable auth state
@@ -83,9 +87,8 @@ export interface AuthKeyTarget {
   refresh(): Promise<string | null>;
   /**
    * Unconditionally zero the in-memory key (sets it to null). Called on
-   * disconnect so that the provider returns null immediately — distinct from
-   * {@link refresh}, whose guard deliberately keeps the cached key when the
-   * store has nothing to offer.
+   * disconnect so that the provider returns null immediately, without waiting
+   * for another credential-store read.
    */
   clear(): void;
 }
@@ -118,6 +121,10 @@ export interface AuthRoutesOptions {
   performBrowserAuthImpl?: typeof performBrowserAuth;
   /** Server-private identity projection for authorization consumers. It is
    * intentionally not added to AuthState or any browser response. */
+  onProjectUserChanged?: (userId: string | null) => void;
+  /** Awaited after local auth is cleared and before disconnect reports success. */
+  onCredentialRemoved?: () => Promise<void>;
+  /** @deprecated Use onProjectUserChanged; remove in SAP-3152. */
   onPlanningUserChanged?: (userId: string | null) => void;
 }
 
@@ -136,15 +143,31 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     authEnabled = true,
     environment,
     performBrowserAuthImpl = performBrowserAuth,
+    onProjectUserChanged,
     onPlanningUserChanged,
+    onCredentialRemoved,
   } = opts;
+  const notifyProjectUserChanged =
+    onProjectUserChanged ?? onPlanningUserChanged;
 
-  // Track any in-flight start() call so a second concurrent POST /api/auth/start
-  // returns a clear error rather than racing two browser-open flows.
-  let pendingAuth: Promise<void> | null = null;
-  // Set to true by disconnect while a start is in flight so the async chain
-  // can bail before writing credentials / refreshing / broadcasting authenticated.
-  let pendingCancelled = false;
+  // Browser OAuth is deliberately left outside this queue: a person may take
+  // minutes to finish it. Only the short credential commit is serialized with
+  // disconnect so whichever transition was requested last wins durably.
+  let transitionQueue: Promise<void> = Promise.resolve();
+  const serializeTransition = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = transitionQueue.catch(() => {}).then(operation);
+    transitionQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
+  // Each browser flow owns one epoch. Disconnect invalidates the current epoch
+  // immediately (without trying to abort OAuth) and frees the slot for a new
+  // login; late continuations can then identify themselves as stale.
+  let authEpoch = 0;
+  let activeAttempt: number | null = null;
 
   // ---------------------------------------------------------------------------
   // GET /api/auth/status — live auth state (not the boot-time snapshot)
@@ -170,7 +193,7 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
       return;
     }
 
-    if (pendingAuth !== null) {
+    if (activeAttempt !== null) {
       res.status(409).json({ error: "authentication already in progress" });
       return;
     }
@@ -181,60 +204,80 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
     // know when it completes.
     res.json({ started: true });
 
-    pendingCancelled = false;
-    pendingAuth = (async () => {
+    const attempt = ++authEpoch;
+    activeAttempt = attempt;
+    const isCurrentAttempt = (): boolean =>
+      activeAttempt === attempt && authEpoch === attempt;
+    void (async () => {
       try {
         const env = await resolveEnvironment(
           environment ?? process.env.SAPIOM_ENVIRONMENT,
         );
+        if (!isCurrentAttempt()) return;
 
-        const result = await performBrowserAuthImpl(env.appURL, env.apiURL);
-
-        // If disconnect arrived while the browser flow was in progress, treat
-        // the resolved result as cancelled — do not write credentials, do not
-        // adopt the key, do not broadcast authenticated.
-        if (pendingCancelled) return;
-
-        // Write credentials.json — same as cli/auth.ts's ensureAuthenticated,
-        // reusing the same file and format so the CLI and Studio share one store.
-        await writeCredentials(env.name, env.appURL, env.apiURL, {
-          apiKey: result.apiKey,
-          tenantId: result.tenantId,
-          organizationName: result.organizationName,
-          apiKeyId: result.apiKeyId,
+        const result = await performBrowserAuthImpl(env.appURL, env.apiURL, {
+          studioIdentity: true,
         });
+        if (!isCurrentAttempt()) {
+          // This coordinator only prevents local adoption. Cancelling a
+          // superseded browser flow or its result needs separate OAuth support.
+          return;
+        }
 
-        // Adopt the new key in the live provider without a server restart.
-        await apiKeyProvider.refresh();
+        await serializeTransition(async () => {
+          if (!isCurrentAttempt()) return;
+          // Write credentials.json — same as cli/auth.ts's ensureAuthenticated,
+          // reusing the same file and format so the CLI and Studio share one store.
+          await withStudioCredentialLock(() =>
+            writeCredentials(env.name, env.appURL, env.apiURL, {
+              apiKey: result.apiKey,
+              tenantId: result.tenantId,
+              organizationName: result.organizationName,
+              apiKeyId: result.apiKeyId,
+              ...(result.studioCredentials && {
+                studioCredentials: result.studioCredentials,
+              }),
+            }),
+          );
+          // Disconnect may have invalidated this attempt while the write was in
+          // flight. Its queued clear follows us, so do not adopt or publish.
+          if (!isCurrentAttempt()) return;
 
-        // Update shared auth state and notify all open WS connections.
-        authState.set({
-          authenticated: true,
-          organizationName: result.organizationName,
-        });
-        // CLI identity uses tenantId as HarnessIdentity.userId. Update the
-        // private live principal in the same committed transition as auth;
-        // never expose it in the public auth status payload.
-        onPlanningUserChanged?.(result.tenantId);
-        bus.publish({
-          type: "auth.changed",
-          authenticated: true,
-          organizationName: result.organizationName,
+          await apiKeyProvider.refresh();
+          if (!isCurrentAttempt()) return;
+
+          authState.set({
+            authenticated: true,
+            organizationName: result.organizationName,
+          });
+          // CLI identity uses tenantId as HarnessIdentity.userId. Update the
+          // private live principal in the same committed transition as auth;
+          // never expose it in the public auth status payload.
+          notifyProjectUserChanged?.(result.tenantId);
+          bus.publish({
+            type: "auth.changed",
+            authenticated: true,
+            organizationName: result.organizationName,
+          });
         });
       } catch (err: unknown) {
+        if (!isCurrentAttempt()) return;
         // OAuth cancelled, state-mismatch, timeout, network error — leave
         // auth state as-is (unauthenticated) and broadcast so the SPA can
         // surface a retry affordance.
         const message =
           err instanceof Error ? err.message : "authentication failed";
         console.error("[harness] auth/start failed:", message);
-        bus.publish({
-          type: "auth.changed",
-          authenticated: false,
-          organizationName: null,
+        await serializeTransition(async () => {
+          if (!isCurrentAttempt()) return;
+          bus.publish({
+            type: "auth.changed",
+            authenticated: false,
+            organizationName: null,
+          });
         });
       } finally {
-        pendingAuth = null;
+        if (activeAttempt === attempt) activeAttempt = null;
       }
     })();
   });
@@ -251,30 +294,27 @@ export function createAuthRouter(opts: AuthRoutesOptions): Router {
       return;
     }
 
+    // Invalidate before the first await so a new login can begin immediately.
+    authEpoch++;
+    activeAttempt = null;
+
     try {
-      const env = await resolveEnvironment(
-        environment ?? process.env.SAPIOM_ENVIRONMENT,
-      );
+      await serializeTransition(async () => {
+        const env = await resolveEnvironment(
+          environment ?? process.env.SAPIOM_ENVIRONMENT,
+        );
 
-      // If a sign-in is in flight, neutralize it so a late browser-auth resolve
-      // cannot re-authenticate after we've disconnected.
-      if (pendingAuth !== null) {
-        pendingCancelled = true;
-      }
-
-      // Clear the credential store — the next refresh() call will find nothing.
-      await clearCredentials(env.name);
-
-      // Zero the in-memory key immediately so getKey() returns null right away,
-      // without waiting for the next launch-time or request-retry refresh.
-      apiKeyProvider.clear();
-
-      authState.set({ authenticated: false, organizationName: null });
-      onPlanningUserChanged?.(null);
-      bus.publish({
-        type: "auth.changed",
-        authenticated: false,
-        organizationName: null,
+        await withStudioCredentialLock(() => clearCredentials(env.name));
+        void revokeStudioCredentials(env);
+        apiKeyProvider.clear();
+        authState.set({ authenticated: false, organizationName: null });
+        notifyProjectUserChanged?.(null);
+        bus.publish({
+          type: "auth.changed",
+          authenticated: false,
+          organizationName: null,
+        });
+        await onCredentialRemoved?.();
       });
 
       res.json({ ok: true });

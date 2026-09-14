@@ -13,6 +13,12 @@ import type {
   ProposalValidationResult,
   RelationshipKind,
 } from "../shared/agent-map.js";
+import {
+  canonicalizeAgentMapGraph,
+  compareCanonicalStrings,
+} from "../shared/agent-map-canonical.js";
+
+export { canonicalizeAgentMapGraph } from "../shared/agent-map-canonical.js";
 
 const ACTOR_KINDS = new Set<PlanNodeKind>(["agent", "subagent"]);
 const ALL_NODE_KINDS = new Set<PlanNodeKind>([
@@ -97,8 +103,7 @@ const nodeDraftKey = (draftRef: DraftRef): string => `draft-node:${draftRef}`;
 const relationshipDraftKey = (draftRef: DraftRef): string =>
   `draft-relationship:${draftRef}`;
 
-const compareStrings = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
+const compareStrings = compareCanonicalStrings;
 
 const canonicalStrings = (values: readonly string[]): string[] =>
   [...values].sort(compareStrings);
@@ -109,26 +114,6 @@ const stripUndefinedProperties = <T extends Record<string, unknown>>(
   Object.fromEntries(
     Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
   ) as T;
-
-const canonicalNode = (node: PlanNode): PlanNode => ({
-  ...node,
-  contractRefs: canonicalStrings(node.contractRefs),
-});
-
-const canonicalRelationship = (
-  relationship: PlanRelationship,
-): PlanRelationship => ({ ...relationship });
-
-export function canonicalizeAgentMapGraph(graph: AgentMapGraph): AgentMapGraph {
-  return {
-    nodes: graph.nodes
-      .map(canonicalNode)
-      .sort((left, right) => compareStrings(left.id, right.id)),
-    relationships: graph.relationships
-      .map(canonicalRelationship)
-      .sort((left, right) => compareStrings(left.id, right.id)),
-  };
-}
 
 export function semanticRelationshipKey(
   relationship: Pick<

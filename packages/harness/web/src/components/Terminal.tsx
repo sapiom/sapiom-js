@@ -217,12 +217,13 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
     });
 
     const sendResize = (): void => {
-      if (ws?.readyState === WebSocket.OPEN) {
+      if (!disposed && ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       }
     };
 
     const resizeObserver = new ResizeObserver(() => {
+      if (disposed) return;
       fitAddon.fit();
       sendResize();
     });
@@ -261,6 +262,7 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
       ws = socket;
 
       socket.onopen = () => {
+        if (disposed || ws !== socket) return;
         reconnectAttempt = 0;
         setStatus("connected");
         setErrorMessage(null);
@@ -269,13 +271,14 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
       };
 
       socket.onmessage = (event) => {
+        if (disposed || ws !== socket) return;
         const data =
           typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data as ArrayBuffer);
         term.write(data);
       };
 
       socket.onclose = (event) => {
-        if (disposed) return;
+        if (disposed || ws !== socket) return;
         if (PERMANENT_CLOSE_CODES.has(event.code)) {
           setStatus("error");
           setErrorMessage(event.reason || `Connection refused (${event.code})`);
@@ -307,7 +310,11 @@ export const Terminal = ({ sessionId, token }: TerminalProps): JSX.Element => {
       inputDisposable.dispose();
       mock?.dispose();
       ws?.close();
-      term.dispose();
+      // xterm 5.5 queues an uncancelled viewport timer in open(). StrictMode
+      // can clean up before that timer runs. Detach immediately, then dispose
+      // after the already-queued timer, while its renderer is still available.
+      term.element?.remove();
+      setTimeout(() => term.dispose(), 0);
       termRef.current = null;
     };
   }, [sessionId, token]);

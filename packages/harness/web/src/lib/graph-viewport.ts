@@ -32,17 +32,21 @@ export interface GraphFit extends GraphView {
 export interface GraphViewportStore {
   get(workspaceKey: string): GraphView | undefined;
   set(workspaceKey: string, view: GraphView): void;
+  delete(workspaceKey: string): void;
 }
-
-const roundZoom = (zoom: number): number => Math.round(zoom * 100) / 100;
 
 export function clampGraphZoom(
   zoom: number,
   minZoom = GRAPH_DEFAULT_MIN_ZOOM,
+  floorZoom = GRAPH_FLOOR_ZOOM,
 ): number {
+  const precision = floorZoom < GRAPH_FLOOR_ZOOM ? 1000 : 100;
   return Math.min(
     GRAPH_MAX_ZOOM,
-    Math.max(Math.max(GRAPH_FLOOR_ZOOM, minZoom), roundZoom(zoom)),
+    Math.max(
+      Math.max(floorZoom, minZoom),
+      Math.round(zoom * precision) / precision,
+    ),
   );
 }
 
@@ -50,6 +54,7 @@ export function fitGraphView(
   graph: GraphSize,
   viewport: GraphSize,
   rootFontSize: number,
+  floorZoom = GRAPH_FLOOR_ZOOM,
 ): GraphFit {
   if (
     graph.width <= 0 ||
@@ -72,9 +77,10 @@ export function fitGraphView(
     (viewport.height - insetY * 2) / graph.height,
     GRAPH_MAX_ZOOM,
   );
+  const precision = floorZoom < GRAPH_FLOOR_ZOOM ? 1000 : 100;
   const zoom = Math.max(
-    GRAPH_FLOOR_ZOOM,
-    Math.min(GRAPH_MAX_ZOOM, Math.floor(fitted * 100) / 100),
+    floorZoom,
+    Math.min(GRAPH_MAX_ZOOM, Math.floor(fitted * precision) / precision),
   );
   return {
     zoom,
@@ -213,10 +219,12 @@ export function wheelGraphView(
   deltaY: number,
   pointer: GraphPoint,
   minZoom: number,
+  floorZoom = GRAPH_FLOOR_ZOOM,
 ): GraphView {
   const zoom = clampGraphZoom(
     view.zoom * Math.exp(-deltaY * GRAPH_WHEEL_RATE),
     minZoom,
+    floorZoom,
   );
   return zoomGraphAtPointer(view, zoom, pointer);
 }
@@ -230,6 +238,9 @@ export function createGraphViewportStore(): GraphViewportStore {
     },
     set(workspaceKey, value) {
       saved.set(workspaceKey, { ...value });
+    },
+    delete(workspaceKey) {
+      saved.delete(workspaceKey);
     },
   };
 }

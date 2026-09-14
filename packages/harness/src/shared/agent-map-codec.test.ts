@@ -13,8 +13,6 @@ const acceptedAt = "2026-09-02T12:00:00.000Z";
 const actor = {
   userId: "user-1",
   sessionId: "session-1",
-  role: "map-planner",
-  assignment: null,
 };
 const operation = {
   kind: "add-node",
@@ -68,11 +66,7 @@ describe("Agent Map persisted/public codecs", () => {
       "unknown operation",
       (value: any) => (value.history[0].operation.kind = "execute"),
     ],
-    [
-      "spoofed assignment",
-      (value: any) =>
-        (value.history[0].actor.assignment = { kind: "unplanned" }),
-    ],
+    ["spoofed authority", (value: any) => (value.history[0].actor.scope = "foreign")],
     [
       "nested extra field",
       (value: any) => (value.history[0].operation.node.privatePath = "/secret"),

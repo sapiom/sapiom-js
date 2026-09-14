@@ -1,5 +1,361 @@
 # @sapiom/harness
 
+## 0.17.0
+
+### Minor Changes
+
+- 84f5767: Surface when a running Claude session needs the current Sapiom connection, prevent prepared sessions or tasks from launching after it changes, and expose `MCP_CREDENTIAL_GENERATION_CHANGED` as a retryable conflict.
+- d775192: **Breaking for HTTP clients** (minor while `@sapiom/harness` is pre-1.0): retire
+  the documented project System Graph endpoints. Authenticated requests to all
+  three routes now return the generic JSON API `404` response:
+
+  - `GET /api/workspaces/:workspaceKey/system-graph`
+  - `POST /api/workspaces/:workspaceKey/system-graph/refresh`
+  - `GET /api/workspaces/:workspaceKey/system-graph/navigation`
+
+  The boot token remains required. These requests no longer resolve a scope,
+  read or refresh a legacy graph, or activate graph watchers.
+
+  Migrate to `GET /api/projects/:projectId/agent-map/workspace` for the durable
+  Agent Map and shared proposal, and
+  `GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` for exact
+  implementation navigation. Obtain server-issued project IDs from
+  `GET /api/state`; a workspace key, path or display name is not a project ID.
+  The durable APIs do not use the old process-memory graph snapshots or revision
+  matching protocol.
+
+  This release includes the matching Studio client recovery: an unresolved
+  project shows **Agent Map unavailable** with **Reload projects**, preserves its
+  conversation, and no longer starts or selects a session on a project click.
+  Shared workspace discovery, explicit session creation and ordinary session
+  navigation remain available independently of the retired graph.
+
+- 1a33894: Remove the retired project graph server runtime and HTTP handlers. Authenticated requests to the old graph, refresh, and navigation URLs return the generic JSON API 404; requests without the required boot token still return 401. The JSON 404 fallback applies to all unknown `/api` paths, preventing them from falling through to the Studio HTML shell.
+
+  Use durable project IDs and the Agent Map APIs. Shared agent discovery, ordinary sessions, and per-agent Canvas remain available.
+
+- fc8b07b: Bring Codex into Studio's Sapiom connection lifecycle: report stale credentials, explicitly restart resumable sessions with the current credential, and stop credential-bearing sessions and background tasks on disconnect.
+- fefb4f8: Expose the shared credential-store path to authenticated local integrations and stop affected Studio-managed Claude sessions and background tasks when the current Sapiom connection is removed.
+- cf3e872: Offer an explicit MCP session restart API and UI action when the Sapiom connection changes, and export `McpSessionRestartUnavailableError` for programmatic handling.
+- 2b9f75e: Resolve and refresh internal Assistant access using trusted Studio user credentials.
+- bcd6167: Add a revocable runtime-only credential bridge for the internal Studio Assistant.
+- 981c940: Add the internally gated Terminal/Assistant switch and a Studio-native streaming OpenCode conversation with connection recovery.
+- 1bb065e: Own OpenCode startup, authorized workspace state, access revocation, and shutdown in the shared Studio host.
+- 7df16bd: Associate Studio sessions with distinct OpenCode conversations and expose authenticated, session-scoped actions and incremental events.
+- b460c9a: Resolve linked agents from one tenant-scoped definitions list per poll instead
+  of a by-id lookup per agent: definitions the signed-in account cannot see are
+  never requested and show as unavailable in Studio. `WorkflowInfo` gains an
+  optional, serve-time `definitionAccess` field (never persisted).
+- d7f5c04: Let Studio request and privately retain a delegated signed-in user credential alongside its existing organization connection. Serialize user-token refresh with Studio login/sign-out, persist rotations atomically, and revoke the user-token family on sign-out when the backend is reachable. Existing CLI callers and legacy project ownership remain unchanged.
+
+### Patch Changes
+
+- 758ba40: Shorten the right pane's "Agent Map" tab to "Map" when the pane is narrow, instead of wrapping the label onto two lines.
+- 7776065: Limit archive backfill to 200 conversations per maintenance pass. Keep source events while work remains or archiving fails, and retry at the next scheduled cleanup.
+- c39980b: Route the Assistant through router.sapiom.ai using Luna and the Responses API.
+  Preserve streaming tool use, account-scoped credentials, and bounded retries for
+  empty answers. Throttle repeated failed runtime authentication attempts.
+  Custom Assistant gateways must support /v1/responses.
+- ad9789a: Synchronize Assistant status after the native stream connects, and ignore stale reads after newer activity, disconnects or session-view disposal.
+- b260034: Define a strict shared contract for sanitized Assistant transport failures and their trusted recovery actions.
+- 3a60ca7: Coalesce Assistant catch-up reads, cancel queued work on detach, and preserve visible history when a native response fails validation.
+- 2acd9bb: Attach a per-request completion instruction and support one durable native continuation from saved conversation results after an eligible incomplete turn. Fence prompt admission and uncertain dispatch, retain normal permissions, bound recovery time, and prevent the same continuation from dispatching again after reload. Preserve the exact Studio completion protocol on native compaction continuations so completed answers remain classifiable without replaying prompts or tool calls.
+- 6c96a5b: Fix project selection when a current Studio server cannot resolve the project's identity: show "Agent Map unavailable" with a "Reload projects" retry instead of the legacy project graph, and no longer start or select a session when that project is clicked. Explicit session creation and session-tab navigation remain available. Reloading project identities preserves the selected project and active conversation, and current projects ignore obsolete graph events.
+
+  This patch restores Studio's documented read-only project-selection contract during catalog failures.
+
+- a56328d: Add shared Assistant turn interpretation that distinguishes native activity, explicit completion reports, errors, and unconfirmed stops. Bind completion declarations to the current request and hide their bookkeeping across streamed parts and restored history. The host and chat integration follow in dependent changes.
+- d26b29b: Reconcile Assistant permissions and questions on attachment and reconnect, keeping acknowledged requests settled and showing when the session needs input.
+- 5602d4e: Fence in-memory Assistant drafts by the server-issued authority revision so drafts cannot cross account, tenant, denial, or readmission boundaries.
+- 4da9937: Add an opt-in durable process guard that prevents a replacement Assistant runtime from starting until prior native writer cleanup is positively proven.
+- e28f255: Fence Assistant runtime startup with durable native cleanup ownership and retain the lock whenever cleanup cannot be proven.
+- 768d9e4: Hide internal Assistant completion markers with an incorrect turn ID in streamed responses, confirmed answers, and saved history. Preserve literal prose and invalid marker syntax, and restore incomplete marker candidates when streaming ends. Completion still requires the expected turn ID; an unconfirmed answer remains Stopped.
+
+  Keep the Assistant conversation and unsent draft visible while automatic answer recovery reconnects the event stream and reconciles saved history and execution status.
+
+- d72433a: Preserve actionable Assistant service status codes and validated retry delays while replacing upstream error content with sanitized structured responses. Return oversized local requests as JSON 413 errors through the assembled Studio server.
+- ec252d3: Revoke Assistant bridge credentials when the verified user or tenant changes, even if an identity revision is incorrectly reused.
+- 6b0b11f: Name the two Sapiom MCP servers by role in both offline fallbacks — "the local
+  authoring server" and "the hosted capability server" — instead of by registration
+  alias (SAP-3179).
+
+  The two texts disagreed: the Studio prompt called the servers `sapiom` (hosted) and
+  `sapiom-dev` (local), which is what Studio registers; the authoring primer called them
+  `sapiom` (local) and `sapiom-direct` (hosted), which is what a plain Claude Code user is
+  told to register. A Studio session reads both, so "use the `sapiom` alias to author
+  agents" pointed it at the remote server the prompt had just said not to call while
+  authoring. Aliases now appear only inside the two `claude mcp add` commands, which are
+  unchanged. The Studio prompt also disambiguates the two same-named `sapiom_authenticate`
+  / `sapiom_status` pairs, so a session signs in against the local server.
+
+  Both digest pins move with the bodies. The paired backend content release
+  (sapiom/Sapiom#4884) must adopt the same two bodies for the cross-repo pins to agree.
+
+- ed89616: Preserve native updates and removals across Assistant history reads without overwriting newer activity or completed content.
+- e6e510e: Add a read-only native conversation observer that reconciles activity and pending-request counts across stream gaps for host integration.
+- 4b1ebc5: Keep overlapping Studio sign-in and sign-out transitions ordered while allowing a new sign-in to begin promptly after signing out.
+- 93fa8df: Keep native Assistant observation owned by the authorized Studio runtime, independently of browser attachment, and retire its summaries synchronously with access or runtime changes.
+- 66542da: Retry fully received incomplete Assistant model responses up to twice before exposing output or tool calls. Pass through tool fragments, refusals, errors, uncertain endings, and oversized prefixes without retrying. A completion declaration is the model's report and does not independently verify task success.
+- 4936ce9: Keep the initial creation form open when attachment preparation fails, preserving the request and files so you can retry.
+- df39da5: Deliver bounded Assistant summaries through Studio's existing state and event transports, with socket and account ordering that preserves uncertainty through disconnects.
+- b04ad4d: Preserve MCP replay cursors and optional-stream protocol responses so queued tool results arrive without repeating the original tool call. Use the pinned OpenCode runtime's native Code Mode to retain full MCP discovery without sending every remote tool schema with each model request.
+- 49e82a9: Preserve Assistant output through native stream gaps without joining incomplete text or replaying buffered deltas. Show catch-up until authoritative history or current stream parts repair the conversation. Cancel outstanding catch-up requests when their connection ends.
+- f618e7e: Retain unchanged verified Assistant access through bounded transient outages while revoking principal crossovers and exposing an opaque browser authority barrier for draft isolation.
+- 5602d4e: Retain unsent Assistant drafts across pane routes, session review, reconnects, and live-to-exited remounts while clearing them at authentication, deletion, and reload boundaries.
+- e40920e: Route strictly scoped Assistant runtime, authentication, and missing-history failures as actionable sanitized errors while preserving saved session associations and preventing replay.
+- 0f28c4e: Prevent repeated exit-status broadcasts from deleting configuration regenerated during session resume, including sessions restored after restart or imported from history. Failed resume preparation also cleans up regenerated configuration.
+- d07acd9: Preserve native event scoping, browser backpressure and connection cleanup in a shared Assistant event reader.
+- d2be8aa: Show trusted static recovery actions for typed Assistant transport and final-response failures while keeping incomplete turns blocked and preventing prompt or tool replay.
+- f13cad3: Show independent Assistant activity and pending-input indicators in existing session tabs and retained-session rows, with explicit uncertainty through reconnects.
+- c343fd1: Prepare the first part of the Assistant UI dependency graph for Studio's gated chat integration.
+- b177f49: Prepare the remaining Radix dependency graph required by the pinned Assistant UI integration.
+- 48ab09f: Adopt the pinned Assistant UI OpenCode packages and remove all temporary direct Radix dependency declarations.
+- 9ddb57c: Preserve Assistant drafts across view changes and brief capability-check failures. Reveal Terminal after foreground work is accepted, and show rejected inspector sends without changing the view.
+- 175fe2b: Package a pinned headless OpenCode runtime and configure Sapiom access through Studio's private bridge.
+- 42fcacc: Remove unreachable legacy project graph browser code from Studio's bundled client and server. This internal cleanup preserves durable Agent Map navigation, project-wide conversation tabs, and ordinary sessions' independent Canvas and Steps views.
+
+  Restore each project's map pan and zoom when returning from another project or an agent Canvas. If the saved view would leave every node offscreen, fit the map into view.
+
+- 7776065: Preserve the selected coding agent when launching a template from the new-session composer or template gallery, including bundled starters. Codex selections no longer start Claude Code sessions.
+- 9b957ca: Remove the 720px cap on the Agent Map pane: the resize handle now lets it grow until the terminal hits its own minimum width.
+- c2128f6: Validate native session and message identifiers before creating Assistant continuation records or lock files. Reject malformed identifiers at the storage boundary while preserving the existing record names and protection against dispatching recovery twice.
+- e59da42: Show overall Assistant status separately from completed tools, preserve the answer when completion is unconfirmed, and expose the saved conversation after its Terminal exits. Display bounded continuation progress, reconcile its history, and hide internal completion bookkeeping. Finished reflects the model's explicit report; an unmarked answer remains Stopped and automatic continuation may still produce an unnecessary recap.
+- Updated dependencies [0710301]
+- Updated dependencies [c39980b]
+- Updated dependencies [2acd9bb]
+- Updated dependencies [9633e15]
+- Updated dependencies [98f88fd]
+- Updated dependencies [6b0b11f]
+- Updated dependencies [421439b]
+- Updated dependencies [4c9bafb]
+- Updated dependencies [b04ad4d]
+- Updated dependencies [fefb4f8]
+- Updated dependencies [d516895]
+- Updated dependencies [1bb065e]
+- Updated dependencies [175fe2b]
+- Updated dependencies [7df16bd]
+- Updated dependencies [d7f5c04]
+- Updated dependencies [a2ce646]
+- Updated dependencies [5d18ba3]
+- Updated dependencies [99bd7d3]
+  - @sapiom/mcp@0.16.0
+  - @sapiom/opencode@0.1.0
+  - @sapiom/agent@0.14.0
+  - @sapiom/agent-core@0.14.0
+
+## 0.16.0
+
+### Minor Changes
+
+- b4d6067: Replace Proposed with Draft and Deployed on Agent Map agent/subagent nodes and their inspector, using the same deployment evidence and tooltips as the rail cloud icon. Failed checks retain confirmed indicators without an explanation; Retry status remains available. Status recovery preserves the map and conversation. Non-agent nodes no longer display proposal status. Accessible node names follow these label changes, and the `data-proposal-state` DOM attribute is removed.
+- fd9ec19: A project row in the rail now shows a green dot when the project has live coding-agent sessions, so which projects are active reads at a glance without opening them. The dot names its own count, "1 live session" or "3 live sessions", in its tooltip and to a screen reader, and it disappears when the last of those sessions ends. Group headers carry the same dot for the agents filed under them. Project and group counts use the same durable project identity as the session tabs, keeping nested projects separate and including a project's sessions across roots. Older servers without Studio project identities retain folder-based membership. Agent rows are unchanged, and the rail still lists no sessions.
+- 674ba1d: Open an Agent Map node’s linked agent on Canvas while preserving the active session, with separate Info controls for inspecting the plan.
+
+  Hide conversations belonging to another project when an agent is selected.
+
+- 55630a9: Expose protected `GET /api/projects/:projectId/agent-map/implementations` and `GET /api/projects/:projectId/agent-map/nodes/:nodeId/implementation` endpoints for binding summaries and exact local navigation targets. Resolve existing generated maps through their original agent associations without changing map history or starting another model pass.
+- ff414ff: Replace the previous Agent Map layout with Vertical ELK in Studio and the desktop app. All existing maps use the new layout without regenerating their nodes, connections, or history. Remove the layout selector and earlier layout preferences. A failed layout can be retried without changing saved maps.
+
+  Opening a map loads the bundled ELK worker (about 1.6 MB raw / 467 kB gzip).
+
+- 6707366: Add a vertical Agent Map layout using a bundled ELK worker. The renderer bundles a 1.6 MB worker and pins ELK for repeatable output.
+
+### Patch Changes
+
+- 3d96d32: Attach generated Sapiom MCP configuration to Codex sessions on launch and resume, using session-specific server names and environment-based credentials while preserving existing Codex settings. Invalid or unreadable generated configuration now reports a launch error instead of silently starting without MCP servers.
+- 908b72c: The canvas Render-failed state shows one message instead of two drawn on top of each other. The app's card and the rendered document both painted the failure reason, and the card is a transparent layer over the document, so the short reason and the long one overlapped and neither was readable. The document now stands its prose down while it is embedded, the same way it already hides its title, badge and legend as chrome the app draws instead. Opened on its own, or embedded somewhere that never takes the message over, the document keeps its prose and is still the only message, so a failure never ends as an empty board.
+- f6dd638: Pack disconnected vertical Agent Maps to the viewport while retaining manual pan, zoom, and selection across map updates. Focusing an off-screen node reveals it; relationship labels render consistently at fit scale.
+- 6468ead: Keep deployment indicators consistent during lookup failures without showing a refresh-failure explanation, and discard stale deployment evidence when accounts change. Retained display status never enables cloud runs.
+- e690f7c: Re-sync the offline teaching fallbacks with the 2026-09 served-text release (SAP-3180), so a
+  session whose startup fetch fails learns the same four things an online session does:
+
+  - **Vault semantics** — secrets are set in the dashboard per deployed agent; agent code reads
+    `ctx.sapiom.vault.get` and cannot write; a Sapiom-managed resource is used through its
+    handle, never by copying its credentials into Vault.
+  - **`ctx.sapiom.agents.launch`** — fire-and-forget dispatch of a deployed agent for any caller
+    that must return fast (a webhook receiver); `agents.run` waits for the terminal state.
+  - **Receipts and manual replay** of inbound events, pointed at the REST surface until a tool
+    exists.
+  - **App Link webhooks** — `/hook/*` forwarding, off by default behind `webhooksEnabled`, 60 s
+    hold, byte-exact body so third-party signature schemes verify inside the app.
+
+  `@sapiom/mcp`'s `AUTHORING_INSTRUCTIONS` (primer 2.9) and `@sapiom/harness`'s
+  `DEFAULT_SYSTEM_PROMPT` (1.1) move with their digest pins; the 2.9 primer also drops the
+  `deadlineMinutes` clause that offered a knob `llm.run` does not have. The
+  `sapiom-agent-authoring` skill gains a pointer to where these are taught, not a restatement.
+
+  Naming note: the 2.9 primer spells the receipts and replay routes with their real
+  `/v1/workflows/` REST prefix, because no tool or docs page covers them yet and the routes
+  are the only surface that exists. The primer's guard is therefore scoped to the per-step
+  executions path it was written about. The Studio system prompt, which is Agent Studio
+  visible text and subject to the terminology gate, names the same routes without the prefix
+  and defers to the primer for the full paths.
+
+- Updated dependencies [8ae573b]
+- Updated dependencies [e690f7c]
+  - @sapiom/mcp@0.15.0
+  - @sapiom/agent-core@0.13.5
+  - @sapiom/agent@0.13.2
+
+## 0.15.0
+
+### Minor Changes
+
+- 7d947b1: Store project maps atomically with immutable version histories and role-neutral proposal attribution, alongside shared build plans. Map and brief quotas, malformed aggregates and unsupported storage schemas now report terminal manual-intervention recovery through MCP; operation history is explicitly bounded before writes. This storage contract does not preserve format-1 maps: startup resets those maps under the legacy-reset policy.
+
+  **Breaking:** `ProposalActor` and proposal-history payloads now contain only trusted `userId` and `sessionId` attribution. Consumers must stop reading or constructing the removed `role` and `assignment` fields and use `sessionId` for attribution. Those fields never represented write or implementation authority.
+
+- aad9500: Agent Studio now defaults to light mode when no explicit light or dark preference is stored. Previously it followed the OS `prefers-color-scheme`; that fallback is removed. A stored light or dark choice still wins — in a browser, toggling once pins it.
+- 58fb5cf: Publish delegation request/result contracts, lifecycle record types, bounded limits and canonical codec/digest helpers. Add durable reservations, exact child bindings, request receipts and release history for delegated sessions. Retain unfinished private cleanup proof until cleanup completes, clear completed spawn claims on lifecycle transitions, and use locale-independent release-key ordering for durable replay.
+- 74884b1: Add deterministic role-neutral focused brief compilation, categorized impact,
+  immutable scope-keyed lifecycle refresh, and bounded prompt-safe context
+  projection for canonical and ad-hoc project work. Build-plan apply and rebase
+  now perform a best-effort brief-history refresh after committing the plan and
+  return separate `briefRefresh` recovery guidance; the universal
+  `build_plan_brief_refresh` tool retries the exact source independently. Brief
+  refresh receipts use bounded retention, while durable history exhaustion is
+  reported as terminal manual intervention rather than an endlessly retryable
+  storage failure.
+
+  Publish the compiler functions and `DeterministicAgentBriefCompiler`, `AgentBriefService`, impact evaluator, and `serializeFocusedSessionContext` with its discriminated result and branded projection type. These helpers support exact-version offline compilation and safe context composition; Studio attaches projections through its internal session manager. Automatic refresh uses a trusted receipt namespace that caller map, plan and brief request IDs cannot occupy.
+
+- d5c26ae: Publish immutable Agent Map, build-plan and brief contracts with strict codecs and canonical digest helpers. The public types, exact-reference helpers, codecs and digest functions support offline contract validation independently of running Studio; documented compatibility aliases remain supported.
+- 4622f40: Delete only legacy format-1 Agent Map workspace records during shared desktop and
+  CLI startup. Automatically generate missing maps for existing agents in the
+  background with one isolated, structured Claude Code or Codex inference pass.
+  Protect authored format-2 history from automatic edits, expose named initialization
+  status types and authenticated status/retry endpoints, and pack disconnected
+  components into compact layouts.
+
+  Back up and convert exact, unused historical format-2 containers before map
+  discovery, allowing their existing agents to receive an initial map. Do not
+  reset current format-2 storage. Protect authored maps and history from automatic
+  edits; eligible projects without authored maps can receive an initial map.
+  Preserve historical records containing authored state or history.
+  Exclude linked dependency/build/metadata directories from static source inspection
+  just like ordinary ignored directories, without following links into external sources.
+
+- 9fadbae: Add optional interpreter arguments and environment to coding-provider adapters
+  and export `createCodexAdapter`. Preserve managed launch configuration across
+  new sessions, resume, and private structured inference for both providers.
+- 143787a: Add shared build-plan read, validate, apply and rebase tools for trusted project sessions, with deterministic assignment IDs, conflict handling and idempotent write receipts. Keep validation errors visible within bounded diagnostics and timestamp semantic no-op receipts at the time they are accepted.
+- 69f2a6e: Give every Studio project session the same writable coding-agent prompt and
+  map capabilities, with durable project ownership revalidated before launch
+  and resume.
+
+  **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
+  `HarnessSession.agentMapIdentity` now exposes only
+  `ProjectAgentSession { projectId, userId, sessionId }`. Replace branches on
+  `role` and `assignment` with neutral project identity. Optional
+  `projectBootstrap` carries startup status without granting authority. Valid
+  persisted legacy metadata is normalized while session/provider IDs, cwd,
+  title, transcript, and Canvas are preserved. Malformed or conflicting
+  authority fails closed; unavailable project scope prevents resume until the
+  current owner and root binding are valid again.
+
+  `AgentMapToolEvent.role` is also removed. Telemetry consumers should use the
+  neutral project/session identifiers and the tool name and outcome instead of
+  branching on a session role.
+
+  Persisted bootstrap failures with `scope_unavailable` are recognized on
+  restart, so valid conversation metadata is retained and can resume after
+  scope is restored.
+
+- 3d105bc: Track ordinary session input delivery and runtime ownership so partial input, preemption, stale ingest events, and shutdown are handled consistently.
+
+  Background input now yields to terminal keystrokes received while its durable pre-write hook is pending. A submission displaced before writing compensates its durable claim so it can be recovered safely.
+
+  **Breaking for embedders** (minor while the package is pre-1.0): `SessionManager.write()` can throw an isolation error with code `SESSION_INPUT_ISOLATION_REQUIRED` when prior partial input cannot be cleared. Callers forwarding terminal bytes should handle this failure and keep the terminal available for a later retry instead of assuming every call returns a boolean.
+
+- 4aa4784: Add trusted child-session creation, recovery and closure with exact binding checks, plus exclusive Codex rollout attribution for simultaneous runtimes. Failed launches retain retryable ownership, and finished discovery releases pending runtime registrations.
+
+  The SessionManager returned by startServer exposes the owned-session lifecycle methods. Callers can handle the public SubsessionBindingMismatchError when an operation does not match its coordinator binding and SubsessionFreshRestartForbiddenError when a fresh restart would overwrite a recorded or explicitly closed conversation. The close() operation must be awaited because durable closure bookkeeping can reject.
+
+- 2168491: Activate one recoverable first-session map bootstrap for newly opened Studio projects. Durable project intent, input receipts, readiness, preemption, and restart recovery share the ordinary session lifecycle.
+
+  Breaking changes for embedders and HTTP clients:
+
+  - Remove `HarnessSession.planning`, `SessionManager.setPlanningMetadata()`, and the trusted create/resume `planning` options. Read the neutral `agentMapIdentity` for project identity and optional `projectBootstrap` for lifecycle state. The server migrates valid persisted legacy metadata and input queues automatically.
+  - Remove the planner contracts `PlannerGreetingErrorCode`, `PlannerGreetingState`, `PlannerSessionMetadata`, `PlannerQueuedInput`, `PlannerSessionRequest`, `PlannerSessionResponse`, `PlannerMessageRequest`, `PlannerSessionMetadataResponse`, and `PlannerLifecycleEvent`. Use ordinary session request/response types and `ProjectBootstrapMetadata`, `ProjectBootstrapState`, and `ProjectBootstrapInputReceipt` for bootstrap state and input acknowledgements.
+  - Remove `POST /api/projects/:projectId/planner-sessions`, `POST /api/projects/:projectId/planner-sessions/:sessionId/messages`, and `POST /api/projects/:projectId/planner-sessions/:sessionId/greeting/retry`. Create, resume, and send input through `POST /api/sessions`, `POST /api/sessions/:id/resume`, and `POST /api/sessions/:id/input`. Bootstrap recovery is server-owned. Clients supplying the first prompt should set `initialUserInputPending: true` when creating a session.
+  - Replace the `planner_session.*` and `planner_greeting.*` analytics event names with `project_agent.identity_*` and `project_bootstrap.*`. Their remote projections remain content-free.
+
+  Project creation and root binding can return `202` with a committed project identity when automatic initialization must retry; treat that identity as successfully created. Settings updates return their committed values while new-root initialization continues in the background. Server shutdown keeps admission fenced and bounds its wait for bootstrap, persistence, archive, and telemetry drains before releasing the listener.
+
+- 1cc232a: The project-row `+` now starts an ordinary coding-agent session at that project root. Sessions can create agents and work on the shared Agent Map; Plan Agents is an ordinary session without exclusive creation authority.
+- e0c1f47: Deliver a new-agent request directly to Claude Code or Codex at startup after
+  scaffolding and attachment preparation, without requiring a second Enter or
+  placing internal authoring instructions in the user's prompt. Preserve project
+  scope during launch and retain the composer draft when preparation fails.
+  Session creation and attachment uploads each retain an independent limit of
+  30 requests per minute, so uploading files does not block a new conversation.
+
+  Add optional `CreateSessionRequest.initialPrompt`, `initialAttachments`, and
+  `scaffold` fields, `LaunchOpts.initialPrompt` for fresh interactive launches,
+  and `CREATE_SESSION_JSON_LIMIT_BYTES` for embedders configuring HTTP parsers.
+  Export `PROJECT_AGENT_PROMPT_APPENDIX` and `projectAgentPromptAppendix` so
+  embedders can compose Studio's shared project guidance and optional focused
+  context offline without starting a server.
+
+  Strengthen shared Agent Map, build-plan, and writable subsession guidance while
+  keeping authoring and runtime capabilities primary. Document project-tool
+  contracts and replace the known stale Studio orientation at prompt delivery.
+
+- cf2369c: Unify Agent Studio project sessions around one ordinary coding-agent identity, make the project name open the shared Agent Map, and seed new projects through a durable, retry-safe bootstrap in the first ordinary session, titled `Plan Agents`.
+
+  **Breaking for embedders** (minor while `@sapiom/harness` is pre-1.0):
+  `HarnessSession.agentMapIdentity` is now the role-neutral
+  `ProjectAgentSession { projectId, userId, sessionId }`; `role` and `assignment`
+  are no longer present. `AgentMapToolEvent.role` is also removed; telemetry
+  consumers use neutral project/session/tool/outcome fields. Valid persisted pre-upgrade session metadata is migrated
+  into the optional `projectBootstrap` lifecycle field and then removed. Retired
+  project-session HTTP aliases and public API names are removed; live clients use
+  the generic session routes.
+
+  **Migration:** stop branching on `agentMapIdentity.role` or `.assignment`, read
+  optional `projectBootstrap` only for bootstrap status, and use the generic
+  session routes. An
+  embedder that already owns a new session's first prompt should send
+  `initialUserInputPending: true` in the same `CreateSessionRequest`, so automatic
+  bootstrap yields before launch. New telemetry consumers should recognize the
+  neutral `project_agent.*` and `project_bootstrap.*` events. Valid legacy state
+  keeps its session/provider IDs, cwd, title, transcript, and Canvas; malformed or
+  conflicting authority is retained and fails closed. Released infrastructure
+  bootstrap event markers remain read-compatible so their private control prompt
+  never becomes a human transcript turn after upgrade. Downgrading does not
+  restore the superseded session authority model.
+
+- 4af416a: Add `project_subsession_delegate` on Studio's project MCP endpoint, with delegate, focused-context refresh, release and dormant-release operations. Delegation supports 16 children per batch, four nesting levels and 64 active or explicitly re-referenced coordinator-owned sessions per project.
+
+  Readiness waits share a 30-second batch budget and return partial retry results with durable session identities. Treat uncertain kickoff delivery as terminal until acknowledged, and use a new request key when canonical content changes. Dormant cleanup remains recoverable after an earlier request expires.
+
+  **Breaking:** `AnalyticsEventType` includes new `subsession.*` events. Update exhaustive event consumers to handle the added values.
+
+### Patch Changes
+
+- d10f605: Support automatic Agent Map bootstrap with recovery, FIFO delivery, and shutdown handling. Recovery events describe committed state.
+- 2b5ee34: Add durable project intents for automatic Agent Map bootstrap. Clean up temporary state after failed writes and ignore unrelated files when reading project intents.
+- e0c1f47: Keep canvas overview resizing responsive when the pointer is released over the embedded canvas. The drag now finishes and its height persists instead of leaving the panel stuck in resize mode.
+- fe9d7d5: Resolve and retain durable project roots consistently for Studio and System Graph, including descendant sessions after a recent directory is evicted. Compare Windows drive and UNC roots without case sensitivity and migrate legacy case aliases while preserving durable project identities.
+- 73e7f46: Keep new-agent composer submissions in their standalone coding session instead of automatically switching to Plan Agents.
+- e0c1f47: Fix fresh Codex delegation waiting for a transcript that Codex creates only after the first turn. Exact owned children now receive one marked kickoff before transcript discovery, and concurrent rollouts are correlated to that runtime without crossing session identities. Retried requests preserve the same child and do not repeat its kickoff.
+- 30dce20: Studio's dialogs now behave the same as each other. Add existing agents, Add a project, Create an agent, Use a template, Remove project, End session and Clone agent share one shell, so Tab stays inside the open dialog instead of walking into the rail behind it, the page behind the dialog stops taking clicks and screen-reader attention while it is up, and focus opens on the dialog's subject rather than its close button. Closing a dialog hands focus back to the control that opened it — through the close button, the backdrop and Cancel, not only Escape — wherever that control is still on screen to receive it. Enter submits from a single-line field and Cmd/Ctrl+Enter from a text area, one rule everywhere, and the three confirmation dialogs take neither, so a removal is never one stray Return away. Dialog titles are one size instead of the two they had drifted into.
+- 0cbdd86: Remove the inline first-agent creation button from empty projects, including
+  projects reopened without a live session and clients connected to older servers.
+  Keep ordinary project session shortcuts, menu actions, and scan boundary notes.
+- e0c1f47: Register successfully scaffolded agents immediately under their creating Studio
+  project, including folders beside its root. Preserve the project's existing
+  conversation when selecting those agents, and restore membership from recorded
+  scaffold completions on restart without moving files or creating extra sessions.
+
+  Accept native Codex timed MCP results and relative scaffold targets while preserving exact creator-path and project ownership checks. Previously recorded successful Codex completions recover membership on restart.
+
+  Keep an explicitly selected archived conversation when selecting its project's created agents after restart. Remember that conversation across browser reloads only while its exact session ID remains in the server's state, without resuming a runtime, creating a session, or replaying input. Existing browser preferences remain compatible; absent or stale conversation selections use the existing live-session fallback.
+
+- 40fe3e8: Prevent terminal mount cleanup from disposing the renderer before xterm's
+  queued viewport initialization runs. Ignore callbacks from closed terminal
+  connections and preserve workspace preferences across reloads in the Studio demo.
+
 ## 0.14.0
 
 ### Minor Changes

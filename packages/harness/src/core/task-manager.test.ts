@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { BackgroundTask, HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
 import {
   TaskAlreadyRunningError,
+  McpCredentialGenerationChangedError,
   TaskManager,
+  type TaskManagerOptions,
   TaskNotSupportedError,
   type TaskProcess,
   type TaskSpawnFn,
@@ -52,7 +54,8 @@ function makeAdapter(overrides: Partial<HarnessAdapter> = {}): HarnessAdapter {
 function makeManager(options: {
   adapter?: HarnessAdapter;
   onCleanup?: (taskId: string) => void;
-  buildLaunchOpts?: () => Record<string, never>;
+  buildLaunchOpts?: TaskManagerOptions["buildLaunchOpts"];
+  currentCredentialGeneration?: TaskManagerOptions["currentCredentialGeneration"];
 } = {}): { manager: TaskManager; spawned: Spawned[]; statuses: BackgroundTask[] } {
   const spawned: Spawned[] = [];
   const spawnProcess: TaskSpawnFn = (command, args, opts) => {
@@ -67,6 +70,7 @@ function makeManager(options: {
     spawnProcess,
     onCleanup: options.onCleanup,
     buildLaunchOpts: options.buildLaunchOpts,
+    currentCredentialGeneration: options.currentCredentialGeneration,
     now: () => "2026-01-01T00:00:00.000Z",
     generateId: (() => {
       let n = 0;
@@ -349,6 +353,58 @@ describe("TaskManager", () => {
     expect(manager.list()).toHaveLength(0);
   });
 
+  it("rejects an ordinary task whose MCP credential changes before child-process admission", async () => {
+    const onCleanup = vi.fn();
+    let generation = 1;
+    const { manager, spawned } = makeManager({
+      onCleanup,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => {
+        const launch = {
+          mcpCredentialLaunch: { generation, credentialBearing: true },
+        };
+        generation = 2;
+        return launch;
+      },
+    });
+
+    await expect(manager.run(runRequest)).rejects.toBeInstanceOf(
+      McpCredentialGenerationChangedError,
+    );
+    expect(spawned).toHaveLength(0);
+    expect(onCleanup).toHaveBeenCalledWith("task-1");
+    expect(manager.list()).toHaveLength(0);
+  });
+
+  it("terminates only credential-bearing ordinary tasks at or before the removal generation", async () => {
+    let launchCount = 0;
+    let generation = 1;
+    const { manager, spawned } = makeManager({
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: launchCount++ !== 1,
+        },
+      }),
+    });
+    const first = await manager.run(runRequest);
+    const second = await manager.run({ ...runRequest, macroId: "describe" });
+    generation = 2;
+    const newer = await manager.run({ ...runRequest, macroId: "newer" });
+
+    const terminating = manager.terminateCredentialBearingTasks(1);
+    await vi.waitFor(() => expect(spawned[0]!.proc.killed).toBe("SIGTERM"));
+    expect(spawned[1]!.proc.killed).toBeUndefined();
+    expect(spawned[2]!.proc.killed).toBeUndefined();
+
+    spawned[0]!.proc.emit("exit", 0);
+    await terminating;
+    expect(manager.get(first.id)?.status).toBe("completed");
+    expect(manager.get(second.id)?.status).toBe("running");
+    expect(manager.get(newer.id)?.status).toBe("running");
+  });
+
   it("killAll signals every still-running task process with SIGTERM", async () => {
     const { manager, spawned } = makeManager();
     await manager.run(runRequest);
@@ -502,5 +558,43 @@ describe("TaskManager", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("private structured inference", () => {
+  it("stops native authentication retries as a provider failure, without switching providers", async () => {
+    const { manager, spawned, statuses } = makeManager();
+    const result = manager.runStructuredInference({ projectId: "project-test", attemptId: "attempt-test", harness: "claude-code",
+      prompt: "Private contracts", schema: { type: "object" }, signal: new AbortController().signal });
+    const rejected = expect(result).rejects.toThrow("provider_failed");
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    spawned[0]!.proc.stdout.write(JSON.stringify({ type: "system", subtype: "api_retry", error: "authentication_failed", error_status: 401 }) + "\n");
+    await tick(); expect(spawned[0]!.proc.killed).toBe("SIGTERM"); spawned[0]!.proc.emit("exit", null);
+    await rejected; expect(spawned).toHaveLength(1); expect(statuses).toEqual([]);
+  });
+
+  it("keeps project inference out of browser tasks and never builds coding capabilities", async () => {
+    const buildLaunchOpts = vi.fn(() => ({}));
+    const launchTask = vi.fn((opts: LaunchOpts): SpawnSpec => ({ command: "claude", args: [], env: {}, cwd: opts.cwd, stdin: opts.prompt }));
+    const { manager, spawned, statuses } = makeManager({ buildLaunchOpts, adapter: makeAdapter({ launchTask }) });
+    const result = manager.runStructuredInference({ projectId: "project-test", attemptId: "attempt-test", harness: "claude-code",
+      prompt: "Private contracts", schema: { type: "object" }, signal: new AbortController().signal });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    expect(buildLaunchOpts).not.toHaveBeenCalled(); expect(manager.list()).toEqual([]); expect(manager.get("task-1")).toBeUndefined();
+    expect(Object.keys(spawned[0]!.options.env).filter((key) => key.startsWith("SAPIOM_") || key.startsWith("HARNESS_"))).toEqual([]);
+    expect(launchTask.mock.calls[0]![0]).toMatchObject({ structuredInference: { projectId: "project-test" } });
+    spawned[0]!.proc.stdout.write(JSON.stringify({ type: "result", is_error: false, structured_output: { nodes: [] } }) + "\n");
+    await tick(); spawned[0]!.proc.emit("exit", 0);
+    expect(await result).toBe('{"nodes":[]}'); expect(statuses).toEqual([]);
+    const fs = await import("node:fs/promises"); await expect(fs.stat(spawned[0]!.options.cwd)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("cancels the provider and removes private files without publishing output", async () => {
+    const { manager, spawned, statuses } = makeManager(); const controller = new AbortController();
+    const result = manager.runStructuredInference({ projectId: "project-test", attemptId: "attempt-test", harness: "claude-code",
+      prompt: "Private contracts", schema: { type: "object" }, signal: controller.signal });
+    const rejected = expect(result).rejects.toThrow("cancelled");
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+    controller.abort(new Error("cancelled")); expect(spawned[0]!.proc.killed).toBe("SIGTERM"); spawned[0]!.proc.emit("exit", null);
+    await rejected; expect(statuses).toEqual([]); expect(manager.list()).toEqual([]);
   });
 });

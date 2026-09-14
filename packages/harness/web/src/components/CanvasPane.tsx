@@ -20,7 +20,11 @@ import { Icon } from "./Icon";
 import { WorkflowActionsHeader } from "./WorkflowActionsHeader";
 import { RunWorkspace } from "./RunWorkspace";
 import { SnippetPanel } from "./SnippetPanel";
-import { isWorkflowRunnable, workflowDeploymentState } from "../lib/workflow-deployment";
+import {
+  isWorkflowRunnable,
+  snippetsPendingSentence,
+  workflowDeploymentState,
+} from "../lib/workflow-deployment";
 import { track as trackProduct } from "../lib/analytics/events";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -1020,13 +1024,9 @@ export function CanvasPane({
   const snippetsPendingReason =
     snippetSubject == null || snippetsRunnable
       ? null
-      : ((state) =>
-          state === "building"
-            ? `${snippetSubject.name} is linked and building. The snippets appear once the cloud build is ready.`
-            : state === "failed"
-              ? `The last deploy of ${snippetSubject.name} did not produce a ready build. Fix it and deploy again.`
-              : `${snippetSubject.name} is linked to Sapiom, but Studio cannot confirm a ready cloud build. Deploy it before integrating.`)(
+      : snippetsPendingSentence(
           workflowDeploymentState(snippetSubject, null),
+          snippetSubject.name,
         );
   // Keyed by path rather than a boolean, so the disclosure does not stay open
   // over the NEXT agent you select — that agent has different snippets, and a

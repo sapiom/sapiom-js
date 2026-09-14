@@ -199,15 +199,24 @@ test.describe("legacy-server agent creation compatibility", () => {
     await expect(page.getByTestId("workflow-cancelled")).toHaveCount(0);
   });
 
-  test("the empty-project row opens the same dialog", async ({ page }) => {
-    // One create flow, not one per door: the empty project's CTA is the same
-    // subject and must not be a second mechanism that drifts.
+  test("an empty project has no inline create action and retains its menu dialog", async ({
+    page,
+  }) => {
     await page.getByTestId("rail-add-project").click();
     await page
       .getByTestId("folder-field-input")
       .fill("/Users/demo/blank-slate");
     await page.getByTestId("open-project").click();
-    await page.getByTestId("project-empty-blank-slate").click();
+    const group = page.getByTestId("workspace-group-blank-slate");
+    await expect(group).toBeVisible();
+    await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
+    await expect(
+      group.getByRole("button", {
+        name: /^Create (the first |an )agent here$/,
+      }),
+    ).toHaveCount(0);
+    await openProjectMenu(page, "blank-slate");
+    await page.getByTestId("project-create-agent-blank-slate").click();
 
     await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
     await expect(page.getByTestId("create-agent-project")).toHaveText(

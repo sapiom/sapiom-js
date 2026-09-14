@@ -13,15 +13,22 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@shared/assistant-state": fileURLToPath(
+        new URL("src/shared/assistant-state.ts", import.meta.url),
+      ),
+      "@shared/initial-prompt": fileURLToPath(
+        new URL("src/shared/initial-prompt.ts", import.meta.url),
+      ),
       // Resolve "@shared/types" to the package's canonical contract so web
       // unit tests and server tests always build against the same source of
       // truth. Mirrors the alias in web/vite.config.ts.
       "@shared/types": fileURLToPath(
         new URL("src/shared/types.ts", import.meta.url),
       ),
-      "@shared/system-graph": fileURLToPath(
-        new URL("src/shared/system-graph.ts", import.meta.url),
+      "@shared/workspace-scope": fileURLToPath(
+        new URL("src/shared/workspace-scope.ts", import.meta.url),
       ),
+      "@shared/agent-map-initialization": fileURLToPath(new URL("src/shared/agent-map-initialization.ts", import.meta.url)),
       "@shared/agent-map": fileURLToPath(
         new URL("src/shared/agent-map.ts", import.meta.url),
       ),

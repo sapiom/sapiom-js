@@ -44,11 +44,15 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import type { JSX } from "react";
 import type {
+  AppState,
+  CreateSessionRequest,
+  HarnessEntry,
   HarnessKind,
   HarnessSession,
   MacroDef,
@@ -56,20 +60,21 @@ import type {
   WorkflowInfo,
   WorkflowInputContractResponse,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
-  PlannerSessionRequest,
   StudioProjectId,
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";
+import { createGraphViewportStore } from "./lib/graph-viewport";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ConnectivityBanner,
   ConnectivityScreen,
 } from "./components/ConnectivityState";
+import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
@@ -79,6 +84,8 @@ import { RunSheet } from "./components/RunSheet";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
+import { AssistantPane } from "./components/AssistantPane";
+import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
@@ -86,7 +93,6 @@ import { HelpOverlay } from "./components/HelpOverlay";
 import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { WorkspaceGraphView } from "./components/WorkspaceGraphView";
 import { boundWorkflowPathOf, createApi, errorMessage } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
@@ -104,6 +110,7 @@ import {
   conversationSubject,
   liveSessionsForFocus,
   liveSessionsForProject,
+  liveSessionsForStudioProject,
   mergeSubjectRuns,
   projectRootForAgent,
   rootContains,
@@ -111,17 +118,17 @@ import {
   selectedRunForSubject,
   sessionForFocus,
   sessionReachesFocus,
+  sessionSharesFocusProject,
   shownRunForSubject,
 } from "./lib/session-scope";
 import {
   canvasView,
-  projectAbove,
   studioCanvasView,
   stepsDisabledReason,
   secretsDisabledReason,
   type ProjectRef,
 } from "./lib/canvas-altitude";
-import { mostSpecificStudioScope } from "./lib/agent-map";
+import { mostSpecificStudioScope, studioScopeForAgent } from "./lib/agent-map";
 import { inputContractFromCanvasGraph } from "./lib/run-input";
 import { agentUrl } from "./lib/urls";
 import {
@@ -152,15 +159,19 @@ import { directActionKind } from "./lib/macro-actions";
 import { describeWorkflowPrompt } from "./lib/describe-prompt";
 import { sessionDisplayName } from "./lib/session-name";
 import type { PaletteAction } from "./lib/palette";
-import { getTheme, toggleTheme } from "./lib/theme";
+import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
+import {
+  DEFAULT_HARNESS,
+  FALLBACK_HARNESSES,
+  isHarnessSelectable,
+  orderHarnesses,
+} from "./lib/harness-registry";
 import {
   useNavigationHistory,
   type NavigationVisit,
 } from "./lib/navigation-history";
 import {
-  buildIdeaWithAttachments,
-  materializeAttachments,
   type NewSessionAttachment,
 } from "./lib/new-session-attachments";
 import {
@@ -177,7 +188,10 @@ import {
 } from "./lib/use-harness-state";
 import { useAgentMapEntry } from "./lib/use-agent-map-entry";
 import {
+  deploymentStateLabel,
+  deploymentStateTitle,
   isWorkflowRunnable,
+  prodRunBlockedToast,
   workflowDeploymentState,
 } from "./lib/workflow-deployment";
 import { SecretsPanel } from "./components/SecretsPanel";
@@ -207,6 +221,34 @@ const knownRootsOf = (
   launchDir: string | null | undefined,
 ): string[] => [...(recentDirs ?? []), ...(launchDir ? [launchDir] : [])];
 
+/** Resolve the one Studio workspace selection every map consumer observes. */
+const effectiveStudioWorkspaceSelection = (
+  selection: StudioWorkspaceSelection | null,
+  state: Pick<AppState, "studioProjects" | "workflows"> | null | undefined,
+): StudioWorkspaceSelection | null => {
+  if (!selection || !state || state.studioProjects === undefined) return null;
+  if (
+    !state.studioProjects.some(
+      (project) => project.projectId === selection.projectId,
+    )
+  ) {
+    // A selected durable map keeps its exact identity through catalog loss.
+    // Explicit agent/session selection can still use its ordinary Canvas.
+    return selection.kind === "agent-map" ? selection : null;
+  }
+  if (selection.kind === "agent-map") return selection;
+  const agentStillExists = state.workflows.some((workflow) =>
+    workflow.studioBindings?.some(
+      (binding) =>
+        binding.projectId === selection.projectId &&
+        binding.agentId === selection.agentId,
+    ),
+  );
+  return agentStillExists
+    ? selection
+    : { kind: "agent-map", projectId: selection.projectId };
+};
+
 /**
  * How long a held initial prompt waits for the coding agent to become ready
  * (i.e. the user to finish any sign-in, trust, or onboarding step) before we
@@ -225,10 +267,15 @@ const HELD_PROMPT_TIMEOUT_MS = 10 * 60_000;
 const HELD_PROMPT_HINT_DELAY_MS = 4_000;
 
 interface CreateSessionAtOptions {
+  initialPrompt?: CreateSessionRequest["initialPrompt"];
+  initialAttachments?: CreateSessionRequest["initialAttachments"];
+  scaffold?: CreateSessionRequest["scaffold"];
   /** Keep the create-new queue mounted while inline files are materialized. */
   keepComposerOpen?: boolean;
   /** Keep an explicit new-agent builder active when its root joins Studio. */
   standaloneBuilder?: boolean;
+  /** The caller already owns the session's first real user-authored turn. */
+  initialUserInputPending?: boolean;
 }
 
 /**
@@ -244,6 +291,62 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  // A project map remounts when browsing another project or agent. Keep its
+  // viewport for this signed-in UI lifetime, without persisting map data.
+  const agentMapViewportStore = useMemo(
+    createGraphViewportStore,
+    [harness.authRevision],
+  );
+  const [assistantAuthorityRevision, setAssistantAuthorityRevision] = useState<
+    string | null
+  >(null);
+  // Draft text belongs to a principal + Studio session, not to whichever
+  // centre-pane branch happens to be mounted. An auth barrier replaces this
+  // whole store; an app reload intentionally drops it rather than persisting
+  // sensitive, unsent text.
+  const assistantDrafts = useMemo<ChatDraftStore>(
+    () => new Map(),
+    [assistantAuthorityRevision, harness.authRevision, harness.bootToken],
+  );
+  // Successful session deletion removes its keyed draft. Exited sessions stay
+  // in state (and keep their draft) until the user actually closes them.
+  useEffect(() => {
+    if (!harness.state) return;
+    const sessionIds = new Set(harness.state.sessions.map(({ id }) => id));
+    for (const id of assistantDrafts.keys()) {
+      if (!sessionIds.has(id)) assistantDrafts.delete(id);
+    }
+  }, [assistantDrafts, harness.state]);
+  const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
+    () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
+  );
+  const [harnessEntries, setHarnessEntries] = useState<HarnessEntry[] | null>(
+    null,
+  );
+  // Keep the selection above the composer so every template entry point sees
+  // automatic corrections and choices that could not be saved to preferences.
+  useEffect(() => {
+    let cancelled = false;
+    harness
+      .listHarnesses()
+      .then((registry) => {
+        if (cancelled || registry.length === 0) return;
+        setHarnessEntries(orderHarnesses(registry));
+        const selectable = registry.filter(isHarnessSelectable);
+        setSelectedHarness((current) =>
+          selectable.some((entry) => entry.id === current)
+            ? current
+            : ((selectable[0]?.id as HarnessKind | undefined) ?? current),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [harness.listHarnesses]);
+  useEffect(() => {
+    saveUiPrefs({ preferredHarness: selectedHarness });
+  }, [selectedHarness]);
   // Live browser connectivity (navigator.onLine + online/offline events).
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
@@ -270,8 +373,8 @@ export const App = (): JSX.Element => {
     },
     [harness.getWorkflowInputContract],
   );
-  // The composer-first "new session" home. `composing` is explicit rail
-  // Create-new intent; the workbench tab + starts a sibling directly instead.
+  // The composer-first "new session" home. `composing` holds it open for
+  // explicit Create-new intent or a submission from the automatic home.
   // The home also shows whenever nothing else claims the centre pane.
   const [composing, setComposing] = useState(false);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
@@ -279,12 +382,13 @@ export const App = (): JSX.Element => {
   const [siblingSessionPending, setSiblingSessionPending] = useState(false);
   const siblingSessionPendingRef = useRef(false);
   // The focused agent (or bare-scaffold folder) path — the rail's single
-  // selection and the main panel's tab-strip subject. The active tab's
-  // session is harness.activeSessionId.
+  // selection and the Canvas/Steps subject. The active conversation is always
+  // harness.activeSessionId; choosing the project map does not rewrite it.
   const [focusedAgentPath, setFocusedAgentPath] = useState<string | null>(null);
-  // The project the canvas is at MAP altitude for. Not a destination any more
-  // (SAP-2980): the chat stays in the centre and the map draws beside it, so
-  // this selects a SUBJECT rather than replacing the workbench.
+  // A project whose durable identity has not resolved yet.
+  // Studio projects use `studioSelection` below with the same invariant: chat stays in
+  // the centre and the map draws beside it, so this selects a SUBJECT rather
+  // than replacing the workbench.
   //
   // ONE value, not the key and a parallel meta record it used to be: half the
   // doors cleared only the key and left the meta behind, so every reader had to
@@ -305,83 +409,42 @@ export const App = (): JSX.Element => {
   );
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
-  const plannerProjectId =
-    studioSelection?.kind === "agent-map" ? studioSelection.projectId : null;
-  const handlePlannerReady = useCallback(
-    (
-      response: { session: HarnessSession },
-      mode: PlannerSessionRequest["mode"],
-    ): void => {
-      const selected = harness.state?.sessions.find(
-        (session) => session.id === harness.activeSessionId,
-      );
-      // An explicit palette/history selection is more specific than the
-      // project-level resume ordering. Keep that chosen live tab; fresh mode
-      // remains an explicit request to select the newly-created planner.
-      if (
-        mode === "resume-or-create" &&
-        selected?.status !== "exited" &&
-        selected?.planning?.identity.role === "map-planner" &&
-        selected.planning.identity.projectId ===
-          response.session.planning?.identity.projectId
-      ) {
-        return;
-      }
-      harness.setActiveSessionId(response.session.id);
-    },
-    [
-      harness.activeSessionId,
-      harness.setActiveSessionId,
-      harness.state?.sessions,
-    ],
+  const effectiveStudioSelection = effectiveStudioWorkspaceSelection(
+    studioSelection,
+    harness.state,
   );
-  const activePlannerForProject = harness.state?.sessions.find(
-    (session) =>
-      session.id === harness.activeSessionId &&
-      session.status !== "exited" &&
-      session.planning?.identity.role === "map-planner" &&
-      session.planning.identity.projectId === plannerProjectId,
-  );
+  const agentMapProjectId =
+    effectiveStudioSelection?.kind === "agent-map"
+      ? effectiveStudioSelection.projectId
+      : null;
   const agentMapEntry = useAgentMapEntry({
-    projectId: plannerProjectId,
-    selectedPlanner: activePlannerForProject ?? null,
+    projectId: agentMapProjectId,
     api: harness.api,
-    harness: () =>
-      loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code",
-    theme: getTheme,
-    openPlannerSession: harness.openPlannerSession,
-    onPlannerReady: handlePlannerReady,
     subscribeProposalChanges: harness.subscribeAgentMapProposalChanges,
+    subscribeInitializationChanges: harness.subscribeAgentMapInitializationChanges,
     subscribeReconnects: harness.subscribeEventReconnects,
   });
 
   // A project visit restores its server-owned preference before choosing an
-  // altitude. Once map is chosen, `useAgentMapEntry` owns the independent map
-  // and planner requests; preference restoration must not couple their fate.
+  // altitude. Once map is chosen, `useAgentMapEntry` owns only the independent
+  // map read; preference restoration must never turn that view change into a
+  // session create, resume, or selection.
   useEffect(() => {
     const state = harness.state;
     const active = state?.sessions.find(
       (session) => session.id === harness.activeSessionId,
     );
 
-    // Bind the intent as soon as createSession() selects its session — before
-    // that call's slower recent-directory/catalog refresh finishes. Once
-    // bound, the session id makes the intent safe to retain across focus
-    // changes; only that session disappearing or exiting expires it.
+    // Once the create response binds an intent to its exact session, retain it
+    // across focus changes until that session disappears or exits. A pending
+    // null is deliberately NOT inferred from the active same-cwd session: a
+    // new project's automatic Plan Agents session can arrive while an explicit
+    // create is in flight, and cwd cannot correlate those two launches.
     for (const [
       root,
       sessionId,
     ] of pendingStandaloneBuilderSessionsRef.current) {
-      if (sessionId === null) {
-        if (
-          active &&
-          active.status !== "exited" &&
-          samePath(root, active.cwd)
-        ) {
-          pendingStandaloneBuilderSessionsRef.current.set(root, active.id);
-        }
-        continue;
-      }
+      if (sessionId === null) continue;
       const builder = state?.sessions.find(
         (session) => session.id === sessionId,
       );
@@ -390,15 +453,40 @@ export const App = (): JSX.Element => {
       }
     }
 
-    if (!state?.studioProjects || !active) return;
+    // Explicit navigation owns its destination even if boot could not restore
+    // the active session's project until this catalog refresh.
+    if (
+      !state?.studioProjects || !active || selectedProject || studioSelection
+    ) return;
+    const identityProjectId = active.agentMapIdentity?.projectId ?? null;
+    const identityProject = identityProjectId
+      ? state.studioProjects.find(
+          (candidate) => candidate.projectId === identityProjectId,
+        )
+      : null;
+    // A neutral principal is the exact server-derived authority. Never let a
+    // bound Canvas subject reclassify that session under a nested project. The
+    // path-only branch exists solely for rolling compatibility with sessions
+    // persisted before project principals were recorded.
+    if (identityProjectId && !identityProject) return;
+    const eligibleProjects = identityProject
+      ? [identityProject]
+      : state.studioProjects;
+    const eligibleScopes = identityProject
+      ? (state.workspaceScopes ?? []).filter(
+          (candidate) => candidate.projectId === identityProject.projectId,
+        )
+      : (state.workspaceScopes ?? []);
     const scope = mostSpecificStudioScope(
-      active.boundWorkflowPath ?? active.cwd,
-      state.workspaceScopes ?? [],
-      state.studioProjects,
+      active.cwd,
+      eligibleScopes,
+      eligibleProjects,
     );
-    const project = state.studioProjects.find(
-      (candidate) => candidate.projectId === scope?.projectId,
-    );
+    const project =
+      identityProject ??
+      state.studioProjects.find(
+        (candidate) => candidate.projectId === scope?.projectId,
+      );
     if (!scope?.projectId || !project) return;
     const standaloneBuilderRoot = [
       ...pendingStandaloneBuilderSessionsRef.current,
@@ -458,7 +546,40 @@ export const App = (): JSX.Element => {
         setFocusedAgentPath(scope.cwd);
         if (isMobile) setRightCollapsed(true);
       });
-  }, [harness.activeSessionId, harness.api, harness.state, isMobile]);
+  }, [
+    harness.activeSessionId,
+    harness.api,
+    harness.state,
+    isMobile,
+    selectedProject,
+    studioSelection,
+  ]);
+
+  // A catalog retry may resolve the exact scope selected earlier. Promote it
+  // without the boot reload's session hydration or a path/name-based guess.
+  // This refreshes identities only; an already selected map keeps its loaded
+  // workspace until the normal map refresh or invalidation path runs.
+  useEffect(() => {
+    if (!selectedProject) return;
+    const state = harness.state;
+    const projectId = state?.workspaceScopes?.find(
+      (scope) => scope.workspaceKey === selectedProject.workspaceKey,
+    )?.projectId;
+    if (
+      !projectId ||
+      !state?.studioProjects?.some((project) => project.projectId === projectId)
+    )
+      return;
+    studioRestoreGenerationRef.current += 1;
+    restoredStudioProjectsRef.current.add(projectId);
+    const selection: StudioWorkspaceSelection = {
+      kind: "agent-map",
+      projectId,
+    };
+    setStudioSelection(selection);
+    setSelectedProject(null);
+    void harness.api.putStudioCurrentWorkspace(projectId, selection).catch(() => {});
+  }, [harness.api, harness.state, selectedProject]);
 
   // A selected agent that disappears falls back to its map in memory. Only
   // the server knows whether the project scan is complete enough to persist a
@@ -532,20 +653,23 @@ export const App = (): JSX.Element => {
    * this epic removes, one click later. A functional updater so the rule can
    * be applied from handlers that do not close over the current selection.
    */
-  const leaveProjectUnlessInside = useCallback((cwd: string | null): void => {
-    setSelectedProject((current) =>
-      current && cwd && rootContains(current.root, cwd) ? current : null,
-    );
-    setStudioSelection((current) => {
-      if (!current || !cwd) return null;
-      const ownsTarget = (harness.state?.workspaceScopes ?? []).some(
-        (scope) =>
-          scope.projectId === current.projectId &&
-          rootContains(scope.cwd, cwd),
+  const leaveProjectUnlessInside = useCallback(
+    (cwd: string | null): void => {
+      setSelectedProject((current) =>
+        current && cwd && rootContains(current.root, cwd) ? current : null,
       );
-      return ownsTarget ? current : null;
-    });
-  }, [harness.state]);
+      setStudioSelection((current) => {
+        if (!current || !cwd) return null;
+        const ownsTarget = (harness.state?.workspaceScopes ?? []).some(
+          (scope) =>
+            scope.projectId === current.projectId &&
+            rootContains(scope.cwd, cwd),
+        );
+        return ownsTarget ? current : null;
+      });
+    },
+    [harness.state],
+  );
   // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
   // because it needs `state`/`handleFocusAgent`, which exist only past the loading
   // guard; the effects below reach it through the ref. The cold-start target rides
@@ -562,6 +686,7 @@ export const App = (): JSX.Element => {
   const selectProjectRef = useRef<
     ((workspaceKey: WorkspaceKey, root: string, label: string) => void) | null
   >(null);
+  const openSessionRef = useRef<((sessionId: string) => void) | null>(null);
   const coldDeepLinkRef = useRef<DeepLinkTarget | null>(deepLinkFromSearch());
   const coldDeepLinkHandledRef = useRef(false);
   // A clone kicked off from a remote-only deep link: focus the agent once the
@@ -580,6 +705,11 @@ export const App = (): JSX.Element => {
   // Lifted so the telemetry chip in the session bar can open the settings
   // popover from outside SessionBar's own gear button.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const signInForAssistant = useCallback(() => {
+    void harness.startAuth().catch((error) => {
+      harness.showToast(errorMessage(error, "Could not start sign-in."));
+    });
+  }, [harness.showToast, harness.startAuth]);
   // Right tab is part of the held arrangement: restored on reload.
   // Guard against a stored value for a tab that no longer exists ("skills",
   // and now "code" — its snippets moved to the deploy surface) — fall back to
@@ -861,8 +991,10 @@ export const App = (): JSX.Element => {
         // second copy of the rule it would address a different list than the one
         // the user is counting along.
         const sessions = harness.state?.sessions ?? [];
+        const shortcutActive =
+          sessions.find((s) => s.id === harness.activeSessionId) ?? null;
         const subject = conversationSubject(
-          sessions.find((s) => s.id === harness.activeSessionId) ?? null,
+          shortcutActive,
           focusedAgentPath,
           // The SELECTED project, exactly as the strip passes it. Left null
           // here, the two resolvers agree only while the active session is live
@@ -874,29 +1006,22 @@ export const App = (): JSX.Element => {
           selectedProject?.root ?? null,
           knownRootsOf(harness.settings?.recentDirs, harness.state?.launchDir),
         );
-        const tabs =
-          studioSelection?.kind === "agent-map"
-            ? sessions.filter(
-                (session) =>
-                  session.status !== "exited" &&
-                  session.planning?.identity.role === "map-planner" &&
-                  session.planning.identity.projectId ===
-                    studioSelection.projectId,
-              )
+        const unresolvedProject = selectedProject !== null;
+        const studioProjectId =
+          effectiveStudioSelection?.projectId ??
+          (unresolvedProject ? null : shortcutActive?.agentMapIdentity?.projectId) ??
+          null;
+        const tabs = studioProjectId
+          ? liveSessionsForStudioProject(sessions, studioProjectId)
+          : unresolvedProject
+            ? liveSessionsForProject(sessions, selectedProject.root)
             : subject.kind === "project"
               ? liveSessionsForProject(sessions, subject.root)
               : liveSessionsForFocus(sessions, subject.path);
         const target = tabs[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
-          setComposing(false);
-          setReviewSummary(null);
-          leaveProjectUnlessInside(target.cwd);
-          // A tab jump is a navigation: leave any full-width destination that
-          // is standing in for the workbench, or it would linger over the tab.
-          setTemplatesOpen(false);
-          setOverviewOpen(false);
-          harness.setActiveSessionId(target.id);
+          openSessionRef.current?.(target.id);
         }
       }
     };
@@ -913,11 +1038,12 @@ export const App = (): JSX.Element => {
     // still addressed the outer one, until the next session event healed it.
   }, [
     harness.state?.sessions,
+    harness.state?.studioProjects,
     harness.activeSessionId,
     harness.settings?.recentDirs,
     focusedAgentPath,
     selectedProject,
-    studioSelection,
+    effectiveStudioSelection,
     isMobile,
     rightCollapsed,
     paletteOpen,
@@ -1045,11 +1171,11 @@ export const App = (): JSX.Element => {
     // Legacy System Graph selection keeps its established auto-open behavior.
     if (
       selectedProject ||
-      (!isMobile && studioSelection?.kind === "agent-map")
+      (!isMobile && effectiveStudioSelection?.kind === "agent-map")
     ) {
       setRightCollapsed(false);
     }
-  }, [isMobile, selectedProject, studioSelection]);
+  }, [effectiveStudioSelection?.kind, isMobile, selectedProject]);
 
   // Crossing the breakpoint resets both panes to that mode's default.
   const prevMobile = useRef(isMobile);
@@ -1091,8 +1217,11 @@ export const App = (): JSX.Element => {
       applyingVisitRef.current = false;
       return;
     }
-    if (studioSelection?.kind === "agent-map") {
-      recordVisit({ kind: "agent-map", projectId: studioSelection.projectId });
+    if (effectiveStudioSelection?.kind === "agent-map") {
+      recordVisit({
+        kind: "agent-map",
+        projectId: effectiveStudioSelection.projectId,
+      });
     } else if (selectedProject) {
       recordVisit({
         kind: "project",
@@ -1121,7 +1250,7 @@ export const App = (): JSX.Element => {
   }, [
     recordVisit,
     selectedProject,
-    studioSelection,
+    effectiveStudioSelection,
     templatesOpen,
     reviewSummary,
     composing,
@@ -1151,12 +1280,9 @@ export const App = (): JSX.Element => {
         setStudioSelection(null);
       }
       if (visit.kind === "project") {
-        // Through the SAME door the rail click uses, not the raw setter: a
-        // project selection now hands the conversation to that project (and
-        // starts one where there is none), and a replayed visit that only
-        // re-selected the key would land on the map with somebody else's chat
-        // beside it. The ref exists because the handler closes over `state`,
-        // which is only available past the loading guard.
+        // Replay through the rail's read-only project selection handler.
+        // The ref reaches the handler below the loading guard, where
+        // the hydrated `state` is available.
         selectProjectRef.current?.(visit.workspaceKey, visit.root, visit.label);
       } else if (visit.kind === "agent-map") {
         const state = harness.state;
@@ -1188,8 +1314,8 @@ export const App = (): JSX.Element => {
         );
         const scope =
           workflow && state?.studioProjects
-            ? mostSpecificStudioScope(
-                workflow.path,
+            ? studioScopeForAgent(
+                workflow,
                 state.workspaceScopes ?? [],
                 state.studioProjects,
               )
@@ -1324,31 +1450,36 @@ export const App = (): JSX.Element => {
   const boundWorkflow =
     state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
   const workspaceScopes = state.workspaceScopes ?? [];
-  const selectedStudioProject = studioSelection
+  const studioScopeForAgentProject = (
+    path: string,
+    projectId: string | null | undefined,
+  ) => {
+    if (!projectId) return null;
+    const project = state.studioProjects?.find(
+      (candidate) => candidate.projectId === projectId,
+    );
+    if (!project) return null;
+    const workflow = state.workflows.find((candidate) =>
+      samePath(candidate.path, path),
+    );
+    return workflow
+      ? studioScopeForAgent(workflow, workspaceScopes, [project], projectId)
+      : null;
+  };
+  const selectedStudioProject = effectiveStudioSelection
     ? (state.studioProjects?.find(
-        (project) => project.projectId === studioSelection.projectId,
+        (project) => project.projectId === effectiveStudioSelection.projectId,
       ) ?? null)
     : null;
   const selectedStudioWorkflow =
-    studioSelection?.kind === "agent"
+    effectiveStudioSelection?.kind === "agent"
       ? (state.workflows.find((workflow) =>
           workflow.studioBindings?.some(
             (binding) =>
-              binding.projectId === studioSelection.projectId &&
-              binding.agentId === studioSelection.agentId,
+              binding.projectId === effectiveStudioSelection.projectId &&
+              binding.agentId === effectiveStudioSelection.agentId,
           ),
         ) ?? null)
-      : null;
-  // Missing client inventory is an in-memory map fallback, never a durable
-  // repair. The server owns the completeness decision in the effect above.
-  const effectiveStudioSelection =
-    studioSelection && selectedStudioProject
-      ? studioSelection.kind === "agent" && !selectedStudioWorkflow
-        ? ({
-            kind: "agent-map",
-            projectId: studioSelection.projectId,
-          } satisfies StudioWorkspaceSelection)
-        : studioSelection
       : null;
   const selectedStudioScopes = effectiveStudioSelection
     ? workspaceScopes.filter(
@@ -1357,19 +1488,26 @@ export const App = (): JSX.Element => {
     : [];
   const selectedStudioScope =
     effectiveStudioSelection && selectedStudioProject
-      ? mostSpecificStudioScope(
-          selectedStudioWorkflow?.path ??
+      ? selectedStudioWorkflow
+        ? studioScopeForAgent(
+            selectedStudioWorkflow,
+            selectedStudioScopes,
+            [selectedStudioProject],
+            selectedStudioProject.projectId,
+          )
+        : mostSpecificStudioScope(
             focusedAgentPath ??
-            activeSession?.cwd ??
-            selectedStudioScopes[0]?.cwd ??
-            "",
-          selectedStudioScopes,
-          [selectedStudioProject],
-        )
+              activeSession?.cwd ??
+              selectedStudioScopes[0]?.cwd ??
+              "",
+            selectedStudioScopes,
+            [selectedStudioProject],
+          )
       : null;
-  const planFirstSelection = selectedStudioScope
-    ? effectiveStudioSelection
-    : null;
+  const planFirstSelection =
+    selectedStudioScope || effectiveStudioSelection?.kind === "agent-map"
+      ? effectiveStudioSelection
+      : null;
   const effectiveFocusedAgentPath =
     planFirstSelection?.kind === "agent" && selectedStudioWorkflow
       ? selectedStudioWorkflow.path
@@ -1383,30 +1521,15 @@ export const App = (): JSX.Element => {
    * ONE selection, at ONE altitude — the contract the rail, the centre pane and
    * the canvas all read, so they cannot disagree about what is on screen (E3.8).
    */
-  const legacyView = canvasView(selectedProject, effectiveFocusedAgentPath);
   const studioView = planFirstSelection
     ? studioCanvasView(planFirstSelection)
     : null;
-  const view = studioView ?? legacyView;
+  const view = studioView ?? canvasView(selectedProject, effectiveFocusedAgentPath);
   const atMapAltitude = view.altitude === "map";
-  const planningWorkspace = studioView?.altitude === "map";
-  const agentMapUnavailable =
-    planningWorkspace && agentMapEntry.state.unavailable !== null;
-  const plannerSessions = planningWorkspace
-    ? state.sessions.filter(
-        (session) =>
-          session.status !== "exited" &&
-          session.planning?.identity.role === "map-planner" &&
-          session.planning.identity.projectId === studioView.projectId,
-      )
-    : [];
-  const activePlannerSession =
-    planningWorkspace &&
-    activeSession?.status !== "exited" &&
-    activeSession?.planning?.identity.role === "map-planner" &&
-    activeSession.planning.identity.projectId === studioView.projectId
-      ? activeSession
-      : null;
+  // Missing identity always offers recovery, including older server payloads.
+  const unresolvedProjectMap = selectedProject !== null;
+  const projectMapSelected =
+    studioView?.altitude === "map" || unresolvedProjectMap;
 
   /**
    * Whose tabs the strip shows: the ACTIVE session's PROJECT (SAP-2980), never
@@ -1427,14 +1550,38 @@ export const App = (): JSX.Element => {
       : (selectedProject?.root ?? null),
     knownProjectRoots(),
   );
-  const focusTabs = planningWorkspace
-    ? plannerSessions
-    : conversation.kind === "project"
-      ? liveSessionsForProject(state.sessions, conversation.root)
-      : liveSessionsForFocus(state.sessions, conversation.path);
+  const studioConversationProjectId =
+    planFirstSelection?.projectId ??
+    (unresolvedProjectMap ? null : activeSession?.agentMapIdentity?.projectId) ??
+    null;
+  const focusTabs = studioConversationProjectId
+    ? liveSessionsForStudioProject(state.sessions, studioConversationProjectId)
+    : unresolvedProjectMap
+      ? liveSessionsForProject(state.sessions, selectedProject.root)
+      : conversation.kind === "project"
+        ? liveSessionsForProject(state.sessions, conversation.root)
+        : liveSessionsForFocus(state.sessions, conversation.path);
+  // Project-name navigation cannot activate a session. Keep an already-active
+  // conversation only when it belongs to that exact project; a foreign CLI is
+  // hidden until the user explicitly selects one of this project's tabs.
+  const activeProjectTab = projectMapSelected
+    ? (focusTabs.find((session) => session.id === harness.activeSessionId) ??
+      null)
+    : activeSession;
+  const conversationSession = projectMapSelected
+    ? activeProjectTab
+    : planFirstSelection &&
+        !sessionSharesFocusProject(
+          activeSession,
+          effectiveFocusedAgentPath,
+          knownProjectRoots(),
+          planFirstSelection.projectId,
+          selectedStudioScope?.cwd,
+        )
+      ? null
+      : activeSession;
   const showReview = reviewSummary != null;
-  const showDead =
-    !planningWorkspace && !showReview && activeSession?.status === "exited";
+  const showDead = !showReview && conversationSession?.status === "exited";
   // An agent selected with no session that can WORK on it: honest absence, and
   // opening one lands on the "start a session" state.
   //
@@ -1455,7 +1602,6 @@ export const App = (): JSX.Element => {
   const showAgentEmpty =
     !showReview &&
     !showDead &&
-    !planningWorkspace &&
     !composing &&
     !atMapAltitude &&
     focusedWorkflow != null &&
@@ -1463,20 +1609,27 @@ export const App = (): JSX.Element => {
       activeSession,
       effectiveFocusedAgentPath,
       knownProjectRoots(),
+      planFirstSelection?.kind === "agent"
+        ? planFirstSelection.projectId
+        : null,
+      planFirstSelection?.kind === "agent" ? selectedStudioScope?.cwd : null,
     );
   // The workbench: a live active session.
   const showWorkbench =
     !showReview &&
     !showDead &&
-    !planningWorkspace &&
     !composing &&
     !showAgentEmpty &&
-    activeSession != null &&
-    activeSession.status !== "exited";
+    conversationSession != null &&
+    conversationSession.status !== "exited";
+  const showMapConversationEmpty =
+    !showReview &&
+    !composing &&
+    projectMapSelected &&
+    conversationSession == null;
   // A project selected with no session yet: its first one is on the way, and
   // the centre says so rather than flashing the create-new composer.
   const showProjectStarting =
-    !planningWorkspace &&
     !showReview &&
     !showDead &&
     !composing &&
@@ -1488,18 +1641,9 @@ export const App = (): JSX.Element => {
   const showComposer =
     !showReview &&
     !showDead &&
-    !planningWorkspace &&
     !showProjectStarting &&
+    !showMapConversationEmpty &&
     (composing || (!showAgentEmpty && !showWorkbench));
-  /** The project a board can cut UP to — derived, so the way back is the same
-   *  door whether the agent was reached from the rail or from the map. */
-  const upToProject = atMapAltitude
-    ? null
-    : projectAbove(
-        effectiveFocusedAgentPath,
-        knownProjectRoots(),
-        workspaceScopes,
-      );
   const stepsDisabled = stepsDisabledReason(view.altitude);
   const secretsDisabled = secretsDisabledReason(view.altitude);
   // At map altitude the map IS the canvas panel, so a stored `steps` intent is
@@ -1509,13 +1653,12 @@ export const App = (): JSX.Element => {
     (secretsDisabled && rightTab === "secrets")
       ? "canvas"
       : rightTab;
-  const rightPaneSuppressedByComposer =
-    (showComposer && !atMapAltitude) || agentMapUnavailable;
-  const sessionBarSession = planningWorkspace
-    ? activePlannerSession
-    : showWorkbench || showDead
-      ? activeSession
-      : null;
+  const rightPaneSuppressedByComposer = showComposer && !atMapAltitude;
+  const sessionBarSession =
+    showWorkbench || showDead ? conversationSession : null;
+  const newTabSource = projectMapSelected
+    ? (activeProjectTab ?? focusTabs[0] ?? null)
+    : activeSession;
   // A live session to return to when the composer was opened over the workbench.
   const composerCanCancel =
     composing && activeSession != null && activeSession.status !== "exited";
@@ -1623,21 +1766,7 @@ export const App = (): JSX.Element => {
     if (isMobile) setRailCollapsed(true);
   };
 
-  /**
-   * The rail verb: SELECT a project.
-   *
-   * A project is somewhere you WORK, not somewhere you look (SAP-2980), so
-   * this does two things that used to be one. The canvas goes to map altitude
-   * — and the conversation becomes the project's, through the SAME decision
-   * function an agent selection uses. Reusing it is the point: crossing from
-   * one project to another has to hand the conversation over exactly once,
-   * with one rule, and a second hand-written copy here is how the two answers
-   * come to disagree.
-   *
-   * A project with no live session gets one at its root. Otherwise a project is
-   * a row you can select but cannot talk to — an empty workbench beside a map,
-   * which is the failure this criterion names.
-   */
+  /** Select a project's durable map without touching session state. */
   const handleSelectWorkspace = (
     workspaceKey: WorkspaceKey,
     root: string,
@@ -1647,7 +1776,6 @@ export const App = (): JSX.Element => {
     const studioProjectId = workspaceScopes.find(
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
-    let selectedAgentMap = false;
     if (
       studioProjectId &&
       state.studioProjects?.some(
@@ -1661,8 +1789,7 @@ export const App = (): JSX.Element => {
       };
       setStudioSelection(selection);
       setSelectedProject(null);
-      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection);
-      selectedAgentMap = true;
+      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection).catch(() => {});
     } else {
       setStudioSelection(null);
       setSelectedProject({ workspaceKey, root, label });
@@ -1677,36 +1804,19 @@ export const App = (): JSX.Element => {
     setTemplatesOpen(false);
     setOverviewOpen(false);
     closeMobileDrawer();
-    // Stable Studio projects talk through their trusted map-planner. The
-    // selection effect starts resume-or-create; an ordinary project-root PTY
-    // here would race it and briefly make the wrong conversation authoritative.
-    if (selectedAgentMap) {
-      if (isMobile) setRightCollapsed(true);
-      return;
-    }
-    const decision = sessionForFocus({
-      focusPath: root,
-      active: activeSession,
-      sessions: state.sessions,
-      roots: knownProjectRoots(),
-    });
-    if (decision.kind === "keep") return;
-    if (decision.to) {
-      if (decision.to.id !== harness.activeSessionId)
-        harness.setActiveSessionId(decision.to.id);
-      return;
-    }
-    void startProjectSession(root, label, preferredHarness());
+    // A Studio project-name click is a read-only navigation action. It must not
+    // choose, create, resume, focus, or prompt any session.
+    if (isMobile) setRightCollapsed(false);
   };
   selectProjectRef.current = handleSelectWorkspace;
 
   /**
-   * Open the first session of a project you just selected.
+   * Start an explicitly requested project session.
    *
    * Guarded BY ROOT, not by a boolean: two projects can be starting at once
-   * (select one, select another before the first POST resolves) and a single
-   * flag would drop the second create silently. Re-selecting the SAME project
-   * mid-flight is the double-create this prevents.
+   * (request one, then another before the first POST resolves) and a single
+   * flag would drop the second create silently. Repeating a request for the
+   * same project mid-flight is the double-create this prevents.
    */
   const startProjectSession = async (
     root: string,
@@ -1732,16 +1842,13 @@ export const App = (): JSX.Element => {
     }
   };
 
-  /**
-   * The provider a create-initiated session boots with — the same stored
-   * preference the rail used to read before it dispatched. It moved here with
-   * the create itself; the rail no longer starts sessions.
-   */
-  function preferredHarness(): HarnessKind {
-    return loadUiPrefs().preferredHarness === "codex"
-      ? "codex"
-      : "claude-code";
-  }
+  const handleStartProjectSession = async (root: string, label: string): Promise<void> => {
+    const started = await startProjectSession(root, label, selectedHarness);
+    if (!started) return;
+    studioRestoreGenerationRef.current += 1;
+    setStudioSelection(null);
+    setSelectedProject(null);
+  };
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -1753,8 +1860,22 @@ export const App = (): JSX.Element => {
    * do not: that folder is the new project's root by construction, and
    * resolving it upward would drop the new agent into its parent project.
    */
-  const sessionCwdForAgent = (agentPath: string): string =>
-    projectRootForAgent(agentPath, knownProjectRoots());
+  const sessionCwdForAgent = (agentPath: string): string => {
+    const workflow = state.workflows.find((candidate) =>
+      samePath(candidate.path, agentPath),
+    );
+    const scope = workflow
+      ? studioScopeForAgent(
+          workflow,
+          workspaceScopes,
+          state.studioProjects ?? [],
+          effectiveStudioSelection?.kind === "agent"
+            ? effectiveStudioSelection.projectId
+            : undefined,
+        )
+      : null;
+    return scope?.cwd ?? projectRootForAgent(agentPath, knownProjectRoots());
+  };
 
   // The ONE choke point for session creation: sets the focus to the new
   // session's folder (so the main panel shows it) and fires telemetry once.
@@ -1766,12 +1887,14 @@ export const App = (): JSX.Element => {
     agentHarness: HarnessKind,
     options: CreateSessionAtOptions = {},
   ): Promise<HarnessSession> => {
-    if (!options.keepComposerOpen) setComposing(false);
+    // Activate the automatic home before a scaffold update can replace it;
+    // its local draft and files must survive a later preparation failure.
+    setComposing(options.keepComposerOpen === true);
     setReviewSummary(null);
-    // A session started INSIDE the selected project is one of ITS tabs — the
-    // tab `+`, the palette's "new session in this folder", the project's own
-    // first session. Closing its map under them would be the mode switch this
-    // epic removes, one click later.
+    // Preserve a same-project selection while the create is in flight. The
+    // caller owns the final destination: a project-row create can deliberately
+    // stay put until success, while a tab-strip create opens the new ordinary
+    // conversation/canvas once its exact session exists.
     leaveProjectUnlessInside(cwd);
     setOverviewOpen(false);
     setFocusedAgentPath(cwd);
@@ -1789,10 +1912,28 @@ export const App = (): JSX.Element => {
       studioRestoreGenerationRef.current += 1;
     }
     try {
-      const session = await harness.createSession({
-        cwd,
-        harness: agentHarness,
-      });
+      const session = await harness.createSession(
+        {
+          cwd,
+          harness: agentHarness,
+          ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
+          ...(options.initialAttachments?.length ? { initialAttachments: options.initialAttachments } : {}),
+          ...(options.scaffold ? { scaffold: options.scaffold } : {}),
+          ...((options.initialUserInputPending ?? options.standaloneBuilder)
+            ? { initialUserInputPending: true }
+            : {}),
+        },
+        (created) => {
+          if (
+            options.standaloneBuilder &&
+            pendingStandaloneBuilderSessionsRef.current.get(cwd) === null
+          ) {
+            // The POST response—not an active same-cwd status projection—is
+            // the first trustworthy correlation for this explicit create.
+            pendingStandaloneBuilderSessionsRef.current.set(cwd, created.id);
+          }
+        },
+      );
       if (
         options.standaloneBuilder &&
         pendingStandaloneBuilderSessionsRef.current.get(cwd) === null
@@ -1859,7 +2000,9 @@ export const App = (): JSX.Element => {
     agentHarness: HarnessKind,
     idea?: string,
   ): Promise<void> => {
-    const session = await createSessionAt(cwd, agentHarness);
+    const session = await createSessionAt(cwd, agentHarness, {
+      initialUserInputPending: true,
+    });
     sendScaffoldPrompt(session, cwd, idea);
   };
 
@@ -1947,7 +2090,9 @@ export const App = (): JSX.Element => {
         : null;
       const session =
         existing ??
-        (await createSessionAt(request.root, preferredHarness()));
+        (await createSessionAt(request.root, selectedHarness, {
+          initialUserInputPending: input.instruction.trim().length > 0,
+        }));
       await harness.bindWorkflow(session.id, created.path);
       harness.setActiveSessionId(session.id);
       setFocusedAgentPath(created.path);
@@ -1995,6 +2140,9 @@ export const App = (): JSX.Element => {
     void (async () => {
       try {
         const session = await createSessionAt(cwd, source.harness);
+        studioRestoreGenerationRef.current += 1;
+        setStudioSelection(null);
+        setSelectedProject(null);
         if (!workflowPath) {
           setFocusedAgentPath(cwd);
           return;
@@ -2094,6 +2242,21 @@ export const App = (): JSX.Element => {
       | "template_gallery"
       | "template_detail" = "template_gallery",
   ): Promise<void> => {
+    // Capture the current choice for this launch, including async scaffolding.
+    let agentHarness = selectedHarness;
+    // A deep link can open before registry loading finishes. Resolve its
+    // selection before creating a session on an unavailable default adapter.
+    const registry =
+      harnessEntries ??
+      (await harness.listHarnesses().catch(() => FALLBACK_HARNESSES));
+    const selectable = registry.filter(isHarnessSelectable);
+    if (!selectable.some((entry) => entry.id === agentHarness)) {
+      agentHarness =
+        (selectable[0]?.id as HarnessKind | undefined) ?? agentHarness;
+      setSelectedHarness((current) =>
+        current === selectedHarness ? agentHarness : current,
+      );
+    }
     // Product metric — "templates used". Fires at the choke point every
     // template surface funnels through; `agent.created` fires later when the
     // clone produces a real sapiom.json, so built ≥ templates holds.
@@ -2111,7 +2274,9 @@ export const App = (): JSX.Element => {
       // the dialog shows it verbatim.
       const parent = parentOf(cwd);
       if (!parent)
-        throw new Error(`Can't create an agent at ${cwd} — pick a folder inside a project.`);
+        throw new Error(
+          `Can't create an agent at ${cwd} — pick a folder inside a project.`,
+        );
       const created = await harness.scaffoldAgent(
         parent,
         basenameOf(cwd),
@@ -2120,12 +2285,14 @@ export const App = (): JSX.Element => {
       trackUse();
       setTemplatesOpen(false);
       setFocusedAgentPath(created.path);
-      const session = await createSessionAt(parent, "claude-code");
+      const session = await createSessionAt(parent, agentHarness);
       await harness.bindWorkflow(session.id, created.path);
       setFocusedAgentPath(created.path);
       return;
     }
-    const session = await createSessionAt(cwd, "claude-code");
+    const session = await createSessionAt(cwd, agentHarness, {
+      initialUserInputPending: true,
+    });
     trackUse();
     sendPromptWhenReady(
       session.id,
@@ -2156,7 +2323,6 @@ export const App = (): JSX.Element => {
 
   const handleComposerSubmitIdea = async (
     idea: string,
-    agentHarness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ): Promise<void> => {
     const cwd = uniqueProjectDir(
@@ -2167,33 +2333,20 @@ export const App = (): JSX.Element => {
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
-    const session = await createSessionAt(cwd, agentHarness, {
+    await createSessionAt(cwd, selectedHarness, {
       keepComposerOpen: true,
       standaloneBuilder: true,
+      scaffold: { template: "default" },
+      initialPrompt: idea.trim(),
+      initialAttachments: attachments.map((attachment) =>
+        attachment.kind === "path"
+          ? { kind: "path", path: attachment.path }
+          : { kind: "inline", filename: attachment.name, dataUrl: attachment.dataUrl },
+      ),
     });
-    try {
-      const resolved = await materializeAttachments(
-        session.id,
-        attachments,
-        harness.attachFile,
-      );
-      sendScaffoldPrompt(
-        session,
-        cwd,
-        buildIdeaWithAttachments(idea, resolved),
-      );
-      setComposing(false);
-    } catch (error) {
-      // The first prompt is registered only after every upload succeeds. Kill
-      // the provisional session on failure so retrying reuses the same folder
-      // and queue instead of leaving a blank tab behind.
-      await harness.closeSession(session.id).catch((rollbackError: unknown) => {
-        console.error("[harness] attachment rollback failed:", rollbackError);
-      });
-      pendingStandaloneBuilderSessionsRef.current.delete(cwd);
-      harness.removePendingWorkspace(cwd);
-      throw error;
-    }
+    // Only a successful create clears the draft. Scaffolding and uploads
+    // complete server-side before the vendor receives its first user turn.
+    setComposing(false);
   };
 
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
@@ -2245,46 +2398,51 @@ export const App = (): JSX.Element => {
     setTemplatesOpen(false);
     setOverviewOpen(false);
     const session = state.sessions.find((s) => s.id === id);
-    if (session?.planning?.identity.role === "map-planner") {
-      const selection: StudioWorkspaceSelection = {
-        kind: "agent-map",
-        projectId: session.planning.identity.projectId,
-      };
-      restoredStudioProjectsRef.current.add(selection.projectId);
-      setStudioSelection(selection);
-      setSelectedProject(null);
-      setFocusedAgentPath(session.cwd);
-      closeMobileDrawer();
-      if (isMobile) setRightCollapsed(true);
-      harness.setActiveSessionId(id);
-      void harness.api.putStudioCurrentWorkspace(
-        selection.projectId,
-        selection,
-      );
-      return;
-    }
-    // Opening one of the selected project's own sessions is not a navigation
-    // away from it — only a session somewhere else is.
-    leaveProjectUnlessInside(session?.cwd ?? null);
+    studioRestoreGenerationRef.current += 1;
+    setSelectedProject(null);
+    setStudioSelection(null);
     closeMobileDrawer();
-    if (session)
-      setFocusedAgentPath(boundWorkflowPathOf(session) ?? session.cwd);
+    if (session) {
+      if (session.agentMapIdentity?.projectId) {
+        // An explicit session selection owns its destination. Mark its neutral
+        // project visited even when the session has no agent binding, so a
+        // late preference read cannot replace this exact ordinary tab.
+        restoredStudioProjectsRef.current.add(
+          session.agentMapIdentity.projectId,
+        );
+      }
+      const focusPath = boundWorkflowPathOf(session) ?? session.cwd;
+      setFocusedAgentPath(focusPath);
+      const workflow = state.workflows.find((candidate) =>
+        samePath(candidate.path, focusPath),
+      );
+      const binding = workflow?.studioBindings?.find(
+        (candidate) =>
+          candidate.projectId === session.agentMapIdentity?.projectId,
+      );
+      if (binding) {
+        const selection: StudioWorkspaceSelection = {
+          kind: "agent",
+          projectId: binding.projectId,
+          agentId: binding.agentId,
+        };
+        restoredStudioProjectsRef.current.add(binding.projectId);
+        setStudioSelection(selection);
+        void harness.api.putStudioCurrentWorkspace(
+          binding.projectId,
+          selection,
+        );
+      }
+    }
     harness.setActiveSessionId(id);
   };
+  openSessionRef.current = openSession;
 
-  // Select a tab in the strip — same as openSession, but the tab always
-  // belongs to the current focus, so focus never moves.
+  // Tabs are exact conversation navigation. Selecting one leaves the project
+  // map and renders that ordinary session's own conversation/canvas.
   const selectTab = (id: string): void => {
-    setComposing(false);
-    setReviewSummary(null);
-    setTemplatesOpen(false);
-    setOverviewOpen(false);
-    // The tabs ARE the project's tabs at map altitude — picking one must not
-    // close the map they are rendered beside.
-    leaveProjectUnlessInside(
-      state.sessions.find((s) => s.id === id)?.cwd ?? null,
-    );
-    harness.setActiveSessionId(id);
+    openSession(id);
+    track("session.switched", { navigation_kind: "session_tab" }, id);
   };
 
   // One entry point for reviewing a past (transcript) session.
@@ -2331,10 +2489,10 @@ export const App = (): JSX.Element => {
   const selectStudioAgent = (
     workflow: WorkflowInfo,
     preferred?: { projectId: string; agentId: string },
-  ): void => {
+  ): { projectId: string; agentId: string } | null => {
     const bindings = workflow.studioBindings ?? [];
-    const owningScope = mostSpecificStudioScope(
-      workflow.path,
+    const owningScope = studioScopeForAgent(
+      workflow,
       workspaceScopes,
       state.studioProjects ?? [],
     );
@@ -2350,7 +2508,8 @@ export const App = (): JSX.Element => {
         (candidate) => candidate.projectId === owningScope?.projectId,
       ) ??
       bindings.find(
-        (candidate) => candidate.projectId === studioSelection?.projectId,
+        (candidate) =>
+          candidate.projectId === effectiveStudioSelection?.projectId,
       ) ??
       [...bindings].sort(
         (left, right) =>
@@ -2359,7 +2518,7 @@ export const App = (): JSX.Element => {
       )[0];
     if (!binding) {
       setStudioSelection(null);
-      return;
+      return null;
     }
     const selection: StudioWorkspaceSelection = {
       kind: "agent",
@@ -2379,6 +2538,7 @@ export const App = (): JSX.Element => {
         setStudioSelection(current.selection);
       })
       .catch(() => {});
+    return binding;
   };
 
   const handleFocusAgent = (
@@ -2395,14 +2555,22 @@ export const App = (): JSX.Element => {
     const workflow = state.workflows.find((candidate) =>
       samePath(candidate.path, path),
     );
-    if (workflow) selectStudioAgent(workflow, preferredStudioBinding);
-    else setStudioSelection(null);
+    const studioBinding = workflow
+      ? selectStudioAgent(workflow, preferredStudioBinding)
+      : null;
+    if (!workflow) setStudioSelection(null);
     closeMobileDrawer();
+    const targetScope = studioScopeForAgentProject(
+      path,
+      studioBinding?.projectId,
+    );
     const decision = sessionForFocus({
       focusPath: path,
       active: activeSession,
       sessions: state.sessions,
       roots: knownProjectRoots(),
+      targetProjectId: studioBinding?.projectId,
+      targetProjectRoot: targetScope?.cwd,
     });
     if (
       decision.kind === "switch" &&
@@ -2464,7 +2632,9 @@ export const App = (): JSX.Element => {
     pendingCloneFocusRef.current = target.definitionId;
     setRightCollapsed(true); // terminal-first, like the template flow
     try {
-      const session = await createSessionAt(cwd, "claude-code");
+      const session = await createSessionAt(cwd, "claude-code", {
+        initialUserInputPending: true,
+      });
       sendPromptWhenReady(
         session.id,
         cloneDefinitionPrompt(target.definitionId, cwd),
@@ -2492,9 +2662,42 @@ export const App = (): JSX.Element => {
   const handleBindWorkflow = async (path: string): Promise<string | null> => {
     setSelectedProject(null);
     closeMobileDrawer();
+    const workflow = state.workflows.find((candidate) =>
+      samePath(candidate.path, path),
+    );
+    const selectedBinding =
+      effectiveStudioSelection?.kind === "agent"
+        ? workflow?.studioBindings?.find(
+            (candidate) =>
+              candidate.projectId === effectiveStudioSelection.projectId &&
+              candidate.agentId === effectiveStudioSelection.agentId,
+          )
+        : undefined;
+    const inferredScope =
+      selectedBinding || !state.studioProjects
+        ? null
+        : workflow
+          ? studioScopeForAgent(workflow, workspaceScopes, state.studioProjects)
+          : null;
+    const targetBinding =
+      selectedBinding ??
+      workflow?.studioBindings?.find(
+        (candidate) => candidate.projectId === inferredScope?.projectId,
+      );
+    const targetProjectId = targetBinding?.projectId ?? null;
+    const targetScope = studioScopeForAgentProject(path, targetProjectId);
     const live = state.sessions.filter((s) => s.status !== "exited");
     const ownsPath = (s: HarnessSession): boolean =>
-      s.boundWorkflowPath === path || isWithinDir(s.cwd, path);
+      (Boolean(targetProjectId) ||
+        samePath(s.boundWorkflowPath ?? "", path) ||
+        isWithinDir(s.cwd, path)) &&
+      sessionReachesFocus(
+        s,
+        path,
+        knownProjectRoots(),
+        targetProjectId,
+        targetScope?.cwd,
+      );
     // Prefer the ACTIVE tab when it already owns the workflow, so running a
     // macro against the current agent never yanks the workbench to a sibling
     // session in the same workspace (e.g. re-visualize on a two-tab agent).
@@ -2520,7 +2723,10 @@ export const App = (): JSX.Element => {
     } else {
       try {
         targetId = (
-          await createSessionAt(sessionCwdForAgent(path), "claude-code")
+          await createSessionAt(
+            targetScope?.cwd ?? sessionCwdForAgent(path),
+            "claude-code",
+          )
         ).id;
       } catch (err) {
         harness.showToast(
@@ -2531,10 +2737,7 @@ export const App = (): JSX.Element => {
     }
     await harness.bindWorkflow(targetId, path);
     setFocusedAgentPath(path);
-    const workflow = state.workflows.find((candidate) =>
-      samePath(candidate.path, path),
-    );
-    if (workflow) selectStudioAgent(workflow);
+    if (workflow) selectStudioAgent(workflow, targetBinding);
     return targetId;
   };
 
@@ -2600,15 +2803,7 @@ export const App = (): JSX.Element => {
             const deploymentState = workflow
               ? workflowDeploymentState(workflow, lastErr)
               : "draft";
-            harness.showToast(
-              deploymentState === "failed"
-                ? "Last deploy failed — retry Deploy."
-                : deploymentState === "building"
-                  ? "The cloud build is still in progress."
-                  : deploymentState === "linked"
-                    ? "No ready deployment yet — deploy it first."
-                    : "This agent isn't deployed yet — deploy it first.",
-            );
+            harness.showToast(prodRunBlockedToast(deploymentState));
           }
         } else if (direct === "run-local") {
           if (!workflow) {
@@ -2705,6 +2900,7 @@ export const App = (): JSX.Element => {
           }
         >
           <WorkflowsRail
+            assistant={harness.assistant}
             projectRoot={projectRoot || null}
             onSaveProjectRoot={saveProjectRoot}
             width={widths.rail}
@@ -2713,20 +2909,12 @@ export const App = (): JSX.Element => {
             sessions={state.sessions}
             pendingWorkspaces={harness.pendingWorkspaces}
             activeSessionId={harness.activeSessionId}
-            focusedAgentPath={
-              atMapAltitude ? null : effectiveFocusedAgentPath
-            }
+            focusedAgentPath={atMapAltitude ? null : effectiveFocusedAgentPath}
             workspaceScopes={state.workspaceScopes}
             studioProjects={state.studioProjects}
             studioSelection={planFirstSelection}
             selectedWorkspaceKey={selectedProject?.workspaceKey ?? null}
             onSelectWorkspace={handleSelectWorkspace}
-            onSelectAgentMap={(projectId, root, label) => {
-              const scope = workspaceScopes.find(
-                (candidate) => candidate.projectId === projectId,
-              );
-              if (scope) handleSelectWorkspace(scope.workspaceKey, root, label);
-            }}
             onSelectStudioAgent={(workflow, projectId, agentId) =>
               handleFocusAgent(workflow.path, { projectId, agentId })
             }
@@ -2768,16 +2956,13 @@ export const App = (): JSX.Element => {
             closedProjects={harness.closedProjects}
             unsearchedCheckouts={harness.unsearchedCheckouts}
             onRemoveProject={async (root) => {
-              if (
-                selectedProject &&
-                samePath(selectedProject.root, root)
-              ) {
+              if (selectedProject && samePath(selectedProject.root, root)) {
                 setSelectedProject(null);
               }
               const removedProjectId = workspaceScopes.find((scope) =>
                 samePath(scope.cwd, root),
               )?.projectId;
-              if (studioSelection?.projectId === removedProjectId) {
+              if (effectiveStudioSelection?.projectId === removedProjectId) {
                 studioRestoreGenerationRef.current += 1;
                 setStudioSelection(null);
               }
@@ -2850,21 +3035,7 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onStartProjectSession={async (root, label) => {
-              // A project-row `+` explicitly asks to see a fresh coding
-              // session, even when Plan Agents or a legacy project map is the
-              // current altitude. Change views only after creation succeeds so
-              // a failed launch leaves the planner in place and resumable.
-              const started = await startProjectSession(
-                root,
-                label,
-                preferredHarness(),
-              );
-              if (!started) return;
-              studioRestoreGenerationRef.current += 1;
-              setStudioSelection(null);
-              setSelectedProject(null);
-            }}
+            onStartProjectSession={handleStartProjectSession}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}
@@ -2977,7 +3148,10 @@ export const App = (): JSX.Element => {
                         : "0px"
                       : widths.canvas == null
                         ? "1fr"
-                        : `${widths.canvas}px`
+                        : // Clamp the pinned width to what the shell can hold
+                          // (the terminal keeps its floor), so a width saved on a
+                          // wide monitor doesn't overflow a narrower window.
+                          `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`
                   }`,
           }}
         >
@@ -3001,12 +3175,19 @@ export const App = (): JSX.Element => {
 
           <div className="center-pane">
             <SessionBar
-              planning={planningWorkspace}
+              assistant={harness.assistant}
               openedAgentName={
                 showAgentEmpty ? (focusedWorkflow?.name ?? null) : null
               }
               reviewTitle={reviewSummary ? reviewSummary.title : null}
-              composing={showComposer}
+              // With no active CLI the centre still offers the ordinary
+              // composer, but a selected project map must keep its real
+              // session tabs visible so the user can activate one. Treating
+              // that derived empty-centre state as explicit composition hid
+              // every project tab until some unrelated path selected a CLI.
+              composing={
+                showComposer && !(projectMapSelected && focusTabs.length > 0)
+              }
               onBack={composerCanCancel ? () => setComposing(false) : null}
               activeSession={sessionBarSession}
               sessionName={
@@ -3019,16 +3200,8 @@ export const App = (): JSX.Element => {
                   : null
               }
               onRenameSession={renameSession}
-              boundWorkflowName={
-                planningWorkspace ? null : (boundWorkflow?.name ?? null)
-              }
-              sessions={
-                planningWorkspace
-                  ? plannerSessions
-                  : showWorkbench
-                    ? focusTabs
-                    : []
-              }
+              boundWorkflowName={boundWorkflow?.name ?? null}
+              sessions={showWorkbench || projectMapSelected ? focusTabs : []}
               busySessionIds={harness.busySessionIds}
               onSelectSession={selectTab}
               labelOf={(session) =>
@@ -3045,31 +3218,23 @@ export const App = (): JSX.Element => {
               onExpandRail={
                 railCollapsed ? () => setRailCollapsed(false) : null
               }
-              onExpandRight={
-                !agentMapUnavailable && rightCollapsed ? expandRightPane : null
-              }
+              onExpandRight={rightCollapsed ? expandRightPane : null}
               expandRightLabel={
-                planningWorkspace ? "Agent Map" : "Expand canvas panel"
+                projectMapSelected ? "Agent Map" : "Expand canvas panel"
               }
-              showExpandRightLabel={isMobile && planningWorkspace}
+              showExpandRightLabel={isMobile && projectMapSelected}
               expandRightRef={rightPaneTriggerRef}
               subjectName={
-                planningWorkspace
+                projectMapSelected
                   ? (selectedStudioProject?.displayName ?? "Agent Map")
                   : (focusedWorkflow?.name ??
                     (activeSession ? basenameOf(activeSession.cwd) : null))
               }
-              newSessionPending={
-                planningWorkspace
-                  ? agentMapEntry.state.planner.status === "loading"
-                  : siblingSessionPending
-              }
+              newSessionPending={siblingSessionPending}
               onNewSession={
-                planningWorkspace
-                  ? agentMapEntry.openFreshPlanner
-                  : activeSession
-                    ? () => handleStartSiblingSession(activeSession)
-                    : null
+                newTabSource
+                  ? () => handleStartSiblingSession(newTabSource)
+                  : null
               }
               /* The agent action cluster shares the same row as the tabs.
                  Its subject AND its gating are `rightPaneWorkflow` — the same
@@ -3098,7 +3263,7 @@ export const App = (): JSX.Element => {
                  that is the SAP-2931 trap itself — the verbs staying live
                  against the bound agent while the pane showed another. */
               actions={
-                !planningWorkspace && rightPaneWorkflow ? (
+                !atMapAltitude && rightPaneWorkflow ? (
                   <SessionStepsBar
                     workflow={rightPaneWorkflow}
                     activeSessionId={
@@ -3140,91 +3305,21 @@ export const App = (): JSX.Element => {
               }
             />
 
-            <div className="terminal-slot">
-              {agentMapUnavailable ? (
-                <EmptyState
-                  className="terminal-empty"
-                  testId="agent-map-unavailable"
-                  icon="TriangleAlert"
-                  title="Agent Map unavailable"
-                  body={
-                    agentMapEntry.state.unavailable ??
-                    "This project is no longer available."
+            {sessionBarSession &&
+              (sessionBarSession.mcpAuthState === "restart-required" ||
+                sessionBarSession.mcpAuthState === "restarting") && (
+                <McpAuthRestartNotice
+                  restarting={
+                    sessionBarSession.mcpAuthState === "restarting"
                   }
-                  cta={
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      data-testid="agent-map-retry-all"
-                      onClick={agentMapEntry.retryAll}
-                    >
-                      Retry
-                    </button>
-                  }
+                  onRestart={async () => {
+                    await harness.restartMcpSession(sessionBarSession.id);
+                  }}
                 />
-              ) : planningWorkspace ? (
-                agentMapEntry.state.planner.status === "error" ? (
-                  <EmptyState
-                    className="terminal-empty"
-                    testId="planner-load-error"
-                    icon="TriangleAlert"
-                    title="Planning session couldn't open"
-                    body={agentMapEntry.state.planner.message}
-                    cta={
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        data-testid="planner-retry"
-                        onClick={agentMapEntry.retryPlanner}
-                      >
-                        Retry session
-                      </button>
-                    }
-                  />
-                ) : agentMapEntry.state.planner.status === "loading" ? (
-                  <EmptyState
-                    className="terminal-empty"
-                    testId="planner-loading"
-                    icon="Radio"
-                    title="Opening planning session…"
-                  />
-                ) : activePlannerSession?.planning ? (
-                  /* Agent Map planning is still an ordinary coding-agent
-                     session. Keep the exact same raw CLI surface used for
-                     every agent: trust/auth prompts, slash commands, tool
-                     output, and provider chrome must remain visible rather
-                     than being replaced by a transcript/composer facsimile. */
-                  <div className="agent-view" data-testid="agent-view">
-                    <div
-                      className="agent-view-panel"
-                      id="agent-panel-terminal"
-                    >
-                      <Terminal
-                        sessionId={activePlannerSession.id}
-                        token={harness.bootToken}
-                        cwd={activePlannerSession.cwd}
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <EmptyState
-                    className="terminal-empty"
-                    testId="planner-session-ended"
-                    icon="Radio"
-                    title="Planning session ended"
-                    body="Start a new planning session to continue working on this Agent Map."
-                    cta={
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={agentMapEntry.openFreshPlanner}
-                      >
-                        New planning session
-                      </button>
-                    }
-                  />
-                )
-              ) : showReview && reviewSummary ? (
+              )}
+
+            <div className="terminal-slot">
+              {showReview && reviewSummary ? (
                 <PastSessionPane
                   summary={reviewSummary}
                   loadRecord={harness.sessionRecord}
@@ -3235,21 +3330,41 @@ export const App = (): JSX.Element => {
                   }}
                   onClose={() => setReviewSummary(null)}
                 />
-              ) : showDead && activeSession ? (
-                <DeadSessionPane
-                  session={activeSession}
-                  resumeMode={deadResumeMode}
-                  loadRecord={harness.sessionRecord}
-                  onResume={() => void harness.resumeSession(activeSession.id)}
-                  onContinue={() =>
-                    void harness.rehydrateSession({
-                      cwd: activeSession.cwd,
-                      harness: activeSession.harness,
-                      from: activeSession.id,
-                    })
+              ) : showDead && conversationSession ? (
+                <AssistantPane
+                  sessionId={conversationSession.id}
+                  bootToken={harness.bootToken}
+                  authRevision={harness.authRevision}
+                  drafts={assistantDrafts}
+                  authorityRevision={assistantAuthorityRevision}
+                  onAuthorityRevision={setAssistantAuthorityRevision}
+                  onSignIn={signInForAssistant}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  terminalRevision={
+                    harness.terminalRevealBySession.get(
+                      conversationSession.id,
+                    ) ?? 0
                   }
-                  onClose={() => void harness.closeSession(activeSession.id)}
-                />
+                >
+                  <DeadSessionPane
+                    session={conversationSession}
+                    resumeMode={deadResumeMode}
+                    loadRecord={harness.sessionRecord}
+                    onResume={() =>
+                      void harness.resumeSession(conversationSession.id)
+                    }
+                    onContinue={() =>
+                      void harness.rehydrateSession({
+                        cwd: conversationSession.cwd,
+                        harness: conversationSession.harness,
+                        from: conversationSession.id,
+                      })
+                    }
+                    onClose={() =>
+                      void harness.closeSession(conversationSession.id)
+                    }
+                  />
+                </AssistantPane>
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session that can WORK on this agent — its
                    board still draws on the right, from the workflow-keyed route
@@ -3274,6 +3389,30 @@ export const App = (): JSX.Element => {
                     </button>
                   }
                 />
+              ) : showMapConversationEmpty ? (
+                <EmptyState
+                  className="terminal-empty"
+                  testId="project-session-empty"
+                  icon="MessageSquare"
+                  title="No active session in this project"
+                  body="Start a session or select a tab to open its conversation."
+                  cta={
+                    selectedStudioScope && agentMapEntry.state.workspace.status === "ready" ? (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        data-testid="project-start-session"
+                        disabled={startingProject?.root === selectedStudioScope.cwd}
+                        onClick={() => void handleStartProjectSession(
+                          selectedStudioScope.cwd,
+                          selectedStudioProject?.displayName ?? basenameOf(selectedStudioScope.cwd),
+                        )}
+                      >
+                        <Icon name="Plus" size={14} /> Start session
+                      </button>
+                    ) : null
+                  }
+                />
               ) : showProjectStarting && startingProject ? (
                 /* E3.2: a project you can select but not talk to is the
                    failure. Its first session is on the way — say so, instead
@@ -3286,14 +3425,30 @@ export const App = (): JSX.Element => {
                   title={`Starting a session in ${startingProject.label}…`}
                   body="Sessions boot at the project root, so the coding agent comes up with this project's instructions and skills."
                 />
-              ) : showWorkbench && harness.activeSessionId ? (
+              ) : showWorkbench && conversationSession ? (
                 <div className="agent-view" data-testid="agent-view">
                   <div className="agent-view-panel" id="agent-panel-terminal">
-                    <Terminal
-                      sessionId={harness.activeSessionId}
-                      token={harness.bootToken}
-                      cwd={activeSession?.cwd ?? null}
-                    />
+                    <AssistantPane
+                      sessionId={conversationSession.id}
+                      bootToken={harness.bootToken}
+                      authRevision={harness.authRevision}
+                      drafts={assistantDrafts}
+                      authorityRevision={assistantAuthorityRevision}
+                      onAuthorityRevision={setAssistantAuthorityRevision}
+                      onSignIn={signInForAssistant}
+                      onOpenSettings={() => setSettingsOpen(true)}
+                      terminalRevision={
+                        harness.terminalRevealBySession.get(
+                          conversationSession.id,
+                        ) ?? 0
+                      }
+                    >
+                      <Terminal
+                        sessionId={conversationSession.id}
+                        token={harness.bootToken}
+                        cwd={conversationSession.cwd}
+                      />
+                    </AssistantPane>
                   </div>
                 </div>
               ) : (
@@ -3302,6 +3457,9 @@ export const App = (): JSX.Element => {
                    screen gives way to the terminal (createSessionAt clears
                    `composing`), and the canvas reveals itself once populated. */
                 <NewSessionComposer
+                  harness={selectedHarness}
+                  entries={harnessEntries ?? FALLBACK_HARNESSES}
+                  onHarnessChange={setSelectedHarness}
                   firstRun={state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
@@ -3312,7 +3470,6 @@ export const App = (): JSX.Element => {
                     setSelectedProject(null);
                     setTemplatesOpen(true);
                   }}
-                  listHarnesses={harness.listHarnesses}
                   listTemplates={harness.listTemplates}
                   telemetryOptIn={
                     harness.settings?.telemetryOptIn ?? state.telemetryOptIn
@@ -3338,29 +3495,27 @@ export const App = (): JSX.Element => {
             !isMobile &&
             !rightPaneSuppressedByComposer &&
             !canvasExpanded && (
-            <div
-              className="pane-resize-handle pane-resize-handle-canvas"
-              // Track the canvas column's ACTUAL edge, not the requested width.
-              // The column is `minmax(CANVAS_MIN, widths.canvas)`, so it clamps
-              // below widths.canvas once the terminal is at its own floor
-              // (100% − CANVAS_MIN). Positioning the handle at the raw
-              // widths.canvas then stranded it in the terminal, a growing gap
-              // to the left of the board it splits. The same clamp keeps them
-              // welded at every width. (null = the 1fr/1fr split, always at 50%.)
-              style={{
-                right:
-                  widths.canvas == null
-                    ? "50%"
-                    : `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`,
-              }}
-              onPointerDown={startCanvasDrag}
-              onDoubleClick={resetCanvas}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize canvas pane"
-              data-testid="resize-handle-canvas"
-            />
-          )}
+              <div
+                className="pane-resize-handle pane-resize-handle-canvas"
+                // Track the canvas column's ACTUAL edge, not the requested width.
+                // The column track is clamped to `100% − CANVAS_MIN` (the
+                // terminal's floor), so the handle uses the same expression to
+                // stay welded to the board's edge at every width. (null = the
+                // 1fr/1fr split, always at 50%.)
+                style={{
+                  right:
+                    widths.canvas == null
+                      ? "50%"
+                      : `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`,
+                }}
+                onPointerDown={startCanvasDrag}
+                onDoubleClick={resetCanvas}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize canvas pane"
+                data-testid="resize-handle-canvas"
+              />
+            )}
 
           {isMobile && !rightCollapsed && (
             <div
@@ -3391,32 +3546,6 @@ export const App = (): JSX.Element => {
               role="tablist"
               aria-label="Right pane"
             >
-              {/* THE WAY BACK UP. The map was a one-way door: you could drill
-                  into an agent and never return, which is most of why it felt
-                  like a dead end. Derived from containment (not from the click
-                  that got here), so the same door exists whether the agent was
-                  reached from the rail or from a map node. */}
-              {upToProject && (
-                <button
-                  type="button"
-                  className="right-pane-up"
-                  data-testid="canvas-altitude-up"
-                  aria-label={`Back to the ${upToProject.label} map`}
-                  data-tooltip={`Back to the ${upToProject.label} map`}
-                  onClick={() =>
-                    handleSelectWorkspace(
-                      upToProject.workspaceKey,
-                      upToProject.root,
-                      upToProject.label,
-                    )
-                  }
-                >
-                  <Icon name="ChevronLeft" size={14} />
-                  <span className="right-pane-up-label">
-                    {upToProject.label}
-                  </span>
-                </button>
-              )}
               <button
                 role="tab"
                 aria-selected={shownTab === "canvas"}
@@ -3427,7 +3556,13 @@ export const App = (): JSX.Element => {
                 data-testid="right-tab-canvas"
               >
                 <Icon name="Workflow" size={14} />
-                {planningWorkspace ? "Agent Map" : "Canvas"}
+                {projectMapSelected ? (
+                  <>
+                    <span className="right-pane-tab-qualifier">Agent </span>Map
+                  </>
+                ) : (
+                  "Canvas"
+                )}
               </button>
               {/* Steps are an AGENT's steps. At map altitude there is no
                   meaningful step list for a whole project, and a tab that
@@ -3463,7 +3598,8 @@ export const App = (): JSX.Element => {
                 aria-label={secretsDisabled ?? undefined}
                 data-tooltip={secretsDisabled ?? undefined}
                 className={
-                  "right-pane-tab" + (shownTab === "secrets" ? " is-active" : "")
+                  "right-pane-tab" +
+                  (shownTab === "secrets" ? " is-active" : "")
                 }
                 onClick={() => setRightTab("secrets")}
                 data-testid="right-tab-secrets"
@@ -3476,7 +3612,23 @@ export const App = (): JSX.Element => {
                     so the link/build state lives here in the tab bar. */}
                 {shownTab === "canvas" &&
                   !atMapAltitude &&
-                  rightPaneWorkflow?.definitionId != null && (
+                  rightPaneWorkflow?.definitionId != null &&
+                  rightPaneDeploymentState === "unavailable" && (
+                    /* Not a link: this account can't open that dashboard page. */
+                    <span
+                      className="status-tag right-pane-deployed"
+                      data-testid="agent-unavailable-tag"
+                      data-deployment-state="unavailable"
+                      data-tooltip={deploymentStateTitle("unavailable")}
+                    >
+                      <Icon name="CloudOff" size={12} />
+                      {deploymentStateLabel("unavailable")}
+                    </span>
+                  )}
+                {shownTab === "canvas" &&
+                  !atMapAltitude &&
+                  rightPaneWorkflow?.definitionId != null &&
+                  rightPaneDeploymentState !== "unavailable" && (
                     <a
                       className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                       data-testid="workflow-dashboard-link"
@@ -3490,31 +3642,27 @@ export const App = (): JSX.Element => {
                       data-tooltip="Open this agent in the Sapiom dashboard"
                     >
                       <Icon name="Cloud" size={12} />
-                      {rightPaneDeploymentState === "ready"
-                        ? "deployed"
-                        : rightPaneDeploymentState === "building"
-                          ? "building"
-                          : rightPaneDeploymentState === "failed"
-                            ? "deploy failed"
-                            : "linked"}
+                      {deploymentStateLabel(
+                        rightPaneDeploymentState ?? "linked",
+                      )}
                     </a>
                   )}
                 {/* Full view belongs to the graph surface currently shown:
                     Agent Map at project altitude, Canvas / Focus below it. */}
-                {(!atMapAltitude || planningWorkspace) && (
+                {(!atMapAltitude || projectMapSelected) && (
                   <button
                     className="theme-toggle"
                     data-testid="canvas-expand"
                     hidden={canvasExpanded}
                     aria-label={
-                      planningWorkspace
+                      projectMapSelected
                         ? "Expand Agent Map"
                         : shownTab === "steps"
                           ? "Open Focus mode"
                           : "Expand canvas"
                     }
                     title={
-                      planningWorkspace
+                      projectMapSelected
                         ? "Expand Agent Map"
                         : shownTab === "steps"
                           ? "Open Focus mode"
@@ -3529,12 +3677,12 @@ export const App = (): JSX.Element => {
                   className="theme-toggle right-pane-collapse"
                   data-testid="right-collapse"
                   aria-label={
-                    planningWorkspace
+                    projectMapSelected
                       ? "Close Agent Map"
                       : "Collapse canvas panel"
                   }
                   title={
-                    planningWorkspace
+                    projectMapSelected
                       ? "Close Agent Map"
                       : "Collapse canvas panel"
                   }
@@ -3552,7 +3700,10 @@ export const App = (): JSX.Element => {
                 key worth preserving, and keeping a credential list mounted
                 behind another tab buys nothing. */}
             {shownTab === "secrets" && (
-              <div className="right-pane-panel" data-testid="right-panel-secrets">
+              <div
+                className="right-pane-panel"
+                data-testid="right-panel-secrets"
+              >
                 <SecretsPanel
                   api={harness.api}
                   workflow={rightPaneWorkflow}
@@ -3575,27 +3726,54 @@ export const App = (): JSX.Element => {
                   the subject is a project, so there is no agent board drawn
                   behind the map. Keyed by project, so switching projects is a
                   fresh load rather than a mutation of the one on screen. */}
-              {studioView?.altitude === "map" ? (
-                <AgentMapPane
-                  state={agentMapEntry.state.workspace}
-                  onRetry={agentMapEntry.retryWorkspace}
-                  expanded={canvasExpanded}
-                  onToggleExpanded={toggleCanvasExpanded}
+              {unresolvedProjectMap ||
+              (studioView?.altitude === "map" && !selectedStudioProject) ? (
+                <EmptyState
+                  className="canvas-empty"
+                  testId="agent-map-identity-unavailable"
+                  icon="Folder"
+                  title="Agent Map unavailable"
+                  body="Studio couldn't identify this project. Reload projects to try again, or select another project."
+                  cta={
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      data-testid="agent-map-reload-projects"
+                      onClick={() => {
+                        void harness.refreshWorkspaceScopes().catch(() => {
+                          harness.showToast(
+                            "Projects couldn't be reloaded. Try again.",
+                          );
+                        });
+                      }}
+                    >
+                      Reload projects
+                    </button>
+                  }
                 />
-              ) : legacyView.altitude === "map" ? (
-                <WorkspaceGraphView
-                  key={legacyView.project.workspaceKey}
-                  workspaceKey={legacyView.project.workspaceKey}
-                  workspaceName={legacyView.project.label}
+              ) : studioView?.altitude === "map" ? (
+                <AgentMapPane
+                  key={`${studioView.projectId}:${harness.authRevision}`}
+                  viewportStore={agentMapViewportStore}
+                  visible={!rightCollapsed && shownTab === "canvas"}
                   api={harness.api}
                   workflows={state.workflows}
-                  workspaceScopes={workspaceScopes}
-                  latestAnnouncement={
-                    harness.systemGraphAnnouncements.get(
-                      legacyView.project.workspaceKey,
-                    ) ?? null
-                  }
-                  onOpenAgent={handleFocusAgent}
+                  refreshWorkflows={harness.refreshWorkflows}
+                  onOpenAgent={(workflow, target) => {
+                    selectStudioAgent(workflow, target);
+                    setSelectedProject(null);
+                    setFocusedAgentPath(workflow.path);
+                    setRightTab("canvas");
+                    expandRightPane();
+                    closeMobileDrawer();
+                  }}
+                  state={agentMapEntry.state.workspace}
+                  unavailable={agentMapEntry.state.unavailable}
+                  onRetry={agentMapEntry.retryWorkspace}
+                  initialization={agentMapEntry.initialization}
+                  onRetryGeneration={agentMapEntry.retryGeneration}
+                  expanded={canvasExpanded}
+                  onToggleExpanded={toggleCanvasExpanded}
                 />
               ) : null}
               <div
@@ -3604,109 +3782,118 @@ export const App = (): JSX.Element => {
                 }
                 data-testid="right-panel-board"
               >
-              <CanvasPane
-                sessionId={harness.activeSessionId}
-                lastMessage={harness.lastMessage}
-                subjectWorkflow={rightPaneWorkflow}
-                source={canvasSource}
-                loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
-                overviewActive={showComposer}
-                sessionExited={showDead}
-                onCanvasState={(hasContent) => {
-                  // The board keeps its mount behind the map; its probe must
-                  // not reveal or collapse the pane while the PROJECT is what
-                  // the pane is showing — the map is the answer to selecting a
-                  // project and cannot be closed under it.
-                  if (atMapAltitude) return;
-                  // The pane follows the active session's board: open it whenever
-                  // the session has one, close it when it doesn't. This fires on
-                  // the mount probe, on every canvas.reload, and on each session
-                  // switch — so a board an agent just rendered (a finished build,
-                  // a switch to a populated agent) opens the pane on its own, even
-                  // one you'd collapsed, and an empty session keeps it closed.
-                  // Mobile drives its sheet with its own control, not this.
-                  if (isMobile) return;
-                  // An exited session keeps the pane open even with no board, so
-                  // its "resume to see it" invite stays visible.
-                  const activeExited =
-                    state.sessions.find((s) => s.id === harness.activeSessionId)
-                      ?.status === "exited";
-                  if (hasContent || activeExited) {
-                    // Content present (or an exited session's invite) → always
-                    // reveal, re-opening even a pane the user had collapsed.
-                    emptyCollapsedKeyRef.current = null;
-                    setRightCollapsed(false);
-                    return;
+                <CanvasPane
+                  sessionId={harness.activeSessionId}
+                  lastMessage={harness.lastMessage}
+                  subjectWorkflow={rightPaneWorkflow}
+                  source={canvasSource}
+                  loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
+                  overviewActive={showComposer}
+                  sessionExited={showDead}
+                  onCanvasState={(hasContent) => {
+                    // The board keeps its mount behind the map; its probe must
+                    // not reveal or collapse the pane while the PROJECT is what
+                    // the pane is showing — the map is the answer to selecting a
+                    // project and cannot be closed under it.
+                    if (atMapAltitude) return;
+                    // The pane follows the active session's board: open it whenever
+                    // the session has one, close it when it doesn't. This fires on
+                    // the mount probe, on every canvas.reload, and on each session
+                    // switch — so a board an agent just rendered (a finished build,
+                    // a switch to a populated agent) opens the pane on its own, even
+                    // one you'd collapsed, and an empty session keeps it closed.
+                    // Mobile drives its sheet with its own control, not this.
+                    if (isMobile) return;
+                    // An exited session keeps the pane open even with no board, so
+                    // its "resume to see it" invite stays visible.
+                    const activeExited =
+                      state.sessions.find(
+                        (s) => s.id === harness.activeSessionId,
+                      )?.status === "exited";
+                    if (hasContent || activeExited) {
+                      // Content present (or an exited session's invite) → always
+                      // reveal, re-opening even a pane the user had collapsed.
+                      emptyCollapsedKeyRef.current = null;
+                      setRightCollapsed(false);
+                      return;
+                    }
+                    // Empty board → collapse once per (session, bound workflow). A
+                    // redundant probe for the same one must not re-close a pane the
+                    // user just expanded; a new session or binding still collapses.
+                    if (manualExpandPendingRef.current) {
+                      manualExpandPendingRef.current = false;
+                      manualExpandSessionRef.current =
+                        harness.activeSessionId ?? null;
+                      return;
+                    }
+                    const claimed = manualExpandSessionRef.current;
+                    if (claimed != null && claimed === harness.activeSessionId)
+                      return;
+                    if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
+                    emptyCollapsedKeyRef.current = emptyBoardKey;
+                    setRightCollapsed(true);
+                  }}
+                  onGraphChange={(workflowPath, graph) => {
+                    const contract = inputContractFromCanvasGraph(graph);
+                    if (contract)
+                      visibleInputContractsRef.current.set(
+                        workflowPath,
+                        contract,
+                      );
+                  }}
+                  expanded={canvasExpanded && !atMapAltitude}
+                  onToggleExpanded={toggleCanvasExpanded}
+                  macros={state.macros}
+                  tasks={harness.tasks}
+                  surface={shownTab === "steps" ? "steps" : "board"}
+                  onOpenSteps={() => setRightTab("steps")}
+                  run={activeObservedRun?.run ?? null}
+                  runTarget={activeObservedRun?.target ?? null}
+                  runs={activeSessionRuns}
+                  onSelectRun={(executionId) => {
+                    if (harness.activeSessionId)
+                      harness.selectRun(harness.activeSessionId, executionId);
+                  }}
+                  preview={
+                    harness.activeSessionId
+                      ? (harness.previewBySession.get(
+                          harness.activeSessionId,
+                        ) ?? null)
+                      : null
                   }
-                  // Empty board → collapse once per (session, bound workflow). A
-                  // redundant probe for the same one must not re-close a pane the
-                  // user just expanded; a new session or binding still collapses.
-                  if (manualExpandPendingRef.current) {
-                    manualExpandPendingRef.current = false;
-                    manualExpandSessionRef.current =
-                      harness.activeSessionId ?? null;
-                    return;
+                  deployState={
+                    rightPaneWorkflow
+                      ? (harness.deployStateByPath.get(
+                          rightPaneWorkflow.path,
+                        ) ?? null)
+                      : null
                   }
-                  const claimed = manualExpandSessionRef.current;
-                  if (claimed != null && claimed === harness.activeSessionId)
-                    return;
-                  if (emptyCollapsedKeyRef.current === emptyBoardKey) return;
-                  emptyCollapsedKeyRef.current = emptyBoardKey;
-                  setRightCollapsed(true);
-                }}
-                onGraphChange={(workflowPath, graph) => {
-                  const contract = inputContractFromCanvasGraph(graph);
-                  if (contract)
-                    visibleInputContractsRef.current.set(
-                      workflowPath,
-                      contract,
-                    );
-                }}
-                expanded={canvasExpanded && !atMapAltitude}
-                onToggleExpanded={toggleCanvasExpanded}
-                macros={state.macros}
-                tasks={harness.tasks}
-                surface={shownTab === "steps" ? "steps" : "board"}
-                onOpenSteps={() => setRightTab("steps")}
-                run={activeObservedRun?.run ?? null}
-                runTarget={activeObservedRun?.target ?? null}
-                runs={activeSessionRuns}
-                onSelectRun={(executionId) => {
-                  if (harness.activeSessionId)
-                    harness.selectRun(harness.activeSessionId, executionId);
-                }}
-                preview={
-                  harness.activeSessionId
-                    ? (harness.previewBySession.get(harness.activeSessionId) ??
-                      null)
-                    : null
-                }
-                deployState={
-                  rightPaneWorkflow
-                    ? (harness.deployStateByPath.get(rightPaneWorkflow.path) ??
-                      null)
-                    : null
-                }
-                onDismissDeploy={() => {
-                  if (rightPaneWorkflow)
-                    harness.dismissDeployState(rightPaneWorkflow.path);
-                }}
-                agentsBaseUrl={state.agentsBaseUrl}
-                onOpenCode={() => setRightTab("steps")}
-                workflows={state.workflows}
-                onOpenWorkflow={(path) => void handleBindWorkflow(path)}
-                /* The pane's own CTAs (Visualize, a failed task's Retry) act on
+                  onDismissDeploy={() => {
+                    if (rightPaneWorkflow)
+                      harness.dismissDeployState(rightPaneWorkflow.path);
+                  }}
+                  agentsBaseUrl={state.agentsBaseUrl}
+                  onOpenCode={() => setRightTab("steps")}
+                  workflows={state.workflows}
+                  onOpenWorkflow={(path) => void handleBindWorkflow(path)}
+                  /* The pane's own CTAs (Visualize, a failed task's Retry) act on
                    what the pane is DRAWING, not on what the session is bound
                    to — otherwise the empty state for F renders F's board. */
-                onRunMacro={(macro) =>
-                  handleRunMacroForWorkflow(rightPaneWorkflow, macro)
-                }
-                onInjectPrompt={(text) => {
-                  if (harness.activeSessionId)
-                    void harness.injectInput(harness.activeSessionId, text);
-                }}
-                onDescribeWorkflow={handleDescribeWithAI}
-              />
+                  onRunMacro={(macro) =>
+                    handleRunMacroForWorkflow(rightPaneWorkflow, macro)
+                  }
+                  onInjectPrompt={(text) => {
+                    if (harness.activeSessionId)
+                      void harness
+                        .injectInput(harness.activeSessionId, text)
+                        .catch((err) =>
+                          harness.showToast(
+                            errorMessage(err, "Could not send the prompt to Terminal."),
+                          ),
+                        );
+                  }}
+                  onDescribeWorkflow={handleDescribeWithAI}
+                />
               </div>
             </div>
           </div>

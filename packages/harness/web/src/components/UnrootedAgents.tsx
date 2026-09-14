@@ -9,7 +9,7 @@ import { prefixIsPathTail } from "../lib/project-tree";
 import { basenameOf, parentOf } from "../lib/paths";
 import { rootContains } from "../lib/session-scope";
 import { displayAgentName } from "../lib/agent-name";
-import { workflowDeploymentState } from "../lib/workflow-deployment";
+import { workflowDeploymentState, workflowDeploymentIndicator, workflowDeploymentTitle } from "../lib/workflow-deployment";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /**
@@ -215,7 +215,8 @@ function UnrootedRow({
      must not render as `ari/ari-grade-repo`, which names nothing on disk. */
   const pathTail = prefixIsPathTail(workflow, name);
   const deploymentState = workflowDeploymentState(workflow);
-  const deployed = deploymentState === "ready";
+  const display = workflowDeploymentIndicator(workflow);
+  const deployed = display.indicator === "deployed";
   return (
     <div
       className={"workflow-item unrooted-item" + (isFocused ? " is-focused" : "")}
@@ -261,10 +262,12 @@ function UnrootedRow({
         <span
           className="workflow-status"
           data-deployed={deployed}
+          data-deployment-unavailable={display.unavailable}
           data-deployment-state={deploymentState}
           data-testid={`unrooted-status-${workflow.path}`}
+          title={workflowDeploymentTitle(workflow)}
         >
-          <Icon name={deployed ? "Cloud" : "CloudOff"} size={13} />
+          <Icon name={display.indicator === "draft" ? "CloudOff" : "Cloud"} size={13} />
         </span>
       </button>
       <OpenAsProject agent={agent} agentPaths={agentPaths} onOpenAsProject={onOpenAsProject} />

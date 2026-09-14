@@ -3,7 +3,7 @@ import express from "express";
 import type { Server } from "node:http";
 import { createMacrosRouter, type MacrosRouterDeps } from "./macros.js";
 import { DEFAULT_MACROS } from "../core/macros.js";
-import { ExternalHarnessError } from "../core/errors.js";
+import { ExternalHarnessError, McpCredentialGenerationChangedError } from "../core/errors.js";
 import { SessionNotReadyError } from "../core/session-manager.js";
 import { TaskAlreadyRunningError, TaskNotSupportedError } from "../core/task-manager.js";
 import type { WorkflowInfo } from "../shared/types.js";
@@ -372,6 +372,33 @@ describe("macros router", () => {
     // workflowPath must be threaded through so TaskManager can reject a
     // second session running the same macro against the same workflow.
     expect(passedWorkflowPath).toBe(workflow.path);
+  });
+
+  it("409s with a stable code when credentials change while a background task is preparing", async () => {
+    const backgroundMacro = {
+      id: "bg-generation-change",
+      label: "Background generation change",
+      icon: "Wand2",
+      execution: "background" as const,
+      action: { kind: "inject" as const, text: "do something", submit: true },
+    };
+    const deps = makeDeps({
+      listMacros: () => [...DEFAULT_MACROS, backgroundMacro],
+      runBackgroundTask: vi.fn().mockRejectedValue(new McpCredentialGenerationChangedError()),
+    });
+    await start(deps);
+
+    const res = await fetch(`${baseUrl}/api/macros/bg-generation-change/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ harnessSessionId: "sess-1" }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+    });
   });
 
   it("400s visualize on a harness with no headless mode (TaskNotSupportedError from the enrichment spawn)", async () => {

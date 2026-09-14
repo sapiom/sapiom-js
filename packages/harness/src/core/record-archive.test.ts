@@ -354,43 +354,46 @@ describe("backfillSessionRecords", () => {
     const read = new Set<string>();
 
     const archived = await backfillSessionRecords({
-      conversationIds: async () => ["sess-live", "sess-done", "sess-missing"],
+      conversationIds: async () => ["sess-live", "sess-missing", "sess-done"],
       readFromEvents: async (id) => {
         read.add(id);
         return record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null });
       },
       archive,
       isLiveSession: (id) => id === "sess-live",
+      maxRecords: 1,
     });
 
-    expect(archived).toEqual(["sess-missing"]);
+    expect(archived).toEqual({ archived: ["sess-missing"], complete: true });
     // A live session is never even folded — the point is not to store a
     // half-finished record over the one its exit will write.
     expect([...read]).toEqual(["sess-missing"]);
     expect(await archive.has("sess-live")).toBe(false);
   });
 
-  it("stops at its cap and reports what it left behind", async () => {
-    const capped: number[] = [];
-    const archived = await backfillSessionRecords({
+  it("stops at its cap and finishes the remaining work on later passes", async () => {
+    const options = {
       conversationIds: async () => ["a", "b", "c", "d"],
-      readFromEvents: async (id) => record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null }),
+      readFromEvents: async (id: string) => record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null }),
       archive,
       maxRecords: 2,
-      onCapped: (remaining) => capped.push(remaining),
-    });
+    };
 
-    expect(archived).toEqual(["a", "b"]);
-    expect(capped).toEqual([2]);
+    expect(await backfillSessionRecords(options)).toEqual({ archived: ["a", "b"], complete: false });
+    expect(await archive.has("c")).toBe(false);
+    expect(await backfillSessionRecords(options)).toEqual({ archived: ["c", "d"], complete: true });
+    expect(await backfillSessionRecords(options)).toEqual({ archived: [], complete: true });
   });
 
-  it("skips a conversation the fold has nothing for, without failing the pass", async () => {
+  it.each(["missing", "empty"])("skips a %s conversation without failing the pass", async (kind) => {
     const archived = await backfillSessionRecords({
       conversationIds: async () => ["gone", "here"],
       readFromEvents: async (id) =>
-        id === "gone" ? null : record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null }),
+        id === "gone"
+          ? (kind === "missing" ? null : record({ turns: [], turnCount: 0 }))
+          : record({ harnessSessionId: id, mergedSessionIds: [id], agentSessionId: null }),
       archive,
     });
-    expect(archived).toEqual(["here"]);
+    expect(archived).toEqual({ archived: ["here"], complete: true });
   });
 });

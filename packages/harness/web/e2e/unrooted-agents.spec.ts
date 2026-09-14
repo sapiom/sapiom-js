@@ -229,11 +229,12 @@ test.describe("(a) every row's absolute path is reachable by HOVER", () => {
   }) => {
     await expand(page);
     const titles = await page
-      .locator('[data-testid^="unrooted-agent-"] [title]')
+      .locator('[data-testid^="unrooted-agent-"] .workflow-item-trigger[title]')
       .evaluateAll((nodes) =>
         nodes.map((node) => node.getAttribute("title") ?? ""),
       );
     expect(titles).toHaveLength(24);
+    await expect(page.locator('[data-testid^="unrooted-status-"][title]')).toHaveCount(24);
     expect(titles.every((title) => title.startsWith("/Users/demo/"))).toBe(
       true,
     );

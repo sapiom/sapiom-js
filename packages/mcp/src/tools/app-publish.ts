@@ -11,12 +11,43 @@
  * is provisioned here: no gateway call, no sandbox, no Blaxel. The wake happens
  * later, on demand.
  *
+ * What the durable address IS, and it is easy to read the copy the other way
+ * (SAP-3217): a redirector, not a reverse proxy. The host answers the root with a
+ * 302 to whichever preview URL is serving the app, answers `/__status` with the wake
+ * state that the "Starting …" page polls, forwards `/hook`/`/hook/*` when the link
+ * has `webhooksEnabled`, and 404s everything else. So the app's own API is only
+ * reachable at the preview URL the redirect lands on.
+ *
+ * Which is why the copy does not stop at "not the durable URL". Three further facts
+ * each turn one wrong inference into another, so all three are stated:
+ *   - RE-RESOLVE, do not store: the URL changes when a wake recreates the sandbox,
+ *     and for an org-scoped app it carries a token that expires inside one wake — so
+ *     a stored URL 401s minutes later, which "changes across wakes" does not predict.
+ *   - The redirect and `/__status` both run the link's access check, which verifies a
+ *     browser cookie and nothing else. An org-scoped app's API is therefore
+ *     browser-only; an API-key caller lands on the login page.
+ *   - `webhooksEnabled` is off by default and is not in this tool's schema, so
+ *     promising `/hook/` unconditionally would send an agent to register a URL that
+ *     404s indistinguishably from a typo'd slug.
+ *
+ * Both the tool description and the success summary say all of it, because the
+ * summary is what an agent reads back before it wires up a client, and the summary
+ * branches on visibility so a public app is not warned about a gate it does not have.
+ *
+ * The offline primer (instructions.ts) deliberately does NOT carry this paragraph yet:
+ * it and the backend's `DEFAULT_MCP_INSTRUCTIONS` are currently drifted by two unrelated
+ * release pairs (SAP-3180's vault/launch/receipts landed here, the backend's trigger-kinds
+ * release landed there), so neither body is a superset and syncing either way would delete
+ * the other's content. The redirector paragraph goes into the primer with that
+ * reconciliation, not ahead of it.
+ *
  * Three calls against the App Links REST API, in order:
  *   POST /v1/app-links            (upsert on slug)
  *   PUT  /v1/app-links/{id}/bundle
  *   POST /v1/app-links/{id}/publish
  *
- * Auth is the cached `sapiom_authenticate` credential as `x-api-key`.
+ * Auth is the cached `sapiom_authenticate` credential as `x-api-key`, over the
+ * App Links transport shared with the management tools (app-links-api.ts).
  *
  * The first call CREATES the link, so a failure in either of the last two
  * leaves a real link with no active bundle. Error copy is step-aware for
@@ -49,11 +80,17 @@ import { z } from "zod";
 
 import { readCredentials, type ResolvedEnvironment } from "../credentials.js";
 import { registerTool } from "../register-tool.js";
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
+import {
+  appLinksFetch,
+  asAppLink,
+  codeFrom,
+  fail,
+  messageFrom,
+  NOT_AUTHED,
+  ok,
+  type AppLinkWire,
+  type ErrorBody,
+} from "./app-links-api.js";
 
 /** Same shape as the backend's `APP_LINK_SLUG_PATTERN` (app-links.types.ts). */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -85,16 +122,6 @@ interface AppLinkManifest {
   bytes: number;
 }
 
-interface AppLinkWire {
-  id: string;
-  slug: string;
-  name: string;
-  visibility: string;
-  url: string;
-  /** Null until a bundle is activated; set on the publish response. */
-  bundleSha256?: string | null;
-}
-
 interface UploadBundleWire {
   bundleSha256: string;
   manifest: AppLinkManifest;
@@ -116,6 +143,15 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       '(only logged-in members of your organization can open it); visibility "public" needs ' +
       "confirmPublic: true and a dailySpendCapUsd because your org pays for every wake. Publishing the " +
       "same slug again replaces the app in place at the SAME URL — that is how you ship an update. " +
+      "The link is a wake-on-visit REDIRECTOR, not a reverse proxy: its root answers a 302 to whichever " +
+      "preview URL is currently serving the app and sub-paths are NOT proxied, so the app's own API lives " +
+      "at that preview URL, never under the link. Read it off the redirect (or from `url` in " +
+      "GET {link}/__status) and re-resolve it per use — it changes when a wake recreates the sandbox and, " +
+      "for an org-scoped app, carries a short-lived token that expires. Both routes run the link's OWN " +
+      "access check — for an org-scoped app that means a logged-in member's browser session, NOT an API " +
+      "key, so its API is browser-only. A public app's link and `/__status` need no session at all, so for " +
+      "machine callers publish the app as `public`, or receive traffic on `/hook/…`, which needs " +
+      "`webhooksEnabled` on the link (off by default, not settable here — REST only). " +
       `Bundles are TEXT-ONLY (UTF-8 files; no images, fonts, or archives) and capped at ${BUNDLE_CAP_MIB} MiB; ` +
       "node_modules, .git, dotfiles, symlinks and the project's own sapiom.json are never uploaded — " +
       "install dependencies at wake via `build`. Both limits are checked locally, so a bad bundle costs no upload. " +
@@ -306,18 +342,20 @@ function summarize(
   return (
     `Published "${link.name}" to ${link.url} (${audience}; ${files}). ` +
     `The link is durable — republish the "${link.slug}" slug to update it in place. ` +
-    "The first visit after a publish cold-starts the app."
+    "The first visit after a publish cold-starts the app. " +
+    "It is a REDIRECTOR, not a reverse proxy: the root 302s to the preview URL currently " +
+    "serving the app and sub-paths are not proxied, so the app's own API lives at that preview " +
+    `URL, not under this link — read it off the redirect (or from \`url\` in GET ${link.url}/__status) ` +
+    "and re-resolve it per use, because it changes when a wake recreates the sandbox and, for an " +
+    "org-scoped app, carries a short-lived token that expires. " +
+    (link.visibility === "public"
+      ? `This app is public, so ${link.url} and ${link.url}/__status need no login — that is the ` +
+        "route for a server-side caller too, and it is what wakes the app."
+      : "Both of those routes need a logged-in member's browser session, NOT an API key, so this " +
+        "org-scoped app's API is browser-only: a machine caller needs the app published as " +
+        `\`public\`, or inbound traffic on ${link.url}/hook/… — which requires webhooksEnabled on ` +
+        "the link, off by default and settable only over REST.")
   );
-}
-
-/** A wire body that is usable as an app link, or `null`. */
-function asAppLink(data: unknown): AppLinkWire | null {
-  const link = data as AppLinkWire | undefined;
-  const usable =
-    typeof link?.id === "string" &&
-    link.id !== "" &&
-    typeof link.url === "string";
-  return usable ? (link as AppLinkWire) : null;
 }
 
 /**
@@ -481,12 +519,8 @@ function aftermath(step: PublishStep, slug: string): string {
 }
 
 /**
- * One JSON call against the backend's App Links REST API, with the wire error
- * codes turned into errors the agent can act on.
- *
- * A bare `GatewayClient` would not do: its mapping keeps only `HTTP_<status>`
- * and drops the body's `code`, and `BUNDLE_BINARY_FILE` / `BUNDLE_TOO_LARGE`
- * carry the detail (`path`, `bytes`) that makes the failure fixable.
+ * One publish-step call over the shared App Links transport (app-links-api.ts),
+ * with the wire error codes turned into step-aware errors the agent can act on.
  */
 async function appLinksRequest(
   apiURL: string,
@@ -497,38 +531,17 @@ async function appLinksRequest(
   route: string,
   body: unknown,
 ): Promise<unknown> {
-  // Concatenated, not `new URL(route, base)`: a custom `apiURL` carrying a base
-  // path (a local proxy, a tunnel) would have it silently dropped by the latter.
-  const url = `${apiURL.replace(/\/+$/, "")}${route}`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: { "x-api-key": apiKey, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (cause) {
+  const res = await appLinksFetch(apiURL, apiKey, method, route, body);
+  if (res.kind === "network") {
     throw new PreviewOperationError({
       code: "NETWORK",
-      message: `Could not reach ${url}. ${aftermath(step, slug)}`,
+      message: `Could not reach ${res.url}. ${aftermath(step, slug)}`,
       step: STEP_ROUTE[step],
-      hint: cause instanceof Error ? cause.message : String(cause),
+      hint: res.cause instanceof Error ? res.cause.message : String(res.cause),
     });
   }
-
-  const text = await res.text();
-  const data = text ? safeParse(text) : undefined;
-  if (!res.ok) throw publishError(res.status, data, step, slug);
-  return data;
-}
-
-interface ErrorBody {
-  code?: unknown;
-  message?: unknown;
-  /** `BUNDLE_BINARY_FILE`: the offending FILE path, not the request URL. */
-  path?: unknown;
-  bytes?: unknown;
-  maxBytes?: unknown;
+  if (!res.ok) throw publishError(res.status, res.data, step, slug);
+  return res.data;
 }
 
 /**
@@ -543,7 +556,7 @@ function publishError(
   slug: string,
 ): PreviewOperationError {
   const bodyError = (data ?? {}) as ErrorBody;
-  const code = typeof bodyError.code === "string" ? bodyError.code : undefined;
+  const code = codeFrom(data);
   const message = messageFrom(bodyError);
   const where = STEP_ROUTE[step];
   const left = aftermath(step, slug);
@@ -629,57 +642,3 @@ function publishError(
     step: where,
   });
 }
-
-function safeParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-function messageFrom(body: ErrorBody): string | undefined {
-  const m = body.message;
-  if (Array.isArray(m)) return m.join("; ");
-  if (typeof m === "string") return m;
-  return undefined;
-}
-
-// ─── Result envelope ─────────────────────────────────────────────────────────
-
-function ok(data: unknown): ToolResult {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-  };
-}
-
-/**
- * The structured `{"error": {code, message, hint?}}` envelope. The JSON matters
- * beyond readability: `registerTool` parses `error.code` out of it to classify
- * the `tool.call` analytics event.
- */
-function fail(err: unknown): ToolResult {
-  const structured =
-    err instanceof PreviewOperationError
-      ? err.toStructured()
-      : {
-          code: "UNEXPECTED",
-          message: err instanceof Error ? err.message : String(err),
-        };
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ error: structured }, null, 2),
-      },
-    ],
-    isError: true,
-  };
-}
-
-const NOT_AUTHED = fail(
-  new PreviewOperationError({
-    code: "NOT_AUTHENTICATED",
-    message: "Not authenticated. Run sapiom_authenticate first.",
-  }),
-);

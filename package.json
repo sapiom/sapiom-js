@@ -21,8 +21,9 @@
     "format": "pnpm -r --filter='./packages/*' format",
     "typecheck": "pnpm -r --filter='./packages/*' typecheck",
     "changeset": "changeset",
-    "version-packages": "changeset version && node packages/agent-core/scripts/gen-version-fallback.mjs && pnpm install --lockfile-only",
-    "release": "pnpm build && changeset publish",
+    "release:check": "node scripts/assert-release-ready.mjs",
+    "version-packages": "pnpm release:check && changeset version && node packages/agent-core/scripts/gen-version-fallback.mjs && pnpm install --lockfile-only",
+    "release": "pnpm release:check && pnpm build && changeset publish",
     "dev:watch": "pnpm -r --filter='./packages/*' --parallel run dev",
     "registry:local": "npx -y verdaccio@6 --config .verdaccio/config.yaml",
     "publish:local": "node scripts/publish-local.mjs",
@@ -36,7 +37,9 @@
     "pr-labeler:check": "node --test scripts/pr-label-classifier.test.mjs && prettier --check .github/labeler.yml .github/workflows/pr-labeler.yml .github/workflows/test.yml .github/pull_request_template.md package.json scripts/pr-label-classifier.mjs scripts/pr-label-classifier.test.mjs",
     "pr-ci-security:check": "node --test scripts/pr-ci-security.test.mjs && prettier --check .github/workflows/test.yml .github/workflows/harness.yml scripts/pr-ci-security.test.mjs",
     "examples:sort": "node scripts/examples-sort.mjs",
-    "examples:sync-setup": "node scripts/examples-sync-setup.mjs"
+    "examples:sync-setup": "node scripts/examples-sync-setup.mjs",
+    "authoring-rules:stamp": "node scripts/authoring-rules-stamp.mjs",
+    "examples:app:screenshot": "node scripts/examples-app-screenshot.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.1",
@@ -45,6 +48,7 @@
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
+    "playwright": "^1.61.0",
     "prettier": "^3.2.5",
     "typescript": "^5.4.2"
   },

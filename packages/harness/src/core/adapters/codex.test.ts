@@ -26,6 +26,13 @@ function userMessageLine(message: string): string {
 
 describe("CodexAdapter", () => {
   describe("launch/resume", () => {
+    it("passes the initial user task as one positional argument on fresh launch only", () => {
+      const adapter = new CodexAdapter({ binary: "fake-codex" });
+      const opts = { harnessSessionId: "first-task", cwd: "/tmp/proj", initialPrompt: "--help\nBuild a ticket triage agent" };
+      expect(adapter.launch(opts).args.slice(-2)).toEqual(["--", opts.initialPrompt]);
+      expect(adapter.resume("native-id", opts).args).not.toContain(opts.initialPrompt);
+    });
+
     it("builds a launch SpawnSpec with update check off, never-ask approvals, workspace-write sandbox, and no env overrides", () => {
       const adapter = new CodexAdapter({ binary: "fake-codex" });
       const spec = adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj" });
@@ -120,12 +127,11 @@ describe("CodexAdapter", () => {
       expect(spec.env).toEqual({});
     });
 
-    it("ignores mcpConfigFile/settingsFile — Codex has no per-session injection point for either", () => {
+    it("ignores the Claude-only settingsFile", () => {
       const adapter = new CodexAdapter({ binary: "fake-codex" });
       const spec = adapter.launch({
         harnessSessionId: "h1",
         cwd: "/tmp/proj",
-        mcpConfigFile: "/tmp/proj/.sapiom/mcp.json",
         settingsFile: "/tmp/proj/.sapiom/settings.json",
       });
       expect(spec.args).toEqual([
@@ -148,11 +154,8 @@ describe("CodexAdapter", () => {
         adapter.launch({ harnessSessionId: "h1", cwd: "/tmp/proj", agentMapMcp }),
         adapter.resume("rollout", { harnessSessionId: "h1", cwd: "/tmp/proj", agentMapMcp }),
       ]) {
-        expect(spec.args).toContain(
-          `mcp_servers.agent-map.url=${JSON.stringify(agentMapMcp.url)}`,
-        );
-        expect(spec.args).toContain(
-          'mcp_servers.agent-map.bearer_token_env_var="SAPIOM_AGENT_MAP_CAPABILITY"',
+        expect(spec.args.find((arg) => arg.startsWith("mcp_servers.agent-map-"))).toContain(
+          `{ "url" = ${JSON.stringify(agentMapMcp.url)}, "bearer_token_env_var" = "SAPIOM_AGENT_MAP_CAPABILITY" }`,
         );
         expect(spec.args.join(" ")).not.toContain(agentMapMcp.bearerToken);
         expect(spec.env).toEqual({
