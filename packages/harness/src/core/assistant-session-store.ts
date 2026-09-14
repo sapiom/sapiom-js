@@ -46,6 +46,12 @@ const associationSchema = z
   })
   .strict();
 
+export class AssistantSessionRevisionError extends Error {
+  constructor() {
+    super("Assistant session changed. Please retry.");
+  }
+}
+
 /** Lifecycle ownership is independent of eligibility; content always requires its exact binding. */
 export class AssistantSessionStore {
   constructor(readonly stateRoot: string) {}
@@ -64,15 +70,17 @@ export class AssistantSessionStore {
     id: string,
     expected: number,
     next: Pick<AssistantLifecycle, "lifecycle" | "execution">,
+    signal?: AbortSignal,
   ): Promise<AssistantLifecycle> {
     const directory = await assistantDirectory(this.stateRoot, id);
     const unlock = await new DurableFileLock(
       join(directory, "lifecycle.json"),
     ).acquire();
     try {
+      signal?.throwIfAborted();
       const current = await this.lifecycle(id);
       if ((current?.revision ?? 0) !== expected)
-        throw new Error("Assistant session changed. Please retry.");
+        throw new AssistantSessionRevisionError();
       const updated = lifecycleSchema.parse({
         version: 1,
         harnessSessionId: id,
@@ -80,7 +88,7 @@ export class AssistantSessionStore {
         ...next,
         updatedAt: Date.now(),
       });
-      await writeAssistantJson(directory, "lifecycle.json", updated);
+      await writeAssistantJson(directory, "lifecycle.json", updated, signal);
       return updated;
     } finally {
       await unlock();

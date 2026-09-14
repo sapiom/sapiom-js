@@ -9,6 +9,7 @@ import {
   assistantContextDigest,
 } from "./studio-assistant-context.js";
 import type { OpenCodeTurnMessage } from "../shared/opencode-turn.js";
+import { DurableFileLock } from "./durable-file-lock.js";
 
 let hosted: HostedOpenCode;
 let permission: unknown[];
@@ -220,6 +221,75 @@ it("holds admission while resolving context and releases it without dispatch on 
   expect(dispatch).not.toHaveBeenCalled();
 });
 
+it("cancels a hung old Send preparation without blocking or dispatching into its replacement", async () => {
+  const delivery = new OpenCodeFinalResponse();
+  let release!: (value: RequestInit) => void;
+  const prepare = vi.fn(
+    () =>
+      new Promise<RequestInit>((done) => {
+        release = done;
+      }),
+  );
+  const pending = delivery.send(hosted, "ses_test", prepare);
+  let rejected = false;
+  void pending.catch(() => {
+    rejected = true;
+  });
+  await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+  abort.abort(new Error("ended"));
+  await vi.waitFor(() => expect(rejected).toBe(true));
+  const replacement = { ...hosted, signal: new AbortController().signal };
+  expect(delivery.isRunning(replacement)).toBe(false);
+  dispatch.mockImplementationOnce(async () => {
+    vi.mocked(hosted.server.fetchJson).mockResolvedValue([
+      { info: { id: "msg_new", role: "user", time: {} }, parts: [] },
+    ]);
+    return new Response(null, { status: 204 });
+  });
+  expect((await delivery.send(replacement, "ses_test", {})).status).toBe(204);
+  release({});
+  await expect(pending).rejects.toThrow("ended");
+  expect(dispatch).toHaveBeenCalledOnce();
+});
+
+it("releases a cancelled recovery preparation lock before its provider settles", async () => {
+  let release!: (value: { system: string }) => void;
+  const prepare = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          release = done;
+        }),
+    )
+    .mockResolvedValue({ system });
+  const delivery = new OpenCodeFinalResponse({ recoverPrompt: prepare });
+  const pending = delivery.recover(hosted, "ses_test", "msg_empty");
+  let rejected = false;
+  void pending.catch(() => {
+    rejected = true;
+  });
+  await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+  abort.abort(new Error("ended"));
+  await vi.waitFor(() => expect(rejected).toBe(true));
+  const releaseProbe = await new DurableFileLock(
+    join(hosted.stateRoot, "final-response-ses_test-msg_empty.json"),
+    { timeoutMs: 50 },
+  ).acquire();
+  await releaseProbe();
+  expect(await readdir(hosted.stateRoot)).toEqual([]);
+  const replacement = { ...hosted, signal: new AbortController().signal };
+  await delivery.recover(replacement, "ses_test", "msg_empty");
+  release({ system: system! });
+  await expect(pending).rejects.toThrow("ended");
+  expect(dispatch).toHaveBeenCalledOnce();
+  // Its later successful dispatch still owns the original durable replay fence.
+  await expect(
+    new OpenCodeFinalResponse().recover(replacement, "ses_test", "msg_empty"),
+  ).rejects.toThrow();
+  expect(dispatch).toHaveBeenCalledOnce();
+});
+
 it("never dispatches for busy, answered, stale, or already recovered turns", async () => {
   for (const scenario of [
     "busy",
@@ -299,7 +369,9 @@ it("fences recovery until an already submitted user message is persisted", async
         acknowledge = resolve;
       }),
   );
-  const checkpoint = vi.fn().mockRejectedValue(new Error("archive unavailable"));
+  const checkpoint = vi
+    .fn()
+    .mockRejectedValue(new Error("archive unavailable"));
   const recovery = new OpenCodeFinalResponse({ onPersisted: checkpoint });
   const sending = recovery.send(hosted, "ses_test", {
     method: "POST",

@@ -15,7 +15,10 @@ export interface PreparedOpenCodePrompt {
   readonly expectedSystem: string;
 }
 interface DeliveryOptions {
-  onPersisted?: (hosted: HostedOpenCode, conversationId: string) => Promise<void>;
+  onPersisted?: (
+    hosted: HostedOpenCode,
+    conversationId: string,
+  ) => Promise<void>;
   assertCurrent?: (hosted: HostedOpenCode) => Promise<void>;
   recoverPrompt?: (
     hosted: HostedOpenCode,
@@ -45,10 +48,10 @@ const acknowledges = (
 
 /** One continuation from saved results; never resubmit the original prompt. */
 export class OpenCodeFinalResponse {
-  private pending = new Map<string, Promise<void>>();
-  private admitting = new Set<string>();
-  private uncertain = new Set<string>();
-  private awaiting = new Map<string, PendingAcknowledgement>();
+  private pending = new WeakMap<HostedOpenCode, Promise<void>>();
+  private admitting = new WeakSet<HostedOpenCode>();
+  private uncertain = new WeakSet<HostedOpenCode>();
+  private awaiting = new WeakMap<HostedOpenCode, PendingAcknowledgement>();
 
   constructor(private readonly delivery: DeliveryOptions = {}) {}
 
@@ -60,9 +63,7 @@ export class OpenCodeFinalResponse {
   }
 
   isRunning(hosted: HostedOpenCode): boolean {
-    return (
-      this.pending.has(hosted.stateRoot) || this.admitting.has(hosted.stateRoot)
-    );
+    return this.pending.has(hosted) || this.admitting.has(hosted);
   }
 
   async send(
@@ -77,7 +78,7 @@ export class OpenCodeFinalResponse {
   ): Promise<Response> {
     if (this.isRunning(hosted))
       throw new Error("Another request is being admitted");
-    this.admitting.add(hosted.stateRoot);
+    this.admitting.add(hosted);
     const signal = AbortSignal.any([
       hosted.signal,
       AbortSignal.timeout(30_000),
@@ -90,7 +91,7 @@ export class OpenCodeFinalResponse {
         { signal: requestSignal },
       );
     try {
-      if (this.uncertain.has(hosted.stateRoot)) {
+      if (this.uncertain.has(hosted)) {
         const statuses = await hosted.server.fetchJson<
           Record<string, { type: string }>
         >("/session/status", { signal });
@@ -99,15 +100,18 @@ export class OpenCodeFinalResponse {
       }
       // Reconcile earlier uncertainty before accepting another context generation.
       const messages = await history();
-      const pending = this.awaiting.get(hosted.stateRoot);
+      const pending = this.awaiting.get(hosted);
       if (pending) {
         if (pending.sessionId !== sessionId || !acknowledges(messages, pending))
           throw new Error("Previous request has not been reconciled");
-        this.awaiting.delete(hosted.stateRoot);
-        this.uncertain.delete(hosted.stateRoot);
+        this.awaiting.delete(hosted);
+        this.uncertain.delete(hosted);
       }
       signal.throwIfAborted();
-      const prepared = typeof init === "function" ? await init(signal) : init;
+      const prepared =
+        typeof init === "function"
+          ? await abortablePreparation(init(signal), signal)
+          : init;
       const request = "init" in prepared ? prepared.init : prepared;
       const dispatchSignal = AbortSignal.any([
         signal,
@@ -121,8 +125,8 @@ export class OpenCodeFinalResponse {
         "init" in prepared
           ? { sessionId, before, expectedSystem: prepared.expectedSystem }
           : undefined;
-      if (acknowledgement) this.awaiting.set(hosted.stateRoot, acknowledgement);
-      this.uncertain.add(hosted.stateRoot);
+      if (acknowledgement) this.awaiting.set(hosted, acknowledgement);
+      this.uncertain.add(hosted);
       const response = await hosted.server.fetch(
         `/session/${sessionId}/prompt_async`,
         { ...request, signal: dispatchSignal },
@@ -132,8 +136,8 @@ export class OpenCodeFinalResponse {
         // and missing sessions before forking prompt work. Other HTTP failures
         // retain uncertainty until native history proves exact acknowledgement.
         if ([400, 401, 404].includes(response.status)) {
-          this.awaiting.delete(hosted.stateRoot);
-          this.uncertain.delete(hosted.stateRoot);
+          this.awaiting.delete(hosted);
+          this.uncertain.delete(hosted);
         }
         return response;
       }
@@ -152,13 +156,13 @@ export class OpenCodeFinalResponse {
         if (!acknowledged)
           await delay(25, undefined, { signal: dispatchSignal });
       }
-      this.awaiting.delete(hosted.stateRoot);
-      this.uncertain.delete(hosted.stateRoot);
+      this.awaiting.delete(hosted);
+      this.uncertain.delete(hosted);
       // Archive after actual native acknowledgement; storage failure cannot replay a prompt.
       await this.delivery.onPersisted?.(hosted, sessionId).catch(() => {});
       return response;
     } finally {
-      this.admitting.delete(hosted.stateRoot);
+      this.admitting.delete(hosted);
     }
   }
 
@@ -167,19 +171,16 @@ export class OpenCodeFinalResponse {
     sessionId: string,
     messageId: string,
   ): Promise<void> {
-    if (
-      this.admitting.has(hosted.stateRoot) ||
-      this.uncertain.has(hosted.stateRoot)
-    )
+    if (this.admitting.has(hosted) || this.uncertain.has(hosted))
       return Promise.reject(
         new Error("A user request has not been reconciled"),
       );
-    const previous = this.pending.get(hosted.stateRoot);
+    const previous = this.pending.get(hosted);
     if (previous) return previous;
     const request = this.finish(hosted, sessionId, messageId).finally(() => {
-      this.pending.delete(hosted.stateRoot);
+      this.pending.delete(hosted);
     });
-    this.pending.set(hosted.stateRoot, request);
+    this.pending.set(hosted, request);
     return request;
   }
 
@@ -252,10 +253,13 @@ export class OpenCodeFinalResponse {
       };
       const original = await readOriginal();
       const prompt = this.delivery.recoverPrompt
-        ? await this.delivery.recoverPrompt(
-            hosted,
-            sessionId,
-            original?.info?.system,
+        ? await abortablePreparation(
+            this.delivery.recoverPrompt(
+              hosted,
+              sessionId,
+              original?.info?.system,
+              signal,
+            ),
             signal,
           )
         : recoverAssistantPrompt(original?.info?.system);
@@ -309,7 +313,7 @@ export class OpenCodeFinalResponse {
       if (dispatched && !hosted.signal.aborted) {
         // Cancelling the HTTP waiter does not cancel OpenCode's native fiber.
         // Fence new prompts until abort is confirmed, even on transport failure.
-        this.uncertain.add(hosted.stateRoot);
+        this.uncertain.add(hosted);
         try {
           const signal = AbortSignal.any([
             hosted.signal,
@@ -323,7 +327,7 @@ export class OpenCodeFinalResponse {
             Record<string, { type: string }>
           >("/session/status", { signal });
           if (!statuses[sessionId] || statuses[sessionId].type === "idle")
-            this.uncertain.delete(hosted.stateRoot);
+            this.uncertain.delete(hosted);
         } catch {
           /* Keep the fence until native state can be reconciled. */
         }
@@ -333,4 +337,30 @@ export class OpenCodeFinalResponse {
       await unlock();
     }
   }
+}
+
+/** Only provider preparation is raced. A late result cannot resume dispatch or
+ * touch its recovery fence; publication and cleanup remain in their original owner. */
+function abortablePreparation<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const cancel = () => reject(signal.reason);
+    signal.addEventListener("abort", cancel, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", cancel);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", cancel);
+        reject(error);
+      },
+    );
+    if (signal.aborted) {
+      signal.removeEventListener("abort", cancel);
+      cancel();
+    }
+  });
 }

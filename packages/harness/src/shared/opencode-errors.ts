@@ -7,6 +7,10 @@ export const openCodeTransportErrorCodes = [
   "native_history_missing",
   "context_unavailable",
   "transport_unavailable",
+  "lifecycle_changed",
+  "session_ended",
+  "execution_paused",
+  "cleanup_unconfirmed",
 ] as const;
 export type OpenCodeTransportErrorCode =
   (typeof openCodeTransportErrorCodes)[number];
@@ -45,6 +49,32 @@ export interface OpenCodeStudioErrorEvent {
 }
 
 const fixedFailures = {
+  lifecycle_changed: {
+    code: "lifecycle_changed",
+    message:
+      "This Studio session changed. Reopen Assistant before sending another message.",
+    retryable: true,
+    action: "reconnect",
+  },
+  session_ended: {
+    code: "session_ended",
+    message: "This session has ended. Resume it from its saved history.",
+    retryable: false,
+    action: "open_terminal",
+  },
+  execution_paused: {
+    code: "execution_paused",
+    message: "Assistant is paused. Send a new message to continue.",
+    retryable: false,
+    action: "reconnect",
+  },
+  cleanup_unconfirmed: {
+    code: "cleanup_unconfirmed",
+    message:
+      "Studio could not confirm that all session processes stopped. Try End again.",
+    retryable: true,
+    action: "open_terminal",
+  },
   access_denied: {
     code: "access_denied",
     message: "Assistant access is not available for this account.",
