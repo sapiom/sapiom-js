@@ -61,9 +61,14 @@ export class AssistantRecordStore {
   }
 
   /** Revisions belong to capture scheduling; a late native response cannot win. */
-  async write(value: AssistantRecord): Promise<boolean> {
+  async write(
+    value: AssistantRecord,
+    /** Server-only proof from exact native seed exclusion, tied to the reconciled record. */
+    excludedSeed?: { messageId: string; previousRevision: number },
+  ): Promise<boolean> {
     // Validate and detach caller-owned objects before waiting for the lock.
     const record = validateAssistantRecord(JSON.parse(JSON.stringify(value)));
+    const exclusion = excludedSeed ? { ...excludedSeed } : undefined;
     try {
       const directory = await this.directory(record.binding);
       const file = join(directory, "record.json");
@@ -74,10 +79,23 @@ export class AssistantRecordStore {
           saved === null
             ? null
             : validateAssistantRecord(saved, record.binding);
+        const removesOnlySeed =
+          exclusion !== undefined &&
+          previous !== null &&
+          previous.revision === exclusion.previousRevision &&
+          previous.turnCount === 1 &&
+          previous.messageCount === 1 &&
+          previous.turns.length === 1 &&
+          previous.turns[0]!.id === exclusion.messageId &&
+          previous.turns[0]!.messages.length === 1 &&
+          previous.turns[0]!.messages[0]!.parts.length === 0 &&
+          record.turnCount === 0;
         if (
           previous !== null &&
           (previous.revision >= record.revision ||
-            (previous.messageCount > 0 && record.messageCount === 0))
+            (previous.messageCount > 0 &&
+              record.messageCount === 0 &&
+              !removesOnlySeed))
         )
           return false;
         await writeAssistantJson(directory, "record.json", record);

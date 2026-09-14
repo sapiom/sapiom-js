@@ -177,3 +177,7 @@ Unfinished continuation children remain internal to allocation recovery. General
 session lists, history, runtime/lifecycle events and direct session actions use
 the same preparation visibility boundary; direct Terminal start cannot bypass it.
 Restored pending children are hidden before the server starts accepting requests.
+
+An exact attested no-reply seed can be removed from an older empty user-only
+checkpoint without inflating task counts. Clearing a seed-only record requires
+the exact previous revision; compacted tasks and recorded real replies remain.

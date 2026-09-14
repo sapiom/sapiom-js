@@ -140,3 +140,38 @@ it("rejects unsafe paths, symlinks, oversized files, and mutated caller-owned re
   await write;
   expect((await store.read(binding))!.binding.cwd).toBe(binding.cwd);
 });
+
+it.each([
+  "missing-proof",
+  "wrong-message",
+  "stale-proof",
+  "public-work",
+  "dropped-history",
+])("preserves nonempty history when seed exclusion has %s", async (kind) => {
+  const prior = record(1);
+  if (kind !== "public-work") prior.turns[0]!.messages[0]!.parts = [];
+  if (kind === "dropped-history") {
+    prior.turnCount = 2;
+    prior.messageCount = 2;
+    prior.limitations.push("dropped-early-turns");
+  }
+  await store.write(prior);
+  if (kind === "stale-proof")
+    await new AssistantRecordStore(root).write({ ...prior, revision: 2 });
+  const empty = projectAssistantRecord([], binding, 3);
+  expect(
+    await store.write(
+      empty,
+      kind === "missing-proof"
+        ? undefined
+        : {
+            messageId: kind === "wrong-message" ? "msg_other" : "msg_user",
+            previousRevision: 1,
+          },
+    ),
+  ).toBe(false);
+  expect(await store.read(binding)).toEqual({
+    ...prior,
+    revision: kind === "stale-proof" ? 2 : 1,
+  });
+});

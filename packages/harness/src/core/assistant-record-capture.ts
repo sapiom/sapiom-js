@@ -2,6 +2,10 @@ import type { HostedOpenCode } from "./opencode-host.js";
 import type { AssistantRecordStore } from "./assistant-record-store.js";
 import type { AssistantContinuationView } from "../shared/assistant-continuation.js";
 import { awaitAssistantInspection } from "./assistant-lifecycle.js";
+import {
+  assistantTaskMessages,
+  type OpenCodeTurnMessage,
+} from "../shared/opencode-turn.js";
 import type {
   AssistantRecord,
   AssistantRecordBinding,
@@ -15,11 +19,21 @@ import {
 export function reconcileAssistantRecord(
   previous: AssistantRecord | null,
   next: AssistantRecord,
+  /** Positively excluded by the exact attested seed matcher on validated native input. */
+  excludedSeed?: string,
 ): AssistantRecord {
   if (!previous) return next;
   if (JSON.stringify(previous.binding) !== JSON.stringify(next.binding))
     throw new Error("Assistant record binding changed");
-  const turns = new Map(previous.turns.map((turn) => [turn.id, turn]));
+  const priorTurns = previous.turns.filter(
+    (turn) =>
+      turn.id !== excludedSeed ||
+      // Even an attested seed must not erase previously captured public work.
+      turn.messages.length !== 1 ||
+      turn.messages[0]!.parts.length !== 0,
+  );
+  const removedSeeds = previous.turns.length - priorTurns.length;
+  const turns = new Map(priorTurns.map((turn) => [turn.id, turn]));
   for (const turn of next.turns) {
     const old = turns.get(turn.id);
     const messages = new Map(
@@ -42,9 +56,13 @@ export function reconcileAssistantRecord(
   return boundAssistantRecord({
     ...next,
     turns: retained,
-    turnCount: Math.max(previous.turnCount, next.turnCount, retained.length),
+    turnCount: Math.max(
+      previous.turnCount - removedSeeds,
+      next.turnCount,
+      retained.length,
+    ),
     messageCount: Math.max(
-      previous.messageCount,
+      previous.messageCount - removedSeeds,
       next.messageCount,
       retained.reduce((count, turn) => count + turn.messages.length, 0),
     ),
@@ -158,11 +176,22 @@ export class AssistantRecordCapture {
           undefined,
           continuation,
         );
+        // Projection validated these messages and their exact native binding.
+        // An absent native turn alone is not proof: it may have been compacted.
+        const messages = native as OpenCodeTurnMessage[];
+        const tasks = new Set(assistantTaskMessages(messages, continuation));
+        const excludedSeed = messages.find((message) => !tasks.has(message))
+          ?.info?.id;
         const previous = await this.store.read(this.binding);
-        const record = reconcileAssistantRecord(previous, next);
+        const record = reconcileAssistantRecord(previous, next, excludedSeed);
         signal.throwIfAborted();
         if (!this.live()) return;
-        await this.store.write(record);
+        await this.store.write(
+          record,
+          excludedSeed && previous
+            ? { messageId: excludedSeed, previousRevision: previous.revision }
+            : undefined,
+        );
         this.failed = false;
       } catch {
         this.failed = true; // Retain the last successful checkpoint; never turn failure into absence.
