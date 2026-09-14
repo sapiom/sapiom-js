@@ -60,6 +60,9 @@ export interface HostedOpenCode extends OpenCodeWorkspace {
   signal: AbortSignal;
   isCurrent: () => boolean;
 }
+export interface OpenCodeRetirement {
+  state: "confirmed" | "absent" | "unconfirmed";
+}
 interface Managed {
   workspace: OpenCodeWorkspace;
   authority: string;
@@ -129,9 +132,13 @@ export class OpenCodeHost {
   private readonly summaries = new Map<string, AssistantSessionSummary>();
   private readonly assistantListeners = new Set<() => void>();
   private entries = new Map<string, Managed>();
-  private closing = new Set<Promise<void>>();
+  private closing = new Map<
+    string,
+    { entry: Managed; promise: Promise<void> }
+  >();
+  private failedCleanup = new Map<string, Managed>();
+  private generations = new Map<string, number>();
   private closed = false;
-  private cleanupFailed = false;
   private workspaceTimer: ReturnType<typeof setInterval>;
   private unsubscribe: () => void;
   constructor(private readonly options: Options) {
@@ -298,7 +305,20 @@ export class OpenCodeHost {
     if (!owned()) throw failure();
   }
 
+  /** Read an existing exact runtime without obtaining startup admission. */
+  current(id: string): HostedOpenCode | null {
+    const hosted = this.entries.get(id)?.hosted;
+    return hosted?.isCurrent() ? hosted : null;
+  }
+
   async ensure(id: string): Promise<HostedOpenCode> {
+    const generation = this.generations.get(id) ?? 0;
+    const assertAdmission = () => {
+      if (this.closed || (this.generations.get(id) ?? 0) !== generation)
+        throw new OpenCodeTransportError(
+          openCodeTransportFailure("transport_unavailable"),
+        );
+    };
     const grant = this.options.access.get();
     if (this.closed || !grant)
       throw this.accessError("Assistant access is unavailable");
@@ -311,6 +331,7 @@ export class OpenCodeHost {
       );
       throw error;
     });
+    assertAdmission();
     const { cwd } = workspace;
     const current = this.options.access.get();
     if (this.closed || !current || authority(current) !== authority(grant))
@@ -326,10 +347,20 @@ export class OpenCodeHost {
     )
       return existing.ready!;
     if (existing)
-      await this.retire(id, openCodeTransportFailure("access_denied"));
+      await this.retireEntry(
+        id,
+        existing,
+        openCodeTransportFailure("access_denied"),
+      );
     // A prior retirement must finish before another process uses its database.
-    await Promise.all(this.closing);
+    if (this.failedCleanup.has(id))
+      throw new OpenCodeTransportError(
+        openCodeTransportFailure("transport_unavailable"),
+      );
+    await this.closing.get(id)?.promise;
+    assertAdmission();
     const verified = await this.workspace(id);
+    assertAdmission();
     if (
       this.closed ||
       this.options.access.get() !== current ||
@@ -352,8 +383,61 @@ export class OpenCodeHost {
     id: string,
     failure = openCodeTransportFailure("transport_unavailable"),
   ): Promise<void> {
+    this.generations.set(id, (this.generations.get(id) ?? 0) + 1);
     const entry = this.entries.get(id);
-    if (!entry) return Promise.resolve();
+    if (entry) return this.retireEntry(id, entry, failure);
+    const closing = this.closing.get(id);
+    if (closing) return closing.promise;
+    if (this.failedCleanup.has(id)) {
+      const rejected = Promise.reject<void>(new OpenCodeShutdownError());
+      void rejected.catch(() => {});
+      return rejected;
+    }
+    return Promise.resolve();
+  }
+
+  /** A failed inspection must not retire a replacement belonging to a newer operation. */
+  retireExact(hosted: HostedOpenCode): Promise<void> {
+    const id = hosted.harnessSessionId;
+    const entry = this.entries.get(id);
+    if (entry?.hosted === hosted) return this.retire(id);
+    const closing = this.closing.get(id);
+    if (closing?.entry.hosted === hosted) return closing.promise;
+    if (this.failedCleanup.get(id)?.hosted === hosted) return this.retire(id);
+    return Promise.resolve();
+  }
+
+  /** Wait only a bounded time for reporting; timeout leaves ownership fenced. */
+  async retireWithResult(
+    id: string,
+    waitMs = 3500,
+  ): Promise<OpenCodeRetirement> {
+    const owned =
+      this.entries.has(id) ||
+      this.closing.has(id) ||
+      this.failedCleanup.has(id);
+    const retiring = this.retire(id);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        retiring.then(
+          (): OpenCodeRetirement => ({ state: owned ? "confirmed" : "absent" }),
+          (): OpenCodeRetirement => ({ state: "unconfirmed" }),
+        ),
+        new Promise<OpenCodeRetirement>((resolve) => {
+          timer = setTimeout(() => resolve({ state: "unconfirmed" }), waitMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private retireEntry(
+    id: string,
+    entry: Managed,
+    failure: OpenCodeTransportFailure,
+  ): Promise<void> {
     this.entries.delete(id);
     const closing = (async () => {
       const hosted = await entry.ready?.catch(() => null);
@@ -366,28 +450,50 @@ export class OpenCodeHost {
       // concurrently use a database whose previous owner may still be alive.
       await this.unlock(entry);
     })();
-    this.closing.add(closing);
-    void closing.finally(() => this.closing.delete(closing)).catch(() => {});
+    this.closing.set(id, { entry, promise: closing });
+    void closing.then(
+      () => {
+        if (this.closing.get(id)?.entry === entry) this.closing.delete(id);
+      },
+      () => {
+        this.failedCleanup.set(id, entry);
+        if (this.closing.get(id)?.entry === entry) this.closing.delete(id);
+      },
+    );
     // Own cleanup before removal notifies listeners that may reenter close().
     // The first await above defers native cleanup until this retirement is fenced.
     const binding = entry.observation;
     entry.observation = undefined;
-    this.removeSummary(id);
-    binding?.observer?.dispose();
     entry.abort.abort(new OpenCodeTransportError(failure));
     entry.credential?.revoke();
+    this.removeSummary(id);
+    try {
+      binding?.observer?.dispose();
+    } catch {
+      /* Cleanup ownership is independent of observers. */
+    }
     return closing;
   }
 
-  async close(): Promise<void> {
+  /** Close launch admission synchronously before whole-server asynchronous cleanup. */
+  beginShutdown(): void {
+    if (this.closed) return;
     this.closed = true;
     this.syncAssistantAccess();
     clearInterval(this.workspaceTimer);
     this.unsubscribe();
     for (const id of this.entries.keys()) void this.retire(id);
-    const results = await Promise.allSettled(this.closing);
+  }
+
+  async close(): Promise<void> {
+    this.beginShutdown();
+    // A state listener may reenter close while beginShutdown is fencing siblings.
+    await Promise.resolve();
+    const results = await Promise.allSettled(
+      [...this.closing.values()].map(({ promise }) => promise),
+    );
     if (
-      this.cleanupFailed ||
+      this.failedCleanup.size ||
       results.some((result) => result.status === "rejected")
     )
       throw new OpenCodeShutdownError();
@@ -421,11 +527,16 @@ export class OpenCodeHost {
 
   private async unlock(entry: Managed): Promise<void> {
     if (entry.cleanupFailed) {
-      this.cleanupFailed = true;
+      this.failedCleanup.set(entry.workspace.harnessSessionId, entry);
       throw new OpenCodeShutdownError();
     }
-    await entry.unlock?.();
-    entry.unlock = undefined;
+    try {
+      await entry.unlock?.();
+      entry.unlock = undefined;
+    } catch {
+      this.failedCleanup.set(entry.workspace.harnessSessionId, entry);
+      throw new OpenCodeShutdownError();
+    }
   }
 
   private async start(
@@ -525,8 +636,6 @@ export class OpenCodeHost {
       entry.hosted = hosted;
       return hosted;
     } catch (error) {
-      if (this.entries.get(entry.workspace.harnessSessionId) === entry)
-        this.entries.delete(entry.workspace.harnessSessionId);
       entry.credential?.revoke();
       if (error instanceof OpenCodeShutdownError) entry.cleanupFailed = true;
       if (server) {
@@ -536,7 +645,12 @@ export class OpenCodeHost {
           entry.cleanupFailed = true;
         }
       }
-      await this.unlock(entry);
+      try {
+        await this.unlock(entry);
+      } finally {
+        if (this.entries.get(entry.workspace.harnessSessionId) === entry)
+          this.entries.delete(entry.workspace.harnessSessionId);
+      }
       if (error instanceof OpenCodeTransportError) throw error;
       if (
         entry.abort.signal.aborted &&

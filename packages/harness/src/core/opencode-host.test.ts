@@ -141,7 +141,10 @@ describe("Studio-owned OpenCode lifecycle", () => {
   it("keeps accepted scope stable across credential rotation and runtime restart", async () => {
     const original = await host.ensure("studio-a");
     expect(original.contextAuthorityScope).toMatch(/^[a-f0-9]{64}$/);
-    expect(original.model).toEqual({ providerID: "sapiom", modelID: "gpt-luna" });
+    expect(original.model).toEqual({
+      providerID: "sapiom",
+      modelID: "gpt-luna",
+    });
     expect(Object.isFrozen(original.model)).toBe(true);
     expect(Object.isFrozen(original)).toBe(true);
     grant = {
@@ -498,7 +501,7 @@ describe("Studio-owned OpenCode lifecycle", () => {
         }),
     );
     const retiring = host.retire("studio-one");
-    const pending = host.ensure("studio-two");
+    const pending = host.ensure("studio-one");
     const rejected = expect(pending).rejects.toThrow("workspace");
     await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
     authorize.mockResolvedValue(null);
@@ -543,6 +546,108 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(settled).toBe(false);
     finish();
     await rejected;
+  });
+
+  it("joins repeated retirement for the same ID while other sessions start independently", async () => {
+    const a = await host.ensure("studio-a");
+    let release!: () => void;
+    close.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const retiring = host.retire("studio-a");
+    expect(host.retire("studio-a")).toBe(retiring);
+    expect(host.current("studio-a")).toBeNull();
+    const b = await host.ensure("studio-b");
+    expect(b.harnessSessionId).toBe("studio-b");
+    expect(b.signal.aborted).toBe(false);
+    expect(a.signal.aborted).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+    release();
+    await retiring;
+  });
+
+  it("fences admission before asynchronous workspace authorization publishes an entry", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    authorize.mockImplementationOnce(async (id) => {
+      await gate;
+      return { harnessSessionId: id, cwd };
+    });
+    const pending = host.ensure("studio-a");
+    const rejected = expect(pending).rejects.toMatchObject({
+      failure: { code: "transport_unavailable" },
+    });
+    await host.retire("studio-a");
+    release();
+    await rejected;
+    expect(start).not.toHaveBeenCalled();
+    await host.ensure("studio-a");
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("retiring an old exact runtime leaves its replacement active", async () => {
+    const old = await host.ensure("studio-a");
+    await host.retireExact(old);
+    const current = await host.ensure("studio-a");
+    await host.retireExact(old);
+    expect(host.current("studio-a")).toBe(current);
+    expect(current.signal.aborted).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("reports bounded pending cleanup honestly and later joins positive completion", async () => {
+    await host.ensure("studio-a");
+    let release!: () => void;
+    close.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    expect(await host.retireWithResult("studio-a", 10)).toEqual({
+      state: "unconfirmed",
+    });
+    expect(close).toHaveBeenCalledOnce();
+    const joined = host.retireWithResult("studio-a");
+    release();
+    expect(await joined).toEqual({ state: "confirmed" });
+    expect(await host.retireWithResult("studio-a")).toEqual({
+      state: "absent",
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("retains failed cleanup without repeating a memoized close or blocking another ID", async () => {
+    expectShutdownFailure = true;
+    await host.ensure("studio-a");
+    close.mockRejectedValueOnce(new Error("not confirmed"));
+    expect(await host.retireWithResult("studio-a")).toEqual({
+      state: "unconfirmed",
+    });
+    expect(await host.retireWithResult("studio-a")).toEqual({
+      state: "unconfirmed",
+    });
+    await expect(host.ensure("studio-a")).rejects.toMatchObject({
+      failure: { code: "transport_unavailable" },
+    });
+    await host.ensure("studio-b");
+    expect(close).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it("beginShutdown synchronously closes admission and aborts existing runtimes", async () => {
+    const a = await host.ensure("studio-a");
+    host.beginShutdown();
+    expect(a.signal.aborted).toBe(true);
+    expect(host.current("studio-a")).toBeNull();
+    await expect(host.ensure("studio-b")).rejects.toThrow();
+    await host.close();
+    expect(start).toHaveBeenCalledOnce();
   });
 
   it("retires a confirmed exited process so retry can reopen the same persistent state", async () => {
