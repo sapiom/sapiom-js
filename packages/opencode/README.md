@@ -73,3 +73,12 @@ Validation rejects unknown fields, foreign references and inconsistent revisions
 The 4 MiB serialized-record, 4,096-entry and 24-level limits reject oversized data;
 they never truncate required guidance. This contract does not enable context delivery,
 source fetching or caching on its own.
+
+Saved accepted prompts retain the leading `StudioAssistantResult/v2:<attempt>`
+completion contract and append one canonical `StudioAssistantContext/v2` envelope.
+The envelope carries verified inline text, catalog manifests and package references.
+Native validation recomputes inline hashes and record revisions; the host separately
+verifies retained package bytes before dispatch. Native projection places stable
+guidance before the real completion contract and JSON-escaped dynamic facts, without
+rewriting saved history. Legacy completion-only and valid inline context/v1 records
+have explicit parser variants; malformed claimed context never becomes generic.
