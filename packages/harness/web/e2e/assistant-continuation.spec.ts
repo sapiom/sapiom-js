@@ -142,6 +142,7 @@ async function setup(page: Page) {
     missingNative: false,
     prompts: [] as Route[],
     messages: [] as any[],
+    starts: [] as Route[],
   };
   const response = (request: Record<string, any>) => {
     const continuation = {
@@ -200,6 +201,9 @@ async function setup(page: Page) {
           }
         : { json: response(route.request().postDataJSON()) },
     );
+  });
+  await page.route("**/api/sessions/*/terminal/start", (route) => {
+    probe.starts.push(route);
   });
   await page.route("**/api/assistant/access", (route) =>
     route.fulfill({ json: { enabled: true, authorityRevision: "account-a" } }),
@@ -350,7 +354,15 @@ async function setup(page: Page) {
   await page.goto("/?seed=0");
   await expect(page.locator(".harness-terminal")).toBeVisible();
   await project(page);
-  return Object.assign(probe, { response });
+  return Object.assign(probe, {
+    response,
+    started: () => ({
+      ...response({}).session,
+      terminalState: undefined,
+      status: "running",
+      ready: true,
+    }),
+  });
 }
 
 test("Continue opens a distinct paused child from the displayed record and preserves source history", async ({
@@ -619,3 +631,283 @@ test("missing native history offers the saved record without automatic Continue"
   await expect.poll(() => probe.requests.length).toBe(1);
   expect(probe.requests[0]!.request().postDataJSON().expectedRevision).toBe(3);
 });
+
+async function dormant(page: Page) {
+  const probe = await setup(page);
+  await review(page);
+  await button(page).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await project(page, 2, "account-a", [lifecycle(childId)]);
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.getByTestId("dormant-terminal-pane")).toBeVisible();
+  return probe;
+}
+const startTerminal = (page: Page) =>
+  page.getByRole("button", { name: "Start Terminal", exact: true });
+
+test("dormant Terminal starts only on an explicit click and keeps the same paused Assistant", async ({
+  page,
+}, info) => {
+  const probe = await dormant(page);
+  await expect(page.getByTestId("dormant-terminal-pane")).toContainText(
+    "Terminal has not started",
+  );
+  await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
+  expect(probe.starts).toHaveLength(0);
+  await page.screenshot({ path: info.outputPath("dormant-terminal.png") });
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  await expect(
+    page.getByRole("button", { name: "Starting Terminal…" }),
+  ).toBeDisabled();
+  expect(probe.starts[0]!.request().postDataJSON()).toEqual({});
+  expect(probe.starts[0]!.request().headers()).toHaveProperty(
+    "x-harness-token",
+  );
+  await probe.starts[0]!.fulfill({ json: probe.started() });
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    childId,
+  );
+  await page.screenshot({ path: info.outputPath("terminal-started.png") });
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId("assistant-continuation-context"),
+  ).toBeVisible();
+  expect(
+    probe.calls.filter((url) => /prompt_async|final-response/.test(url)),
+  ).toEqual([]);
+});
+
+test("failed Start Terminal retains the dormant session and can retry", async ({
+  page,
+}, info) => {
+  const probe = await dormant(page);
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  await probe.starts[0]!.fulfill({
+    status: 409,
+    json: { code: "SESSION_PREPARATION_CANCELLED" },
+  });
+  await expect(page.getByTestId("dormant-terminal-pane")).toContainText(
+    "Terminal could not be started",
+  );
+  await expect(startTerminal(page)).toBeEnabled();
+  await page.screenshot({
+    path: info.outputPath("dormant-terminal-retry.png"),
+  });
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(2);
+  await probe.starts[1]!.fulfill({ json: probe.started() });
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+for (const field of ["id", "project", "user", "harness", "not-started"]) {
+  test(
+    "Start Terminal rejects a foreign or unstarted " + field + " response",
+    async ({ page }) => {
+      const probe = await dormant(page);
+      await startTerminal(page).click();
+      await expect.poll(() => probe.starts.length).toBe(1);
+      const response: any = probe.started();
+      if (field === "id") response.id = "another-studio";
+      if (field === "project")
+        response.agentMapIdentity.projectId = "another-project";
+      if (field === "user") response.agentMapIdentity.userId = "another-user";
+      if (field === "harness") response.harness = "codex";
+      if (field === "not-started") response.terminalState = "not-started";
+      await probe.starts[0]!.fulfill({ json: response });
+      await expect(page.getByTestId("dormant-terminal-pane")).toContainText(
+        "could not be verified",
+      );
+      await expect(page.locator(".harness-terminal")).toHaveCount(0);
+    },
+  );
+}
+
+for (const barrier of ["navigation", "account", "End", "bus-exit"]) {
+  test("late Start Terminal cannot cross " + barrier, async ({ page }) => {
+    const probe = await dormant(page);
+    await startTerminal(page).click();
+    await expect.poll(() => probe.starts.length).toBe(1);
+    if (barrier === "navigation")
+      await selectMockSessionFromPalette(page, "acme-app");
+    if (barrier === "account")
+      await publish(page, {
+        type: "auth.changed",
+        authenticated: true,
+        organizationName: "New account",
+      });
+    if (barrier === "End") {
+      await page.evaluate(async () => {
+        const url = performance
+          .getEntriesByType("resource")
+          .find(
+            (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+          )!.name;
+        const { MockApi, ApiError } = await import(url);
+        MockApi.prototype.killSession = async () => {
+          throw new ApiError(409, "controlled End failure");
+        };
+      });
+      await page.getByTestId("session-menu").click();
+      await page.getByTestId("session-end-btn").click();
+      await page.getByTestId("end-session-confirm-btn").click();
+      await expect(
+        page.getByText(/Session cleanup is incomplete/),
+      ).toBeVisible();
+    }
+    if (barrier === "bus-exit")
+      await publish(page, {
+        type: "session.status",
+        session: { ...probe.started(), status: "exited", ready: false },
+      });
+    await probe.starts[0]!.fulfill({ json: probe.started() });
+    if (barrier === "navigation")
+      await expect(page.getByTestId("session-context")).not.toHaveAttribute(
+        "data-session-id",
+        childId,
+      );
+    else if (barrier === "End")
+      await expect(page.getByTestId("dormant-terminal-pane")).toContainText(
+        "session changed while Terminal was starting",
+      );
+    else if (barrier === "account")
+      await expect(startTerminal(page)).toBeEnabled();
+    else await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+    if (barrier !== "navigation")
+      await expect(page.locator(".harness-terminal")).toHaveCount(0);
+  });
+}
+
+test("Start Terminal preserves newer bus state before its response", async ({
+  page,
+}) => {
+  const probe = await dormant(page);
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  await publish(page, {
+    type: "session.status",
+    session: { ...probe.started(), title: "Newer Terminal state" },
+  });
+  await probe.starts[0]!.fulfill({
+    json: { ...probe.started(), ready: false },
+  });
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await expect(page.getByTestId("session-context")).toContainText(
+    "Newer Terminal state",
+  );
+});
+
+test("Start Terminal commits after an earlier preparation frame", async ({
+  page,
+}) => {
+  const probe = await dormant(page);
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  await publish(page, {
+    type: "session.status",
+    session: { ...probe.response({}).session, status: "starting" },
+  });
+  await expect(page.getByTestId("dormant-terminal-pane")).toBeVisible();
+  await probe.starts[0]!.fulfill({ json: probe.started() });
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+test("a Terminal that exits during startup shows its actual exit instead of a dormant session", async ({
+  page,
+}, info) => {
+  const probe = await dormant(page);
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  await probe.starts[0]!.fulfill({
+    json: {
+      ...probe.started(),
+      status: "exited",
+      ready: false,
+      exitCode: 2,
+      exitTail: "Agent exited during startup",
+    },
+  });
+  await expect(page.getByTestId("dead-session-pane")).toContainText(
+    "Terminal exited",
+  );
+  await expect(page.getByTestId("dead-session-pane")).toContainText(
+    "exit code 2",
+  );
+  await expect(page.getByTestId("dormant-terminal-pane")).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("terminal-startup-exit.png") });
+});
+
+test("Start Terminal remains available when Assistant access is disabled", async ({
+  page,
+}) => {
+  const probe = await dormant(page);
+  await page.route("**/api/assistant/access", (route) =>
+    route.fulfill({ json: { enabled: false, authorityRevision: "account-a" } }),
+  );
+  await publish(page, {
+    type: "auth.changed",
+    authenticated: true,
+    organizationName: "Same account",
+  });
+  await expect(
+    page.getByRole("button", { name: "Assistant", exact: true }),
+  ).toHaveCount(0);
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  await probe.starts[0]!.fulfill({ json: probe.started() });
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+for (const field of ["project", "user", "harness", "source-rebound"]) {
+  test(
+    "Continue fences the registry source's " + field + " in its child response",
+    async ({ page }) => {
+      const probe = await setup(page);
+      probe.hold = true;
+      const source = {
+        ...probe.response({}).session,
+        id: sourceId,
+        agentMapIdentity: {
+          projectId: "project-acme",
+          sessionId: sourceId,
+          userId: "user-a",
+        },
+      };
+      await publish(page, { type: "session.status", session: source });
+      await review(page);
+      await button(page).click();
+      await expect.poll(() => probe.requests.length).toBe(1);
+      const response = probe.response(
+        probe.requests[0]!.request().postDataJSON(),
+      );
+      if (field === "project")
+        response.session.agentMapIdentity.projectId = "foreign-project";
+      if (field === "user")
+        response.session.agentMapIdentity.userId = "foreign-user";
+      if (field === "harness") response.session.harness = "codex";
+      if (field === "source-rebound")
+        await publish(page, {
+          type: "session.status",
+          session: {
+            ...source,
+            agentMapIdentity: {
+              ...source.agentMapIdentity,
+              projectId: "new-source-project",
+            },
+          },
+        });
+      await probe.requests[0]!.fulfill({ json: response });
+      await expect(page.getByRole("alert")).toContainText(
+        "selection or session changed",
+      );
+      await expect(page.getByTestId("assistant-transcript")).toContainText(
+        "Original saved task",
+      );
+      expect(probe.calls).toEqual([]);
+    },
+  );
+}

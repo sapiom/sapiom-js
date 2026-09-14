@@ -167,3 +167,8 @@ bound to the exact runtime that the operation started.
 Temporary-file cleanup cannot replace the primary storage failure. An unconfirmed
 publication remains distinguishable for Resume reconciliation even when rollback
 and cleanup also fail; cleanup failures after successful publication are surfaced.
+
+A continued session shows a distinct Terminal-not-started pane. Start Terminal
+launches its coding agent in that same Studio workspace only after an explicit
+click. Failed starts retain the session for retry, immediate exits show the real
+exit state, and stale responses cannot override End or a newer selected session.

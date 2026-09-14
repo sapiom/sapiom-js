@@ -3,6 +3,7 @@ import type { AssistantHistoryEntry } from "../../../src/shared/assistant-histor
 import { readAssistantHistory } from "./assistant-history-client";
 import { resumeAssistantRequest } from "./assistant-resume-client";
 import { continueAssistantRequest, type ContinueRequest } from "./assistant-continuation-client";
+import { sameStudioAuthority, startTerminalRequest } from "./terminal-start-client";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -148,6 +149,7 @@ export interface HarnessStateHook {
   resumeAssistant: (entry: AssistantHistoryEntry, operationId: string, signal: AbortSignal, authority: string, isCurrent: () => boolean) => Promise<HarnessSession | null>;
   continueAssistant: (entry: AssistantHistoryEntry, request: ContinueRequest, signal: AbortSignal, authority: string, isCurrent: () => boolean) => Promise<HarnessSession | null>;
   assistantHistoryEntry: (id: string, signal: AbortSignal) => Promise<AssistantHistoryEntry | null>;
+  startTerminal: (id: string, signal: AbortSignal, isCurrent: () => boolean) => Promise<HarnessSession | null>;
   assistantRevealBySession: Map<string, number>;
   endingSessionIds: ReadonlySet<string>;
   authRevision: number;
@@ -594,6 +596,8 @@ export function useHarnessState(): HarnessStateHook {
   // the network. The bus owns the newer full-session snapshot, so an older
   // response must not roll its planning metadata back after that snapshot.
   const sessionStatusRevisions = useRef<Map<string, number>>(new Map());
+  const sessionStatusSnapshots = useRef(new Map<string, HarnessSession>());
+  const sessionOperationGenerations = useRef(new Map<string, number>());
   const [busySessionIds, setBusySessionIds] = useState<Set<string>>(new Set());
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const busyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -1276,6 +1280,7 @@ export function useHarnessState(): HarnessStateHook {
         // Studio for records no mounted transcript is watching.
         if (message.type !== "session.record.changed") setLastMessage(message);
         if (message.type === "session.status") {
+          sessionStatusSnapshots.current.set(message.session.id, message.session);
           sessionStatusRevisions.current.set(
             message.session.id,
             (sessionStatusRevisions.current.get(message.session.id) ?? 0) + 1,
@@ -1833,12 +1838,15 @@ export function useHarnessState(): HarnessStateHook {
   }, [assistantAuthorityKey, assistantOrder]);
 
   const continueAssistant = useCallback(async (entry: AssistantHistoryEntry, request: ContinueRequest, signal: AbortSignal, authority: string, isCurrent: () => boolean): Promise<HarnessSession | null> => {
+    const source = sessionsRef.current.find((row) => row.id === entry.harnessSessionId);
     const selection = switchSeqRef.current;
     const foreground = conversationRevealSequence.current;
     const valid = () => !signal.aborted && authority === assistantAuthorityKey() && isCurrent() && selection === switchSeqRef.current && foreground === conversationRevealSequence.current;
     if (!valid()) return null;
     const result = await continueAssistantRequest(entry, request, getBootToken(), signal);
     if (!valid()) return null;
+    const currentSource = sessionsRef.current.find((row) => row.id === entry.harnessSessionId);
+    if (source && (!currentSource || !sameStudioAuthority(source, currentSource) || !sameStudioAuthority(source, result.session))) return null;
     const latest = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === result.session.id);
     if (latest && (latest.revision > result.lifecycle.revision || (latest.revision === result.lifecycle.revision && latest.lifecycle !== "open"))) return null;
     const current = sessionsRef.current.find((row) => row.id === result.session.id);
@@ -1859,9 +1867,42 @@ export function useHarnessState(): HarnessStateHook {
     return entries.find((entry) => entry.harnessSessionId === id) ?? null;
   }, [assistantAuthorityKey]);
 
+  const startTerminal = useCallback(async (id: string, signal: AbortSignal, isCurrent: () => boolean): Promise<HarnessSession | null> => {
+    const source = sessionsRef.current.find((row) => row.id === id);
+    if (!source || source.terminalState !== "not-started" || endingSessions.current.has(id)) return null;
+    const boundary = () => {
+      const snapshot = assistantOrder.current().snapshot;
+      return JSON.stringify([authoritySequence.current, snapshot?.hostInstanceId, snapshot?.authorityRevision]);
+    };
+    const authority = boundary(), selection = switchSeqRef.current, foreground = conversationRevealSequence.current;
+    const operation = (sessionOperationGenerations.current.get(id) ?? 0) + 1;
+    sessionOperationGenerations.current.set(id, operation);
+    const before = sessionStatusRevisions.current.get(id) ?? 0;
+    const lifecycle = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === id);
+    const valid = () => !signal.aborted && isCurrent() && authority === boundary() && selection === switchSeqRef.current &&
+      foreground === conversationRevealSequence.current && sessionOperationGenerations.current.get(id) === operation && !endingSessions.current.has(id);
+    if (!valid()) return null;
+    const result = await startTerminalRequest(source, getBootToken(), signal);
+    if (!valid()) return null;
+    const latestLifecycle = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === id);
+    if (latestLifecycle && latestLifecycle.revision > (lifecycle?.revision ?? -1) && latestLifecycle.lifecycle !== "open") return null;
+    const changed = (sessionStatusRevisions.current.get(id) ?? 0) !== before;
+    const bus = changed ? sessionStatusSnapshots.current.get(id) : undefined;
+    const current = sessionsRef.current.find((row) => row.id === id);
+    if (!current || !sameStudioAuthority(source, current) || (bus && !sameStudioAuthority(source, bus))) return null;
+    // Preparation still carries not-started. The committed POST clears that
+    // marker permanently; subsequent bus status (including exit) owns the row.
+    const preserve = bus !== undefined && bus.terminalState === undefined;
+    const latest = preserve ? bus : result;
+    setState((prev) => prev ? { ...prev, sessions: prev.sessions.map((row) => row.id === id && !preserve ? result : row) } : prev);
+    revealTerminal(id);
+    return latest;
+  }, [assistantOrder, revealTerminal]);
+
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
       if (endingSessions.current.has(id)) return;
+      sessionOperationGenerations.current.set(id, (sessionOperationGenerations.current.get(id) ?? 0) + 1);
       endingSessions.current.add(id);
       setEndingSessionIds(new Set(endingSessions.current));
       const selectionAtStart = switchSeqRef.current;
@@ -2563,6 +2604,7 @@ export function useHarnessState(): HarnessStateHook {
     resumeAssistant,
     continueAssistant,
     assistantHistoryEntry,
+    startTerminal,
     assistantRevealBySession,
     endingSessionIds,
     state,

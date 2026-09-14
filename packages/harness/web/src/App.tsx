@@ -90,6 +90,7 @@ import { AssistantHistoryPane } from "./components/AssistantHistoryPane";
 import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
 import { AssistantHistoryActions } from "./components/AssistantHistoryActions";
 import { AssistantContinueAction } from "./components/AssistantContinueAction";
+import { DormantTerminalPane } from "./components/DormantTerminalPane";
 import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
@@ -1620,7 +1621,7 @@ export const App = (): JSX.Element => {
       ? null
       : activeSession;
   const showReview = reviewSummary != null || activeAssistantReview != null;
-  const showDead = !showReview && conversationSession?.status === "exited";
+  const showDead = !showReview && (conversationSession?.status === "exited" || conversationSession?.terminalState === "not-started");
   // An agent selected with no session that can WORK on it: honest absence, and
   // opening one lands on the "start a session" state.
   //
@@ -3429,8 +3430,8 @@ export const App = (): JSX.Element => {
                     }}
                   /></>}
                   terminalNotStarted={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started"}
-                  terminalLabel={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.status !== "exited" ? "Open Terminal" : "View Terminal history"}
-                  onOpenTerminal={state.sessions.some((session) => session.id === activeAssistantReview.entry.harnessSessionId && session.terminalState !== "not-started")
+                  terminalLabel={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started" || state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.status !== "exited" ? "Open Terminal" : "View Terminal history"}
+                  onOpenTerminal={state.sessions.some((session) => session.id === activeAssistantReview.entry.harnessSessionId)
                     ? () => openSession(activeAssistantReview.entry.harnessSessionId)
                     : undefined}
                 />
@@ -3466,7 +3467,15 @@ export const App = (): JSX.Element => {
                   assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
                   onReviewHistory={() => void reviewLiveAssistant(conversationSession.id)}
                 >
-                  <DeadSessionPane
+                  {conversationSession.terminalState === "not-started" ? <DormantTerminalPane
+                    session={conversationSession}
+                    authRevision={harness.authRevision}
+                    ending={harness.endingSessionIds.has(conversationSession.id) || assistantLifecycles.some((row) => row.harnessSessionId === conversationSession.id && row.lifecycle === "ending")}
+                    onStart={async (signal) => {
+                      const navigation = studioRestoreGenerationRef.current;
+                      return (await harness.startTerminal(conversationSession.id, signal, () => navigation === studioRestoreGenerationRef.current)) !== null;
+                    }}
+                  /> : <DeadSessionPane
                     session={conversationSession}
                     terminalOnly={assistantNeedsEnd(conversationSession.id)}
                     resumeMode={deadResumeMode}
@@ -3489,7 +3498,7 @@ export const App = (): JSX.Element => {
                           .closeSession(conversationSession.id)
                           .catch(() => undefined);
                     }}
-                  />
+                  />}
                 </AssistantPane>
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session that can WORK on this agent — its
