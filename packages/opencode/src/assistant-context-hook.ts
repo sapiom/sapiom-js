@@ -236,7 +236,10 @@ export function createStudioAssistantContextHooks(
             epoch.fingerprints.get(key) === fingerprint(saved.system),
         );
         const parsed = parse(saved.system, input.sessionID);
-        if (parsed.kind === "generic") return;
+        if (parsed.kind === "generic") {
+          contextCheck(!output.system.some(claimed));
+          return;
+        }
         const last = output.system.length - 1;
         const trailing = output.system[last];
         contextCheck(
@@ -244,7 +247,12 @@ export function createStudioAssistantContextHooks(
         );
         const prefix = trailing.slice(0, -parsed.savedSystem.length);
         contextCheck(!prefix || prefix.endsWith("\n"));
-        if (parsed.kind === "legacy-v2") return;
+        if (parsed.kind === "legacy-v2") {
+          contextCheck(
+            !claimed(prefix) && !output.system.slice(0, last).some(claimed),
+          );
+          return;
+        }
         // Replace only the exact saved suffix. Native/provider prefixes can contain
         // marker-shaped text and remain byte-for-byte intact, with array identity.
         output.system.splice(
