@@ -152,6 +152,8 @@ beforeEach(async () => {
       return fetch(`${nativeOrigin}${path}`, { ...init, headers });
     };
     hosts.set(id, {
+      contextAuthorityScope: "a".repeat(64),
+      model: "smart",
       harnessSessionId: id,
       cwd: root,
       stateRoot,

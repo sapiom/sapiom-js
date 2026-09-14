@@ -48,6 +48,9 @@ export interface OpenCodeWorkspace {
   cwd: string;
 }
 export interface HostedOpenCode extends OpenCodeWorkspace {
+  /** Stable accepted-context scope; credentials and transient host epochs are excluded. */
+  readonly contextAuthorityScope: string;
+  readonly model: string;
   stateRoot: string;
   server: OpenCodeServer;
   signal: AbortSignal;
@@ -113,6 +116,39 @@ const authority = (grant: AssistantGrant) =>
       ]),
     )
     .digest("hex");
+
+function contextAuthorityScope(
+  grant: AssistantGrant,
+  workspace: OpenCodeWorkspace,
+): string {
+  let api: URL;
+  try {
+    api = new URL(grant.environment.apiURL);
+  } catch {
+    throw new OpenCodeAccessError("Assistant environment is invalid");
+  }
+  if (
+    !["http:", "https:"].includes(api.protocol) ||
+    api.username ||
+    api.password ||
+    api.search ||
+    api.hash
+  )
+    throw new OpenCodeAccessError("Assistant environment is invalid");
+  api.pathname = api.pathname.replace(/\/+$/, "") || "/";
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        grant.userId,
+        grant.tenantId,
+        grant.environment.name,
+        api.href,
+        workspace.cwd,
+        workspace.harnessSessionId,
+      ]),
+    )
+    .digest("hex");
+}
 
 /** Owned by startServer, not by React mounts or browser connections. */
 export class OpenCodeHost {
@@ -270,6 +306,25 @@ export class OpenCodeHost {
       binding.observer?.dispose();
       throw error;
     }
+  }
+
+  /** Revalidate an exact owned host after asynchronous context work. Retention grants no access. */
+  async assertCurrent(hosted: HostedOpenCode): Promise<void> {
+    const entry = this.entries.get(hosted.harnessSessionId);
+    const owned = () =>
+      entry &&
+      entry.hosted === hosted &&
+      this.entries.get(hosted.harnessSessionId) === entry &&
+      hosted.isCurrent();
+    const failure = () =>
+      hosted.signal.reason instanceof OpenCodeTransportError
+        ? hosted.signal.reason
+        : new OpenCodeTransportError(
+            openCodeTransportFailure("transport_unavailable"),
+          );
+    if (!owned()) throw failure();
+    await this.validate(entry!);
+    if (!owned()) throw failure();
   }
 
   async ensure(id: string): Promise<HostedOpenCode> {
@@ -453,12 +508,14 @@ export class OpenCodeHost {
           );
       }
       await this.validate(entry);
+      const contextScope = contextAuthorityScope(grant, entry.workspace);
+      const model = this.options.bridge.model;
       entry.credential = this.options.bridge.issue();
       const config = {
         ...createSapiomOpenCodeConfig({
           bridgeUrl: `${this.options.origin()}/opencode-runtime/${entry.credential.id}`,
           runtimeToken: entry.credential.token,
-          model: this.options.bridge.model,
+          model,
         }),
         ...(skillPaths.length ? { skills: { paths: skillPaths } } : {}),
       };
@@ -480,8 +537,10 @@ export class OpenCodeHost {
         })
         .catch(() => {});
       await this.validate(entry);
-      const hosted: HostedOpenCode = {
+      const hosted: HostedOpenCode = Object.freeze({
         ...entry.workspace,
+        contextAuthorityScope: contextScope,
+        model,
         stateRoot,
         server,
         signal: entry.abort.signal,
@@ -495,7 +554,7 @@ export class OpenCodeHost {
             authority(current) === entry.authority
           );
         },
-      };
+      });
       entry.hosted = hosted;
       return hosted;
     } catch (error) {
