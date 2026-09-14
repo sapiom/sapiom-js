@@ -365,6 +365,7 @@ export interface HarnessStateHook {
   injectInput: (sessionId: string, text: string) => Promise<void>;
   /** Reveal app-driven foreground PTY work in the matching conversation pane. */
   terminalRevealBySession: Map<string, number>;
+  revealTerminal: (sessionId: string) => void;
   /** Expose the toast setter so panels can push their own toasts. Defaults
    *  to the "error" tone; callers announcing a result opt into "info". */
   showToast: (message: string, tone?: ToastTone) => void;
@@ -444,8 +445,9 @@ export function useHarnessState(): HarnessStateHook {
       : null;
   }, [assistantOrder]);
   const [assistantHistory, setAssistantHistory] = useState<{
-    authority: string | null; entries: AssistantHistoryEntry[]; unavailable: boolean;
-  }>({ authority: null, entries: [], unavailable: false });
+    authority: string | null; entries: AssistantHistoryEntry[];
+    failedCwds: Set<string>; versions: Map<string, number>;
+  }>({ authority: null, entries: [], failedCwds: new Set(), versions: new Map() });
   const endingSessions = useRef(new Set<string>());
   const [endingSessionIds, setEndingSessionIds] = useState<ReadonlySet<string>>(
     new Set(),
@@ -541,11 +543,12 @@ export function useHarnessState(): HarnessStateHook {
   // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
   // affects the render, and both are read/written within a single call.
   const inFlightHistory = useRef<Map<string, Promise<{
-    terminal: SessionSummary[] | null; assistant: AssistantHistoryEntry[] | null;
+    terminal: SessionSummary[] | null; assistant: AssistantHistoryEntry[] | null; revision: number;
   }>>>(
     new Map(),
   );
   const historyLoads = useRef(0);
+  const historyRequestRevision = useRef(0);
   // Deploys in flight, keyed by workflow path. A second click while one is
   // running must not start another: for an UNLINKED project each deploy calls
   // link({ create: true }), which is a read-then-write with no uniqueness
@@ -1463,12 +1466,14 @@ export function useHarnessState(): HarnessStateHook {
       const key = `${authority ?? "terminal"}:${cwd}`;
       const pending = inFlightHistory.current.get(key);
       if (pending) return pending;
+      const revision = ++historyRequestRevision.current;
       const request = Promise.allSettled([
         api.sessionHistory(cwd),
         authority
           ? readAssistantHistory(cwd, getBootToken(), AbortSignal.timeout(5000))
           : Promise.resolve([]),
       ]).then(([terminal, assistant]) => ({
+        revision,
         terminal: terminal.status === "fulfilled" ? terminal.value : null,
         assistant: assistant.status === "fulfilled" ? assistant.value : null,
       })).finally(() => inFlightHistory.current.delete(key));
@@ -1486,28 +1491,34 @@ export function useHarnessState(): HarnessStateHook {
       const results = await Promise.allSettled(requests);
       const refreshed: SessionSummary[] = [];
       const refreshedCwds = new Set<string>();
-      const assistantEntries: AssistantHistoryEntry[] = [];
-      const assistantCwds = new Set<string>();
-      let unavailable = false;
       results.forEach((result, index) => {
         if (result.status !== "fulfilled") return;
         if (result.value.terminal) {
           refreshedCwds.add(unique[index]!);
           refreshed.push(...result.value.terminal);
         }
-        if (result.value.assistant) {
-          assistantCwds.add(unique[index]!);
-          assistantEntries.push(...result.value.assistant);
-        } else unavailable = true;
       });
       setHistory((prev) => mergeHistory(prev, refreshed, refreshedCwds));
       if (authority && authority === assistantAuthorityKey()) {
-        setAssistantHistory((prev) => ({ authority, unavailable, entries: [
-          ...new Map([
-            ...(prev.authority === authority ? prev.entries.filter((entry) => !assistantCwds.has(entry.cwd)) : []),
-            ...assistantEntries,
-          ].map((entry) => [entry.harnessSessionId, entry])).values(),
-        ] }));
+        setAssistantHistory((prev) => {
+          if (authority !== assistantAuthorityKey()) return prev;
+          const sameAuthority = prev.authority === authority;
+          const entries = new Map((sameAuthority ? prev.entries : []).map((entry) => [entry.harnessSessionId, entry]));
+          const failedCwds = new Set(sameAuthority ? prev.failedCwds : []);
+          const versions = new Map(sameAuthority ? prev.versions : []);
+          results.forEach((result, index) => {
+            if (result.status !== "fulfilled") return;
+            const cwd = unique[index]!, { revision, assistant } = result.value;
+            // A slow multi-directory batch cannot roll back a newer one-dir read.
+            if (revision <= (versions.get(cwd) ?? -1)) return;
+            versions.set(cwd, revision);
+            if (assistant === null) { failedCwds.add(cwd); return; }
+            failedCwds.delete(cwd);
+            for (const [id, entry] of entries) if (entry.cwd === cwd) entries.delete(id);
+            for (const entry of assistant) entries.set(entry.harnessSessionId, entry);
+          });
+          return { authority, entries: [...entries.values()], failedCwds, versions };
+        });
       }
     } finally {
       historyLoads.current -= 1;
@@ -2612,7 +2623,7 @@ export function useHarnessState(): HarnessStateHook {
     assistantHistory: assistantHistory.authority === assistantAuthorityKey() ? assistantHistory.entries : [],
     assistantHistoryAuthority: assistantAuthorityKey(),
     assistantAuthorityCurrent: (authority) => authority !== null && authority === assistantAuthorityKey(),
-    assistantHistoryUnavailable: assistantHistory.authority === assistantAuthorityKey() && assistantHistory.unavailable,
+    assistantHistoryUnavailable: assistantHistory.authority === assistantAuthorityKey() && assistantHistory.failedCwds.size > 0,
     resumeAssistant,
     continueAssistant,
     assistantHistoryEntry,
@@ -2664,6 +2675,7 @@ export function useHarnessState(): HarnessStateHook {
     runLocal,
     injectInput,
     terminalRevealBySession,
+    revealTerminal,
     showToast,
     lastDeployErrorFor,
     deployStateByPath,

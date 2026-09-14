@@ -749,6 +749,10 @@ export const App = (): JSX.Element => {
   }, []);
   const activeAssistantReview = assistantReview?.authority === harness.assistantHistoryAuthority &&
     assistantReview.navigation === studioRestoreGenerationRef.current ? assistantReview : null;
+  const reviewedAssistantTerminal = activeAssistantReview ? harness.state?.sessions.find((session) =>
+    session.id === activeAssistantReview.entry.harnessSessionId && session.cwd === activeAssistantReview.entry.cwd) : undefined;
+  const reviewedTerminalSummary = activeAssistantReview ? harness.history.find((summary) =>
+    summary.harnessSessionId === activeAssistantReview.entry.harnessSessionId && summary.cwd === activeAssistantReview.entry.cwd) : undefined;
   // Template gallery opened from the command palette (browse is reachable
   // from anywhere, not only the add dialog / welcome panel entries).
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -3430,11 +3434,11 @@ export const App = (): JSX.Element => {
                       return true;
                     }}
                   /></>}
-                  terminalNotStarted={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started"}
-                  terminalLabel={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started" || state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.status !== "exited" ? "Open Terminal" : "View Terminal history"}
-                  onOpenTerminal={state.sessions.some((session) => session.id === activeAssistantReview.entry.harnessSessionId)
-                    ? () => openSession(activeAssistantReview.entry.harnessSessionId)
-                    : undefined}
+                  terminalNotStarted={reviewedAssistantTerminal?.terminalState === "not-started"}
+                  terminalLabel={reviewedAssistantTerminal && (reviewedAssistantTerminal.terminalState === "not-started" || reviewedAssistantTerminal.status !== "exited") ? "Open Terminal" : "View Terminal history"}
+                  onOpenTerminal={reviewedAssistantTerminal
+                    ? () => { harness.revealTerminal(reviewedAssistantTerminal.id); openSession(reviewedAssistantTerminal.id); }
+                    : reviewedTerminalSummary ? () => reviewPastSession(reviewedTerminalSummary) : undefined}
                 />
               ) : showReview && reviewSummary ? (
                 <PastSessionPane
@@ -3930,7 +3934,8 @@ export const App = (): JSX.Element => {
                   source={canvasSource}
                   loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
                   overviewActive={showComposer}
-                  sessionExited={showDead && !!conversationSession && !assistantNeedsEnd(conversationSession.id)}
+                  sessionExited={showDead && !!conversationSession && !assistantNeedsEnd(conversationSession.id) &&
+                    (conversationSession.terminalState !== "not-started" || assistantLifecycles.some((row) => row.harnessSessionId === conversationSession.id && row.lifecycle === "ended"))}
                   onCanvasState={(hasContent) => {
                     // The board keeps its mount behind the map; its probe must
                     // not reveal or collapse the pane while the PROJECT is what

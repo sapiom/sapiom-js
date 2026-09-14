@@ -658,7 +658,7 @@ test("resumed Assistant yields to newer foreground Terminal work", async ({
 for (const revisit of [false, true]) {
   test(`Resume keeps the original revision after its bus commit and lost ACK${revisit ? " across Close and Back" : ""}`, async ({
     page,
-  }) => {
+  }, info) => {
     const probe = await setup(page);
     probe.holdResume = true;
     await review(page);
@@ -681,6 +681,10 @@ for (const revisit of [false, true]) {
     await expect(page.getByRole("alert")).toContainText(
       "Retry to check the same operation",
     );
+    if (!revisit)
+      await page.screenshot({
+        path: info.outputPath("retry-resume-original-request.png"),
+      });
     if (revisit) {
       await page
         .getByTestId("assistant-history-pane")
@@ -720,4 +724,311 @@ test("a definite Resume conflict permits a fresh availability check without auto
   await expect(page.getByTestId("assistant-transcript")).toContainText(
     "Saved answer assistant-only",
   );
+});
+
+const historyUnavailable = (page: Page) =>
+  page.getByText("Assistant history is unavailable. Reopen history to retry.", {
+    exact: true,
+  });
+const refreshDirectory = (page: Page, directory: string) =>
+  publish(page, {
+    type: "session.status",
+    session: {
+      id: "sess-boot",
+      cwd: directory,
+      title: "Directory history check",
+      harness: "claude-code",
+      agentSessionId: "unlisted-native",
+      boundWorkflowPath: null,
+      status: "exited",
+      ready: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+    },
+  });
+const otherCwd = "/Users/demo/rfq-agent";
+
+test("a successful directory refresh preserves another directory's history failure until that directory succeeds", async ({
+  page,
+}, info) => {
+  await setup(page);
+  let failed = true;
+  const requests: string[] = [];
+  await page.route("**/api/sessions/assistant-history?**", (route) => {
+    const directory = new URL(route.request().url()).searchParams.get("cwd")!;
+    requests.push(directory);
+    return route.fulfill(
+      directory === cwd && failed
+        ? { status: 503, json: {} }
+        : { json: { entries: directory === cwd ? [entry("recovered")] : [] } },
+    );
+  });
+  await rows(page);
+  await expect(historyUnavailable(page)).toBeVisible();
+  const before = requests.filter((dir) => dir === otherCwd).length;
+  await refreshDirectory(page, otherCwd);
+  await expect
+    .poll(() => requests.filter((dir) => dir === otherCwd).length)
+    .toBeGreaterThan(before);
+  await expect(page.getByText("Loading…", { exact: true })).toHaveCount(0);
+  await expect(historyUnavailable(page)).toBeVisible();
+  await historyUnavailable(page).scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: info.outputPath("history-directory-unavailable.png"),
+  });
+  failed = false;
+  await refreshDirectory(page, cwd);
+  await expect(page.getByTestId("assistant-history-recovered")).toBeVisible();
+  await expect(historyUnavailable(page)).toHaveCount(0);
+  await page
+    .getByTestId("assistant-history-recovered")
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: info.outputPath("history-directory-recovered.png"),
+  });
+});
+
+for (const oldResult of ["failure", "old metadata"] as const) {
+  test(`a slow multi-directory batch cannot restore ${oldResult} over a newer directory result`, async ({
+    page,
+  }) => {
+    await setup(page);
+    // Make Terminal discovery immediate; this test holds only the Assistant
+    // directory fan-out and must allow its first cwd request to settle.
+    await page.evaluate(async () => {
+      const url = performance
+        .getEntriesByType("resource")
+        .find(
+          (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+        )!.name;
+      const { MockApi } = await import(url);
+      MockApi.prototype.sessionHistory = async () => [];
+    });
+    const firstResponse = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          "/api/sessions/assistant-history" &&
+        new URL(response.url()).searchParams.get("cwd") === cwd,
+    );
+    let acmeRequests = 0;
+    let held: Route | null = null;
+    await page.route("**/api/sessions/assistant-history?**", (route) => {
+      const directory = new URL(route.request().url()).searchParams.get("cwd");
+      if (directory === otherCwd && held === null) {
+        held = route;
+        return;
+      }
+      if (directory !== cwd) return route.fulfill({ json: { entries: [] } });
+      acmeRequests++;
+      return route.fulfill(
+        acmeRequests === 1 && oldResult === "failure"
+          ? { status: 503, json: {} }
+          : {
+              json: {
+                entries: [
+                  {
+                    ...entry("ordered"),
+                    title:
+                      acmeRequests === 1
+                        ? "Old saved history"
+                        : "Fresh saved history",
+                  },
+                ],
+              },
+            },
+      );
+    });
+    await rows(page);
+    await expect.poll(() => held !== null && acmeRequests === 1).toBe(true);
+    await (await firstResponse).finished();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await refreshDirectory(page, cwd);
+    await expect(page.getByTestId("assistant-history-ordered")).toContainText(
+      "Fresh saved history",
+    );
+    await held!.fulfill({ json: { entries: [] } });
+    await expect(page.getByText("Loading…", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("assistant-history-ordered")).toContainText(
+      "Fresh saved history",
+    );
+    await expect(historyUnavailable(page)).toHaveCount(0);
+  });
+}
+
+test("a mixed Assistant row retains its transcript-only Terminal record without starting either engine", async ({
+  page,
+}, info) => {
+  const probe = await setup(page);
+  await page.evaluate(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .find(
+        (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+      )!.name;
+    const { MockApi } = await import(url);
+    const history = MockApi.prototype.sessionHistory,
+      record = MockApi.prototype.sessionRecord;
+    MockApi.prototype.sessionHistory = async function (cwd: string) {
+      const rows = await history.call(this, cwd);
+      return cwd === "/Users/demo/acme-app"
+        ? [
+            ...rows,
+            {
+              harnessSessionId: "assistant-only",
+              agentSessionId: "retained-terminal-native",
+              harness: "claude-code",
+              cwd,
+              title: "Retained Terminal record",
+              lastActiveAt: "2026-09-14T00:00:00.000Z",
+              source: "transcript",
+              resumeMode: "agent-resume",
+            },
+          ]
+        : rows;
+    };
+    MockApi.prototype.sessionRecord = async function (id: string) {
+      if (id !== "assistant-only") return record.call(this, id);
+      return {
+        ...(await record.call(this, "2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33")),
+        harnessSessionId: id,
+        mergedSessionIds: [id],
+        agentSessionId: "retained-terminal-native",
+      };
+    };
+  });
+  await rows(page);
+  await expect(
+    page.getByTestId("assistant-history-assistant-only"),
+  ).toContainText("Terminal + Assistant");
+  await expect(
+    page.getByTestId("history-retained-terminal-native"),
+  ).toHaveCount(0);
+  await page.getByTestId("assistant-history-assistant-only").click();
+  await expect(page.getByTestId("assistant-transcript")).toContainText(
+    "Saved answer assistant-only",
+  );
+  await page.screenshot({
+    path: info.outputPath("mixed-assistant-record.png"),
+  });
+  await page
+    .getByRole("button", { name: "View Terminal history", exact: true })
+    .click();
+  await expect(page.getByTestId("past-session-pane")).toContainText(
+    "Retained Terminal record",
+  );
+  await expect(page.getByTestId("session-transcript")).toContainText(
+    "Wire the screening webhook",
+  );
+  expect(probe.calls).toEqual([]);
+  await page.screenshot({ path: info.outputPath("mixed-terminal-record.png") });
+});
+
+test("Open Terminal from history outranks an earlier Assistant Resume focus", async ({
+  page,
+}) => {
+  const probe = await setup(page);
+  await review(page);
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await review(page);
+  await page
+    .getByRole("button", { name: "View Terminal history", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Terminal", exact: true }).waitFor();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(
+    page.getByRole("button", { name: "Terminal", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  expect(probe.resumes).toHaveLength(1);
+});
+
+test("a resumed dormant Terminal is not labelled as an ended Studio before its lifecycle bus arrives", async ({
+  page,
+}) => {
+  const probe = await setup(page);
+  probe.holdResume = true;
+  await review(page);
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect.poll(() => probe.resumes.length).toBe(1);
+  const value = probe.resumed("assistant-only");
+  await probe.resumes[0]!.fulfill({
+    json: {
+      ...value,
+      session: { ...value.session, terminalState: "not-started" },
+    },
+  });
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await expect(page.getByText("Session ended", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByText("Nothing generated yet", { exact: true }),
+  ).toBeVisible();
+  await publish(page, {
+    type: "assistant.state",
+    snapshot: {
+      hostInstanceId: "history-host",
+      authorityRevision: "account-a",
+      revision: 2,
+      enabled: true,
+      sessions: [],
+      lifecycles: [{ ...entry("assistant-only").lifecycle, revision: 4 }],
+    },
+  });
+  await expect(page.getByText("Session ended", { exact: true })).toBeVisible();
+});
+
+test("a Terminal summary in another directory remains separate from an Assistant with the same Studio ID", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.evaluate(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .find(
+        (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+      )!.name;
+    const { MockApi } = await import(url);
+    const history = MockApi.prototype.sessionHistory;
+    MockApi.prototype.sessionHistory = async function (cwd: string) {
+      const rows = await history.call(this, cwd);
+      return cwd === "/Users/demo/rfq-agent"
+        ? [
+            ...rows,
+            {
+              harnessSessionId: "assistant-only",
+              agentSessionId: "different-directory-native",
+              harness: "codex",
+              cwd,
+              title: "Other directory Terminal",
+              lastActiveAt: "2026-09-14T00:00:00.000Z",
+              source: "transcript",
+              resumeMode: "agent-resume",
+            },
+          ]
+        : rows;
+    };
+  });
+  await rows(page);
+  await expect(
+    page.getByTestId("assistant-history-assistant-only"),
+  ).not.toContainText("Terminal + Assistant");
+  await expect(
+    page.getByTestId("history-different-directory-native"),
+  ).toBeVisible();
+  await page.getByTestId("assistant-history-assistant-only").click();
+  await expect(
+    page.getByRole("button", { name: "View Terminal history", exact: true }),
+  ).toHaveCount(0);
 });

@@ -678,12 +678,12 @@ export function WorkflowsRail({
       ) && !registryAgentIds.has(summary.agentSessionId),
   );
   const pastRows = [
-    ...exitedSessions.filter((session) => !assistantByStudio.has(session.id)).map((session) => ({
+    ...exitedSessions.filter((session) => assistantByStudio.get(session.id)?.cwd !== session.cwd).map((session) => ({
       kind: "exited" as const,
       at: session.lastActiveAt,
       session,
     })),
-    ...pastSummaries.filter((summary) => !summary.harnessSessionId || !assistantByStudio.has(summary.harnessSessionId)).map((summary) => ({
+    ...pastSummaries.filter((summary) => !summary.harnessSessionId || assistantByStudio.get(summary.harnessSessionId)?.cwd !== summary.cwd).map((summary) => ({
       kind: "summary" as const,
       at: summary.lastActiveAt,
       summary,
@@ -1191,12 +1191,13 @@ export function WorkflowsRail({
                   >
                     {pastRows.map((row) => {
                       if (row.kind === "assistant") {
-                        const terminal = sessions.find((session) => session.id === row.entry.harnessSessionId);
+                        const terminal = sessions.find((session) => session.id === row.entry.harnessSessionId && session.cwd === row.entry.cwd);
+                        const summary = history.find((candidate) => candidate.harnessSessionId === row.entry.harnessSessionId && candidate.cwd === row.entry.cwd);
                         return <PastSessionRow
-                          key={row.entry.harnessSessionId}
+                          key={`assistant:${row.entry.harnessSessionId}`}
                           testid={`assistant-history-${row.entry.harnessSessionId}`}
                           title={row.entry.title}
-                          meta={`${terminal && terminal.terminalState !== "not-started" ? "Terminal + Assistant" : "Assistant"} · ${row.entry.history === "available" ? "saved record" : row.entry.history === "partial" ? "partial record" : "record " + row.entry.history}`}
+                          meta={`${(terminal && terminal.terminalState !== "not-started") || summary ? "Terminal + Assistant" : "Assistant"} · ${row.entry.history === "available" ? "saved record" : row.entry.history === "partial" ? "partial record" : "record " + row.entry.history}`}
                           cwd={row.entry.cwd}
                           resumeMode={undefined}
                           isSelected={false}

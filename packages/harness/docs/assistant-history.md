@@ -207,3 +207,9 @@ Visibility changes publish on the existing Assistant state revision clock, and
 an older read cannot overwrite newer completed evidence. An unreadable index
 blocks discovery and execution while exact authorized End remains available;
 previously verified pending children remain private during that failure.
+
+History groups Terminal and Assistant records only for the same Studio and cwd.
+Transcript-only Terminal records remain reachable, and explicit Terminal focus
+outranks an earlier Assistant reveal. Assistant history tracks failures and newer
+results per cwd; another directory's refresh cannot erase or roll them back.
+A dormant Terminal does not label the Studio ended before lifecycle state arrives.
