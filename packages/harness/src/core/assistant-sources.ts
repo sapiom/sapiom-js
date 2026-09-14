@@ -293,6 +293,7 @@ export function retainAssistantGuidance(
     source: guidance.source,
     authorityScope,
     ...(guidance.scope === undefined ? {} : { scope: guidance.scope }),
+    ...(guidance.fallback === undefined ? {} : { fallback: guidance.fallback }),
   };
   const resolved = createAssistantSource(
     identity,

@@ -10,23 +10,39 @@ import { fetchSystemPromptWithSource } from "./system-prompt-fetch.js";
 
 export async function assistantProfile(
   environment: ResolvedEnvironment,
-  loadOverride?: () => Promise<string>,
+  loadOverride?: (signal?: AbortSignal) => Promise<string>,
+  signal?: AbortSignal,
 ): Promise<AssistantGuidance> {
+  signal?.throwIfAborted();
   const fallback = {
     text: DEFAULT_SYSTEM_PROMPT,
     source: "bundled:studio-profile",
   };
-  let loaded = fallback;
+  let loaded: {
+    text: string;
+    source: string;
+    fallback?: AssistantGuidance["fallback"];
+  } = fallback;
   if (loadOverride) {
     try {
-      const text = await loadOverride();
+      loaded = {
+        ...fallback,
+        fallback: {
+          fromSource: "host:studio-profile",
+          reason: "Host profile did not supply usable guidance",
+        },
+      };
+      const text = await loadOverride(signal);
+      signal?.throwIfAborted();
       if (text.trim()) loaded = { text, source: "host:studio-profile" };
     } catch {
+      signal?.throwIfAborted();
       /* The bundled teaching is the required offline fallback. */
     }
   } else if (!isEnvFlagSet(process.env.SAPIOM_HARNESS_PROMPT_FETCH_DISABLED)) {
-    loaded = await fetchSystemPromptWithSource(environment);
+    loaded = await fetchSystemPromptWithSource(environment, signal);
   }
+  signal?.throwIfAborted();
   const text = resolveKnownSystemPrompt(loaded.text);
   return {
     id: "studio-profile",
@@ -34,6 +50,16 @@ export async function assistantProfile(
     required: true,
     status: "available",
     source: text === loaded.text ? loaded.source : "bundled:studio-profile",
+    ...(text !== loaded.text
+      ? {
+          fallback: {
+            fromSource: loaded.source,
+            reason: "Superseded profile replaced with current bundled guidance",
+          },
+        }
+      : loaded.fallback
+        ? { fallback: loaded.fallback }
+        : {}),
     revision: assistantContextDigest(text),
     text,
   };

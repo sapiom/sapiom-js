@@ -15,28 +15,43 @@ import {
   assistantProjectRole,
 } from "../profiles/assistant.js";
 
+import {
+  createAssistantContextCandidate,
+  retainAssistantGuidance,
+  type ResolvedAssistantGuidance,
+} from "../core/assistant-sources.js";
+import type { ResolveAssistantCandidate } from "../core/studio-assistant-delivery.js";
+
 interface Options {
   getSession: (id: string) => HarnessSession | undefined | null;
-  getWorkflows: () => Promise<WorkflowInfo[]>;
+  getWorkflows: (signal?: AbortSignal) => Promise<WorkflowInfo[]>;
   getEnvironment: () => ResolvedEnvironment | null;
-  loadSystemPrompt?: () => Promise<string>;
+  loadSystemPrompt?: (signal?: AbortSignal) => Promise<string>;
   /** Epic 3 supplies connection/catalog facts, never a browser-provided list. */
-  loadCapabilities?: (hosted: HostedOpenCode) => Promise<AssistantCapability[]>;
+  loadCapabilities?: (
+    hosted: HostedOpenCode,
+    signal: AbortSignal,
+  ) => Promise<AssistantCapability[]>;
   /** Instruction/skill/lifecycle loaders receive already-resolved authority. */
   loadGuidance?: (
     context: StudioAssistantContext,
     hosted: HostedOpenCode,
+    signal: AbortSignal,
   ) => Promise<AssistantGuidance[]>;
 }
 
 async function currentCapabilities(
   hosted: HostedOpenCode,
+  signal: AbortSignal,
 ): Promise<AssistantCapability[]> {
   const mcp = await hosted.server
     .fetchJson<Record<string, { status: string }>>("/mcp", {
-      signal: AbortSignal.any([hosted.signal, AbortSignal.timeout(5000)]),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
     })
-    .catch(() => ({}) as Record<string, { status: string }>);
+    .catch(() => {
+      signal.throwIfAborted();
+      return {} as Record<string, { status: string }>;
+    });
   return [
     {
       name: "sapiom",
@@ -56,7 +71,9 @@ async function currentCapabilities(
 export function createAssistantContextResolver(
   options: Options,
 ): ResolveAssistantContext {
-  return async (hosted, selectedAgentPath) => {
+  return async (hosted, selectedAgentPath, admissionSignal = hosted.signal) => {
+    const signal = AbortSignal.any([hosted.signal, admissionSignal]);
+    signal.throwIfAborted();
     const current = options.getSession(hosted.harnessSessionId);
     const environment = options.getEnvironment();
     if (!current || !environment) throw assistantContextUnavailable();
@@ -68,10 +85,11 @@ export function createAssistantContextResolver(
       boundAgentPath: current.boundWorkflowPath,
     };
     const [workflows, profile, capabilities] = await Promise.all([
-      options.getWorkflows(),
-      assistantProfile(environment, options.loadSystemPrompt),
-      (options.loadCapabilities ?? currentCapabilities)(hosted),
+      options.getWorkflows(signal),
+      assistantProfile(environment, options.loadSystemPrompt, signal),
+      (options.loadCapabilities ?? currentCapabilities)(hosted, signal),
     ]);
+    signal.throwIfAborted();
     const context = await resolveStudioAssistantContext({
       hosted,
       session,
@@ -84,8 +102,9 @@ export function createAssistantContextResolver(
         ...(session.projectId ? [assistantProjectRole()] : []),
       ],
     });
+    signal.throwIfAborted();
     const sources = options.loadGuidance
-      ? await options.loadGuidance(context, hosted)
+      ? await options.loadGuidance(context, hosted, signal)
       : [
           {
             id: "project-instructions",
@@ -108,6 +127,7 @@ export function createAssistantContextResolver(
               "The managed authoring skill loader is not connected yet. Use the installed SDK documentation; do not claim this skill was loaded.",
           },
         ];
+    signal.throwIfAborted();
     if (!hosted.isCurrent() || hosted.signal.aborted)
       throw assistantContextUnavailable();
     const serialized = JSON.stringify({
@@ -119,5 +139,52 @@ export function createAssistantContextResolver(
       ...JSON.parse(serialized),
       revision: assistantContextDigest(serialized),
     };
+  };
+}
+
+/** The typed provider seam retains exact supplied material; acquisition remains with sibling loaders. */
+export function createAssistantContextCandidateResolver(
+  options: Omit<Options, "loadGuidance"> & {
+    loadGuidance?: (
+      context: StudioAssistantContext,
+      hosted: HostedOpenCode,
+      signal: AbortSignal,
+    ) => Promise<ResolvedAssistantGuidance[]>;
+  },
+): ResolveAssistantCandidate {
+  const { loadGuidance, ...base } = options;
+  const resolve = createAssistantContextResolver({
+    ...base,
+    ...(loadGuidance ? { loadGuidance: async () => [] } : {}),
+  });
+  return async (hosted, selection, admissionSignal) => {
+    const signal = AbortSignal.any([hosted.signal, admissionSignal]);
+    const context = await resolve(hosted, selection, signal);
+    const extra = loadGuidance
+      ? await loadGuidance(context, hosted, signal)
+      : [];
+    signal.throwIfAborted();
+    if (!hosted.isCurrent()) throw assistantContextUnavailable();
+    const guidance = [
+      ...context.guidance.map((source) =>
+        retainAssistantGuidance(source, hosted.contextAuthorityScope),
+      ),
+      ...extra,
+    ];
+    const resolved = {
+      ...context,
+      guidance: [
+        ...context.guidance,
+        ...extra.map((source) => source.metadata),
+      ],
+    };
+    resolved.revision = assistantContextDigest(
+      JSON.stringify({ ...resolved, revision: undefined }),
+    );
+    return createAssistantContextCandidate(
+      resolved,
+      hosted.contextAuthorityScope,
+      guidance,
+    );
   };
 }

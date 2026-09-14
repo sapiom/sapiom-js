@@ -28,8 +28,18 @@ export async function fetchSystemPrompt(
 /** Same fallback as Terminal, with provenance for Assistant's context revision. */
 export async function fetchSystemPromptWithSource(
   env: ResolvedEnvironment,
-): Promise<{ text: string; source: string }> {
+  signal?: AbortSignal,
+): Promise<{
+  text: string;
+  source: string;
+  fallback?: { fromSource: string; reason: string };
+}> {
+  signal?.throwIfAborted();
   const fallback = {
+    fallback: {
+      fromSource: `${env.apiURL}/v1/harness/system-prompt`,
+      reason: "Profile endpoint did not supply usable guidance",
+    },
     text: DEFAULT_SYSTEM_PROMPT,
     source: "bundled:studio-profile",
   };
@@ -38,14 +48,19 @@ export async function fetchSystemPromptWithSource(
   try {
     const response = await fetch(`${env.apiURL}/v1/harness/system-prompt`, {
       headers: { Accept: "text/markdown, text/plain" },
-      signal: controller.signal,
+      signal: signal
+        ? AbortSignal.any([signal, controller.signal])
+        : controller.signal,
     });
+    signal?.throwIfAborted();
     if (!response.ok) return fallback;
     const body = (await response.text()).trim();
+    signal?.throwIfAborted();
     return body.length > 0
       ? { text: body, source: `${env.apiURL}/v1/harness/system-prompt` }
       : fallback;
   } catch {
+    signal?.throwIfAborted();
     return fallback;
   } finally {
     clearTimeout(timeout);

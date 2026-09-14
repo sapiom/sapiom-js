@@ -29,6 +29,7 @@ export interface AssistantGuidance {
   text?: string;
   location?: string;
   reason?: string;
+  fallback?: { fromSource: string; reason: string };
 }
 export interface AssistantCapability {
   name: string;
@@ -49,6 +50,7 @@ export interface StudioAssistantContext {
 export type ResolveAssistantContext = (
   hosted: HostedOpenCode,
   selectedAgentPath?: string | null,
+  signal?: AbortSignal,
 ) => Promise<StudioAssistantContext>;
 
 export const assistantContextDigest = (value: string): string =>

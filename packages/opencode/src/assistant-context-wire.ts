@@ -47,6 +47,7 @@ export interface LegacyAssistantGuidance {
   text?: string;
   location?: string;
   reason?: string;
+  fallback?: { fromSource: string; reason: string };
 }
 export interface LegacyAssistantContext extends AssistantContextFacts {
   schemaVersion: 1;
@@ -208,7 +209,7 @@ function legacyContext(
     const source = contextKeys(
       value,
       ["id", "kind", "required", "source", "revision", "status"],
-      ["scope", "text", "location", "reason"],
+      ["scope", "text", "location", "reason", "fallback"],
     );
     contextText(source.id);
     contextText(source.source);
@@ -226,6 +227,11 @@ function legacyContext(
       typeof source.required === "boolean" &&
         (source.revision === null || typeof source.revision === "string"),
     );
+    if (source.fallback !== undefined) {
+      const fallback = contextKeys(source.fallback, ["fromSource", "reason"]);
+      contextText(fallback.fromSource);
+      contextText(fallback.reason);
+    }
     for (const key of ["scope", "text", "location", "reason"])
       if (source[key] !== undefined) contextText(source[key]);
     contextCheck(
