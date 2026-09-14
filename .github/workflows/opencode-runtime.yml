@@ -3,7 +3,16 @@ name: Owned OpenCode runtime
 on:
   pull_request:
     paths:
-      - "packages/opencode/native-runtime.json"
+      - "packages/opencode/**"
+      - "packages/harness/src/core/assistant-*.ts"
+      - "packages/harness/src/core/studio-assistant*.ts"
+      - "packages/harness/src/core/test-fixtures/assistant-context.ts"
+      - "packages/harness/package.json"
+      - "packages/harness/tsconfig*.json"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
       - "patches/opencode/**"
       - "scripts/opencode-runtime/**"
       - ".github/workflows/opencode-runtime.yml"
@@ -78,6 +87,7 @@ jobs:
       - run: |
           npm install --prefix "$RUNNER_TEMP/pnpm-cli" --ignore-scripts --no-audit --no-fund pnpm@10.34.3
           echo "PNPM_SCRIPT=$RUNNER_TEMP/pnpm-cli/node_modules/pnpm/bin/pnpm.cjs" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/pnpm-cli/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Fresh selected-platform installation and failure boundaries
         run: node scripts/opencode-runtime/install-proof.mjs "$RUNNER_TEMP/runtime-artifacts" "$RUNNER_TEMP/install-proof"
       - name: Build production plugin and harness dependencies

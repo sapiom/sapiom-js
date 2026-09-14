@@ -175,9 +175,12 @@ try {
     if (ignore) {
       assert.equal(await sha(binary), proof.packaging.launcherStubSha256);
       assert.deepEqual([...new Set(requests.slice(begin))], [`/${name}.tgz`]);
-      // The preserved shell stub also fails closed on Windows, where it is not an executable.
+      // This is the verified upstream shell stub, not a native executable yet.
       if (process.platform !== "win32")
-        assert.equal((await command(binary, ["--version"], dir, true)).code, 1);
+        assert.equal(
+          (await command("/bin/sh", [binary, "--version"], dir, true)).code,
+          1,
+        );
       await command(
         process.execPath,
         [join(installed, "postinstall.mjs")],
