@@ -13,7 +13,7 @@ export async function checkOpenCodeRuntime(): Promise<string> {
     join(realpathSync(tmpdir()), "studio-opencode-smoke-"),
   );
   const runtimes: OpenCodeServer[] = [];
-  let startupFailure: unknown;
+  const failures: unknown[] = [];
   try {
     const sessions = new Set<string>();
     for (const name of ["first", "second"]) {
@@ -43,19 +43,35 @@ export async function checkOpenCodeRuntime(): Promise<string> {
         if (!health.healthy) throw new Error("Packaged OpenCode is unhealthy");
       }
     }
-    return "two packaged Assistant runtimes opened independent sessions and shut down";
   } catch (error) {
-    startupFailure = error;
-    throw error;
-  } finally {
-    const cleanup = await Promise.allSettled(
-      runtimes.map((runtime) => runtime.close()),
-    );
-    const failed = cleanup.find((result) => result.status === "rejected");
-    // Retain state when process ownership/cleanup is uncertain, matching the
-    // production host; a failed cleanup must fail this release check.
-    if (failed?.status === "rejected") throw failed.reason;
-    if (!(startupFailure instanceof OpenCodeShutdownError))
-      rmSync(root, { recursive: true, force: true });
+    failures.push(error);
   }
+  const cleanup = await Promise.allSettled(
+    runtimes.map((runtime) => runtime.close()),
+  );
+  for (const result of cleanup)
+    if (result.status === "rejected") failures.push(result.reason);
+  // Retain state when process ownership/cleanup is uncertain, matching the
+  // production host; a failed cleanup must fail this release check.
+  if (
+    cleanup.every((result) => result.status === "fulfilled") &&
+    !failures.some((error) => error instanceof OpenCodeShutdownError)
+  ) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      failures
+        .map((error) =>
+          error instanceof Error ? error.message : String(error),
+        )
+        .join("; "),
+    );
+  return "two packaged Assistant runtimes opened independent sessions and shut down";
 }
