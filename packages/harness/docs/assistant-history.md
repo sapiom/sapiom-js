@@ -185,3 +185,7 @@ the exact previous revision; compacted tasks and recorded real replies remain.
 A failed Terminal binding publication can roll back only its original close
 generation and exact proposed marker. A queued End retains its durable tombstone
 or confirmed removal, and other sessions keep their own process and binding.
+
+Brief part selection keeps the latest useful Assistant text, tool results and
+attachments even when blank or omitted control parts follow them. Omission counts
+remain explicit without incorrectly labeling every removed part as earlier.

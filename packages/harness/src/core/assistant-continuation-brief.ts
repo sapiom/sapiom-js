@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   AssistantRecord,
   AssistantRecordBinding,
+  AssistantRecordPart,
 } from "../shared/assistant-record.js";
 import { validateAssistantRecord } from "./assistant-record.js";
 import {
@@ -25,6 +26,9 @@ const clamp = (value: string, limit: number) =>
   value.length <= limit
     ? value
     : `${value.slice(0, limit)}… [excerpt truncated]`;
+const usefulPart = (part: AssistantRecordPart) =>
+  part.type !== "omitted" &&
+  (part.type !== "text" || part.text.trim().length > 0);
 
 /** Freeze a bounded public reconstruction. It carries context, never an instruction to replay work. */
 export function buildAssistantContinuationBrief(
@@ -45,7 +49,7 @@ export function buildAssistantContinuationBrief(
       const messages = turn.messages.map((message) => {
         const selected =
           message.role === "assistant"
-            ? message.parts.slice(-12)
+            ? message.parts.filter(usefulPart).slice(-12)
             : message.parts.slice(0, 12);
         const parts = selected.map((part) => {
           switch (part.type) {
@@ -59,18 +63,15 @@ export function buildAssistantContinuationBrief(
               return `Omitted ${part.nativeType} part.`;
           }
         });
-        if (message.parts.length > 12) {
-          const omitted = `${message.parts.length - 12} ${message.role === "assistant" ? "earlier" : "further"} parts omitted.`;
+        if (message.parts.length > selected.length) {
+          const count = message.parts.length - selected.length;
+          const omitted = `${count} ${message.role === "assistant" ? "" : "further "}part${count === 1 ? "" : "s"} omitted.`;
           if (message.role === "assistant") parts.unshift(omitted);
           else parts.push(omitted);
         }
         return {
           text: `${message.role === "user" ? "User" : "Assistant"} ${message.id}:\n${parts.join("\n")}`,
-          useful: message.parts.some(
-            (part) =>
-              part.type !== "omitted" &&
-              (part.type !== "text" || part.text.trim().length > 0),
-          ),
+          useful: selected.some(usefulPart),
         };
       });
       return {

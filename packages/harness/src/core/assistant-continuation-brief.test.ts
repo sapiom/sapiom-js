@@ -122,7 +122,7 @@ it("reserves user context and the newest Assistant parts when both messages are 
   expect(frozen.text).toContain("excerpt truncated");
   expect(frozen.text).toContain("assistant state 12:");
   expect(frozen.text).not.toContain("assistant state 0:");
-  expect(frozen.text).toContain("1 earlier parts omitted.");
+  expect(frozen.text).toContain("1 part omitted.");
   expect(frozen.text).toContain("incomplete; do not assume success");
 });
 it("keeps the newest useful Assistant state ahead of later empty native messages", () => {
@@ -170,3 +170,72 @@ it("fails without usable public history or with corrupt binding metadata", () =>
     }),
   ).toThrow();
 });
+
+it.each(["blank", "omitted", "mixed"])(
+  "keeps the latest useful text, tool and attachment before thirteen %s parts",
+  (kind) => {
+    const record = fixture();
+    record.turns[0]!.messages.push({
+      id: "msg_state",
+      role: "assistant",
+      parentId: "msg_user_0",
+      createdAt: 2,
+      completedAt: 3,
+      parts: [
+        {
+          id: "prt_state",
+          type: "text",
+          text: "Latest result: tests pass; deployment pending.",
+          truncated: false,
+        },
+        {
+          id: "prt_tool",
+          type: "tool",
+          callId: "call_verify",
+          name: "test",
+          status: "completed",
+          input: "{}",
+          output: "12 tests passed",
+          error: null,
+          startedAt: 2,
+          completedAt: 3,
+          truncated: false,
+        },
+        {
+          id: "prt_file",
+          type: "file",
+          name: "test-report.txt",
+          mime: "text/plain",
+        },
+        ...Array.from({ length: 13 }, (_, index) =>
+          kind === "omitted" || (kind === "mixed" && index % 2 === 0)
+            ? {
+                id: `prt_empty_${index}`,
+                type: "omitted" as const,
+                nativeType: "step-finish",
+              }
+            : {
+                id: `prt_empty_${index}`,
+                type: "text" as const,
+                text: " \n\t ",
+                truncated: false,
+              },
+        ),
+      ],
+    });
+    record.messageCount = 2;
+    const frozen = buildAssistantContinuationBrief(record);
+    expect(frozen.text).toContain(
+      "Latest result: tests pass; deployment pending.",
+    );
+    expect(frozen.text).toContain("Recorded tool test (completed)");
+    expect(frozen.text).toContain("12 tests passed");
+    expect(frozen.text).toContain(
+      "Attachment test-report.txt (text/plain); contents omitted.",
+    );
+    expect(frozen.text).toContain("13 parts omitted.");
+    expect(frozen.text).not.toContain("earlier parts omitted");
+    expect(frozen.estimatedTokens).toBeLessThanOrEqual(6000);
+    expect(frozen).toEqual(buildAssistantContinuationBrief(record));
+  },
+);
