@@ -129,6 +129,12 @@ dispatch fence. Failed preparation consumes no fence. Model, recovery agent,
 saved-results continuation text and uncertain-dispatch behavior stay with this
 owner. Legacy callers remain supported until production activation connects both
 ordinary and recovery preparation together.
+
+Preparation can await source reads, so the acknowledgement baseline is refreshed
+after it returns. Recovery also rereads native history, status and permissions,
+and checks that the original saved user/system still match before fencing. A
+cancellation during fence creation removes only this operation's new fence and
+syncs its directory before returning; once a POST is attempted its fence remains.
 Runtime readiness is a required injected contract, not a claim that package-generation
 acquisition or refresh is implemented by this service.
 

@@ -1,4 +1,5 @@
 import { mkdtemp, readdir, rm } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -11,9 +12,16 @@ import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 import type { OpenCodeTurnMessage } from "../shared/opencode-turn.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof fs>();
+  return { ...actual, writeFile: vi.fn(actual.writeFile) };
+});
+const actualFs = await vi.importActual<typeof fs>("node:fs/promises");
+
 let hosted: HostedOpenCode;
 let messages: OpenCodeTurnMessage[];
 let state: string;
+let permission: unknown[];
 let abort: AbortController;
 let original: string;
 const dispatch = vi.fn();
@@ -26,6 +34,7 @@ const prepared = (system = "accepted attempt") => ({
   expectedSystem: system,
 });
 beforeEach(async () => {
+  vi.mocked(fs.writeFile).mockImplementation(actualFs.writeFile);
   original = openCodeCompletionPrompt().system;
   messages = [
     user("msg_original", original),
@@ -42,6 +51,7 @@ beforeEach(async () => {
     },
   ];
   state = "idle";
+  permission = [];
   abort = new AbortController();
   dispatch
     .mockReset()
@@ -55,7 +65,7 @@ beforeEach(async () => {
       fetchJson: vi.fn(async (path: string) => {
         if (path.endsWith("/message")) return structuredClone(messages);
         if (path === "/session/status") return { ses_test: { type: state } };
-        return { permission: [] };
+        return { permission };
       }),
     },
   } as unknown as HostedOpenCode;
@@ -254,4 +264,65 @@ it("does not consume a recovery fence when preparation finishes after revocation
   ).rejects.toThrow();
   expect(dispatch).not.toHaveBeenCalled();
   expect(await readdir(hosted.stateRoot)).toEqual([]);
+});
+
+it("takes the legacy acknowledgement baseline after asynchronous preparation", async () => {
+  const delivery = new OpenCodeFinalResponse();
+  const sending = delivery.send(hosted, "ses_test", async () => {
+    messages.push(user("msg_during_preparation", "unrelated"));
+    return prepared().init;
+  });
+  await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const stillAdmitting = delivery.isRunning(hosted);
+  messages.push(user("msg_after_dispatch", "accepted attempt"));
+  await sending;
+  expect(stillAdmitting).toBe(true);
+});
+
+it.each(["busy", "new-user", "answered", "permissions", "changed-system"])(
+  "rejects recovery when %s changes during preparation",
+  async (change) => {
+    const delivery = new OpenCodeFinalResponse({
+      recoverPrompt: async () => {
+        if (change === "busy") state = "busy";
+        if (change === "new-user") messages.push(user("msg_new", "new work"));
+        if (change === "answered")
+          messages[1]!.parts = [
+            {
+              type: "text",
+              text: `<!-- studio-result:${original.split("\n")[0]!.split(":")[1]}:finished -->\nAlready complete`,
+            },
+          ];
+        if (change === "permissions")
+          permission.push({ permission: "*", action: "allow" });
+        if (change === "changed-system")
+          messages[0]!.info!.system = openCodeCompletionPrompt().system;
+        return { system: "retained recovery" };
+      },
+    });
+    await expect(
+      delivery.recover(hosted, "ses_test", "msg_missing"),
+    ).rejects.toThrow();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await readdir(hosted.stateRoot)).toEqual([]);
+  },
+);
+
+it("removes its own fence when cancelled during fence creation before attempting POST", async () => {
+  vi.mocked(fs.writeFile).mockImplementationOnce(async (...args) => {
+    await actualFs.writeFile(...args);
+    abort.abort();
+  });
+  const delivery = new OpenCodeFinalResponse({
+    recoverPrompt: async () => ({ system: "retained recovery" }),
+  });
+  await expect(
+    delivery.recover(hosted, "ses_test", "msg_missing"),
+  ).rejects.toThrow();
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await readdir(hosted.stateRoot)).toEqual([]);
+  hosted = { ...hosted, signal: new AbortController().signal };
+  await delivery.recover(hosted, "ses_test", "msg_missing");
+  expect(dispatch).toHaveBeenCalledOnce();
 });

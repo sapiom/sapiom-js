@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { open, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { HostedOpenCode } from "./opencode-host.js";
@@ -105,7 +105,6 @@ export class OpenCodeFinalResponse {
         this.awaiting.delete(hosted.stateRoot);
         this.uncertain.delete(hosted.stateRoot);
       }
-      const before = new Set(messages.map((message) => message.info?.id));
       signal.throwIfAborted();
       const prepared = typeof init === "function" ? await init(signal) : init;
       const request = "init" in prepared ? prepared.init : prepared;
@@ -113,6 +112,9 @@ export class OpenCodeFinalResponse {
         signal,
         ...(request.signal ? [request.signal] : []),
       ]);
+      const before = new Set(
+        (await history(dispatchSignal)).map((message) => message.info?.id),
+      );
       await this.current(hosted, dispatchSignal);
       const acknowledgement =
         "init" in prepared
@@ -192,50 +194,54 @@ export class OpenCodeFinalResponse {
     );
     const unlock = await new DurableFileLock(file).acquire();
     let dispatched = false;
+    let fenced = false;
     try {
       // Survives browser disconnects. Host revocation still cancels the request.
       const signal = AbortSignal.any([
         hosted.signal,
         AbortSignal.timeout(120_000),
       ]);
-      const messages = await hosted.server.fetchJson<OpenCodeTurnMessage[]>(
-        `/session/${sessionId}/message`,
-        { signal },
-      );
-      const statuses = await hosted.server.fetchJson<
-        Record<string, { type: string }>
-      >("/session/status", { signal });
-      if (
-        openCodeTurn(messages, statuses[sessionId]?.type ?? "idle").missing !==
-        messageId
-      )
-        throw new Error("Turn changed or no final response is missing");
-      const session = await hosted.server.fetchJson<{ permission?: unknown[] }>(
-        `/session/${sessionId}`,
-        { signal },
-      );
-      // Native session permissions override agent permissions. Studio sessions
-      // have none; fail closed if another client has changed that contract.
-      if (session.permission?.length)
-        throw new Error("Session permissions changed");
-      const parentId = messages.find(
-        (message) => message.info?.id === messageId,
-      )?.info?.parentID;
-      const parentIndex = messages.findIndex(
-        (message) => message.info?.id === parentId,
-      );
-      const original = messages
-        .slice(0, parentIndex + 1)
-        .reverse()
-        .find(
-          (message) =>
-            message.info?.role === "user" &&
-            !message.parts.some(
-              (part) =>
-                part.type === "compaction" ||
-                (part.synthetic && part.metadata?.compaction_continue === true),
-            ),
+      const readOriginal = async () => {
+        const messages = await hosted.server.fetchJson<OpenCodeTurnMessage[]>(
+          `/session/${sessionId}/message`,
+          { signal },
         );
+        const statuses = await hosted.server.fetchJson<
+          Record<string, { type: string }>
+        >("/session/status", { signal });
+        if (
+          openCodeTurn(messages, statuses[sessionId]?.type ?? "idle")
+            .missing !== messageId
+        )
+          throw new Error("Turn changed or no final response is missing");
+        const session = await hosted.server.fetchJson<{
+          permission?: unknown[];
+        }>(`/session/${sessionId}`, { signal });
+        // Native session permissions override agent permissions. Studio sessions
+        // have none; fail closed if another client has changed that contract.
+        if (session.permission?.length)
+          throw new Error("Session permissions changed");
+        const parentId = messages.find(
+          (message) => message.info?.id === messageId,
+        )?.info?.parentID;
+        const parentIndex = messages.findIndex(
+          (message) => message.info?.id === parentId,
+        );
+        return messages
+          .slice(0, parentIndex + 1)
+          .reverse()
+          .find(
+            (message) =>
+              message.info?.role === "user" &&
+              !message.parts.some(
+                (part) =>
+                  part.type === "compaction" ||
+                  (part.synthetic &&
+                    part.metadata?.compaction_continue === true),
+              ),
+          );
+      };
+      const original = await readOriginal();
       const prompt = this.delivery.recoverPrompt
         ? await this.delivery.recoverPrompt(
             hosted,
@@ -244,11 +250,18 @@ export class OpenCodeFinalResponse {
             signal,
           )
         : recoverAssistantPrompt(original?.info?.system);
+      const latest = await readOriginal();
+      if (
+        latest?.info?.id !== original?.info?.id ||
+        latest?.info?.system !== original?.info?.system
+      )
+        throw new Error("Original Assistant request changed");
       await this.current(hosted, signal);
       // Record BEFORE dispatch. An uncertain request is never retried on reload.
       await writeFile(file, "{}\n", { flag: "wx", mode: 0o600 });
-      dispatched = true;
+      fenced = true;
       signal.throwIfAborted();
+      dispatched = true;
       const response = await hosted.server.fetch(
         `/session/${sessionId}/message`,
         {
@@ -271,6 +284,16 @@ export class OpenCodeFinalResponse {
       if (!response.ok) throw new Error("Final response failed");
       await response.arrayBuffer();
     } catch (error) {
+      if (fenced && !dispatched) {
+        // Still under our exclusive lock; this fence is ours and no POST was attempted.
+        await unlink(file);
+        const directory = await open(hosted.stateRoot, "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      }
       if (dispatched && !hosted.signal.aborted) {
         // Cancelling the HTTP waiter does not cancel OpenCode's native fiber.
         // Fence new prompts until abort is confirmed, even on transport failure.
