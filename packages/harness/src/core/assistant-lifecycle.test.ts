@@ -141,6 +141,19 @@ it("coalesces duplicate attach and rejects stale revisions without native work",
   expect(ensure).toHaveBeenCalledOnce();
 });
 
+it("starts native retirement immediately while End waits for the original durable snapshot", async () => {
+  const attached = await coordinator.attach("studio-a", 0);
+  const held = gate();
+  const read = vi.spyOn(store, "lifecycle");
+  const ending = coordinator.beginEnd("studio-a", held.promise);
+  expect(abort.signal.aborted).toBe(true);
+  expect(read).not.toHaveBeenCalled();
+  await expect(coordinator.use("studio-a", attached.lease)).rejects.toThrow();
+  held.release();
+  await ending.persistence;
+  expect(await store.lifecycle("studio-a")).toMatchObject({ lifecycle: "ending" });
+});
+
 it("rejects a late attach after End and retains its durable fence without eligibility", async () => {
   const held = gate();
   associate.mockImplementationOnce(async () => {

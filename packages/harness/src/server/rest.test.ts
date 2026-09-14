@@ -25,10 +25,12 @@ import type {
 import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
+  SessionCleanupUnconfirmedError,
   SessionInputIsolationError,
   SessionManager,
   SessionManagerClosingError,
   SessionNotReadyError,
+  SessionPreparationCancelledError,
   UnknownSessionError,
 } from "../core/session-manager.js";
 import type { SessionRecordReader } from "../core/session-record.js";
@@ -65,6 +67,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     resume: vi.fn(),
     restartForMcpCredentials: vi.fn(),
     kill: vi.fn(() => true),
+    close: vi.fn(async () => true),
     write: vi.fn(() => true),
     submitInput: vi.fn(async () => true),
     setBoundWorkflowPath: vi.fn((id: string, workflowPath: string | null) => {
@@ -343,6 +346,81 @@ describe("createRestRouter", () => {
       const res = await fetch(`${baseUrl}/state`);
       const body = (await res.json()) as { telemetryOptIn: boolean };
       expect(body.telemetryOptIn).toBe(true);
+    });
+  });
+
+  it.each([
+    new SessionPreparationCancelledError(),
+    new SessionCleanupUnconfirmedError(),
+  ])("returns 409 for cancelled or unconfirmed Terminal resume: $code", async (error) => {
+    const sessionManager = fakeSessionManager([exitedSession()]);
+    vi.mocked(sessionManager.resume).mockRejectedValue(error);
+    vi.mocked(sessionManager.restartForMcpCredentials).mockRejectedValue(error);
+    start({ sessionManager, adapters: { "claude-code": historyAdapter() } });
+    for (const endpoint of ["sess-1/resume", "sess-1/restart-mcp", "adopt"]) {
+      const res = await fetch(`${baseUrl}/sessions/${endpoint}`, {
+        method: "POST",
+        headers: { ...TOKEN_HEADER, "Content-Type": "application/json" },
+        ...(endpoint === "adopt" ? { body: JSON.stringify({
+          agentSessionId: "agent-1", harness: "claude-code", cwd: "/tmp/proj",
+          title: "proj", lastActiveAt: "2026-01-01T00:00:00.000Z",
+        }) } : {}),
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: error.message, code: error.code });
+    }
+  });
+
+  describe("DELETE /sessions/:id", () => {
+    it("keeps the legacy close path when no End coordinator is installed", async () => {
+      const sessionManager = fakeSessionManager([exitedSession()]);
+      start({ sessionManager });
+      const res = await fetch(`${baseUrl}/sessions/sess-1`, { method: "DELETE", headers: TOKEN_HEADER });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(sessionManager.close).toHaveBeenCalledExactlyOnceWith("sess-1");
+      expect(sessionManager.get("sess-1")).toBeDefined();
+    });
+
+    it("returns 404 before invoking End for an unknown row", async () => {
+      const endSession = vi.fn();
+      start({ endSession });
+      const res = await fetch(`${baseUrl}/sessions/missing`, { method: "DELETE", headers: TOKEN_HEADER });
+      expect(res.status).toBe(404);
+      expect(endSession).not.toHaveBeenCalled();
+    });
+
+    it("uses boot-authorized End without a current Assistant identity and keeps retained rows", async () => {
+      const sessionManager = fakeSessionManager([exitedSession()]);
+      const result = { ok: true as const, lifecycle: {
+        version: 1 as const, harnessSessionId: "sess-1", revision: 3,
+        lifecycle: "ended" as const, execution: "paused" as const, updatedAt: 1,
+      } };
+      const endSession = vi.fn().mockResolvedValue(result);
+      start({ sessionManager, endSession, identity: null });
+      const res = await fetch(`${baseUrl}/sessions/sess-1`, { method: "DELETE", headers: TOKEN_HEADER });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(result);
+      expect(endSession).toHaveBeenCalledExactlyOnceWith("sess-1");
+      expect(sessionManager.close).not.toHaveBeenCalled();
+      expect(sessionManager.get("sess-1")).toBeDefined();
+    });
+
+    it("returns cleanup_unconfirmed without removing the selected row or same-folder history", async () => {
+      const a = exitedSession();
+      const b = exitedSession({ id: "sess-2", agentSessionId: "agent-2" });
+      const sessionManager = fakeSessionManager([a, b]);
+      const result = { ok: false as const, code: "cleanup_unconfirmed" as const, error: "Cleanup remains unconfirmed." };
+      const endSession = vi.fn().mockResolvedValue(result);
+      start({ sessionManager, endSession, adapters: { "claude-code": historyAdapter() } });
+      const res = await fetch(`${baseUrl}/sessions/sess-1`, { method: "DELETE", headers: TOKEN_HEADER });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual(result);
+      expect(endSession).toHaveBeenCalledExactlyOnceWith("sess-1");
+      expect(sessionManager.list()).toEqual([a, b]);
+      const history = await fetch(`${baseUrl}/sessions/history?cwd=${encodeURIComponent(a.cwd)}`);
+      const rows = await history.json() as SessionSummary[];
+      expect(rows.map((row) => row.harnessSessionId).sort()).toEqual(["sess-1", "sess-2"]);
     });
   });
 

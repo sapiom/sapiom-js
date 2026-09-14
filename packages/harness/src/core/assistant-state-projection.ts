@@ -15,7 +15,13 @@ export function createAssistantStateProjection(
     return {
       ...runtime,
       revision,
-      lifecycles: runtime.enabled ? lifecycle.snapshot() : [],
+      lifecycles: runtime.enabled
+        ? lifecycle
+            .snapshot()
+            .filter(
+              (state) => state.revision > 0 || state.lifecycle === "ending",
+            )
+        : [],
     };
   };
   const changed = () => {

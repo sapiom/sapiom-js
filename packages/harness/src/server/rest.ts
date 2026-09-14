@@ -52,14 +52,17 @@ import {
 import {
   ProjectSessionScopeUnavailableError,
   SessionBackgroundInputPreemptedError,
+  SessionCleanupUnconfirmedError,
   SessionInputIsolationError,
   SessionManagerClosingError,
   SessionNotReadyError,
+  SessionPreparationCancelledError,
   UnknownSessionError,
   type SessionManager,
 } from "../core/session-manager.js";
 import { normalizeCwd } from "./cwd-normalize.js";
 import type { SessionRecordReader } from "../core/session-record.js";
+import type { AssistantEndResult } from "../core/assistant-end.js";
 import {
   getHarnessAdapter,
   listHarnessAdapters,
@@ -195,6 +198,9 @@ async function agentHoldsConversation(
 
 export interface RestRouterOptions {
   getAssistantState?: () => AssistantStateSnapshot;
+  /** Complete selected-session End, including native and Terminal cleanup.
+   * Uses the route's boot authorization independently of Assistant grant expiry. */
+  endSession?: (id: string) => Promise<AssistantEndResult>;
   sessionManager: SessionManager;
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
@@ -725,6 +731,8 @@ export function createRestRouter(options: RestRouterOptions): Router {
       err instanceof McpSessionRestartUnavailableError ||
       err instanceof ProjectSessionScopeUnavailableError ||
       err instanceof SessionAlreadyLiveError ||
+      err instanceof SessionPreparationCancelledError ||
+      err instanceof SessionCleanupUnconfirmedError ||
       err instanceof SessionNotResumeableError
     ) {
       res
@@ -868,6 +876,11 @@ export function createRestRouter(options: RestRouterOptions): Router {
       return;
     }
     try {
+      if (options.endSession) {
+        const result = await options.endSession(req.params.id);
+        res.status(result.ok ? 200 : 409).json(result);
+        return;
+      }
       await sessionManager.close(req.params.id);
       res.json({ ok: true });
     } catch (error) {

@@ -198,6 +198,7 @@ import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { AssistantSessionStore } from "../core/assistant-session-store.js";
 import { AssistantLifecycleCoordinator } from "../core/assistant-lifecycle.js";
+import { AssistantEndCoordinator } from "../core/assistant-end.js";
 import { createAssistantStateProjection } from "../core/assistant-state-projection.js";
 import { OpenCodeAssociations } from "../core/opencode-association.js";
 import { OpenCodeHost, type HostedOpenCode } from "../core/opencode-host.js";
@@ -3571,6 +3572,7 @@ export const startServer = async (
   });
   const openCodeAssociations = new OpenCodeAssociations(assistantSessions);
   const assistantLifecycle = new AssistantLifecycleCoordinator({ store: assistantSessions, host: openCodeHost, associations: openCodeAssociations });
+  const assistantEnd = new AssistantEndCoordinator({ store: assistantSessions, lifecycle: assistantLifecycle, sessionManager });
   // Hydrate lifecycle headers without launching runtimes. A corrupt entry fails
   // closed when selected rather than preventing unrelated sessions from loading.
   await Promise.allSettled(sessionManager.list().map((session) => assistantLifecycle.describe(session.id)));
@@ -3635,6 +3637,7 @@ export const startServer = async (
     "/api",
     createRestRouter({
       getAssistantState,
+      endSession: (id) => assistantEnd.end(id),
       sessionManager,
       adapters,
       version: readVersion(),

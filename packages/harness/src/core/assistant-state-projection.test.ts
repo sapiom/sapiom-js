@@ -47,6 +47,10 @@ it("orders lifecycle-only updates with observations and clears disabled projecti
   );
   const initial = projection.get();
   expect(parseAssistantState(initial)).toEqual(initial);
+  rows = [{ ...state, revision: 0, lifecycle: "open" }];
+  expect(projection.get().lifecycles).toEqual([]);
+  rows = [{ ...state, revision: 0, lifecycle: "ending" }];
+  expect(projection.get().lifecycles?.[0]?.lifecycle).toBe("ending");
   rows = [{ ...state, revision: 3, lifecycle: "open" }];
   changedLifecycle();
   const resumed = publish.mock.lastCall![0] as AssistantStateSnapshot;

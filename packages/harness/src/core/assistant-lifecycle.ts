@@ -264,15 +264,18 @@ export class AssistantLifecycleCoordinator {
 
   /** Fences execution and requests process termination before any persistence await.
    * The End orchestration owner must coalesce callers through its complete
-   * Terminal/native/persistence operation, including finishEnd or failure reporting. */
-  beginEnd(id: string) {
+   * Terminal/native/persistence operation, including finishEnd or failure reporting.
+   * An optional original-state read delays writes only, never runtime retirement. */
+  beginEnd(id: string, beforePersistence?: Promise<unknown>) {
     const fence = { id, generation: this.generation(id) + 1 };
     this.generations.set(id, fence.generation);
     this.ending.add(id);
     this.leases.delete(id);
     this.pending.delete(id);
     const native = this.options.host.retireWithResult(id);
-    const persistence = this.persistEnd(fence, "ending");
+    const persistence = beforePersistence
+      ? beforePersistence.then(() => this.persistEnd(fence, "ending"))
+      : this.persistEnd(fence, "ending");
     this.changed();
     return { fence, native, persistence };
   }
