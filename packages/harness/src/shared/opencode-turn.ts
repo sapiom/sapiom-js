@@ -57,6 +57,8 @@ export function openCodeResult(
 export function openCodeTurn(
   messages: readonly OpenCodeTurnMessage[],
   status: string | undefined,
+  /** A token resolved against full history when evaluating an isolated archived turn. */
+  completionToken?: string,
 ): {
   status: "ready" | "working" | "finished" | "stopped" | "failed" | "unknown";
   missing?: string;
@@ -76,7 +78,7 @@ export function openCodeTurn(
   );
   if (!answer?.info || !answer.info.time.completed) return { status: "failed" };
   if (answer.info.agent === finalResponseAgent) return { status: "failed" };
-  const token = openCodeCompletionTokens(messages).get(user.info!.id);
+  const token = completionToken ?? openCodeCompletionTokens(messages).get(user.info!.id);
   if (answer.info.error) return { status: "failed" };
   if (token) {
     const result = openCodeResult(answer, token);
