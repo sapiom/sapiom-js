@@ -26,6 +26,7 @@ beforeEach(async () => {
   abort = new AbortController();
   dispatch.mockReset().mockResolvedValue(new Response("{}"));
   hosted = {
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
     stateRoot: await mkdtemp(join(tmpdir(), "opencode-final-")),
     signal: abort.signal,
     server: {
@@ -100,6 +101,7 @@ it("coalesces recovery and never resends it after a host restart", async () => {
   expect(path).toBe("/session/ses_test/message");
   expect(JSON.parse(init.body)).toMatchObject({
     agent: "sapiom-turn-recovery",
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
     system: expect.stringContaining("StudioAssistantResult/v2:"),
   });
   expect(JSON.parse(init.body)).not.toHaveProperty("tools");
