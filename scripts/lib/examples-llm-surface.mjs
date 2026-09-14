@@ -97,6 +97,87 @@ export function checkNoSliceParse({ path, source }) {
   return errors;
 }
 
+/**
+ * The floor a structured `llm.run` cap has to clear (SAP-3280).
+ *
+ * A routed label emits a `thinking` block before the forced tool call and those tokens are
+ * spent out of `max_tokens`, so a cap sized for the answer alone can end the turn before the
+ * tool call is emitted — leaving nothing to read, on the hardest inputs only. This is a floor,
+ * not the recommendation: the examples use 4096. What it forbids is the order of magnitude
+ * that starves the call.
+ */
+export const STRUCTURED_CAP_FLOOR = 2048;
+
+const LLM_RUN_OPEN = /llm\.run\(\{/;
+const CALL_CLOSE = /^\s*\}\);/;
+/** A literal cap, or the identifier holding one — `max_tokens: LEAF_MAX_TOKENS` is the idiom here. */
+const CAP_ASSIGNMENT = /max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/;
+const NUMERIC_CONST =
+  /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(\d[\d_]*)\s*;/g;
+
+/** In-file `const NAME = 700;` declarations, so a named cap is read as the number it is. */
+function numericConstsOf(source) {
+  const consts = new Map();
+  for (const [, name, value] of source.matchAll(NUMERIC_CONST)) {
+    consts.set(name, Number(value.replaceAll("_", "")));
+  }
+  return consts;
+}
+
+/**
+ * Reject a structured `llm.run` whose cap thinking can exhaust — in a template source or in
+ * a fenced snippet under `examples/`, since both are copied verbatim by the next author.
+ *
+ * Scoped to the call it reads, not the file: a plain-text call bounded on purpose (a
+ * `textOf` reply capped at 700) is legitimate and left alone. Only a call that also declares
+ * `output` is judged, because that is the one whose failure is silent.
+ *
+ * A named cap is resolved against the file's own `const NAME = <number>` declarations —
+ * `max_tokens: LEAF_MAX_TOKENS` is already the idiom in `fan-out-and-combine`, and a check that
+ * only read digits would have been bypassed by writing the starved number one line higher. What
+ * it still cannot see is a cap imported from another module or computed at runtime; that is the
+ * known edge, and the templates do not do it.
+ *
+ * @param path    repository-relative path, for the message
+ * @param source  the file's contents
+ * @returns string[] of problems, one per offending call
+ */
+export function checkStructuredOutputCap({ path, source }) {
+  const errors = [];
+  const lines = source.split("\n");
+  const consts = numericConstsOf(source);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!LLM_RUN_OPEN.test(lines[i])) continue;
+
+    let capLine = -1;
+    let declaresOutput = false;
+    for (let j = i; j < lines.length; j += 1) {
+      if (/\boutput\s*:/.test(lines[j])) declaresOutput = true;
+      if (capLine === -1 && CAP_ASSIGNMENT.test(lines[j])) capLine = j;
+      if (j > i && CALL_CLOSE.test(lines[j])) break;
+    }
+    if (!declaresOutput || capLine === -1) continue;
+
+    const cap = CAP_ASSIGNMENT.exec(lines[capLine])[1];
+    const value = /^\d/.test(cap)
+      ? Number(cap.replaceAll("_", ""))
+      : consts.get(cap);
+    if (value === undefined || value >= STRUCTURED_CAP_FLOOR) continue;
+
+    errors.push(
+      `llm-surface: ${path}:${capLine + 1} caps a structured llm.run at ${value} tokens. ` +
+        "Thinking is spent out of the same budget, so a cap this size can end the turn before " +
+        "the forced tool call is emitted — the structured result then never arrives, on the " +
+        "hardest inputs only (SAP-3280). Size it for thinking plus output " +
+        `(at least ${STRUCTURED_CAP_FLOOR}; the examples use 4096); billing settles on the tokens ` +
+        "actually produced.",
+    );
+  }
+
+  return errors;
+}
+
 export function checkOneShotLlmTemplate({
   id,
   indexSource,
