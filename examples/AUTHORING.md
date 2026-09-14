@@ -22,9 +22,9 @@ The platform rules a template must respect — which capability calls an LLM, da
 trigger kinds, App Link webhooks — are served live at
 <https://api.sapiom.ai/v1/agents/authoring-rules> and are not restated in this guide; where a
 step below touches one, it points at the served section. This guide was
-written against release 1.0 of that text.
+written against release 1.1 of that text.
 
-<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8661181bdc6f -->
 
 ---
 

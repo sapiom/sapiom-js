@@ -34,10 +34,10 @@ only summarized here; each such chapter is bracketed by `section:` markers namin
 section it points at. A pointer's `#name` fragment names that section's marker (an HTML
 comment, `section: name`) in the served text — the endpoint serves raw Markdown, so search for
 the marker rather than expecting a browser to jump to it. When a summary below and the served text disagree, the served text wins.
-This copy was written against release 1.0 of it; `sapiom_dev_agents_check` warns when the
+This copy was written against release 1.1 of it; `sapiom_dev_agents_check` warns when the
 served copy differs.
 
-<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8661181bdc6f -->
 
 <!-- section: one-off-vs-agent -->
 
@@ -670,7 +670,7 @@ Write each step the way it should run in production — never weaken logic to sh
 
 | Resource                                                                     | What it covers                                                                                                 |
 | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.0 |
+| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.1 |
 | [Authoring guide](https://docs.sapiom.ai/agents/authoring)                   | Full step model, failure patterns, pause/resume, determinism                                                   |
 | [Quickstart](https://docs.sapiom.ai/agents/quick-start)                      | Scaffold → write → test → deploy walkthrough                                                                   |
 | [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |
