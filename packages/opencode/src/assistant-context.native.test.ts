@@ -354,11 +354,13 @@ it.skipIf(!binary)(
         "malformed",
         "wrong-token",
         "missing-required",
+        "missing-system",
+        "completion-only",
       ] as const) {
         const rejected = await post<{ id: string }>("/session", {
           title: mode,
         });
-        let malformed = fixtureSystem(rejected.id);
+        let malformed: string | undefined = fixtureSystem(rejected.id);
         if (mode === "malformed") malformed = malformed.slice(0, -1);
         if (mode === "wrong-token")
           malformed = malformed.replace(
@@ -367,6 +369,9 @@ it.skipIf(!binary)(
           );
         if (mode === "missing-required")
           malformed = malformed.replace('"guidance":', '"missingGuidance":');
+        if (mode === "missing-system") malformed = undefined;
+        if (mode === "completion-only")
+          malformed = studioAssistantCompletionSystem(fixtureToken);
         expect(malformed).not.toBe(fixtureSystem(rejected.id));
         const response = await runtime.fetch(
           `/session/${rejected.id}/prompt_async`,

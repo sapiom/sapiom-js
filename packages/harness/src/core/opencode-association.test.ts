@@ -36,7 +36,7 @@ it("serializes association commits across runtime retirement, including an alrea
   const abort = new AbortController();
   const hosted: HostedOpenCode = {
     contextAuthorityScope: "a".repeat(64),
-    model: "smart",
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
     harnessSessionId: "studio-one",
     cwd: root,
     stateRoot: root,
@@ -100,7 +100,7 @@ it("distinguishes confirmed missing history from transient lookup failure withou
   const create = vi.fn();
   const hosted: HostedOpenCode = {
     contextAuthorityScope: "a".repeat(64),
-    model: "smart",
+    model: { providerID: "sapiom", modelID: "gpt-luna" },
     harnessSessionId: "studio-one",
     cwd: root,
     stateRoot: root,

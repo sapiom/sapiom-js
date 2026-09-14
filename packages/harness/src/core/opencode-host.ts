@@ -50,7 +50,7 @@ export interface OpenCodeWorkspace {
 export interface HostedOpenCode extends OpenCodeWorkspace {
   /** Stable accepted-context scope; credentials and transient host epochs are excluded. */
   readonly contextAuthorityScope: string;
-  readonly model: string;
+  readonly model: Readonly<{ providerID: "sapiom"; modelID: string }>;
   stateRoot: string;
   server: OpenCodeServer;
   signal: AbortSignal;
@@ -540,7 +540,7 @@ export class OpenCodeHost {
       const hosted: HostedOpenCode = Object.freeze({
         ...entry.workspace,
         contextAuthorityScope: contextScope,
-        model,
+        model: Object.freeze({ providerID: "sapiom" as const, modelID: model }),
         stateRoot,
         server,
         signal: entry.abort.signal,

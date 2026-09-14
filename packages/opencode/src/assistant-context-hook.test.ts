@@ -168,8 +168,26 @@ describe("request-bound native Assistant projection", () => {
     });
     release();
     await expect(delayed).rejects.toThrow(AssistantContextError);
-    await f.messages([user("msg_first", save())]);
     await expect(f.system(save())).rejects.toThrow(AssistantContextError);
+  });
+  it("releases completed execution proofs while allowing verified historical titles and new native work", async () => {
+    const f = fixture([user("msg_first", save())]);
+    await f.messages([user("msg_first", save())]);
+    await f.hooks.event!({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_fixture", status: { type: "idle" } },
+      },
+    });
+    await expect(f.system(save())).rejects.toThrow(AssistantContextError);
+    expect(f.load).not.toHaveBeenCalled();
+    expect(
+      (await f.system(save(), input("msg_first", "ses_fixture", "title")))[2],
+    ).toBe("Profile\r\nexact bytes");
+    await f.messages([user("msg_next", save())]);
+    expect((await f.system(save(), input("msg_next")))[2]).toBe(
+      "Profile\r\nexact bytes",
+    );
   });
   it("permits a first title before message capture using its exact persisted user", async () => {
     const saved = save();
@@ -268,18 +286,23 @@ describe("request-bound native Assistant projection", () => {
       f.system(saved, input("msg_unknown", "ses_fixture", "title")),
     ).rejects.toThrow(AssistantContextError);
   });
-  it("leaves generic and leading-v2 completion-only systems intact", async () => {
+  it("requires context for ordinary Studio work while preserving the unscoped wrapper", async () => {
     const f = fixture();
     for (const saved of [
+      undefined,
       "generic instructions",
       studioAssistantCompletionSystem(fixtureToken),
     ]) {
       const id =
-        saved === "generic instructions" ? "msg_generic" : "msg_completion";
+        saved === undefined
+          ? "msg_missing"
+          : saved === "generic instructions"
+            ? "msg_generic"
+            : "msg_completion";
       await f.messages([user(id, saved)]);
-      expect(await f.system(saved, input(id))).toEqual([
-        "Native prefix\n" + saved,
-      ]);
+      await expect(f.system(saved ?? "", input(id))).rejects.toThrow(
+        AssistantContextError,
+      );
     }
     expect(
       createStudioAssistantContextHooks(async () => []),
