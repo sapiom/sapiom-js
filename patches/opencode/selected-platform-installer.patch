@@ -1,0 +1,91 @@
+--- a/packages/opencode/script/postinstall.mjs
++++ b/packages/opencode/script/postinstall.mjs
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env node
+ 
+ import childProcess from "child_process"
++import { createHash } from "node:crypto"
+ import fs from "fs"
+ import os from "os"
+ import path from "path"
+@@ -123,28 +124,59 @@
+   return binaryPath
+ }
+ 
++class RuntimeArtifactError extends Error {}
++
++function pinnedArtifact(name) {
++  const artifact = packageJson.sapiomRuntimeArtifacts?.[name]
++  if (!artifact || typeof artifact.url !== "string" || typeof artifact.binarySha256 !== "string" || !/^[a-f0-9]{64}$/.test(artifact.binarySha256))
++    throw new RuntimeArtifactError("Invalid pinned OpenCode runtime artifact metadata.")
++  let url
++  try { url = new URL(artifact.url) } catch {
++    throw new RuntimeArtifactError("Invalid pinned OpenCode runtime artifact URL.")
++  }
++  if (url.username || url.password || url.hash ||
++      (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "127.0.0.1")))
++    throw new RuntimeArtifactError("Invalid pinned OpenCode runtime artifact URL.")
++  return artifact
++}
++
+ function installPackage(name) {
+-  const version = packageJson.optionalDependencies?.[name]
+-  if (!version) return
++  const artifact = pinnedArtifact(name)
++  const npmCLI = [
++    process.env.npm_execpath,
++    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
++    path.join(path.dirname(process.execPath), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
++  ].find((file) => file && path.basename(file) === "npm-cli.js" && fs.existsSync(file))
++  if (!npmCLI && platform === "windows")
++    throw new RuntimeArtifactError("Could not locate the npm CLI for the pinned OpenCode runtime install.")
+ 
+   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-install-"))
+   try {
+     const result = childProcess.spawnSync(
+-      "npm",
+-      ["install", "--ignore-scripts", "--no-save", "--loglevel=error", "--prefix", temp, `${name}@${version}`],
++      npmCLI ? process.execPath : "npm",
++      [...(npmCLI ? [npmCLI] : []), "install", "--ignore-scripts", "--no-save", "--loglevel=error", "--prefix", temp, `${name}@${artifact.url}`],
+       { stdio: "inherit", windowsHide: true },
+     )
+-    if (result.status !== 0) return
++    if (result.status !== 0) throw new RuntimeArtifactError("Could not install the pinned OpenCode runtime artifact.")
+     const packageDir = path.join(temp, "node_modules", name)
+-    copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
++    copyBinary(name, path.join(packageDir, "bin", sourceBinary), targetBinary)
+     return true
+   } finally {
+     fs.rmSync(temp, { recursive: true, force: true })
+   }
+ }
+ 
+-function copyBinary(source, target) {
+-  if (!fs.existsSync(source)) throw new Error(`Binary not found at ${source}`)
++function copyBinary(name, source, target) {
++  const artifact = pinnedArtifact(name)
++  let actual
++  try {
++    if (!fs.lstatSync(source).isFile()) throw new Error("not a regular file")
++    actual = createHash("sha256").update(fs.readFileSync(source)).digest("hex")
++  } catch {
++    throw new RuntimeArtifactError("Pinned OpenCode runtime binary is missing or invalid.")
++  }
++  if (actual !== artifact.binarySha256)
++    throw new RuntimeArtifactError("OpenCode runtime binary does not match its pinned hash.")
+   fs.mkdirSync(path.dirname(target), { recursive: true })
+   if (fs.existsSync(target)) fs.unlinkSync(target)
+   try {
+@@ -167,9 +199,10 @@
+ function main() {
+   for (const name of packageNames()) {
+     try {
+-      copyBinary(resolveBinary(name), targetBinary)
++      copyBinary(name, resolveBinary(name), targetBinary)
+       if (verifyBinary()) return
+-    } catch {
++    } catch (error) {
++      if (error instanceof RuntimeArtifactError) throw error
+       if (installPackage(name) && verifyBinary()) return
+     }
+   }

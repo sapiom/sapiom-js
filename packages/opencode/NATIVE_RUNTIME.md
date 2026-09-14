@@ -28,7 +28,37 @@ Different build paths may produce different binary bytes; use the resulting hash
 and do not claim bit-for-bit reproducibility across directories.
 
 This recipe builds artifacts; it does not publish, update the production dependency,
-or establish Mac/Windows execution support through cross-compilation alone. Packaging,
-selected-platform installation and platform launch gates follow in the stack. A native
+or establish Mac/Windows execution support through cross-compilation alone. Actual
+selected-platform installation and launch gates follow in the stack. A native
 release must use a separate `opencode-runtime-v<version>` tag and remain non-latest so
 it cannot replace the Studio desktop update feed. Never run upstream `publish.ts`.
+
+## Package the verified outputs
+
+Run `python3 scripts/opencode-runtime/pack.py --work-dir <build directory>
+--output-dir <new artifact directory> --download-cache <archive cache>` after
+a complete build. The packager rejects stale recipe proofs, incomplete matrices
+and altered binary bytes. It writes twelve platform tarballs, a small `opencode-ai`
+root tarball, and `release-proof.json` with archive and binary digests, source and
+compiler pins, licenses, patch identities and build/pack recipe hashes. Tar members
+have stable ordering, permissions, ownership and timestamps. These are unpublished
+candidates for a separate, non-latest GitHub runtime release.
+
+The root installer retains the upstream OS/CPU/libc/AVX2 and baseline fallback
+selection. Its artifact map is ordinary metadata, so pnpm does not download every
+platform as an optional dependency. Only the selected URL is installed with package
+scripts disabled; the regular binary's SHA256 must match before copying or running
+it. Missing metadata, unavailable archives and altered bytes terminate installation.
+Only a verified binary that fails to launch may fall back to the baseline target.
+Windows invokes an actual `npm-cli.js` using Node, without a shell. HTTPS URLs are
+required except loopback HTTP fixtures used by installation tests.
+
+With pnpm 10, approve the exact `opencode-ai@<root tarball URL>` in
+`onlyBuiltDependencies`; approving only the package name does not run this URL
+dependency's installer. When scripts are disabled, the original launcher stub
+remains until the existing managed launcher explicitly runs postinstall.
+
+`installer.test.mjs <patched postinstall path>` simulates all twelve selectors,
+baseline retry, cross-device copying and failure boundaries. These simulations
+are separate from actual installation and native execution on target operating
+systems. The CI artifact contains an explicit candidate proof, not a publishing step.
