@@ -94,3 +94,11 @@ Resume reuses an operation UUID after an uncertain response and reveals Assistan
 only if the same account, navigation and foreground intent still own the result.
 Newer bus state owns Terminal status. A restored Assistant stays paused until an
 explicit message; existing live execution keeps its current state.
+
+Continue coordinates one durable operation from a specific retained record into
+a new Studio child with a dormant Terminal. It freezes current child context,
+accepts it through the existing source owner, and verifies one native no-reply
+seed before permitting Attach. Retries consult the original allocation identity
+and receipt before reading a newer source record. Completed retries only verify
+saved preparation and preserve an already-running child's lease and execution.
+End and authority changes fence each asynchronous step and final attachment.

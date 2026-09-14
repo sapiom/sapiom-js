@@ -598,6 +598,9 @@ export class AssistantLifecycleCoordinator {
     try {
       await revision();
       hosted = this.options.host.current(id) ?? undefined;
+      // Continue may mutate native preparation only before a child has a live
+      // lease. Prepared-operation retries use the read-only inspection path.
+      if (retain && this.leases.has(id)) throw failure("lifecycle_changed");
       provisional = !hosted;
       if (!hosted) {
         started = true;

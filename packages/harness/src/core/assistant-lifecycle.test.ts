@@ -505,6 +505,20 @@ it("failed Continue preparation retires only its provisional host and releases t
   expect(await store.lifecycle("studio-a")).toBeNull();
 });
 
+it("mutating Continue preparation rejects live leases while read-only reconciliation preserves them", async () => {
+  const attachment = await coordinator.attach("studio-a", 0);
+  const hosted = current!;
+  await coordinator.enable(hosted);
+  const revision = (await coordinator.describe("studio-a")).revision;
+  const prepare = vi.fn();
+  await expect(coordinator.prepareContinuation("studio-a", revision, prepare)).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  expect(prepare).not.toHaveBeenCalled();
+  expect(await coordinator.inspect("studio-a", revision, async (runtime) => runtime)).toBe(hosted);
+  expect(await coordinator.use("studio-a", attachment.lease)).toMatchObject({ hosted });
+  expect((await coordinator.describe("studio-a")).execution).toBe("enabled");
+  expect(retire).not.toHaveBeenCalled();
+});
+
 it("Continue requires an open exact revision and discards a late result after durable change", async () => {
   await store.transition("studio-a", 0, { lifecycle: "ended", execution: "paused" });
   await expect(coordinator.prepareContinuation("studio-a", 1, vi.fn())).rejects.toThrow();
