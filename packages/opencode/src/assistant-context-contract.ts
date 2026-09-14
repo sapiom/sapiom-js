@@ -75,13 +75,12 @@ export interface AcceptedAssistantContext extends AcceptedContextRef {
   readonly instructionSet: InstructionSet;
 }
 
-// A complete bundled profile is ~30 KiB. These are serialization safety limits,
-// not truncation rules or a model context budget; oversized required data fails.
-export const assistantContextLimits = {
+/** Serialization safety bounds (bundled profile ~30 KiB), never truncation rules. */
+export const assistantContextLimits = Object.freeze({
   bytes: 4 * 1024 * 1024,
   entries: 4096,
   depth: 24,
-};
+});
 /** Safe context failure; deliberately contains no paths, credentials or source text. */
 export class AssistantContextError extends Error {
   constructor() {
@@ -282,6 +281,7 @@ export function validateInstructionSet(
   value: unknown,
   authorityScope: string,
 ): asserts value is InstructionSet {
+  encodeAssistantContext(value);
   const set = contextKeys(value, [
     "revision",
     "sources",
@@ -332,6 +332,7 @@ function validateAgent(value: unknown): asserts value is AssistantContextAgent {
 export function validateAssistantFacts(
   value: unknown,
 ): asserts value is AssistantContextFacts {
+  encodeAssistantContext(value);
   const facts = contextKeys(value, [
     "session",
     "environment",
@@ -418,6 +419,7 @@ export function validateAcceptedContextRef(
 export function validateAcceptedAssistantContext(
   value: unknown,
 ): asserts value is AcceptedAssistantContext {
+  encodeAssistantContext(value);
   const object = contextKeys(value, [
     "schemaVersion",
     "acceptanceId",
@@ -434,5 +436,4 @@ export function validateAcceptedAssistantContext(
   contextCheck(
     reference.revision === assistantRevision(value as AcceptedAssistantContext),
   );
-  encodeAssistantContext(value);
 }

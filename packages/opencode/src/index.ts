@@ -14,6 +14,7 @@ export {
 } from "./server.js";
 export {
   AssistantContextError,
+  assistantContextLimits,
   assistantContentHash,
   assistantDescriptorHash,
   assistantRevision,
