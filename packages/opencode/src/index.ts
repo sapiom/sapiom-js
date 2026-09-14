@@ -45,3 +45,7 @@ export {
   type ParsedStudioAssistantSystem,
   type RetainedWireGuidance,
 } from "./assistant-context-wire.js";
+export {
+  createStudioAssistantContextHooks,
+  type AssistantSystemTransformInput,
+} from "./assistant-context-hook.js";

@@ -78,3 +78,18 @@ verifies retained package bytes before dispatch. Native projection places stable
 guidance before the real completion contract and JSON-escaped dynamic facts, without
 rewriting saved history. Legacy completion-only and valid inline context/v1 records
 have explicit parser variants; malformed claimed context never becomes generic.
+
+`createStudioAssistantContextHooks(loadSessionMessages, authorityScope)` provides the
+native consumer. It requires the owned runtime's actual system-hook `messageID` and
+executing `agent` fields for claimed Studio requests. Ordinary requests require their
+exact message capture; titles can verify their historical user through native history.
+Compaction history copies cannot replace another request's capture. Synthetic users
+restore the original saved contract before capture, including later tool-loop steps.
+
+Projection replaces only the exact terminal saved system, preserves native prefix
+bytes and mutates the existing system array. Per-request validation failures stay
+sticky until runtime disposal and are thrown at the provider boundary using the fixed
+message `Studio assistant context could not be verified`. Native serializes it as an
+`UnknownError` without triggering overload retries. Calling without an authority scope
+retains completion-only behavior. Launcher/host activation and the corrected artifact
+are separate stack prerequisites; this API alone does not enable accepted delivery.

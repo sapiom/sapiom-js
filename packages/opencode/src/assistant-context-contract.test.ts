@@ -121,7 +121,7 @@ describe("accepted context contract", () => {
     const value = structuredClone(fixtureAccepted());
     change(value);
     expect(() => validateAcceptedAssistantContext(value)).toThrow(
-      "Studio assistant context unavailable",
+      "Studio assistant context could not be verified",
     );
   });
   it("requires retained manifests, unique source IDs, and actual profile/policy", () => {

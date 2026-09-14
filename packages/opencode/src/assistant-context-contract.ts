@@ -84,7 +84,7 @@ export const assistantContextLimits = Object.freeze({
 /** Safe context failure; deliberately contains no paths, credentials or source text. */
 export class AssistantContextError extends Error {
   constructor() {
-    super("Studio assistant context unavailable");
+    super("Studio assistant context could not be verified");
     this.name = "StudioAssistantContextError";
   }
 }
