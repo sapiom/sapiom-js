@@ -32,7 +32,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24.15.0"
-      - run: python3 -m unittest discover -s scripts/opencode-runtime -p 'test_*.py'
+      - run: |
+          python3 -m unittest discover -s scripts/opencode-runtime -p 'test_*.py'
+          node --test scripts/opencode-runtime/install-selection.test.mjs
       - run: python3 scripts/opencode-runtime/build.py --work-dir "$RUNNER_TEMP/opencode-build"
       - run: |
           python3 scripts/opencode-runtime/pack.py --work-dir "$RUNNER_TEMP/opencode-build" --output-dir "$RUNNER_TEMP/runtime-artifacts" --download-cache "$RUNNER_TEMP/opencode-build/downloads"
