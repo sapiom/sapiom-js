@@ -56,6 +56,7 @@ import {
   SessionInputIsolationError,
   SessionManagerClosingError,
   SessionNotReadyError,
+  SessionNotDormantError,
   SessionPreparationCancelledError,
   UnknownSessionError,
   type SessionManager,
@@ -733,6 +734,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       err instanceof SessionAlreadyLiveError ||
       err instanceof SessionPreparationCancelledError ||
       err instanceof SessionCleanupUnconfirmedError ||
+      err instanceof SessionNotDormantError ||
       err instanceof SessionNotResumeableError
     ) {
       res
@@ -867,6 +869,16 @@ export function createRestRouter(options: RestRouterOptions): Router {
       if (sendResumeError(res, err)) return;
       next(err);
     }
+  });
+
+  router.post("/sessions/:id/terminal/start", async (req, res, next) => {
+    const input = req.body ?? {};
+    if (typeof input !== "object" || Array.isArray(input) || Object.keys(input).length || Object.keys(req.query).length) {
+      res.status(400).json({ error: "Start Terminal does not accept launch overrides" });
+      return;
+    }
+    try { res.json(await sessionManager.activateDormant(req.params.id)); }
+    catch (error) { if (!sendResumeError(res, error)) next(error); }
   });
 
   router.delete("/sessions/:id", async (req, res, next) => {
