@@ -24,13 +24,16 @@ are distinct states. Only an omitted selection falls back to the conversation's
 binding. An explicit empty or deleted target never selects another agent.
 Snapshot values are detached from mutable registries. A changed selection,
 binding, source or capability changes the revision of the next request.
+Composition validates the serialized schema and revision before dispatch. Mutating
+a resolved snapshot requires resolving a new snapshot with its own revision.
 
 ## Instructions and recovery
 
 `composeAssistantPrompt(context)` is the single normal prompt composer.
 It keeps `StudioAssistantResult/v2:<token>` first, then the versioned context
-policy and snapshot. A Studio profile is mandatory. Required guidance without
-available text or a managed source location fails before native dispatch.
+policy and snapshot. A Studio profile is mandatory. Available profiles, project
+rules and continuation briefs require text; managed skills may supply a location.
+Required unavailable guidance fails before native dispatch.
 
 The profile uses the active environment's served guidance with a bundled
 fallback and records the actual source. Existing Terminal prompt fetching keeps
@@ -42,6 +45,8 @@ preserves the admitted context verbatim. Native compaction controls are not new
 user intent: recovery traces them back to the accepted user message. Old history
 without a saved context stays readable, but cannot be automatically recovered
 using invented current context.
+Recovery verifies the UUID, exact completion/context policy, JSON schema and
+revision. Truncated, changed or malformed saved prompts fail explicitly.
 
 ## Loader boundary
 
