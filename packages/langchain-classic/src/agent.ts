@@ -17,9 +17,9 @@ import { wrapChatAnthropic } from "./models/anthropic.js";
 import { wrapChatOpenAI } from "./models/openai.js";
 import type { LangChainAgentRequestFacts } from "./schemas/langchain-agent-v1.js";
 import { wrapSapiomTool } from "./tool.js";
+import { VERSION as SDK_VERSION } from "./_generated/version.js";
 
 // SDK version for facts
-const SDK_VERSION = "1.0.0"; // TODO: Read from package.json
 
 /**
  * Configuration for wrapping an agent with Sapiom tracking
