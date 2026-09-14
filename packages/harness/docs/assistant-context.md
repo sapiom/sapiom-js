@@ -74,3 +74,19 @@ directory conflicts. It does not collect or materialize a live skill directory.
 Every accepted available source must have verified material, even when optional;
 recorded absence remains explicit. Constructing a record does not commit it to disk
 or prove native acceptance. Source acquisition and generation refresh remain separate.
+
+## Durable acceptance
+
+Accepted records and exact source objects live under the private host state root at
+`assistant-context/v1/<authorityScope>`, outside the native engine. A synced immutable
+manifest is published last, after every available source is verified and retained.
+Repeating an identical acceptance is idempotent; conflicting content is rejected.
+Reads verify the conversation, authority, record digest and every source hash, with
+bounded allocations and symlink rejection. Errors never fall back to live providers.
+
+Cancellation or storage failure acknowledges no retention and authorizes no dispatch.
+An interrupted write can leave unreferenced objects, or an unacknowledged manifest
+after a directory-sync failure. Retention alone never proves native acceptance.
+Directory fsync is required: unsupported platforms fail closed instead of claiming
+durability. Linux filesystem behavior is covered by the storage tests; other platforms
+require their own verification. Host shutdown preserves this repository for recovery.
