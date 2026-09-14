@@ -1,5 +1,6 @@
 import {
   AssistantContextError,
+  assistantContentHash,
   contextCheck,
 } from "./assistant-context-contract.js";
 import {
@@ -27,6 +28,9 @@ export interface AssistantSystemTransformInput {
   agent?: string;
 }
 interface StudioAssistantContextHooks {
+  event?: (input: {
+    event: { type: string; properties?: { info?: { id?: unknown } } };
+  }) => Promise<void>;
   "experimental.chat.messages.transform": (
     input: Record<string, never>,
     output: CompletionTransformOutput,
@@ -54,6 +58,14 @@ export function createStudioAssistantContextHooks(
   const scope = authorityScope;
   const captured = new Map<string, CapturedUser>();
   const failures = new Set<string>();
+  const deleted = new Set<string>();
+  // Keep compact capture proofs beyond the bounded full-text cache. Provider
+  // retries can reconstruct the same user without another messages transform.
+  const fingerprints = new Map<string, string>();
+  const fingerprint = (system: unknown) =>
+    assistantContentHash(
+      system === undefined ? "undefined" : `string:${String(system)}`,
+    );
   const keyOf = (sessionID: string, messageID: string) =>
     `${sessionID}:${messageID}`;
   const parse = (system: unknown, sessionID: string) =>
@@ -67,7 +79,8 @@ export function createStudioAssistantContextHooks(
     if (
       info?.role !== "user" ||
       typeof info.id !== "string" ||
-      typeof info.sessionID !== "string"
+      typeof info.sessionID !== "string" ||
+      deleted.has(info.sessionID)
     )
       return;
     let failed = false;
@@ -76,6 +89,10 @@ export function createStudioAssistantContextHooks(
       if (isSyntheticContinuation(message) && info.system === undefined)
         throw new AssistantContextError();
       parse(info.system, info.sessionID);
+      const key = keyOf(info.sessionID, info.id);
+      const digest = fingerprint(info.system);
+      contextCheck(!fingerprints.has(key) || fingerprints.get(key) === digest);
+      fingerprints.set(key, digest);
     } catch {
       failed = true;
     }
@@ -129,6 +146,14 @@ export function createStudioAssistantContextHooks(
   }
 
   return {
+    async event({ event }) {
+      const id = event.properties?.info?.id;
+      if (event.type !== "session.deleted" || typeof id !== "string") return;
+      deleted.add(id);
+      for (const keys of [captured, fingerprints, failures])
+        for (const key of keys.keys())
+          if (key.startsWith(`${id}:`)) keys.delete(key);
+    },
     async "experimental.chat.messages.transform"(
       input: Record<string, never>,
       output: CompletionTransformOutput,
@@ -157,21 +182,25 @@ export function createStudioAssistantContextHooks(
             /^msg_[A-Za-z0-9_-]{1,128}$/.test(input.messageID),
         );
         const key = keyOf(input.sessionID, input.messageID);
-        contextCheck(!failures.has(key));
+        contextCheck(!deleted.has(input.sessionID) && !failures.has(key));
         const helper = ["title", "compaction", "project-copy-name"].includes(
           input.agent,
         );
         if (!captured.has(key)) {
           if (helper && !output.system.some(claimed)) return;
-          contextCheck(helper);
+          contextCheck(helper || fingerprints.has(key));
         }
         const saved = await savedUser(input.sessionID, input.messageID);
-        contextCheck(!failures.has(key));
+        contextCheck(!deleted.has(input.sessionID) && !failures.has(key));
         if (!saved) {
           contextCheck(!output.system.some(claimed));
           return;
         }
         contextCheck(!saved.failed);
+        contextCheck(
+          !fingerprints.has(key) ||
+            fingerprints.get(key) === fingerprint(saved.system),
+        );
         const parsed = parse(saved.system, input.sessionID);
         if (parsed.kind === "generic") return;
         const last = output.system.length - 1;
