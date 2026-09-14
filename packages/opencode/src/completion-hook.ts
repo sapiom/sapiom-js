@@ -1,4 +1,4 @@
-interface CompletionMessage {
+export interface CompletionMessage {
   info?: {
     id?: unknown;
     role?: unknown;
@@ -13,18 +13,18 @@ interface CompletionMessage {
   }[];
 }
 
-interface CompletionTransformOutput {
+export interface CompletionTransformOutput {
   messages: CompletionMessage[];
 }
 
-type LoadSessionMessages = (
+export type LoadSessionMessages = (
   sessionID: string,
 ) => Promise<readonly CompletionMessage[]>;
 
 const completionSystem =
   /^StudioAssistantResult\/v2:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n/;
 
-function isSyntheticContinuation(message: CompletionMessage): boolean {
+export function isSyntheticContinuation(message: CompletionMessage): boolean {
   return (
     message.info?.role === "user" &&
     !!message.parts?.some(
@@ -36,7 +36,7 @@ function isSyntheticContinuation(message: CompletionMessage): boolean {
   );
 }
 
-function isCompactionControl(message: CompletionMessage): boolean {
+export function isCompactionControl(message: CompletionMessage): boolean {
   return (
     isSyntheticContinuation(message) ||
     (message.info?.role === "user" &&
@@ -55,7 +55,13 @@ export function createStudioCompletionHooks(
 } {
   return {
     async "experimental.chat.messages.transform"(_input, output) {
-      const target = output.messages.at(-1);
+      let target: CompletionMessage | undefined;
+      for (let index = output.messages.length - 1; index >= 0; index--) {
+        if (output.messages[index]?.info?.role === "user") {
+          target = output.messages[index];
+          break;
+        }
+      }
       if (
         target?.info?.role !== "user" ||
         target.info.system !== undefined ||

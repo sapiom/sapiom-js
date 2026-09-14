@@ -191,7 +191,7 @@ describe("saved Studio system envelope", () => {
       "native prefix" + acceptedContextHeader + "{}",
     ])
       expect(() => parseStudioAssistantSystem(system)).toThrow(
-        "Studio assistant context unavailable",
+        "Studio assistant context could not be verified",
       );
   });
   it("requires the real current completion block for accepted-v2", () => {

@@ -82,3 +82,27 @@ verifies retained package bytes before dispatch. Native projection places stable
 guidance before the real completion contract and JSON-escaped dynamic facts, without
 rewriting saved history. Legacy completion-only and valid inline context/v1 records
 have explicit parser variants; malformed claimed context never becomes generic.
+
+`createStudioAssistantContextHooks(loadSessionMessages, authorityScope)` provides the
+native consumer. It requires the owned runtime's actual system-hook `messageID` and
+executing `agent` fields for claimed Studio requests. Ordinary requests require their
+exact message capture; titles can verify their historical user through native history.
+Compaction history copies cannot replace another request's capture. Synthetic users
+restore the original saved contract before capture, including later tool-loop steps.
+
+Projection replaces only the exact terminal saved system, preserves native prefix
+bytes and mutates the existing system array. Per-request validation failures stay
+sticky through the active native execution and are thrown at the provider boundary using the fixed
+message `Studio assistant context could not be verified`. Native serializes it as an
+`UnknownError` without triggering overload retries. Calling without an authority scope
+retains completion-only behavior. Launcher/host activation and the corrected artifact
+are separate stack prerequisites; this API alone does not enable accepted delivery.
+
+The full saved-text cache is bounded independently of successful capture proofs.
+Pending ordinary requests and native retries can reload evicted captures only
+when the saved bytes match their original fingerprint. Changing a saved user ID's
+context fails closed during that execution. Native idle/deletion retires its capture
+and proof epoch, so saved history does not accumulate in process memory. Historical
+titles still verify their exact saved user. Deletion guards live only while a system
+callback is in flight and reject callbacks that race deletion. Ordinary callbacks
+from a retired execution require a new native messages capture.
