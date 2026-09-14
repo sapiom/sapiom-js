@@ -4,11 +4,7 @@ on:
   pull_request:
     paths:
       - "packages/opencode/**"
-      - "packages/harness/src/core/assistant-*.ts"
-      - "packages/harness/src/core/studio-assistant*.ts"
-      - "packages/harness/src/core/test-fixtures/assistant-context.ts"
-      - "packages/harness/package.json"
-      - "packages/harness/tsconfig*.json"
+      - "packages/harness/**"
       - "packages/harness-desktop/package.json"
       - "packages/harness-desktop/scripts/opencode-*"
       - "packages/harness-desktop/scripts/pack.mjs"
