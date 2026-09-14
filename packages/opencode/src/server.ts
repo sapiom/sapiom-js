@@ -8,13 +8,13 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { prepareRuntimeDependencies } from "./runtime-dependencies.js";
+import { resolveRuntimeCommand } from "./runtime-identity.js";
 
 export interface StartOpenCodeServerOptions {
   cwd: string;
@@ -512,15 +512,11 @@ export async function startOpenCodeServer(
     !/^[a-f0-9]{64}$/.test(options.assistantContext.authorityScope)
   )
     throw new OpenCodeStartupError("launch-failed");
-  const command = options.command ?? {
-    executable: join(
-      dirname(
-        createRequire(import.meta.url).resolve("opencode-ai/package.json"),
-      ),
-      "bin",
-      "opencode.exe",
-    ).replace(/([/\\])app\.asar([/\\])/, "$1app.asar.unpacked$2"),
-  };
+  const command: NonNullable<StartOpenCodeServerOptions["command"]> =
+    options.command ??
+    (await resolveRuntimeCommand().catch(() => {
+      throw new OpenCodeStartupError("launch-failed");
+    }));
   const port = await reservePort();
   const origin = `http://127.0.0.1:${port}`;
   const password = randomBytes(32).toString("hex");

@@ -1,5 +1,21 @@
 # Owned native runtime
 
+The launcher accepts the owned runtime only with a complete `sapiomNativeRuntime`
+pin in the SDK package metadata: schema 1, runtime version, tested upstream plugin
+version, source commit and all twelve binary SHA-256 values from the release proof.
+The dependency must use the exact owned release URL. Before the default launch,
+the wrapper verifies installed package identity, both source patch digests and the
+actual regular executable's hash against the pinned hashes for this OS and CPU.
+Missing postinstall output, a launcher stub, changed binary bytes or incompatible
+metadata fail with the existing safe startup error. The original official exact
+runtime/plugin pair remains supported until the owned artifact is pinned.
+
+Plugin provisioning links the installed `@opencode-ai/plugin@1.18.29` into each
+private runtime configuration and describes that link in its local npm lockfile.
+The owned runtime suffix is never used to request a nonexistent plugin version.
+Explicit custom launcher commands remain available for isolated native/process
+fixtures; production default command selection performs the identity check.
+
 `native-runtime.json` pins OpenCode 1.18.29 at commit
 `16747470f976aca3d362ad730bcd3fe82ecc2c9a`, its frozen dependency lock, the
 baseline Bun compiler and seven cross compilers, and the model catalog input.

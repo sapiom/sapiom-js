@@ -93,7 +93,7 @@ jobs:
           node "$PNPM_SCRIPT" install --frozen-lockfile
           node "$PNPM_SCRIPT" --filter "@sapiom/harness..." build
       - name: Execute the installed runtime with the production context plugin
-        run: node "$PNPM_SCRIPT" --filter @sapiom/opencode exec vitest run src/assistant-context.native.test.ts
+        run: node "$PNPM_SCRIPT" --filter @sapiom/opencode exec vitest run src/assistant-context.native.test.ts src/startup-dependencies.native.test.ts src/runtime-identity.test.ts
       - name: Verify accepted-source retention on the target filesystem
         run: node "$PNPM_SCRIPT" --filter @sapiom/harness exec vitest run src/core/assistant-source-store.test.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
