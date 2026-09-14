@@ -21,6 +21,7 @@ import {
 } from "../core/studio-assistant-context.js";
 import type { AssistantContextDelivery } from "../core/studio-assistant-delivery.js";
 import type { AssistantLifecycleCoordinator } from "../core/assistant-lifecycle.js";
+import type { AssistantContinuationView } from "../shared/assistant-continuation.js";
 
 export function createOpenCodeRouter(
   host: Pick<OpenCodeHost, "ensure" | "observe"> &
@@ -33,6 +34,10 @@ export function createOpenCodeRouter(
     AssistantLifecycleCoordinator,
     "describe" | "attach" | "use" | "enable" | "assertRuntime"
   >,
+  continuationFor?: (
+    id: string,
+    conversationId: string,
+  ) => Promise<AssistantContinuationView | null>,
 ): Router {
   const router = express.Router();
   const dispatch =
@@ -129,7 +134,14 @@ export function createOpenCodeRouter(
       }
       if (attach && lifecycle) {
         const attached = await lifecycle.attach(id, req.body.expectedRevision);
-        if (!res.destroyed) res.json(attached);
+        const continuation = await continuationFor?.(
+          id,
+          attached.conversationId,
+        );
+        // Receipt IO cannot publish an old lease after End or an authority change.
+        if (continuationFor) await lifecycle.use(id, attached.lease);
+        if (!res.destroyed)
+          res.json({ ...attached, ...(continuation ? { continuation } : {}) });
         return;
       }
       const bound = lifecycle

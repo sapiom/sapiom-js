@@ -16,6 +16,8 @@ interface Options {
   authorize: (id: string) => Promise<AssistantAssociation | null>;
   records: Pick<AssistantRecordStore, "read">;
   lifecycle: Pick<AssistantLifecycleCoordinator, "describe">;
+  /** Pending continuation children are not discoverable until preparation commits. */
+  isVisible?: (id: string) => Promise<boolean>;
 }
 
 /** Metadata-only discovery. Native availability is checked separately for a selected entry. */
@@ -32,6 +34,8 @@ export class AssistantHistory {
   } | null> {
     const session = this.options.sessions.get(id);
     if (!session) return null;
+    if (this.options.isVisible && !(await this.options.isVisible(id)))
+      return null;
     const project = JSON.stringify([session.harness, session.agentMapIdentity]);
     const binding = await this.options.authorize(id);
     if (!binding) return null;
@@ -65,6 +69,8 @@ export class AssistantHistory {
     )
       throw new OpenCodeAccessError("Assistant binding changed");
     const current = this.options.sessions.get(id);
+    if (this.options.isVisible && !(await this.options.isVisible(id)))
+      return null;
     if (
       !current ||
       current.cwd !== session.cwd ||
@@ -139,6 +145,11 @@ export class AssistantHistory {
     // Revalidate the complete result after IO for the other entries. No old
     // authority's titles or existence may escape on a mid-list account change.
     for (const { entry, binding: previous } of entries) {
+      if (
+        this.options.isVisible &&
+        !(await this.options.isVisible(entry.harnessSessionId))
+      )
+        throw new OpenCodeAccessError("Assistant preparation changed");
       const binding = await this.options.authorize(entry.harnessSessionId);
       if (!binding || JSON.stringify(binding) !== JSON.stringify(previous))
         throw new OpenCodeAccessError("Assistant access changed");

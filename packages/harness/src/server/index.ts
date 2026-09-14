@@ -201,7 +201,7 @@ import { AssistantLifecycleCoordinator } from "../core/assistant-lifecycle.js";
 import { AssistantEndCoordinator } from "../core/assistant-end.js";
 import { createAssistantStateProjection } from "../core/assistant-state-projection.js";
 import { OpenCodeAssociations } from "../core/opencode-association.js";
-import { OpenCodeHost, type HostedOpenCode } from "../core/opencode-host.js";
+import { OpenCodeHost, OpenCodeAccessError, type HostedOpenCode } from "../core/opencode-host.js";
 import { AssistantRecordStore } from "../core/assistant-record-store.js";
 import { AssistantRecordCapture } from "../core/assistant-record-capture.js";
 import { assistantHistoryAccess } from "../core/assistant-history-access.js";
@@ -209,7 +209,13 @@ import { AssistantHistory } from "../core/assistant-history.js";
 import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
 import { createAssistantRecordsRouter } from "./assistant-records.js";
 import { OpenCodeObserver } from "../core/opencode-observer.js";
-import { createAssistantContextResolver } from "./studio-assistant.js";
+import { createAssistantContextRuntime, type ActivatedAssistantContextRuntime } from "./assistant-context-runtime.js";
+import { AssistantContinuationStore } from "../core/assistant-continuation-store.js";
+import { AssistantContinuationNative } from "../core/assistant-continuation-native.js";
+import { AssistantContinuation } from "../core/assistant-continuation.js";
+import { AssistantNativeHistory } from "../core/assistant-native-history.js";
+import { createAssistantLifecycleRouter, projectAssistantContinuation } from "./assistant-lifecycle.js";
+import type { AssistantContinuationView } from "../shared/assistant-continuation.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -302,6 +308,8 @@ export interface HarnessServerOptions {
    *  bundled DEFAULT_SYSTEM_PROMPT on any failure. Tests and offline hosts inject a
    *  plain function instead of reaching the network. */
   loadSystemPrompt?: () => Promise<string>;
+  /** Explicit verified capability supplied by the existing context runtime owner. */
+  assistantContextRuntime?: ActivatedAssistantContextRuntime;
   /** Host-supplied launcher for the local sapiom-dev MCP server, replacing the
    *  default `npx @sapiom/mcp@latest`. The Electron host passes its own binary
    *  (GUI-subsystem — allocates no console window on Windows, where the npx
@@ -3546,6 +3554,7 @@ export const startServer = async (
 
   const assistantSessions = new AssistantSessionStore(statePaths.root);
   const assistantRecords = new AssistantRecordStore(statePaths.root);
+  const assistantContinuations = new AssistantContinuationStore(statePaths.root);
   const recordCaptures = new WeakMap<HostedOpenCode, AssistantRecordCapture>();
   const authorizeAssistantWorkspace = async (id: string) => {
     const session = sessionManager.get(id);
@@ -3556,10 +3565,24 @@ export const startServer = async (
     }))) return null;
     return { harnessSessionId: id, cwd: session.cwd };
   };
+  const authorizeAssistantHistory = assistantHistoryAccess({ access: assistantAccess, authorize: authorizeAssistantWorkspace, store: assistantSessions });
+  const continuationFor = async (id: string, conversationId: string): Promise<AssistantContinuationView | null> => {
+    const receipt = await assistantContinuations.readChild(id);
+    if (!receipt) return null;
+    const binding = await authorizeAssistantHistory(id);
+    if (!binding || !receipt.childBinding || receipt.childStudioId !== id ||
+        binding.conversationId !== conversationId ||
+        binding.conversationId !== receipt.childBinding.conversationId ||
+        binding.contextAuthorityScope !== receipt.childBinding.contextAuthorityScope ||
+        binding.cwd !== receipt.childBinding.cwd)
+      throw new OpenCodeAccessError("Assistant continuation binding changed");
+    return projectAssistantContinuation(receipt);
+  };
   const openCodeHost = new OpenCodeHost({
+    contextRuntime: options.assistantContextRuntime,
     access: assistantAccess,
     createObserver: (hosted, id, update) => {
-      const capture = new AssistantRecordCapture(hosted, id, assistantRecords);
+      const capture = new AssistantRecordCapture(hosted, id, assistantRecords, () => continuationFor(hosted.harnessSessionId, id));
       recordCaptures.set(hosted, capture);
       const checkpoint = () => capture.checkpoint();
       const observer = new OpenCodeObserver(hosted, id, update, capture.invalidate, () => { void checkpoint(); });
@@ -3571,7 +3594,7 @@ export const startServer = async (
     authorize: authorizeAssistantWorkspace,
   });
   const openCodeAssociations = new OpenCodeAssociations(assistantSessions);
-  const assistantLifecycle = new AssistantLifecycleCoordinator({ store: assistantSessions, host: openCodeHost, associations: openCodeAssociations });
+  const assistantLifecycle = new AssistantLifecycleCoordinator({ store: assistantSessions, host: openCodeHost, associations: openCodeAssociations, canAttach: (id) => assistantContinuations.canAttach(id) });
   const assistantEnd = new AssistantEndCoordinator({ store: assistantSessions, lifecycle: assistantLifecycle, sessionManager });
   // Hydrate lifecycle headers without launching runtimes. A corrupt entry fails
   // closed when selected rather than preventing unrelated sessions from loading.
@@ -3580,6 +3603,35 @@ export const startServer = async (
     bus.publish({ type: "assistant.state", snapshot }),
   );
   const getAssistantState = assistantProjection.get;
+  const assistantContext = createAssistantContextRuntime({
+    activated: options.assistantContextRuntime,
+    continuations: assistantContinuations,
+    assertCurrent: (hosted) => openCodeHost.assertCurrent(hosted),
+    contextOptions: {
+      getSession: (id) => sessionManager.get(id),
+      resolveProject: (id) => studioProjectCatalog.resolveIdentity(id),
+      getWorkflows: readPublicWorkflows,
+      getEnvironment: () => assistantAccess.get()?.environment ?? null,
+      loadSystemPrompt: options.loadSystemPrompt,
+    },
+  });
+  const assistantNativeHistory = new AssistantNativeHistory({
+    authorize: authorizeAssistantHistory,
+    lifecycle: assistantLifecycle,
+    preflight: assistantContext.delivery.recover,
+  });
+  const assistantContinue = new AssistantContinuation({
+    store: assistantContinuations,
+    records: assistantRecords,
+    sessions: sessionManager,
+    associations: assistantSessions,
+    lifecycle: assistantLifecycle,
+    native: new AssistantContinuationNative((hosted) => openCodeHost.assertCurrent(hosted)),
+    delivery: assistantContext.delivery,
+    authorize: authorizeAssistantHistory,
+    resolveCandidate: (hosted, _receipt, signal) => assistantContext.resolveCandidate(hosted, null, signal),
+    assertAvailable: assistantContext.assertAvailable,
+  });
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
@@ -3588,19 +3640,15 @@ export const startServer = async (
     createOpenCodeRouter(
       openCodeHost,
       options.bootToken,
-      createAssistantContextResolver({
-        getSession: (id) => sessionManager.get(id),
-        resolveProject: (id) => studioProjectCatalog.resolveIdentity(id),
-        getWorkflows: readPublicWorkflows,
-        getEnvironment: () => assistantAccess.get()?.environment ?? null,
-        loadSystemPrompt: options.loadSystemPrompt,
-      }),
+      assistantContext.context,
       openCodeAssociations,
       new OpenCodeFinalResponse({
+        recoverPrompt: assistantContext.delivery.recover,
         assertCurrent: (hosted) => assistantLifecycle.assertRuntime(hosted, true),
         onPersisted: async (hosted) => { await recordCaptures.get(hosted)?.checkpoint(); },
       }),
       assistantLifecycle,
+      continuationFor,
     ),
   );
 
@@ -3625,8 +3673,20 @@ export const startServer = async (
     res.setHeader("Cache-Control", "no-store");
     res.json(assistantAccess.getBrowserState());
   });
-  const authorizeAssistantHistory = assistantHistoryAccess({ access: assistantAccess, authorize: authorizeAssistantWorkspace, store: assistantSessions });
-  const assistantHistory = new AssistantHistory({ sessions: sessionManager, authorize: authorizeAssistantHistory, records: assistantRecords, lifecycle: assistantLifecycle });
+  const assistantHistory = new AssistantHistory({ sessions: sessionManager, authorize: authorizeAssistantHistory, records: assistantRecords, lifecycle: assistantLifecycle, isVisible: (id) => assistantContinuations.canAttach(id) });
+  app.use("/api", createAssistantLifecycleRouter({
+    bootToken: options.bootToken,
+    history: assistantHistory,
+    native: assistantNativeHistory,
+    getSession: (id) => sessionManager.get(id),
+    resume: (id, revision, operationId) => assistantNativeHistory.resume(id, revision, operationId),
+    continue: async (id, request) => {
+      const prepared = await assistantContinue.continue(id, request);
+      // Publish only the verified child. Pending receipt allocation is private.
+      bus.publish({ type: "session.status", session: prepared.session });
+      return prepared;
+    },
+  }));
   app.use("/api", createAssistantRecordsRouter({
     bootToken: options.bootToken,
     store: assistantRecords,

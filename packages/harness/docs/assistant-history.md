@@ -148,3 +148,9 @@ Continue explicitly uses the record currently displayed in history review. Its
 opaque request tuple survives reloads and uncertain responses; tabs serialize
 creation before POST. A verified child opens Assistant paused with recorded
 provenance. Account, navigation and newer bus state fence result adoption.
+
+The assembled server shares one context delivery instance across Send, recovery,
+Resume and Continue. Attach includes verified public continuation provenance and
+rechecks its lease after receipt reads. Pending children stay out of history and
+cannot attach, including after restart; only prepared children publish a session
+event. Runtime activation remains an explicit capability from its existing owner.

@@ -743,6 +743,7 @@ it("binds an authorized association even when its browser disconnects during att
 
 function installLifecycle(
   context: Parameters<typeof createOpenCodeRouter>[2] = resolveContext,
+  continuationFor?: Parameters<typeof createOpenCodeRouter>[6],
 ) {
   const host = {
     ensure,
@@ -779,6 +780,7 @@ function installLifecycle(
     associations,
     undefined,
     lifecycle,
+    continuationFor,
   );
   return lifecycle;
 }
@@ -838,6 +840,41 @@ it("requires a revision for attach and an exact lease for every subsequent nativ
     headers: leaseHeaders(attached.lease),
   });
   expect(other.status).toBe(409);
+});
+
+it("enriches exact attachments with authorized continuation provenance without prompting", async () => {
+  const continuation = { sourceSessionId: "source" } as Awaited<
+    ReturnType<NonNullable<Parameters<typeof createOpenCodeRouter>[6]>>
+  >;
+  const project = vi.fn(async () => continuation);
+  installLifecycle(resolveContext, project);
+  const attached = await attachLease();
+  expect(attached).toHaveProperty("continuation", continuation);
+  expect(project).toHaveBeenCalledExactlyOnceWith(
+    "studio-a",
+    attached.conversationId,
+  );
+  expect(
+    requests.filter((request) => request.path.endsWith("/prompt_async")),
+  ).toHaveLength(0);
+});
+
+it("does not return provenance with a lease superseded during receipt IO", async () => {
+  const lifecycle = installLifecycle(resolveContext, async (id) => {
+    const ending = lifecycle.beginEnd(id);
+    await ending.persistence;
+    await ending.native;
+    await lifecycle.finishEnd(ending.fence);
+    return null;
+  });
+  const response = await request("studio-a/attach", {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision: 0 }),
+  });
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({
+    error: { code: "lifecycle_changed" },
+  });
 });
 
 it("rejects paused recovery before native reads and enables only explicit prepared Send", async () => {
