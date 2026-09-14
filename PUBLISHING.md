@@ -170,3 +170,14 @@ so a re-run is a no-op for everything currently published:
 ```bash
 gh workflow run publish.yml --ref main
 ```
+
+If npm publication succeeded but the MCP registry step failed, fix the registry
+metadata on `main`, then explicitly retry registration of the current MCP version:
+
+```bash
+gh workflow run publish.yml --ref main -f publish_mcp_registry=true
+```
+
+This still skips npm versions that are already published and uses the workflow's
+GitHub OIDC login for the MCP registry. Leave the input off for ordinary reruns;
+only request registration when the current MCP version is missing from the registry.
