@@ -137,6 +137,7 @@ export interface PendingWorkspace {
 
 export interface HarnessStateHook {
   assistant: AssistantProjection;
+  endingSessionIds: ReadonlySet<string>;
   authRevision: number;
   state: AppState | null;
   loading: boolean;
@@ -421,6 +422,10 @@ export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
   const assistantOrder = useRef(new AssistantStateOrder()).current;
   const [assistant, setAssistant] = useState(() => assistantOrder.current());
+  const endingSessions = useRef(new Set<string>());
+  const [endingSessionIds, setEndingSessionIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   useEffect(() => {
     if (!state) return;
     const projectIds = new Set(
@@ -1756,39 +1761,74 @@ export function useHarnessState(): HarnessStateHook {
 
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
+      if (endingSessions.current.has(id)) return;
+      endingSessions.current.add(id);
+      setEndingSessionIds(new Set(endingSessions.current));
+      const selectionAtStart = switchSeqRef.current;
+      const lifecycleAtStart = assistantOrder
+        .current()
+        .snapshot?.lifecycles?.find((row) => row.harnessSessionId === id);
       try {
         await api.killSession(id);
       } catch (err) {
-        // Surface the failure as a toast and keep the user on the dead-session
-        // overlay: the re-throw below skips the local removal, so a failed kill
-        // never makes the session vanish from the UI as if it had succeeded.
+        // Neither a rejected End nor unconfirmed cleanup dismisses the row.
         setToast(
           createToastMessage(
-            err instanceof ApiError && err.reason
-              ? err.reason
-              : (err as Error).message,
+            "Session cleanup is incomplete. The session is still available; retry End session to finish stopping it.",
           ),
         );
         throw err;
+      } finally {
+        endingSessions.current.delete(id);
+        setEndingSessionIds(new Set(endingSessions.current));
       }
-      const remaining = (state?.sessions ?? []).filter(
+      const lifecycles = assistantOrder.current().snapshot?.lifecycles ?? [];
+      const lifecycle = lifecycles.find((row) => row.harnessSessionId === id);
+      // A newer Resume can finish before this older End response arrives.
+      if (
+        lifecycle?.lifecycle === "open" &&
+        lifecycle.revision > (lifecycleAtStart?.revision ?? -1)
+      )
+        return;
+      const remaining = sessionsRef.current.filter(
         (session) => session.id !== id,
       );
-      setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
-      if (activeSessionId === id) {
-        const closed = state?.sessions.find((session) => session.id === id);
+      const retained = lifecycleAtStart != null || lifecycle != null;
+      // Apply to the latest rows: another session may have started or changed
+      // while End was waiting for cleanup. Assistant history stays reachable.
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              sessions: retained
+                ? prev.sessions.map((session) =>
+                    session.id === id
+                      ? { ...session, status: "exited", ready: false }
+                      : session,
+                  )
+                : prev.sessions.filter((session) => session.id !== id),
+            }
+          : prev,
+      );
+      if (activeSessionId === id && switchSeqRef.current === selectionAtStart) {
+        const closed = sessionsRef.current.find((session) => session.id === id);
         const projectId = closed?.agentMapIdentity?.projectId;
+        const active = (session: HarnessSession) =>
+          session.status !== "exited" ||
+          lifecycles.some(
+            (row) => row.harnessSessionId === session.id && row.lifecycle !== "ended",
+          );
         const nextRunning =
           remaining.find(
             (session) =>
-              session.status !== "exited" &&
+              active(session) &&
               projectId != null &&
               session.agentMapIdentity?.projectId === projectId,
-          ) ?? remaining.find((session) => session.status !== "exited");
+          ) ?? remaining.find(active);
         selectSession(nextRunning ? nextRunning.id : null);
       }
     },
-    [state, activeSessionId, selectSession],
+    [assistantOrder, activeSessionId, selectSession],
   );
 
   const connectWorkflow = useCallback(
@@ -2413,6 +2453,7 @@ export function useHarnessState(): HarnessStateHook {
 
   return {
     assistant,
+    endingSessionIds,
     state,
     authRevision,
     loading,

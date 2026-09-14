@@ -21,6 +21,9 @@ function workspaceLabelOf(path: string): string {
 
 const EMPTY_BUSY_SESSION_IDS: ReadonlySet<string> = new Set();
 
+export const MANAGED_END_DESCRIPTION =
+  "This stops Terminal and Assistant work for this session. Its saved history remains available. Other sessions keep running.";
+
 interface SessionBarProps {
   assistant?: AssistantProjection;
   /** The main panel is showing the Overview/intro, not a session. */
@@ -52,8 +55,9 @@ interface SessionBarProps {
   expandRightLabel?: string;
   showExpandRightLabel?: boolean;
   expandRightRef?: RefObject<HTMLButtonElement | null>;
-  /** Ends a live session — kills its PTY; it stays resumable from history. */
+  /** Stops the selected session's managed work and retains its saved history. */
   onCloseSession: (id: string) => void;
+  ending?: boolean;
   /** Opens the session's directory in the user's editor. */
   onOpenInEditor: (path: string) => void;
   /** The chosen editor's display name, so the item names where it lands. */
@@ -103,6 +107,7 @@ export function SessionBar({
   showExpandRightLabel = false,
   expandRightRef,
   onCloseSession,
+  ending = false,
   onOpenInEditor,
   editorLabel,
   onToast,
@@ -115,6 +120,13 @@ export function SessionBar({
   onSelectSession = null,
   labelOf,
 }: SessionBarProps): JSX.Element {
+  const assistantLifecycle = assistant?.snapshot?.enabled
+    ? assistant.snapshot.lifecycles?.find(
+        (row) => row.harnessSessionId === activeSession?.id,
+      )
+    : undefined;
+  const assistantNeedsEnd =
+    assistantLifecycle != null && assistantLifecycle.lifecycle !== "ended";
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -370,18 +382,24 @@ export function SessionBar({
             <Icon name="Code" size={13} />
             Open in {editorLabel}
           </button>
-          {activeSession.status !== "exited" && (
+          {(activeSession.status !== "exited" || assistantNeedsEnd) && (
             <button
               role="menuitem"
               className="profile-menu-item session-menu-danger"
               data-testid="session-end-btn"
+              disabled={ending}
+              aria-busy={ending}
               onClick={() => {
                 closeMenu();
                 setConfirmingClose(true);
               }}
             >
               <Icon name="X" size={13} />
-              End session…
+              {ending
+                ? "Ending session…"
+                : assistantLifecycle?.lifecycle === "ending"
+                  ? "Retry End session…"
+                  : "End session…"}
             </button>
           )}
         </AnchoredPopover>
@@ -433,6 +451,7 @@ export function SessionBar({
 
       {confirmingClose && activeSession && (
         <EndSessionConfirm
+          description={assistantLifecycle ? MANAGED_END_DESCRIPTION : undefined}
           triggerRef={menuTriggerRef}
           onCancel={() => setConfirmingClose(false)}
           onConfirm={() => {

@@ -78,7 +78,8 @@ import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
-import { SessionBar } from "./components/SessionBar";
+import { MANAGED_END_DESCRIPTION, SessionBar } from "./components/SessionBar";
+import { EndSessionConfirm } from "./components/EndSessionConfirm";
 import { SessionStepsBar } from "./components/SessionStepsBar";
 import { RunSheet } from "./components/RunSheet";
 import { TelemetryNotice } from "./components/TelemetryNotice";
@@ -291,6 +292,13 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  const [confirmEndSessionId, setConfirmEndSessionId] = useState<string | null>(
+    null,
+  );
+  useEffect(() => setConfirmEndSessionId(null), [
+    harness.activeSessionId,
+    harness.authRevision,
+  ]);
   // A project map remounts when browsing another project or agent. Keep its
   // viewport for this signed-in UI lifetime, without persisting map data.
   const agentMapViewportStore = useMemo(
@@ -1446,6 +1454,13 @@ export const App = (): JSX.Element => {
   const activeSession =
     state.sessions.find((session) => session.id === harness.activeSessionId) ??
     null;
+  const assistantLifecycles = harness.assistant.snapshot?.enabled
+    ? (harness.assistant.snapshot.lifecycles ?? [])
+    : [];
+  const assistantNeedsEnd = (id: string) =>
+    assistantLifecycles.some(
+      (row) => row.harnessSessionId === id && row.lifecycle !== "ended",
+    );
   const boundWorkflowPath = boundWorkflowPathOf(activeSession);
   const boundWorkflow =
     state.workflows.find((w) => w.path === boundWorkflowPath) ?? null;
@@ -1566,7 +1581,12 @@ export const App = (): JSX.Element => {
   // hidden until the user explicitly selects one of this project's tabs.
   const activeProjectTab = projectMapSelected
     ? (focusTabs.find((session) => session.id === harness.activeSessionId) ??
-      null)
+      (activeSession &&
+      studioConversationProjectId &&
+      activeSession.agentMapIdentity?.projectId === studioConversationProjectId &&
+      assistantNeedsEnd(activeSession.id)
+        ? activeSession
+        : null))
     : activeSession;
   const conversationSession = projectMapSelected
     ? activeProjectTab
@@ -3201,7 +3221,9 @@ export const App = (): JSX.Element => {
               }
               onRenameSession={renameSession}
               boundWorkflowName={boundWorkflow?.name ?? null}
-              sessions={showWorkbench || projectMapSelected ? focusTabs : []}
+              sessions={
+                !showDead && (showWorkbench || projectMapSelected) ? focusTabs : []
+              }
               busySessionIds={harness.busySessionIds}
               onSelectSession={selectTab}
               labelOf={(session) =>
@@ -3211,7 +3233,13 @@ export const App = (): JSX.Element => {
                 sessionBarSession != null &&
                 harness.busySessionIds.has(sessionBarSession.id)
               }
-              onCloseSession={(id) => void harness.closeSession(id)}
+              ending={
+                sessionBarSession != null &&
+                harness.endingSessionIds.has(sessionBarSession.id)
+              }
+              onCloseSession={(id) =>
+                void harness.closeSession(id).catch(() => undefined)
+              }
               onOpenInEditor={openInEditor}
               editorLabel={editorLabel(harness.settings?.editor)}
               onToast={harness.showToast}
@@ -3363,9 +3391,14 @@ export const App = (): JSX.Element => {
                         from: conversationSession.id,
                       })
                     }
-                    onClose={() =>
-                      void harness.closeSession(conversationSession.id)
-                    }
+                    onClose={() => {
+                      if (assistantNeedsEnd(conversationSession.id))
+                        setConfirmEndSessionId(conversationSession.id);
+                      else
+                        void harness
+                          .closeSession(conversationSession.id)
+                          .catch(() => undefined);
+                    }}
                   />
                 </AssistantPane>
               ) : showAgentEmpty && focusedWorkflow ? (
@@ -3905,6 +3938,18 @@ export const App = (): JSX.Element => {
           </div>
         </div>
       </div>
+
+      {confirmEndSessionId && (
+        <EndSessionConfirm
+          description={MANAGED_END_DESCRIPTION}
+          onCancel={() => setConfirmEndSessionId(null)}
+          onConfirm={() => {
+            const id = confirmEndSessionId;
+            setConfirmEndSessionId(null);
+            void harness.closeSession(id).catch(() => undefined);
+          }}
+        />
+      )}
 
       {/* The Overview is a card ON TOP of the shell, so it mounts beside the
           palette rather than standing in for the workbench. */}
