@@ -39,7 +39,7 @@ describe("retained Terminal cleanup and bound restart cancellation", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  function fixture() {
+  function fixture(closeRecorded = true) {
     const request = { cwd: root, harness: "claude-code" as const };
     const path = join(root, "sessions.json");
     const writeBinding = vi.fn(async (file: string, text: string) => {
@@ -88,7 +88,7 @@ describe("retained Terminal cleanup and bound restart cancellation", () => {
       adapters: { "claude-code": adapter },
       resolveAgentMapIdentity: resolveIdentity,
       writeSubsessionBindingRegistry: writeBinding,
-      onSubsessionUserClosed: async () => {},
+      onSubsessionUserClosed: closeRecorded ? async () => {} : undefined,
       spawnPty,
       isPidAlive,
     });
@@ -313,6 +313,101 @@ describe("retained Terminal cleanup and bound restart cancellation", () => {
       fixture();
       await manager.init();
       expect(manager.getSubsessionBinding(id)).toBeNull();
+    },
+  );
+
+  it.each([
+    ["create", false],
+    ["create", true],
+    ["resume", false],
+    ["resume", true],
+  ] as const)(
+    "failed %s publication cannot roll back queued End (coordinator recorded=%s)",
+    async (kind, closeRecorded) => {
+      const { request, path, writeBinding, canResume, spawnPty } =
+        fixture(closeRecorded);
+      const id = "00000000-0000-4000-8000-000000000335";
+      const siblingId = "00000000-0000-4000-8000-000000000336";
+      const marker = {
+        sessionId: id,
+        projectId: "project-1",
+        parentSessionId: "parent-1",
+        bindingId: "binding-primary",
+        incarnation: 1,
+        spawnEpoch: 1,
+      };
+      const next = { ...marker, incarnation: 2, spawnEpoch: 2 };
+      const siblingMarker = {
+        ...marker,
+        sessionId: siblingId,
+        bindingId: "binding-sibling",
+      };
+      const trusted = {
+        agentMapIdentity: (sessionId: string) => ({
+          sessionId,
+          projectId: "project-1",
+          userId: "user-1",
+        }),
+      };
+      if (kind === "resume") {
+        await manager.createReserved(id, request, marker, trusted);
+        await manager.setAgentSessionId(
+          id,
+          "vendor-1",
+          "startup",
+          manager.getRuntimeEpoch(id)!,
+        );
+        spawns[0]!.exit();
+        await manager.flush();
+        canResume.mockResolvedValue(true);
+      }
+      await manager.createReserved(siblingId, request, siblingMarker, trusted);
+      const siblingEpoch = manager.getRuntimeEpoch(siblingId);
+      const siblingSpawn = spawns.at(-1)!;
+      const spawnCount = spawns.length;
+      const held = gate();
+      const failure = new Error("binding publication acknowledgement failed");
+      writeBinding.mockImplementationOnce(async (file, text) => {
+        await held.wait();
+        await writeFile(file, text);
+        throw failure;
+      });
+      const preparing =
+        kind === "create"
+          ? manager.createReserved(id, request, marker, trusted)
+          : manager.resumeBound(id, marker, next);
+      const rejected = expect(preparing).rejects.toBe(failure);
+      await held.entered;
+      const closing = manager.close(id);
+      const endedMarker = kind === "create" ? marker : next;
+      expect(manager.wasSubsessionClosedByUser(endedMarker)).toBe(true);
+      held.release();
+      await Promise.all([closing, rejected]);
+
+      const expectedMarker = closeRecorded ? null : endedMarker;
+      expect(manager.getSubsessionBinding(id)).toEqual(expectedMarker);
+      expect(manager.getRuntimeEpoch(siblingId)).toBe(siblingEpoch);
+      expect(siblingSpawn.kill).not.toHaveBeenCalled();
+      expect(spawnPty).toHaveBeenCalledTimes(spawnCount);
+      expect(
+        JSON.parse(await readFile(`${path}.subsession-bindings.json`, "utf8")),
+      ).toEqual({
+        version: 1,
+        markers: {
+          [siblingId]: siblingMarker,
+          ...(expectedMarker ? { [id]: expectedMarker } : {}),
+        },
+        closedSessionIds: closeRecorded ? [] : [id],
+      });
+      siblingSpawn.exit();
+      await manager.flush();
+      fixture(closeRecorded);
+      await manager.init();
+      expect(manager.getSubsessionBinding(id)).toEqual(expectedMarker);
+      expect(manager.getSubsessionBinding(siblingId)).toEqual(siblingMarker);
+      expect(manager.wasSubsessionClosedByUser(endedMarker)).toBe(
+        !closeRecorded,
+      );
     },
   );
 });

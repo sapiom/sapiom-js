@@ -1959,11 +1959,16 @@ export class SessionManager {
       // A failed spawn may leave the exact next marker durably committed.
       // Retrying that same transition must not require the old marker again.
       if (!sameSubsessionBinding(current, bindingTransition.next)) {
-        this.subsessionBindings.set(id, bindingTransition.next);
+        const next = bindingTransition.next;
+        this.subsessionBindings.set(id, next);
         try {
           await this.persistSubsessionBindings();
         } catch (error) {
-          this.subsessionBindings.set(id, current);
+          if (
+            (this.closeGenerations.get(id) ?? 0) === closeGeneration &&
+            this.subsessionBindings.get(id) === next
+          )
+            this.subsessionBindings.set(id, current);
           throw error;
         }
       }
@@ -4042,7 +4047,10 @@ export class SessionManager {
         try {
           await this.persistSubsessionBindings();
         } catch (error) {
-          if (this.subsessionBindings.get(reservedSessionId) === marker)
+          if (
+            (this.closeGenerations.get(reservedSessionId) ?? 0) === closeGeneration &&
+            this.subsessionBindings.get(reservedSessionId) === marker
+          )
             this.subsessionBindings.delete(reservedSessionId);
           throw error;
         }

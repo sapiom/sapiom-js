@@ -181,3 +181,7 @@ Restored pending children are hidden before the server starts accepting requests
 An exact attested no-reply seed can be removed from an older empty user-only
 checkpoint without inflating task counts. Clearing a seed-only record requires
 the exact previous revision; compacted tasks and recorded real replies remain.
+
+A failed Terminal binding publication can roll back only its original close
+generation and exact proposed marker. A queued End retains its durable tombstone
+or confirmed removal, and other sessions keep their own process and binding.
