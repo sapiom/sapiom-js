@@ -1,6 +1,7 @@
 import {
   AssistantContextError,
   assistantContentHash,
+  assistantContextLimits,
   assistantRevision,
   assistantManifestFields,
   encodeAssistantContext,
@@ -83,6 +84,7 @@ const utf8 = (bytes: Uint8Array) => {
 };
 const packagePath = (value: unknown): value is string =>
   typeof value === "string" &&
+  Buffer.byteLength(value) <= assistantContextLimits.bytes &&
   !/[\\:]/.test(value) &&
   [...value].every(
     (character) =>
@@ -97,6 +99,10 @@ const packagePath = (value: unknown): value is string =>
 export function encodeAssistantSkillPackage(
   members: readonly SkillPackageMember[],
 ): Uint8Array {
+  check(
+    Array.isArray(members) && members.length <= assistantContextLimits.entries,
+  );
+  let materialBytes = 0;
   const artifact = {
     schemaVersion: 1,
     entrypoint: "SKILL.md",
@@ -108,6 +114,10 @@ export function encodeAssistantSkillPackage(
             member.bytes instanceof Uint8Array &&
             typeof member.executable === "boolean",
         );
+        materialBytes +=
+          Buffer.byteLength(member.path) +
+          4 * Math.ceil(member.bytes.byteLength / 3);
+        check(materialBytes <= assistantContextLimits.bytes);
         const bytes = new Uint8Array(member.bytes);
         return {
           path: member.path,
@@ -128,7 +138,10 @@ export function decodeAssistantSource(
   format: "utf8" | "json" | "skill-package",
   bytes: Uint8Array,
 ): ReadonlySourceContent {
-  check(bytes.byteLength <= 4 * 1024 * 1024);
+  check(
+    bytes instanceof Uint8Array &&
+      bytes.byteLength <= assistantContextLimits.bytes,
+  );
   const text = utf8(bytes);
   if (format === "utf8") {
     check(text.trim().length > 0);
@@ -205,6 +218,11 @@ export function createAssistantSource(
     | { status: "unavailable" | "not-configured"; reason: string },
 ): { version: SourceVersion; material?: SourceMaterial } {
   const available = "bytes" in content;
+  if (available)
+    check(
+      content.bytes instanceof Uint8Array &&
+        content.bytes.byteLength <= assistantContextLimits.bytes,
+    );
   const bytes = available ? new Uint8Array(content.bytes) : undefined;
   if (available) decodeAssistantSource(content.format, bytes!);
   const hash = bytes ? assistantContentHash(bytes) : null;
@@ -255,6 +273,12 @@ export function retainAssistantGuidance(
 ): ResolvedAssistantGuidance {
   const { text, location, ...metadata } = guidance;
   check(!location);
+  if (guidance.status === "available")
+    check(
+      typeof text === "string" &&
+        Buffer.byteLength(text) <= assistantContextLimits.bytes &&
+        Buffer.from(text).toString("utf8") === text,
+    );
   if (guidance.status !== "available")
     check(typeof guidance.reason === "string");
   const identity: SourceIdentity = {

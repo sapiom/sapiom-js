@@ -59,7 +59,8 @@ Missing optional sources are explicit. Required missing sources block dispatch.
 The foundation does not itself implement the project instruction loader, managed
 skill materializer, queue transitions, Resume/Continue UI or complete tool parity.
 Those integrations must preserve this contract and the existing access gate.
-# Retained source artifacts
+
+## Retained source artifacts
 
 The source codec records the Studio policy, exact guidance bytes and explicit scope,
 skill and MCP manifests. Content hashes preserve UTF-8 bytes, BOMs and line endings;

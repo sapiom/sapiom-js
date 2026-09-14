@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AssistantContextError,
   assistantContentHash,
+  assistantContextLimits,
   encodeAssistantContext,
 } from "@sapiom/opencode";
 import {
@@ -47,6 +48,32 @@ const identity = {
 };
 
 describe("retained Assistant source artifacts", () => {
+  it("bounds supplied package allocation and rejects lossy UTF-16 guidance", () => {
+    const large = {
+      ...members()[0]!,
+      bytes: new Uint8Array(assistantContextLimits.bytes),
+    };
+    expect(() => encodeAssistantSkillPackage([large])).toThrow(
+      AssistantContextError,
+    );
+    expect(() =>
+      encodeAssistantSkillPackage(
+        Array(assistantContextLimits.entries + 1).fill(members()[0]),
+      ),
+    ).toThrow(AssistantContextError);
+    expect(() =>
+      createAssistantSource(identity, {
+        format: "utf8",
+        bytes: new Uint8Array(assistantContextLimits.bytes + 1),
+      }),
+    ).toThrow(AssistantContextError);
+    expect(() =>
+      retainAssistantGuidance(
+        { ...sourceContext().guidance[0]!, text: "lone \ud800" },
+        sourceScope,
+      ),
+    ).toThrow(AssistantContextError);
+  });
   it("retains exact text and explicit scope, skill and MCP manifests", () => {
     const { candidate, accepted } = sourceFixture();
     const decoded = validateAssistantMaterials(
