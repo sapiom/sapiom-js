@@ -1,9 +1,14 @@
 import type { AssistantLifecycle } from "../../../src/shared/assistant-session";
+import {
+  parseAssistantContinuationView,
+  type AssistantContinuationView,
+} from "../../../src/shared/assistant-continuation";
 
 export interface AssistantAttachment {
   conversationId: string;
   lease: string;
   lifecycle: AssistantLifecycle;
+  continuation?: AssistantContinuationView;
 }
 
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -44,8 +49,16 @@ export function parseAssistantAttachment(
 ): AssistantAttachment | null {
   if (!object(value)) return null;
   const lifecycle = parseAssistantLifecycle(value.lifecycle, harnessSessionId);
+  const continuation =
+    value.continuation == null
+      ? null
+      : parseAssistantContinuationView(
+          value.continuation,
+          value.conversationId as string,
+        );
   if (
     !lifecycle ||
+    (value.continuation != null && !continuation) ||
     lifecycle.lifecycle !== "open" ||
     ![expectedRevision, expectedRevision + 1].includes(lifecycle.revision) ||
     typeof value.conversationId !== "string" ||
@@ -60,5 +73,6 @@ export function parseAssistantAttachment(
     conversationId: value.conversationId,
     lease: value.lease,
     lifecycle,
+    ...(continuation ? { continuation } : {}),
   };
 }

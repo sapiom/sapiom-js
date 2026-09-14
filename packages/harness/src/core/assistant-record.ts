@@ -17,6 +17,7 @@ import {
   openCodeVisibleParts,
 } from "../shared/opencode-completion.js";
 import {
+  assistantTaskMessages,
   openCodeTurn,
   type OpenCodeTurnMessage,
 } from "../shared/opencode-turn.js";
@@ -229,6 +230,9 @@ export function projectAssistantRecord(
   binding: AssistantRecordBinding,
   revision: number,
   capturedAt = new Date().toISOString(),
+  continuation?:
+    | import("../shared/assistant-continuation.js").AssistantContinuationView
+    | null,
 ): AssistantRecord {
   try {
     binding = validateAssistantRecordBinding(binding);
@@ -243,7 +247,7 @@ export function projectAssistantRecord(
     };
     const seen = new Set<string>(),
       partIds = new Set<string>();
-    const native = nativeMessages
+    const validated = nativeMessages
       .map((value) => {
         const envelope = object(value),
           info = object(envelope.info),
@@ -280,6 +284,10 @@ export function projectAssistantRecord(
           Number(object(a.info.time).created) -
           Number(object(b.info.time).created),
       );
+    const native = assistantTaskMessages(
+      validated as unknown as OpenCodeTurnMessage[],
+      continuation,
+    ) as unknown as typeof validated;
     const messages = native as unknown as OpenCodeTurnMessage[];
     const tokens = openCodeCompletionTokens(messages);
     const turns = new Map<string, AssistantRecord["turns"][number]>();

@@ -3,11 +3,13 @@ import {
   openCodeVisibleText,
   parseOpenCodeCompletion,
 } from "./opencode-completion.js";
+import type { AssistantContinuationView } from "./assistant-continuation.js";
 
 /** Use native messages: the UI adapter merges tool steps and final answers. */
 export interface OpenCodeTurnMessage {
   info?: {
     id: string;
+    sessionID?: string;
     role: string;
     parentID?: string;
     agent?: string;
@@ -18,18 +20,67 @@ export interface OpenCodeTurnMessage {
     time: { created?: number; completed?: number };
   };
   parts: readonly {
+    id?: string;
+    messageID?: string;
+    sessionID?: string;
     type: string;
     text?: string;
     ignored?: boolean;
     synthetic?: boolean;
     tool?: string;
     state?: { status?: string; input?: unknown };
-    metadata?: { compaction_continue?: unknown };
+    metadata?: { compaction_continue?: unknown; sapiomContinuation?: unknown };
   }[];
 }
 
 export const finalResponseAgent = "sapiom-final-response";
 export const turnRecoveryAgent = "sapiom-turn-recovery";
+
+/** Only a server-attested exact no-reply seed is recorded input, not a human task. */
+export function isAssistantContinuationSeed(
+  message: OpenCodeTurnMessage | undefined,
+  continuation?: AssistantContinuationView | null,
+): boolean {
+  if (!message || !continuation) return false;
+  const { seed, operationId } = continuation;
+  const part = message.parts[0];
+  const raw = part?.metadata?.sapiomContinuation;
+  const marker =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : null;
+  return (
+    message.info?.role === "user" &&
+    message.info.id === seed.messageId &&
+    message.info.sessionID === seed.conversationId &&
+    message.parts.length === 1 &&
+    part?.id === seed.partId &&
+    part.messageID === seed.messageId &&
+    part.sessionID === seed.conversationId &&
+    part.type === "text" &&
+    part.synthetic === true &&
+    part.ignored === false &&
+    part.text === seed.text &&
+    marker?.operationId === operationId &&
+    marker.briefHash === seed.sha256
+  );
+}
+
+export function assistantTaskMessages<T extends OpenCodeTurnMessage>(
+  messages: readonly T[],
+  continuation?: AssistantContinuationView | null,
+): readonly T[] {
+  if (!continuation) return messages;
+  return messages.filter(
+    (message) =>
+      !isAssistantContinuationSeed(message, continuation) ||
+      messages.some(
+        (answer) =>
+          answer.info?.role === "assistant" &&
+          answer.info.parentID === message.info?.id,
+      ),
+  );
+}
 
 export function openCodeResult(
   message: OpenCodeTurnMessage | undefined,
@@ -59,13 +110,16 @@ export function openCodeTurn(
   status: string | undefined,
   /** A token resolved against full history when evaluating an isolated archived turn. */
   completionToken?: string,
+  continuation?: AssistantContinuationView | null,
 ): {
   status: "ready" | "working" | "finished" | "stopped" | "failed" | "unknown";
   missing?: string;
 } {
   if (!status) return { status: "unknown" };
   if (status !== "idle") return { status: "working" };
-  const newestFirst = [...messages].reverse();
+  const newestFirst = [
+    ...assistantTaskMessages(messages, continuation),
+  ].reverse();
   const user = newestFirst.find((message) => message.info?.role === "user");
   if (!user) return { status: "ready" };
   // Older previews only summarized a stopped run; that did not finish its task.
@@ -78,7 +132,8 @@ export function openCodeTurn(
   );
   if (!answer?.info || !answer.info.time.completed) return { status: "failed" };
   if (answer.info.agent === finalResponseAgent) return { status: "failed" };
-  const token = completionToken ?? openCodeCompletionTokens(messages).get(user.info!.id);
+  const token =
+    completionToken ?? openCodeCompletionTokens(messages).get(user.info!.id);
   if (answer.info.error) return { status: "failed" };
   if (token) {
     const result = openCodeResult(answer, token);

@@ -117,3 +117,10 @@ accepted context. Every later explicit child Send includes the frozen recorded
 brief with freshly resolved current guidance. With no activation supplied,
 ordinary legacy delivery remains available, legacy inline history can preflight,
 and accepted-context Continue fails before reserving or allocating a child.
+
+A prepared child's exact seed is displayed as recorded background context. Its
+attestation binds native conversation, message and part IDs, operation UUID, text
+and content hash. Only that exact no-reply seed is excluded from human task status
+and archive counts; arbitrary synthetic messages and unexpected answers retain
+ordinary task semantics. Opening or reloading it does not trigger recovery.
+Missing native history offers a separate action to review the retained record.

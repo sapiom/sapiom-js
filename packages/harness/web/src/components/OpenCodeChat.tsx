@@ -33,6 +33,7 @@ import {
   finalResponseAgent,
   turnRecoveryAgent,
   openCodeTurn,
+  isAssistantContinuationSeed,
   openCodeResult,
 } from "../../../src/shared/opencode-turn";
 import {
@@ -40,6 +41,10 @@ import {
   openCodeVisibleParts,
   openCodeVisibleText,
 } from "../../../src/shared/opencode-completion";
+import {
+  verifyAssistantContinuationView,
+  type AssistantContinuationView,
+} from "../../../src/shared/assistant-continuation";
 import {
   openCodeTransportFailure,
   parseOpenCodeStudioErrorEvent,
@@ -61,8 +66,10 @@ interface Props {
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  onReviewHistory?: () => void;
 }
 interface RecoveryNotice {
+  code?: OpenCodeTransportFailure["code"];
   message: string;
   action: OpenCodeTransportAction;
 }
@@ -85,6 +92,7 @@ const requestError = reconnectNotice(
 
 /** The parser returns the shared table entry, never the server's string. */
 const trustedNotice = (failure: OpenCodeTransportFailure): RecoveryNotice => ({
+  code: failure.code,
   message: failure.message,
   action: failure.action,
 });
@@ -107,6 +115,7 @@ export function OpenCodeChat({
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  onReviewHistory,
 }: Props) {
   const [attachment, setAttachment] = useState<AssistantAttachment | null>(
     null,
@@ -162,7 +171,14 @@ export function OpenCodeChat({
         harnessSessionId,
         lifecycle.revision,
       );
-      if (!attached) {
+      if (
+        !attached ||
+        (attached.continuation &&
+          !(await verifyAssistantContinuationView(
+            attached.continuation,
+            attached.conversationId,
+          )))
+      ) {
         if (!abort.signal.aborted)
           setError(
             trustedNotice(openCodeTransportFailure("lifecycle_changed")),
@@ -188,12 +204,14 @@ export function OpenCodeChat({
       conversationId={attachment.conversationId}
       lease={attachment.lease}
       initialExecution={attachment.lifecycle.execution}
+      continuation={attachment.continuation}
       selectedAgentPath={selectedAgentPath}
       retry={retry}
       draft={draft}
       onSignIn={onSignIn}
       onOpenSettings={onOpenSettings}
       onOpenTerminal={onOpenTerminal}
+      onReviewHistory={onReviewHistory}
     />
   ) : (
     <div className="studio-chat-start">
@@ -204,6 +222,7 @@ export function OpenCodeChat({
           onSignIn={onSignIn}
           onOpenSettings={onOpenSettings}
           onOpenTerminal={onOpenTerminal}
+          onReviewHistory={onReviewHistory}
         />
       ) : (
         <span role="status">Opening Assistant…</span>
@@ -219,11 +238,13 @@ function RuntimeChat({
   conversationId,
   lease,
   initialExecution,
+  continuation,
   retry,
   draft,
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  onReviewHistory,
 }: {
   baseUrl: string;
   selectedAgentPath?: string | null;
@@ -231,11 +252,13 @@ function RuntimeChat({
   conversationId: string;
   lease: string;
   initialExecution: AssistantAttachment["lifecycle"]["execution"];
+  continuation?: AssistantContinuationView;
   retry: () => void;
   draft: ChatDraft;
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  onReviewHistory?: () => void;
 }) {
   // Selection changes must not recreate the conversation/runtime or its draft.
   const selection = useRef(selectedAgentPath);
@@ -378,6 +401,7 @@ function RuntimeChat({
         conversationId={conversationId}
         lease={lease}
         execution={execution}
+        continuation={continuation}
         connected={connected}
         reconcile={reconcile}
         error={actionError ?? transportError}
@@ -387,6 +411,7 @@ function RuntimeChat({
         onSignIn={onSignIn}
         onOpenSettings={onOpenSettings}
         onOpenTerminal={onOpenTerminal}
+        onReviewHistory={onReviewHistory}
         onTypedError={onTypedError}
       />
     </AssistantRuntimeProvider>
@@ -418,6 +443,7 @@ function ChatSurface({
   conversationId,
   lease,
   execution,
+  continuation,
   connected,
   reconcile,
   error,
@@ -427,6 +453,7 @@ function ChatSurface({
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  onReviewHistory,
   onTypedError,
 }: {
   baseUrl: string;
@@ -434,6 +461,7 @@ function ChatSurface({
   conversationId: string;
   lease: string;
   execution: AssistantAttachment["lifecycle"]["execution"];
+  continuation?: AssistantContinuationView;
   connected: boolean;
   reconcile: () => void;
   error: RecoveryNotice | null;
@@ -443,6 +471,7 @@ function ChatSurface({
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  onReviewHistory?: () => void;
   onTypedError: (failure: OpenCodeTransportFailure) => void;
 }) {
   const loading = useAuiState((s) => s.thread.isLoading);
@@ -471,6 +500,8 @@ function ChatSurface({
   const turn = openCodeTurn(
     native.messageOrder.map((id) => native.messagesById[id]!).filter(Boolean),
     native.sessionStatus?.type,
+    undefined,
+    continuation,
   );
   const attempted = useRef(new Set<string>());
   const recoveryAbort = useRef<AbortController | null>(null);
@@ -553,6 +584,7 @@ function ChatSurface({
     conversationId,
     lease,
     execution,
+    continuation,
     error,
     missing,
     pending,
@@ -619,15 +651,37 @@ function ChatSurface({
         scrollToBottomOnRunStart={false}
       >
         <div className="studio-chat-feed">
-          <ThreadPrimitive.Empty>
-            <EmptyState
-              title="Start a conversation"
-              body="Describe the change you want to make in this project."
-            />
-          </ThreadPrimitive.Empty>
+          {continuation && (
+            <details
+              className="studio-chat-meta"
+              data-testid="assistant-continuation-context"
+            >
+              <summary>
+                Recorded context from a previous Assistant session
+              </summary>
+              <p>
+                Prepared from {continuation.retainedTurns} saved turns.{" "}
+                {continuation.omittedTurns > 0
+                  ? `${continuation.omittedTurns} earlier turns were omitted. `
+                  : ""}
+                Send a message when you are ready to continue.
+              </p>
+              <Markdown text={continuation.seed.text} />
+            </details>
+          )}
+          {!continuation && (
+            <ThreadPrimitive.Empty>
+              <EmptyState
+                title="Start a conversation"
+                body="Describe the change you want to make in this project."
+              />
+            </ThreadPrimitive.Empty>
+          )}
           <ThreadPrimitive.Messages>
             {({ message }) => {
               const nativeMessage = native.messagesById[message.id];
+              if (isAssistantContinuationSeed(nativeMessage, continuation))
+                return null;
               const token =
                 nativeMessage?.info?.role === "assistant"
                   ? completionTokens.get(nativeMessage.info.parentID)
@@ -703,6 +757,7 @@ function ChatSurface({
               onSignIn={onSignIn}
               onOpenSettings={onOpenSettings}
               onOpenTerminal={onOpenTerminal}
+              onReviewHistory={onReviewHistory}
             />
           )}
         </div>
@@ -765,12 +820,14 @@ function Recovery({
   onSignIn,
   onOpenSettings,
   onOpenTerminal,
+  onReviewHistory,
 }: {
   notice: RecoveryNotice;
   retry: () => void;
   onSignIn: () => void;
   onOpenSettings: () => void;
   onOpenTerminal: () => void;
+  onReviewHistory?: () => void;
 }) {
   const action = {
     sign_in: { label: "Sign in", run: onSignIn },
@@ -791,6 +848,11 @@ function Recovery({
       >
         {action[notice.action].label}
       </button>
+      {notice.code === "native_history_missing" && onReviewHistory && (
+        <button type="button" className="btn-ghost" onClick={onReviewHistory}>
+          Review saved Assistant history
+        </button>
+      )}
     </div>
   );
 }

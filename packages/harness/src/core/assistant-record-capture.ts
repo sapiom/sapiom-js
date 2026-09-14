@@ -1,5 +1,7 @@
 import type { HostedOpenCode } from "./opencode-host.js";
 import type { AssistantRecordStore } from "./assistant-record-store.js";
+import type { AssistantContinuationView } from "../shared/assistant-continuation.js";
+import { awaitAssistantInspection } from "./assistant-lifecycle.js";
 import type {
   AssistantRecord,
   AssistantRecordBinding,
@@ -67,6 +69,9 @@ export class AssistantRecordCapture {
       AssistantRecordStore,
       "read" | "write" | "reserve"
     >,
+    private readonly continuation?: (
+      signal: AbortSignal,
+    ) => Promise<AssistantContinuationView | null>,
   ) {
     this.binding = {
       harnessSessionId: hosted.harnessSessionId,
@@ -142,8 +147,17 @@ export class AssistantRecordCapture {
           { signal },
         );
         const native = await readBoundedHistory(response, signal);
+        const continuation = this.continuation
+          ? await awaitAssistantInspection(this.continuation(signal), signal)
+          : null;
         if (!this.live()) return;
-        const next = projectAssistantRecord(native, this.binding, revision);
+        const next = projectAssistantRecord(
+          native,
+          this.binding,
+          revision,
+          undefined,
+          continuation,
+        );
         const previous = await this.store.read(this.binding);
         const record = reconcileAssistantRecord(previous, next);
         signal.throwIfAborted();

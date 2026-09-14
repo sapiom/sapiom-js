@@ -71,3 +71,20 @@ export function parseAssistantContinuationView(
     },
   };
 }
+
+/** Browser callers verify the exact bounded brief before adopting its attestation. */
+export async function verifyAssistantContinuationView(
+  value: unknown,
+  conversationId?: string,
+): Promise<AssistantContinuationView | null> {
+  const parsed = parseAssistantContinuationView(value, conversationId);
+  if (!parsed) return null;
+  const hash = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(parsed.seed.text),
+  );
+  const hex = Array.from(new Uint8Array(hash), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return hex === parsed.seed.sha256 ? parsed : null;
+}
