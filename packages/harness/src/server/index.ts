@@ -907,6 +907,9 @@ export const startServer = async (
     } satisfies Partial<Record<HarnessKind, HarnessAdapter>>);
 
   const bus = new EventBus();
+  // Synchronous event projections consult this cache; all public admission reads
+  // refresh it from durable receipts, and allocation marks it before publication.
+  const hiddenAssistantSessions = new Set<string>();
   const canvasWatcher = new CanvasWatcherManager({
     onChange: (harnessSessionId) =>
       bus.publish({ type: "canvas.reload", harnessSessionId }),
@@ -2013,7 +2016,7 @@ export const startServer = async (
   const rescannedOnStart = new Set<string>();
 
   sessionManager.onStatusChange((session) => {
-    bus.publish({ type: "session.status", session });
+    if (!hiddenAssistantSessions.has(session.id)) bus.publish({ type: "session.status", session });
     if (session.status === "running") {
       canvasWatcher.start(session.id, session.cwd);
       workspaceWatcher.start(session.id, session.cwd);
@@ -3555,6 +3558,15 @@ export const startServer = async (
   const assistantSessions = new AssistantSessionStore(statePaths.root);
   const assistantRecords = new AssistantRecordStore(statePaths.root);
   const assistantContinuations = new AssistantContinuationStore(statePaths.root);
+  const isAssistantSessionVisible = async (id: string): Promise<boolean> => {
+    const visible = await assistantContinuations.canAttach(id);
+    if (visible) hiddenAssistantSessions.delete(id);
+    else hiddenAssistantSessions.add(id);
+    return visible;
+  };
+  const restoredSessionIds = sessionManager.list().map((session) => session.id);
+  for (let offset = 0; offset < restoredSessionIds.length; offset += 8)
+    await Promise.all(restoredSessionIds.slice(offset, offset + 8).map(isAssistantSessionVisible));
   const recordCaptures = new WeakMap<HostedOpenCode, AssistantRecordCapture>();
   const authorizeAssistantWorkspace = async (id: string) => {
     const session = sessionManager.get(id);
@@ -3594,13 +3606,14 @@ export const startServer = async (
     authorize: authorizeAssistantWorkspace,
   });
   const openCodeAssociations = new OpenCodeAssociations(assistantSessions);
-  const assistantLifecycle = new AssistantLifecycleCoordinator({ store: assistantSessions, host: openCodeHost, associations: openCodeAssociations, canAttach: (id) => assistantContinuations.canAttach(id) });
+  const assistantLifecycle = new AssistantLifecycleCoordinator({ store: assistantSessions, host: openCodeHost, associations: openCodeAssociations, canAttach: isAssistantSessionVisible });
   const assistantEnd = new AssistantEndCoordinator({ store: assistantSessions, lifecycle: assistantLifecycle, sessionManager });
   // Hydrate lifecycle headers without launching runtimes. A corrupt entry fails
   // closed when selected rather than preventing unrelated sessions from loading.
   await Promise.allSettled(sessionManager.list().map((session) => assistantLifecycle.describe(session.id)));
   const assistantProjection = createAssistantStateProjection(openCodeHost, assistantLifecycle, (snapshot) =>
     bus.publish({ type: "assistant.state", snapshot }),
+    (id) => !hiddenAssistantSessions.has(id),
   );
   const getAssistantState = assistantProjection.get;
   const assistantContext = createAssistantContextRuntime({
@@ -3623,7 +3636,13 @@ export const startServer = async (
   const assistantContinue = new AssistantContinuation({
     store: assistantContinuations,
     records: assistantRecords,
-    sessions: sessionManager,
+    sessions: {
+      get: (id) => sessionManager.get(id),
+      allocateDormant: async (id, input) => {
+        await isAssistantSessionVisible(input.childSessionId);
+        return sessionManager.allocateDormant(id, input);
+      },
+    },
     associations: assistantSessions,
     lifecycle: assistantLifecycle,
     native: new AssistantContinuationNative((hosted) => openCodeHost.assertCurrent(hosted)),
@@ -3673,7 +3692,7 @@ export const startServer = async (
     res.setHeader("Cache-Control", "no-store");
     res.json(assistantAccess.getBrowserState());
   });
-  const assistantHistory = new AssistantHistory({ sessions: sessionManager, authorize: authorizeAssistantHistory, records: assistantRecords, lifecycle: assistantLifecycle, isVisible: (id) => assistantContinuations.canAttach(id) });
+  const assistantHistory = new AssistantHistory({ sessions: sessionManager, authorize: authorizeAssistantHistory, records: assistantRecords, lifecycle: assistantLifecycle, isVisible: isAssistantSessionVisible });
   app.use("/api", createAssistantLifecycleRouter({
     bootToken: options.bootToken,
     history: assistantHistory,
@@ -3690,12 +3709,13 @@ export const startServer = async (
   app.use("/api", createAssistantRecordsRouter({
     bootToken: options.bootToken,
     store: assistantRecords,
-    authorize: authorizeAssistantHistory,
+    authorize: async (id) => (await isAssistantSessionVisible(id)) ? authorizeAssistantHistory(id) : null,
     history: assistantHistory,
   }));
   app.use(
     "/api",
     createRestRouter({
+      isSessionVisible: isAssistantSessionVisible,
       getAssistantState,
       endSession: (id) => assistantEnd.end(id),
       sessionManager,

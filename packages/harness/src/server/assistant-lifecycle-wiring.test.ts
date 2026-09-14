@@ -614,6 +614,12 @@ it("shares retained context across Continue, later Send and Resume while Termina
     input,
   );
   const childId = continued.session.id as string;
+  expect((await json("/api/state")).sessions).toContainEqual(
+    expect.objectContaining({ id: childId }),
+  );
+  expect(await json("/api/sessions")).toContainEqual(
+    expect.objectContaining({ id: childId }),
+  );
   await vi.waitFor(() =>
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -815,6 +821,35 @@ it("hides an allocated but unprepared child across reboot and blocks attach befo
   expect(failed.status).toBe(503);
   const receipt = (await stores.continuations.read(binding, operationId))!;
   expect(receipt.phase).toBe("associated");
+  const assertPrivate = async () => {
+    const state = await json("/api/state");
+    expect(JSON.stringify(state)).not.toContain(receipt.childStudioId);
+    expect(await json("/api/sessions")).not.toContainEqual(
+      expect.objectContaining({ id: receipt.childStudioId }),
+    );
+    for (const [suffix, method, body] of [
+      ["/terminal/start", "POST", {}],
+      ["/resume", "POST", {}],
+      ["/restart-mcp", "POST", {}],
+      ["/workflow", "PATCH", { workflowPath: null }],
+      ["/input", "POST", { text: "must not run" }],
+      ["/record", "GET", undefined],
+      ["/assistant/record", "GET", undefined],
+      ["", "DELETE", undefined],
+    ] as const)
+      expect(
+        (
+          await request(
+            `/api/sessions/${receipt.childStudioId}${suffix}`,
+            method,
+            body,
+          )
+        ).status,
+        `${method} ${suffix}`,
+      ).toBe(404);
+    expect(JSON.stringify(events)).not.toContain(receipt.childStudioId);
+  };
+  await assertPrivate();
   expect(events).not.toContainEqual(
     expect.objectContaining({
       type: "session.status",
@@ -828,6 +863,7 @@ it("hides an allocated but unprepared child across reboot and blocks attach befo
   studio = undefined;
   const before = launches.length;
   await boot(activated);
+  await assertPrivate();
   expect(
     (await entries()).map(({ harnessSessionId }) => harnessSessionId),
   ).toEqual([parentId]);

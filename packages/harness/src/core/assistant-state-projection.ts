@@ -7,6 +7,7 @@ export function createAssistantStateProjection(
   host: Pick<OpenCodeHost, "getAssistantState" | "subscribeAssistantState">,
   lifecycle: Pick<AssistantLifecycleCoordinator, "snapshot" | "subscribe">,
   publish: (snapshot: AssistantStateSnapshot) => void,
+  isVisible: (id: string) => boolean = () => true,
 ) {
   let revision = 0;
   const get = (): AssistantStateSnapshot => {
@@ -15,11 +16,16 @@ export function createAssistantStateProjection(
     return {
       ...runtime,
       revision,
+      sessions: runtime.sessions.filter((state) =>
+        isVisible(state.harnessSessionId),
+      ),
       lifecycles: runtime.enabled
         ? lifecycle
             .snapshot()
             .filter(
-              (state) => state.revision > 0 || state.lifecycle === "ending",
+              (state) =>
+                isVisible(state.harnessSessionId) &&
+                (state.revision > 0 || state.lifecycle === "ending"),
             )
         : [],
     };

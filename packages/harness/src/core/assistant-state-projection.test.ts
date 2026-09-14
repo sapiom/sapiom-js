@@ -71,6 +71,52 @@ it("orders lifecycle-only updates with observations and clears disabled projecti
   expect(stopHost).toHaveBeenCalledOnce();
   expect(stopLifecycle).toHaveBeenCalledOnce();
 });
+it("keeps private continuation runtimes and lifecycle headers out of every snapshot", () => {
+  let visible = false;
+  let changed!: () => void;
+  const publish = vi.fn();
+  const projection = createAssistantStateProjection(
+    {
+      getAssistantState: () => ({
+        ...runtime,
+        sessions: [
+          {
+            harnessSessionId: state.harnessSessionId,
+            conversationId: "ses_private",
+            activity: "idle",
+            pendingPermissions: 0,
+            pendingQuestions: 0,
+            freshness: "current",
+          },
+        ],
+      }),
+      subscribeAssistantState: () => () => {},
+    },
+    {
+      snapshot: () => [state],
+      subscribe: (fn) => {
+        changed = fn;
+        return () => {};
+      },
+    },
+    publish,
+    () => visible,
+  );
+  expect(projection.get()).toMatchObject({ sessions: [], lifecycles: [] });
+  changed();
+  expect(publish.mock.lastCall?.[0]).toMatchObject({
+    sessions: [],
+    lifecycles: [],
+  });
+  visible = true;
+  changed();
+  expect(publish.mock.lastCall?.[0]).toMatchObject({
+    sessions: [{ harnessSessionId: state.harnessSessionId }],
+    lifecycles: [state],
+  });
+  projection.dispose();
+});
+
 it.each([
   [{ ...state, lease: "private" }],
   [{ ...state, execution: "enabled" }],

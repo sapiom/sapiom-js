@@ -198,6 +198,8 @@ async function agentHoldsConversation(
 }
 
 export interface RestRouterOptions {
+  /** Keep unfinished continuation allocations private without removing internal registry rows. */
+  isSessionVisible?: (id: string) => Promise<boolean>;
   getAssistantState?: () => AssistantStateSnapshot;
   /** Complete selected-session End, including native and Terminal cleanup.
    * Uses the route's boot authorization independently of Assistant grant expiry. */
@@ -355,6 +357,27 @@ export function createRestRouter(options: RestRouterOptions): Router {
   router.post("/sessions", express.json({ limit: CREATE_SESSION_JSON_LIMIT_BYTES }));
   router.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
+  const listVisibleSessions = async (): Promise<HarnessSession[]> => {
+    const sessions = sessionManager.list();
+    if (!options.isSessionVisible) return sessions;
+    const visible: HarnessSession[] = [];
+    for (let offset = 0; offset < sessions.length; offset += 8) {
+      const page = sessions.slice(offset, offset + 8);
+      const accepted = await Promise.all(page.map((session) => options.isSessionVisible!(session.id)));
+      visible.push(...page.filter((_session, index) => accepted[index]));
+    }
+    return visible;
+  };
+  router.use("/sessions/:id", async (req, res, next) => {
+    try {
+      if (options.isSessionVisible && sessionManager.get(req.params.id) && !(await options.isSessionVisible(req.params.id))) {
+        res.status(404).json({ error: "session not found" });
+        return;
+      }
+      next();
+    } catch (error) { next(error); }
+  });
+
   router.get("/state", async (_req, res, next) => {
     try {
       const settings = await loadSettings(options.settingsPath);
@@ -367,7 +390,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
         telemetryOptIn: settings.telemetryOptIn,
         // Absent === opted-in: light product analytics is on by default.
         productAnalyticsOptIn: settings.productAnalyticsOptIn !== false,
-        sessions: sessionManager.list(),
+        sessions: await listVisibleSessions(),
         workflows: await listWorkflows(),
         ...(options.listWorkspaceScopes
           ? { workspaceScopes: await options.listWorkspaceScopes() }
@@ -593,8 +616,9 @@ export function createRestRouter(options: RestRouterOptions): Router {
     }
   });
 
-  router.get("/sessions", (_req, res) => {
-    res.json(sessionManager.list());
+  router.get("/sessions", async (_req, res, next) => {
+    try { res.json(await listVisibleSessions()); }
+    catch (error) { next(error); }
   });
 
   router.get("/sessions/history", async (req, res, next) => {
@@ -630,8 +654,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
 
       // Registry entries win over transcript-scanned history for the same
       // agent session — they carry live status the transcript can't know.
-      const registryRows = sessionManager
-        .list()
+      const registryRows = (await listVisibleSessions())
         .filter(
           (session) => session.cwd === cwd && session.agentSessionId != null,
         );

@@ -172,3 +172,8 @@ A continued session shows a distinct Terminal-not-started pane. Start Terminal
 launches its coding agent in that same Studio workspace only after an explicit
 click. Failed starts retain the session for retry, immediate exits show the real
 exit state, and stale responses cannot override End or a newer selected session.
+
+Unfinished continuation children remain internal to allocation recovery. General
+session lists, history, runtime/lifecycle events and direct session actions use
+the same preparation visibility boundary; direct Terminal start cannot bypass it.
+Restored pending children are hidden before the server starts accepting requests.
