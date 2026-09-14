@@ -33,3 +33,14 @@ export {
   type AcceptedContextRef,
   type AcceptedAssistantContext,
 } from "./assistant-context-contract.js";
+export {
+  parseStudioAssistantSystem,
+  serializeAcceptedAssistantSystem,
+  validateAcceptedAssistantWire,
+  projectStudioAssistantSystem,
+  studioAssistantCompletionSystem,
+  acceptedContextFromWire,
+  type AcceptedAssistantWireV2,
+  type ParsedStudioAssistantSystem,
+  type RetainedWireGuidance,
+} from "./assistant-context-wire.js";
