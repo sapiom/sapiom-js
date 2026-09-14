@@ -1,4 +1,5 @@
 import express, { type Request, type Response, type Router } from "express";
+import { randomUUID } from "node:crypto";
 import {
   OpenCodeAssociations,
   isConversationId,
@@ -18,15 +19,33 @@ import {
   composeAssistantPrompt,
   type ResolveAssistantContext,
 } from "../core/studio-assistant-context.js";
+import type { AssistantContextDelivery } from "../core/studio-assistant-delivery.js";
+import type { AssistantLifecycleCoordinator } from "../core/assistant-lifecycle.js";
 
 export function createOpenCodeRouter(
-  host: Pick<OpenCodeHost, "ensure" | "observe">,
+  host: Pick<OpenCodeHost, "ensure" | "observe"> &
+    Partial<Pick<OpenCodeHost, "assertCurrent">>,
   bootToken: string,
-  resolveContext: ResolveAssistantContext,
+  context: ResolveAssistantContext | AssistantContextDelivery,
   associations = new OpenCodeAssociations(),
-  finalResponse = new OpenCodeFinalResponse(),
+  finalResponse?: OpenCodeFinalResponse,
+  lifecycle?: Pick<
+    AssistantLifecycleCoordinator,
+    "describe" | "attach" | "use" | "enable" | "assertRuntime"
+  >,
 ): Router {
   const router = express.Router();
+  const dispatch =
+    finalResponse ??
+    new OpenCodeFinalResponse({
+      assertCurrent: async (hosted) => {
+        await lifecycle?.assertRuntime(hosted, true);
+        await host.assertCurrent?.(hosted);
+      },
+      ...(typeof context === "function"
+        ? {}
+        : { recoverPrompt: context.recover }),
+    });
   router.use(
     createBootTokenMiddleware(bootToken),
     express.json({ limit: "1mb" }),
@@ -42,6 +61,7 @@ export function createOpenCodeRouter(
     const path = req.params[0] ?? "";
     const id = req.params.harnessSessionId!;
     const read = req.method === "GET";
+    const descriptor = read && path === "lifecycle" && !!lifecycle;
     const conversation =
       /^session\/(ses_[A-Za-z0-9_-]+)(\/message|\/prompt_async|\/final-response)?$/.exec(
         path,
@@ -58,6 +78,7 @@ export function createOpenCodeRouter(
     const recover =
       req.method === "POST" && conversation?.[2] === "/final-response";
     const allowed =
+      descriptor ||
       attach ||
       prompt ||
       recover ||
@@ -79,6 +100,11 @@ export function createOpenCodeRouter(
       !/^[A-Za-z0-9_-]{1,128}$/.test(id) ||
       !queryAllowed ||
       (conversation && !isConversationId(conversation[1])) ||
+      (attach &&
+        lifecycle &&
+        (Object.keys(req.body ?? {}).length !== 1 ||
+          !Number.isSafeInteger(req.body?.expectedRevision) ||
+          req.body.expectedRevision < 0)) ||
       (recover &&
         (Object.keys(req.body ?? {}).length !== 1 ||
           !/^msg_[A-Za-z0-9_-]{1,128}$/.test(req.body?.messageId ?? "")))
@@ -97,8 +123,21 @@ export function createOpenCodeRouter(
     res.once("close", cancel);
     res.setHeader("Cache-Control", "no-store");
     try {
-      const hosted = await host.ensure(id);
-      const nativeId = await associations.ensure(hosted);
+      if (descriptor) {
+        res.json(await lifecycle!.describe(id));
+        return;
+      }
+      if (attach && lifecycle) {
+        const attached = await lifecycle.attach(id, req.body.expectedRevision);
+        if (!res.destroyed) res.json(attached);
+        return;
+      }
+      const bound = lifecycle
+        ? await lifecycle.use(id, req.header("X-Assistant-Lease"), recover)
+        : null;
+      const hosted = bound?.hosted ?? (await host.ensure(id));
+      const nativeId =
+        bound?.conversationId ?? (await associations.ensure(hosted));
       if (conversation && conversation[1] !== nativeId) {
         res.status(403).json({
           error: "Conversation does not belong to this Studio session",
@@ -117,11 +156,11 @@ export function createOpenCodeRouter(
         return;
       }
       if (recover) {
-        await finalResponse.recover(hosted, nativeId, req.body.messageId);
+        await dispatch.recover(hosted, nativeId, req.body.messageId);
         if (!res.destroyed) res.status(204).end();
         return;
       }
-      if (prompt && finalResponse.isRunning(hosted)) {
+      if (prompt && dispatch.isRunning(hosted)) {
         res
           .status(409)
           .json({ error: "Assistant is finishing the previous response" });
@@ -138,20 +177,48 @@ export function createOpenCodeRouter(
         signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
       };
       const upstream = prompt
-        ? await finalResponse.send(hosted, nativeId, async () => ({
-            ...init,
-            body: JSON.stringify({
-              parts: req.body.parts,
-              model: hosted.model,
-              ...composeAssistantPrompt(
-                await resolveContext(
-                  hosted,
-                  req.body.selectedAgentPath,
-                  init.signal,
-                ),
-              ),
-            }),
-          }))
+        ? await dispatch.send(
+            hosted,
+            nativeId,
+            async (admissionSignal) => {
+              const prompt =
+                typeof context === "function"
+                  ? composeAssistantPrompt(
+                      await context(
+                        hosted,
+                        req.body.selectedAgentPath,
+                        admissionSignal,
+                      ),
+                    )
+                  : await context.compose(
+                      hosted,
+                      nativeId,
+                      await context.accept(
+                        hosted,
+                        nativeId,
+                        req.body.selectedAgentPath,
+                        admissionSignal,
+                      ),
+                      { attemptToken: randomUUID() },
+                      admissionSignal,
+                    );
+              admissionSignal.throwIfAborted();
+              await lifecycle?.enable(hosted);
+              const request = {
+                ...init,
+                signal: admissionSignal,
+                body: JSON.stringify({
+                  parts: req.body.parts,
+                  model: hosted.model,
+                  ...prompt,
+                }),
+              };
+              return typeof context === "function"
+                ? request
+                : { init: request, expectedSystem: prompt.system };
+            },
+            signal,
+          )
         : await hosted.server.fetch(`/${nativePath}`, init);
       if (!upstream.ok) {
         await upstream.body?.cancel();
@@ -166,6 +233,8 @@ export function createOpenCodeRouter(
         return;
       }
       if (upstream.status === 204) {
+        if (prompt && lifecycle)
+          res.setHeader("X-Assistant-Execution", "enabled");
         res.status(204).end();
         return;
       }
@@ -204,9 +273,16 @@ function sendFailure(res: Response, failure: OpenCodeTransportFailure): void {
       ? 401
       : failure.code === "access_denied" || failure.code === "access_expired"
         ? 403
-        : failure.code === "native_history_missing"
-          ? 410
-          : 503;
+        : [
+              "lifecycle_changed",
+              "session_ended",
+              "execution_paused",
+              "cleanup_unconfirmed",
+            ].includes(failure.code)
+          ? 409
+          : failure.code === "native_history_missing"
+            ? 410
+            : 503;
   res.status(status).json({ error: failure });
 }
 

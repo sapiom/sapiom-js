@@ -16,6 +16,9 @@ import {
 } from "../core/studio-assistant-context.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { scopedOpenCodeEvent } from "./opencode-events.js";
+import { AssistantLifecycleCoordinator } from "../core/assistant-lifecycle.js";
+import { AssistantSessionStore } from "../core/assistant-session-store.js";
+import { OpenCodeAssociations } from "../core/opencode-association.js";
 
 let root: string;
 let origin: string;
@@ -119,6 +122,11 @@ beforeEach(async () => {
                 id: `msg_admitted_${requests.filter((request) => request.path.endsWith("/prompt_async")).length}`,
                 role: "user",
                 time: {},
+                system: (
+                  requests
+                    .filter((request) => request.path.endsWith("/prompt_async"))
+                    .at(-1)?.body as { system?: string } | undefined
+                )?.system,
               },
               parts: [],
             },
@@ -731,4 +739,201 @@ it("binds an authorized association even when its browser disconnects during att
   await vi.waitFor(() => expect(observe).toHaveBeenCalledWith(hosted, "ses_1"));
   expect(hosted.signal.aborted).toBe(false);
   expect(close).not.toHaveBeenCalled();
+});
+
+function installLifecycle(
+  context: Parameters<typeof createOpenCodeRouter>[2] = resolveContext,
+) {
+  const host = {
+    ensure,
+    observe,
+    current: (id: string) => {
+      const current = hosts.get(id);
+      return current?.isCurrent() ? current : null;
+    },
+    assertCurrent: async (hosted: HostedOpenCode) => {
+      if (!enabled || !hosted.isCurrent())
+        throw new OpenCodeAccessError("unavailable");
+    },
+    retireExact: async (hosted: HostedOpenCode) => {
+      aborts.get(hosted.harnessSessionId)?.abort();
+    },
+    retireWithResult: async (id: string) => {
+      aborts.get(id)?.abort();
+      return { state: "confirmed" as const };
+    },
+    beginShutdown: () => {
+      for (const abort of aborts.values()) abort.abort();
+    },
+  };
+  const associations = new OpenCodeAssociations();
+  const lifecycle = new AssistantLifecycleCoordinator({
+    host,
+    associations,
+    store: new AssistantSessionStore(root),
+  });
+  router = createOpenCodeRouter(
+    host,
+    "boot-token",
+    context,
+    associations,
+    undefined,
+    lifecycle,
+  );
+  return lifecycle;
+}
+const leaseHeaders = (lease: string) => ({
+  "X-Harness-Token": "boot-token",
+  "Content-Type": "application/json",
+  "X-Assistant-Lease": lease,
+});
+async function attachLease(expectedRevision = 0) {
+  const response = await request("studio-a/attach", {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision }),
+  });
+  expect(response.status).toBe(200);
+  return response.json() as Promise<{
+    conversationId: string;
+    lease: string;
+    lifecycle: { revision: number; execution: string };
+  }>;
+}
+
+it("requires a revision for attach and an exact lease for every subsequent native request", async () => {
+  installLifecycle();
+  const descriptor = await request("studio-a/lifecycle");
+  expect(await descriptor.json()).toMatchObject({
+    revision: 0,
+    lifecycle: "open",
+    execution: "paused",
+  });
+  expect(ensure).not.toHaveBeenCalled();
+  expect((await request("studio-a/session/status")).status).toBe(409);
+  expect(ensure).not.toHaveBeenCalled();
+  expect(
+    (await request("studio-a/attach", { method: "POST", body: "{}" })).status,
+  ).toBe(400);
+  const attached = await attachLease();
+  expect(attached.lifecycle).toMatchObject({
+    revision: 1,
+    execution: "paused",
+  });
+  const count = requests.length;
+  const wrong = await request(
+    `studio-a/session/${attached.conversationId}/message`,
+    { headers: leaseHeaders("wrong") },
+  );
+  expect(wrong.status).toBe(409);
+  expect(requests).toHaveLength(count);
+  expect(
+    (
+      await request(`studio-a/session/${attached.conversationId}/message`, {
+        headers: leaseHeaders(attached.lease),
+      })
+    ).status,
+  ).toBe(200);
+  expect(ensure).toHaveBeenCalledOnce();
+  const other = await request("studio-b/session/status", {
+    headers: leaseHeaders(attached.lease),
+  });
+  expect(other.status).toBe(409);
+});
+
+it("rejects paused recovery before native reads and enables only explicit prepared Send", async () => {
+  const lifecycle = installLifecycle();
+  const attached = await attachLease();
+  const count = requests.length;
+  const paused = await request(
+    `studio-a/session/${attached.conversationId}/final-response`,
+    {
+      method: "POST",
+      headers: leaseHeaders(attached.lease),
+      body: JSON.stringify({ messageId: "msg_empty" }),
+    },
+  );
+  expect(paused.status).toBe(409);
+  expect(await paused.json()).toMatchObject({
+    error: { code: "execution_paused" },
+  });
+  expect(requests).toHaveLength(count);
+  const sent = await request(
+    `studio-a/session/${attached.conversationId}/prompt_async`,
+    {
+      method: "POST",
+      headers: leaseHeaders(attached.lease),
+      body: JSON.stringify({
+        parts: [{ type: "text", text: "Explicit new work" }],
+      }),
+    },
+  );
+  expect(sent.status).toBe(204);
+  expect(sent.headers.get("X-Assistant-Execution")).toBe("enabled");
+  expect((await lifecycle.describe("studio-a")).execution).toBe("enabled");
+  const active = await attachLease(2);
+  expect(active.lease).toBe(attached.lease);
+  expect(active.lifecycle.execution).toBe("enabled");
+  const ending = lifecycle.beginEnd("studio-a");
+  await ending.persistence;
+  await ending.native;
+  await lifecycle.finishEnd(ending.fence);
+  const endedCount = requests.length;
+  expect(
+    (
+      await request(`studio-a/session/${attached.conversationId}/message`, {
+        headers: leaseHeaders(attached.lease),
+      })
+    ).status,
+  ).toBe(409);
+  expect(requests).toHaveLength(endedCount);
+  expect(
+    (
+      await request("studio-a/attach", {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: 4 }),
+      })
+    ).status,
+  ).toBe(409);
+  expect(ensure).toHaveBeenCalledOnce();
+});
+
+it("composes the accepted-context owner's interface inside the same leased dispatch", async () => {
+  const accepted = { acceptanceId: "fixture" };
+  const context = {
+    accept: vi.fn().mockResolvedValue(accepted),
+    compose: vi.fn().mockResolvedValue({ system: "exact accepted system" }),
+    recover: vi.fn(),
+  };
+  installLifecycle(context);
+  const attached = await attachLease();
+  const response = await request(
+    `studio-a/session/${attached.conversationId}/prompt_async`,
+    {
+      method: "POST",
+      headers: leaseHeaders(attached.lease),
+      body: JSON.stringify({
+        selectedAgentPath: null,
+        parts: [{ type: "text", text: "Prepare accepted work" }],
+      }),
+    },
+  );
+  expect(response.status).toBe(204);
+  expect(context.accept).toHaveBeenCalledExactlyOnceWith(
+    hosts.get("studio-a"),
+    attached.conversationId,
+    null,
+    expect.any(AbortSignal),
+  );
+  expect(context.compose).toHaveBeenCalledWith(
+    hosts.get("studio-a"),
+    attached.conversationId,
+    accepted,
+    { attemptToken: expect.any(String) },
+    expect.any(AbortSignal),
+  );
+  expect(resolveContext).not.toHaveBeenCalled();
+  expect(context.recover).not.toHaveBeenCalled();
+  expect(
+    requests.filter(({ path }) => path.endsWith("/prompt_async")),
+  ).toHaveLength(1);
 });
