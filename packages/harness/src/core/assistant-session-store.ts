@@ -153,7 +153,13 @@ export class AssistantSessionStore {
         );
         if (other !== null) {
           const parsed = associationSchema.safeParse(other);
-          if (!parsed.success) throw new AssistantStorageError();
+          if (
+            !parsed.success ||
+            parsed.data.harnessSessionId !== key.harnessSessionId ||
+            parsed.data.contextAuthorityScope !== scope ||
+            parsed.data.conversationId === key.harnessSessionId
+          )
+            throw new AssistantStorageError();
           if (parsed.data.nativeScope === nativeScope) alreadyImported = true;
         }
       }

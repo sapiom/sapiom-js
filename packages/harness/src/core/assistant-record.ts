@@ -21,6 +21,7 @@ import {
   type OpenCodeTurnMessage,
 } from "../shared/opencode-turn.js";
 
+/** Internal archive bounds; these modules are not part of the package's public API. */
 export const ASSISTANT_RECORD_MAX_BYTES = 64 * 1024;
 export const ASSISTANT_RECORD_TEXT_CHARS = 4000;
 export const ASSISTANT_RECORD_TOOL_CHARS = 512;
@@ -208,6 +209,14 @@ export function validateAssistantRecord(
       record.turnCount >= record.turns.length &&
         record.messageCount >= messages.size,
     );
+    if (!record.limitations.includes("dropped-early-turns"))
+      check(record.turnCount === record.turns.length);
+    if (
+      !record.limitations.some((item) =>
+        ["dropped-early-turns", "dropped-message-content"].includes(item),
+      )
+    )
+      check(record.messageCount === messages.size);
     return record;
   } catch {
     throw new AssistantRecordError("corrupt_record");
@@ -275,7 +284,8 @@ export function projectAssistantRecord(
     const tokens = openCodeCompletionTokens(messages);
     const turns = new Map<string, AssistantRecord["turns"][number]>();
     const nativeTurns = new Map<string, OpenCodeTurnMessage[]>();
-    for (const { info } of native) {
+    let currentAccepted: AcceptedContextRef | null = null;
+    for (const { info, parts } of native) {
       if (info.role !== "user") continue;
       let acceptedContext: AcceptedContextRef | null = null;
       let parsed: ReturnType<typeof parseStudioAssistantSystem> | undefined;
@@ -295,7 +305,20 @@ export function projectAssistantRecord(
             context.session.cwd === binding.cwd,
         );
         acceptedContext = { ...accepted };
-      } else limitations.add("accepted-context-unavailable");
+      } else if (
+        info.system === undefined &&
+        parts.some(
+          (part) =>
+            part.type === "compaction" ||
+            (part.synthetic &&
+              part.metadata != null &&
+              object(part.metadata).compaction_continue === true),
+        )
+      ) {
+        acceptedContext = currentAccepted;
+      }
+      currentAccepted = acceptedContext;
+      if (!acceptedContext) limitations.add("accepted-context-unavailable");
       turns.set(info.id as string, {
         id: info.id as string,
         messages: [],
@@ -401,7 +424,8 @@ export function projectAssistantRecord(
     for (const turn of turns.values()) {
       check(turn.messages[0]?.role === "user");
       turn.incomplete =
-        openCodeTurn(nativeTurns.get(turn.id)!, "idle").status !== "finished";
+        openCodeTurn(nativeTurns.get(turn.id)!, "idle", tokens.get(turn.id))
+          .status !== "finished";
     }
     return boundAssistantRecord({
       schemaVersion: 1,

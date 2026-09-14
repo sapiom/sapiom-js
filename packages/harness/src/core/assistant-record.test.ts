@@ -210,6 +210,33 @@ describe("native Assistant record projection", () => {
         .join(""),
     ).toBe("Done");
     expect(JSON.stringify(record)).not.toContain("Exact profile");
+    const continuation = user("msg_continue", 3);
+    const compacted = project([
+      ...messages,
+      {
+        ...continuation,
+        parts: continuation.parts.map((part) => ({
+          ...part,
+          synthetic: true,
+          metadata: { compaction_continue: true },
+        })),
+      },
+      answer(
+        "msg_failed",
+        4,
+        [
+          {
+            type: "text",
+            text: `<!-- studio-result:${ref.acceptanceId}:failed -->\nCould not finish`,
+          },
+        ],
+        { parentID: "msg_continue" },
+      ),
+      user("msg_independent", 7),
+    ]);
+    expect(compacted.turns[1]!.acceptedContext).toEqual(ref);
+    expect(compacted.turns[1]!.incomplete).toBe(true);
+    expect(compacted.turns[2]!.acceptedContext).toBeNull();
     expect(() =>
       projectAssistantRecord(
         messages,
@@ -333,6 +360,12 @@ describe("native Assistant record projection", () => {
   });
 
   it("drops oldest turns for the byte cap while keeping the original count", () => {
+    expect(() =>
+      validateAssistantRecord({ ...project([]), turnCount: 1 }),
+    ).toThrow();
+    expect(() =>
+      validateAssistantRecord({ ...project([]), messageCount: 1 }),
+    ).toThrow();
     const record = project(
       Array.from({ length: 90 }, (_, index) => {
         const prompt = user(`msg_${index}`, index + 1);

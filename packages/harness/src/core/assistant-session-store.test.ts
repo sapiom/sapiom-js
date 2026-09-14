@@ -101,6 +101,24 @@ it("persists End without an Assistant binding or grant and rejects stale transit
   expect(await store.association(key)).toBeNull();
 });
 
+it("rejects contradictory identities while scanning other bindings before legacy import", async () => {
+  await legacy();
+  const directory = await assistantDirectory(
+    root,
+    key.harnessSessionId,
+    "c".repeat(64),
+  );
+  await writeAssistantJson(directory, "association.json", {
+    version: 1,
+    ...key,
+    nativeScope,
+    conversationId: "ses_other",
+    createdAt: 1,
+  });
+  await expect(store.associate(key, nativeScope, create)).rejects.toThrow();
+  expect(create).not.toHaveBeenCalled();
+});
+
 it("keeps the previous durable checkpoint when cancellation interrupts a write", async () => {
   const ended = await store.transition(key.harnessSessionId, 0, {
     lifecycle: "ended",
