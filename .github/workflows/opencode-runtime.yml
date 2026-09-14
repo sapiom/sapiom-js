@@ -29,11 +29,13 @@ jobs:
           node-version: "24.15.0"
       - run: python3 -m unittest discover -s scripts/opencode-runtime -p 'test_*.py'
       - run: python3 scripts/opencode-runtime/build.py --work-dir "$RUNNER_TEMP/opencode-build"
+      - run: |
+          python3 scripts/opencode-runtime/pack.py --work-dir "$RUNNER_TEMP/opencode-build" --output-dir "$RUNNER_TEMP/runtime-artifacts" --download-cache "$RUNNER_TEMP/opencode-build/downloads"
+          node scripts/opencode-runtime/installer.test.mjs "$RUNNER_TEMP/runtime-artifacts/postinstall.mjs"
       - uses: actions/upload-artifact@v4
         with:
-          name: opencode-native-build
-          path: |
-            ${{ runner.temp }}/opencode-build/build-proof.json
-            ${{ runner.temp }}/opencode-build/source/packages/opencode/dist
+          name: opencode-runtime-candidate
+          path: ${{ runner.temp }}/runtime-artifacts
+          compression-level: 0
           if-no-files-found: error
           retention-days: 7

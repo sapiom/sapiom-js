@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "rootTemplate": {
+    "url": "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.18.29.tgz",
+    "integrity": "sha512-syIDVwlrYTgTOXzZe9SkInJWethbq6l3SNC762UeXyO0a9V0wGfd+U4yACvppwNBnhIsl0j2QPYYCyLpNaSomg==",
+    "sha256": "bec74d1c33582ac16489e524d947f4f1f02ee0eadc6053577d66b32f7034a5be"
+  },
+  "installerPatchSha256": "1f9ec2a4881c52de7d81ba82372c95b26f0806bc5caf2cd20323e4a9f4d48924",
+  "postinstallSha256": "f7fd20220a97f8eebd9588242befdfc7272e935bcaf18cc12ca481f1da389c79",
+  "launcherStubSha256": "21c366f53283d5b5e1cdbbec2aafc98286b4c1075a4c3d5afd5ce1f5c9bf46dd"
+}
