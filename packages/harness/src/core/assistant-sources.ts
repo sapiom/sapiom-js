@@ -85,7 +85,7 @@ const utf8 = (bytes: Uint8Array) => {
 const packagePath = (value: unknown): value is string =>
   typeof value === "string" &&
   Buffer.byteLength(value) <= assistantContextLimits.bytes &&
-  !/[\\:]/.test(value) &&
+  !/[\\:<>"|?*]/.test(value) &&
   [...value].every(
     (character) =>
       character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
@@ -93,7 +93,12 @@ const packagePath = (value: unknown): value is string =>
   Buffer.from(value).toString("utf8") === value &&
   value
     .split("/")
-    .every((part) => part !== "" && part !== "." && part !== "..");
+    .every(
+      (part) =>
+        part !== "" &&
+        !/[. ]$/.test(part) &&
+        !/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part),
+    );
 
 /** Encode complete supplied artifacts; never follow a live filesystem location. */
 export function encodeAssistantSkillPackage(
@@ -305,10 +310,13 @@ export function retainAssistantGuidance(
 export function createAssistantContextCandidate(
   context: StudioAssistantContext,
   authorityScope: string,
-  guidance = context.guidance.map((source) =>
-    retainAssistantGuidance(source, authorityScope),
-  ),
+  guidance?: ResolvedAssistantGuidance[],
 ): AssistantContextCandidate {
+  encodeAssistantContext(context);
+  guidance ??= context.guidance.map((source) =>
+    retainAssistantGuidance(source, authorityScope),
+  );
+  check(guidance.length <= assistantContextLimits.entries);
   const facts = assistantContextFacts(context);
   const policy = createAssistantSource(
     {
@@ -387,6 +395,7 @@ export function createAssistantContextCandidate(
     mcpCatalogRevision: manifests[3]!.version.revision,
   };
   instructionSet.revision = assistantRevision(instructionSet);
+  validateAssistantMaterials(instructionSet, materials, authorityScope);
   const candidate = {
     context: structuredClone(context),
     instructionSet: JSON.parse(
@@ -397,11 +406,6 @@ export function createAssistantContextCandidate(
       bytes: new Uint8Array(item.bytes),
     })),
   };
-  validateAssistantMaterials(
-    instructionSet,
-    candidate.materials,
-    authorityScope,
-  );
   return candidate;
 }
 
@@ -411,6 +415,13 @@ export function validateAssistantMaterials(
   materials: readonly SourceMaterial[],
   authorityScope: string,
 ): ReadonlyMap<string, ReadonlySourceContent> {
+  check(materials.length <= assistantContextLimits.entries);
+  let materialBytes = 0;
+  for (const material of materials) {
+    check(material.bytes instanceof Uint8Array);
+    materialBytes += material.bytes.byteLength;
+    check(materialBytes <= assistantContextLimits.bytes);
+  }
   validateInstructionSet(instructionSet, authorityScope);
   check(
     new Set(materials.map((item) => item.sourceId)).size === materials.length,

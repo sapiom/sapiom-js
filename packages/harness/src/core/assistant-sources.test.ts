@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AssistantContextError,
   assistantContentHash,
+  assistantRevision,
   assistantContextLimits,
   encodeAssistantContext,
 } from "@sapiom/opencode";
@@ -72,6 +73,38 @@ describe("retained Assistant source artifacts", () => {
         { ...sourceContext().guidance[0]!, text: "lone \ud800" },
         sourceScope,
       ),
+    ).toThrow(AssistantContextError);
+  });
+  it("rejects aggregate retained material size before copying a candidate", () => {
+    const context = sourceContext();
+    const guidance = Array.from({ length: 3 }, (_, index) =>
+      retainAssistantGuidance(
+        {
+          ...context.guidance[0]!,
+          id: `profile-${index}`,
+          text: "x".repeat(assistantContextLimits.bytes / 2),
+        },
+        sourceScope,
+      ),
+    );
+    expect(() =>
+      createAssistantContextCandidate(context, sourceScope, guidance),
+    ).toThrow(AssistantContextError);
+    const { candidate } = sourceFixture();
+    const instructionSet = {
+      ...candidate.instructionSet,
+      sources: [
+        ...candidate.instructionSet.sources,
+        ...guidance.map((item) => item.version),
+      ],
+    };
+    instructionSet.revision = assistantRevision(instructionSet);
+    const oversized = [
+      ...candidate.materials,
+      ...guidance.map((item) => item.material!),
+    ];
+    expect(() =>
+      validateAssistantMaterials(instructionSet, oversized, sourceScope),
     ).toThrow(AssistantContextError);
   });
   it("retains exact text and explicit scope, skill and MCP manifests", () => {
@@ -195,6 +228,18 @@ describe("retained Assistant source artifacts", () => {
     "a//b",
     "a/",
     "a\u0000b",
+    "assets/input?.txt",
+    "star*",
+    'a"b',
+    "a<b",
+    "a>b",
+    "a|b",
+    "trailing.",
+    "trailing ",
+    "CON.txt",
+    "nested/com1/script",
+    "NUL",
+    "LPT9.log",
   ])("rejects nonportable package member %j", (path) => {
     expect(() =>
       encodeAssistantSkillPackage([

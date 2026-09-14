@@ -66,6 +66,7 @@ The source codec records the Studio policy, exact guidance bytes and explicit sc
 skill and MCP manifests. Content hashes preserve UTF-8 bytes, BOMs and line endings;
 source revisions additionally include identity, provenance, applicability and fallback.
 Candidates detach provider buffers and facts before asynchronous acceptance work.
+The shared 4 MiB bound also caps aggregate retained material before copying it.
 
 Complete supplied skill artifacts contain `SKILL.md` plus sorted resource members,
 their exact bytes, hashes and executable flags. The codec rejects missing entrypoints,
