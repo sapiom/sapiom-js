@@ -108,6 +108,15 @@ it("resolves selected and bound agents separately and limits inventory to canoni
     }),
   ).rejects.toThrow("context");
 });
+it("rejects incomplete active project roots instead of shrinking the inventory", async () => {
+  const input = fixture();
+  await expect(
+    resolveStudioAssistantContext({
+      ...input,
+      projectRoots: [input.hosted.cwd, join(root, "absent")],
+    }),
+  ).rejects.toThrow("context");
+});
 it("rejects wrong-session, moved-workspace and revoked context resolution", async () => {
   const input = fixture();
   await expect(
