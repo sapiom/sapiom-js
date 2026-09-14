@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   assistantContentHash,
+  assistantContextLimits,
   parseStudioAssistantSystem,
   studioAssistantCompletionSystem,
 } from "@sapiom/opencode";
@@ -160,6 +161,31 @@ describe("accepted Assistant context delivery", () => {
     expect(f.resolveContext).toHaveBeenCalledTimes(2);
     expect(resolveContext).not.toHaveBeenCalled();
     expect(f.hosted.server.fetch).not.toHaveBeenCalled();
+  });
+  it("budgets the complete saved prompt before committing acceptance", async () => {
+    const f = fixture();
+    f.context.guidance[0]!.text = "x".repeat(
+      assistantContextLimits.bytes - 6000,
+    );
+    expect(() =>
+      createAssistantContextCandidate(f.context, sourceScope),
+    ).not.toThrow();
+    const retain = vi.spyOn(f.store, "retainAccepted");
+    await expect(f.accept()).rejects.toMatchObject({
+      failure: { code: "context_unavailable" },
+    });
+    expect(retain).not.toHaveBeenCalled();
+    f.context.guidance[0]!.text = "Fits the full envelope";
+    const accepted = await f.accept();
+    const prompt = await f.delivery.compose(
+      f.hosted,
+      accepted,
+      { attemptToken: acceptanceId },
+      f.signal,
+    );
+    expect(typed(prompt.system).accepted.acceptanceId).toBe(
+      accepted.acceptanceId,
+    );
   });
   it("requires every accepted material on readback and never refetches missing optional content", async () => {
     const f = fixture();
