@@ -243,9 +243,11 @@ it("rejects malformed saved completion policies, snapshots and revisions", async
     await resolveStudioAssistantContext(fixture()),
   ).system;
   const boundary = original.lastIndexOf("\n") + 1;
-  const { revision: _revision, ...snapshot } = JSON.parse(
-    original.slice(boundary),
-  );
+  const snapshot = JSON.parse(original.slice(boundary)) as Record<
+    string,
+    unknown
+  >;
+  delete snapshot.revision;
   const malformed = { ...snapshot, capabilities: "not an array" };
   for (const system of [
     "StudioAssistantResult/v2:broken\n\nStudioAssistantContext/v1\n{",
