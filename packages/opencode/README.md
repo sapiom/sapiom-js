@@ -119,3 +119,10 @@ and proof epoch, so saved history does not accumulate in process memory. Histori
 titles still verify their exact saved user. Deletion guards live only while a system
 callback is in flight and reject callbacks that race deletion. Ordinary callbacks
 from a retired execution require a new native messages capture.
+
+## Completion contract
+
+`@sapiom/opencode/completion` exports `studioAssistantCompletionSystem(token?)`.
+Pass a validated attempt UUID when composing accepted work, or omit it to create
+a new UUID. This browser-safe subpath shares the native wire completion text and
+validation without importing filesystem, process-launch or Node crypto modules.

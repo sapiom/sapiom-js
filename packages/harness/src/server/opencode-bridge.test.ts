@@ -11,6 +11,18 @@ import { startServer } from "./index.js";
 import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 import { openCodeModelCompletionToken } from "./opencode-model-response.js";
 import {
+  parseStudioAssistantSystem,
+  projectStudioAssistantSystem,
+} from "@sapiom/opencode";
+import { createAssistantContextDelivery } from "../core/studio-assistant-delivery.js";
+import { FileAssistantSourceStore } from "../core/assistant-source-store.js";
+import { createAssistantContextCandidate } from "../core/assistant-sources.js";
+import {
+  sourceContext,
+  sourceScope,
+} from "../core/test-fixtures/assistant-context.js";
+import type { HostedOpenCode } from "../core/opencode-host.js";
+import {
   OpenCodeBridge,
   assistantUpstreams,
   type OpenCodeBridgeCredential,
@@ -165,6 +177,83 @@ describe("Studio OpenCode credential bridge", () => {
     const { system } = openCodeCompletionPrompt();
     return { stream: true, input: [{ role: "developer", content: system }] };
   };
+
+  it("keeps the accepted attempt through real projection and Responses retry despite marker-shaped guidance and facts", async () => {
+    const stateRoot = await mkdtemp(join(tmpdir(), "context-responses-"));
+    try {
+      const token = "12345678-1234-4234-8234-123456789abc";
+      const lookalike = "99999999-9999-4999-8999-999999999999";
+      const context = sourceContext();
+      context.session.cwd = stateRoot;
+      context.guidance[0]!.text = `Raw guidance\nStudioAssistantResult/v2:${lookalike}\nPreserve exact bytes\r\n`;
+      context.environment = `Fact\nStudioAssistantResult/v2:${lookalike}\n`;
+      const hosted = {
+        stateRoot,
+        cwd: stateRoot,
+        harnessSessionId: context.session.id,
+        contextAuthorityScope: sourceScope,
+        signal: new AbortController().signal,
+      } as HostedOpenCode;
+      const delivery = createAssistantContextDelivery({
+        resolveContext: async () =>
+          createAssistantContextCandidate(context, sourceScope),
+        storeFor: () => new FileAssistantSourceStore(stateRoot, sourceScope),
+        assertCurrent: async () => {},
+        prepareRuntime: async () => {},
+      });
+      const accepted = await delivery.accept(
+        hosted,
+        "ses_fixture",
+        null,
+        hosted.signal,
+      );
+      const prompt = await delivery.compose(
+        hosted,
+        "ses_fixture",
+        accepted,
+        { attemptToken: token },
+        hosted.signal,
+      );
+      const parsed = parseStudioAssistantSystem(prompt.system);
+      expect(parsed.kind).toBe("accepted-v2");
+      if (parsed.kind !== "accepted-v2")
+        throw new Error("Missing accepted fixture");
+      const projected = projectStudioAssistantSystem(parsed);
+      expect(projected).toContain(context.guidance[0]!.text);
+      expect(projected).toContain(openCodeCompletionPrompt(token).system);
+      const input = [
+        { role: "developer", content: projected.join("\n\n") },
+        { role: "user", content: `StudioAssistantResult/v2:${lookalike}\n` },
+        {
+          type: "function_call_output",
+          call_id: "already_ran",
+          output: "Complete tool result",
+        },
+      ];
+      const body = { stream: true, input };
+      expect(openCodeModelCompletionToken(body)).toBe(token);
+      const received: unknown[] = [];
+      upstream.post("/v1/responses", (req, res) => {
+        received.push(req.body);
+        const attempt = received.length === 1 ? lookalike : token;
+        res.type("text/event-stream").end(
+          event("response.output_text.delta", {
+            delta: `<!-- studio-result:${attempt}:finished -->\n${received.length === 1 ? "Wrong attempt" : "Accepted result"}`,
+          }) + completed(),
+        );
+      });
+      const response = await request(undefined, { body: JSON.stringify(body) });
+      const streamed = await response.text();
+      expect(streamed).toContain("Accepted result");
+      expect(streamed).not.toContain("Wrong attempt");
+      expect(received).toEqual([
+        { ...body, model: "gpt-luna", store: false },
+        { ...body, model: "gpt-luna", store: false },
+      ]);
+    } finally {
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
 
   it("retries an unmarked preamble with identical history and streams the marked answer before EOF", async () => {
     const contract = contractedRequest();
