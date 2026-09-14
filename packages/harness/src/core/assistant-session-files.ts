@@ -41,12 +41,7 @@ export async function assistantDirectory(
     const stat = await fs.lstat(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink())
       throw new AssistantStorageError();
-    const parent = await fs.open(parentDirectory, "r");
-    try {
-      await parent.sync();
-    } finally {
-      await parent.close();
-    }
+    await syncDirectory(parentDirectory);
   }
   return directory;
 }
@@ -96,13 +91,27 @@ export async function writeAssistantJson(
     }
     signal?.throwIfAborted();
     await fs.rename(temporary, join(directory, name));
-    const parent = await fs.open(directory, "r");
-    try {
-      await parent.sync();
-    } finally {
-      await parent.close();
-    }
+    await syncDirectory(directory);
   } finally {
     await fs.rm(temporary, { force: true });
+  }
+}
+
+/** Match DurableFileLock on platforms without directory-handle fsync support. */
+async function syncDirectory(directory: string): Promise<void> {
+  try {
+    const handle = await fs.open(directory, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (
+      !["EINVAL", "ENOTSUP", "EPERM"].includes(
+        (error as NodeJS.ErrnoException).code ?? "",
+      )
+    )
+      throw error;
   }
 }
