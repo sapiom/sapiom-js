@@ -99,3 +99,26 @@ after a directory-sync failure. Retention alone never proves native acceptance.
 Directory fsync is required: unsupported platforms fail closed instead of claiming
 durability. Linux filesystem behavior is covered by the storage tests; other platforms
 require their own verification. Host shutdown preserves this repository for recovery.
+
+## Accepted context coordination
+
+`createAssistantContextDelivery` is the shared acceptance, composition and recovery
+service. Acceptance resolves one detached candidate and commits all retained material
+before returning an identity. Composition reads that exact accepted record, checks
+the injected runtime-generation readiness boundary, and serializes a validated saved
+system with an explicit attempt UUID. Recovery reads the original record; it never
+resolves the current selection or fetches new guidance. An available accepted source
+remains mandatory on readback even when its original provider marked it optional.
+
+The host exposes an immutable, secret-free `contextAuthorityScope` and selected model.
+The scope includes user, tenant, environment name, canonical API URL, canonical cwd
+and Studio session. Credential rotation and runtime restart preserve it.
+`assertCurrent` separately checks exact hosted-object ownership and fresh grants and
+workspace access after asynchronous work. A retained manifest grants no authority.
+
+Valid legacy inline context/v1 recovery preserves the exact saved suffix and creates
+only a new attempt token. Context-free, malformed, foreign-workspace or location-only
+legacy work fails clearly. The coordinator owns no dispatch lock or native request;
+the existing admission and recovery owners are connected in the activation increment.
+Runtime readiness is a required injected contract, not a claim that package-generation
+acquisition or refresh is implemented by this service.

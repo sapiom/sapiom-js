@@ -138,6 +138,80 @@ afterEach(async () => {
 });
 
 describe("Studio-owned OpenCode lifecycle", () => {
+  it("keeps accepted scope stable across credential rotation and runtime restart", async () => {
+    const original = await host.ensure("studio-a");
+    expect(original.contextAuthorityScope).toMatch(/^[a-f0-9]{64}$/);
+    expect(original.model).toEqual({ providerID: "sapiom", modelID: "gpt-luna" });
+    expect(Object.isFrozen(original.model)).toBe(true);
+    expect(Object.isFrozen(original)).toBe(true);
+    grant = {
+      ...grant!,
+      identityRevision: "new-revision",
+      expiresAt: Date.now() + 120000,
+      environment: {
+        ...grant!.environment,
+        apiURL: "https://API.sapiom.ai:443/",
+        credentials: { ...grant!.environment.credentials!, apiKey: "rotated" },
+      },
+    };
+    changed();
+    const next = await host.ensure("studio-a");
+    expect(next).not.toBe(original);
+    expect(next.contextAuthorityScope).toBe(original.contextAuthorityScope);
+    expect(next.stateRoot).toBe(original.stateRoot);
+    await expect(host.assertCurrent(original)).rejects.toBeInstanceOf(
+      OpenCodeTransportError,
+    );
+    await expect(host.assertCurrent(next)).resolves.toBeUndefined();
+  });
+  it.each(["user", "tenant", "environment", "api", "cwd", "session"])(
+    "separates accepted authority when %s changes",
+    async (dimension) => {
+      const original = await host.ensure("studio-a");
+      await host.retire("studio-a");
+      if (dimension === "user") grant!.userId = "other-user";
+      if (dimension === "tenant") grant!.tenantId = "other-tenant";
+      if (dimension === "environment") grant!.environment.name = "development";
+      if (dimension === "api")
+        grant!.environment.apiURL = "https://other.example/api";
+      if (dimension === "cwd") {
+        cwd = join(root, "other");
+        await mkdir(cwd);
+      }
+      const next = await host.ensure(
+        dimension === "session" ? "studio-b" : "studio-a",
+      );
+      expect(next.contextAuthorityScope).not.toBe(
+        original.contextAuthorityScope,
+      );
+    },
+  );
+  it("rejects copied hosts and access or workspace changes during current validation", async () => {
+    const current = await host.ensure("studio-a");
+    await expect(host.assertCurrent({ ...current })).rejects.toBeInstanceOf(
+      OpenCodeTransportError,
+    );
+    authorize.mockImplementationOnce(async (id) => {
+      grant = null;
+      return { harnessSessionId: id, cwd };
+    });
+    await expect(host.assertCurrent(current)).rejects.toMatchObject({
+      failure: { code: "authentication_required" },
+    });
+  });
+  it("checks canonical workspace ownership again after acceptance IO", async () => {
+    const current = await host.ensure("studio-a");
+    const other = join(root, "moved");
+    await mkdir(other);
+    authorize.mockResolvedValueOnce({
+      harnessSessionId: "studio-a",
+      cwd: other,
+    });
+    await expect(host.assertCurrent(current)).rejects.toMatchObject({
+      failure: { code: "access_denied" },
+    });
+  });
+
   it("accepts only host-prepared skill directories in private session state", async () => {
     prepareSkills.mockImplementationOnce(async (_workspace, stateRoot) => {
       const skills = join(stateRoot, "skills-v1");

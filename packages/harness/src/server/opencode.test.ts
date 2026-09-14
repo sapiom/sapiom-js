@@ -152,6 +152,7 @@ beforeEach(async () => {
       return fetch(`${nativeOrigin}${path}`, { ...init, headers });
     };
     hosts.set(id, {
+      contextAuthorityScope: "a".repeat(64),
       model: { providerID: "sapiom", modelID: "gpt-luna" },
       harnessSessionId: id,
       cwd: root,
