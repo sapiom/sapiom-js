@@ -177,7 +177,11 @@ beforeEach(async () => {
       throw new OpenCodeAccessError("unavailable");
     return hosts.get(id)!;
   });
-  router = createOpenCodeRouter({ ensure, observe }, "boot-token", resolveContext);
+  router = createOpenCodeRouter(
+    { ensure, observe },
+    "boot-token",
+    resolveContext,
+  );
   const app = express();
   app.use("/opencode", (req, res, next) => router(req, res, next));
   origin = await listen(app);
@@ -223,6 +227,45 @@ async function readUntil(
 }
 
 describe("Studio-scoped OpenCode transport", () => {
+  it("cancels provider work on browser disconnect and releases admission for the next prompt", async () => {
+    const native = await attach();
+    const path = `studio-a/session/${native}/prompt_async`;
+    const body = JSON.stringify({ parts: [{ type: "text", text: "Help" }] });
+    let providerSignal: AbortSignal | undefined;
+    let release: ((error: unknown) => void) | undefined;
+    resolveContext.mockImplementationOnce((_hosted, _selection, signal) => {
+      providerSignal = signal;
+      return new Promise((_resolve, reject) => {
+        release = reject;
+        signal?.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    });
+    const browser = new AbortController();
+    const pending = request(path, {
+      method: "POST",
+      body,
+      signal: browser.signal,
+    });
+    const cancelled = expect(pending).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      browser.abort();
+      await cancelled;
+      await vi.waitFor(() => expect(providerSignal?.aborted).toBe(true));
+      expect(hosts.get("studio-a")!.signal.aborted).toBe(false);
+      expect(requests.some((item) => item.path.endsWith("/prompt_async"))).toBe(
+        false,
+      );
+      const next = await request(path, { method: "POST", body });
+      expect(next.status).toBe(204);
+    } finally {
+      browser.abort();
+      release?.(new Error("Fixture cleanup"));
+    }
+  });
+
   it("delivers session-owned context and validated selection without forwarding browser overrides", async () => {
     for (const studio of ["studio-a", "studio-b"]) {
       const native = await attach(studio);
@@ -358,7 +401,11 @@ describe("Studio-scoped OpenCode transport", () => {
     expect(await attach("studio-b")).not.toBe(a);
     expect(created).toBe(2);
     hosts.set("studio-a", { ...hosts.get("studio-a")! });
-    router = createOpenCodeRouter({ ensure, observe }, "boot-token", resolveContext);
+    router = createOpenCodeRouter(
+      { ensure, observe },
+      "boot-token",
+      resolveContext,
+    );
     expect(await attach()).toBe(a);
     expect(created).toBe(2);
   });
@@ -494,7 +541,11 @@ describe("Studio-scoped OpenCode transport", () => {
     const id = await attach();
     sessions.delete(id);
     observe.mockClear();
-    router = createOpenCodeRouter({ ensure, observe }, "boot-token", resolveContext);
+    router = createOpenCodeRouter(
+      { ensure, observe },
+      "boot-token",
+      resolveContext,
+    );
     const missing = await request("studio-a/attach", { method: "POST" });
     expect(missing.status).toBe(410);
     expect(await missing.json()).toEqual({

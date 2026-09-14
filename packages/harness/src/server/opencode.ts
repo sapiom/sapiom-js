@@ -144,7 +144,11 @@ export function createOpenCodeRouter(
               parts: req.body.parts,
               model: hosted.model,
               ...composeAssistantPrompt(
-                await resolveContext(hosted, req.body.selectedAgentPath),
+                await resolveContext(
+                  hosted,
+                  req.body.selectedAgentPath,
+                  init.signal,
+                ),
               ),
             }),
           }))
