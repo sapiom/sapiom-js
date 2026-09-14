@@ -66,6 +66,7 @@ import { shimDir } from "./runtime-shims.js";
 import { CHANNEL_ENV_VAR, resolveUpdateChannel } from "./update-policy.js";
 import type { BootResult } from "./boot.js";
 import { checkAgentMap } from "./smoke-agent-map.js";
+import { checkOpenCodeRuntime } from "./smoke-opencode.js";
 
 const require = createRequire(import.meta.url);
 
@@ -1122,6 +1123,7 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("session-create", () => checkSessionCreate(base, token)),
     await check("agent-shim", checkAgentShim),
     await check("managed-agent", checkManagedAgent),
+    await check("opencode-runtime", checkOpenCodeRuntime),
     await check("preload-bridge", checkPreloadBridge),
     await check("node-pty", checkNodePty),
     await check("unpacked-deps", checkUnpackedDeps),
