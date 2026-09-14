@@ -163,3 +163,7 @@ Continue allows up to 45 seconds total for cold startup and frozen preparation.
 Selected inspection retains its separate 15-second limit. The caller's remaining
 deadline and End can cancel either operation sooner; provisional cleanup remains
 bound to the exact runtime that the operation started.
+
+Temporary-file cleanup cannot replace the primary storage failure. An unconfirmed
+publication remains distinguishable for Resume reconciliation even when rollback
+and cleanup also fail; cleanup failures after successful publication are surfaced.

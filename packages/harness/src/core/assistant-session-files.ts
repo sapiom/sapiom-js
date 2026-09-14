@@ -95,6 +95,7 @@ export async function writeAssistantJson(
     rollback = `${temporary}.rollback`;
   let retained = false,
     published = false;
+  let cleanupFailure: PromiseRejectedResult | undefined;
   try {
     const file = await fs.open(temporary, "wx", 0o600);
     try {
@@ -135,10 +136,13 @@ export async function writeAssistantJson(
       throw new AssistantStorageCommitUnconfirmedError();
     throw error;
   } finally {
-    await Promise.all(
+    const cleanup = await Promise.allSettled(
       [temporary, backup, rollback].map((file) => fs.rm(file, { force: true })),
     );
+    // Cleanup must not disguise whether the durable publication is uncertain.
+    cleanupFailure = cleanup.find((result) => result.status === "rejected");
   }
+  if (cleanupFailure) throw cleanupFailure.reason;
 }
 
 /** Match DurableFileLock on platforms without directory-handle fsync support. */
