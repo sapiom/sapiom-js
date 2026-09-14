@@ -1,0 +1,72 @@
+--- a/packages/opencode/src/session/llm/request.ts
++++ b/packages/opencode/src/session/llm/request.ts
+@@ -68,7 +68,7 @@
+   const header = system[0]
+   yield* input.plugin.trigger(
+     "experimental.chat.system.transform",
+-    { sessionID: input.sessionID, model: input.model },
++    { sessionID: input.sessionID, model: input.model, messageID: input.user.id, agent: input.agent.name },
+     { system },
+   )
+   if (system.length > 2 && system[0] === header) {
+--- a/packages/plugin/src/index.ts
++++ b/packages/plugin/src/index.ts
+@@ -289,7 +289,7 @@
+     },
+   ) => Promise<void>
+   "experimental.chat.system.transform"?: (
+-    input: { sessionID?: string; model: Model },
++    input: { sessionID?: string; model: Model; messageID?: string; agent?: string },
+     output: {
+       system: string[]
+     },
+--- /dev/null
++++ b/packages/opencode/test/session/llm-request-identity.test.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, test } from "bun:test"
++import { Effect } from "effect"
++import { prepare } from "../../src/session/llm/request"
++
++describe("system transform request identity", () => {
++  for (const scenario of [
++    { agent: "build", messageID: "msg_ordinary", system: "accepted first" },
++    { agent: "build", messageID: "msg_ordinary", system: "accepted first", toolLoop: true },
++    { agent: "title", messageID: "msg_ordinary", system: "accepted first" },
++    { agent: "compaction", messageID: "msg_compaction" },
++    { agent: "build", messageID: "msg_continuation", system: "accepted first" },
++    { agent: "project-copy-name", messageID: "msg_helper" },
++  ]) {
++    test(`${scenario.agent} ${scenario.messageID}${scenario.toolLoop ? " tool loop" : ""}`, async () => {
++      const calls: { name: string; input: unknown; output: unknown }[] = []
++      // Stop at the hook: provider/model preparation after this boundary is
++      // unrelated. Deliberately use only the fields read before that boundary.
++      const input = {
++        user: { id: scenario.messageID, system: scenario.system },
++        sessionID: "ses_fixture",
++        agent: { name: scenario.agent, prompt: "native prefix" },
++        model: { id: "fixture-model" },
++        provider: { id: "fixture-provider" },
++        system: ["native instructions"],
++        plugin: {
++          trigger(name: string, input: unknown, output: unknown) {
++            calls.push({ name, input, output })
++            return Effect.die(new Error("fixture boundary reached"))
++          },
++        },
++      } as unknown as Parameters<typeof prepare>[0]
++      await Effect.runPromiseExit(prepare(input))
++      expect(calls).toEqual([
++        {
++          name: "experimental.chat.system.transform",
++          input: {
++            sessionID: "ses_fixture",
++            model: input.model,
++            messageID: scenario.messageID,
++            agent: scenario.agent,
++          },
++          output: { system: [["native prefix", "native instructions", scenario.system].filter(Boolean).join("\n")] },
++        },
++      ])
++    })
++  }
++})
