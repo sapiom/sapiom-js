@@ -280,3 +280,21 @@ it("keeps unresolved End durable across coordinator restart and global shutdown 
   await expect(coordinator.attach("studio-b", 0)).rejects.toThrow();
   expect(ensure).not.toHaveBeenCalled();
 });
+
+it("rejects new attaches during shutdown while old association IO ignores cancellation", async () => {
+  const held = gate();
+  associate.mockImplementationOnce(async () => {
+    await held.promise;
+    return "ses_history";
+  });
+  const old = coordinator.attach("studio-a", 0);
+  const rejected = expect(old).rejects.toThrow();
+  await vi.waitFor(() => expect(associate).toHaveBeenCalledOnce());
+  coordinator.beginShutdown();
+  await expect(coordinator.attach("studio-a", 0)).rejects.toMatchObject({
+    failure: { code: "lifecycle_changed" },
+  });
+  expect(ensure).toHaveBeenCalledOnce();
+  held.release();
+  await rejected;
+});

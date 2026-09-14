@@ -2,6 +2,10 @@ import {
   parseOpenCodeTransportFailure,
   type OpenCodeTransportFailure,
 } from "./opencode-errors.js";
+import {
+  parseAssistantLifecycle,
+  type AssistantLifecycle,
+} from "./assistant-session.js";
 
 export interface AssistantSessionSummary {
   harnessSessionId: string;
@@ -18,6 +22,7 @@ export interface AssistantStateSnapshot {
   revision: number;
   enabled: boolean;
   sessions: readonly AssistantSessionSummary[];
+  lifecycles?: readonly AssistantLifecycle[];
 }
 export type AssistantObservation = Omit<
   AssistantSessionSummary,
@@ -53,6 +58,7 @@ export function parseAssistantState(
     "revision",
     "enabled",
     "sessions",
+    "lifecycles",
   ]);
   if (
     !input ||
@@ -110,11 +116,27 @@ export function parseAssistantState(
       ...(failure ? { failure } : {}),
     });
   }
+  const lifecycles: AssistantLifecycle[] = [];
+  if (input.lifecycles !== undefined) {
+    if (
+      !Array.isArray(input.lifecycles) ||
+      (!input.enabled && input.lifecycles.length)
+    )
+      return null;
+    const identities = new Set<string>();
+    for (const raw of input.lifecycles) {
+      const lifecycle = parseAssistantLifecycle(raw);
+      if (!lifecycle || identities.has(lifecycle.harnessSessionId)) return null;
+      identities.add(lifecycle.harnessSessionId);
+      lifecycles.push(lifecycle);
+    }
+  }
   return {
     hostInstanceId: input.hostInstanceId,
     authorityRevision: input.authorityRevision,
     revision: input.revision,
     enabled: input.enabled,
     sessions,
+    ...(input.lifecycles !== undefined ? { lifecycles } : {}),
   };
 }

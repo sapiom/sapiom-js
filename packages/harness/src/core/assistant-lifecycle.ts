@@ -122,7 +122,11 @@ export class AssistantLifecycleCoordinator {
   }
 
   attach(id: string, expectedRevision: number): Promise<AssistantAttachment> {
-    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+    if (
+      this.closed ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0
+    )
       return Promise.reject(failure("lifecycle_changed"));
     const pending = this.pending.get(id);
     if (pending)
@@ -305,6 +309,7 @@ export class AssistantLifecycleCoordinator {
   beginShutdown(): void {
     this.closed = true;
     this.leases.clear();
+    this.pending.clear();
     this.options.host.beginShutdown();
     this.changed();
   }

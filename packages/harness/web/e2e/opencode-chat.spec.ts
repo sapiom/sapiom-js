@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import express, { type Response } from "express";
 import type { Server } from "node:http";
+import { randomUUID } from "node:crypto";
+import type { AssistantLifecycle } from "../../src/shared/assistant-session";
 import { openCodeCompletionPrompt } from "../../src/shared/opencode-completion";
 import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
 
@@ -8,6 +10,7 @@ import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
 test.describe.configure({ mode: "serial" });
 type Conversation = {
   id: string;
+  lease: string;
   turns: Array<{
     info: Record<string, any>;
     parts: Array<Record<string, any>>;
@@ -35,6 +38,23 @@ let accessCalls: number;
 let recoveryReply: ((text: string, agent?: string) => void) | undefined;
 const historyReplies: Array<() => void> = [];
 let routeCalls: number;
+let lifecycleState: AssistantLifecycle["lifecycle"];
+let execution: AssistantLifecycle["execution"];
+let lifecycleRevision: number;
+let endBeforeAttach: boolean;
+let holdAttach: boolean;
+let holdPromptPublication: boolean;
+let holdPromptAck: boolean;
+let announceExecution: boolean;
+const attachReplies: Array<() => void> = [];
+const promptPublications: Array<() => void> = [];
+const promptAcks: Array<() => void> = [];
+const attachRevisions: number[] = [];
+const leasedRequests: Array<{
+  path: string;
+  actual: string | undefined;
+  expected: string;
+}> = [];
 const conversations = new Map<string, Conversation>();
 const emit = (c: Conversation, type: string, properties: object) => {
   if (type === "session.status")
@@ -75,12 +95,24 @@ test.beforeEach(async ({ page }) => {
   recoveryReply = undefined;
   historyReplies.length = 0;
   routeCalls = 0;
+  lifecycleState = "open";
+  execution = "enabled";
+  lifecycleRevision = 0;
+  endBeforeAttach = holdAttach = holdPromptPublication = holdPromptAck = false;
+  announceExecution = true;
+  attachReplies.length =
+    promptPublications.length =
+    promptAcks.length =
+    attachRevisions.length =
+    leasedRequests.length =
+      0;
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
     res.set({
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
+      "Access-Control-Expose-Headers": "X-Assistant-Execution",
     });
     if (req.method === "OPTIONS") {
       res.end();
@@ -94,11 +126,41 @@ test.beforeEach(async ({ page }) => {
       res.status(401).end();
       return;
     }
+    const path = req.params[0];
+    const lifecycle: AssistantLifecycle = {
+      version: 1,
+      harnessSessionId: req.params.studioId,
+      revision: lifecycleRevision,
+      lifecycle: lifecycleState,
+      execution,
+      updatedAt: 1,
+    };
+    if (path === "lifecycle") {
+      res.json(lifecycle);
+      if (endBeforeAttach) {
+        lifecycleState = "ended";
+        lifecycleRevision++;
+      }
+      return;
+    }
+    if (path === "attach") {
+      attachRevisions.push(req.body.expectedRevision);
+      if (
+        req.body.expectedRevision !== lifecycleRevision ||
+        lifecycleState !== "open"
+      ) {
+        res
+          .status(409)
+          .json({ error: openCodeTransportFailure("lifecycle_changed") });
+        return;
+      }
+    }
     const id = `ses_${req.params.studioId.replaceAll("-", "_")}`;
     let c = conversations.get(id);
     if (!c) {
       c = {
         id,
+        lease: randomUUID(),
         turns: [],
         streams: new Set(),
         prompts: [],
@@ -108,7 +170,6 @@ test.beforeEach(async ({ page }) => {
       };
       conversations.set(id, c);
     }
-    const path = req.params[0];
     const session = {
       id,
       title: "Studio conversation",
@@ -119,7 +180,23 @@ test.beforeEach(async ({ page }) => {
         res.status(503).json(attachError);
         return;
       }
-      res.status(failAttach ? 502 : 200).json({ conversationId: id });
+      const reply = () =>
+        res
+          .status(failAttach ? 502 : 200)
+          .json({ conversationId: id, lease: c!.lease, lifecycle });
+      if (holdAttach) attachReplies.push(reply);
+      else reply();
+      return;
+    }
+    leasedRequests.push({
+      path,
+      actual: req.header("X-Assistant-Lease"),
+      expected: c.lease,
+    });
+    if (req.header("X-Assistant-Lease") !== c.lease) {
+      res
+        .status(409)
+        .json({ error: openCodeTransportFailure("lifecycle_changed") });
       return;
     }
     if (path === "experimental/session") {
@@ -262,21 +339,30 @@ test.beforeEach(async ({ page }) => {
           },
         ],
       };
-      c.turns.push(user, assistant);
-      res.status(204).end();
-      emit(c, "session.status", { sessionID: id, status: { type: "busy" } });
-      for (const turn of [user, assistant]) {
-        emit(c, "message.updated", { info: turn.info });
-        emit(c, "message.part.updated", { part: turn.parts[0] });
-      }
-      assistant.parts[0].text = "First chunk";
-      emit(c, "message.part.delta", {
-        sessionID: id,
-        messageID: assistantId,
-        partID: assistant.parts[0].id,
-        field: "text",
-        delta: "First chunk",
-      });
+      const acknowledge = () => {
+        if (announceExecution) res.set("X-Assistant-Execution", "enabled");
+        res.status(204).end();
+      };
+      if (holdPromptAck) promptAcks.push(acknowledge);
+      else acknowledge();
+      const publish = () => {
+        c!.turns.push(user, assistant);
+        emit(c, "session.status", { sessionID: id, status: { type: "busy" } });
+        for (const turn of [user, assistant]) {
+          emit(c, "message.updated", { info: turn.info });
+          emit(c, "message.part.updated", { part: turn.parts[0] });
+        }
+        assistant.parts[0].text = "First chunk";
+        emit(c, "message.part.delta", {
+          sessionID: id,
+          messageID: assistantId,
+          partID: assistant.parts[0].id,
+          field: "text",
+          delta: "First chunk",
+        });
+      };
+      if (holdPromptPublication) promptPublications.push(publish);
+      else publish();
       return;
     }
     res.status(404).end();
@@ -899,6 +985,176 @@ async function openAssistant(page: Page) {
     page.getByRole("textbox", { name: "Message Assistant" }),
   ).toBeEnabled();
 }
+
+for (const state of ["ending", "ended"] as const) {
+  test(`lifecycle handshake never attaches an ${state} session`, async ({
+    page,
+  }, testInfo) => {
+    lifecycleState = state;
+    execution = "paused";
+    await page.goto("/?seed=0");
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      openCodeTransportFailure("session_ended").message,
+    );
+    expect(attachRevisions).toEqual([]);
+    expect(conversations.size).toBe(0);
+    await expect(
+      page.getByRole("textbox", { name: "Message Assistant" }),
+    ).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`${state}.png`) });
+  });
+}
+
+test("lifecycle handshake binds the old revision when End wins before attach", async ({
+  page,
+}, testInfo) => {
+  endBeforeAttach = true;
+  await page.goto("/?seed=0");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    openCodeTransportFailure("lifecycle_changed").message,
+  );
+  expect(attachRevisions).toEqual([0]);
+  expect(conversations.size).toBe(0);
+  expect(leasedRequests).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("ended-before-attach.png"),
+  });
+});
+
+test("lifecycle handshake discards an attach response after leaving Assistant", async ({
+  page,
+}, testInfo) => {
+  holdAttach = true;
+  await page.goto("/?seed=0");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect.poll(() => attachReplies.length).toBe(1);
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  attachReplies.shift()!();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Message Assistant" }),
+  ).toHaveCount(0);
+  expect(leasedRequests).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("late-attach-discarded.png"),
+  });
+});
+
+async function restorePausedHistory(page: Page) {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Original task");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  useCompletionContract(c);
+  const previous = c.turns.at(-1)!;
+  previous.parts[0].text = "I'll finish the original task next.";
+  previous.info.agent = "build";
+  previous.info.time.created = c.turns[0].info.time.created + 1;
+  previous.info.time.completed = Date.now();
+  previous.info.finish = "stop";
+  c.busy = false;
+  c.lease = randomUUID();
+  execution = "paused";
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Paused");
+  await expect(
+    page.getByRole("textbox", { name: "Message Assistant" }),
+  ).toBeEnabled();
+  await expect(
+    page.getByText(previous.parts[0].text, { exact: true }),
+  ).toBeVisible();
+  return c;
+}
+
+test("paused restoration makes no recovery and leases only the new explicit turn", async ({
+  page,
+}, testInfo) => {
+  const c = await restorePausedHistory(page);
+  expect(c.prompts).toEqual(["Original task"]);
+  expect(c.recoveries).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("restored-paused.png") });
+  holdPromptPublication = true;
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("New explicit task");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => promptPublications.length).toBe(1);
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).not.toHaveText("Paused");
+  // ACK enabled admission, but the adapter still holds only the old history.
+  expect(c.recoveries).toEqual([]);
+  promptPublications.shift()!();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  useCompletionContract(c);
+  endWithoutAnswer(c);
+  await expect.poll(() => c.recoveries).toEqual(["msg_empty"]);
+  expect(
+    c.turns.find((turn) => turn.info.id === "msg_empty")!.info.parentID,
+  ).toBe("msg_user_2");
+  expect(
+    leasedRequests.some((request) => request.path.endsWith("/final-response")),
+  ).toBe(true);
+  expect(
+    leasedRequests.every((request) => request.actual === request.expected),
+  ).toBe(true);
+  expect(c.prompts).toEqual(["Original task", "New explicit task"]);
+  recoveryReply!("Finished the new task.");
+});
+
+test("paused restoration admits the new turn when history arrives before its acknowledgment", async ({
+  page,
+}, testInfo) => {
+  const c = await restorePausedHistory(page);
+  holdPromptAck = true;
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("New explicit task");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  useCompletionContract(c);
+  endWithoutAnswer(c);
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(status).toHaveText("Paused");
+  expect(c.recoveries).toEqual([]);
+  await expect.poll(() => promptAcks.length).toBe(1);
+  promptAcks.shift()!();
+  await expect.poll(() => c.recoveries).toEqual(["msg_empty"]);
+  await expect(status).toContainText("Working");
+  await page.screenshot({
+    path: testInfo.outputPath("new-turn-after-ack.png"),
+  });
+  recoveryReply!("Finished the new task.");
+});
+
+test("paused restoration stays paused without the server execution acknowledgment", async ({
+  page,
+}, testInfo) => {
+  const c = await restorePausedHistory(page);
+  announceExecution = false;
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("New explicit task");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  useCompletionContract(c);
+  endWithoutAnswer(c);
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Paused");
+  expect(c.recoveries).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("paused-without-ack.png"),
+  });
+});
 
 test("sibling selection survives mounted recovery and reaches each accepted send", async ({
   page,

@@ -197,6 +197,8 @@ import {
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { AssistantSessionStore } from "../core/assistant-session-store.js";
+import { AssistantLifecycleCoordinator } from "../core/assistant-lifecycle.js";
+import { createAssistantStateProjection } from "../core/assistant-state-projection.js";
 import { OpenCodeAssociations } from "../core/opencode-association.js";
 import { OpenCodeHost, type HostedOpenCode } from "../core/opencode-host.js";
 import { AssistantRecordStore } from "../core/assistant-record-store.js";
@@ -3566,10 +3568,15 @@ export const startServer = async (
     stateRoot: statePaths.root,
     authorize: authorizeAssistantWorkspace,
   });
-  const getAssistantState = () => openCodeHost.getAssistantState();
-  const unsubscribeAssistant = openCodeHost.subscribeAssistantState(() =>
-    bus.publish({ type: "assistant.state", snapshot: getAssistantState() }),
+  const openCodeAssociations = new OpenCodeAssociations(assistantSessions);
+  const assistantLifecycle = new AssistantLifecycleCoordinator({ store: assistantSessions, host: openCodeHost, associations: openCodeAssociations });
+  // Hydrate lifecycle headers without launching runtimes. A corrupt entry fails
+  // closed when selected rather than preventing unrelated sessions from loading.
+  await Promise.allSettled(sessionManager.list().map((session) => assistantLifecycle.describe(session.id)));
+  const assistantProjection = createAssistantStateProjection(openCodeHost, assistantLifecycle, (snapshot) =>
+    bus.publish({ type: "assistant.state", snapshot }),
   );
+  const getAssistantState = assistantProjection.get;
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
@@ -3585,8 +3592,12 @@ export const startServer = async (
         getEnvironment: () => assistantAccess.get()?.environment ?? null,
         loadSystemPrompt: options.loadSystemPrompt,
       }),
-      new OpenCodeAssociations(assistantSessions),
-      new OpenCodeFinalResponse({ onPersisted: async (hosted) => { await recordCaptures.get(hosted)?.checkpoint(); } }),
+      openCodeAssociations,
+      new OpenCodeFinalResponse({
+        assertCurrent: (hosted) => assistantLifecycle.assertRuntime(hosted, true),
+        onPersisted: async (hosted) => { await recordCaptures.get(hosted)?.checkpoint(); },
+      }),
+      assistantLifecycle,
     ),
   );
 
@@ -4321,11 +4332,14 @@ export const startServer = async (
 
       credentialStoreObserver?.close();
       unsubscribeCredentialChanges();
+      // Fence both engines synchronously. Native ownership cleanup can wait on
+      // process proof and must not leave Terminal admission open during that wait.
+      assistantLifecycle.beginShutdown();
+      sessionManager.beginShutdown();
       assistantAccess.close();
-      await settle(() => openCodeHost.close());
-      unsubscribeAssistant();
+      const nativeClosing = settle(() => openCodeHost.close());
+      assistantProjection.dispose();
       openCodeBridge.close();
-      await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());
       const registrationClosing = settle(() => createdAgentRegistration.close());
       coordinatorActive = false;
@@ -4353,6 +4367,7 @@ export const startServer = async (
       // socket if an adapter misses its own exit acknowledgement.
       const SHUTDOWN_KILL_TIMEOUT_MS = 5_000;
       const killsSettled = Promise.all([
+        nativeClosing,
         settle(() => sessionManager.killAll()),
         settle(() => taskManager.killAll()),
       ]).then(() => {});

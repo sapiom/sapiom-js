@@ -25,6 +25,11 @@ import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { EmptyState } from "./EmptyState";
 import {
+  parseAssistantAttachment,
+  parseAssistantLifecycle,
+  type AssistantAttachment,
+} from "../lib/assistant-lifecycle-client";
+import {
   finalResponseAgent,
   turnRecoveryAgent,
   openCodeTurn,
@@ -36,6 +41,7 @@ import {
   openCodeVisibleText,
 } from "../../../src/shared/opencode-completion";
 import {
+  openCodeTransportFailure,
   parseOpenCodeStudioErrorEvent,
   parseOpenCodeTransportErrorBody,
   type OpenCodeTransportAction,
@@ -102,7 +108,9 @@ export function OpenCodeChat({
   onOpenSettings,
   onOpenTerminal,
 }: Props) {
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [attachment, setAttachment] = useState<AssistantAttachment | null>(
+    null,
+  );
   const [error, setError] = useState<RecoveryNotice | null>(null);
   const [attempt, setAttempt] = useState(0);
   const baseUrl = new URL(
@@ -111,45 +119,75 @@ export function OpenCodeChat({
   ).toString();
   useEffect(() => {
     const abort = new AbortController();
-    setConversationId(null);
+    setAttachment(null);
     setError(null);
-    void fetch(`${baseUrl}/attach`, {
-      method: "POST",
-      headers: { "X-Harness-Token": bootToken },
-      credentials: "omit",
-      signal: abort.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          const failure = await responseFailure(response);
-          if (!abort.signal.aborted)
-            setError(failure ? trustedNotice(failure) : openError);
-          return;
-        }
-        const data = await response.json();
-        if (
-          typeof data.conversationId !== "string" ||
-          !data.conversationId.startsWith("ses_")
-        )
-          throw new Error("invalid association");
-        if (!abort.signal.aborted) setConversationId(data.conversationId);
-      })
-      .catch(() => {
-        if (!abort.signal.aborted) setError(openError);
+    void (async () => {
+      const options = {
+        headers: { "X-Harness-Token": bootToken },
+        credentials: "omit" as const,
+        cache: "no-store" as const,
+        signal: abort.signal,
+      };
+      let response = await fetch(`${baseUrl}/lifecycle`, options);
+      if (!response.ok) {
+        const failure = await responseFailure(response);
+        if (!abort.signal.aborted)
+          setError(failure ? trustedNotice(failure) : openError);
+        return;
+      }
+      const lifecycle = parseAssistantLifecycle(
+        await response.json(),
+        harnessSessionId,
+      );
+      if (abort.signal.aborted) return;
+      if (!lifecycle) throw new Error("invalid lifecycle");
+      if (lifecycle.lifecycle !== "open") {
+        setError(trustedNotice(openCodeTransportFailure("session_ended")));
+        return;
+      }
+      response = await fetch(`${baseUrl}/attach`, {
+        ...options,
+        method: "POST",
+        headers: { ...options.headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedRevision: lifecycle.revision }),
       });
+      if (!response.ok) {
+        const failure = await responseFailure(response);
+        if (!abort.signal.aborted)
+          setError(failure ? trustedNotice(failure) : openError);
+        return;
+      }
+      const attached = parseAssistantAttachment(
+        await response.json(),
+        harnessSessionId,
+        lifecycle.revision,
+      );
+      if (!attached) {
+        if (!abort.signal.aborted)
+          setError(
+            trustedNotice(openCodeTransportFailure("lifecycle_changed")),
+          );
+        return;
+      }
+      if (!abort.signal.aborted) setAttachment(attached);
+    })().catch(() => {
+      if (!abort.signal.aborted) setError(openError);
+    });
     return () => abort.abort();
-  }, [baseUrl, bootToken, attempt]);
+  }, [baseUrl, bootToken, attempt, harnessSessionId]);
   const retry = useCallback(() => {
-    setConversationId(null);
+    setAttachment(null);
     setError(null);
     setAttempt((value) => value + 1);
   }, []);
-  return conversationId ? (
+  return attachment?.lifecycle.harnessSessionId === harnessSessionId ? (
     <RuntimeChat
-      key={`${conversationId}:${attempt}`}
+      key={attachment.lease}
       baseUrl={baseUrl}
       bootToken={bootToken}
-      conversationId={conversationId}
+      conversationId={attachment.conversationId}
+      lease={attachment.lease}
+      initialExecution={attachment.lifecycle.execution}
       selectedAgentPath={selectedAgentPath}
       retry={retry}
       draft={draft}
@@ -179,6 +217,8 @@ function RuntimeChat({
   selectedAgentPath,
   bootToken,
   conversationId,
+  lease,
+  initialExecution,
   retry,
   draft,
   onSignIn,
@@ -189,6 +229,8 @@ function RuntimeChat({
   selectedAgentPath?: string | null;
   bootToken: string;
   conversationId: string;
+  lease: string;
+  initialExecution: AssistantAttachment["lifecycle"]["execution"];
   retry: () => void;
   draft: ChatDraft;
   onSignIn: () => void;
@@ -205,6 +247,7 @@ function RuntimeChat({
   );
   const [actionError, setActionError] = useState<RecoveryNotice | null>(null);
   const [connected, setConnected] = useState(false);
+  const [execution, setExecution] = useState(initialExecution);
   const eventAbort = useRef<AbortController | null>(null);
   const reconcile = useCallback(() => {
     // The adapter reconnects this display stream and reloads history/status.
@@ -220,13 +263,15 @@ function RuntimeChat({
   const client = useMemo(() => {
     const client = createOpencodeClient({
       baseUrl,
-      headers: { "X-Harness-Token": bootToken },
+      headers: { "X-Harness-Token": bootToken, "X-Assistant-Lease": lease },
       credentials: "omit",
       fetch: async (input, init) => {
         let request = new Request(input, init);
         const path = new URL(request.url).pathname;
         const root = new URL(`${baseUrl}/session/${conversationId}`).pathname;
-        if (request.method === "POST" && path === `${root}/prompt_async`) {
+        const explicitPrompt =
+          request.method === "POST" && path === `${root}/prompt_async`;
+        if (explicitPrompt) {
           const selectedAgentPath = selection.current;
           const body = await request.clone().json();
           request = new Request(request, {
@@ -239,6 +284,12 @@ function RuntimeChat({
           path.endsWith("/experimental/session");
         try {
           const response = await globalThis.fetch(request);
+          if (
+            explicitPrompt &&
+            response.ok &&
+            response.headers.get("X-Assistant-Execution") === "enabled"
+          )
+            setExecution("enabled");
           if (!response.ok) {
             const failure = await responseFailure(response);
             if (failure) onTypedError(failure);
@@ -313,7 +364,7 @@ function RuntimeChat({
     // generates titles; suppress that unrelated model action, as in the POC.
     client.session.summarize = async () => ({ data: true }) as never;
     return client;
-  }, [baseUrl, bootToken, conversationId, onError, onTypedError]);
+  }, [baseUrl, bootToken, conversationId, lease, onError, onTypedError]);
   const runtime = useOpenCodeRuntime({
     client,
     initialSessionId: conversationId,
@@ -325,6 +376,8 @@ function RuntimeChat({
         baseUrl={baseUrl}
         bootToken={bootToken}
         conversationId={conversationId}
+        lease={lease}
+        execution={execution}
         connected={connected}
         reconcile={reconcile}
         error={actionError ?? transportError}
@@ -363,6 +416,8 @@ function ChatSurface({
   baseUrl,
   bootToken,
   conversationId,
+  lease,
+  execution,
   connected,
   reconcile,
   error,
@@ -377,6 +432,8 @@ function ChatSurface({
   baseUrl: string;
   bootToken: string;
   conversationId: string;
+  lease: string;
+  execution: AssistantAttachment["lifecycle"]["execution"];
   connected: boolean;
   reconcile: () => void;
   error: RecoveryNotice | null;
@@ -419,19 +476,28 @@ function ChatSurface({
   const recoveryAbort = useRef<AbortController | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [recoveryFailed, setRecoveryFailed] = useState(false);
-  const missing = turn.missing;
+  // Capture restored history once: the explicit Send ACK and its new history
+  // can arrive in either order. Only the restored old turn stays suppressed.
+  const restoredMissing = useRef<string | null | undefined>(undefined);
+  if (execution === "paused" && ready && restoredMissing.current === undefined)
+    restoredMissing.current = turn.missing ?? null;
+  const missing =
+    turn.missing && turn.missing !== restoredMissing.current
+      ? turn.missing
+      : null;
   const pending = Object.values(native.pendingUserMessages).some(
     (message) => message.status === "pending",
   );
   useEffect(() => {
-    if (!error) return;
+    if (!error && execution !== "paused") return;
     recoveryAbort.current?.abort();
     recoveryAbort.current = null;
     setRecovering(false);
-  }, [error]);
+  }, [error, execution]);
   useEffect(() => {
     if (
       !ready ||
+      execution === "paused" ||
       !connected ||
       error ||
       running ||
@@ -452,6 +518,7 @@ function ChatSurface({
       method: "POST",
       headers: {
         "X-Harness-Token": bootToken,
+        "X-Assistant-Lease": lease,
         "Content-Type": "application/json",
       },
       credentials: "omit",
@@ -484,6 +551,8 @@ function ChatSurface({
     bootToken,
     connected,
     conversationId,
+    lease,
+    execution,
     error,
     missing,
     pending,
@@ -514,6 +583,7 @@ function ChatSurface({
     native.loadState.type === "loading" &&
     native.messageOrder.length > 0;
   const working =
+    execution === "enabled" &&
     !visibleError &&
     (running ||
       recovering ||
@@ -526,17 +596,19 @@ function ChatSurface({
       ? catchingUp
         ? "Catching up…"
         : "Checking status…"
-      : waiting
-        ? "Waiting for input"
-        : working
-          ? "Working"
-          : turn.status === "finished"
-            ? "Finished"
-            : turn.status === "failed" || recoveryFailed
-              ? "Failed"
-              : turn.status === "stopped"
-                ? "Stopped"
-                : "Ready";
+      : execution === "paused"
+        ? "Paused"
+        : waiting
+          ? "Waiting for input"
+          : working
+            ? "Working"
+            : turn.status === "finished"
+              ? "Finished"
+              : turn.status === "failed" || recoveryFailed
+                ? "Failed"
+                : turn.status === "stopped"
+                  ? "Stopped"
+                  : "Ready";
   return (
     <ThreadPrimitive.Root
       className="studio-chat"
