@@ -74,6 +74,19 @@ and self-contained; republishing the same slug replaces the app in place at the 
 Org-scoped by default; \`public\` needs an explicit confirmation and a daily spend cap because
 your org pays for every wake. See https://docs.sapiom.ai/capabilities/app-links.
 
+An App Link can also receive webhooks. Webhooks are OFF by default on a link: turn on
+\`webhooksEnabled\` with \`sapiom_dev_app_settings\` and third parties POST to
+\`https://apps.sapiom.ai/{org}/{slug}/hook/<path>\`: the \`/hook\` prefix is stripped, the body is
+forwarded byte-exact so Slack/Stripe/GitHub signatures verify inside the app, and a request that
+arrives while the app sleeps is held up to 60 s (then 504 while the wake continues, so the
+sender's retry lands warm). Keep the receiver fast: dispatch real work with \`agents.launch\`
+(below) and return. \`_settings\` also sets visibility, dailySpendCapUsd and
+wakeRateLimitPerHour; \`sapiom_dev_app_list\` shows every link; \`sapiom_dev_app_delete\` removes
+one. All three need \`@sapiom/mcp\` >= 0.15 — on an older client use the dashboard App Links page
+or the REST routes: \`GET /v1/app-links\` to find the id, then \`PATCH\` / \`DELETE
+/v1/app-links/{id}\`. These settings need \`org.write\` — a credential without it gets the
+permission named in the tool's error; tell the user, do not retry.
+
 ## Triggers (run a deployed agent without a human)
 \`sapiom_dev_agents_schedule\` creates a trigger of one of four kinds on a deployed agent:
 \`schedule_cron\` (recurring), \`schedule_once\` (one future time), \`event\` (fires whenever this
@@ -108,6 +121,21 @@ https://docs.sapiom.ai/guides/triggers.
   don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are
   a top-level \`@sapiom/tools\` import, not under \`ctx.sapiom\`.
 
+## Secrets, inbound events, receipts
+- **Secrets** set in the dashboard per deployed agent reach a step only as env vars
+  (\`process.env.SLACK_BOT_TOKEN\`); their Vault ref is derived server-side, so step code cannot
+  name it. \`ctx.sapiom.vault.get(ref, key)\` is for tenant secrets stored under your own ref
+  (e.g. \`vault.get("slack", "bot_token")\`) and returns \`null\` when absent — agent code cannot write
+  the Vault. Never route a Sapiom-managed resource's credentials (a repository, a sandbox, a
+  provisioned service) through Vault: use the handle the capability returned.
+- **Receipts and replay:** every inbound event or webhook leaves a receipt, matched or
+  unmatched, and a failed fire can be replayed by hand (never automatically). No tool yet —
+  use the REST surface: \`GET /v1/workflows/receipts?outcome=unmatched\`,
+  \`GET /v1/workflows/receipts/{id}\` (the chain it started),
+  \`POST /v1/workflows/receipts/{id}/replay\` (re-match an unmatched event against today's
+  triggers), \`POST /v1/workflows/fires/{id}/replay\` (re-drive a failed or stranded fire;
+  \`{"rerun":true}\` to repeat one that succeeded).
+
 ## Calling LLMs and running agent loops (from agent code)
 - **One LLM call → \`ctx.sapiom.llm.run\`** — summarize, extract, classify, one-shot generate.
   For a plain-text reply, read only \`type === 'text'\` content blocks (a \`thinking\` block
@@ -118,11 +146,13 @@ https://docs.sapiom.ai/guides/triggers.
   tool-calling task (minutes, not seconds). \`models.coding.run\` for sandboxed coding tasks.
   Never use this for a one-shot completion — it will loop and overthink.
 - **Dispatch a deployed agent by slug → \`ctx.sapiom.agents.run\`** — compose systems from
-  small deployed agents rather than one large monolith.
-- **You never pick a model.** Say how long you can wait (\`deadlineMinutes\` where supported)
-  — the platform picks the model. \`llm.run\`/\`models.run\` report the served class and lane
-  on the result (absent on older servers — treat missing as unknown); \`models.coding.run\`
-  reports both as \`null\` today.
+  small deployed agents rather than one large monolith. \`agents.run\` waits for the terminal
+  state; **\`ctx.sapiom.agents.launch\`** takes the same spec and returns a handle at once
+  (fire-and-forget). Use \`launch\` from anything that must return fast — a webhook receiver —
+  or with \`pauseUntilSignal(handle, …)\` for a long-running child.
+- **You never pick a model.** The platform picks it. \`llm.run\`/\`models.run\` report the
+  served class and lane on the result (absent on older servers — treat missing as unknown);
+  \`models.coding.run\` reports both as \`null\` today.
   **Omit \`model\` entirely (recommended)** — the platform routes it. Raw provider model ids
   are never honored.
 - **Debugging a run:** open the Run Inspector, or fetch a step's full input/output via
