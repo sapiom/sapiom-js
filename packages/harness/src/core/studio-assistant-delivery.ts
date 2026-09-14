@@ -47,6 +47,20 @@ export interface AssistantContextDelivery {
     selection: string | null | undefined,
     signal: AbortSignal,
   ): Promise<AcceptedAssistantContext>;
+  /**
+   * Accept a durably frozen candidate for the new child's own Studio ID/scope.
+   * The receipt owner freezes exact inputs and acceptanceId before this call,
+   * proves conversationId is the child's native association, and reuses both on
+   * retry. This never resolves live guidance or adopts a parent's accepted ref;
+   * the source store remains the sole authority for committed accepted content.
+   */
+  acceptFrozen(
+    hosted: HostedOpenCode,
+    conversationId: string,
+    candidate: AssistantContextCandidate,
+    acceptanceId: string,
+    signal: AbortSignal,
+  ): Promise<AcceptedAssistantContext>;
   compose(
     hosted: HostedOpenCode,
     conversationId: string,
@@ -93,11 +107,18 @@ export function createAssistantContextDelivery(
       await current(hosted, signal);
       return result;
     } catch (error) {
-      signal.throwIfAborted();
-      hosted.signal.throwIfAborted();
-      if (error instanceof OpenCodeTransportError) throw error;
-      throw assistantContextUnavailable();
+      return fail(hosted, signal, error);
     }
+  }
+  function fail(
+    hosted: HostedOpenCode,
+    signal: AbortSignal,
+    error: unknown,
+  ): never {
+    signal.throwIfAborted();
+    hosted.signal.throwIfAborted();
+    if (error instanceof OpenCodeTransportError) throw error;
+    throw assistantContextUnavailable();
   }
   function checkFacts(
     hosted: HostedOpenCode,
@@ -190,6 +211,58 @@ export function createAssistantContextDelivery(
     });
     return { system };
   }
+  function prepareAcceptance(
+    hosted: HostedOpenCode,
+    conversationId: string,
+    candidate: AssistantContextCandidate,
+    acceptanceId: string,
+  ) {
+    const accepted = acceptedAssistantRecord(
+      candidate,
+      hosted.contextAuthorityScope,
+      conversationId,
+      acceptanceId,
+    );
+    checkFacts(hosted, accepted);
+    // acceptedAssistantRecord bounds and detaches facts/manifest. Copy the
+    // validated materials too, before authority IO can yield to caller mutation.
+    const materials = candidate.materials.map(({ sourceId, bytes }) => ({
+      sourceId,
+      bytes: new Uint8Array(bytes),
+    }));
+    // UUID attempts have fixed width; budget the complete envelope before commit.
+    materializedSystem(
+      hosted,
+      {
+        accepted,
+        sources: validateAssistantMaterials(
+          accepted.instructionSet,
+          materials,
+          hosted.contextAuthorityScope,
+        ),
+      },
+      referenceOf(accepted),
+      accepted.acceptanceId,
+    );
+    return { accepted, materials };
+  }
+  async function retainAcceptance(
+    hosted: HostedOpenCode,
+    conversationId: string,
+    prepared: ReturnType<typeof prepareAcceptance>,
+    signal: AbortSignal,
+  ) {
+    checkFacts(hosted, prepared.accepted);
+    await options
+      .storeFor(hosted)
+      .retainAccepted(
+        prepared.accepted,
+        prepared.materials,
+        authority(hosted, conversationId),
+        signal,
+      );
+    return prepared.accepted;
+  }
   return {
     accept(hosted, conversationId, selection, signal) {
       return safe(hosted, signal, async () => {
@@ -199,37 +272,36 @@ export function createAssistantContextDelivery(
           signal,
         );
         await current(hosted, signal);
-        const accepted = acceptedAssistantRecord(
-          candidate,
-          hosted.contextAuthorityScope,
-          conversationId,
-          randomUUID(),
-        );
-        checkFacts(hosted, accepted);
-        // UUID attempts have fixed width; validate actual envelope overhead before retention.
-        materializedSystem(
+        return retainAcceptance(
           hosted,
-          {
-            accepted,
-            sources: validateAssistantMaterials(
-              candidate.instructionSet,
-              candidate.materials,
-              hosted.contextAuthorityScope,
-            ),
-          },
-          referenceOf(accepted),
-          accepted.acceptanceId,
+          conversationId,
+          prepareAcceptance(hosted, conversationId, candidate, randomUUID()),
+          signal,
         );
-        await options
-          .storeFor(hosted)
-          .retainAccepted(
-            accepted,
-            candidate.materials,
-            authority(hosted, conversationId),
-            signal,
-          );
-        return accepted;
       });
+    },
+    async acceptFrozen(
+      hosted,
+      conversationId,
+      candidate,
+      acceptanceId,
+      signal,
+    ) {
+      try {
+        signal.throwIfAborted();
+        hosted.signal.throwIfAborted();
+        const prepared = prepareAcceptance(
+          hosted,
+          conversationId,
+          candidate,
+          acceptanceId,
+        );
+        return await safe(hosted, signal, () =>
+          retainAcceptance(hosted, conversationId, prepared, signal),
+        );
+      } catch (error) {
+        return fail(hosted, signal, error);
+      }
     },
     compose(hosted, conversationId, accepted, attempt, signal) {
       return safe(hosted, signal, async () => {

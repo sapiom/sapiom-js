@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -35,13 +35,13 @@ afterEach(async () => {
     roots.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-function fixture() {
+function fixture({ id = "studio-a", scope = sourceScope } = {}) {
   const abort = new AbortController();
   const hosted: HostedOpenCode = {
-    harnessSessionId: "studio-a",
+    harnessSessionId: id,
     cwd: root,
     stateRoot: root,
-    contextAuthorityScope: sourceScope,
+    contextAuthorityScope: scope,
     model: { providerID: "sapiom", modelID: "smart" },
     signal: abort.signal,
     isCurrent: () => !abort.signal.aborted,
@@ -54,6 +54,7 @@ function fixture() {
     },
   };
   const context = sourceContext();
+  context.session.id = id;
   context.session.cwd = root;
   const agents = ["a", "b"].map((name) => ({
     name,
@@ -61,7 +62,7 @@ function fixture() {
     definitionId: null,
   }));
   context.agents = agents;
-  const store = new FileAssistantSourceStore(root, sourceScope);
+  const store = new FileAssistantSourceStore(root, scope);
   const assertCurrent = vi.fn(async () => {
     if (!hosted.isCurrent())
       throw new OpenCodeTransportError(
@@ -76,7 +77,7 @@ function fixture() {
             status: "available",
             agent: agents.find((agent) => agent.path === selection)!,
           };
-    return createAssistantContextCandidate(context, sourceScope);
+    return createAssistantContextCandidate(context, scope);
   });
   const prepareRuntime = vi.fn<
     Parameters<typeof createAssistantContextDelivery>[0]["prepareRuntime"]
@@ -179,32 +180,45 @@ describe("accepted Assistant context delivery", () => {
     expect(resolveContext).not.toHaveBeenCalled();
     expect(f.hosted.server.fetch).not.toHaveBeenCalled();
   });
-  it("budgets the complete saved prompt before committing acceptance", async () => {
-    const f = fixture();
-    f.context.guidance[0]!.text = "x".repeat(
-      assistantContextLimits.bytes - 6000,
-    );
-    expect(() =>
-      createAssistantContextCandidate(f.context, sourceScope),
-    ).not.toThrow();
-    const retain = vi.spyOn(f.store, "retainAccepted");
-    await expect(f.accept()).rejects.toMatchObject({
-      failure: { code: "context_unavailable" },
-    });
-    expect(retain).not.toHaveBeenCalled();
-    f.context.guidance[0]!.text = "Fits the full envelope";
-    const accepted = await f.accept();
-    const prompt = await f.delivery.compose(
-      f.hosted,
-      "ses_fixture",
-      accepted,
-      { attemptToken: acceptanceId },
-      f.signal,
-    );
-    expect(typed(prompt.system).accepted.acceptanceId).toBe(
-      accepted.acceptanceId,
-    );
-  });
+  it.each(["ordinary", "frozen"])(
+    "budgets the complete saved prompt before committing %s acceptance",
+    async (mode) => {
+      const f = fixture();
+      const accept = () =>
+        mode === "ordinary"
+          ? f.accept()
+          : f.delivery.acceptFrozen(
+              f.hosted,
+              "ses_fixture",
+              createAssistantContextCandidate(f.context, sourceScope),
+              acceptanceId,
+              f.signal,
+            );
+      f.context.guidance[0]!.text = "x".repeat(
+        assistantContextLimits.bytes - 6000,
+      );
+      expect(() =>
+        createAssistantContextCandidate(f.context, sourceScope),
+      ).not.toThrow();
+      const retain = vi.spyOn(f.store, "retainAccepted");
+      await expect(accept()).rejects.toMatchObject({
+        failure: { code: "context_unavailable" },
+      });
+      expect(retain).not.toHaveBeenCalled();
+      f.context.guidance[0]!.text = "Fits the full envelope";
+      const accepted = await accept();
+      const prompt = await f.delivery.compose(
+        f.hosted,
+        "ses_fixture",
+        accepted,
+        { attemptToken: acceptanceId },
+        f.signal,
+      );
+      expect(typed(prompt.system).accepted.acceptanceId).toBe(
+        accepted.acceptanceId,
+      );
+    },
+  );
   it("requires every accepted material on readback and never refetches missing optional content", async () => {
     const f = fixture();
     f.context.guidance.push({
@@ -403,4 +417,317 @@ describe("accepted Assistant context delivery", () => {
       ).rejects.toMatchObject({ failure: { code: "context_unavailable" } });
     expect(f.resolveContext).not.toHaveBeenCalled();
   });
+});
+
+function frozenFixture() {
+  const f = fixture({ id: "studio-child", scope: "b".repeat(64) });
+  f.context.guidance.push({
+    id: "recorded-continuation",
+    kind: "continuation",
+    required: true,
+    source: "studio:recorded-brief",
+    revision: "frozen-revision",
+    status: "available",
+    text: "Recorded brief\r\nCompleted tools are historical context.",
+  });
+  const candidate = createAssistantContextCandidate(
+    f.context,
+    f.hosted.contextAuthorityScope,
+  );
+  const directory = join(
+    root,
+    "assistant-context",
+    "v1",
+    f.hosted.contextAuthorityScope,
+    "accepted",
+  );
+  const manifest = () =>
+    readFile(join(directory, `${acceptanceId}.json`), "utf8");
+  const acceptFrozen = (signal = f.signal) =>
+    f.delivery.acceptFrozen(
+      f.hosted,
+      "ses_child",
+      candidate,
+      acceptanceId,
+      signal,
+    );
+  return { ...f, candidate, directory, manifest, acceptFrozen };
+}
+
+describe("frozen child Assistant acceptance", () => {
+  it("reconciles a lost acknowledgement with one exact acceptance after restart and live source changes", async () => {
+    const f = frozenFixture();
+    const retain = f.store.retainAccepted.bind(f.store);
+    vi.spyOn(f.store, "retainAccepted").mockImplementationOnce(
+      async (...args) => {
+        await retain(...args);
+        throw new Error("response lost after durable manifest commit");
+      },
+    );
+    await expect(f.acceptFrozen()).rejects.toMatchObject({
+      failure: { code: "context_unavailable" },
+    });
+    const committed = await f.manifest();
+    f.context.guidance[0]!.text = "Changed live profile";
+    f.context.selectedAgent = {
+      status: "unavailable",
+      path: "/changed-selection",
+    };
+    f.resolveContext.mockRejectedValue(
+      new Error("Frozen acceptance must never resolve current sources"),
+    );
+    const restarted = createAssistantContextDelivery({
+      resolveContext: f.resolveContext,
+      storeFor: () =>
+        new FileAssistantSourceStore(root, f.hosted.contextAuthorityScope),
+      assertCurrent: f.assertCurrent,
+      prepareRuntime: f.prepareRuntime,
+    });
+    const retry = () =>
+      restarted.acceptFrozen(
+        f.hosted,
+        "ses_child",
+        f.candidate,
+        acceptanceId,
+        f.signal,
+      );
+    const [first, duplicate] = await Promise.all([retry(), retry()]);
+    expect(first).toEqual(JSON.parse(committed));
+    expect(duplicate).toEqual(first);
+    expect(first).toMatchObject({
+      acceptanceId,
+      conversationId: "ses_child",
+      authorityScope: f.hosted.contextAuthorityScope,
+      context: {
+        session: { id: "studio-child", cwd: root },
+        selectedAgent: { status: "none" },
+      },
+    });
+    expect(await readdir(f.directory)).toEqual([`${acceptanceId}.json`]);
+    expect(await f.manifest()).toBe(committed);
+    expect(f.prepareRuntime).not.toHaveBeenCalled();
+    f.prepareRuntime.mockRejectedValueOnce(
+      new Error("runtime generation unavailable"),
+    );
+    const compose = () =>
+      restarted.compose(
+        f.hosted,
+        "ses_child",
+        first,
+        { attemptToken: acceptanceId },
+        f.signal,
+      );
+    await expect(compose()).rejects.toMatchObject({
+      failure: { code: "context_unavailable" },
+    });
+    const prompt = await compose();
+    const wire = typed(prompt.system);
+    expect(wire.stable.guidance).toEqual(
+      expect.arrayContaining([
+        { sourceId: "profile", text: "Exact profile\r\nbytes" },
+        {
+          sourceId: "recorded-continuation",
+          text: "Recorded brief\r\nCompleted tools are historical context.",
+        },
+      ]),
+    );
+    const recovered = typed(
+      (await restarted.recover(f.hosted, "ses_child", prompt.system, f.signal))
+        .system,
+    );
+    expect(recovered.stable).toEqual(wire.stable);
+    expect(recovered.accepted).toEqual(wire.accepted);
+    expect(f.resolveContext).not.toHaveBeenCalled();
+    expect(f.hosted.server.fetch).not.toHaveBeenCalled();
+    expect(f.hosted.server.fetchJson).not.toHaveBeenCalled();
+  });
+
+  it("detaches frozen facts and materials before the first awaited authority check", async () => {
+    const f = frozenFixture();
+    let release!: () => void;
+    f.assertCurrent.mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+        }),
+    );
+    const accepting = f.acceptFrozen();
+    f.candidate.context.environment = "mutated after call";
+    f.candidate.context.session.id = "studio-parent";
+    f.candidate.materials.forEach((material) => material.bytes.fill(0));
+    release();
+    const accepted = await accepting;
+    expect(accepted.context.environment).toBe("test");
+    expect(accepted.context.session.id).toBe("studio-child");
+    const prompt = await f.delivery.compose(
+      f.hosted,
+      "ses_child",
+      accepted,
+      { attemptToken: acceptanceId },
+      f.signal,
+    );
+    expect(typed(prompt.system).stable.guidance).toContainEqual({
+      sourceId: "profile",
+      text: "Exact profile\r\nbytes",
+    });
+  });
+
+  it.each(["facts", "material", "conversation"])(
+    "rejects conflicting %s under an already committed receipt ID",
+    async (changed) => {
+      const f = frozenFixture();
+      const original = await f.acceptFrozen();
+      const committed = await f.manifest();
+      if (changed === "facts") f.context.environment = "different facts";
+      if (changed === "material")
+        f.context.guidance[0]!.text = "different profile bytes";
+      const candidate = createAssistantContextCandidate(
+        f.context,
+        f.hosted.contextAuthorityScope,
+      );
+      await expect(
+        f.delivery.acceptFrozen(
+          f.hosted,
+          changed === "conversation" ? "ses_parent" : "ses_child",
+          candidate,
+          acceptanceId,
+          f.signal,
+        ),
+      ).rejects.toMatchObject({ failure: { code: "context_unavailable" } });
+      expect(await f.manifest()).toBe(committed);
+      const prompt = await f.delivery.compose(
+        f.hosted,
+        "ses_child",
+        original,
+        { attemptToken: acceptanceId },
+        f.signal,
+      );
+      expect(typed(prompt.system).stable.guidance).toContainEqual({
+        sourceId: "profile",
+        text: "Exact profile\r\nbytes",
+      });
+      expect(f.resolveContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "parent-session",
+    "workspace",
+    "scope",
+    "native-id",
+    "acceptance-id",
+    "material-hash",
+    "material-count",
+    "material-bytes",
+  ])("rejects invalid frozen %s before retention", async (invalid) => {
+    const f = frozenFixture();
+    let candidate = f.candidate,
+      conversationId = "ses_child",
+      id = acceptanceId;
+    if (invalid === "parent-session")
+      candidate.context.session.id = "studio-parent";
+    if (invalid === "workspace")
+      candidate.context.session.cwd = "/different-project";
+    if (invalid === "scope")
+      candidate = createAssistantContextCandidate(f.context, sourceScope);
+    if (invalid === "native-id") conversationId = "ses_../parent";
+    if (invalid === "acceptance-id") id = "receipt-without-valid-UUID";
+    if (invalid === "material-hash") candidate.materials[0]!.bytes.fill(0);
+    if (invalid === "material-count")
+      candidate = {
+        ...candidate,
+        materials: Array(assistantContextLimits.entries + 1).fill(
+          candidate.materials[0]!,
+        ),
+      };
+    if (invalid === "material-bytes")
+      candidate = {
+        ...candidate,
+        materials: [
+          {
+            sourceId: "studio-context-policy",
+            bytes: new Uint8Array(assistantContextLimits.bytes + 1),
+          },
+        ],
+      };
+    const retain = vi.spyOn(f.store, "retainAccepted");
+    await expect(
+      f.delivery.acceptFrozen(
+        f.hosted,
+        conversationId,
+        candidate,
+        id,
+        f.signal,
+      ),
+    ).rejects.toMatchObject({ failure: { code: "context_unavailable" } });
+    expect(retain).not.toHaveBeenCalled();
+    expect(f.resolveContext).not.toHaveBeenCalled();
+    expect(f.prepareRuntime).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "caller-before",
+    "caller-authority",
+    "caller-retain",
+    "host-before",
+    "host-authority",
+    "host-retain",
+  ])(
+    "preserves %s cancellation without returning accepted success",
+    async (phase) => {
+      const f = frozenFixture();
+      const caller = new AbortController();
+      const controller = phase.startsWith("caller") ? caller : f.abort;
+      const reason = new Error("frozen acceptance cancelled");
+      const cancel = () => controller.abort(reason);
+      const retain = f.store.retainAccepted.bind(f.store);
+      const write = vi.spyOn(f.store, "retainAccepted");
+      if (phase.endsWith("before")) cancel();
+      if (phase.endsWith("authority"))
+        f.assertCurrent.mockImplementationOnce(async () => {
+          cancel();
+        });
+      if (phase.endsWith("retain"))
+        write.mockImplementationOnce(async (...args) => {
+          await retain(...args);
+          cancel();
+        });
+      await expect(f.acceptFrozen(caller.signal)).rejects.toBe(reason);
+      if (phase.endsWith("retain")) {
+        expect(write.mock.calls[0]![3]).toBe(caller.signal);
+        expect(JSON.parse(await f.manifest()).acceptanceId).toBe(acceptanceId);
+        if (phase.startsWith("caller"))
+          expect((await f.acceptFrozen()).acceptanceId).toBe(acceptanceId);
+      } else expect(write).not.toHaveBeenCalled();
+      expect(f.resolveContext).not.toHaveBeenCalled();
+      expect(f.prepareRuntime).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves typed authorization failure before retaining frozen content", async () => {
+    const f = frozenFixture();
+    const denied = new OpenCodeTransportError(
+      openCodeTransportFailure("access_denied"),
+    );
+    f.assertCurrent.mockRejectedValue(denied);
+    const retain = vi.spyOn(f.store, "retainAccepted");
+    await expect(f.acceptFrozen()).rejects.toBe(denied);
+    expect(retain).not.toHaveBeenCalled();
+  });
+
+  it.each(["session", "workspace"])(
+    "rechecks hosted %s identity after authority IO",
+    async (changed) => {
+      const f = frozenFixture();
+      f.assertCurrent.mockImplementationOnce(async () => {
+        if (changed === "session") f.hosted.harnessSessionId = "studio-parent";
+        else f.hosted.cwd = "/changed-workspace";
+      });
+      const retain = vi.spyOn(f.store, "retainAccepted");
+      await expect(f.acceptFrozen()).rejects.toMatchObject({
+        failure: { code: "context_unavailable" },
+      });
+      expect(retain).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -901,6 +901,7 @@ it("composes the accepted-context owner's interface inside the same leased dispa
   const accepted = { acceptanceId: "fixture" };
   const context = {
     accept: vi.fn().mockResolvedValue(accepted),
+    acceptFrozen: vi.fn(),
     compose: vi.fn().mockResolvedValue({ system: "exact accepted system" }),
     recover: vi.fn(),
   };
