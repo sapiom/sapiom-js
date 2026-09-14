@@ -95,6 +95,17 @@ storing transcript content or issuing execution commands.
 Host observation starts after an authorized conversation attaches and ends with
 runtime retirement. Reading summaries never launches inactive conversations.
 This first slice includes basic tool status; richer controls arrive separately.
+
+At Send, Assistant receives a host-validated snapshot of the visible agent
+selection, conversation binding, authorized inventory and Studio guidance.
+Selection and binding may differ. An empty or unavailable selection stays
+explicit, and accepted recovery requests retain their original context. Canvas
+and the selected-agent action bar follow the visible rail selection. The
+[context contract](docs/assistant-context.md) describes revisions, provenance and
+the extension boundary for project rules, skills and lifecycle integration.
+Those loaders are separate work; unavailable guidance and tools are identified
+as unavailable rather than claimed as loaded or connected.
+
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
 keyed by authenticated principal and Studio session above the centre pane, so it

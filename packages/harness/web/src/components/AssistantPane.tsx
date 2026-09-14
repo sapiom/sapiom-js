@@ -8,6 +8,7 @@ import {
 /** The server owns eligibility; this is only its short-lived UI projection. */
 export function AssistantPane({
   sessionId,
+  selectedAgentPath,
   bootToken,
   authRevision,
   terminalRevision,
@@ -19,6 +20,7 @@ export function AssistantPane({
   children,
 }: {
   sessionId: string;
+  selectedAgentPath?: string | null;
   bootToken: string;
   authRevision: number;
   terminalRevision: number;
@@ -134,6 +136,7 @@ export function AssistantPane({
           <OpenCodeChat
             key={`${authorityRevision}:${sessionId}`}
             harnessSessionId={sessionId}
+            selectedAgentPath={selectedAgentPath}
             bootToken={bootToken}
             draft={draft}
             onSignIn={onSignIn}

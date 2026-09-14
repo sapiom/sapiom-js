@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { HostedOpenCode } from "./opencode-host.js";
 import { DurableFileLock } from "./durable-file-lock.js";
-import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
+import { recoverAssistantPrompt } from "./studio-assistant-context.js";
 import {
   turnRecoveryAgent,
   openCodeTurn,
@@ -25,7 +25,7 @@ export class OpenCodeFinalResponse {
   async send(
     hosted: HostedOpenCode,
     sessionId: string,
-    init: RequestInit,
+    init: RequestInit | (() => Promise<RequestInit>),
   ): Promise<Response> {
     if (this.isRunning(hosted))
       throw new Error("Another request is being admitted");
@@ -40,6 +40,7 @@ export class OpenCodeFinalResponse {
         { signal },
       );
     try {
+      const request = typeof init === "function" ? await init() : init;
       if (this.uncertain.has(hosted.stateRoot)) {
         const statuses = await hosted.server.fetchJson<
           Record<string, { type: string }>
@@ -53,7 +54,7 @@ export class OpenCodeFinalResponse {
       this.uncertain.add(hosted.stateRoot);
       const response = await hosted.server.fetch(
         `/session/${sessionId}/prompt_async`,
-        init,
+        request,
       );
       if (!response.ok) return response;
       // A native 204 means scheduled. Keep admission closed until the user
@@ -138,6 +139,25 @@ export class OpenCodeFinalResponse {
       // have none; fail closed if another client has changed that contract.
       if (session.permission?.length)
         throw new Error("Session permissions changed");
+      const parentId = messages.find(
+        (message) => message.info?.id === messageId,
+      )?.info?.parentID;
+      const parentIndex = messages.findIndex(
+        (message) => message.info?.id === parentId,
+      );
+      const original = messages
+        .slice(0, parentIndex + 1)
+        .reverse()
+        .find(
+          (message) =>
+            message.info?.role === "user" &&
+            !message.parts.some(
+              (part) =>
+                part.type === "compaction" ||
+                (part.synthetic && part.metadata?.compaction_continue === true),
+            ),
+        );
+      const prompt = recoverAssistantPrompt(original?.info?.system);
       // Record BEFORE dispatch. An uncertain request is never retried on reload.
       await writeFile(file, "{}\n", { flag: "wx", mode: 0o600 });
       dispatched = true;
@@ -147,12 +167,12 @@ export class OpenCodeFinalResponse {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            ...openCodeCompletionPrompt(),
+            ...prompt,
             agent: turnRecoveryAgent,
             parts: [
               {
                 type: "text",
-                text: "The previous execution stopped unexpectedly. Continue the original user request from the saved conversation and tool results. Complete any remaining requested work, then explain the actual results. Do not repeat completed actions or expand the task. If all requested work is already done, provide the missing explanation. If you cannot complete the task, clearly explain what remains and why.",
+                text: "The previous execution stopped unexpectedly. Continue the most recent user request before this recovery from the saved conversation and tool results. Complete any remaining requested work, then explain the actual results. Do not repeat completed actions, recap earlier completed turns, or expand the task. If all requested work is already done, provide the missing explanation. If you cannot complete the task, clearly explain what remains and why.",
               },
             ],
           }),
