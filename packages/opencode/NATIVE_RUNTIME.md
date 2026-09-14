@@ -1,5 +1,23 @@
 # Owned native runtime
 
+Signed macOS Desktop bundles carry a fixed receipt in `Contents/Resources`.
+The desktop `afterPack` hook first verifies the copied native artifact against the
+SDK pin, detaches any hardlink, and signs that copy using the standard builder's
+identity/keychain and existing JIT entitlements. It records original and signed
+hashes, excludes only that exact executable from recursive re-signing, and leaves
+the outer app signer to seal the receipt. `afterSign` verifies unchanged native
+bytes and the complete containing signature. Neither hook publishes an artifact.
+
+The launcher consults this receipt only from Electron's main process when both
+the executing SDK and native binary belong to the executing app's unpacked
+resources. It validates the original pinned artifact, runtime/plugin/source,
+platform and resource-relative executable path before requiring the signed hash.
+The receipt shares the installed signed-app trust boundary with the SDK's package
+metadata; it is not an independently signed distribution manifest. CLI Node,
+development Electron and unsigned bundles retain raw artifact verification.
+Actual signed-app smoke and notarization evidence are required before activating
+the owned pin in desktop delivery; local signer simulations establish boundaries.
+
 The launcher accepts the owned runtime only with a complete `sapiomNativeRuntime`
 pin in the SDK package metadata: schema 1, runtime version, tested upstream plugin
 version, source commit and all twelve binary SHA-256 values from the release proof.

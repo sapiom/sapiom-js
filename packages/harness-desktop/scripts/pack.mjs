@@ -143,6 +143,8 @@ run(
     "never",
     ...channelFlag,
     `-c.directories.output=${outputDir}`,
+    `-c.afterPack=${join(pkgDir, "scripts", "opencode-after-pack.cjs")}`,
+    `-c.afterSign=${join(pkgDir, "scripts", "opencode-after-sign.cjs")}`,
     ...passthrough,
   ],
   deployDir,

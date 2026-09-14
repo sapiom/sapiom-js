@@ -17,7 +17,7 @@
     "dist": "pnpm run build && node scripts/pack.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "test": "vitest run"
+    "test": "vitest run && node --test scripts/opencode-after-pack.check.cjs"
   },
   "dependencies": {
     "@sapiom/harness": "workspace:^",

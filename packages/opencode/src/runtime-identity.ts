@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { signedDesktopRuntimeDigest } from "./desktop-runtime-identity.js";
 
 // This compatibility pair is backed by the owned source and native plugin tests.
 const version = "1.18.29-sapiom.3328.2";
@@ -112,6 +113,11 @@ export async function resolveRuntimeCommand(
     ([name]) => name === prefix || name.startsWith(`${prefix}-`),
   );
   check(allowed.length > 0);
+  const signedHash = await signedDesktopRuntimeDigest(executable, allowed, {
+    version,
+    pluginVersion,
+    sourceCommit,
+  });
   check((await lstat(executable)).isFile());
   const file = await open(
     executable,
@@ -124,7 +130,11 @@ export async function resolveRuntimeCommand(
     for await (const chunk of file.createReadStream({ autoClose: false }))
       hash.update(chunk);
     const actual = hash.digest("hex");
-    check(allowed.some(([, expected]) => expected === actual));
+    check(
+      signedHash
+        ? actual === signedHash
+        : allowed.some(([, expected]) => expected === actual),
+    );
   } finally {
     await file.close();
   }

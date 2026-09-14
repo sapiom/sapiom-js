@@ -9,8 +9,9 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readRuntimePin, resolveRuntimeCommand } from "./runtime-identity.js";
+import * as desktop from "./desktop-runtime-identity.js";
 
 const version = "1.18.29-sapiom.3328.2";
 const pluginVersion = "1.18.29";
@@ -61,7 +62,25 @@ beforeEach(async () => {
   await writeFile(executable, binaryName);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await rm(root, { recursive: true, force: true });
+});
+
+it("requires the signed hash when the packaged-app boundary supplies a receipt", async () => {
+  vi.spyOn(desktop, "signedDesktopRuntimeDigest").mockResolvedValue(
+    hash("signed bytes"),
+  );
+  const pin = await readRuntimePin(ownerPath);
+  // Even the original valid artifact cannot substitute for the receipt's bytes.
+  await expect(resolveRuntimeCommand(pin, directory)).rejects.toThrow(
+    "verified pin",
+  );
+  await writeFile(executable, "signed bytes");
+  expect(await resolveRuntimeCommand(pin, directory)).toEqual({ executable });
+  await writeFile(executable, "changed after signing");
+  await expect(resolveRuntimeCommand(pin, directory)).rejects.toThrow(
+    "verified pin",
+  );
 });
 
 it("retains the exact upstream plugin version for the verified owned artifact", async () => {
