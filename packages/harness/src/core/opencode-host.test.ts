@@ -141,7 +141,8 @@ describe("Studio-owned OpenCode lifecycle", () => {
   it("keeps accepted scope stable across credential rotation and runtime restart", async () => {
     const original = await host.ensure("studio-a");
     expect(original.contextAuthorityScope).toMatch(/^[a-f0-9]{64}$/);
-    expect(original.model).toBe("smart");
+    expect(original.model).toEqual({ providerID: "sapiom", modelID: "gpt-luna" });
+    expect(Object.isFrozen(original.model)).toBe(true);
     expect(Object.isFrozen(original)).toBe(true);
     grant = {
       ...grant!,
