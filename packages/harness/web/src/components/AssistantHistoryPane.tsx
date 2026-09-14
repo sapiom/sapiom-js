@@ -34,7 +34,7 @@ export function AssistantHistoryPane({
   entry: AssistantHistoryEntry;
   bootToken: string;
   onClose: () => void;
-  actions?: ReactNode;
+  actions?: (record: ReadableAssistantRecord | null) => ReactNode;
   onOpenTerminal?: () => void;
   terminalLabel?: string;
   terminalNotStarted?: boolean;
@@ -89,7 +89,7 @@ export function AssistantHistoryPane({
         </p>
       )}
       <div className="past-session-body">
-        {actions}
+        {actions?.(state.record)}
         {state.loading ? (
           <div className="past-session-status" role="status">
             Loading Assistant history…

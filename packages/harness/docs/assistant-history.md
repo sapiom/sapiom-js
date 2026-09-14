@@ -143,3 +143,8 @@ If publication and rollback both fail, metadata reports an unconfirmed commit;
 the new valid generation may already be readable and the previous generation is
 retained. Resume reconciles its exact durable operation proof after restart.
 An original-base replay cannot change the operation's committed execution state.
+
+Continue explicitly uses the record currently displayed in history review. Its
+opaque request tuple survives reloads and uncertain responses; tabs serialize
+creation before POST. A verified child opens Assistant paused with recorded
+provenance. Account, navigation and newer bus state fence result adoption.

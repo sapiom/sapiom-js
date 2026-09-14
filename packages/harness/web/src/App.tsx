@@ -89,6 +89,7 @@ import { AssistantPane } from "./components/AssistantPane";
 import { AssistantHistoryPane } from "./components/AssistantHistoryPane";
 import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
 import { AssistantHistoryActions } from "./components/AssistantHistoryActions";
+import { AssistantContinueAction } from "./components/AssistantContinueAction";
 import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
@@ -2507,6 +2508,20 @@ export const App = (): JSX.Element => {
     setOverviewOpen(false);
     closeMobileDrawer();
   };
+  const reviewLiveAssistant = async (id: string): Promise<void> => {
+    const navigation = ++studioRestoreGenerationRef.current;
+    const authority = harness.assistantHistoryAuthority;
+    const current = () => navigation === studioRestoreGenerationRef.current && harness.assistantAuthorityCurrent(authority);
+    try {
+      const entry = await harness.assistantHistoryEntry(id, AbortSignal.timeout(5000));
+      if (!current()) return;
+      if (entry) reviewAssistant(entry);
+      else harness.showToast("Saved Assistant history is unavailable. Try again.");
+    } catch {
+      if (current())
+        harness.showToast("Saved Assistant history is unavailable. Try again.");
+    }
+  };
 
   // Jump from the Studio to the real code, in the editor the user picked.
   const openInEditor = (path: string): void => {
@@ -3387,7 +3402,7 @@ export const App = (): JSX.Element => {
                   entry={activeAssistantReview.entry}
                   bootToken={harness.bootToken}
                   onClose={() => setAssistantReview(null)}
-                  actions={<AssistantHistoryActions
+                  actions={(record) => <><AssistantHistoryActions
                     entry={activeAssistantReview.entry}
                     lifecycle={assistantLifecycles.find((row) => row.harnessSessionId === activeAssistantReview.entry.harnessSessionId)}
                     bootToken={harness.bootToken}
@@ -3400,7 +3415,19 @@ export const App = (): JSX.Element => {
                       openSession(session.id, session);
                       return true;
                     }}
-                  />}
+                  /><AssistantContinueAction
+                    entry={{ ...activeAssistantReview.entry, lifecycle: assistantLifecycles.find((row) => row.harnessSessionId === activeAssistantReview.entry.harnessSessionId && row.revision >= activeAssistantReview.entry.lifecycle.revision) ?? activeAssistantReview.entry.lifecycle }}
+                    recordRevision={record?.turns.length ? record.revision : null}
+                    bootToken={harness.bootToken}
+                    onContinue={async (entry, request, signal) => {
+                      const review = activeAssistantReview;
+                      const current = () => studioRestoreGenerationRef.current === review.navigation;
+                      const session = await harness.continueAssistant(entry, request, signal, review.authority, current);
+                      if (!session || !current() || signal.aborted) return false;
+                      openSession(session.id, session);
+                      return true;
+                    }}
+                  /></>}
                   terminalNotStarted={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started"}
                   terminalLabel={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.status !== "exited" ? "Open Terminal" : "View Terminal history"}
                   onOpenTerminal={state.sessions.some((session) => session.id === activeAssistantReview.entry.harnessSessionId && session.terminalState !== "not-started")
@@ -3437,6 +3464,7 @@ export const App = (): JSX.Element => {
                     ) ?? 0
                   }
                   assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
+                  onReviewHistory={() => void reviewLiveAssistant(conversationSession.id)}
                 >
                   <DeadSessionPane
                     session={conversationSession}
@@ -3544,6 +3572,7 @@ export const App = (): JSX.Element => {
                         ) ?? 0
                       }
                       assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
+                      onReviewHistory={() => void reviewLiveAssistant(conversationSession.id)}
                     >
                       <Terminal
                         sessionId={conversationSession.id}

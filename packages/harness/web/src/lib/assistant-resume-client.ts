@@ -6,7 +6,7 @@ import { parseOpenCodeTransportFailure } from "../../../src/shared/opencode-erro
 import { parseAssistantHistoryEntry } from "./assistant-history-client";
 
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/);
-const sessionSchema = z.object({
+export const assistantSessionSchema = z.object({
   id,
   cwd: z.string(),
   title: z.string(),
@@ -35,7 +35,7 @@ const object = (value: unknown): Record<string, unknown> =>
 
 export async function assistantActionRequest(
   entry: AssistantHistoryEntry,
-  action: "inspect" | "resume",
+  action: "inspect" | "resume" | "continue",
   body: object,
   bootToken: string,
   signal: AbortSignal,
@@ -100,7 +100,7 @@ export async function resumeAssistantRequest(
     bootToken,
     signal,
   );
-  const session = sessionSchema.safeParse(value.session);
+  const session = assistantSessionSchema.safeParse(value.session);
   const attachment = object(value.attachment);
   const lifecycle = parseAssistantLifecycle(attachment.lifecycle);
   if (

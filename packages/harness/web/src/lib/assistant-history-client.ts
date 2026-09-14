@@ -31,6 +31,11 @@ const entrySchema = z
       )
       .optional(),
     recordRevision: count.positive().nullable(),
+    continuationScope: z
+      .string()
+      .regex(/^[a-f\d]{64}$/)
+      .optional()
+      .catch(undefined),
   })
   .refine(
     (entry) => entry.harnessSessionId === entry.lifecycle.harnessSessionId,
@@ -176,7 +181,7 @@ export async function readAssistantHistory(
     signal,
   );
   const result = z.object({ entries: z.array(entrySchema) }).safeParse(value);
-  if (!result.success)
+  if (!result.success || result.data.entries.some((entry) => entry.cwd !== cwd))
     throw new Error("Assistant history could not be verified.");
   const ids = new Set(
     result.data.entries.map((entry) => entry.harnessSessionId),

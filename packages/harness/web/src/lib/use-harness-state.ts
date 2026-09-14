@@ -2,6 +2,7 @@ import { AssistantStateOrder, type AssistantProjection } from "./assistant-state
 import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import { readAssistantHistory } from "./assistant-history-client";
 import { resumeAssistantRequest } from "./assistant-resume-client";
+import { continueAssistantRequest, type ContinueRequest } from "./assistant-continuation-client";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -142,8 +143,11 @@ export interface HarnessStateHook {
   assistant: AssistantProjection;
   assistantHistory: AssistantHistoryEntry[];
   assistantHistoryAuthority: string | null;
+  assistantAuthorityCurrent: (authority: string | null) => boolean;
   assistantHistoryUnavailable: boolean;
   resumeAssistant: (entry: AssistantHistoryEntry, operationId: string, signal: AbortSignal, authority: string, isCurrent: () => boolean) => Promise<HarnessSession | null>;
+  continueAssistant: (entry: AssistantHistoryEntry, request: ContinueRequest, signal: AbortSignal, authority: string, isCurrent: () => boolean) => Promise<HarnessSession | null>;
+  assistantHistoryEntry: (id: string, signal: AbortSignal) => Promise<AssistantHistoryEntry | null>;
   assistantRevealBySession: Map<string, number>;
   endingSessionIds: ReadonlySet<string>;
   authRevision: number;
@@ -1828,6 +1832,33 @@ export function useHarnessState(): HarnessStateHook {
     return currentSession ?? result.session;
   }, [assistantAuthorityKey, assistantOrder]);
 
+  const continueAssistant = useCallback(async (entry: AssistantHistoryEntry, request: ContinueRequest, signal: AbortSignal, authority: string, isCurrent: () => boolean): Promise<HarnessSession | null> => {
+    const selection = switchSeqRef.current;
+    const foreground = conversationRevealSequence.current;
+    const valid = () => !signal.aborted && authority === assistantAuthorityKey() && isCurrent() && selection === switchSeqRef.current && foreground === conversationRevealSequence.current;
+    if (!valid()) return null;
+    const result = await continueAssistantRequest(entry, request, getBootToken(), signal);
+    if (!valid()) return null;
+    const latest = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === result.session.id);
+    if (latest && (latest.revision > result.lifecycle.revision || (latest.revision === result.lifecycle.revision && latest.lifecycle !== "open"))) return null;
+    const current = sessionsRef.current.find((row) => row.id === result.session.id);
+    if (current && (current.cwd !== entry.cwd || current.agentMapIdentity?.projectId !== result.session.agentMapIdentity?.projectId)) return null;
+    setState((prev) => prev && !prev.sessions.some((row) => row.id === result.session.id)
+      ? { ...prev, sessions: [...prev.sessions, result.session] } : prev);
+    const revision = ++conversationRevealSequence.current;
+    setAssistantRevealBySession((prev) => new Map(prev).set(result.session.id, revision));
+    return current ?? result.session;
+  }, [assistantAuthorityKey, assistantOrder]);
+
+  const assistantHistoryEntry = useCallback(async (id: string, signal: AbortSignal): Promise<AssistantHistoryEntry | null> => {
+    const session = sessionsRef.current.find((row) => row.id === id);
+    const authority = assistantAuthorityKey();
+    if (!session || !authority || signal.aborted) return null;
+    const entries = await readAssistantHistory(session.cwd, getBootToken(), signal);
+    if (signal.aborted || authority !== assistantAuthorityKey() || sessionsRef.current.find((row) => row.id === id)?.cwd !== session.cwd) return null;
+    return entries.find((entry) => entry.harnessSessionId === id) ?? null;
+  }, [assistantAuthorityKey]);
+
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
       if (endingSessions.current.has(id)) return;
@@ -2527,8 +2558,11 @@ export function useHarnessState(): HarnessStateHook {
     assistant,
     assistantHistory: assistantHistory.authority === assistantAuthorityKey() ? assistantHistory.entries : [],
     assistantHistoryAuthority: assistantAuthorityKey(),
+    assistantAuthorityCurrent: (authority) => authority !== null && authority === assistantAuthorityKey(),
     assistantHistoryUnavailable: assistantHistory.authority === assistantAuthorityKey() && assistantHistory.unavailable,
     resumeAssistant,
+    continueAssistant,
+    assistantHistoryEntry,
     assistantRevealBySession,
     endingSessionIds,
     state,

@@ -18,6 +18,7 @@ export function AssistantPane({
   onAuthorityRevision,
   onSignIn,
   onOpenSettings,
+  onReviewHistory,
   children,
 }: {
   sessionId: string;
@@ -31,6 +32,7 @@ export function AssistantPane({
   onAuthorityRevision: (revision: string) => void;
   onSignIn: () => void;
   onOpenSettings: () => void;
+  onReviewHistory?: () => void;
   children: ReactNode;
 }) {
   const [access, setAccess] = useState<{
@@ -146,6 +148,7 @@ export function AssistantPane({
             onSignIn={onSignIn}
             onOpenSettings={onOpenSettings}
             onOpenTerminal={() => setMode("Terminal")}
+            onReviewHistory={onReviewHistory}
           />
         ) : (
           children

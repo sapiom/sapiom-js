@@ -660,7 +660,7 @@ function ChatSurface({
                 Recorded context from a previous Assistant session
               </summary>
               <p>
-                Prepared from {continuation.retainedTurns} saved turns.{" "}
+                Prepared from {continuation.retainedTurns} saved {continuation.retainedTurns === 1 ? "turn" : "turns"}.{" "}
                 {continuation.omittedTurns > 0
                   ? `${continuation.omittedTurns} earlier turns were omitted. `
                   : ""}
