@@ -215,6 +215,24 @@ describe("request-bound native Assistant projection", () => {
     expect((await title)[2]).toBe("Profile\r\nexact bytes");
     expect((await f.system(next, input("msg_next")))[2]).toBe("Next guidance");
   });
+  it.each([
+    undefined,
+    "generic helper",
+    studioAssistantCompletionSystem(fixtureToken),
+  ])(
+    "rejects a raced helper carrying another user's claimed context with saved system %s",
+    async (saved) => {
+      const f = fixture([user("msg_old", saved)]);
+      const foreign = save("ses_fixture", nextToken, "Another user's context");
+      const output = saved?.startsWith("StudioAssistantResult/")
+        ? foreign + "\n" + saved
+        : foreign;
+      await expect(
+        f.system(output, input("msg_old", "ses_fixture", "title")),
+      ).rejects.toThrow(AssistantContextError);
+      expect(f.load).toHaveBeenCalledWith("ses_fixture");
+    },
+  );
   it.each(["compaction", "project-copy-name"])(
     "leaves an unclaimed %s helper unchanged without a history query",
     async (agent) => {

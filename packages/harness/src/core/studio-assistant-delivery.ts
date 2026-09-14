@@ -49,6 +49,7 @@ export interface AssistantContextDelivery {
   ): Promise<AcceptedAssistantContext>;
   compose(
     hosted: HostedOpenCode,
+    conversationId: string,
     accepted: AcceptedAssistantContext,
     attempt: { readonly attemptToken: string },
     signal: AbortSignal,
@@ -111,14 +112,17 @@ export function createAssistantContextDelivery(
   }
   async function compose(
     hosted: HostedOpenCode,
+    conversationId: string,
     ref: AcceptedContextRef,
     token: string,
     signal: AbortSignal,
   ) {
+    if (ref.conversationId !== conversationId)
+      throw assistantContextUnavailable();
     const completionSystem = studioAssistantCompletionSystem(token);
     const retained = await options
       .storeFor(hosted)
-      .readAccepted(ref, authority(hosted, ref.conversationId), signal);
+      .readAccepted(ref, authority(hosted, conversationId), signal);
     await current(hosted, signal);
     const { accepted } = retained;
     validateAcceptedAssistantContext(accepted);
@@ -227,11 +231,12 @@ export function createAssistantContextDelivery(
         return accepted;
       });
     },
-    compose(hosted, accepted, attempt, signal) {
+    compose(hosted, conversationId, accepted, attempt, signal) {
       return safe(hosted, signal, async () => {
         validateAcceptedAssistantContext(accepted);
         return compose(
           hosted,
+          conversationId,
           referenceOf(accepted),
           attempt.attemptToken,
           signal,
@@ -245,7 +250,13 @@ export function createAssistantContextDelivery(
           authority(hosted, conversationId),
         );
         if (parsed.kind === "accepted-v2")
-          return compose(hosted, parsed.wire.accepted, randomUUID(), signal);
+          return compose(
+            hosted,
+            conversationId,
+            parsed.wire.accepted,
+            randomUUID(),
+            signal,
+          );
         if (
           parsed.kind !== "legacy-inline-v1" ||
           parsed.context.session.id !== hosted.harnessSessionId ||
