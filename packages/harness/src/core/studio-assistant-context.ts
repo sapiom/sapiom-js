@@ -88,13 +88,13 @@ export async function resolveStudioAssistantContext(input: {
     (await realpath(session.cwd).catch(() => null)) !== hosted.cwd
   )
     throw assistantContextUnavailable();
-  const roots = (
-    await Promise.all(
-      (input.projectRoots ?? [hosted.cwd]).map((path) =>
-        realpath(path).catch(() => null),
-      ),
-    )
-  ).filter((path): path is string => path !== null);
+  const roots = await Promise.all(
+    (input.projectRoots ?? [hosted.cwd]).map(async (path) => {
+      const canonical = await realpath(path).catch(() => null);
+      if (!canonical) throw assistantContextUnavailable();
+      return canonical;
+    }),
+  );
   const authorizedPath = (path: string) =>
     roots.some((root) => within(root, path));
   if (!authorizedPath(hosted.cwd)) throw assistantContextUnavailable();
