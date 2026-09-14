@@ -49,6 +49,24 @@ const identity = {
 };
 
 describe("retained Assistant source artifacts", () => {
+  it("copies the same bounded bytes reference that passed the aggregate preflight", () => {
+    const context = sourceContext();
+    const guidance = retainAssistantGuidance(context.guidance[0]!, sourceScope);
+    const original = guidance.material!.bytes;
+    const oversized = new Uint8Array(assistantContextLimits.bytes + 1);
+    let reads = 0;
+    Object.defineProperty(guidance.material, "bytes", {
+      get: () => (++reads <= 2 ? original : oversized),
+    });
+    const candidate = createAssistantContextCandidate(context, sourceScope, [
+      guidance,
+    ]);
+    expect(
+      candidate.materials.find((item) => item.sourceId === guidance.version.id)
+        ?.bytes,
+    ).toEqual(new Uint8Array(original));
+    expect(reads).toBe(1);
+  });
   it.each([1, 2, 3, 4, 5, 6])(
     "returns a validated snapshot when shared bytes change at read %i",
     (at) => {
