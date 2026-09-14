@@ -166,6 +166,8 @@ export interface HarnessSession {
   /** Display title (first prompt, or directory basename until known). */
   title: string;
   status: SessionStatus;
+  /** Allocated without Terminal; cleared only when its first PTY starts. */
+  terminalState?: "not-started";
   /**
    * Whether this live process was launched against the current Sapiom MCP
    * credential. The underlying generation and key remain server-private.

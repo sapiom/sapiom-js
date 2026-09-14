@@ -6,6 +6,11 @@
  */
 
 import type { FocusedSessionContextProjection } from "./focused-session-context.js";
+import {
+  readAssistantJson,
+  studioIdPattern,
+  writeAssistantJson,
+} from "./assistant-session-files.js";
 import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
@@ -17,7 +22,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 
 import {
@@ -583,6 +588,23 @@ export interface TrustedSessionCreateOptions {
   requireProjectBootstrapClaim?: boolean;
 }
 
+/** Server/receipt-authored allocation identity, never accepted from generic create. */
+export interface DormantSessionAllocationOptions {
+  childSessionId: string;
+  harness: HarnessKind;
+  expectedSource: Pick<ProjectAgentSession, "projectId" | "userId"> & {
+    cwd: string;
+  };
+}
+
+export class DormantSessionAllocationMismatchError extends Error {
+  readonly code = "DORMANT_SESSION_ALLOCATION_MISMATCH";
+  constructor() {
+    super("the reserved Studio session does not match this allocation");
+    this.name = "DormantSessionAllocationMismatchError";
+  }
+}
+
 export interface TrustedSessionResumeOptions {
   /** Recomputed focused context for the resumed process. */
   promptAppendix?: string;
@@ -997,6 +1019,8 @@ export class SessionManager {
   private readonly retiringPtys = new Map<string, PtyHandle>();
   /** Matching positive evidence remains available after its handle is released. */
   private readonly confirmedCleanupEpochs = new Map<string, string>();
+  private readonly dormantAllocations = new Map<string, string>();
+  private dormantAllocationsLoaded = false;
 
   private assertAdmission(id: string, generation: number): void {
     if (this.closing) throw new SessionManagerClosingError();
@@ -1271,6 +1295,7 @@ export class SessionManager {
     }
     dirty = (await this.loadAgentSessionOwners(persisted)) || dirty;
     await this.loadSubsessionBindings();
+    await this.loadDormantAllocations();
     if (dirty) await this.persist();
   }
 
@@ -1433,6 +1458,198 @@ export class SessionManager {
     trusted: TrustedSessionCreateOptions = {},
   ): Promise<HarnessSession> {
     return this.createWithId(this.generateId(), req, trusted);
+  }
+
+  /** Allocate only an inert Studio row. Continue owns frozen content and native seeding. */
+  async allocateDormant(
+    sourceId: string,
+    input: DormantSessionAllocationOptions,
+  ): Promise<HarnessSession> {
+    const { childSessionId: id, harness } = input;
+    const expected = { ...input.expectedSource };
+    if (
+      typeof sourceId !== "string" ||
+      !studioIdPattern.test(sourceId) ||
+      typeof id !== "string" ||
+      !studioIdPattern.test(id) ||
+      id === sourceId ||
+      typeof expected.cwd !== "string" ||
+      !isAbsolute(expected.cwd) ||
+      expected.cwd.length > 4096 ||
+      ![expected.projectId, expected.userId].every(
+        (value) =>
+          typeof value === "string" && value.length > 0 && value.length <= 256,
+      )
+    )
+      throw new DormantSessionAllocationMismatchError();
+    this.getAdapter(harness);
+    const sourceGeneration = this.closeGenerations.get(sourceId) ?? 0;
+    const childGeneration = this.closeGenerations.get(id) ?? 0;
+    this.assertAdmission(sourceId, sourceGeneration);
+    this.assertAdmission(id, childGeneration);
+    const source = this.sessions.get(sourceId);
+    if (!source) throw new UnknownSessionError(sourceId);
+    const sourceIdentity: ProjectAgentSession = {
+      sessionId: sourceId,
+      projectId: expected.projectId,
+      userId: expected.userId,
+    };
+    const childIdentity = { ...sourceIdentity, sessionId: id };
+    const assertSource = (): void => {
+      this.assertAdmission(sourceId, sourceGeneration);
+      this.assertAdmission(id, childGeneration);
+      if (
+        this.sessions.get(sourceId) !== source ||
+        source.cwd !== expected.cwd ||
+        !source.agentMapIdentity ||
+        !sameProjectAgent(source.agentMapIdentity, sourceIdentity) ||
+        this.rejectedProjectSessionMetadata.has(sourceId) ||
+        !this.resolveAgentMapIdentity
+      )
+        throw new ProjectSessionScopeUnavailableError(sourceId);
+    };
+    const authorize = async (): Promise<void> => {
+      assertSource();
+      // Supplying the existing principal keeps the production resolver read-only;
+      // resolving an unbound cwd instead could claim a project/bootstrap lifecycle.
+      await this.revalidateAgentMapIdentity(
+        sourceId,
+        expected.cwd,
+        sourceIdentity,
+      );
+      await this.revalidateAgentMapIdentity(id, expected.cwd, childIdentity);
+      assertSource();
+    };
+    const digest = createHash("sha256")
+      .update(
+        JSON.stringify([
+          sourceId,
+          id,
+          expected.cwd,
+          expected.projectId,
+          expected.userId,
+          harness,
+        ]),
+      )
+      .digest("hex");
+    return this.serializeAgentSessionIdentity(async () => {
+      await authorize();
+      await this.loadDormantAllocations();
+      const reserved = this.dormantAllocations.get(id);
+      if (
+        (reserved !== undefined && reserved !== digest) ||
+        this.subsessionBindings.has(id)
+      )
+        throw new DormantSessionAllocationMismatchError();
+      const existing = this.sessions.get(id);
+      if (existing) {
+        if (
+          reserved !== digest ||
+          existing.cwd !== expected.cwd ||
+          existing.harness !== harness ||
+          !existing.agentMapIdentity ||
+          !sameProjectAgent(existing.agentMapIdentity, childIdentity) ||
+          this.rejectedProjectSessionMetadata.has(id)
+        )
+          throw new DormantSessionAllocationMismatchError();
+        await authorize();
+        return existing;
+      }
+      return this.prepareSession(
+        id,
+        async () => {
+          if (reserved === undefined && this.dormantAllocations.size >= 10_000)
+            throw new DormantSessionAllocationMismatchError();
+          this.dormantAllocations.set(id, digest);
+          // Keep a failed reservation: only the exact operation may retry this ID.
+          await this.persistDormantAllocations();
+          await authorize();
+          const createdAt = this.now();
+          const candidate: HarnessSession = {
+            id,
+            harness,
+            cwd: expected.cwd,
+            agentSessionId: null,
+            title: basename(expected.cwd) || expected.cwd,
+            status: "exited",
+            terminalState: "not-started",
+            ready: false,
+            createdAt,
+            lastActiveAt: createdAt,
+            exitCode: null,
+            boundWorkflowPath: null,
+            rehydratedFrom: null,
+            agentMapIdentity: childIdentity,
+          };
+          let releaseFence!: () => void;
+          const fence = new Promise<void>((done) => {
+            releaseFence = done;
+          });
+          this.sessionRegistryIdentityFence = fence;
+          let failure: { error: unknown } | undefined;
+          try {
+            await this.persistIdentityCandidate(candidate);
+            await authorize();
+            this.sessions.set(id, candidate);
+          } catch (error) {
+            failure = { error };
+          } finally {
+            this.sessionRegistryIdentityFence = null;
+            releaseFence();
+          }
+          if (failure) {
+            // A rejected write can have reached rename. Release our fence before
+            // repairing, since an ordinary queued write may already await it.
+            await this.persist().catch(() => {});
+            throw failure.error;
+          }
+          return candidate;
+        },
+        childGeneration,
+      );
+    });
+  }
+
+  private async loadDormantAllocations(): Promise<void> {
+    if (this.dormantAllocationsLoaded) return;
+    const value = await readAssistantJson(
+      `${this.sessionsPath}.dormant-allocations.json`,
+      4 * 1024 * 1024,
+    );
+    if (value !== null) {
+      if (
+        !isRecord(value) ||
+        Object.keys(value).sort().join(",") !== "allocations,version" ||
+        value.version !== 1 ||
+        !isRecord(value.allocations)
+      )
+        throw new DormantSessionAllocationMismatchError();
+      const entries = Object.entries(value.allocations);
+      if (
+        entries.length > 10_000 ||
+        entries.some(
+          ([id, digest]) =>
+            !studioIdPattern.test(id) ||
+            typeof digest !== "string" ||
+            !/^[a-f0-9]{64}$/u.test(digest),
+        )
+      )
+        throw new DormantSessionAllocationMismatchError();
+      for (const [id, digest] of entries)
+        this.dormantAllocations.set(id, digest as string);
+    }
+    this.dormantAllocationsLoaded = true;
+  }
+
+  private async persistDormantAllocations(): Promise<void> {
+    if (this.dormantAllocations.size > 10_000)
+      throw new DormantSessionAllocationMismatchError();
+    const file = `${this.sessionsPath}.dormant-allocations.json`;
+    await mkdir(dirname(file), { recursive: true });
+    await writeAssistantJson(dirname(file), basename(file), {
+      version: 1,
+      allocations: Object.fromEntries(this.dormantAllocations),
+    });
   }
 
   /**
@@ -3599,6 +3816,8 @@ export class SessionManager {
     if (!marker) throw new SubsessionBindingMismatchError();
     const operation = async (): Promise<HarnessSession> => {
       this.assertAdmission(reservedSessionId, closeGeneration);
+      if (this.dormantAllocations.has(reservedSessionId))
+        throw new DormantSessionAllocationMismatchError();
       const existingMarker = this.subsessionBindings.get(reservedSessionId);
       const existingSession = this.sessions.get(reservedSessionId);
       if (existingMarker) {
@@ -3692,6 +3911,8 @@ export class SessionManager {
     expectedSubsessionBinding?: TrustedSubsessionBindingMarker,
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
+    if (this.dormantAllocations.has(id))
+      throw new DormantSessionAllocationMismatchError();
     const marker = this.subsessionBindings.get(id);
     if (
       (marker !== undefined || expectedSubsessionBinding !== undefined) &&
