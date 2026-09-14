@@ -1,5 +1,0 @@
----
-"@sapiom/mcp": patch
----
-
-Say that an App Link is a redirector, not a reverse proxy. `sapiom_dev_app_publish`'s description and its publish summary now state that the link's root answers a 302 to whichever preview URL is currently serving the app, that sub-paths are not proxied, and that the app's own API therefore lives at the preview URL — which must be re-resolved per use rather than stored, because it changes when a wake recreates the sandbox and for an org-scoped app carries a short-lived token that expires. They also say who can take those routes: for an org-scoped app the redirect and `GET {link}/__status` both need a logged-in member's browser session rather than an API key, so its API is browser-only and a machine caller needs the app published `public` (whose link and `__status` need no session) or inbound traffic on `/hook/…`, which requires `webhooksEnabled`, off by default. The summary branches on visibility, so a public app is not warned about a gate it does not have.

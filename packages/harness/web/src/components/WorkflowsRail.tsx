@@ -1,3 +1,5 @@
+import { AssistantActivity } from "./AssistantActivity";
+import type { AssistantProjection } from "../lib/assistant-state";
 import {
   useCallback,
   useEffect,
@@ -101,6 +103,7 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 const api = createApi();
 
 interface WorkflowsRailProps {
+  assistant?: AssistantProjection;
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
   width: number;
   minWidth: number;
@@ -401,6 +404,8 @@ function ProjectRowMenu({
  * `=== "true"` checks that silently miss the unknown state.
  */
 function PastSessionRow({
+  assistant,
+  sessionId,
   testid,
   harness,
   title,
@@ -410,6 +415,8 @@ function PastSessionRow({
   isSelected,
   onOpen,
 }: {
+  assistant?: AssistantProjection;
+  sessionId?: string;
   testid: string;
   harness: HarnessKind;
   title: string;
@@ -443,6 +450,7 @@ function PastSessionRow({
         <span className="session-item-title">{title}</span>
         <span className="session-item-meta">{meta}</span>
       </span>
+      {sessionId && <AssistantActivity assistant={assistant} sessionId={sessionId} />}
     </button>
   );
 }
@@ -454,6 +462,7 @@ function PastSessionRow({
  * keyed to the focused agent.
  */
 export function WorkflowsRail({
+  assistant,
   width,
   minWidth,
   workflows,
@@ -1186,6 +1195,8 @@ export function WorkflowsRail({
                             : summary?.resumeMode;
                         return (
                           <PastSessionRow
+                            assistant={assistant}
+                            sessionId={row.session.id}
                             key={row.session.id}
                             testid={`exited-session-${row.session.id}`}
                             harness={row.session.harness}

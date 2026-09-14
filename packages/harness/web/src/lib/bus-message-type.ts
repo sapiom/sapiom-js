@@ -3,6 +3,7 @@ import type { BusMessage } from "@shared/types";
 // Keep the transport's supported discriminators exhaustive as the protocol
 // evolves. Removed or unknown events never reach mounted state subscribers.
 const supportedTypes: Record<BusMessage["type"], true> = {
+  "assistant.state": true,
   "session.status": true,
   "session.record.changed": true,
   "canvas.reload": true,

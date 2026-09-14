@@ -1,3 +1,5 @@
+import { AssistantActivity } from "./AssistantActivity";
+import type { AssistantProjection } from "../lib/assistant-state";
 import { useEffect, useRef, useState } from "react";
 import type { JSX, ReactNode, RefObject } from "react";
 import type { HarnessSession } from "@shared/types";
@@ -20,6 +22,7 @@ function workspaceLabelOf(path: string): string {
 const EMPTY_BUSY_SESSION_IDS: ReadonlySet<string> = new Set();
 
 interface SessionBarProps {
+  assistant?: AssistantProjection;
   /** The main panel is showing the Overview/intro, not a session. */
   overviewMode?: boolean;
   /** Set while an agent is open whose workspace has no live session. */
@@ -83,6 +86,7 @@ interface SessionBarProps {
  * its caret, while agent actions remain right-anchored on the same row.
  */
 export function SessionBar({
+  assistant,
   overviewMode = false,
   openedAgentName = null,
   reviewTitle = null,
@@ -220,6 +224,7 @@ export function SessionBar({
           onNewSession &&
           labelOf ? (
           <SessionTabs
+            assistant={assistant}
             sessions={sessions}
             activeSessionId={activeSession?.id ?? null}
             busySessionIds={busySessionIds}
@@ -296,6 +301,7 @@ export function SessionBar({
                     ? labelOf(activeSession)
                     : (sessionName ?? activeSession.title)}
                 </span>
+                <AssistantActivity assistant={assistant} sessionId={activeSession.id} />
                 <Icon name="ChevronDown" size={13} />
               </button>
             )}

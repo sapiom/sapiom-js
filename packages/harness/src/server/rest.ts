@@ -1,3 +1,4 @@
+import type { AssistantStateSnapshot } from "../shared/assistant-state.js";
 /**
  * REST surface under /api — see src/shared/types.ts for the full contract
  * table. This router covers the session-lifecycle endpoints (W1); workflows,
@@ -193,6 +194,7 @@ async function agentHoldsConversation(
 }
 
 export interface RestRouterOptions {
+  getAssistantState?: () => AssistantStateSnapshot;
   sessionManager: SessionManager;
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
@@ -388,6 +390,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
           ? { agentsBaseUrl: options.agentsBaseUrl }
           : {}),
       };
+      if (options.getAssistantState) state.assistant = options.getAssistantState();
       res.json(state);
     } catch (err) {
       next(err);
