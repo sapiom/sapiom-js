@@ -1,5 +1,5 @@
 import { open, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { HostedOpenCode } from "./opencode-host.js";
 import { DurableFileLock } from "./durable-file-lock.js";
@@ -292,7 +292,10 @@ export class OpenCodeFinalResponse {
     } catch (error) {
       if (fenced && !dispatched) {
         // Still under our exclusive lock; this fence is ours and no POST was attempted.
-        await unlink(file);
+        const ownedFile = resolve(file);
+        if (!ownedFile.startsWith(resolve(hosted.stateRoot) + sep))
+          throw new Error("Invalid Assistant recovery storage boundary");
+        await unlink(ownedFile);
         const directory = await open(hosted.stateRoot, "r");
         try {
           await directory.sync();
