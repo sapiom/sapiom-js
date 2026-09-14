@@ -39,7 +39,7 @@ export const AUTHORING_RULES_PATH = "/v1/agents/authoring-rules";
 export const AUTHORING_RULES_RELEASE = "1.1";
 
 /** First 12 hex of sha-256 over that release's body — what the server reports in `X-Sapiom-Content-Digest`. */
-export const AUTHORING_RULES_DIGEST = "8661181bdc6f";
+export const AUTHORING_RULES_DIGEST = "8ed17f08af11";
 
 /**
  * The section anchors the served body carries (`<!-- section: NAME -->`), in

@@ -90,4 +90,4 @@ are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summari
 `sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.1 of
 that text; `sapiom_dev_agents_check` warns when the served copy differs.
 
-<!-- sapiom-authoring-rules release=1.1 digest=8661181bdc6f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->

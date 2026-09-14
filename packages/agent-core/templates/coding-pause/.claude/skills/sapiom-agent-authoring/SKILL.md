@@ -37,7 +37,7 @@ the marker rather than expecting a browser to jump to it. When a summary below a
 This copy was written against release 1.1 of it; `sapiom_dev_agents_check` warns when the
 served copy differs.
 
-<!-- sapiom-authoring-rules release=1.1 digest=8661181bdc6f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->
 
 <!-- section: one-off-vs-agent -->
 

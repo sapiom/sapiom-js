@@ -24,7 +24,7 @@ trigger kinds, App Link webhooks — are served live at
 step below touches one, it points at the served section. This guide was
 written against release 1.1 of that text.
 
-<!-- sapiom-authoring-rules release=1.1 digest=8661181bdc6f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->
 
 ---
 
