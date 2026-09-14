@@ -448,6 +448,74 @@ describe("Axios HTTP Client Integration Tests", () => {
       expect(mocks.reauthorizeWithPayment).toHaveBeenCalled();
     });
 
+    it("should reauthorize with payment when the existing transaction genuinely requires it (status: pending)", async () => {
+      mocks.create.mockResolvedValue({
+        id: "tx-needs-payment",
+        status: TransactionStatus.AUTHORIZED,
+      } as any);
+
+      // This is the realistic shape returned for a transaction that actually
+      // needs payment: requiresPayment is true and status is not yet
+      // AUTHORIZED (unlike the mock above, which — misleadingly — has
+      // requiresPayment: false alongside status: AUTHORIZED).
+      mocks.get.mockResolvedValue({
+        id: "tx-needs-payment",
+        status: TransactionStatus.PENDING,
+        requiresPayment: true,
+      } as any);
+
+      mocks.reauthorizeWithPayment.mockResolvedValue({
+        id: "tx-needs-payment",
+        status: TransactionStatus.AUTHORIZED,
+        payment: {
+          authorizationPayload: "payment-token-xyz",
+        },
+      } as any);
+
+      mocks.complete.mockResolvedValue({
+        transaction: { id: "tx-needs-payment", status: "completed" },
+      } as any);
+
+      let requestCount = 0;
+      mockAxios.onGet("/paid").reply(() => {
+        requestCount++;
+        if (requestCount === 1) {
+          return [
+            402,
+            {
+              x402Version: 1,
+              accepts: [
+                {
+                  scheme: "exact",
+                  network: "base",
+                  maxAmountRequired: "1000000",
+                  resource: "https://api.example.com/paid",
+                  payTo: "0x123",
+                  asset: "0xUSDC",
+                },
+              ],
+            },
+          ];
+        } else {
+          return [200, { paid: true }];
+        }
+      });
+
+      const client = withSapiom(axiosInstance, {
+        sapiomClient: mockSapiomClient,
+      });
+      const response = await client.get("/paid");
+      await flushPromises();
+
+      expect(response.status).toBe(200);
+      expect(response.data).toEqual({ paid: true });
+      expect(requestCount).toBe(2);
+      expect(mocks.reauthorizeWithPayment).toHaveBeenCalledWith(
+        "tx-needs-payment",
+        expect.objectContaining({ x402: expect.anything() }),
+      );
+    });
+
     it("should return original 402 if payment reauthorization is denied", async () => {
       mocks.create.mockResolvedValue({
         id: "tx-auth",
