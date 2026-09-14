@@ -49,6 +49,45 @@ const identity = {
 };
 
 describe("retained Assistant source artifacts", () => {
+  it.each([1, 2, 3, 4, 5, 6])(
+    "returns a validated snapshot when shared bytes change at read %i",
+    (at) => {
+      const context = sourceContext();
+      const guidance = retainAssistantGuidance(
+        context.guidance[0]!,
+        sourceScope,
+      );
+      const shared = new Uint8Array(
+        new SharedArrayBuffer(guidance.material!.bytes.byteLength),
+      );
+      shared.set(guidance.material!.bytes);
+      let reads = 0;
+      // Deterministically model a concurrent writer at several snapshot boundaries.
+      Object.defineProperty(guidance.material, "bytes", {
+        get() {
+          if (++reads === at) shared.fill(120);
+          return shared;
+        },
+      });
+      let candidate;
+      try {
+        candidate = createAssistantContextCandidate(context, sourceScope, [
+          guidance,
+        ]);
+      } catch (error) {
+        expect(error).toBeInstanceOf(AssistantContextError);
+        return;
+      }
+      expect(() =>
+        acceptedAssistantRecord(
+          candidate,
+          sourceScope,
+          "ses_fixture",
+          acceptanceId,
+        ),
+      ).not.toThrow();
+    },
+  );
   it("bounds supplied package allocation and rejects lossy UTF-16 guidance", () => {
     const large = {
       ...members()[0]!,
