@@ -146,7 +146,8 @@ export function createAssistantLifecycleRouter(options: {
           if (
             !current ||
             current.lifecycle.revision !== parsed.data.expectedRevision ||
-            current.cwd !== entry.cwd
+            current.cwd !== entry.cwd ||
+            current.continuationScope !== entry.continuationScope
           )
             throw changed();
           res.json({
@@ -165,12 +166,13 @@ export function createAssistantLifecycleRouter(options: {
             request.expectedRevision,
             request.operationId,
           );
-          const session = options.getSession(id);
           const current = await options.history.entry(id);
+          const session = options.getSession(id);
           if (
             !session ||
             !current ||
             current.cwd !== entry.cwd ||
+            current.continuationScope !== entry.continuationScope ||
             current.lifecycle.revision !== attachment.lifecycle.revision ||
             current.lifecycle.lifecycle !== "open"
           )

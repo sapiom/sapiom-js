@@ -43,6 +43,7 @@ const savedEntry = {
   history: "partial",
   nativeResume: "unchecked",
   recordRevision: 7,
+  continuationScope: "a".repeat(64),
 };
 const session = {
   id: "studio-a",
@@ -235,6 +236,30 @@ it("discards Resume when a newer lifecycle or authorization wins before the resp
   expect(response.status).toBe(403);
   expect(await response.text()).not.toContain("private");
 });
+it.each([
+  ["inspect", "b".repeat(64)],
+  ["inspect", undefined],
+  ["resume", "b".repeat(64)],
+  ["resume", undefined],
+] as const)(
+  "discards %s results when the authorized binding changes in the same workspace (%s)",
+  async (action, continuationScope) => {
+    entry.mockResolvedValueOnce(savedEntry).mockResolvedValueOnce({
+      ...savedEntry,
+      continuationScope,
+      lifecycle: action === "resume" ? attachment.lifecycle : lifecycle,
+    });
+    const response = await post(action, {
+      expectedRevision: 4,
+      ...(action === "resume" ? { operationId: op } : {}),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: openCodeTransportFailure("lifecycle_changed"),
+    });
+  },
+);
+
 it("projects Continue provenance without receipt inputs or accepted-reference authority", async () => {
   const response = await post("continue", {
     expectedRevision: 4,

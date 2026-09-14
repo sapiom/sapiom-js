@@ -154,3 +154,7 @@ Resume and Continue. Attach includes verified public continuation provenance and
 rechecks its lease after receipt reads. Pending children stay out of history and
 cannot attach, including after restart; only prepared children publish a session
 event. Runtime activation remains an explicit capability from its existing owner.
+
+Inspection and Resume responses recheck the complete opaque history scope after
+asynchronous work. A changed project, account, harness or native binding invalidates
+the result even when the workspace path and lifecycle revision are unchanged.
