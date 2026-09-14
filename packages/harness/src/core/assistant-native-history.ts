@@ -1,15 +1,18 @@
-import { basename, isAbsolute } from "node:path";
+import { basename } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
-import { isConversationId } from "../shared/assistant-state.js";
 import {
   openCodeTransportFailure,
   type OpenCodeTransportFailure,
 } from "../shared/opencode-errors.js";
 import {
   awaitAssistantInspection,
+  type AssistantAttachment,
   type AssistantLifecycleCoordinator,
 } from "./assistant-lifecycle.js";
-import type { AssistantAssociation } from "./assistant-session-store.js";
+import {
+  assistantResumeBindingDigest,
+  type AssistantAssociation,
+} from "./assistant-session-store.js";
 import {
   OpenCodeAccessError,
   OpenCodeTransportError,
@@ -26,7 +29,8 @@ export interface AssistantNativeInspection {
 }
 interface Options {
   authorize: (id: string) => Promise<AssistantAssociation | null>;
-  lifecycle: Pick<AssistantLifecycleCoordinator, "inspect">;
+  lifecycle: Pick<AssistantLifecycleCoordinator, "inspect"> &
+    Partial<Pick<AssistantLifecycleCoordinator, "resume">>;
   /** The shared delivery.recover preflight; validates retained content without dispatch. */
   preflight: (
     hosted: HostedOpenCode,
@@ -45,13 +49,6 @@ const object = (value: unknown): Record<string, unknown> => {
     throw unavailable();
   return value as Record<string, unknown>;
 };
-const same = (a: AssistantAssociation, b: AssistantAssociation | null) =>
-  !!b &&
-  a.harnessSessionId === b.harnessSessionId &&
-  a.conversationId === b.conversationId &&
-  a.cwd === b.cwd &&
-  a.contextAuthorityScope === b.contextAuthorityScope &&
-  a.nativeScope === b.nativeScope;
 
 async function json(
   response: Response,
@@ -95,6 +92,38 @@ async function json(
 export class AssistantNativeHistory {
   constructor(private readonly options: Options) {}
 
+  /** Retain the coordinator's exact validated runtime; never inspect/retire it
+   * first or return private saved context in the public attachment. */
+  async resume(
+    id: string,
+    expectedRevision: number,
+    operationId: string,
+  ): Promise<AssistantAttachment> {
+    if (!this.options.lifecycle.resume) throw unavailable();
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(unavailable()),
+      this.options.timeoutMs ?? 15_000,
+    );
+    try {
+      return await this.options.lifecycle.resume(
+        id,
+        expectedRevision,
+        operationId,
+        {
+          authorize: (signal) => this.authorized(id, signal),
+          read: (hosted, binding, signal) =>
+            this.read(hosted, binding, signal, {
+              nativeHistory: "unavailable",
+            }),
+        },
+        controller.signal,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async inspect(
     id: string,
     expectedRevision: number,
@@ -109,121 +138,16 @@ export class AssistantNativeHistory {
       nativeHistory: "unavailable",
     };
     try {
-      const saved = await awaitAssistantInspection(
-        this.options.authorize(id),
-        signal,
-      );
-      if (
-        !saved ||
-        saved.harnessSessionId !== id ||
-        !isConversationId(saved.conversationId) ||
-        saved.conversationId === id ||
-        !isAbsolute(saved.cwd) ||
-        !/^[a-f0-9]{64}$/.test(saved.contextAuthorityScope) ||
-        !/^[a-f0-9]{64}$/.test(saved.nativeScope)
-      )
-        throw new OpenCodeAccessError("Assistant binding unavailable");
-      const binding = { ...saved };
+      const binding = await this.authorized(id, signal);
       const result = await this.options.lifecycle.inspect(
         id,
         expectedRevision,
-        async (hosted, readSignal) => {
-          if (
-            hosted.harnessSessionId !== id ||
-            hosted.cwd !== binding.cwd ||
-            hosted.contextAuthorityScope !== binding.contextAuthorityScope ||
-            basename(hosted.stateRoot) !== binding.nativeScope
-          )
-            throw new OpenCodeAccessError("Assistant binding changed");
-          const get = async (path: string, limit: number) =>
-            json(
-              await awaitAssistantInspection(
-                hosted.server.fetch(path, {
-                  method: "GET",
-                  signal: readSignal,
-                }),
-                readSignal,
-              ),
-              readSignal,
-              limit,
-            );
-          const session = object(
-            await get(`/session/${binding.conversationId}`, 64 * 1024),
-          );
-          if (
-            session.id !== binding.conversationId ||
-            (session.directory !== undefined &&
-              session.directory !== binding.cwd)
-          )
-            throw unavailable();
-          const history = await get(
-            `/session/${binding.conversationId}/message`,
-            16 * 1024 * 1024,
-          );
-          let source: ReturnType<AssistantNativeHistory["source"]>;
-          try {
-            source = this.source(history, binding.conversationId);
-          } catch (error) {
-            if (
-              error instanceof OpenCodeTransportError &&
-              error.failure.code === "context_unavailable"
-            )
-              observed.nativeHistory = "available";
-            throw error;
-          }
-          observed.nativeHistory = "available";
-          if (source) {
-            if (typeof source.system !== "string" || !source.system.trim())
-              throw contextUnavailable();
-            try {
-              await awaitAssistantInspection(
-                this.options.preflight(
-                  hosted,
-                  binding.conversationId,
-                  source.system,
-                  readSignal,
-                ),
-                readSignal,
-              );
-            } catch (error) {
-              readSignal.throwIfAborted();
-              throw error instanceof OpenCodeTransportError
-                ? error
-                : contextUnavailable();
-            }
-          }
-          readSignal.throwIfAborted();
-          if (
-            !same(
-              binding,
-              await awaitAssistantInspection(
-                this.options.authorize(id),
-                readSignal,
-              ),
-            )
-          )
-            throw new OpenCodeAccessError("Assistant binding changed");
-          return {
-            nativeHistory: observed.nativeHistory,
-            nativeResume: "available" as const,
-            ...(source
-              ? {
-                  savedSystem: source.system as string,
-                  sourceMessageId: source.id,
-                }
-              : {}),
-          };
-        },
+        (hosted, readSignal) =>
+          this.read(hosted, binding, readSignal, observed),
         signal,
       );
       // The provisional runtime has now retired; refresh authority after cleanup IO.
-      if (
-        !same(
-          binding,
-          await awaitAssistantInspection(this.options.authorize(id), signal),
-        )
-      )
-        throw new OpenCodeAccessError("Assistant binding changed");
+      await this.assertBinding(binding, signal);
       return result;
     } catch (error) {
       const code =
@@ -255,6 +179,123 @@ export class AssistantNativeHistory {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private async authorized(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<AssistantAssociation> {
+    const binding = await awaitAssistantInspection(
+      this.options.authorize(id),
+      signal,
+    );
+    try {
+      if (
+        !binding ||
+        binding.harnessSessionId !== id ||
+        binding.conversationId === id
+      )
+        throw new Error("invalid binding");
+      assistantResumeBindingDigest(binding);
+      return { ...binding };
+    } catch {
+      throw new OpenCodeAccessError("Assistant binding unavailable");
+    }
+  }
+
+  private async assertBinding(
+    binding: AssistantAssociation,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const current = await this.authorized(binding.harnessSessionId, signal);
+    if (
+      assistantResumeBindingDigest(current) !==
+      assistantResumeBindingDigest(binding)
+    )
+      throw new OpenCodeAccessError("Assistant binding changed");
+  }
+
+  private async read(
+    hosted: HostedOpenCode,
+    binding: AssistantAssociation,
+    readSignal: AbortSignal,
+    observed: Pick<AssistantNativeInspection, "nativeHistory">,
+  ): Promise<AssistantNativeInspection> {
+    if (
+      hosted.harnessSessionId !== binding.harnessSessionId ||
+      hosted.cwd !== binding.cwd ||
+      hosted.contextAuthorityScope !== binding.contextAuthorityScope ||
+      basename(hosted.stateRoot) !== binding.nativeScope
+    )
+      throw new OpenCodeAccessError("Assistant binding changed");
+    const get = async (path: string, limit: number) =>
+      json(
+        await awaitAssistantInspection(
+          hosted.server.fetch(path, {
+            method: "GET",
+            signal: readSignal,
+          }),
+          readSignal,
+        ),
+        readSignal,
+        limit,
+      );
+    const session = object(
+      await get(`/session/${binding.conversationId}`, 64 * 1024),
+    );
+    if (
+      session.id !== binding.conversationId ||
+      (session.directory !== undefined && session.directory !== binding.cwd)
+    )
+      throw unavailable();
+    const history = await get(
+      `/session/${binding.conversationId}/message`,
+      16 * 1024 * 1024,
+    );
+    let source: ReturnType<AssistantNativeHistory["source"]>;
+    try {
+      source = this.source(history, binding.conversationId);
+    } catch (error) {
+      if (
+        error instanceof OpenCodeTransportError &&
+        error.failure.code === "context_unavailable"
+      )
+        observed.nativeHistory = "available";
+      throw error;
+    }
+    observed.nativeHistory = "available";
+    if (source) {
+      if (typeof source.system !== "string" || !source.system.trim())
+        throw contextUnavailable();
+      try {
+        await awaitAssistantInspection(
+          this.options.preflight(
+            hosted,
+            binding.conversationId,
+            source.system,
+            readSignal,
+          ),
+          readSignal,
+        );
+      } catch (error) {
+        readSignal.throwIfAborted();
+        throw error instanceof OpenCodeTransportError
+          ? error
+          : contextUnavailable();
+      }
+    }
+    readSignal.throwIfAborted();
+    await this.assertBinding(binding, readSignal);
+    return {
+      nativeHistory: observed.nativeHistory,
+      nativeResume: "available" as const,
+      ...(source
+        ? {
+            savedSystem: source.system as string,
+            sourceMessageId: source.id,
+          }
+        : {}),
+    };
   }
 
   private source(

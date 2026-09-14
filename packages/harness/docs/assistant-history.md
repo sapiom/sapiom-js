@@ -80,3 +80,10 @@ Inspection never creates an association, posts a prompt, or grants execution.
 It holds a per-session admission slot, obeys End and shutdown, and retires only
 its own provisional runtime. Existing running runtimes remain running. Startup
 and reads have a deadline; uncertain provisional cleanup is reported explicitly.
+
+Resume uses the same bounded native read and original-context preflight inside
+the coordinator's retained runtime. It validates the complete saved association
+before and after IO. Missing native history never creates a replacement session;
+missing retained context blocks execution while public history remains readable.
+An empty saved conversation needs no invented context. Public attachments contain
+only native identity, lease and lifecycle state, never saved system text.

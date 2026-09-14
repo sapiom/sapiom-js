@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { AssistantNativeHistory } from "./assistant-native-history.js";
 import type { HostedOpenCode } from "./opencode-host.js";
 import type { AssistantAssociation } from "./assistant-session-store.js";
+import type { AssistantAttachment, AssistantResumePreparation } from "./assistant-lifecycle.js";
 
 const binding: AssistantAssociation = {
   version: 1, harnessSessionId: "studio-a", cwd: "/same/folder", conversationId: "ses_saved",
@@ -27,16 +28,24 @@ function fixture(history: unknown = [message()]) {
   const preflight = vi.fn(async () => ({ system: "validated-retained-system" }));
   const calls: unknown[] = [];
   let afterRead = () => {};
+  const resume = vi.fn(async (id: string, revision: number, _operationId: string, prepare: AssistantResumePreparation, signal?: AbortSignal): Promise<AssistantAttachment> => {
+    const active = signal ?? lifetime.signal;
+    const saved = await prepare.authorize(active);
+    await prepare.read(hosted, saved, active);
+    return { conversationId: saved.conversationId, lease: "f1872aaa-b7c0-44f1-a9bc-3f9613b4a52c", lifecycle: {
+      version: 1, harnessSessionId: id, revision: revision + 1, lifecycle: "open", execution: "paused", updatedAt: 1,
+    } };
+  });
   const service = new AssistantNativeHistory({
     authorize, preflight, timeoutMs: 100,
-    lifecycle: { inspect: async <T>(id: string, revision: number, read: (hosted: HostedOpenCode, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> => {
+    lifecycle: { resume, inspect: async <T>(id: string, revision: number, read: (hosted: HostedOpenCode, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> => {
       calls.push([id, revision]);
       const result = await read(hosted, signal ?? lifetime.signal);
       afterRead();
       return result;
     } },
   });
-  return { service, hosted, fetch, authorize, preflight, calls, afterRead: (run: () => void) => { afterRead = run; } };
+  return { service, hosted, fetch, authorize, preflight, calls, resume, afterRead: (run: () => void) => { afterRead = run; } };
 }
 afterEach(() => vi.useRealTimers());
 
@@ -111,6 +120,12 @@ it("requires a saved association and revalidates account/binding after cleanup",
   await expect(f.service.inspect("studio-a", 0)).rejects.toMatchObject({ failure: { code: "access_denied" } });
 });
 
+it("revalidates the complete saved association even when native identity stays unchanged", async () => {
+  const f = fixture();
+  f.afterRead(() => f.authorize.mockResolvedValue({ ...binding, createdAt: 2 }));
+  await expect(f.service.inspect("studio-a", 0)).rejects.toMatchObject({ failure: { code: "access_denied" } });
+});
+
 it.each(["wrong-session", "wrong-message", "malformed", "oversized"])("fails closed for %s native payloads", async (kind) => {
   const row = message();
   if (kind === "wrong-message") row.info.sessionID = "ses_other";
@@ -143,4 +158,44 @@ it("cancels a body stream that never finishes within the overall read deadline",
   expect(await result).toMatchObject({ nativeResume: "unavailable", resumeFailure: { code: "transport_unavailable" } });
   expect(cancel).toHaveBeenCalledOnce();
   expect(f.preflight).not.toHaveBeenCalled();
+});
+
+const operation = "ac243472-d1ef-4926-bf47-2a32bd28e912";
+it("Resume composes exact native read and preflight under the retained coordinator runtime", async () => {
+  const f = fixture();
+  const attached = await f.service.resume("studio-a", 7, operation);
+  expect(attached).toMatchObject({ conversationId: "ses_saved", lifecycle: { harnessSessionId: "studio-a", revision: 8, execution: "paused" } });
+  expect(f.calls).toEqual([]);
+  expect(f.resume).toHaveBeenCalledExactlyOnceWith("studio-a", 7, operation, expect.any(Object), expect.any(AbortSignal));
+  expect(f.fetch.mock.calls.map(([path]) => path)).toEqual(["/session/ses_saved", "/session/ses_saved/message"]);
+  expect(f.fetch.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+  expect(f.preflight).toHaveBeenCalledExactlyOnceWith(f.hosted, "ses_saved", "retained-system", expect.any(AbortSignal));
+  expect(JSON.stringify(attached)).not.toMatch(/retained-system|savedSystem|sourceMessageId/);
+});
+
+it.each(["missing", "context", "authority"])("Resume rejects %s before granting an attachment", async (failure) => {
+  const f = fixture();
+  if (failure === "missing") f.fetch.mockResolvedValueOnce(new Response(null, { status: 404 }));
+  if (failure === "context") f.preflight.mockRejectedValueOnce(new Error("private retained path"));
+  if (failure === "authority") f.authorize.mockResolvedValueOnce(null);
+  await expect(f.service.resume("studio-a", 7, operation)).rejects.toMatchObject({ failure: { code: failure === "missing" ? "native_history_missing" : failure === "context" ? "context_unavailable" : "access_denied" } });
+});
+
+it("Resume allows an empty saved conversation without creating accepted context", async () => {
+  const f = fixture([]);
+  expect(await f.service.resume("studio-a", 0, operation)).toMatchObject({ conversationId: "ses_saved" });
+  expect(f.preflight).not.toHaveBeenCalled();
+});
+
+it.each(["authorization", "query", "preflight"])("Resume bounds a hung %s provider through the coordinator signal", async (stage) => {
+  vi.useFakeTimers();
+  const f = fixture();
+  if (stage === "authorization") f.authorize.mockImplementationOnce(() => new Promise(() => {}));
+  if (stage === "query") f.fetch.mockImplementationOnce(() => new Promise(() => {}));
+  if (stage === "preflight") f.preflight.mockImplementationOnce(() => new Promise(() => {}));
+  const resumed = f.service.resume("studio-a", 7, operation);
+  const rejected = expect(resumed).rejects.toMatchObject({ failure: { code: "transport_unavailable" } });
+  await vi.advanceTimersByTimeAsync(100);
+  await rejected;
+  expect(vi.getTimerCount()).toBe(0);
 });
