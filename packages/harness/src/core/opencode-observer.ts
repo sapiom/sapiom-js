@@ -48,6 +48,7 @@ export class OpenCodeObserver {
     private readonly id: string,
     private readonly onUpdate: (state: AssistantObservation) => void,
     private readonly onHistoryInvalidated: () => void = () => {},
+    private readonly onHistoryCheckpoint: () => void = onHistoryInvalidated,
   ) {}
 
   getState(): AssistantObservation {
@@ -256,7 +257,14 @@ export class OpenCodeObserver {
     }
   }
   private event(c: Connection, event: Record<string, unknown>): void {
-    if (typeof event.type === "string" && (event.type.startsWith("message.") || ["session.idle", "session.status"].includes(event.type)))
+    if (
+      [
+        "message.updated",
+        "message.removed",
+        "message.part.updated",
+        "message.part.removed",
+      ].includes(String(event.type))
+    )
       this.onHistoryInvalidated();
     const properties = record(event.properties) ?? {};
     if (event.type === "session.deleted") {
@@ -275,6 +283,7 @@ export class OpenCodeObserver {
           ? activity(record(properties.status)?.type)
           : null;
     if (next) {
+      if (next === "idle") this.onHistoryCheckpoint();
       c.statusRevision++;
       c.current.add("status");
       this.accepted(c, { activity: next });

@@ -49,6 +49,44 @@ it("resolves the host's same stable binding without native IO and rechecks autho
   });
   expect(await resolve("studio-a")).toEqual(saved);
   authorize.mockImplementationOnce(async () => {
+    grant = {
+      ...grant!,
+      expiresAt: Date.now() + 120000,
+      environment: { ...grant!.environment },
+    };
+    return workspace;
+  });
+  expect(await resolve("studio-a")).toEqual(saved);
+  for (const mutate of [
+    () => {
+      grant!.identityRevision = "two";
+    },
+    () => {
+      grant!.userId = "another-user";
+    },
+    () => {
+      grant!.environment.apiURL = "https://changed.example.test";
+    },
+    () => {
+      grant!.expiresAt = Date.now() - 1;
+    },
+  ]) {
+    const original: AssistantGrant = {
+      ...grant!,
+      environment: { ...grant!.environment },
+    };
+    authorize.mockImplementationOnce(async () => {
+      mutate();
+      return workspace;
+    });
+    await expect(resolve("studio-a")).rejects.toThrow("access changed");
+    grant = original;
+  }
+  authorize
+    .mockImplementationOnce(async () => workspace)
+    .mockImplementationOnce(async () => ({ ...workspace, cwd: tmpdir() }));
+  await expect(resolve("studio-a")).rejects.toThrow("access changed");
+  authorize.mockImplementationOnce(async () => {
     grant = null;
     return workspace;
   });

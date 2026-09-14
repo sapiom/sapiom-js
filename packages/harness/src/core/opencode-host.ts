@@ -40,7 +40,10 @@ import {
   type AssistantStateSnapshot,
 } from "../shared/assistant-state.js";
 
-type ObserverHandle = Pick<OpenCodeObserver, "start" | "dispose">;
+type ObserverHandle = Pick<OpenCodeObserver, "start" | "dispose"> & {
+  /** Complete an in-flight retained checkpoint before an ordinary exit retires its host. */
+  checkpoint?: () => Promise<void>;
+};
 interface ObservationBinding {
   conversationId: string;
   observer?: ObserverHandle;
@@ -539,6 +542,35 @@ export class OpenCodeHost {
     }
   }
 
+  private async retireExited(entry: Managed): Promise<void> {
+    const id = entry.workspace.harnessSessionId;
+    if (this.entries.get(id) !== entry) return;
+    const observer = entry.observation?.observer;
+    if (observer?.checkpoint && entry.hosted?.isCurrent()) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let interrupted!: () => void;
+      const deadline = new Promise<void>((resolve) => {
+        interrupted = resolve;
+        timer = setTimeout(resolve, 750);
+        timer.unref?.();
+        entry.abort.signal.addEventListener("abort", interrupted, {
+          once: true,
+        });
+      });
+      try {
+        await Promise.race([observer.checkpoint(), deadline]);
+      } catch {
+        // Checkpoint failure preserves the previous record; it cannot prevent cleanup.
+      } finally {
+        clearTimeout(timer);
+        entry.abort.signal.removeEventListener("abort", interrupted);
+      }
+    }
+    // End or revocation may already have retired this entry and admitted a replacement.
+    if (this.entries.get(id) === entry)
+      await this.retire(id, openCodeTransportFailure("runtime_exited"));
+  }
+
   private async start(
     entry: Managed,
     grant: AssistantGrant,
@@ -605,15 +637,7 @@ export class OpenCodeHost {
         signal: entry.abort.signal,
         beforeLaunch: (identity) => release.protectProcess(identity),
       });
-      void server.exited
-        .then(() => {
-          if (this.entries.get(entry.workspace.harnessSessionId) === entry)
-            return this.retire(
-              entry.workspace.harnessSessionId,
-              openCodeTransportFailure("runtime_exited"),
-            );
-        })
-        .catch(() => {});
+      void server.exited.then(() => this.retireExited(entry)).catch(() => {});
       await this.validate(entry);
       const hosted: HostedOpenCode = Object.freeze({
         ...entry.workspace,

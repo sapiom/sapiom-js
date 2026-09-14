@@ -52,10 +52,12 @@ beforeEach(async () => {
 afterEach(async () => {
   capture.dispose();
   abort.abort();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await rm(root, { recursive: true, force: true });
 });
 
-it("coalesces arbitrarily many invalidations into one active read and one catch-up", async () => {
+it("coalesces concurrent explicit checkpoints into one active read and one catch-up", async () => {
   let release!: (value: Response) => void;
   fetch.mockImplementationOnce(
     () =>
@@ -65,7 +67,7 @@ it("coalesces arbitrarily many invalidations into one active read and one catch-
   );
   const first = capture.checkpoint();
   await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-  for (let i = 0; i < 100; i++) capture.invalidate();
+  for (let i = 0; i < 100; i++) expect(capture.checkpoint()).toBe(first);
   expect(fetch).toHaveBeenCalledTimes(1);
   release(Response.json(native("Earlier")));
   await first;
@@ -73,6 +75,30 @@ it("coalesces arbitrarily many invalidations into one active read and one catch-
   expect(
     (await store.read(binding))?.turns[0]?.messages[0]?.parts[0],
   ).toMatchObject({ text: "Latest" });
+});
+
+it("bounds sustained background capture and lets explicit checkpoints flush without a delayed duplicate", async () => {
+  vi.spyOn(store, "reserve").mockResolvedValue(1);
+  vi.spyOn(store, "read").mockResolvedValue(null);
+  const write = vi.spyOn(store, "write").mockResolvedValue(true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  await capture.checkpoint();
+  for (let i = 0; i < 40; i++) {
+    capture.invalidate();
+    await vi.advanceTimersByTimeAsync(50);
+  }
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(write).toHaveBeenCalledTimes(3);
+  capture.invalidate();
+  await capture.checkpoint();
+  expect(fetch).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(fetch).toHaveBeenCalledTimes(4);
+  capture.invalidate();
+  abort.abort();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it("retains a previous checkpoint after native failure and refuses a late retired response", async () => {

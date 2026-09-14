@@ -55,6 +55,9 @@ export class AssistantRecordCapture {
   private readonly lifetime = new AbortController();
   private pending = false;
   private running?: Promise<void>;
+  private invalidated = false;
+  private timer?: ReturnType<typeof setTimeout>;
+  private startedAt = 0;
   private failed = false;
   readonly binding: AssistantRecordBinding;
   constructor(
@@ -77,20 +80,40 @@ export class AssistantRecordCapture {
     return this.failed;
   }
   invalidate = (): void => {
-    void this.checkpoint();
+    if (!this.live()) return;
+    this.invalidated = true;
+    this.schedule();
   };
+  private schedule(): void {
+    if (this.timer || this.running || !this.invalidated || !this.live()) return;
+    this.timer = setTimeout(
+      () => {
+        this.timer = undefined;
+        void this.checkpoint();
+      },
+      Math.max(0, this.startedAt + 1000 - Date.now()),
+    );
+    this.timer.unref?.();
+  }
+  /** Explicit lifecycle/acknowledgement/idle checkpoints bypass background throttling. */
   checkpoint(): Promise<void> {
     if (!this.live()) return Promise.resolve();
+    clearTimeout(this.timer);
+    this.timer = undefined;
     this.pending = true;
     if (!this.running)
       this.running = this.capture().finally(() => {
         this.running = undefined;
-        if (this.pending && this.live()) this.invalidate();
+        if (this.pending && this.live()) return this.checkpoint();
+        this.schedule();
       });
     return this.running;
   }
   dispose = (): void => {
     this.pending = false;
+    this.invalidated = false;
+    clearTimeout(this.timer);
+    this.timer = undefined;
     this.lifetime.abort();
     this.hosted.signal.removeEventListener("abort", this.dispose);
   };
@@ -104,6 +127,8 @@ export class AssistantRecordCapture {
   private async capture(): Promise<void> {
     while (this.pending && this.live()) {
       this.pending = false;
+      this.invalidated = false;
+      this.startedAt = Date.now();
       const signal = AbortSignal.any([
         this.lifetime.signal,
         this.hosted.signal,

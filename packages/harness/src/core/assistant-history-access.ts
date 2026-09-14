@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import type { AssistantAccess } from "./assistant-access.js";
+import type { AssistantAccess, AssistantGrant } from "./assistant-access.js";
 import {
   contextAuthorityScope,
   nativeAuthorityScope,
@@ -10,6 +10,18 @@ import {
 } from "./opencode-host.js";
 import type { AssistantSessionStore } from "./assistant-session-store.js";
 
+const authority = (grant: AssistantGrant | null): string | null =>
+  !grant || grant.expiresAt <= Date.now()
+    ? null
+    : JSON.stringify([
+        grant.userId,
+        grant.tenantId,
+        grant.identityRevision,
+        grant.environment.name,
+        grant.environment.apiURL,
+        grant.environment.credentials?.apiKey,
+      ]);
+
 /** Resolve the current authorized binding without launching or querying OpenCode. */
 export function assistantHistoryAccess(options: {
   access: Pick<AssistantAccess, "get">;
@@ -18,8 +30,10 @@ export function assistantHistoryAccess(options: {
 }) {
   return async (id: string) => {
     const grant = options.access.get();
-    if (!grant)
+    const captured = authority(grant);
+    if (!grant || !captured)
       throw new OpenCodeAccessError("Assistant access is unavailable");
+    const snapshot = { ...grant, environment: { ...grant.environment } };
     const workspace = await options.authorize(id);
     if (!workspace || workspace.harnessSessionId !== id)
       throw new OpenCodeAccessError("Workspace unavailable");
@@ -27,20 +41,20 @@ export function assistantHistoryAccess(options: {
     const key = {
       harnessSessionId: id,
       cwd,
-      contextAuthorityScope: contextAuthorityScope(grant, {
+      contextAuthorityScope: contextAuthorityScope(snapshot, {
         harnessSessionId: id,
         cwd,
       }),
     };
     const binding = await options.store.associate(
       key,
-      nativeAuthorityScope(grant, key),
+      nativeAuthorityScope(snapshot, key),
       undefined,
     );
     const current = await options.authorize(id);
     const currentCwd = current ? await realpath(current.cwd) : null;
     if (
-      options.access.get() !== grant ||
+      authority(options.access.get()) !== captured ||
       !current ||
       current.harnessSessionId !== id ||
       currentCwd !== cwd

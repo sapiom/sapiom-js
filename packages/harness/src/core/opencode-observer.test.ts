@@ -11,7 +11,10 @@ const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 const wait = (check: () => void) =>
   vi.waitFor(check, { interval: 10, timeout: 2500 });
-function fixture(onHistoryInvalidated?: () => void) {
+function fixture(
+  onHistoryInvalidated?: () => void,
+  onHistoryCheckpoint?: () => void,
+) {
   const abort = new AbortController();
   cleanups.push(() => abort.abort());
   const data = new Map<string, unknown>([
@@ -66,9 +69,12 @@ function fixture(onHistoryInvalidated?: () => void) {
     server: { fetch, close },
   } as unknown as HostedOpenCode;
   const updates: AssistantObservation[] = [];
-  const observer = new OpenCodeObserver(hosted, "ses_a", (state) =>
-    updates.push(state),
+  const observer = new OpenCodeObserver(
+    hosted,
+    "ses_a",
+    (state) => updates.push(state),
     onHistoryInvalidated,
+    onHistoryCheckpoint,
   );
   cleanups.push(observer.dispose);
   return {
@@ -372,14 +378,28 @@ it.each(["dispose", "abort", "retire"])(
 );
 
 it("invalidates retained history from the existing observer after native message persistence", async () => {
-  const checkpoint = vi.fn();
-  const f = fixture(checkpoint);
+  const invalidated = vi.fn(),
+    checkpoint = vi.fn();
+  const f = fixture(invalidated, checkpoint);
   await f.start();
   checkpoint.mockClear();
+  invalidated.mockClear();
+  for (let i = 0; i < 100; i++)
+    f.send("message.part.delta", {
+      messageID: "msg_a",
+      partID: "part_a",
+      delta: "token",
+    });
+  f.send("session.status", { status: { type: "busy" } });
   f.send("message.updated", { info: { id: "msg_a", sessionID: "ses_a" } });
-  await wait(() => expect(checkpoint).toHaveBeenCalledTimes(1));
-  f.send("message.updated", { sessionID: "ses_b", info: { id: "msg_b", sessionID: "ses_b" } });
+  await wait(() => expect(invalidated).toHaveBeenCalledTimes(1));
+  expect(checkpoint).not.toHaveBeenCalled();
+  f.send("message.updated", {
+    sessionID: "ses_b",
+    info: { id: "msg_b", sessionID: "ses_b" },
+  });
   f.send("session.idle");
-  await wait(() => expect(checkpoint).toHaveBeenCalledTimes(2));
+  await wait(() => expect(checkpoint).toHaveBeenCalledTimes(1));
+  expect(invalidated).toHaveBeenCalledTimes(1);
   expect(f.streams).toHaveLength(1);
 });

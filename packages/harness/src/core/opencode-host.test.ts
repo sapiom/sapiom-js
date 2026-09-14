@@ -29,6 +29,7 @@ const observers: Array<{
   update: (state: AssistantObservation) => void;
   dispose: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
+  checkpoint?: () => Promise<void>;
 }> = [];
 const createObserver = vi.fn(
   (
@@ -65,6 +66,17 @@ const revoke = vi.fn();
 const close = vi.fn();
 const issue = vi.fn();
 const neverExited = new Promise<void>(() => {});
+async function exitFixture(checkpoint: () => Promise<void>) {
+  let exit!: () => void;
+  const exited = new Promise<void>((resolve) => {
+    exit = resolve;
+  });
+  start.mockResolvedValueOnce({ pid: 123, exited, close });
+  const hosted = await host.ensure("studio-a");
+  host.observe(hosted, "ses_a");
+  observers[0]!.checkpoint = checkpoint;
+  return { hosted, exit };
+}
 const cleanupProofFor = (stateRoot: string, hex: string) => ({
   path: join(stateRoot, `cleanup-${hex.repeat(32)}.json`),
   token: hex.repeat(64),
@@ -131,6 +143,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  vi.useRealTimers();
   if (expectShutdownFailure)
     await expect(host.close()).rejects.toThrow("shutdown");
   else await host.close();
@@ -667,6 +680,86 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(start).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it("lets an in-flight checkpoint persist before ordinary exit aborts its exact host", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let pending!: Promise<void>;
+    const checkpoint = vi.fn(() => pending);
+    const { hosted, exit } = await exitFixture(checkpoint);
+    pending = held.then(async () => {
+      hosted.signal.throwIfAborted();
+      await writeFile(join(root, "final-checkpoint.json"), "retained");
+    });
+    exit();
+    await vi.waitFor(() => expect(checkpoint).toHaveBeenCalledOnce());
+    expect(host.current("studio-a")).toBe(hosted);
+    expect(hosted.signal.aborted).toBe(false);
+    expect(observers[0]!.dispose).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(hosted.signal.aborted).toBe(true));
+    expect(await readFile(join(root, "final-checkpoint.json"), "utf8")).toBe(
+      "retained",
+    );
+    expect(createObserver).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("bounds an unresponsive ordinary-exit checkpoint to 750 ms", async () => {
+    const checkpoint = vi.fn(() => new Promise<void>(() => {}));
+    const { hosted, exit } = await exitFixture(checkpoint);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    exit();
+    await vi.advanceTimersByTimeAsync(749);
+    expect(checkpoint).toHaveBeenCalledOnce();
+    expect(hosted.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hosted.signal.aborted).toBe(true);
+    expect(observers[0]!.dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each(["End", "access", "workspace", "shutdown"])(
+    "%s preempts ordinary-exit draining without waiting for the checkpoint or deadline",
+    async (reason) => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const checkpoint = vi.fn(() => held);
+      const { hosted, exit } = await exitFixture(checkpoint);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      exit();
+      await Promise.resolve();
+      expect(checkpoint).toHaveBeenCalledOnce();
+      if (reason === "End") await host.retire("studio-a");
+      if (reason === "access") {
+        grant = null;
+        changed();
+      }
+      if (reason === "workspace") {
+        authorize.mockResolvedValue(null);
+        await expect(host.ensure("studio-a")).rejects.toThrow("unavailable");
+      }
+      if (reason === "shutdown") host.beginShutdown();
+      expect(hosted.signal.aborted).toBe(true);
+      expect(observers[0]!.dispose).toHaveBeenCalledOnce();
+      await host.retireExact(hosted);
+      expect(close).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      if (reason === "End") {
+        const replacement = await host.ensure("studio-a");
+        release();
+        await Promise.resolve();
+        expect(host.current("studio-a")).toBe(replacement);
+        expect(replacement.signal.aborted).toBe(false);
+        expect(close).toHaveBeenCalledOnce();
+      } else release();
+    },
+  );
 
   it("maps only the bounded native startup reason and suppresses expected cancellation", async () => {
     start.mockRejectedValueOnce({

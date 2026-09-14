@@ -3557,8 +3557,9 @@ export const startServer = async (
     createObserver: (hosted, id, update) => {
       const capture = new AssistantRecordCapture(hosted, id, assistantRecords);
       recordCaptures.set(hosted, capture);
-      const observer = new OpenCodeObserver(hosted, id, update, capture.invalidate);
-      return { start: () => observer.start(), dispose: () => { observer.dispose(); capture.dispose(); } };
+      const checkpoint = () => capture.checkpoint();
+      const observer = new OpenCodeObserver(hosted, id, update, capture.invalidate, () => { void checkpoint(); });
+      return { start: () => observer.start(), checkpoint, dispose: () => { observer.dispose(); capture.dispose(); } };
     },
     bridge: openCodeBridge,
     origin: () => `http://127.0.0.1:${actualPort}`,
@@ -3585,7 +3586,7 @@ export const startServer = async (
         loadSystemPrompt: options.loadSystemPrompt,
       }),
       new OpenCodeAssociations(assistantSessions),
-      new OpenCodeFinalResponse({ onPersisted: async (hosted) => { recordCaptures.get(hosted)?.invalidate(); } }),
+      new OpenCodeFinalResponse({ onPersisted: async (hosted) => { await recordCaptures.get(hosted)?.checkpoint(); } }),
     ),
   );
 
