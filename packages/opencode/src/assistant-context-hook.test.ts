@@ -332,18 +332,23 @@ describe("request-bound native Assistant projection", () => {
       f.system(saved, input("msg_unknown", "ses_fixture", "title")),
     ).rejects.toThrow(AssistantContextError);
   });
-  it("leaves generic and leading-v2 completion-only systems intact", async () => {
+  it("requires context for ordinary Studio work while preserving the unscoped wrapper", async () => {
     const f = fixture();
     for (const saved of [
+      undefined,
       "generic instructions",
       studioAssistantCompletionSystem(fixtureToken),
     ]) {
       const id =
-        saved === "generic instructions" ? "msg_generic" : "msg_completion";
+        saved === undefined
+          ? "msg_missing"
+          : saved === "generic instructions"
+            ? "msg_generic"
+            : "msg_completion";
       await f.messages([user(id, saved)]);
-      expect(await f.system(saved, input(id))).toEqual([
-        "Native prefix\n" + saved,
-      ]);
+      await expect(f.system(saved ?? "", input(id))).rejects.toThrow(
+        AssistantContextError,
+      );
     }
     expect(
       createStudioAssistantContextHooks(async () => []),

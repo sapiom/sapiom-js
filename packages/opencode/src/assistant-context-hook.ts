@@ -105,7 +105,11 @@ export function createStudioAssistantContextHooks(
       // A failed completion restoration must not turn required continuation into generic work.
       if (isSyntheticContinuation(message) && info.system === undefined)
         throw new AssistantContextError();
-      parse(info.system, info.sessionID);
+      const parsed = parse(info.system, info.sessionID);
+      if (!isCompactionControl(message))
+        contextCheck(
+          parsed.kind === "accepted-v2" || parsed.kind === "legacy-inline-v1",
+        );
       const digest = fingerprint(info.system);
       contextCheck(!fingerprints.has(key) || fingerprints.get(key) === digest);
       fingerprints.set(key, digest);
