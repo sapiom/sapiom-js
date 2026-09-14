@@ -395,13 +395,13 @@ export function createAssistantContextCandidate(
     mcpCatalogRevision: manifests[3]!.version.revision,
   };
   instructionSet.revision = assistantRevision(instructionSet);
-  checkMaterialBudget(materials);
+  const retained = boundedMaterials(materials);
   const candidate = {
     context: structuredClone(context),
     instructionSet: JSON.parse(
       encodeAssistantContext(instructionSet),
     ) as InstructionSet,
-    materials: materials.map((item) => ({
+    materials: retained.map((item) => ({
       sourceId: item.sourceId,
       bytes: new Uint8Array(item.bytes),
     })),
@@ -414,17 +414,20 @@ export function createAssistantContextCandidate(
   return candidate;
 }
 
-function checkMaterialBudget(materials: readonly SourceMaterial[]): void {
+function boundedMaterials(
+  materials: readonly SourceMaterial[],
+): SourceMaterial[] {
   check(
     Array.isArray(materials) &&
       materials.length <= assistantContextLimits.entries,
   );
   let materialBytes = 0;
-  for (const material of materials) {
-    check(material.bytes instanceof Uint8Array);
-    materialBytes += material.bytes.byteLength;
+  return materials.map(({ sourceId, bytes }) => {
+    check(bytes instanceof Uint8Array);
+    materialBytes += bytes.byteLength;
     check(materialBytes <= assistantContextLimits.bytes);
-  }
+    return { sourceId, bytes };
+  });
 }
 
 /** Check all accepted available references, including optional sources and packages. */
@@ -433,7 +436,7 @@ export function validateAssistantMaterials(
   materials: readonly SourceMaterial[],
   authorityScope: string,
 ): ReadonlyMap<string, ReadonlySourceContent> {
-  checkMaterialBudget(materials);
+  materials = boundedMaterials(materials);
   validateInstructionSet(instructionSet, authorityScope);
   check(
     new Set(materials.map((item) => item.sourceId)).size === materials.length,
