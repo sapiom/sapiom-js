@@ -230,13 +230,24 @@ describe("retained Terminal cleanup and bound restart cancellation", () => {
         trusted,
         recorded,
       );
-      await held.entered;
-      await manager.close(id);
-      expect(manager.getSubsessionBinding(id)).toBeNull();
-      held.release();
-      await expect(restarting).rejects.toMatchObject({
+      const cancelled = expect(restarting).rejects.toMatchObject({
         code: "SESSION_PREPARATION_CANCELLED",
       });
+      await held.entered;
+      const closing = manager.close(id);
+      try {
+        if (stage === "binding-write") {
+          // The initial reservation and held restart are the only writes.
+          // End must wait for the older write before persisting its tombstone.
+          expect(writeBinding).toHaveBeenCalledTimes(2);
+        } else {
+          await closing;
+          expect(manager.getSubsessionBinding(id)).toBeNull();
+        }
+      } finally {
+        held.release();
+        await Promise.all([closing, cancelled]);
+      }
       expect(manager.getSubsessionBinding(id)).toBeNull();
       expect(
         JSON.parse(await readFile(`${path}.subsession-bindings.json`, "utf8")),
@@ -245,6 +256,63 @@ describe("retained Terminal cleanup and bound restart cancellation", () => {
       expect(adapter.launch).toHaveBeenCalledOnce();
       expect(manager.get(id)?.status).toBe("exited");
       if (stage === "vendor-probe") expect(recorded).not.toHaveBeenCalled();
+      fixture();
+      await manager.init();
+      expect(manager.getSubsessionBinding(id)).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    "surfaces failed marker repair after commit=%s and permits durable close retry",
+    async (committed) => {
+      const { request, path, writeBinding, spawnPty } = fixture();
+      const id = "00000000-0000-4000-8000-000000000334";
+      const marker = {
+        sessionId: id,
+        projectId: "project-1",
+        parentSessionId: "parent-1",
+        bindingId: "binding-1",
+        incarnation: 1,
+        spawnEpoch: 1,
+      };
+      const trusted = {
+        agentMapIdentity: () => ({
+          sessionId: id,
+          projectId: "project-1",
+          userId: "user-1",
+        }),
+      };
+      await manager.createReserved(id, request, marker, trusted);
+      spawns[0]!.exit();
+      await manager.flush();
+      const repairFailure = Object.assign(new Error("marker repair failed"), {
+        code: "ENOSPC",
+      });
+      writeBinding
+        .mockImplementationOnce(async (file, text) => {
+          if (committed) await writeFile(file, text);
+          throw new Error("marker write outcome uncertain");
+        })
+        .mockRejectedValueOnce(repairFailure);
+      await expect(
+        manager.restartFreshBound(
+          id,
+          marker,
+          { ...marker, incarnation: 2, spawnEpoch: 2 },
+          trusted,
+          async () => false,
+        ),
+      ).rejects.toBe(repairFailure);
+      expect(spawnPty).toHaveBeenCalledOnce();
+      // A failed write must not poison the queue or conceal the repair error.
+      // A later successful End must remove even a possibly committed marker.
+      await manager.close(id);
+      expect(
+        JSON.parse(await readFile(`${path}.subsession-bindings.json`, "utf8")),
+      ).toEqual({ version: 1, markers: {}, closedSessionIds: [] });
+      fixture();
+      await manager.init();
+      expect(manager.getSubsessionBinding(id)).toBeNull();
     },
   );
 });

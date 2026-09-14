@@ -237,12 +237,17 @@ describe("Terminal close admission and evidence", () => {
       },
       {},
     );
-    await held.entered;
-    await manager.close(id);
-    held.release();
-    await expect(creating).rejects.toMatchObject({
+    const cancelled = expect(creating).rejects.toMatchObject({
       code: "SESSION_PREPARATION_CANCELLED",
     });
+    await held.entered;
+    const closing = manager.close(id);
+    try {
+      expect(writes).toBe(1);
+    } finally {
+      held.release();
+      await Promise.all([closing, cancelled]);
+    }
     expect(spawnPty).not.toHaveBeenCalled();
   });
 

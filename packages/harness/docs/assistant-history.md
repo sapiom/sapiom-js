@@ -128,3 +128,8 @@ Missing native history offers a separate action to review the retained record.
 Brief reduction preserves the newest useful Assistant state and the user's task
 context, with explicit omission markers. Sibling legacy associations that claim
 the same native scope with contradictory workspaces fail closed before creation.
+
+Terminal binding persistence serializes actual sidecar writes with End, taking
+each snapshot when its write runs. A failed compensating repair is surfaced so
+cleanup can be retried. Resume and Start Terminal during shutdown return a
+conflict instead of an internal-server error.

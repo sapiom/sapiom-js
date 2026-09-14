@@ -1195,6 +1195,7 @@ export class SessionManager {
   private agentSessionIdentityQueue: Promise<void> = Promise.resolve();
   private agentSessionOwnerWriteSeq = 0;
   private subsessionBindingWriteSeq = 0;
+  private subsessionBindingWriteQueue: Promise<void> = Promise.resolve();
   private subsessionBindingQueue: Promise<void> = Promise.resolve();
   private initialized = false;
 
@@ -3262,6 +3263,7 @@ export class SessionManager {
     }
     await this.agentSessionIdentityQueue;
     await this.subsessionBindingQueue;
+    await this.subsessionBindingWriteQueue;
     await this.writeQueue;
   }
 
@@ -3836,7 +3838,19 @@ export class SessionManager {
     }
   }
 
-  private async persistSubsessionBindings(): Promise<void> {
+  private persistSubsessionBindings(): Promise<void> {
+    // End may overtake asynchronous restart preparation. Serialize the actual
+    // sidecar writes and snapshot at execution so an older write cannot land
+    // after End has durably removed the binding. Keep this separate from the
+    // operation queue: End must not wait on held launch preparation.
+    const next = this.subsessionBindingWriteQueue.then(() =>
+      this.writeSubsessionBindings(),
+    );
+    this.subsessionBindingWriteQueue = next.catch(() => {});
+    return next;
+  }
+
+  private async writeSubsessionBindings(): Promise<void> {
     const markers = Object.fromEntries(
       [...this.subsessionBindings.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
@@ -4358,7 +4372,10 @@ export class SessionManager {
           this.subsessionBindings.get(id) === next
         )
           this.subsessionBindings.set(id, current);
-        await this.persistSubsessionBindings().catch(() => {});
+        // Report cancellation only after its durable repair succeeds. A failed
+        // repair is actionable storage uncertainty, including a post-rename
+        // failure that may have committed the advanced marker.
+        await this.persistSubsessionBindings();
         throw error;
       }
     }

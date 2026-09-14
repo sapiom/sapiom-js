@@ -732,6 +732,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
       err instanceof McpSessionRestartUnavailableError ||
       err instanceof ProjectSessionScopeUnavailableError ||
       err instanceof SessionAlreadyLiveError ||
+      err instanceof SessionManagerClosingError ||
       err instanceof SessionPreparationCancelledError ||
       err instanceof SessionCleanupUnconfirmedError ||
       err instanceof SessionNotDormantError ||

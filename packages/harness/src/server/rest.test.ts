@@ -352,9 +352,10 @@ describe("createRestRouter", () => {
   });
 
   it.each([
+    new SessionManagerClosingError(),
     new SessionPreparationCancelledError(),
     new SessionCleanupUnconfirmedError(),
-  ])("returns 409 for cancelled or unconfirmed Terminal resume: $code", async (error) => {
+  ])("returns 409 for Terminal resume lifecycle conflicts: $code", async (error) => {
     const sessionManager = fakeSessionManager([exitedSession()]);
     vi.mocked(sessionManager.resume).mockRejectedValue(error);
     vi.mocked(sessionManager.restartForMcpCredentials).mockRejectedValue(error);
@@ -390,6 +391,14 @@ describe("createRestRouter", () => {
       vi.mocked(sessionManager.activateDormant).mockRejectedValueOnce(error);
       expect((await request()).status).toBe(409);
     }
+    const shutdown = new SessionManagerClosingError();
+    vi.mocked(sessionManager.activateDormant).mockRejectedValueOnce(shutdown);
+    const denied = await request();
+    expect(denied.status).toBe(409);
+    expect(await denied.json()).toEqual({
+      error: shutdown.message,
+      code: shutdown.code,
+    });
     vi.mocked(sessionManager.activateDormant).mockRejectedValueOnce(new UnknownSessionError("sess-1"));
     expect((await request()).status).toBe(404);
   });
