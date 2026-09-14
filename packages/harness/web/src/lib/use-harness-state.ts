@@ -1,6 +1,7 @@
 import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
 import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import { readAssistantHistory } from "./assistant-history-client";
+import { resumeAssistantRequest } from "./assistant-resume-client";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -142,6 +143,8 @@ export interface HarnessStateHook {
   assistantHistory: AssistantHistoryEntry[];
   assistantHistoryAuthority: string | null;
   assistantHistoryUnavailable: boolean;
+  resumeAssistant: (entry: AssistantHistoryEntry, operationId: string, signal: AbortSignal, authority: string, isCurrent: () => boolean) => Promise<HarnessSession | null>;
+  assistantRevealBySession: Map<string, number>;
   endingSessionIds: ReadonlySet<string>;
   authRevision: number;
   state: AppState | null;
@@ -504,9 +507,12 @@ export function useHarnessState(): HarnessStateHook {
   const [terminalRevealBySession, setTerminalRevealBySession] = useState(
     () => new Map<string, number>(),
   );
+  const [assistantRevealBySession, setAssistantRevealBySession] = useState(() => new Map<string, number>());
+  const conversationRevealSequence = useRef(0);
   const revealTerminal = useCallback((sessionId: string) => {
+    const revision = ++conversationRevealSequence.current;
     setTerminalRevealBySession((previous) =>
-      new Map(previous).set(sessionId, (previous.get(sessionId) ?? 0) + 1),
+      new Map(previous).set(sessionId, revision),
     );
   }, []);
   const [loading, setLoading] = useState(true);
@@ -1386,6 +1392,7 @@ export function useHarnessState(): HarnessStateHook {
           );
         } else if (message.type === "auth.changed") {
           authoritySequence.current++;
+          setAssistantRevealBySession(new Map());
           setAssistant(assistantOrder.authChanged());
           // Accept a barrier synchronously: merely issuing the refresh cannot
           // stop an older in-flight success from restoring another account.
@@ -1802,6 +1809,25 @@ export function useHarnessState(): HarnessStateHook {
     [state, resumeSession, rehydrateSession, selectSession],
   );
 
+  const resumeAssistant = useCallback(async (entry: AssistantHistoryEntry, operationId: string, signal: AbortSignal, authority: string, isCurrent: () => boolean): Promise<HarnessSession | null> => {
+    const selection = switchSeqRef.current;
+    const foreground = conversationRevealSequence.current;
+    const valid = () => !signal.aborted && authority === assistantAuthorityKey() && isCurrent() && selection === switchSeqRef.current && foreground === conversationRevealSequence.current;
+    if (!valid()) return null;
+    const result = await resumeAssistantRequest(entry, operationId, getBootToken(), signal);
+    if (!valid()) return null;
+    const latest = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === entry.harnessSessionId);
+    if (latest && (latest.revision > result.lifecycle.revision || (latest.revision === result.lifecycle.revision && latest.lifecycle !== "open"))) return null;
+    const currentSession = sessionsRef.current.find((row) => row.id === result.session.id);
+    if (currentSession && currentSession.cwd !== entry.cwd) return null;
+    // A newer bus row owns Terminal status. Resume only adds an absent Studio.
+    setState((prev) => prev && !prev.sessions.some((row) => row.id === result.session.id)
+      ? { ...prev, sessions: [...prev.sessions, result.session] } : prev);
+    const revision = ++conversationRevealSequence.current;
+    setAssistantRevealBySession((prev) => new Map(prev).set(result.session.id, revision));
+    return currentSession ?? result.session;
+  }, [assistantAuthorityKey, assistantOrder]);
+
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
       if (endingSessions.current.has(id)) return;
@@ -1817,7 +1843,7 @@ export function useHarnessState(): HarnessStateHook {
         await api.killSession(id);
       } catch (err) {
         // Neither a rejected End nor unconfirmed cleanup dismisses the row.
-        setToast(
+        if (authAtStart === authoritySequence.current && authorityAtStart === assistantAuthorityKey()) setToast(
           createToastMessage(
             "Session cleanup is incomplete. The session is still available; retry End session to finish stopping it.",
           ),
@@ -2502,6 +2528,8 @@ export function useHarnessState(): HarnessStateHook {
     assistantHistory: assistantHistory.authority === assistantAuthorityKey() ? assistantHistory.entries : [],
     assistantHistoryAuthority: assistantAuthorityKey(),
     assistantHistoryUnavailable: assistantHistory.authority === assistantAuthorityKey() && assistantHistory.unavailable,
+    resumeAssistant,
+    assistantRevealBySession,
     endingSessionIds,
     state,
     authRevision,

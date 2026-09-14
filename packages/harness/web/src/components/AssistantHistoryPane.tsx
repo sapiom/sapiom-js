@@ -73,7 +73,6 @@ export function AssistantHistoryPane({
           </div>
         </div>
         <div className="dead-session-actions">
-          {actions}
           {onOpenTerminal && (
             <button className="btn-ghost" onClick={onOpenTerminal}>
               {terminalLabel ?? "View Terminal history"}
@@ -90,6 +89,7 @@ export function AssistantHistoryPane({
         </p>
       )}
       <div className="past-session-body">
+        {actions}
         {state.loading ? (
           <div className="past-session-status" role="status">
             Loading Assistant history…

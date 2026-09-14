@@ -1,5 +1,12 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
+import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
+import { createServer, type ServerResponse } from "node:http";
+
+const closeEvents: Array<() => Promise<void>> = [];
+test.afterEach(async () => {
+  await Promise.all(closeEvents.splice(0).map((close) => close()));
+});
 
 const cwd = "/Users/demo/acme-app";
 const entry = (id: string): AssistantHistoryEntry => ({
@@ -110,13 +117,166 @@ const rows = async (page: Page) => {
   await page.getByTestId("past-sessions-trigger").hover();
 };
 async function setup(page: Page, mode = "valid") {
+  const streams = new Set<ServerResponse>();
+  const events = createServer((req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+    });
+    if (req.method === "OPTIONS") {
+      res.end();
+      return;
+    }
+    streams.add(res);
+    res.on("close", () => streams.delete(res));
+    res.write('data: {"type":"server.connected","properties":{}}\n\n');
+  });
+  await new Promise<void>((resolve) => events.listen(0, "127.0.0.1", resolve));
+  const eventOrigin = `http://127.0.0.1:${(events.address() as { port: number }).port}`;
+  closeEvents.push(async () => {
+    for (const stream of streams) stream.end();
+    await new Promise<void>((resolve) => events.close(() => resolve()));
+  });
   const probe = {
     calls: [] as string[],
     holdList: false,
     holdRecord: false,
     lists: [] as Route[],
     records: [] as Route[],
+    inspectState: "available" as "available" | "missing" | "unavailable",
+    inspections: [] as Route[],
+    resumes: [] as Route[],
+    holdInspect: false,
+    holdResume: false,
+    failResume: false,
+    resumedRevision: 3,
   };
+  const attachment = (id: string) => ({
+    conversationId: `ses_${id}`,
+    lease: "11111111-1111-4111-8111-111111111111",
+    lifecycle: {
+      ...entry(id).lifecycle,
+      lifecycle: "open",
+      revision: probe.resumedRevision,
+    },
+  });
+  const resumed = (id: string) => ({
+    session: {
+      id,
+      cwd,
+      title: `Saved ${id}`,
+      harness: "claude-code",
+      agentSessionId: null,
+      boundWorkflowPath: null,
+      status: "exited",
+      ready: false,
+      createdAt: entry(id).createdAt,
+      lastActiveAt: entry(id).updatedAt,
+    },
+    attachment: attachment(id),
+  });
+  await page.route("**/api/sessions/*/assistant/inspect", (route) => {
+    probe.inspections.push(route);
+    if (probe.holdInspect) return;
+    const id = new URL(route.request().url()).pathname.split("/")[3]!;
+    return route.fulfill({
+      json: {
+        entry: {
+          ...entry(id),
+          nativeResume: probe.inspectState,
+          ...(probe.inspectState !== "available"
+            ? {
+                resumeFailure: openCodeTransportFailure(
+                  probe.inspectState === "missing"
+                    ? "native_history_missing"
+                    : "context_unavailable",
+                ),
+              }
+            : {}),
+        },
+      },
+    });
+  });
+  await page.route("**/api/sessions/*/assistant/resume", (route) => {
+    probe.resumes.push(route);
+    if (probe.holdResume) return;
+    const id = new URL(route.request().url()).pathname.split("/")[3]!;
+    return route.fulfill(
+      probe.failResume ? { status: 503, json: {} } : { json: resumed(id) },
+    );
+  });
+  await page.route("**/api/assistant/access", (route) =>
+    route.fulfill({ json: { enabled: true, authorityRevision: "account-a" } }),
+  );
+  await page.route(
+    (url) => url.pathname.startsWith("/opencode/"),
+    (route) => {
+      const [, , id, ...parts] = new URL(route.request().url()).pathname.split(
+        "/",
+      );
+      const path = parts.join("/");
+      const native = {
+        id: `ses_${id}`,
+        title: "Native restored history",
+        time: { created: 1, updated: 2 },
+      };
+      if (path === "lifecycle")
+        return route.fulfill({ json: attachment(id!).lifecycle });
+      if (path === "attach") return route.fulfill({ json: attachment(id!) });
+      if (path === "event")
+        return route.continue({ url: `${eventOrigin}/event` });
+      if (path === "session/status")
+        return route.fulfill({ json: { [native.id]: { type: "idle" } } });
+      if (path === `session/${native.id}`)
+        return route.fulfill({ json: native });
+      if (path === `session/${native.id}/message`)
+        return route.fulfill({
+          json: [
+            {
+              info: {
+                id: "msg_saved_user",
+                sessionID: native.id,
+                role: "user",
+                time: { created: 1 },
+              },
+              parts: [
+                {
+                  id: "prt_saved_user",
+                  messageID: "msg_saved_user",
+                  sessionID: native.id,
+                  type: "text",
+                  text: "Prior saved task",
+                },
+              ],
+            },
+            {
+              info: {
+                id: "msg_saved_answer",
+                parentID: "msg_saved_user",
+                sessionID: native.id,
+                role: "assistant",
+                agent: "build",
+                time: { created: 2, completed: 3 },
+                finish: "tool-calls",
+              },
+              parts: [
+                {
+                  id: "prt_saved_answer",
+                  messageID: "msg_saved_answer",
+                  sessionID: native.id,
+                  type: "text",
+                  text: `Native saved answer ${id}`,
+                },
+              ],
+            },
+          ],
+        });
+      return route.fulfill({
+        json: path === "experimental/session" ? [native] : [],
+      });
+    },
+  );
   await page.route("**/api/sessions/assistant-history?**", (route) => {
     if (new URL(route.request().url()).searchParams.get("cwd") !== cwd)
       return route.fulfill({ json: { entries: [] } });
@@ -125,7 +285,13 @@ async function setup(page: Page, mode = "valid") {
       return;
     }
     return route.fulfill({
-      json: { entries: [entry("assistant-only"), entry("sess-leasing")] },
+      json: {
+        entries: [
+          entry("assistant-only"),
+          entry("sess-leasing"),
+          ...(mode === "foreground" ? [entry("sess-boot")] : []),
+        ],
+      },
     });
   });
   await page.route("**/api/sessions/*/assistant/record", (route) => {
@@ -150,7 +316,7 @@ async function setup(page: Page, mode = "valid") {
   await page.goto("/?seed=0");
   await expect(page.locator(".harness-terminal")).toBeVisible();
   await authority(page, 1);
-  return probe;
+  return Object.assign(probe, { resumed });
 }
 
 test("groups mixed records by Studio ID and reads pure Assistant history without native work", async ({
@@ -174,7 +340,9 @@ test("groups mixed records by Studio ID and reads pure Assistant history without
   await expect(pane).toContainText("A recorded excerpt");
   await expect(pane).not.toContainText("PRIVATE_");
   await expect(
-    pane.getByRole("button", { name: /Resume|Continue|New session/ }),
+    pane.getByRole("button", {
+      name: /^(Resume Assistant|Continue|New session)$/,
+    }),
   ).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("assistant-record.png") });
   await pane.getByRole("button", { name: "Close" }).click();
@@ -235,4 +403,252 @@ test("late history and record reads cannot cross account or navigation barriers"
   await expect(page.getByTestId("assistant-history-pane")).toHaveCount(0);
   await expect(page.getByText("Saved answer assistant-only")).toHaveCount(0);
   expect(probe.calls).toEqual([]);
+});
+
+const review = async (page: Page, id = "assistant-only") => {
+  await rows(page);
+  await page.getByTestId(`assistant-history-${id}`).click();
+  await expect(page.getByTestId("assistant-transcript")).toBeVisible();
+};
+const checkResume = (page: Page) =>
+  page.getByRole("button", { name: "Check Resume availability", exact: true });
+const resumeButton = (page: Page) =>
+  page.getByRole("button", { name: "Resume Assistant", exact: true });
+
+test("Resume verifies availability, preserves identity and opens paused without submitting work", async ({
+  page,
+}, testInfo) => {
+  const probe = await setup(page);
+  await review(page);
+  await expect(resumeButton(page)).toHaveCount(0);
+  expect(probe.inspections).toHaveLength(0);
+  probe.holdInspect = true;
+  await checkResume(page).click();
+  await expect(
+    page.getByRole("button", { name: "Checking Resume availability…" }),
+  ).toBeDisabled();
+  await expect.poll(() => probe.inspections.length).toBe(1);
+  await probe.inspections[0]!.fulfill({
+    json: { entry: { ...entry("assistant-only"), nativeResume: "available" } },
+  });
+  await expect(resumeButton(page)).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("resume-verified.png") });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(resumeButton(page)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("resume-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  probe.holdResume = true;
+  await resumeButton(page).click();
+  await expect.poll(() => probe.resumes.length).toBe(1);
+  await publish(page, {
+    type: "assistant.state",
+    snapshot: {
+      hostInstanceId: "history-host",
+      authorityRevision: "account-a",
+      revision: 2,
+      enabled: true,
+      sessions: [],
+      lifecycles: [probe.resumed("assistant-only").attachment.lifecycle],
+    },
+  });
+  await probe.resumes[0]!.fulfill({ json: probe.resumed("assistant-only") });
+  await expect(
+    page.getByRole("button", { name: "Assistant", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Native saved answer assistant-only", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Session ended", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "assistant-only",
+  );
+  await page.screenshot({ path: testInfo.outputPath("resumed-paused.png") });
+  expect(probe.resumes[0]!.request().postDataJSON()).toMatchObject({
+    expectedRevision: 2,
+    operationId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+  });
+  expect(
+    probe.calls.filter((url) => /prompt_async|final-response/.test(url)),
+  ).toEqual([]);
+});
+
+for (const native of ["missing", "unavailable"] as const) {
+  test(`${native} native context leaves saved history readable without Resume`, async ({
+    page,
+  }, testInfo) => {
+    const probe = await setup(page);
+    probe.inspectState = native;
+    await review(page);
+    await checkResume(page).click();
+    await expect(page.getByTestId("assistant-history-actions")).toContainText(
+      "Your saved record remains readable",
+    );
+    await expect(page.getByTestId("assistant-transcript")).toContainText(
+      "Saved answer assistant-only",
+    );
+    await expect(resumeButton(page)).toHaveCount(0);
+    expect(probe.resumes).toHaveLength(0);
+    await page.screenshot({
+      path: testInfo.outputPath(`resume-${native}.png`),
+    });
+  });
+}
+
+test("uncertain Resume retries the same operation and accepts reconciled later revision", async ({
+  page,
+}) => {
+  const probe = await setup(page);
+  probe.failResume = true;
+  await review(page, "sess-leasing");
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Retry to check the same operation",
+  );
+  await expect(page.getByTestId("assistant-transcript")).toContainText(
+    "Saved answer sess-leasing",
+  );
+  const request = probe.resumes[0]!.request().postDataJSON();
+  await page
+    .getByTestId("assistant-history-pane")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Go back" }).click();
+  await checkResume(page).click();
+  probe.failResume = false;
+  probe.resumedRevision = 4;
+  await resumeButton(page).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  expect(probe.resumes[1]!.request().postDataJSON()).toEqual(request);
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+});
+
+for (const barrier of ["navigation", "account", "lifecycle"] as const) {
+  test(`late Resume cannot cross the ${barrier} barrier`, async ({ page }) => {
+    const probe = await setup(page);
+    probe.holdResume = true;
+    await review(page);
+    await checkResume(page).click();
+    await resumeButton(page).click();
+    await expect.poll(() => probe.resumes.length).toBe(1);
+    if (barrier === "navigation")
+      await page
+        .getByTestId("assistant-history-pane")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
+    if (barrier === "account") await authority(page, 2, "account-b");
+    if (barrier === "lifecycle")
+      await publish(page, {
+        type: "assistant.state",
+        snapshot: {
+          hostInstanceId: "history-host",
+          authorityRevision: "account-a",
+          revision: 3,
+          enabled: true,
+          sessions: [],
+          lifecycles: [{ ...entry("assistant-only").lifecycle, revision: 4 }],
+        },
+      });
+    await probe.resumes[0]!.fulfill({ json: probe.resumed("assistant-only") });
+    if (barrier === "lifecycle") await expect(checkResume(page)).toBeEnabled();
+    else
+      await expect(page.getByTestId("assistant-history-pane")).toHaveCount(0);
+    await expect(
+      page
+        .getByRole("button", { name: "Assistant", exact: true })
+        .and(page.locator('[aria-pressed="true"]')),
+    ).toHaveCount(0);
+    expect(probe.calls.filter((url) => /\/opencode\//.test(url))).toEqual([]);
+  });
+}
+
+for (const invalid of ["studio", "cwd", "lease", "revision"] as const) {
+  test(`an invalid Resume ${invalid} cannot activate a conversation`, async ({
+    page,
+  }) => {
+    const probe = await setup(page);
+    probe.holdResume = true;
+    await review(page);
+    await checkResume(page).click();
+    await resumeButton(page).click();
+    await expect.poll(() => probe.resumes.length).toBe(1);
+    const value = probe.resumed("assistant-only");
+    if (invalid === "studio") value.session.id = "foreign-studio";
+    if (invalid === "cwd") value.session.cwd = "/foreign-project";
+    if (invalid === "lease") value.attachment.lease = "not-a-lease";
+    if (invalid === "revision") value.attachment.lifecycle.revision = 2;
+    await probe.resumes[0]!.fulfill({ json: value });
+    await expect(page.getByRole("alert")).toContainText(
+      "restored Assistant could not be verified",
+    );
+    await expect(page.getByTestId("assistant-transcript")).toContainText(
+      "Saved answer assistant-only",
+    );
+    expect(probe.calls.filter((url) => /\/opencode\//.test(url))).toEqual([]);
+  });
+}
+
+test("late availability and untrusted failure text never authorize Resume", async ({
+  page,
+}) => {
+  const probe = await setup(page);
+  probe.holdInspect = true;
+  await review(page);
+  await checkResume(page).click();
+  await expect.poll(() => probe.inspections.length).toBe(1);
+  await probe.inspections[0]!.fulfill({
+    json: {
+      entry: {
+        ...entry("assistant-only"),
+        nativeResume: "unavailable",
+        resumeFailure: {
+          ...openCodeTransportFailure("context_unavailable"),
+          message: "PRIVATE_RAW_FAILURE",
+        },
+      },
+    },
+  });
+  await expect(page.getByRole("alert")).toContainText(
+    "Resume availability could not be verified",
+  );
+  await expect(page.getByText("PRIVATE_RAW_FAILURE")).toHaveCount(0);
+  await checkResume(page).click();
+  await expect.poll(() => probe.inspections.length).toBe(2);
+  await page
+    .getByTestId("assistant-history-pane")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await probe.inspections[1]!.fulfill({
+    json: { entry: { ...entry("assistant-only"), nativeResume: "available" } },
+  });
+  await expect(resumeButton(page)).toHaveCount(0);
+  expect(probe.resumes).toHaveLength(0);
+});
+
+test("resumed Assistant yields to newer foreground Terminal work", async ({
+  page,
+}) => {
+  await setup(page, "foreground");
+  await review(page, "sess-boot");
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await publish(page, {
+    type: "canvas.reload",
+    harnessSessionId: "sess-boot",
+  });
+  await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute(
+    "data-view",
+    "board",
+  );
+  await page.getByTestId("canvas-chat-toggle").click();
+  await page.getByTestId("canvas-freeform-input").fill("Explain this agent");
+  await page.getByTestId("canvas-freeform-ask").click();
+  await expect(
+    page.getByRole("button", { name: "Terminal", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".harness-terminal")).toBeVisible();
 });

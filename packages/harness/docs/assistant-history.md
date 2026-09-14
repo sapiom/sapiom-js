@@ -87,3 +87,10 @@ before and after IO. Missing native history never creates a replacement session;
 missing retained context blocks execution while public history remains readable.
 An empty saved conversation needs no invented context. Public attachments contain
 only native identity, lease and lifecycle state, never saved system text.
+
+History review offers an explicit availability check before Resume. Missing
+native history and missing execution context remain distinct readable states.
+Resume reuses an operation UUID after an uncertain response and reveals Assistant
+only if the same account, navigation and foreground intent still own the result.
+Newer bus state owns Terminal status. A restored Assistant stays paused until an
+explicit message; existing live execution keeps its current state.

@@ -277,3 +277,34 @@ test("Terminal-only End keeps its existing confirmation and sibling selection", 
   await expect(page.locator(".harness-terminal")).toBeVisible();
   expect(fixture.unexpected).toEqual([]);
 });
+
+test("late End cannot remove or select a row after an auth barrier", async ({
+  page,
+}) => {
+  const fixture = await openStudio(page);
+  await project(page, 1, [lifecycle("sess-boot")]);
+  await openEnd(page);
+  await page.getByTestId("end-session-confirm-btn").click();
+  await expect.poll(() => fixture.requests.length).toBe(1);
+  await publish(page, {
+    type: "auth.changed",
+    authenticated: true,
+    organizationName: "Account B",
+  });
+  await publish(page, {
+    type: "session.status",
+    session: session("sess-boot", { title: "Current account session" }),
+  });
+  await fixture.settle(200);
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__HARNESS_TEST__.killSessionCalls),
+    )
+    .toContain("sess-boot");
+  await expect(page.getByTestId("session-tab-sess-boot")).toContainText(
+    "Current account session",
+  );
+  await expect(selected(page)).toHaveAttribute("data-session-id", "sess-boot");
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  expect(fixture.unexpected).toEqual([]);
+});

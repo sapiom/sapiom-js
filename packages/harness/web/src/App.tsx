@@ -88,6 +88,7 @@ import { Terminal } from "./components/Terminal";
 import { AssistantPane } from "./components/AssistantPane";
 import { AssistantHistoryPane } from "./components/AssistantHistoryPane";
 import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
+import { AssistantHistoryActions } from "./components/AssistantHistoryActions";
 import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
@@ -739,6 +740,7 @@ export const App = (): JSX.Element => {
   const [assistantReview, setAssistantReview] = useState<{
     entry: AssistantHistoryEntry; authority: string; navigation: number;
   } | null>(null);
+  const assistantResumeOperations = useMemo(() => new Map<string, string>(), [harness.assistantHistoryAuthority, harness.bootToken]);
   const setReviewSummary = useCallback((summary: SessionSummary | null) => {
     setAssistantReview(null);
     setTerminalReviewSummary(summary);
@@ -2428,12 +2430,12 @@ export const App = (): JSX.Element => {
 
   // Switch to a session (history-menu pick, palette hit): focus follows it so
   // the main panel shows its context (its bound agent, or its own folder).
-  const openSession = (id: string): void => {
+  const openSession = (id: string, restored?: HarnessSession): void => {
     setComposing(false);
     setReviewSummary(null);
     setTemplatesOpen(false);
     setOverviewOpen(false);
-    const session = state.sessions.find((s) => s.id === id);
+    const session = restored ?? state.sessions.find((s) => s.id === id);
     studioRestoreGenerationRef.current += 1;
     setSelectedProject(null);
     setStudioSelection(null);
@@ -3385,6 +3387,20 @@ export const App = (): JSX.Element => {
                   entry={activeAssistantReview.entry}
                   bootToken={harness.bootToken}
                   onClose={() => setAssistantReview(null)}
+                  actions={<AssistantHistoryActions
+                    entry={activeAssistantReview.entry}
+                    lifecycle={assistantLifecycles.find((row) => row.harnessSessionId === activeAssistantReview.entry.harnessSessionId)}
+                    bootToken={harness.bootToken}
+                    operations={assistantResumeOperations}
+                    onResume={async (entry, operationId, signal) => {
+                      const review = activeAssistantReview;
+                      const current = () => studioRestoreGenerationRef.current === review.navigation;
+                      const session = await harness.resumeAssistant(entry, operationId, signal, review.authority, current);
+                      if (!session || !current() || signal.aborted) return false;
+                      openSession(session.id, session);
+                      return true;
+                    }}
+                  />}
                   terminalNotStarted={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.terminalState === "not-started"}
                   terminalLabel={state.sessions.find((session) => session.id === activeAssistantReview.entry.harnessSessionId)?.status !== "exited" ? "Open Terminal" : "View Terminal history"}
                   onOpenTerminal={state.sessions.some((session) => session.id === activeAssistantReview.entry.harnessSessionId && session.terminalState !== "not-started")
@@ -3420,6 +3436,7 @@ export const App = (): JSX.Element => {
                       conversationSession.id,
                     ) ?? 0
                   }
+                  assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
                 >
                   <DeadSessionPane
                     session={conversationSession}
@@ -3526,6 +3543,7 @@ export const App = (): JSX.Element => {
                           conversationSession.id,
                         ) ?? 0
                       }
+                      assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
                     >
                       <Terminal
                         sessionId={conversationSession.id}
@@ -3873,7 +3891,7 @@ export const App = (): JSX.Element => {
                   source={canvasSource}
                   loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
                   overviewActive={showComposer}
-                  sessionExited={showDead}
+                  sessionExited={showDead && !!conversationSession && !assistantNeedsEnd(conversationSession.id)}
                   onCanvasState={(hasContent) => {
                     // The board keeps its mount behind the map; its probe must
                     // not reveal or collapse the pane while the PROJECT is what

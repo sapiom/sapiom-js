@@ -12,6 +12,7 @@ export function AssistantPane({
   bootToken,
   authRevision,
   terminalRevision,
+  assistantRevision = 0,
   drafts,
   authorityRevision,
   onAuthorityRevision,
@@ -24,6 +25,7 @@ export function AssistantPane({
   bootToken: string;
   authRevision: number;
   terminalRevision: number;
+  assistantRevision?: number;
   drafts: ChatDraftStore;
   authorityRevision: string | null;
   onAuthorityRevision: (revision: string) => void;
@@ -47,11 +49,13 @@ export function AssistantPane({
   }, [drafts, sessionId]);
   const revealed = useRef(new Map<string, number>());
   useEffect(() => {
-    if (terminalRevision > (revealed.current.get(sessionId) ?? 0)) {
-      revealed.current.set(sessionId, terminalRevision);
-      setMode("Terminal");
+    const revision = Math.max(terminalRevision, assistantRevision);
+    const view = assistantRevision > terminalRevision ? "Assistant" : "Terminal";
+    if (revision > (revealed.current.get(sessionId) ?? 0) && (view === "Terminal" || enabled)) {
+      revealed.current.set(sessionId, revision);
+      setMode(view);
     }
-  }, [sessionId, terminalRevision]);
+  }, [sessionId, terminalRevision, assistantRevision, enabled]);
   useEffect(() => {
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;

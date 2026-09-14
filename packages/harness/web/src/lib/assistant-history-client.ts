@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import {
+  parseOpenCodeTransportFailure,
+  type OpenCodeTransportFailure,
+} from "../../../src/shared/opencode-errors";
+import {
   parseAssistantLifecycle,
   type AssistantLifecycle,
 } from "../../../src/shared/assistant-session";
@@ -21,6 +25,11 @@ const entrySchema = z
     ),
     history: z.enum(["available", "partial", "missing", "unavailable"]),
     nativeResume: z.enum(["unchecked", "available", "missing", "unavailable"]),
+    resumeFailure: z
+      .custom<OpenCodeTransportFailure>(
+        (value) => parseOpenCodeTransportFailure(value) !== null,
+      )
+      .optional(),
     recordRevision: count.positive().nullable(),
   })
   .refine(
