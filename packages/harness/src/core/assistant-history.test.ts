@@ -113,6 +113,52 @@ it("discovers distinct same-folder Assistant identities with no Terminal vendor 
   expect(await history.list(other)).toEqual([]);
 });
 
+it("provides stable opaque Continue retry scope only for an authorized project identity", async () => {
+  const session = sessions[0]!;
+  expect((await history.entry(session.id))?.continuationScope).toBeUndefined();
+  session.agentMapIdentity = {
+    sessionId: session.id,
+    projectId: "project-a",
+    userId: "user-a",
+  };
+  const before = (await history.entry(session.id))!.continuationScope!;
+  expect(before).toMatch(/^[a-f\d]{64}$/);
+  expect((await history.entry(session.id))?.continuationScope).toBe(before);
+  for (const update of [
+    () => Object.assign(session.agentMapIdentity!, { projectId: "project-b" }),
+    () => Object.assign(session.agentMapIdentity!, { userId: "user-b" }),
+    () => Object.assign(session, { harness: "codex" }),
+    () =>
+      Object.assign(bindings.get(session.id)!, { conversationId: "ses_new" }),
+    () =>
+      Object.assign(bindings.get(session.id)!, {
+        contextAuthorityScope: "9".repeat(64),
+      }),
+  ]) {
+    const previous = (await history.entry(session.id))!.continuationScope;
+    update();
+    expect((await history.entry(session.id))!.continuationScope).not.toBe(
+      previous,
+    );
+  }
+});
+
+it("rejects a project rebind during retained history IO", async () => {
+  const session = sessions[0]!;
+  session.agentMapIdentity = {
+    sessionId: session.id,
+    projectId: "project-a",
+    userId: "user-a",
+  };
+  const read = records.read.bind(records);
+  vi.spyOn(records, "read").mockImplementationOnce(async (binding) => {
+    const value = await read(binding);
+    Object.assign(session.agentMapIdentity!, { projectId: "project-b" });
+    return value;
+  });
+  await expect(history.entry(session.id)).rejects.toThrow(OpenCodeAccessError);
+});
+
 it("distinguishes missing, partial and failed retained records", async () => {
   const first = bindings.get("studio-a")!;
   await records.write({

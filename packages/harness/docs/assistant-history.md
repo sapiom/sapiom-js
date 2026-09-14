@@ -102,3 +102,10 @@ seed before permitting Attach. Retries consult the original allocation identity
 and receipt before reading a newer source record. Completed retries only verify
 saved preparation and preserve an already-running child's lease and execution.
 End and authority changes fence each asynchronous step and final attachment.
+
+Boot-authorized POST actions at `/api/sessions/:id/assistant/inspect`, `/resume`
+and `/continue` accept exact lifecycle revisions. Resume and Continue also require
+an operation UUID; Continue includes the displayed record revision. Responses
+project public session/lifecycle/provenance fields only. Continue retry storage
+uses an opaque server-projected scope stable across restarts and separated by
+authorized account, workspace, project, harness and native binding.

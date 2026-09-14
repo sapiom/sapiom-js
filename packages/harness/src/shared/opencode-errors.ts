@@ -11,6 +11,7 @@ export const openCodeTransportErrorCodes = [
   "session_ended",
   "execution_paused",
   "cleanup_unconfirmed",
+  "continuation_unconfirmed",
 ] as const;
 export type OpenCodeTransportErrorCode =
   (typeof openCodeTransportErrorCodes)[number];
@@ -49,6 +50,13 @@ export interface OpenCodeStudioErrorEvent {
 }
 
 const fixedFailures = {
+  continuation_unconfirmed: {
+    code: "continuation_unconfirmed",
+    message:
+      "Studio could not verify the prepared continuation. Retry this operation to check its saved result.",
+    retryable: true,
+    action: "reconnect",
+  },
   lifecycle_changed: {
     code: "lifecycle_changed",
     message:

@@ -17,4 +17,6 @@ export interface AssistantHistoryEntry {
   nativeResume: AssistantSessionView["nativeResume"];
   resumeFailure?: OpenCodeTransportFailure;
   recordRevision: number | null;
+  /** Opaque stable retry partition, authorized and projected by the server. */
+  continuationScope?: string;
 }

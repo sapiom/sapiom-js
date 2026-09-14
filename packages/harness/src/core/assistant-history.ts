@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { AssistantHistoryEntry } from "../shared/assistant-history.js";
 import type { HarnessSession } from "../shared/types.js";
@@ -25,14 +26,13 @@ export class AssistantHistory {
     return (await this.read(id))?.entry ?? null;
   }
 
-  private async read(
-    id: string,
-  ): Promise<{
+  private async read(id: string): Promise<{
     entry: AssistantHistoryEntry;
     binding: AssistantAssociation;
   } | null> {
     const session = this.options.sessions.get(id);
     if (!session) return null;
+    const project = JSON.stringify([session.harness, session.agentMapIdentity]);
     const binding = await this.options.authorize(id);
     if (!binding) return null;
     const lifecycle = await this.options.lifecycle.describe(id);
@@ -65,7 +65,11 @@ export class AssistantHistory {
     )
       throw new OpenCodeAccessError("Assistant binding changed");
     const current = this.options.sessions.get(id);
-    if (!current || current.cwd !== session.cwd)
+    if (
+      !current ||
+      current.cwd !== session.cwd ||
+      JSON.stringify([current.harness, current.agentMapIdentity]) !== project
+    )
       throw new OpenCodeAccessError("Workspace changed");
     return {
       binding,
@@ -80,6 +84,22 @@ export class AssistantHistory {
         history,
         nativeResume: "unchecked",
         recordRevision,
+        ...(current.agentMapIdentity
+          ? {
+              continuationScope: createHash("sha256")
+                .update(
+                  JSON.stringify([
+                    "studio-assistant-continue-retry/v1",
+                    binding.contextAuthorityScope,
+                    binding.conversationId,
+                    current.agentMapIdentity.projectId,
+                    current.agentMapIdentity.userId,
+                    current.harness,
+                  ]),
+                )
+                .digest("hex"),
+            }
+          : {}),
       },
     };
   }
