@@ -63,6 +63,24 @@ afterEach(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 
+it("does not repair a committed acceptance's missing material from retried pending input", async () => {
+  const fixture = await retain();
+  const source = fixture.accepted.instructionSet.sources.find(
+    (item) => item.status === "available",
+  )!;
+  if (source.status !== "available")
+    throw new Error("fixture source unavailable");
+  const objectPath = join(root(), "objects", source.contentHash);
+  await fs.rm(objectPath);
+  await expect(
+    retain(new FileAssistantSourceStore(directory, sourceScope), fixture),
+  ).rejects.toBeInstanceOf(AssistantContextError);
+  await expect(fs.stat(objectPath)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(JSON.parse(await fs.readFile(manifest(), "utf8"))).toEqual(
+    fixture.accepted,
+  );
+});
+
 describe("durable accepted Assistant sources", () => {
   it("reads exact retained text after restart and detaches returned data", async () => {
     const fixture = await retain();

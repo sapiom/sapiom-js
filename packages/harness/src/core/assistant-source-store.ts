@@ -96,6 +96,23 @@ export class FileAssistantSourceStore implements AssistantSourceStore {
       );
       signal.throwIfAborted();
       const root = await this.prepare(true, signal);
+      const committed = await this.read(
+        root,
+        "accepted",
+        `${ref.acceptanceId}.json`,
+        signal,
+      ).catch((error: unknown) => {
+        if (isCode(error, "ENOENT")) return null;
+        throw error;
+      });
+      if (committed !== null) {
+        // A lost acknowledgement may retry this ID. An existing acceptance
+        // remains authoritative: validate its original material before any
+        // writes, rather than repairing source loss from pending input.
+        check(committed.equals(Buffer.from(encodeAssistantContext(record))));
+        await this.readAccepted(ref, authority, signal);
+        return;
+      }
       for (const source of record.instructionSet.sources) {
         if (source.status !== "available") continue;
         const material = copies.find((item) => item.sourceId === source.id)!;

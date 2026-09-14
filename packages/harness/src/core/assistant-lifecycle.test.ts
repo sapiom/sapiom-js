@@ -468,3 +468,74 @@ it("pending Continue children cannot attach and End fences a late admission resu
   expect(ensure).not.toHaveBeenCalled();
   expect(associate).not.toHaveBeenCalled();
 });
+
+it("Continue exclusively prepares a gated child and keeps its exact runtime without a lease", async () => {
+  canAttach.mockResolvedValue(false);
+  const held = gate(), prepare = vi.fn(async () => { await held.promise; return "seeded"; });
+  const preparing = coordinator.prepareContinuation("studio-a", 0, prepare);
+  await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+  const provisional = current;
+  await expect(coordinator.inspect("studio-a", 0, vi.fn())).rejects.toThrow();
+  await expect(coordinator.attach("studio-a", 0)).rejects.toThrow();
+  await expect(coordinator.prepareContinuation("studio-a", 0, vi.fn())).rejects.toThrow();
+  held.release();
+  expect(await preparing).toBe("seeded");
+  expect(canAttach).not.toHaveBeenCalled();
+  expect(current).toBe(provisional);
+  expect(await store.lifecycle("studio-a")).toBeNull();
+  expect(associate).not.toHaveBeenCalled();
+  expect(observe).not.toHaveBeenCalled();
+  expect(retire).not.toHaveBeenCalled();
+  await expect(coordinator.use("studio-a", "not-a-lease")).rejects.toThrow();
+  canAttach.mockResolvedValue(true);
+  const attached = await coordinator.attach("studio-a", 0);
+  expect(current).toBe(provisional);
+  expect(attached.lifecycle).toMatchObject({ revision: 1, execution: "paused" });
+  expect(observe).toHaveBeenCalledOnce();
+});
+
+it("failed Continue preparation retires only its provisional host and releases the slot", async () => {
+  await expect(coordinator.prepareContinuation("studio-a", 0, async () => {
+    throw new Error("seed unavailable");
+  })).rejects.toThrow("seed unavailable");
+  expect(current).toBeNull();
+  expect(retire).toHaveBeenCalledOnce();
+  expect(await coordinator.prepareContinuation("studio-a", 0, async () => "retried")).toBe("retried");
+  expect(current).not.toBeNull();
+  expect(await store.lifecycle("studio-a")).toBeNull();
+});
+
+it("Continue requires an open exact revision and discards a late result after durable change", async () => {
+  await store.transition("studio-a", 0, { lifecycle: "ended", execution: "paused" });
+  await expect(coordinator.prepareContinuation("studio-a", 1, vi.fn())).rejects.toThrow();
+  await expect(coordinator.prepareContinuation("studio-a", 0, vi.fn())).rejects.toThrow();
+  expect(ensure).not.toHaveBeenCalled();
+  await store.transition("studio-a", 1, { lifecycle: "open", execution: "paused" });
+  await expect(coordinator.prepareContinuation("studio-a", 2, async () => {
+    await store.transition("studio-a", 2, { lifecycle: "ending", execution: "paused" });
+    return "late";
+  })).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  expect(current).toBeNull();
+  expect(observe).not.toHaveBeenCalled();
+});
+
+it("End preempts hung Continue preparation and its late result cannot retire a replacement", async () => {
+  const held = gate(), prepare = vi.fn(async () => { await held.promise; return "old"; });
+  const preparing = coordinator.prepareContinuation("studio-a", 0, prepare);
+  const rejected = expect(preparing).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  await vi.waitFor(() => expect(prepare).toHaveBeenCalledOnce());
+  const old = current!;
+  const ending = coordinator.beginEnd("studio-a");
+  expect(old.signal.aborted).toBe(true);
+  await rejected;
+  await ending.persistence;
+  const ended = await coordinator.finishEnd(ending.fence);
+  const opened = await store.transition("studio-a", ended.revision, { lifecycle: "open", execution: "paused" });
+  await coordinator.prepareContinuation("studio-a", opened.revision, async () => "new");
+  const replacement = current!;
+  held.release();
+  await Promise.resolve();
+  expect(current).toBe(replacement);
+  expect(replacement.signal.aborted).toBe(false);
+  expect(observe).not.toHaveBeenCalled();
+});

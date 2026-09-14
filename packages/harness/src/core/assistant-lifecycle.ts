@@ -240,13 +240,34 @@ export class AssistantLifecycleCoordinator {
     return { conversationId, lease, lifecycle: { ...lifecycle } };
   }
 
-  /** Exclusive temporary ownership, shared with Attach and future Resume. Never
+  /** Exclusive temporary ownership, shared with Attach, Continue and Resume. Never
    * creates an association or grants execution. Callback results stay private;
    * the caller revalidates its saved binding after provisional cleanup. */
-  async inspect<T>(
+  inspect<T>(
     id: string,
     expectedRevision: number,
     read: (hosted: HostedOpenCode, signal: AbortSignal) => Promise<T>,
+    callerSignal?: AbortSignal,
+  ): Promise<T> {
+    return this.prepareRuntime(id, expectedRevision, read, false, callerSignal);
+  }
+
+  /** Trusted Continue preparation owns an open child before its receipt permits
+   * Attach. Keep the exact runtime on success, but grant no lease or execution. */
+  prepareContinuation<T>(
+    id: string,
+    expectedRevision: number,
+    prepare: (hosted: HostedOpenCode, signal: AbortSignal) => Promise<T>,
+    callerSignal?: AbortSignal,
+  ): Promise<T> {
+    return this.prepareRuntime(id, expectedRevision, prepare, true, callerSignal);
+  }
+
+  private async prepareRuntime<T>(
+    id: string,
+    expectedRevision: number,
+    read: (hosted: HostedOpenCode, signal: AbortSignal) => Promise<T>,
+    retain: boolean,
     callerSignal?: AbortSignal,
   ): Promise<T> {
     if (
@@ -276,7 +297,11 @@ export class AssistantLifecycleCoordinator {
       check();
       const state = await awaitAssistantInspection(this.describe(id), signal);
       check();
-      if (state.revision !== expectedRevision || state.lifecycle === "ending")
+      if (
+        state.revision !== expectedRevision ||
+        state.lifecycle === "ending" ||
+        (retain && state.lifecycle !== "open")
+      )
         throw failure("lifecycle_changed");
     };
     let hosted: HostedOpenCode | undefined;
@@ -322,7 +347,7 @@ export class AssistantLifecycleCoordinator {
       return result;
     } finally {
       try {
-        if (provisional && started) {
+        if (provisional && started && !(complete && retain)) {
           if (
             this.inspections.get(id) === controller &&
             this.generation(id) === fence.generation
@@ -334,7 +359,7 @@ export class AssistantLifecycleCoordinator {
             void this.options.host.retireExact(hosted).catch(() => {});
           }
         }
-        if (complete) await revision();
+        if (complete && !retain) await revision();
       } finally {
         clearTimeout(timer);
         if (this.inspections.get(id) === controller)

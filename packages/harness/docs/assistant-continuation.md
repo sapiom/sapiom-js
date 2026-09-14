@@ -29,3 +29,11 @@ separate revision lock. A private child lookup is durable before allocation;
 ordinary attachment is blocked until the linked receipt is verified prepared.
 Missing or corrupt linked receipts fail closed. An existing receipt is read
 before newer source history, so retries use the same frozen record and child.
+
+Trusted continuation preparation shares the lifecycle admission slot with
+inspection, Attach and Resume. It requires an open matching revision, retains
+its exact host only after successful checks, and grants no runtime lease.
+End preempts preparation; ordinary attachment follows verified preparation.
+If a previous acceptance already committed, a retry validates its original
+manifest and material before any writes. Pending receipt input cannot repair
+lost committed material, including after a lost acceptance acknowledgement.
