@@ -1,0 +1,309 @@
+import { basename, isAbsolute } from "node:path";
+import { clearTimeout, setTimeout } from "node:timers";
+import { isConversationId } from "../shared/assistant-state.js";
+import {
+  openCodeTransportFailure,
+  type OpenCodeTransportFailure,
+} from "../shared/opencode-errors.js";
+import {
+  awaitAssistantInspection,
+  type AssistantLifecycleCoordinator,
+} from "./assistant-lifecycle.js";
+import type { AssistantAssociation } from "./assistant-session-store.js";
+import {
+  OpenCodeAccessError,
+  OpenCodeTransportError,
+  type HostedOpenCode,
+} from "./opencode-host.js";
+
+/** Server-only result: never serialize savedSystem into a public history entry. */
+export interface AssistantNativeInspection {
+  nativeHistory: "available" | "missing" | "unavailable";
+  nativeResume: "available" | "missing" | "unavailable";
+  resumeFailure?: OpenCodeTransportFailure;
+  savedSystem?: string;
+  sourceMessageId?: string;
+}
+interface Options {
+  authorize: (id: string) => Promise<AssistantAssociation | null>;
+  lifecycle: Pick<AssistantLifecycleCoordinator, "inspect">;
+  /** The shared delivery.recover preflight; validates retained content without dispatch. */
+  preflight: (
+    hosted: HostedOpenCode,
+    conversationId: string,
+    savedSystem: string,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
+  timeoutMs?: number;
+}
+const unavailable = () =>
+  new OpenCodeTransportError(openCodeTransportFailure("transport_unavailable"));
+const contextUnavailable = () =>
+  new OpenCodeTransportError(openCodeTransportFailure("context_unavailable"));
+const object = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw unavailable();
+  return value as Record<string, unknown>;
+};
+const same = (a: AssistantAssociation, b: AssistantAssociation | null) =>
+  !!b &&
+  a.harnessSessionId === b.harnessSessionId &&
+  a.conversationId === b.conversationId &&
+  a.cwd === b.cwd &&
+  a.contextAuthorityScope === b.contextAuthorityScope &&
+  a.nativeScope === b.nativeScope;
+
+async function json(
+  response: Response,
+  signal: AbortSignal,
+  limit: number,
+): Promise<unknown> {
+  if (!response.ok || !response.body) {
+    void response.body?.cancel().catch(() => {});
+    throw new OpenCodeTransportError(
+      openCodeTransportFailure(
+        response.status === 404
+          ? "native_history_missing"
+          : "transport_unavailable",
+      ),
+    );
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const { done, value } = await awaitAssistantInspection(
+        reader.read(),
+        signal,
+      );
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) throw unavailable();
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } finally {
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+/** Keep native availability separate from execution readiness. No association
+ * creation, source substitution, prompt, or model call is permitted here. */
+export class AssistantNativeHistory {
+  constructor(private readonly options: Options) {}
+
+  async inspect(
+    id: string,
+    expectedRevision: number,
+  ): Promise<AssistantNativeInspection> {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const timer = setTimeout(
+      () => controller.abort(unavailable()),
+      this.options.timeoutMs ?? 15_000,
+    );
+    const observed: Pick<AssistantNativeInspection, "nativeHistory"> = {
+      nativeHistory: "unavailable",
+    };
+    try {
+      const saved = await awaitAssistantInspection(
+        this.options.authorize(id),
+        signal,
+      );
+      if (
+        !saved ||
+        saved.harnessSessionId !== id ||
+        !isConversationId(saved.conversationId) ||
+        saved.conversationId === id ||
+        !isAbsolute(saved.cwd) ||
+        !/^[a-f0-9]{64}$/.test(saved.contextAuthorityScope) ||
+        !/^[a-f0-9]{64}$/.test(saved.nativeScope)
+      )
+        throw new OpenCodeAccessError("Assistant binding unavailable");
+      const binding = { ...saved };
+      const result = await this.options.lifecycle.inspect(
+        id,
+        expectedRevision,
+        async (hosted, readSignal) => {
+          if (
+            hosted.harnessSessionId !== id ||
+            hosted.cwd !== binding.cwd ||
+            hosted.contextAuthorityScope !== binding.contextAuthorityScope ||
+            basename(hosted.stateRoot) !== binding.nativeScope
+          )
+            throw new OpenCodeAccessError("Assistant binding changed");
+          const get = async (path: string, limit: number) =>
+            json(
+              await awaitAssistantInspection(
+                hosted.server.fetch(path, {
+                  method: "GET",
+                  signal: readSignal,
+                }),
+                readSignal,
+              ),
+              readSignal,
+              limit,
+            );
+          const session = object(
+            await get(`/session/${binding.conversationId}`, 64 * 1024),
+          );
+          if (
+            session.id !== binding.conversationId ||
+            (session.directory !== undefined &&
+              session.directory !== binding.cwd)
+          )
+            throw unavailable();
+          const history = await get(
+            `/session/${binding.conversationId}/message`,
+            16 * 1024 * 1024,
+          );
+          let source: ReturnType<AssistantNativeHistory["source"]>;
+          try {
+            source = this.source(history, binding.conversationId);
+          } catch (error) {
+            if (
+              error instanceof OpenCodeTransportError &&
+              error.failure.code === "context_unavailable"
+            )
+              observed.nativeHistory = "available";
+            throw error;
+          }
+          observed.nativeHistory = "available";
+          if (source) {
+            if (typeof source.system !== "string" || !source.system.trim())
+              throw contextUnavailable();
+            try {
+              await awaitAssistantInspection(
+                this.options.preflight(
+                  hosted,
+                  binding.conversationId,
+                  source.system,
+                  readSignal,
+                ),
+                readSignal,
+              );
+            } catch (error) {
+              readSignal.throwIfAborted();
+              throw error instanceof OpenCodeTransportError
+                ? error
+                : contextUnavailable();
+            }
+          }
+          readSignal.throwIfAborted();
+          if (
+            !same(
+              binding,
+              await awaitAssistantInspection(
+                this.options.authorize(id),
+                readSignal,
+              ),
+            )
+          )
+            throw new OpenCodeAccessError("Assistant binding changed");
+          return {
+            nativeHistory: observed.nativeHistory,
+            nativeResume: "available" as const,
+            ...(source
+              ? {
+                  savedSystem: source.system as string,
+                  sourceMessageId: source.id,
+                }
+              : {}),
+          };
+        },
+        signal,
+      );
+      // The provisional runtime has now retired; refresh authority after cleanup IO.
+      if (
+        !same(
+          binding,
+          await awaitAssistantInspection(this.options.authorize(id), signal),
+        )
+      )
+        throw new OpenCodeAccessError("Assistant binding changed");
+      return result;
+    } catch (error) {
+      const code =
+        error instanceof OpenCodeTransportError
+          ? error.failure.code
+          : "transport_unavailable";
+      if (
+        ["access_denied", "access_expired", "authentication_required"].includes(
+          code,
+        )
+      )
+        throw error;
+      const missing =
+        code === "native_history_missing" &&
+        observed.nativeHistory !== "available";
+      return {
+        nativeHistory: missing ? "missing" : observed.nativeHistory,
+        nativeResume: missing ? "missing" : "unavailable",
+        resumeFailure:
+          code === "runtime_start_failed"
+            ? openCodeTransportFailure(
+                code,
+                error instanceof OpenCodeTransportError
+                  ? error.failure.reason
+                  : undefined,
+              )
+            : openCodeTransportFailure(code),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private source(
+    value: unknown,
+    conversationId: string,
+  ): { id: string; system?: unknown } | null {
+    if (!Array.isArray(value) || value.length > 10_000) throw unavailable();
+    if (!value.length) return null;
+    const messages = value
+      .map((row) => {
+        const message = object(row),
+          info = object(message.info),
+          time = object(info.time);
+        if (
+          info.sessionID !== conversationId ||
+          typeof info.id !== "string" ||
+          !["user", "assistant"].includes(info.role as string) ||
+          typeof time.created !== "number" ||
+          !Number.isFinite(time.created) ||
+          !Array.isArray(message.parts)
+        )
+          throw unavailable();
+        const parts = message.parts.map(object);
+        if (
+          parts.some(
+            (part) =>
+              part.sessionID !== conversationId ||
+              part.messageID !== info.id ||
+              typeof part.type !== "string",
+          )
+        )
+          throw unavailable();
+        return { info, parts, created: time.created };
+      })
+      .sort((a, b) => a.created - b.created);
+    const source = messages
+      .reverse()
+      .find(
+        ({ info, parts }) =>
+          info.role === "user" &&
+          !parts.some(
+            (part) =>
+              part.type === "compaction" ||
+              (part.synthetic &&
+                part.metadata &&
+                object(part.metadata).compaction_continue === true),
+          ),
+      );
+    if (!source) throw contextUnavailable();
+    return { id: source.info.id as string, system: source.info.system };
+  }
+}

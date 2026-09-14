@@ -17,6 +17,7 @@ const ensure = vi.fn(),
   associate = vi.fn();
 const retire = vi.fn(),
   assertCurrent = vi.fn();
+const canAttach = vi.fn();
 const gate = () => {
   let release!: () => void;
   const promise = new Promise<void>((done) => {
@@ -24,8 +25,10 @@ const gate = () => {
   });
   return { promise, release };
 };
-const fixture = () =>
+const fixture = (inspectionTimeoutMs?: number) =>
   new AssistantLifecycleCoordinator({
+    inspectionTimeoutMs,
+    canAttach,
     store,
     associations: { ensure: associate },
     host: {
@@ -47,6 +50,7 @@ beforeEach(async () => {
   store = new AssistantSessionStore(root);
   current = null;
   eligible = true;
+  canAttach.mockReset().mockResolvedValue(true);
   observe.mockReset();
   ensure.mockReset().mockImplementation(async (id) => {
     if (!eligible) throw new Error("access denied");
@@ -85,6 +89,7 @@ beforeEach(async () => {
   coordinator = fixture();
 });
 afterEach(async () => {
+  vi.useRealTimers();
   abort?.abort();
   await rm(root, { recursive: true, force: true });
 });
@@ -310,4 +315,156 @@ it("rejects new attaches during shutdown while old association IO ignores cancel
   expect(ensure).toHaveBeenCalledOnce();
   held.release();
   await rejected;
+});
+
+it("inspection owns its provisional runtime until cleanup and Attach cannot steal it", async () => {
+  const held = gate(), read = vi.fn(async () => { await held.promise; return "history"; });
+  const inspected = coordinator.inspect("studio-a", 0, read);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  await expect(coordinator.attach("studio-a", 0)).rejects.toThrow();
+  await expect(coordinator.inspect("studio-a", 0, read)).rejects.toThrow();
+  expect(ensure).toHaveBeenCalledOnce();
+  expect(associate).not.toHaveBeenCalled();
+  held.release();
+  expect(await inspected).toBe("history");
+  expect(current).toBeNull();
+  expect(await store.lifecycle("studio-a")).toBeNull();
+  await coordinator.attach("studio-a", 0);
+  expect(ensure).toHaveBeenCalledTimes(2);
+  expect(associate).toHaveBeenCalledOnce();
+});
+
+it("refuses inspection while Attach owns asynchronous association preparation", async () => {
+  const held = gate(), read = vi.fn();
+  associate.mockImplementationOnce(async () => { await held.promise; return "ses_history"; });
+  const attaching = coordinator.attach("studio-a", 0);
+  await vi.waitFor(() => expect(associate).toHaveBeenCalledOnce());
+  await expect(coordinator.inspect("studio-a", 0, read)).rejects.toThrow();
+  expect(read).not.toHaveBeenCalled();
+  expect(ensure).toHaveBeenCalledOnce();
+  held.release();
+  await attaching;
+});
+
+it("reuses an enabled exact runtime and leaves it live when the selected query times out", async () => {
+  const attachment = await coordinator.attach("studio-a", 0);
+  await coordinator.enable(current!);
+  const existing = current!;
+  expect(await coordinator.inspect("studio-a", 2, async (hosted) => hosted === existing)).toBe(true);
+  const cancel = new AbortController(), read = vi.fn(() => new Promise<void>(() => {}));
+  const inspected = coordinator.inspect("studio-a", 2, read, cancel.signal);
+  const rejected = expect(inspected).rejects.toThrow("timeout");
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  cancel.abort(new Error("timeout"));
+  await rejected;
+  expect(retire).not.toHaveBeenCalled();
+  expect(current).toBe(existing);
+  await expect(coordinator.use("studio-a", attachment.lease, true)).resolves.toBeDefined();
+  expect(ensure).toHaveBeenCalledOnce();
+});
+
+it("inspects an ended session without changing its revision or creating an association", async () => {
+  await store.transition("studio-a", 0, { lifecycle: "ended", execution: "paused" });
+  expect(await coordinator.inspect("studio-a", 1, async () => "saved")).toBe("saved");
+  expect(await store.lifecycle("studio-a")).toMatchObject({ lifecycle: "ended", revision: 1 });
+  expect(associate).not.toHaveBeenCalled();
+  expect(observe).not.toHaveBeenCalled();
+  expect(current).toBeNull();
+});
+
+it.each(["End", "shutdown"])("%s preempts inspection before pending ensure has returned a host", async (mode) => {
+  const held = gate(), read = vi.fn();
+  ensure.mockImplementationOnce(async () => { await held.promise; throw new Error("old startup cancelled"); });
+  const inspected = coordinator.inspect("studio-a", 0, read);
+  const rejected = expect(inspected).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  await vi.waitFor(() => expect(ensure).toHaveBeenCalledOnce());
+  if (mode === "End") {
+    const ending = coordinator.beginEnd("studio-a");
+    await ending.persistence;
+    await coordinator.finishEnd(ending.fence);
+  } else coordinator.beginShutdown();
+  await rejected;
+  expect(retire).toHaveBeenCalledOnce();
+  held.release();
+  await Promise.resolve();
+  expect(read).not.toHaveBeenCalled();
+});
+
+it("End cancels a hung query and its late completion cannot retire a same-ID replacement", async () => {
+  const held = gate(), read = vi.fn(async () => { await held.promise; return "old"; });
+  const inspected = coordinator.inspect("studio-a", 0, read);
+  const rejected = expect(inspected).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  const ending = coordinator.beginEnd("studio-a");
+  expect(abort.signal.aborted).toBe(true);
+  await rejected;
+  await ending.persistence;
+  const ended = await coordinator.finishEnd(ending.fence);
+  const opened = await store.transition("studio-a", ended.revision, { lifecycle: "open", execution: "paused" });
+  await coordinator.attach("studio-a", opened.revision);
+  const replacement = current!;
+  held.release();
+  await Promise.resolve();
+  expect(current).toBe(replacement);
+  expect(replacement.signal.aborted).toBe(false);
+});
+
+it("the overall inspection deadline fences startup even before a host entry exists", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(store, "lifecycle").mockResolvedValue(null);
+  coordinator = fixture(50);
+  const held = gate();
+  ensure.mockImplementationOnce(async () => { await held.promise; throw new Error("cancelled"); });
+  const inspected = coordinator.inspect("studio-a", 0, vi.fn());
+  const rejected = expect(inspected).rejects.toMatchObject({ failure: { code: "transport_unavailable" } });
+  await vi.advanceTimersByTimeAsync(50);
+  await rejected;
+  expect(retire).toHaveBeenCalledExactlyOnceWith("studio-a", 750);
+  held.release();
+});
+
+it("bounds a hung provisional cleanup instead of reporting a successful inspection", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(store, "lifecycle").mockResolvedValue(null);
+  retire.mockImplementationOnce(() => new Promise(() => {}));
+  const inspected = coordinator.inspect("studio-a", 0, async () => "saved");
+  const rejected = expect(inspected).rejects.toMatchObject({ failure: { code: "cleanup_unconfirmed" } });
+  await vi.advanceTimersByTimeAsync(750);
+  await rejected;
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("reports failed provisional cleanup and rejects stale revisions before querying", async () => {
+  retire.mockRejectedValueOnce(new Error("shutdown not confirmed"));
+  await expect(coordinator.inspect("studio-a", 0, async () => "saved")).rejects.toMatchObject({ failure: { code: "cleanup_unconfirmed" } });
+  const read = vi.fn();
+  await expect(coordinator.inspect("studio-a", 9, read)).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  expect(read).not.toHaveBeenCalled();
+});
+
+it("rechecks durable revision after asynchronous query authorization", async () => {
+  await coordinator.attach("studio-a", 0);
+  const read = vi.fn(async () => {
+    await store.transition("studio-a", 1, { lifecycle: "ended", execution: "paused" });
+    return "stale";
+  });
+  await expect(coordinator.inspect("studio-a", 1, read)).rejects.toMatchObject({ failure: { code: "lifecycle_changed" } });
+  expect(retire).not.toHaveBeenCalled();
+});
+
+it("pending Continue children cannot attach and End fences a late admission result", async () => {
+  canAttach.mockResolvedValueOnce(false);
+  await expect(coordinator.attach("studio-a", 0)).rejects.toThrow();
+  expect(ensure).not.toHaveBeenCalled();
+  const held = gate();
+  canAttach.mockImplementationOnce(async () => { await held.promise; return true; });
+  const attaching = coordinator.attach("studio-a", 0);
+  const rejected = expect(attaching).rejects.toThrow();
+  await vi.waitFor(() => expect(canAttach).toHaveBeenCalledTimes(2));
+  const ending = coordinator.beginEnd("studio-a");
+  held.release();
+  await rejected;
+  await ending.persistence;
+  expect(ensure).not.toHaveBeenCalled();
+  expect(associate).not.toHaveBeenCalled();
 });

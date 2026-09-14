@@ -326,12 +326,13 @@ export class OpenCodeHost {
     if (this.closed || !grant)
       throw this.accessError("Assistant access is unavailable");
     const workspace = await this.workspace(id).catch(async (error) => {
-      await this.retire(
-        id,
-        error instanceof OpenCodeTransportError
-          ? error.failure
-          : openCodeTransportFailure("access_denied"),
-      );
+      if ((this.generations.get(id) ?? 0) === generation)
+        await this.retire(
+          id,
+          error instanceof OpenCodeTransportError
+            ? error.failure
+            : openCodeTransportFailure("access_denied"),
+        );
       throw error;
     });
     assertAdmission();

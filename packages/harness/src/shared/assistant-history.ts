@@ -2,6 +2,7 @@ import type {
   AssistantLifecycle,
   AssistantSessionView,
 } from "./assistant-session.js";
+import type { OpenCodeTransportFailure } from "./opencode-errors.js";
 
 /** Additive history entry: a Studio identity does not require a Terminal vendor ID. */
 export interface AssistantHistoryEntry {
@@ -14,5 +15,6 @@ export interface AssistantHistoryEntry {
   lifecycle: AssistantLifecycle;
   history: AssistantSessionView["history"];
   nativeResume: AssistantSessionView["nativeResume"];
+  resumeFailure?: OpenCodeTransportFailure;
   recordRevision: number | null;
 }

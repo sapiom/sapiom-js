@@ -46,3 +46,15 @@ lifecycle and idle checkpoints can flush immediately. Native reads are capped at
 16 MiB and have a three-second timeout. Failure preserves the previous record,
 so a successful GET can return an older `capturedAt`. Disposal and authority loss
 cancel capture; opening a retained record never resumes execution.
+# Selected native availability
+
+Native inspection is explicit and separate from metadata listing. It validates
+the authorized saved Studio/native association, reads only that native session
+and its bounded history, and checks the saved execution context through the
+shared delivery preflight. Available public history can remain readable when
+native history or required retained context is unavailable.
+
+Inspection never creates an association, posts a prompt, or grants execution.
+It holds a per-session admission slot, obeys End and shutdown, and retires only
+its own provisional runtime. Existing running runtimes remain running. Startup
+and reads have a deadline; uncertain provisional cleanup is reported explicitly.

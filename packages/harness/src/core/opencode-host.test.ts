@@ -613,6 +613,20 @@ describe("Studio-owned OpenCode lifecycle", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("a stale workspace authorization rejection cannot retire a replacement after End", async () => {
+    let reject!: (reason: unknown) => void;
+    authorize.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const stale = host.ensure("studio-a");
+    const rejected = expect(stale).rejects.toThrow("old authorization failed");
+    await host.retireWithResult("studio-a");
+    const replacement = await host.ensure("studio-a");
+    reject(new Error("old authorization failed"));
+    await rejected;
+    expect(host.current("studio-a")).toBe(replacement);
+    expect(replacement.signal.aborted).toBe(false);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it("reports bounded pending cleanup honestly and later joins positive completion", async () => {
     await host.ensure("studio-a");
     let release!: () => void;
@@ -686,10 +700,9 @@ describe("Studio-owned OpenCode lifecycle", () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    let pending!: Promise<void>;
-    const checkpoint = vi.fn(() => pending);
+    const checkpoint = vi.fn((): Promise<void> => pending);
     const { hosted, exit } = await exitFixture(checkpoint);
-    pending = held.then(async () => {
+    const pending: Promise<void> = held.then(async () => {
       hosted.signal.throwIfAborted();
       await writeFile(join(root, "final-checkpoint.json"), "retained");
     });
