@@ -197,7 +197,9 @@ function RuntimeChat({
 }) {
   // Selection changes must not recreate the conversation/runtime or its draft.
   const selection = useRef(selectedAgentPath);
-  selection.current = selectedAgentPath;
+  useLayoutEffect(() => {
+    selection.current = selectedAgentPath;
+  }, [selectedAgentPath]);
   const [transportError, setTransportError] = useState<RecoveryNotice | null>(
     null,
   );

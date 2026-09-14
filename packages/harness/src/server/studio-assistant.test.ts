@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ResolvedEnvironment } from "@sapiom/mcp/auth";
 import type { HostedOpenCode } from "../core/opencode-host.js";
 import type { HarnessSession } from "../shared/types.js";
+import type { StudioProjectIdentity } from "../core/studio-project-catalog.js";
 import { composeAssistantPrompt } from "../core/studio-assistant-context.js";
 import { createAssistantContextResolver } from "./studio-assistant.js";
 
@@ -23,7 +24,11 @@ function fixture() {
     id: "studio-a",
     cwd: root,
     boundWorkflowPath: join(root, "cedar"),
-    agentMapIdentity: { projectId: "project-a" },
+    agentMapIdentity: {
+      projectId: "project-a",
+      userId: "user-a",
+      sessionId: "studio-a",
+    },
   } as HarnessSession;
   const hosted = {
     harnessSessionId: session.id,
@@ -34,12 +39,25 @@ function fixture() {
       fetchJson: vi.fn().mockResolvedValue({ sapiom: { status: "connected" } }),
     },
   } as unknown as HostedOpenCode;
+  const project: StudioProjectIdentity = {
+    projectId: "project-a",
+    identityVersion: 1,
+    displayName: "Project",
+    rootBindings: [
+      { id: "root", repositoryId: null, localRootRef: root, status: "active" },
+    ],
+    legacyWorkspaceKeys: [],
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+  };
   return {
+    project,
     session,
     hosted,
     abort,
     options: {
       getSession: () => session,
+      resolveProject: async () => project,
       getWorkflows: async () =>
         ["cedar", "orchid"].map((name) => ({
           name,
@@ -86,6 +104,60 @@ it("captures binding before providers wait and reports actual capability and mis
   vi.mocked(hosted.server.fetchJson).mockRejectedValue(new Error("offline"));
   expect((await resolve(hosted)).capabilities[0]?.status).toBe("configured");
 });
+
+it("authorizes sibling roots without changing native cwd or exposing foreign paths", async () => {
+  const { project, hosted, session, options } = fixture();
+  session.cwd = hosted.cwd = join(root, "cedar");
+  project.rootBindings = ["cedar", "orchid"].map((name) => ({
+    id: name,
+    repositoryId: null,
+    localRootRef: join(root, name),
+    status: "active",
+  }));
+  const foreign = join(root, "foreign");
+  await mkdir(foreign);
+  await symlink(foreign, join(root, "orchid", "escape"), "junction");
+  const resolve = createAssistantContextResolver(options);
+  const context = await resolve(hosted, join(root, "orchid"));
+  expect(context.session.cwd).toBe(join(root, "cedar"));
+  expect(context.selectedAgent).toMatchObject({
+    agent: { path: join(root, "orchid") },
+  });
+  expect(context.agents).toHaveLength(2);
+  await expect(resolve(hosted, foreign)).rejects.toThrow("context");
+  await expect(resolve(hosted, join(root, "orchid", "escape"))).rejects.toThrow(
+    "context",
+  );
+  project.rootBindings[1]!.status = "missing";
+  await expect(resolve(hosted, join(root, "orchid"))).rejects.toThrow(
+    "context",
+  );
+  expect((await resolve(hosted, null)).agents).toHaveLength(1);
+  project.rootBindings[0]!.status = "missing";
+  await expect(resolve(hosted, null)).rejects.toThrow("context");
+});
+
+it.each(["project", "principal", "roots"])(
+  "rejects %s changes while providers resolve",
+  async (change) => {
+    const { project, session, hosted, options } = fixture();
+    const resolve = createAssistantContextResolver({
+      ...options,
+      loadSystemPrompt: async () => {
+        if (change === "roots") project.rootBindings[0]!.status = "missing";
+        else
+          session.agentMapIdentity = {
+            ...session.agentMapIdentity!,
+            ...(change === "project"
+              ? { projectId: "other" }
+              : { userId: "other" }),
+          };
+        return "Studio fixture guidance";
+      },
+    });
+    await expect(resolve(hosted)).rejects.toThrow("context");
+  },
+);
 
 it("passes validated authority to sibling loaders and preserves their revisions through composition", async () => {
   const { hosted, options, abort } = fixture();
