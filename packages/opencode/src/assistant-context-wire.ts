@@ -18,10 +18,12 @@ import {
   type InstructionSet,
 } from "./assistant-context-contract.js";
 
+/** Exact inline content whose identity/provenance lives in the source manifest. */
 export interface RetainedWireGuidance {
   readonly sourceId: string;
   readonly text: string;
 }
+/** Self-contained model text and references, with distinct acceptance/attempt IDs. */
 export interface AcceptedAssistantWireV2 {
   readonly schemaVersion: 2;
   readonly accepted: AcceptedContextRef;
@@ -51,6 +53,7 @@ export interface LegacyAssistantContext extends AssistantContextFacts {
   revision: string;
   guidance: LegacyAssistantGuidance[];
 }
+/** Explicit stored-format variants; generic/legacy records are never accepted-v2. */
 export type ParsedStudioAssistantSystem =
   | { kind: "generic" }
   | { kind: "legacy-v2"; completionToken: string; savedSystem: string }
@@ -74,11 +77,13 @@ export const acceptedContextHeader = "\n\nStudioAssistantContext/v2\n";
 const legacyContextHeader = "\n\nStudioAssistantContext/v1\n";
 const resultHeader = /^StudioAssistantResult\/v2:([^\n]+)\n/;
 
+/** Compose the current completion contract using an explicit validated attempt UUID. */
 export function studioAssistantCompletionSystem(token: string): string {
   contextUuid(token);
   return `StudioAssistantResult/v2:${token}\nComplete the user's requested work before ending the turn, including any requested explanation. Finish necessary tool calls and examine their results before writing the final answer. A promise or plan to do the work is not completion. For conversational requests, provide the requested reply without unnecessary tool calls.\nBegin your final answer with exactly one of these bookkeeping lines, then write the answer on the following line, outside code blocks:\n<!-- studio-result:${token}:finished -->\n<!-- studio-result:${token}:failed -->\nUse finished only when the request is fulfilled. If you cannot finish, use failed and explain what remains and why. Do not include a result line in progress messages or alongside tool calls. Studio removes this line from the displayed answer; keep the rest of your answer in the format the user requested.`;
 }
 
+/** Verify inline hashes, canonical manifests and the reconstructible accepted record. */
 export function validateAcceptedAssistantWire(
   value: unknown,
 ): asserts value is AcceptedAssistantWireV2 {
@@ -328,6 +333,7 @@ export function parseStudioAssistantSystem(
   };
 }
 
+/** Serialize and validate one canonical envelope, keeping completion metadata first. */
 export function serializeAcceptedAssistantSystem(
   completionSystem: string,
   wire: AcceptedAssistantWireV2,
@@ -376,6 +382,7 @@ export function projectStudioAssistantSystem(
   ];
 }
 
+/** Recover the validated record identity/facts; external package bytes remain host-owned. */
 export function acceptedContextFromWire(
   wire: AcceptedAssistantWireV2,
 ): AcceptedAssistantContext {
