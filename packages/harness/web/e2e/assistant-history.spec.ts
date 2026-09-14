@@ -413,7 +413,7 @@ const review = async (page: Page, id = "assistant-only") => {
 const checkResume = (page: Page) =>
   page.getByRole("button", { name: "Check Resume availability", exact: true });
 const resumeButton = (page: Page) =>
-  page.getByRole("button", { name: "Resume Assistant", exact: true });
+  page.getByRole("button", { name: /^(Resume Assistant|Retry Resume)$/ });
 
 test("Resume verifies availability, preserves identity and opens paused without submitting work", async ({
   page,
@@ -516,7 +516,9 @@ test("uncertain Resume retries the same operation and accepts reconciled later r
     .getByRole("button", { name: "Close", exact: true })
     .click();
   await page.getByRole("button", { name: "Go back" }).click();
-  await checkResume(page).click();
+  await expect(
+    page.getByRole("button", { name: "Retry Resume", exact: true }),
+  ).toBeEnabled();
   probe.failResume = false;
   probe.resumedRevision = 4;
   await resumeButton(page).click();
@@ -553,7 +555,7 @@ for (const barrier of ["navigation", "account", "lifecycle"] as const) {
         },
       });
     await probe.resumes[0]!.fulfill({ json: probe.resumed("assistant-only") });
-    if (barrier === "lifecycle") await expect(checkResume(page)).toBeEnabled();
+    if (barrier === "lifecycle") await expect(resumeButton(page)).toBeEnabled();
     else
       await expect(page.getByTestId("assistant-history-pane")).toHaveCount(0);
     await expect(
@@ -651,4 +653,71 @@ test("resumed Assistant yields to newer foreground Terminal work", async ({
     page.getByRole("button", { name: "Terminal", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+for (const revisit of [false, true]) {
+  test(`Resume keeps the original revision after its bus commit and lost ACK${revisit ? " across Close and Back" : ""}`, async ({
+    page,
+  }) => {
+    const probe = await setup(page);
+    probe.holdResume = true;
+    await review(page);
+    await checkResume(page).click();
+    await resumeButton(page).click();
+    await expect.poll(() => probe.resumes.length).toBe(1);
+    const original = probe.resumes[0]!.request().postDataJSON();
+    await publish(page, {
+      type: "assistant.state",
+      snapshot: {
+        hostInstanceId: "history-host",
+        authorityRevision: "account-a",
+        revision: 2,
+        enabled: true,
+        sessions: [],
+        lifecycles: [probe.resumed("assistant-only").attachment.lifecycle],
+      },
+    });
+    await probe.resumes[0]!.fulfill({ status: 503, json: {} });
+    await expect(page.getByRole("alert")).toContainText(
+      "Retry to check the same operation",
+    );
+    if (revisit) {
+      await page
+        .getByTestId("assistant-history-pane")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Go back" }).click();
+    }
+    await page
+      .getByRole("button", { name: "Retry Resume", exact: true })
+      .click();
+    await expect.poll(() => probe.resumes.length).toBe(2);
+    expect(probe.resumes[1]!.request().postDataJSON()).toEqual(original);
+    expect(original.expectedRevision).toBe(2);
+    expect(probe.inspections).toHaveLength(1);
+    probe.resumedRevision = 4;
+    await probe.resumes[1]!.fulfill({ json: probe.resumed("assistant-only") });
+    await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  });
+}
+
+test("a definite Resume conflict permits a fresh availability check without auto dispatch", async ({
+  page,
+}) => {
+  const probe = await setup(page);
+  probe.holdResume = true;
+  await review(page);
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect.poll(() => probe.resumes.length).toBe(1);
+  await probe.resumes[0]!.fulfill({
+    status: 409,
+    json: { failure: openCodeTransportFailure("lifecycle_changed") },
+  });
+  await expect(checkResume(page)).toBeEnabled();
+  await expect(resumeButton(page)).toHaveCount(0);
+  expect(probe.resumes).toHaveLength(1);
+  await expect(page.getByTestId("assistant-transcript")).toContainText(
+    "Saved answer assistant-only",
+  );
 });

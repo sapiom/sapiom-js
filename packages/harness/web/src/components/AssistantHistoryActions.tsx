@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import type { AssistantLifecycle } from "../../../src/shared/assistant-session";
-import { inspectAssistant } from "../lib/assistant-resume-client";
+import {
+  inspectAssistant,
+  isAssistantLifecycleConflict,
+} from "../lib/assistant-resume-client";
+
+export interface AssistantResumeOperation {
+  entry: AssistantHistoryEntry;
+  operationId: string;
+}
 
 export function AssistantHistoryActions({
   entry,
@@ -13,7 +21,7 @@ export function AssistantHistoryActions({
   entry: AssistantHistoryEntry;
   lifecycle?: AssistantLifecycle;
   bootToken: string;
-  operations: Map<string, string>;
+  operations: Map<string, AssistantResumeOperation>;
   onResume: (
     entry: AssistantHistoryEntry,
     operationId: string,
@@ -48,12 +56,11 @@ export function AssistantHistoryActions({
       busy === "resume"
     )
       return;
-    operations.delete(`${entry.harnessSessionId}:${observedRevision.current}`);
     observedRevision.current = current.lifecycle.revision;
     request.current?.abort();
     request.current = null;
     setInspected(null);
-    setFailure(null);
+    if (!operations.has(entry.harnessSessionId)) setFailure(null);
     setBusy(null);
   }, [entry.harnessSessionId, current.lifecycle.revision, busy, operations]);
   const run = async (action: "inspect" | "resume") => {
@@ -66,22 +73,45 @@ export function AssistantHistoryActions({
       if (action === "inspect") {
         const next = await inspectAssistant(current, bootToken, abort.signal);
         if (!abort.signal.aborted) setInspected(next);
-      } else if (inspected?.nativeResume === "available") {
-        const key = `${entry.harnessSessionId}:${inspected.lifecycle.revision}`;
-        const operationId = operations.get(key) ?? crypto.randomUUID();
-        operations.set(key, operationId);
-        const opened = await onResume(inspected, operationId, abort.signal);
-        if (!abort.signal.aborted && opened) operations.delete(key);
+      } else {
+        const key = entry.harnessSessionId;
+        const operation =
+          operations.get(key) ??
+          (inspected?.nativeResume === "available"
+            ? { entry: inspected, operationId: crypto.randomUUID() }
+            : null);
+        if (!operation) return;
+        // Keep the original revision even when our own commit arrives over the
+        // bus before an HTTP failure. A retry reconciles that exact operation.
+        operations.set(key, operation);
+        const opened = await onResume(
+          operation.entry,
+          operation.operationId,
+          abort.signal,
+        );
+        if (
+          !abort.signal.aborted &&
+          opened &&
+          operations.get(key) === operation
+        )
+          operations.delete(key);
         else if (!abort.signal.aborted)
-          setFailure("This session changed. Check Resume availability again.");
+          setFailure(
+            "Your selection or session changed. Return here to retry the original Resume request.",
+          );
       }
     } catch (error) {
-      if (!abort.signal.aborted)
+      if (!abort.signal.aborted) {
+        if (isAssistantLifecycleConflict(error)) {
+          operations.delete(entry.harnessSessionId);
+          setInspected(null);
+        }
         setFailure(
           error instanceof Error
             ? error.message
             : "Assistant is unavailable. Check again.",
         );
+      }
     } finally {
       if (request.current === abort) {
         request.current = null;
@@ -89,7 +119,8 @@ export function AssistantHistoryActions({
       }
     }
   };
-  const available = inspected?.nativeResume === "available";
+  const retry = operations.has(entry.harnessSessionId);
+  const available = retry || inspected?.nativeResume === "available";
   return (
     <div data-testid="assistant-history-actions">
       {current.lifecycle.lifecycle === "ending" ? (
@@ -107,14 +138,17 @@ export function AssistantHistoryActions({
               ? "Checking Resume availability…"
               : busy === "resume"
                 ? "Resuming Assistant…"
-                : available
-                  ? "Resume Assistant"
-                  : "Check Resume availability"}
+                : retry
+                  ? "Retry Resume"
+                  : available
+                    ? "Resume Assistant"
+                    : "Check Resume availability"}
           </button>
           {available && (
             <p className="dead-session-resume-reason">
-              Restores the same conversation. Restarted Assistant stays paused
-              until you send a message.
+              {retry
+                ? "Retry checks the original Resume request, including its saved revision."
+                : "Restores the same conversation. Restarted Assistant stays paused until you send a message."}
             </p>
           )}
           {inspected && !available && (

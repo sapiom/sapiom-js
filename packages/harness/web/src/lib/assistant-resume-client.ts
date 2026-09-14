@@ -2,7 +2,10 @@ import { z } from "zod";
 import type { HarnessSession } from "@shared/types";
 import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import { parseAssistantLifecycle } from "../../../src/shared/assistant-session";
-import { parseOpenCodeTransportFailure } from "../../../src/shared/opencode-errors";
+import {
+  parseOpenCodeTransportFailure,
+  type OpenCodeTransportFailure,
+} from "../../../src/shared/opencode-errors";
 import { parseAssistantHistoryEntry } from "./assistant-history-client";
 
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/);
@@ -33,6 +36,23 @@ const object = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+export class AssistantActionError extends Error {
+  constructor(
+    readonly status: number,
+    readonly failure: OpenCodeTransportFailure | null,
+  ) {
+    super(
+      failure?.message ??
+        "Assistant could not be restored. Your saved history is still available. Retry to check the same operation.",
+    );
+  }
+}
+
+export const isAssistantLifecycleConflict = (error: unknown): boolean =>
+  error instanceof AssistantActionError &&
+  error.status === 409 &&
+  error.failure?.code === "lifecycle_changed";
+
 export async function assistantActionRequest(
   entry: AssistantHistoryEntry,
   action: "inspect" | "resume" | "continue",
@@ -56,9 +76,9 @@ export async function assistantActionRequest(
   );
   const value = object(await response.json().catch(() => null));
   if (!response.ok)
-    throw new Error(
-      parseOpenCodeTransportFailure(value.failure ?? value.error)?.message ??
-        "Assistant could not be restored. Your saved history is still available. Retry to check the same operation.",
+    throw new AssistantActionError(
+      response.status,
+      parseOpenCodeTransportFailure(value.failure ?? value.error),
     );
   return value;
 }

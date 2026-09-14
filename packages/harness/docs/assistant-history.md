@@ -189,3 +189,9 @@ or confirmed removal, and other sessions keep their own process and binding.
 Brief part selection keeps the latest useful Assistant text, tool results and
 attachments even when blank or omitted control parts follow them. Omission counts
 remain explicit without incorrectly labeling every removed part as earlier.
+
+End and ordinary Terminal Resume acknowledgements yield to newer operations on
+the same Studio. An uncertain Assistant Resume keeps its original revision and
+operation ID across its own lifecycle event and Close/Back navigation; Retry
+Resume reconciles that request. Only a verified lifecycle conflict permits a new
+availability check.

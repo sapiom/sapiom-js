@@ -88,7 +88,7 @@ import { Terminal } from "./components/Terminal";
 import { AssistantPane } from "./components/AssistantPane";
 import { AssistantHistoryPane } from "./components/AssistantHistoryPane";
 import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
-import { AssistantHistoryActions } from "./components/AssistantHistoryActions";
+import { AssistantHistoryActions, type AssistantResumeOperation } from "./components/AssistantHistoryActions";
 import { AssistantContinueAction } from "./components/AssistantContinueAction";
 import { DormantTerminalPane } from "./components/DormantTerminalPane";
 import type { ChatDraftStore } from "./components/OpenCodeChat";
@@ -742,7 +742,7 @@ export const App = (): JSX.Element => {
   const [assistantReview, setAssistantReview] = useState<{
     entry: AssistantHistoryEntry; authority: string; navigation: number;
   } | null>(null);
-  const assistantResumeOperations = useMemo(() => new Map<string, string>(), [harness.assistantHistoryAuthority, harness.bootToken]);
+  const assistantResumeOperations = useMemo(() => new Map<string, AssistantResumeOperation>(), [harness.assistantHistoryAuthority, harness.bootToken]);
   const setReviewSummary = useCallback((summary: SessionSummary | null) => {
     setAssistantReview(null);
     setTerminalReviewSummary(summary);

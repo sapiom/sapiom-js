@@ -98,6 +98,16 @@ async function openStudio(page: Page) {
             ? { ok: true }
             : { failure: { code: "cleanup_unconfirmed" } },
       });
+      if (status === 200)
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () => (window as any).__HARNESS_TEST__.killSessionCalls ?? [],
+            ),
+          )
+          .toContain(
+            new URL(requests[0]!.request().url()).pathname.split("/").at(-1),
+          );
     },
   };
 }
@@ -308,3 +318,115 @@ test("late End cannot remove or select a row after an auth barrier", async ({
   await expect(page.locator(".harness-terminal")).toBeVisible();
   expect(fixture.unexpected).toEqual([]);
 });
+
+async function controlledTerminalResume(page: Page) {
+  const requests: Route[] = [];
+  await page.route("**/api/sessions/*/resume", (route) => {
+    requests.push(route);
+  });
+  await page.evaluate(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .find(
+        (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+      )!.name;
+    const { MockApi } = await import(url);
+    MockApi.prototype.resumeSession = async function (id: string) {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(id)}/resume`,
+        { method: "POST" },
+      );
+      const session = await response.json();
+      (window as any).__HARNESS_TEST__.terminalResumeResponse = session.title;
+      return session;
+    };
+  });
+  return requests;
+}
+const resumable = (title = "Resumed Terminal") =>
+  session("sess-boot", {
+    title,
+    agentSessionId: "8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f",
+  });
+const terminalExited = (page: Page) =>
+  publish(page, {
+    type: "session.status",
+    session: { ...resumable(), status: "exited", ready: false },
+  });
+
+test("late End ACK cannot overwrite a newer ordinary Terminal Resume without an Assistant bus transition", async ({
+  page,
+}) => {
+  const fixture = await openStudio(page);
+  const resumes = await controlledTerminalResume(page);
+  await project(page, 1, [lifecycle("sess-boot")]);
+  await openEnd(page);
+  await page.getByTestId("end-session-confirm-btn").click();
+  await expect.poll(() => fixture.requests.length).toBe(1);
+  await terminalExited(page);
+  await page.getByTestId("dead-session-resume").click();
+  await expect.poll(() => resumes.length).toBe(1);
+  await resumes[0]!.fulfill({ json: resumable() });
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await fixture.settle(200);
+  await expect(selected(page)).toHaveAttribute("data-session-id", "sess-boot");
+  await expect(page.getByTestId("session-tab-sess-boot")).toContainText(
+    "Resumed Terminal",
+  );
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+});
+
+for (const barrier of ["End", "account", "newer bus"] as const) {
+  test(`an ordinary Terminal Resume response yields to ${barrier}`, async ({
+    page,
+  }) => {
+    const fixture = await openStudio(page);
+    const resumes = await controlledTerminalResume(page);
+    await project(page, 1, [lifecycle("sess-boot")]);
+    await terminalExited(page);
+    await page.getByTestId("dead-session-resume").click();
+    await expect.poll(() => resumes.length).toBe(1);
+    if (barrier === "End") {
+      await openEnd(page);
+      await page.getByTestId("end-session-confirm-btn").click();
+      await fixture.settle(200);
+      await expect(selected(page)).not.toHaveAttribute(
+        "data-session-id",
+        "sess-boot",
+      );
+    } else {
+      if (barrier === "account")
+        await publish(page, {
+          type: "auth.changed",
+          authenticated: true,
+          organizationName: "Account B",
+        });
+      await publish(page, {
+        type: "session.status",
+        session: resumable("Newer current Terminal"),
+      });
+    }
+    await resumes[0]!.fulfill({ json: resumable("Stale Terminal response") });
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__HARNESS_TEST__.terminalResumeResponse,
+        ),
+      )
+      .toBe("Stale Terminal response");
+    await expect(
+      page.getByText("Stale Terminal response", { exact: true }),
+    ).toHaveCount(0);
+    if (barrier === "End") {
+      await expect(selected(page)).not.toHaveAttribute(
+        "data-session-id",
+        "sess-boot",
+      );
+      await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(0);
+    } else {
+      await expect(page.getByTestId("session-tab-sess-boot")).toContainText(
+        "Newer current Terminal",
+      );
+    }
+  });
+}

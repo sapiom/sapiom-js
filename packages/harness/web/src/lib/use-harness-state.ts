@@ -1645,26 +1645,37 @@ export function useHarnessState(): HarnessStateHook {
   const resumeSession = useCallback(
     async (harnessSessionId: string): Promise<HarnessSession> => {
       const seqAtStart = switchSeqRef.current;
+      const authority = assistantAuthorityKey(), auth = authoritySequence.current;
+      const source = sessionsRef.current.find((row) => row.id === harnessSessionId);
+      const operation = (sessionOperationGenerations.current.get(harnessSessionId) ?? 0) + 1;
+      sessionOperationGenerations.current.set(harnessSessionId, operation);
+      const status = sessionStatusRevisions.current.get(harnessSessionId) ?? 0;
+      const current = () => auth === authoritySequence.current && authority === assistantAuthorityKey() &&
+        operation === sessionOperationGenerations.current.get(harnessSessionId);
       try {
         const session = await api.resumeSession(harnessSessionId);
+        const row = sessionsRef.current.find((candidate) => candidate.id === harnessSessionId);
+        if (!current() || session.id !== harnessSessionId || !row || (source && (!sameStudioAuthority(source, row) || !sameStudioAuthority(source, session)))) return session;
+        const changed = status !== (sessionStatusRevisions.current.get(harnessSessionId) ?? 0);
+        const latest = changed ? sessionStatusSnapshots.current.get(harnessSessionId) : session;
         setState((prev) =>
           prev
             ? {
                 ...prev,
                 sessions: prev.sessions.map((s) =>
-                  s.id === session.id ? session : s,
+                  s.id === session.id && !changed ? session : s,
                 ),
               }
             : prev,
         );
         // Only claim focus if the user hasn't explicitly switched sessions
         // while the resume was in flight — their pick outranks this resolve.
-        if (switchSeqRef.current === seqAtStart) selectSession(session.id);
-        return session;
+        if (switchSeqRef.current === seqAtStart && latest?.status !== "exited") selectSession(session.id);
+        return latest ?? session;
       } catch (err) {
         // Surface resume failures as a toast so a failed resume is never silent
         // (the caller fires this with void and swallows the rejection).
-        setToast(
+        if (current()) setToast(
           createToastMessage(
             err instanceof ApiError && err.reason
               ? err.reason
@@ -1674,7 +1685,7 @@ export function useHarnessState(): HarnessStateHook {
         throw err;
       }
     },
-    [selectSession],
+    [selectSession, assistantAuthorityKey],
   );
 
   const restartMcpSession = useCallback(
@@ -1902,7 +1913,8 @@ export function useHarnessState(): HarnessStateHook {
   const closeSession = useCallback(
     async (id: string): Promise<void> => {
       if (endingSessions.current.has(id)) return;
-      sessionOperationGenerations.current.set(id, (sessionOperationGenerations.current.get(id) ?? 0) + 1);
+      const operation = (sessionOperationGenerations.current.get(id) ?? 0) + 1;
+      sessionOperationGenerations.current.set(id, operation);
       endingSessions.current.add(id);
       setEndingSessionIds(new Set(endingSessions.current));
       const selectionAtStart = switchSeqRef.current;
@@ -1915,7 +1927,7 @@ export function useHarnessState(): HarnessStateHook {
         await api.killSession(id);
       } catch (err) {
         // Neither a rejected End nor unconfirmed cleanup dismisses the row.
-        if (authAtStart === authoritySequence.current && authorityAtStart === assistantAuthorityKey()) setToast(
+        if (authAtStart === authoritySequence.current && authorityAtStart === assistantAuthorityKey() && operation === sessionOperationGenerations.current.get(id)) setToast(
           createToastMessage(
             "Session cleanup is incomplete. The session is still available; retry End session to finish stopping it.",
           ),
@@ -1925,7 +1937,7 @@ export function useHarnessState(): HarnessStateHook {
         endingSessions.current.delete(id);
         setEndingSessionIds(new Set(endingSessions.current));
       }
-      if (authAtStart !== authoritySequence.current || authorityAtStart !== assistantAuthorityKey()) return;
+      if (authAtStart !== authoritySequence.current || authorityAtStart !== assistantAuthorityKey() || operation !== sessionOperationGenerations.current.get(id)) return;
       const lifecycles = assistantOrder.current().snapshot?.lifecycles ?? [];
       const lifecycle = lifecycles.find((row) => row.harnessSessionId === id);
       // A newer Resume can finish before this older End response arrives.
