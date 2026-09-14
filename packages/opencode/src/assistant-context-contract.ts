@@ -1,4 +1,10 @@
 import { createHash } from "node:crypto";
+import { contextCheck, contextUuid } from "./assistant-context-validation.js";
+export {
+  AssistantContextError,
+  contextCheck,
+  contextUuid,
+} from "./assistant-context-validation.js";
 
 /** One format shared by the host's durable records and native saved prompts. */
 export interface AssistantContextAgent {
@@ -81,16 +87,6 @@ export const assistantContextLimits = Object.freeze({
   entries: 4096,
   depth: 24,
 });
-/** Safe context failure; deliberately contains no paths, credentials or source text. */
-export class AssistantContextError extends Error {
-  constructor() {
-    super("Studio assistant context could not be verified");
-    this.name = "StudioAssistantContextError";
-  }
-}
-export function contextCheck(condition: unknown): asserts condition {
-  if (!condition) throw new AssistantContextError();
-}
 export function contextObject(value: unknown): Record<string, unknown> {
   contextCheck(
     value !== null && typeof value === "object" && !Array.isArray(value),
@@ -125,14 +121,6 @@ export function contextText(value: unknown): asserts value is string {
 }
 export function contextHash(value: unknown): asserts value is string {
   contextCheck(typeof value === "string" && /^[a-f0-9]{64}$/.test(value));
-}
-export function contextUuid(value: unknown): asserts value is string {
-  contextCheck(
-    typeof value === "string" &&
-      /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
-        value,
-      ),
-  );
 }
 export function contextList(value: unknown): unknown[] {
   contextCheck(

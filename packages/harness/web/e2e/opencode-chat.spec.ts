@@ -294,10 +294,12 @@ test.beforeEach(async ({ page }) => {
       json: { enabled, authorityRevision: accessAuthorityRevision },
     });
   });
-  await page.route("**/opencode/**", (route) =>
-    route.continue({
-      url: `${origin}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}`,
-    }),
+  await page.route(
+    (url) => url.pathname.startsWith("/opencode/"),
+    (route) =>
+      route.continue({
+        url: `${origin}${new URL(route.request().url()).pathname}${new URL(route.request().url()).search}`,
+      }),
   );
 });
 
@@ -897,6 +899,72 @@ async function openAssistant(page: Page) {
     page.getByRole("textbox", { name: "Message Assistant" }),
   ).toBeEnabled();
 }
+
+test("sibling selection survives mounted recovery and reaches each accepted send", async ({
+  page,
+}) => {
+  const sent: Array<{ path: string; body: Record<string, unknown> }> = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "POST" && /prompt_async|final-response/.test(path))
+      sent.push({ path, body: request.postDataJSON() });
+  });
+  await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present");
+  const select = async (name: string) => {
+    const row = page.getByTestId(`workflow-${name}`);
+    await row.locator(".workflow-item-trigger").click();
+    await expect(row).toHaveClass(/is-focused/);
+  };
+  await select("ads");
+  await page.getByTestId("open-agent-start-session").click();
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    /.+/,
+  );
+  const sessionId = await page
+    .getByTestId("session-context")
+    .getAttribute("data-session-id");
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await expect(input).toBeEnabled();
+  await input.fill("Explain the selected agent");
+  await input.evaluate((element) =>
+    element.setAttribute("data-context-mount", "original"),
+  );
+  await select("outreach");
+  await expect(input).toHaveValue("Explain the selected agent");
+  await expect(input).toHaveAttribute("data-context-mount", "original");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  expect(sent[0].body.selectedAgentPath).toBe(
+    "/Users/demo/polsia/backend/src/agents/outreach",
+  );
+  const c = conversations.get(`ses_${sessionId!.replaceAll("-", "_")}`)!;
+  await input.fill("Keep the next draft during recovery");
+  await select("ads");
+  endWithoutAnswer(c);
+  await expect.poll(() => c.recoveries.length).toBe(1);
+  expect(
+    sent.find((request) => request.path.endsWith("/final-response"))?.body,
+  ).toEqual({ messageId: "msg_empty" });
+  recoveryReply!("Recovered the original request.");
+  await expect(
+    page.getByText("Recovered the original request.", { exact: true }),
+  ).toBeVisible();
+  await expect(input).toHaveAttribute("data-context-mount", "original");
+  await expect(input).toHaveValue("Keep the next draft during recovery");
+  expect(c.prompts).toHaveLength(1);
+  await expect(
+    page.getByRole("button", { name: "Send message" }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => c.prompts.length).toBe(2);
+  expect(
+    sent.filter((request) => request.path.endsWith("/prompt_async"))[1].body
+      .selectedAgentPath,
+  ).toBe("/Users/demo/polsia/backend/src/agents/ads");
+  expect(c.recoveries).toHaveLength(1);
+});
 
 test("Agent Map submits an explicit empty agent selection", async ({
   page,
