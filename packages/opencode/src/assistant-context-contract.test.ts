@@ -204,4 +204,24 @@ describe("accepted context contract", () => {
     delete object["4096"];
     expect(() => encodeAssistantContext(object)).not.toThrow();
   });
+  it("rejects aggregate catalog size before walking every capability semantically", () => {
+    const accepted = fixtureAccepted();
+    const tools = Array.from(
+      { length: 4096 },
+      (_, index) => `${index}${"x".repeat(128)}`,
+    );
+    let catalogsRead = 0;
+    accepted.context.capabilities = Array.from({ length: 64 }, (_, index) => ({
+      name: String(index),
+      status: "available" as const,
+      get tools() {
+        catalogsRead++;
+        return tools;
+      },
+    }));
+    expect(() => validateAcceptedAssistantContext(accepted)).toThrow(
+      AssistantContextError,
+    );
+    expect(catalogsRead).toBeLessThan(64);
+  });
 });
