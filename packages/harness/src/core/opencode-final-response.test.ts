@@ -213,6 +213,7 @@ it("holds admission while resolving context and releases it without dispatch on 
     recovery.recover(hosted, "ses_test", "msg_empty"),
   ).rejects.toThrow("reconciled");
   expect(dispatch).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(reject).toBeTypeOf("function"));
   reject(new Error("Required context missing"));
   await expect(sending).rejects.toThrow("Required context missing");
   expect(recovery.isRunning(hosted)).toBe(false);

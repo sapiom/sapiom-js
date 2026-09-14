@@ -120,6 +120,29 @@ Valid legacy inline context/v1 recovery preserves the exact saved suffix and cre
 only a new attempt token. Context-free, malformed, foreign-workspace or location-only
 legacy work fails clearly. The coordinator owns no dispatch lock or native request;
 the existing admission and recovery owners are connected in the activation increment.
+
+`OpenCodeFinalResponse.send` accepts a preparation callback with the combined
+admission signal. A prepared request includes its exact expected saved system.
+Earlier native uncertainty and history are checked before this callback runs;
+current host authorization and cancellation are checked again immediately before
+POST. A native 204 keeps admission closed until a new ordinary user message has
+that exact system. Compaction, synthetic, old and unrelated messages cannot
+acknowledge it. A lost reply or mismatched acknowledgement remains uncertain and
+does not automatically replay the request.
+
+The recovery owner accepts the same coordinator's recovery callback. It supplies
+the original real user's saved system after the existing history, turn and
+permission checks, then rechecks the host before creating the existing immutable
+dispatch fence. Failed preparation consumes no fence. Model, recovery agent,
+saved-results continuation text and uncertain-dispatch behavior stay with this
+owner. Legacy callers remain supported until production activation connects both
+ordinary and recovery preparation together.
+
+Preparation can await source reads, so the acknowledgement baseline is refreshed
+after it returns. Recovery also rereads native history, status and permissions,
+and checks that the original saved user/system still match before fencing. A
+cancellation during fence creation removes only this operation's new fence and
+syncs its directory before returning; once a POST is attempted its fence remains.
 Runtime readiness is a required injected contract, not a claim that package-generation
 acquisition or refresh is implemented by this service.
 
