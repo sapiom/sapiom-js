@@ -198,7 +198,12 @@ import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { AssistantSessionStore } from "../core/assistant-session-store.js";
 import { OpenCodeAssociations } from "../core/opencode-association.js";
-import { OpenCodeHost } from "../core/opencode-host.js";
+import { OpenCodeHost, type HostedOpenCode } from "../core/opencode-host.js";
+import { AssistantRecordStore } from "../core/assistant-record-store.js";
+import { AssistantRecordCapture } from "../core/assistant-record-capture.js";
+import { assistantHistoryAccess } from "../core/assistant-history-access.js";
+import { OpenCodeFinalResponse } from "../core/opencode-final-response.js";
+import { createAssistantRecordsRouter } from "./assistant-records.js";
 import { OpenCodeObserver } from "../core/opencode-observer.js";
 import { createAssistantContextResolver } from "./studio-assistant.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
@@ -3535,22 +3540,30 @@ export const startServer = async (
     return { ok: await sessionManager.submitInput(sessionId, text, submit) };
   };
 
+  const assistantSessions = new AssistantSessionStore(statePaths.root);
+  const assistantRecords = new AssistantRecordStore(statePaths.root);
+  const recordCaptures = new WeakMap<HostedOpenCode, AssistantRecordCapture>();
+  const authorizeAssistantWorkspace = async (id: string) => {
+    const session = sessionManager.get(id);
+    if (!session || !(await isProjectSessionDispatchAuthorized({
+      session,
+      currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
+      resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
+    }))) return null;
+    return { harnessSessionId: id, cwd: session.cwd };
+  };
   const openCodeHost = new OpenCodeHost({
     access: assistantAccess,
-    createObserver: (hosted, id, update) =>
-      new OpenCodeObserver(hosted, id, update),
+    createObserver: (hosted, id, update) => {
+      const capture = new AssistantRecordCapture(hosted, id, assistantRecords);
+      recordCaptures.set(hosted, capture);
+      const observer = new OpenCodeObserver(hosted, id, update, capture.invalidate);
+      return { start: () => observer.start(), dispose: () => { observer.dispose(); capture.dispose(); } };
+    },
     bridge: openCodeBridge,
     origin: () => `http://127.0.0.1:${actualPort}`,
     stateRoot: statePaths.root,
-    authorize: async (id) => {
-      const session = sessionManager.get(id);
-      if (!session || !(await isProjectSessionDispatchAuthorized({
-        session,
-        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
-        resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
-      }))) return null;
-      return { harnessSessionId: id, cwd: session.cwd };
-    },
+    authorize: authorizeAssistantWorkspace,
   });
   const getAssistantState = () => openCodeHost.getAssistantState();
   const unsubscribeAssistant = openCodeHost.subscribeAssistantState(() =>
@@ -3571,7 +3584,8 @@ export const startServer = async (
         getEnvironment: () => assistantAccess.get()?.environment ?? null,
         loadSystemPrompt: options.loadSystemPrompt,
       }),
-      new OpenCodeAssociations(new AssistantSessionStore(statePaths.root)),
+      new OpenCodeAssociations(assistantSessions),
+      new OpenCodeFinalResponse({ onPersisted: async (hosted) => { recordCaptures.get(hosted)?.invalidate(); } }),
     ),
   );
 
@@ -3596,6 +3610,11 @@ export const startServer = async (
     res.setHeader("Cache-Control", "no-store");
     res.json(assistantAccess.getBrowserState());
   });
+  app.use("/api", createAssistantRecordsRouter({
+    bootToken: options.bootToken,
+    store: assistantRecords,
+    authorize: assistantHistoryAccess({ access: assistantAccess, authorize: authorizeAssistantWorkspace, store: assistantSessions }),
+  }));
   app.use(
     "/api",
     createRestRouter({

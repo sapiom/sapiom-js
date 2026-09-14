@@ -47,6 +47,7 @@ export class OpenCodeObserver {
     private readonly hosted: HostedOpenCode,
     private readonly id: string,
     private readonly onUpdate: (state: AssistantObservation) => void,
+    private readonly onHistoryInvalidated: () => void = () => {},
   ) {}
 
   getState(): AssistantObservation {
@@ -61,6 +62,7 @@ export class OpenCodeObserver {
       return;
     }
     this.onUpdate(this.getState());
+    this.onHistoryInvalidated();
     void this.run();
   }
   dispose = (): void => {
@@ -154,6 +156,7 @@ export class OpenCodeObserver {
     }
   }
   private async reconcile(c: Connection): Promise<void> {
+    this.onHistoryInvalidated();
     let backoff = 250;
     while (this.live(c) && c.current.size !== resources.length) {
       await Promise.all(
@@ -253,6 +256,8 @@ export class OpenCodeObserver {
     }
   }
   private event(c: Connection, event: Record<string, unknown>): void {
+    if (typeof event.type === "string" && (event.type.startsWith("message.") || ["session.idle", "session.status"].includes(event.type)))
+      this.onHistoryInvalidated();
     const properties = record(event.properties) ?? {};
     if (event.type === "session.deleted") {
       this.fail(openCodeTransportFailure("native_history_missing"));

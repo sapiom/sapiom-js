@@ -15,6 +15,7 @@ export interface PreparedOpenCodePrompt {
   readonly expectedSystem: string;
 }
 interface DeliveryOptions {
+  onPersisted?: (hosted: HostedOpenCode, conversationId: string) => Promise<void>;
   assertCurrent?: (hosted: HostedOpenCode) => Promise<void>;
   recoverPrompt?: (
     hosted: HostedOpenCode,
@@ -153,6 +154,8 @@ export class OpenCodeFinalResponse {
       }
       this.awaiting.delete(hosted.stateRoot);
       this.uncertain.delete(hosted.stateRoot);
+      // Archive after actual native acknowledgement; storage failure cannot replay a prompt.
+      await this.delivery.onPersisted?.(hosted, sessionId).catch(() => {});
       return response;
     } finally {
       this.admitting.delete(hosted.stateRoot);

@@ -24,9 +24,9 @@ export function createOpenCodeRouter(
   bootToken: string,
   resolveContext: ResolveAssistantContext,
   associations = new OpenCodeAssociations(),
+  finalResponse = new OpenCodeFinalResponse(),
 ): Router {
   const router = express.Router();
-  const finalResponse = new OpenCodeFinalResponse();
   router.use(
     createBootTokenMiddleware(bootToken),
     express.json({ limit: "1mb" }),

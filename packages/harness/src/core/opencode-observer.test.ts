@@ -11,7 +11,7 @@ const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 const wait = (check: () => void) =>
   vi.waitFor(check, { interval: 10, timeout: 2500 });
-function fixture() {
+function fixture(onHistoryInvalidated?: () => void) {
   const abort = new AbortController();
   cleanups.push(() => abort.abort());
   const data = new Map<string, unknown>([
@@ -68,6 +68,7 @@ function fixture() {
   const updates: AssistantObservation[] = [];
   const observer = new OpenCodeObserver(hosted, "ses_a", (state) =>
     updates.push(state),
+    onHistoryInvalidated,
   );
   cleanups.push(observer.dispose);
   return {
@@ -369,3 +370,16 @@ it.each(["dispose", "abort", "retire"])(
     expect(f.close).not.toHaveBeenCalled();
   },
 );
+
+it("invalidates retained history from the existing observer after native message persistence", async () => {
+  const checkpoint = vi.fn();
+  const f = fixture(checkpoint);
+  await f.start();
+  checkpoint.mockClear();
+  f.send("message.updated", { info: { id: "msg_a", sessionID: "ses_a" } });
+  await wait(() => expect(checkpoint).toHaveBeenCalledTimes(1));
+  f.send("message.updated", { sessionID: "ses_b", info: { id: "msg_b", sessionID: "ses_b" } });
+  f.send("session.idle");
+  await wait(() => expect(checkpoint).toHaveBeenCalledTimes(2));
+  expect(f.streams).toHaveLength(1);
+});

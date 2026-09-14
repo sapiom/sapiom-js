@@ -20,6 +20,34 @@ import { DurableFileLock } from "./durable-file-lock.js";
 export class AssistantRecordStore {
   constructor(private readonly stateRoot: string) {}
 
+  /** Reserve before native IO, so a retired runtime's late snapshot has an older revision. */
+  async reserve(binding: AssistantRecordBinding): Promise<number> {
+    binding = validateAssistantRecordBinding(binding);
+    const directory = await this.directory(binding);
+    const unlock = await new DurableFileLock(
+      join(directory, "record.json"),
+    ).acquire();
+    try {
+      const counter = await readAssistantJson(
+        join(directory, "capture-revision.json"),
+      );
+      if (
+        counter !== null &&
+        (!Number.isSafeInteger(counter) || (counter as number) < 1)
+      )
+        throw new AssistantRecordError("corrupt_record");
+      const previous = await this.read(binding);
+      const revision =
+        Math.max((counter as number | null) ?? 0, previous?.revision ?? 0) + 1;
+      if (!Number.isSafeInteger(revision))
+        throw new AssistantRecordError("record_unavailable");
+      await writeAssistantJson(directory, "capture-revision.json", revision);
+      return revision;
+    } finally {
+      await unlock();
+    }
+  }
+
   async read(binding: AssistantRecordBinding): Promise<AssistantRecord | null> {
     binding = validateAssistantRecordBinding(binding);
     try {

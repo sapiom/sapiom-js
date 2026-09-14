@@ -299,7 +299,8 @@ it("fences recovery until an already submitted user message is persisted", async
         acknowledge = resolve;
       }),
   );
-  const recovery = new OpenCodeFinalResponse();
+  const checkpoint = vi.fn().mockRejectedValue(new Error("archive unavailable"));
+  const recovery = new OpenCodeFinalResponse({ onPersisted: checkpoint });
   const sending = recovery.send(hosted, "ses_test", {
     method: "POST",
     body: "{}",
@@ -308,14 +309,17 @@ it("fences recovery until an already submitted user message is persisted", async
   await expect(
     recovery.recover(hosted, "ses_test", "msg_empty"),
   ).rejects.toThrow();
+  expect(checkpoint).not.toHaveBeenCalled();
   acknowledge(new Response(null, { status: 204 }));
   await expect(
     recovery.recover(hosted, "ses_test", "msg_empty"),
   ).rejects.toThrow();
+  expect(checkpoint).not.toHaveBeenCalled();
   vi.mocked(hosted.server.fetchJson).mockResolvedValue([
     { info: { id: "msg_new", role: "user", time: {} }, parts: [] },
   ]);
   expect((await sending).status).toBe(204);
+  expect(checkpoint).toHaveBeenCalledExactlyOnceWith(hosted, "ses_test");
   expect(recovery.isRunning(hosted)).toBe(false);
   expect(dispatch).toHaveBeenCalledOnce();
 });
