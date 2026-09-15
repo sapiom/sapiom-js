@@ -270,10 +270,18 @@ function findUnserializable(
   const isArray = Array.isArray(resolved);
   let keys: string[];
   try {
-    keys = Object.keys(resolved);
-    // An array's non-index own keys (`arr.note = …`) are dropped by
-    // `JSON.stringify`, so flagging one would reject a payload over a value
-    // that never reaches the wire.
+    // `Object.keys` for an object, because JSON serializes only its enumerable
+    // own properties. For an ARRAY it is the wrong question: JSON writes every
+    // index from 0 to length regardless of enumerability, so a non-enumerable
+    // index holding an `Infinity` was skipped here and shipped as `null`.
+    // `getOwnPropertyNames` sees those, and on a sparse array still returns
+    // only what exists, so the content bound above survives.
+    keys = isArray
+      ? Object.getOwnPropertyNames(resolved)
+      : Object.keys(resolved);
+    // Drops `length` and an array's non-index own keys (`arr.note = …`), which
+    // `JSON.stringify` ignores — flagging one would reject a payload over a
+    // value that never reaches the wire.
     if (isArray) keys = keys.filter(isArrayIndex);
   } catch {
     seen.delete(resolved);
@@ -293,9 +301,17 @@ function findUnserializable(
   return null;
 }
 
-/** A canonical array index, the only own keys `JSON.stringify` writes for an array. */
+/**
+ * A canonical array index, the only own keys `JSON.stringify` writes for an
+ * array. The upper bound is load-bearing, not decoration: an array index stops
+ * at 2^32 - 2, so `arr[4294967295] = x` is stored as an ordinary property that
+ * leaves `length` at 0 and is dropped by the serializer. Without the bound this
+ * walk would follow it and could reject a payload over a value that never ships.
+ */
+const MAX_ARRAY_LENGTH = 4_294_967_295;
+
 function isArrayIndex(key: string): boolean {
-  return /^(?:0|[1-9][0-9]*)$/.test(key);
+  return /^(?:0|[1-9][0-9]*)$/.test(key) && Number(key) < MAX_ARRAY_LENGTH;
 }
 
 /**

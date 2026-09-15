@@ -509,6 +509,42 @@ describe("emitEvent", () => {
         });
       });
 
+      it("checks a non-enumerable index, which JSON serializes anyway", async () => {
+        const { client } = fakeClient();
+        const items = [1];
+        Object.defineProperty(items, 0, {
+          value: Infinity,
+          enumerable: false,
+          writable: true,
+          configurable: true,
+        });
+        // JSON writes every index up to `length` regardless of enumerability,
+        // so `Object.keys` asks the wrong question for an array: it returned
+        // nothing here and the Infinity shipped as `null`.
+        expect(Object.keys(items)).toEqual([]);
+        expect(JSON.stringify({ items })).toBe('{"items":[null]}');
+
+        await expect(
+          emitEvent({ type: "lead.created", payload: { items } }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.items[0]`"),
+        });
+      });
+
+      it("ignores a key past the last real array index", async () => {
+        const { client, calls } = fakeClient();
+        const items: unknown[] = [];
+        // An index stops at 2^32 - 2, so this is an ordinary property: `length`
+        // stays 0 and the serializer drops it.
+        items[4_294_967_295] = Infinity;
+        expect(items.length).toBe(0);
+        expect(JSON.stringify({ items })).toBe('{"items":[]}');
+
+        await emitEvent({ type: "lead.created", payload: { items } }, client);
+        expect(calls).toHaveLength(1);
+      });
+
       it("ignores an array's non-index key, which JSON drops anyway", async () => {
         const { client, calls } = fakeClient();
         const items: unknown[] & { note?: unknown } = [1];
