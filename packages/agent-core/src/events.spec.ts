@@ -378,6 +378,24 @@ describe("emitEvent", () => {
       });
     });
 
+    it("gives up quietly when the payload is nested deeper than the stack", async () => {
+      const { client, calls } = fakeClient();
+      let node: Record<string, unknown> = {};
+      const root = node;
+      for (let depth = 0; depth < 50_000; depth += 1) {
+        node.next = {};
+        node = node.next as Record<string, unknown>;
+      }
+
+      // The walk recurses, so this used to escape as a raw `RangeError` —
+      // outside the `AgentOperationError` contract the CLI and MCP normalize.
+      // A check that cannot complete stops; it never becomes the reason an
+      // emit fails. (The serializer downstream reports its own failure in the
+      // client's structured shape.)
+      await emitEvent({ type: "lead.created", payload: root }, client);
+      expect(calls).toHaveLength(1);
+    });
+
     // Reflection is caller code once a Proxy is involved: the traps below run
     // on `Object.getOwnPropertyDescriptor`, `Object.getPrototypeOf` and
     // `Object.keys`, none of which `JSON.stringify` needs. Every one of them
@@ -461,6 +479,45 @@ describe("emitEvent", () => {
         expect(JSON.stringify(payload)).toBe(wire);
 
         await emitEvent({ type: "lead.created", payload }, client);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("costs nothing on a huge declared length holding nothing", async () => {
+        const { client, calls } = fakeClient();
+        const items: unknown[] = [];
+        items.length = 50_000_000;
+
+        // Walking `0..length` allocated a string per index: ~1.6 GB and
+        // several seconds here, an out-of-memory abort at 100M. `Object.keys`
+        // returns only the indices that exist, so this is bounded by content.
+        // The 5s default timeout is the regression guard — it used to blow it.
+        await emitEvent({ type: "lead.created", payload: { items } }, client);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("still checks the indices a mostly-sparse array does hold", async () => {
+        const { client } = fakeClient();
+        const items: unknown[] = [];
+        items.length = 1_000_000;
+        items[999_999] = Infinity;
+
+        await expect(
+          emitEvent({ type: "lead.created", payload: { items } }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.items[999999]`"),
+        });
+      });
+
+      it("ignores an array's non-index key, which JSON drops anyway", async () => {
+        const { client, calls } = fakeClient();
+        const items: unknown[] & { note?: unknown } = [1];
+        items.note = Infinity;
+        // `JSON.stringify` writes `[1]` — flagging `note` would reject a
+        // payload over a value that never reaches the wire.
+        expect(JSON.stringify({ items })).toBe('{"items":[1]}');
+
+        await emitEvent({ type: "lead.created", payload: { items } }, client);
         expect(calls).toHaveLength(1);
       });
 

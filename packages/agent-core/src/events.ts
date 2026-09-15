@@ -126,7 +126,19 @@ export async function emitEvent(
   // nothing wrong — the receipt would record a null the sender never wrote.
   // Every other rule stays the engine's; this one has to run before the
   // serialization that destroys the evidence.
-  const unserializable = findUnserializable(payload);
+  // The walk reports findings by returning them, so anything THROWN out of it
+  // is the walk itself failing, not the payload being bad — a value nested
+  // deeper than the call stack is the realistic one, and it arrived as a raw
+  // `RangeError` that no caller's `AgentOperationError` handling catches.
+  // Best-effort by contract: when the check cannot complete, it stops and the
+  // serializer decides. A validation pass must never be the reason an emit
+  // fails, which is the same rule every other give-up path here follows.
+  let unserializable: Unserializable | null = null;
+  try {
+    unserializable = findUnserializable(payload);
+  } catch {
+    unserializable = null;
+  }
   if (unserializable) {
     throw new AgentOperationError({
       code: "BAD_PAYLOAD",
@@ -177,11 +189,17 @@ export async function emitEvent(
  * message. And inspecting the serialized OUTPUT instead is no help at all: by
  * then `Infinity` is already the `null` this check exists to catch.
  */
+/** A value the serializer cannot carry honestly, and where it sits. */
+interface Unserializable {
+  path: string;
+  reason: string;
+}
+
 function findUnserializable(
   value: unknown,
   at = "payload",
   seen = new WeakSet<object>(),
-): { path: string; reason: string } | null {
+): Unserializable | null {
   if (typeof value === "number" && !Number.isFinite(value)) {
     return {
       path: at,
@@ -239,27 +257,33 @@ function findUnserializable(
   // holes, so a sparse array (`new Array(1)`, `[1, , 3]`) yielded an `undefined`
   // slot that destructuring then choked on. `JSON.stringify` writes a hole as
   // `null` and moves on, so the walk has to reach every index and accept them.
-  // Enumerating is caller code once a Proxy is involved (`length` hits its get
-  // trap, `Object.keys` its ownKeys trap), so this fails opaque like the rest:
-  // a throw here means stop inspecting, not reject.
+  // `Object.keys` for both shapes, and for an array that is the load-bearing
+  // choice rather than a tidy one: on a sparse array it returns only the
+  // indices that EXIST. Walking `0..length` instead meant a payload could
+  // declare `length = 100_000_000` while holding nothing and make this
+  // allocate a string per index — gigabytes to validate something that
+  // serializes to almost nothing. A hole serializes to `null`, so there is
+  // nothing to check in the gaps anyway.
+  //
+  // Enumerating is caller code once a Proxy is involved (the ownKeys trap), so
+  // this fails opaque like the rest: a throw means stop inspecting, not reject.
+  const isArray = Array.isArray(resolved);
   let keys: string[];
   try {
-    keys = Array.isArray(resolved)
-      ? Array.from({ length: resolved.length }, (_unused, index) =>
-          String(index),
-        )
-      : Object.keys(resolved);
+    keys = Object.keys(resolved);
+    // An array's non-index own keys (`arr.note = …`) are dropped by
+    // `JSON.stringify`, so flagging one would reject a payload over a value
+    // that never reaches the wire.
+    if (isArray) keys = keys.filter(isArrayIndex);
   } catch {
     seen.delete(resolved);
     return null;
   }
-  const step = Array.isArray(resolved)
-    ? (key: string) => `[${key}]`
-    : (key: string) => `.${key}`;
   for (const key of keys) {
     const entry = readDataProperty(resolved, key);
     if (entry.accessor) continue;
-    const found = findUnserializable(entry.value, `${at}${step(key)}`, seen);
+    const step = isArray ? `[${key}]` : `.${key}`;
+    const found = findUnserializable(entry.value, `${at}${step}`, seen);
     if (found) return found;
   }
   // Dropped once its subtree is cleared: a value repeated across sibling
@@ -267,6 +291,11 @@ function findUnserializable(
   // Only an ancestor repeating itself is a cycle.
   seen.delete(resolved);
   return null;
+}
+
+/** A canonical array index, the only own keys `JSON.stringify` writes for an array. */
+function isArrayIndex(key: string): boolean {
+  return /^(?:0|[1-9][0-9]*)$/.test(key);
 }
 
 /**
