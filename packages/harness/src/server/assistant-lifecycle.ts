@@ -17,6 +17,10 @@ import type { HarnessSession } from "../shared/types.js";
 import type { AssistantContinuationView } from "../shared/assistant-continuation.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { createBootTokenMiddleware } from "./auth.js";
+import {
+  assistantHistoryMatches,
+  sameAssistantWorkspace,
+} from "../shared/assistant-history.js";
 
 const inspectionRequest = z
   .object({ expectedRevision: z.number().int().nonnegative().safe() })
@@ -146,7 +150,7 @@ export function createAssistantLifecycleRouter(options: {
           if (
             !current ||
             current.lifecycle.revision !== parsed.data.expectedRevision ||
-            current.cwd !== entry.cwd ||
+            !sameAssistantWorkspace(current, entry) ||
             current.continuationScope !== entry.continuationScope
           )
             throw changed();
@@ -171,13 +175,18 @@ export function createAssistantLifecycleRouter(options: {
           if (
             !session ||
             !current ||
-            current.cwd !== entry.cwd ||
+            !sameAssistantWorkspace(current, entry) ||
+            !assistantHistoryMatches(current, session.id, session.cwd) ||
             current.continuationScope !== entry.continuationScope ||
             current.lifecycle.revision !== attachment.lifecycle.revision ||
             current.lifecycle.lifecycle !== "open"
           )
             throw changed();
-          res.json({ session: sessionView(session), attachment });
+          res.json({
+            session: sessionView(session),
+            attachment,
+            ...(current.workspace ? { workspace: current.workspace } : {}),
+          });
         } else {
           if (!options.continue)
             throw new OpenCodeTransportError(

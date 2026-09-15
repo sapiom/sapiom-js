@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
+import {
+  assistantHistoryWorkspaceSchema,
+  type AssistantHistoryEntry,
+  type AssistantHistoryList,
+} from "../../../src/shared/assistant-history";
 import {
   parseOpenCodeTransportFailure,
   type OpenCodeTransportFailure,
@@ -18,6 +22,7 @@ const entrySchema = z
     harnessSessionId: id,
     title: z.string(),
     cwd: z.string(),
+    workspace: assistantHistoryWorkspaceSchema.optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
     lifecycle: z.custom<AssistantLifecycle>(
@@ -38,7 +43,9 @@ const entrySchema = z
       .catch(undefined),
   })
   .refine(
-    (entry) => entry.harnessSessionId === entry.lifecycle.harnessSessionId,
+    (entry) =>
+      entry.harnessSessionId === entry.lifecycle.harnessSessionId &&
+      (!entry.workspace || entry.workspace.canonicalCwd === entry.cwd),
   );
 
 export function parseAssistantHistoryEntry(
@@ -175,20 +182,44 @@ export async function readAssistantHistory(
   bootToken: string,
   signal: AbortSignal,
 ): Promise<AssistantHistoryEntry[]> {
+  return (await readAssistantHistoryWorkspace(cwd, bootToken, signal)).entries;
+}
+
+export async function readAssistantHistoryWorkspace(
+  cwd: string,
+  bootToken: string,
+  signal: AbortSignal,
+): Promise<AssistantHistoryList> {
   const value = await assistantHistoryRequest(
     `/api/sessions/assistant-history?cwd=${encodeURIComponent(cwd)}`,
     bootToken,
     signal,
   );
-  const result = z.object({ entries: z.array(entrySchema) }).safeParse(value);
-  if (!result.success || result.data.entries.some((entry) => entry.cwd !== cwd))
+  const result = z
+    .object({
+      entries: z.array(entrySchema),
+      workspace: assistantHistoryWorkspaceSchema.optional(),
+    })
+    .safeParse(value);
+  if (!result.success)
+    throw new Error("Assistant history could not be verified.");
+  const workspace = result.data.workspace ?? { cwd, canonicalCwd: cwd };
+  if (
+    workspace.cwd !== cwd ||
+    result.data.entries.some(
+      (entry) =>
+        entry.cwd !== workspace.canonicalCwd ||
+        // Alias discovery requires an explicit current launch-path proof too.
+        (workspace.cwd !== workspace.canonicalCwd && !entry.workspace),
+    )
+  )
     throw new Error("Assistant history could not be verified.");
   const ids = new Set(
     result.data.entries.map((entry) => entry.harnessSessionId),
   );
   if (ids.size !== result.data.entries.length)
     throw new Error("Assistant history could not be verified.");
-  return result.data.entries;
+  return { entries: result.data.entries, workspace };
 }
 
 export async function readAssistantRecord(

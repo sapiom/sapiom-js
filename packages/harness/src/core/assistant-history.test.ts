@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -37,7 +44,7 @@ const record = (binding: AssistantAssociation): AssistantRecord => ({
   limitations: [],
 });
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "assistant-discovery-"));
+  root = await realpath(await mkdtemp(join(tmpdir(), "assistant-discovery-")));
   cwd = join(root, "project");
   await mkdir(cwd);
   store = new AssistantSessionStore(root);
@@ -188,6 +195,94 @@ it("retains discovery after native data disappears", async () => {
     "available",
   ]);
 });
+
+it("proves a real query alias and each current launch spelling against the saved canonical binding", async () => {
+  const query = join(root, "query-alias"),
+    launch = join(root, "launch-alias");
+  await symlink(cwd, query, "junction");
+  await symlink(cwd, launch, "junction");
+  sessions[0]!.cwd = launch;
+  const result = await history.listWithWorkspace(query);
+  expect(result.workspace).toEqual({ cwd: query, canonicalCwd: cwd });
+  expect(result.entries).toHaveLength(2);
+  expect(result.entries[0]).toMatchObject({
+    cwd,
+    workspace: { cwd: launch, canonicalCwd: cwd },
+    history: "available",
+  });
+  expect(result.entries[1]!.workspace).toEqual({ cwd, canonicalCwd: cwd });
+  await rm(query);
+  await mkdir(query);
+  expect(await history.listWithWorkspace(query)).toEqual({
+    workspace: { cwd: query, canonicalCwd: query },
+    entries: [],
+  });
+});
+
+it.each(["raw rebind", "launch retarget", "query retarget"])(
+  "fences %s during retained history IO",
+  async (change) => {
+    const alias = join(root, "alias"),
+      other = join(root, "other");
+    await symlink(cwd, alias, "junction");
+    await mkdir(other);
+    if (change !== "query retarget") sessions[0]!.cwd = alias;
+    const read = records.read.bind(records);
+    vi.spyOn(records, "read").mockImplementationOnce(async (binding) => {
+      const value = await read(binding);
+      if (change === "raw rebind") sessions[0]!.cwd = cwd;
+      else {
+        await rm(alias);
+        await symlink(other, alias, "junction");
+      }
+      return value;
+    });
+    await expect(
+      change === "query retarget"
+        ? history.listWithWorkspace(alias)
+        : history.entry("studio-a"),
+    ).rejects.toThrow(OpenCodeAccessError);
+  },
+);
+
+it("rechecks earlier entries' raw spelling after the rest of the list", async () => {
+  const alias = join(root, "alias");
+  await symlink(cwd, alias, "junction");
+  const original = authorize.getMockImplementation()!;
+  let calls = 0;
+  authorize.mockImplementation(async (id) => {
+    if (id === "studio-a" && ++calls === 3) sessions[0]!.cwd = alias;
+    return original(id);
+  });
+  await expect(history.listWithWorkspace(cwd)).rejects.toThrow(
+    OpenCodeAccessError,
+  );
+});
+
+it.each(["raw", "target"])(
+  "fences an earlier entry's %s change during final authorization of its sibling",
+  async (change) => {
+    const alias = join(root, "alias"),
+      other = join(root, "other");
+    await symlink(cwd, alias, "junction");
+    await mkdir(other);
+    sessions[0]!.cwd = alias;
+    let calls = 0;
+    authorize.mockImplementation(async (id) => {
+      if (id === "studio-b" && ++calls === 3) {
+        if (change === "raw") sessions[0]!.cwd = cwd;
+        else {
+          await rm(alias);
+          await symlink(other, alias, "junction");
+        }
+      }
+      return bindings.get(id) ?? null;
+    });
+    await expect(history.listWithWorkspace(cwd)).rejects.toThrow(
+      OpenCodeAccessError,
+    );
+  },
+);
 
 it("discards a read whose binding changes before it returns", async () => {
   authorize

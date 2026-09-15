@@ -9,7 +9,8 @@ export function createAssistantRecordsRouter(options: {
   bootToken: string;
   authorize: (id: string) => Promise<AssistantAssociation | null>;
   store: Pick<AssistantRecordStore, "read">;
-  history?: Pick<AssistantHistory, "list">;
+  history?: Pick<AssistantHistory, "list"> &
+    Partial<Pick<AssistantHistory, "listWithWorkspace">>;
 }): Router {
   const router = express.Router();
   router.use(createBootTokenMiddleware(options.bootToken));
@@ -25,7 +26,11 @@ export function createAssistantRecordsRouter(options: {
           return;
         }
         try {
-          res.json({ entries: await options.history!.list(req.query.cwd) });
+          res.json(
+            options.history!.listWithWorkspace
+              ? await options.history!.listWithWorkspace(req.query.cwd)
+              : { entries: await options.history!.list(req.query.cwd) },
+          );
         } catch (error) {
           res
             .status(error instanceof OpenCodeAccessError ? 403 : 503)

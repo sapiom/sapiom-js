@@ -1,7 +1,10 @@
 import { realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
-import type { AssistantHistoryEntry } from "../shared/assistant-history.js";
+import type {
+  AssistantHistoryEntry,
+  AssistantHistoryList,
+} from "../shared/assistant-history.js";
 import type { HarnessSession } from "../shared/types.js";
 import type { AssistantRecordStore } from "./assistant-record-store.js";
 import type { AssistantAssociation } from "./assistant-session-store.js";
@@ -13,7 +16,10 @@ interface Options {
     list(): HarnessSession[];
     get(id: string): HarnessSession | undefined;
   };
-  authorize: (id: string) => Promise<AssistantAssociation | null>;
+  authorize: ((id: string) => Promise<AssistantAssociation | null>) & {
+    /** Existing access owner supplies a synchronous fence for final filesystem awaits. */
+    captureAuthority?: () => () => void;
+  };
   records: Pick<AssistantRecordStore, "read">;
   lifecycle: Pick<AssistantLifecycleCoordinator, "describe">;
   /** Pending continuation children are not discoverable until preparation commits. */
@@ -32,13 +38,17 @@ export class AssistantHistory {
     entry: AssistantHistoryEntry;
     binding: AssistantAssociation;
   } | null> {
+    const assertAuthority = this.options.authorize.captureAuthority?.();
     const session = this.options.sessions.get(id);
     if (!session) return null;
+    const workspaceCwd = session.cwd;
+    const project = JSON.stringify([session.harness, session.agentMapIdentity]);
     if (this.options.isVisible && !(await this.options.isVisible(id)))
       return null;
-    const project = JSON.stringify([session.harness, session.agentMapIdentity]);
     const binding = await this.options.authorize(id);
     if (!binding) return null;
+    if ((await realpath(workspaceCwd)) !== binding.cwd)
+      throw new OpenCodeAccessError("Workspace changed");
     const lifecycle = await this.options.lifecycle.describe(id);
     let history: AssistantHistoryEntry["history"] = "unavailable";
     let recordRevision: number | null = null;
@@ -68,15 +78,18 @@ export class AssistantHistory {
       JSON.stringify(binding)
     )
       throw new OpenCodeAccessError("Assistant binding changed");
-    const current = this.options.sessions.get(id);
     if (this.options.isVisible && !(await this.options.isVisible(id)))
       return null;
+    const canonicalCwd = await realpath(workspaceCwd);
+    const current = this.options.sessions.get(id);
     if (
       !current ||
-      current.cwd !== session.cwd ||
+      current.cwd !== workspaceCwd ||
+      canonicalCwd !== binding.cwd ||
       JSON.stringify([current.harness, current.agentMapIdentity]) !== project
     )
       throw new OpenCodeAccessError("Workspace changed");
+    assertAuthority?.();
     return {
       binding,
       entry: {
@@ -84,6 +97,7 @@ export class AssistantHistory {
         harnessSessionId: id,
         title: current.title,
         cwd: binding.cwd,
+        workspace: { cwd: workspaceCwd, canonicalCwd: binding.cwd },
         createdAt: current.createdAt,
         updatedAt,
         lifecycle,
@@ -111,6 +125,11 @@ export class AssistantHistory {
   }
 
   async list(cwd: string): Promise<AssistantHistoryEntry[]> {
+    return (await this.listWithWorkspace(cwd)).entries;
+  }
+
+  async listWithWorkspace(cwd: string): Promise<AssistantHistoryList> {
+    const assertAuthority = this.options.authorize.captureAuthority?.();
     if (!isAbsolute(cwd) || cwd.length > 4096)
       throw new OpenCodeAccessError("Workspace unavailable");
     const canonical = await realpath(cwd);
@@ -154,12 +173,29 @@ export class AssistantHistory {
       if (!binding || JSON.stringify(binding) !== JSON.stringify(previous))
         throw new OpenCodeAccessError("Assistant access changed");
     }
-    return entries
-      .map(({ entry }) => entry)
-      .sort(
-        (a, b) =>
-          b.updatedAt.localeCompare(a.updatedAt) ||
-          a.harnessSessionId.localeCompare(b.harnessSessionId),
-      );
+    const canonicalCwds = await Promise.all([
+      realpath(cwd),
+      ...entries.map(({ entry }) => realpath(entry.workspace!.cwd)),
+    ]);
+    if (
+      canonicalCwds.some((path) => path !== canonical) ||
+      entries.some(
+        ({ entry }) =>
+          this.options.sessions.get(entry.harnessSessionId)?.cwd !==
+          entry.workspace!.cwd,
+      )
+    )
+      throw new OpenCodeAccessError("Workspace changed");
+    assertAuthority?.();
+    return {
+      workspace: { cwd, canonicalCwd: canonical },
+      entries: entries
+        .map(({ entry }) => entry)
+        .sort(
+          (a, b) =>
+            b.updatedAt.localeCompare(a.updatedAt) ||
+            a.harnessSessionId.localeCompare(b.harnessSessionId),
+        ),
+    };
   }
 }

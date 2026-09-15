@@ -1,5 +1,5 @@
 import { AssistantActivity } from "./AssistantActivity";
-import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
+import { assistantHistoryMatches, type AssistantHistoryEntry } from "../../../src/shared/assistant-history";
 import type { AssistantProjection } from "../lib/assistant-state";
 import {
   useCallback,
@@ -678,12 +678,12 @@ export function WorkflowsRail({
       ) && !registryAgentIds.has(summary.agentSessionId),
   );
   const pastRows = [
-    ...exitedSessions.filter((session) => assistantByStudio.get(session.id)?.cwd !== session.cwd).map((session) => ({
+    ...exitedSessions.filter((session) => !assistantHistoryMatches(assistantByStudio.get(session.id), session.id, session.cwd)).map((session) => ({
       kind: "exited" as const,
       at: session.lastActiveAt,
       session,
     })),
-    ...pastSummaries.filter((summary) => !summary.harnessSessionId || assistantByStudio.get(summary.harnessSessionId)?.cwd !== summary.cwd).map((summary) => ({
+    ...pastSummaries.filter((summary) => !summary.harnessSessionId || !assistantHistoryMatches(assistantByStudio.get(summary.harnessSessionId), summary.harnessSessionId, summary.cwd)).map((summary) => ({
       kind: "summary" as const,
       at: summary.lastActiveAt,
       summary,
@@ -1191,8 +1191,8 @@ export function WorkflowsRail({
                   >
                     {pastRows.map((row) => {
                       if (row.kind === "assistant") {
-                        const terminal = sessions.find((session) => session.id === row.entry.harnessSessionId && session.cwd === row.entry.cwd);
-                        const summary = history.find((candidate) => candidate.harnessSessionId === row.entry.harnessSessionId && candidate.cwd === row.entry.cwd);
+                        const terminal = sessions.find((session) => assistantHistoryMatches(row.entry, session.id, session.cwd));
+                        const summary = history.find((candidate) => assistantHistoryMatches(row.entry, candidate.harnessSessionId, candidate.cwd));
                         return <PastSessionRow
                           key={`assistant:${row.entry.harnessSessionId}`}
                           testid={`assistant-history-${row.entry.harnessSessionId}`}

@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
+import {
+  assistantWorkspace,
+  type AssistantHistoryEntry,
+} from "../../../src/shared/assistant-history";
 import { parseAssistantLifecycle } from "../../../src/shared/assistant-session";
 import { verifyAssistantContinuationView } from "../../../src/shared/assistant-continuation";
 import {
@@ -123,7 +126,7 @@ export async function continueAssistantRequest(
   if (
     !session.success ||
     session.data.id === entry.harnessSessionId ||
-    session.data.cwd !== entry.cwd ||
+    session.data.cwd !== assistantWorkspace(entry).cwd ||
     !session.data.agentMapIdentity ||
     session.data.agentMapIdentity.sessionId !== session.data.id ||
     !lifecycle ||

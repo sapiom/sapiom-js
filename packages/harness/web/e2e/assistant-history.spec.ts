@@ -117,6 +117,12 @@ const rows = async (page: Page) => {
   await page.getByTestId("past-sessions-trigger").hover();
 };
 async function setup(page: Page, mode = "valid") {
+  const workspace =
+    mode === "alias" ? { cwd, canonicalCwd: `/private${cwd}` } : undefined;
+  const savedEntry = (id: string) =>
+    workspace
+      ? { ...entry(id), cwd: workspace.canonicalCwd, workspace }
+      : entry(id);
   const streams = new Set<ServerResponse>();
   const events = createServer((req, res) => {
     res.writeHead(200, {
@@ -162,6 +168,7 @@ async function setup(page: Page, mode = "valid") {
     },
   });
   const resumed = (id: string) => ({
+    ...(workspace ? { workspace } : {}),
     session: {
       id,
       cwd,
@@ -183,7 +190,7 @@ async function setup(page: Page, mode = "valid") {
     return route.fulfill({
       json: {
         entry: {
-          ...entry(id),
+          ...savedEntry(id),
           nativeResume: probe.inspectState,
           ...(probe.inspectState !== "available"
             ? {
@@ -286,9 +293,10 @@ async function setup(page: Page, mode = "valid") {
     }
     return route.fulfill({
       json: {
+        ...(workspace ? { workspace } : {}),
         entries: [
-          entry("assistant-only"),
-          entry("sess-leasing"),
+          savedEntry("assistant-only"),
+          savedEntry("sess-leasing"),
           ...(mode === "foreground" ? [entry("sess-boot")] : []),
         ],
       },
@@ -300,9 +308,11 @@ async function setup(page: Page, mode = "valid") {
       return;
     }
     const id = new URL(route.request().url()).pathname.split("/")[3]!;
+    const saved = record(mode === "foreign" ? "another-studio" : id);
+    if (workspace) saved.binding.cwd = workspace.canonicalCwd;
     return route.fulfill({
       status: mode === "missing" ? 404 : 200,
-      json: { record: record(mode === "foreign" ? "another-studio" : id) },
+      json: { record: saved },
     });
   });
   page.on("request", (request) => {
@@ -1031,4 +1041,136 @@ test("a Terminal summary in another directory remains separate from an Assistant
   await expect(
     page.getByRole("button", { name: "View Terminal history", exact: true }),
   ).toHaveCount(0);
+});
+
+test("verified aliases preserve mixed history and same-ID paused Resume", async ({
+  page,
+}) => {
+  const probe = await setup(page, "alias");
+  await rows(page);
+  await expect(
+    page.getByTestId("assistant-history-sess-leasing"),
+  ).toContainText("Terminal + Assistant");
+  await expect(page.getByTestId("exited-session-sess-leasing")).toHaveCount(0);
+  await page.getByTestId("assistant-history-sess-leasing").click();
+  await expect(page.getByTestId("assistant-transcript")).toContainText(
+    "Saved answer sess-leasing",
+  );
+  await page
+    .getByRole("button", { name: "View Terminal history", exact: true })
+    .click();
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await review(page, "sess-leasing");
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Native saved answer sess-leasing", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-leasing",
+  );
+  expect(
+    probe.calls.filter((url) => /prompt_async|final-response/.test(url)),
+  ).toEqual([]);
+});
+
+test("an empty verified alias refresh clears its prior canonical entries", async ({
+  page,
+}) => {
+  await setup(page, "alias");
+  await rows(page);
+  await expect(
+    page.getByTestId("assistant-history-assistant-only"),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.route("**/api/sessions/assistant-history?**", (route) => {
+    const requested = new URL(route.request().url()).searchParams.get("cwd")!;
+    return route.fulfill({
+      json: {
+        entries: [],
+        workspace: {
+          cwd: requested,
+          canonicalCwd: requested === cwd ? `/private${cwd}` : requested,
+        },
+      },
+    });
+  });
+  await rows(page);
+  await expect(
+    page.getByTestId("assistant-history-assistant-only"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("assistant-history-sess-leasing")).toHaveCount(
+    0,
+  );
+  await expect(page.getByTestId("exited-session-sess-leasing")).toBeVisible();
+});
+
+test("a slow sibling alias cannot replace a newer canonical history bucket", async ({
+  page,
+}) => {
+  await setup(page, "alias");
+  await page.evaluate(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .find(
+        (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+      )!.name;
+    const { MockApi } = await import(url);
+    MockApi.prototype.sessionHistory = async () => [];
+  });
+  const canonicalCwd = `/private${cwd}`;
+  const saved = (title: string) => ({
+    ...entry("ordered-alias"),
+    title,
+    cwd: canonicalCwd,
+    workspace: { cwd, canonicalCwd },
+  });
+  let calls = 0,
+    held: Route | null = null;
+  const first = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).searchParams.get("cwd") === cwd &&
+      response.url().includes("assistant-history"),
+  );
+  await page.route("**/api/sessions/assistant-history?**", (route) => {
+    const directory = new URL(route.request().url()).searchParams.get("cwd")!;
+    if (directory === otherCwd) {
+      held = route;
+      return;
+    }
+    if (directory !== cwd) return route.fulfill({ json: { entries: [] } });
+    return route.fulfill({
+      json: {
+        workspace: { cwd, canonicalCwd },
+        entries: [
+          saved(++calls === 1 ? "Old alias history" : "Fresh alias history"),
+        ],
+      },
+    });
+  });
+  await rows(page);
+  await expect.poll(() => held !== null && calls === 1).toBe(true);
+  await (await first).finished();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await refreshDirectory(page, cwd);
+  await expect(
+    page.getByTestId("assistant-history-ordered-alias"),
+  ).toContainText("Fresh alias history");
+  await held!.fulfill({
+    json: {
+      workspace: { cwd: otherCwd, canonicalCwd },
+      entries: [saved("Old alias history")],
+    },
+  });
+  await expect(page.getByText("Loading…", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByTestId("assistant-history-ordered-alias"),
+  ).toContainText("Fresh alias history");
 });

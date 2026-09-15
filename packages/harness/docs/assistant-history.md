@@ -218,3 +218,9 @@ Starting Terminal keeps the same conversation and pending request through host
 status updates, including readiness before the HTTP acknowledgement. Terminal
 focus stays selected, and settling the request shows the latest live or exited
 state. Navigation, account changes and End still invalidate stale operations.
+
+Workspace aliases use a server-verified pair of the Studio launch path and its
+canonical record path. History, inspection, Resume and mixed Terminal records
+keep both identities, and reject a changed or retargeted path. Refreshes through
+aliases share canonical publication ordering, so an empty response clears stale
+rows without hiding failures in a different workspace.

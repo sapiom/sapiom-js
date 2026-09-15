@@ -96,6 +96,7 @@ const post = (
   });
 beforeEach(async () => {
   entry.mockReset().mockResolvedValue(savedEntry);
+  session.cwd = "/workspace";
   inspect.mockReset().mockResolvedValue({
     nativeHistory: "available",
     nativeResume: "available",
@@ -235,6 +236,62 @@ it("discards Resume when a newer lifecycle or authorization wins before the resp
   });
   expect(response.status).toBe(403);
   expect(await response.text()).not.toContain("private");
+});
+
+it("returns the current raw/canonical proof on same-ID alias Resume", async () => {
+  const workspace = { cwd: "/alias", canonicalCwd: savedEntry.cwd };
+  session.cwd = workspace.cwd;
+  entry
+    .mockResolvedValueOnce({ ...savedEntry, workspace })
+    .mockResolvedValueOnce({
+      ...savedEntry,
+      workspace,
+      lifecycle: attachment.lifecycle,
+    });
+  const response = await post("resume", {
+    expectedRevision: 4,
+    operationId: op,
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    workspace,
+    session: { id: "studio-a", cwd: "/alias" },
+  });
+});
+
+it.each(["inspect", "resume"])(
+  "rejects %s when a raw alias rebind leaves the canonical binding unchanged",
+  async (action) => {
+    entry
+      .mockResolvedValueOnce({
+        ...savedEntry,
+        workspace: { cwd: "/alias-a", canonicalCwd: savedEntry.cwd },
+      })
+      .mockResolvedValueOnce({
+        ...savedEntry,
+        workspace: { cwd: "/alias-b", canonicalCwd: savedEntry.cwd },
+        lifecycle: action === "resume" ? attachment.lifecycle : lifecycle,
+      });
+    session.cwd = "/alias-b";
+    expect(
+      (
+        await post(action, {
+          expectedRevision: 4,
+          ...(action === "resume" ? { operationId: op } : {}),
+        })
+      ).status,
+    ).toBe(409);
+  },
+);
+
+it("rejects a same-ID Terminal cwd rebind after the last history read", async () => {
+  entry.mockResolvedValueOnce(savedEntry).mockImplementationOnce(async () => {
+    session.cwd = "/other";
+    return { ...savedEntry, lifecycle: attachment.lifecycle };
+  });
+  expect(
+    (await post("resume", { expectedRevision: 4, operationId: op })).status,
+  ).toBe(409);
 });
 it.each([
   ["inspect", "b".repeat(64)],

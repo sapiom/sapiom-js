@@ -28,7 +28,16 @@ export function assistantHistoryAccess(options: {
   authorize: (id: string) => Promise<OpenCodeWorkspace | null>;
   store: AssistantSessionStore;
 }) {
-  return async (id: string) => {
+  const captureAuthority = () => {
+    const captured = authority(options.access.get());
+    if (!captured)
+      throw new OpenCodeAccessError("Assistant access is unavailable");
+    return () => {
+      if (authority(options.access.get()) !== captured)
+        throw new OpenCodeAccessError("Assistant access changed");
+    };
+  };
+  const resolve = async (id: string) => {
     const grant = options.access.get();
     const captured = authority(grant);
     if (!grant || !captured)
@@ -37,7 +46,8 @@ export function assistantHistoryAccess(options: {
     const workspace = await options.authorize(id);
     if (!workspace || workspace.harnessSessionId !== id)
       throw new OpenCodeAccessError("Workspace unavailable");
-    const cwd = await realpath(workspace.cwd);
+    const workspaceCwd = workspace.cwd;
+    const cwd = await realpath(workspaceCwd);
     const key = {
       harnessSessionId: id,
       cwd,
@@ -57,9 +67,11 @@ export function assistantHistoryAccess(options: {
       authority(options.access.get()) !== captured ||
       !current ||
       current.harnessSessionId !== id ||
+      current.cwd !== workspaceCwd ||
       currentCwd !== cwd
     )
       throw new OpenCodeAccessError("Assistant access changed");
     return binding;
   };
+  return Object.assign(resolve, { captureAuthority });
 }

@@ -18,6 +18,10 @@ const binding: AssistantAssociation = {
 const authorize = vi.fn(),
   read = vi.fn();
 const list = vi.fn();
+const history = {
+  list,
+  listWithWorkspace: undefined as undefined | ReturnType<typeof vi.fn>,
+};
 const request = (token = "boot") =>
   fetch(`${origin}/sessions/studio-a/assistant/record`, {
     headers: { "X-Harness-Token": token },
@@ -28,13 +32,14 @@ beforeEach(async () => {
   list
     .mockReset()
     .mockResolvedValue([{ kind: "assistant", harnessSessionId: "studio-a" }]);
+  history.listWithWorkspace = undefined;
   const app = express();
   app.use(
     createAssistantRecordsRouter({
       bootToken: "boot",
       authorize,
       store: { read },
-      history: { list },
+      history,
     }),
   );
   server = createServer(app);
@@ -99,4 +104,19 @@ it("gates metadata listing and rejects ambiguous workspace queries", async () =>
   const failed = await fetch(url, { headers });
   expect(failed.status).toBe(503);
   expect(await failed.text()).not.toContain("private");
+});
+
+it("returns the verified query and canonical pair from the history authority", async () => {
+  const result = {
+    entries: [],
+    workspace: { cwd: "/alias", canonicalCwd: "/workspace" },
+  };
+  history.listWithWorkspace = vi.fn().mockResolvedValue(result);
+  const response = await fetch(
+    `${origin}/sessions/assistant-history?cwd=%2Falias`,
+    { headers: { "X-Harness-Token": "boot" } },
+  );
+  expect(await response.json()).toEqual(result);
+  expect(history.listWithWorkspace).toHaveBeenCalledWith("/alias");
+  expect(list).not.toHaveBeenCalled();
 });

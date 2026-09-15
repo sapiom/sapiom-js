@@ -1,6 +1,12 @@
 import { z } from "zod";
 import type { HarnessSession } from "@shared/types";
-import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
+import {
+  assistantHistoryMatches,
+  assistantHistoryWorkspaceSchema,
+  assistantWorkspace,
+  sameAssistantWorkspace,
+  type AssistantHistoryEntry,
+} from "../../../src/shared/assistant-history";
 import { parseAssistantLifecycle } from "../../../src/shared/assistant-session";
 import {
   parseOpenCodeTransportFailure,
@@ -99,7 +105,7 @@ export async function inspectAssistant(
   if (
     !next ||
     next.harnessSessionId !== entry.harnessSessionId ||
-    next.cwd !== entry.cwd ||
+    !sameAssistantWorkspace(next, entry) ||
     next.lifecycle.revision !== entry.lifecycle.revision ||
     next.nativeResume === "unchecked"
   )
@@ -121,12 +127,20 @@ export async function resumeAssistantRequest(
     signal,
   );
   const session = assistantSessionSchema.safeParse(value.session);
+  const workspace = assistantHistoryWorkspaceSchema
+    .optional()
+    .safeParse(value.workspace);
   const attachment = object(value.attachment);
   const lifecycle = parseAssistantLifecycle(attachment.lifecycle);
   if (
     !session.success ||
     session.data.id !== entry.harnessSessionId ||
-    session.data.cwd !== entry.cwd ||
+    !assistantHistoryMatches(entry, session.data.id, session.data.cwd) ||
+    !workspace.success ||
+    (!!entry.workspace && !workspace.data) ||
+    (workspace.data &&
+      (workspace.data.cwd !== assistantWorkspace(entry).cwd ||
+        workspace.data.canonicalCwd !== entry.cwd)) ||
     (session.data.agentMapIdentity &&
       session.data.agentMapIdentity.sessionId !== entry.harnessSessionId) ||
     !lifecycle ||

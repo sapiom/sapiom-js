@@ -1,6 +1,6 @@
 import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
-import type { AssistantHistoryEntry } from "../../../src/shared/assistant-history";
-import { readAssistantHistory } from "./assistant-history-client";
+import { assistantHistoryMatches, assistantWorkspace, type AssistantHistoryEntry, type AssistantHistoryList } from "../../../src/shared/assistant-history";
+import { readAssistantHistory, readAssistantHistoryWorkspace } from "./assistant-history-client";
 import { resumeAssistantRequest } from "./assistant-resume-client";
 import { continueAssistantRequest, type ContinueRequest } from "./assistant-continuation-client";
 import { sameStudioAuthority, startTerminalRequest } from "./terminal-start-client";
@@ -447,7 +447,8 @@ export function useHarnessState(): HarnessStateHook {
   const [assistantHistory, setAssistantHistory] = useState<{
     authority: string | null; entries: AssistantHistoryEntry[];
     failedCwds: Set<string>; versions: Map<string, number>;
-  }>({ authority: null, entries: [], failedCwds: new Set(), versions: new Map() });
+    scopes: Map<string, string>; canonicalVersions: Map<string, number>;
+  }>({ authority: null, entries: [], failedCwds: new Set(), versions: new Map(), scopes: new Map(), canonicalVersions: new Map() });
   const endingSessions = useRef(new Set<string>());
   const [endingSessionIds, setEndingSessionIds] = useState<ReadonlySet<string>>(
     new Set(),
@@ -543,7 +544,7 @@ export function useHarnessState(): HarnessStateHook {
   // History fan-out bookkeeping — see loadHistory. Refs, not state: neither
   // affects the render, and both are read/written within a single call.
   const inFlightHistory = useRef<Map<string, Promise<{
-    terminal: SessionSummary[] | null; assistant: AssistantHistoryEntry[] | null; revision: number;
+    terminal: SessionSummary[] | null; assistant: AssistantHistoryList | null; revision: number;
   }>>>(
     new Map(),
   );
@@ -1470,8 +1471,8 @@ export function useHarnessState(): HarnessStateHook {
       const request = Promise.allSettled([
         api.sessionHistory(cwd),
         authority
-          ? readAssistantHistory(cwd, getBootToken(), AbortSignal.timeout(5000))
-          : Promise.resolve([]),
+          ? readAssistantHistoryWorkspace(cwd, getBootToken(), AbortSignal.timeout(5000))
+          : Promise.resolve({ entries: [], workspace: { cwd, canonicalCwd: cwd } }),
       ]).then(([terminal, assistant]) => ({
         revision,
         terminal: terminal.status === "fulfilled" ? terminal.value : null,
@@ -1506,6 +1507,8 @@ export function useHarnessState(): HarnessStateHook {
           const entries = new Map((sameAuthority ? prev.entries : []).map((entry) => [entry.harnessSessionId, entry]));
           const failedCwds = new Set(sameAuthority ? prev.failedCwds : []);
           const versions = new Map(sameAuthority ? prev.versions : []);
+          const scopes = new Map(sameAuthority ? prev.scopes : []);
+          const canonicalVersions = new Map(sameAuthority ? prev.canonicalVersions : []);
           results.forEach((result, index) => {
             if (result.status !== "fulfilled") return;
             const cwd = unique[index]!, { revision, assistant } = result.value;
@@ -1514,10 +1517,17 @@ export function useHarnessState(): HarnessStateHook {
             versions.set(cwd, revision);
             if (assistant === null) { failedCwds.add(cwd); return; }
             failedCwds.delete(cwd);
-            for (const [id, entry] of entries) if (entry.cwd === cwd) entries.delete(id);
-            for (const entry of assistant) entries.set(entry.harnessSessionId, entry);
+            const canonical = assistant.workspace.canonicalCwd, previous = scopes.get(cwd);
+            scopes.set(cwd, canonical);
+            if (previous && previous !== canonical && ![...scopes.values()].includes(previous))
+              for (const [id, entry] of entries) if (entry.cwd === previous) entries.delete(id);
+            // Different aliases of one directory share the same publication fence.
+            if (revision <= (canonicalVersions.get(canonical) ?? -1)) return;
+            canonicalVersions.set(canonical, revision);
+            for (const [id, entry] of entries) if (entry.cwd === canonical) entries.delete(id);
+            for (const entry of assistant.entries) entries.set(entry.harnessSessionId, entry);
           });
-          return { authority, entries: [...entries.values()], failedCwds, versions };
+          return { authority, entries: [...entries.values()], failedCwds, versions, scopes, canonicalVersions };
         });
       }
     } finally {
@@ -1850,7 +1860,7 @@ export function useHarnessState(): HarnessStateHook {
     const latest = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === entry.harnessSessionId);
     if (latest && (latest.revision > result.lifecycle.revision || (latest.revision === result.lifecycle.revision && latest.lifecycle !== "open"))) return null;
     const currentSession = sessionsRef.current.find((row) => row.id === result.session.id);
-    if (currentSession && currentSession.cwd !== entry.cwd) return null;
+    if (currentSession && !assistantHistoryMatches(entry, currentSession.id, currentSession.cwd)) return null;
     // A newer bus row owns Terminal status. Resume only adds an absent Studio.
     setState((prev) => prev && !prev.sessions.some((row) => row.id === result.session.id)
       ? { ...prev, sessions: [...prev.sessions, result.session] } : prev);
@@ -1872,7 +1882,7 @@ export function useHarnessState(): HarnessStateHook {
     const latest = assistantOrder.current().snapshot?.lifecycles?.find((row) => row.harnessSessionId === result.session.id);
     if (latest && (latest.revision > result.lifecycle.revision || (latest.revision === result.lifecycle.revision && latest.lifecycle !== "open"))) return null;
     const current = sessionsRef.current.find((row) => row.id === result.session.id);
-    if (current && (current.cwd !== entry.cwd || current.agentMapIdentity?.projectId !== result.session.agentMapIdentity?.projectId)) return null;
+    if (current && (current.cwd !== assistantWorkspace(entry).cwd || current.agentMapIdentity?.projectId !== result.session.agentMapIdentity?.projectId)) return null;
     setState((prev) => prev && !prev.sessions.some((row) => row.id === result.session.id)
       ? { ...prev, sessions: [...prev.sessions, result.session] } : prev);
     const revision = ++conversationRevealSequence.current;
@@ -1886,7 +1896,7 @@ export function useHarnessState(): HarnessStateHook {
     if (!session || !authority || signal.aborted) return null;
     const entries = await readAssistantHistory(session.cwd, getBootToken(), signal);
     if (signal.aborted || authority !== assistantAuthorityKey() || sessionsRef.current.find((row) => row.id === id)?.cwd !== session.cwd) return null;
-    return entries.find((entry) => entry.harnessSessionId === id) ?? null;
+    return entries.find((entry) => assistantHistoryMatches(entry, id, session.cwd)) ?? null;
   }, [assistantAuthorityKey]);
 
   const startTerminal = useCallback(async (id: string, signal: AbortSignal, isCurrent: () => boolean): Promise<HarnessSession | null> => {

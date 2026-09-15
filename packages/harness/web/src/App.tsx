@@ -87,7 +87,7 @@ import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
 import { AssistantPane } from "./components/AssistantPane";
 import { AssistantHistoryPane } from "./components/AssistantHistoryPane";
-import type { AssistantHistoryEntry } from "../../src/shared/assistant-history";
+import { assistantHistoryMatches, type AssistantHistoryEntry } from "../../src/shared/assistant-history";
 import { AssistantHistoryActions, type AssistantResumeOperation } from "./components/AssistantHistoryActions";
 import { AssistantContinueAction } from "./components/AssistantContinueAction";
 import { DormantTerminalPane } from "./components/DormantTerminalPane";
@@ -750,9 +750,9 @@ export const App = (): JSX.Element => {
   const activeAssistantReview = assistantReview?.authority === harness.assistantHistoryAuthority &&
     assistantReview.navigation === studioRestoreGenerationRef.current ? assistantReview : null;
   const reviewedAssistantTerminal = activeAssistantReview ? harness.state?.sessions.find((session) =>
-    session.id === activeAssistantReview.entry.harnessSessionId && session.cwd === activeAssistantReview.entry.cwd) : undefined;
+    assistantHistoryMatches(activeAssistantReview.entry, session.id, session.cwd)) : undefined;
   const reviewedTerminalSummary = activeAssistantReview ? harness.history.find((summary) =>
-    summary.harnessSessionId === activeAssistantReview.entry.harnessSessionId && summary.cwd === activeAssistantReview.entry.cwd) : undefined;
+    assistantHistoryMatches(activeAssistantReview.entry, summary.harnessSessionId, summary.cwd)) : undefined;
   // Template gallery opened from the command palette (browse is reachable
   // from anywhere, not only the add dialog / welcome panel entries).
   const [templatesOpen, setTemplatesOpen] = useState(false);
