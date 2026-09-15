@@ -4,6 +4,7 @@ import type { AssistantLifecycle } from "../../../src/shared/assistant-session";
 import {
   inspectAssistant,
   isAssistantLifecycleConflict,
+  resumeEntryForSelection,
 } from "../lib/assistant-resume-client";
 
 export interface AssistantResumeOperation {
@@ -84,8 +85,11 @@ export function AssistantHistoryActions({
         // Keep the original revision even when our own commit arrives over the
         // bus before an HTTP failure. A retry reconciles that exact operation.
         operations.set(key, operation);
+        // Explicit re-selection may refresh only the launch spelling. The
+        // original operation, revision and canonical binding remain fixed.
+        const selected = resumeEntryForSelection(operation.entry, entry);
         const opened = await onResume(
-          operation.entry,
+          selected,
           operation.operationId,
           abort.signal,
         );

@@ -383,6 +383,7 @@ test("Continue opens a distinct paused child from the displayed record and prese
   expect(body).toEqual({
     expectedRevision: 2,
     expectedRecordRevision: 1,
+    expectedWorkspace: { cwd, canonicalCwd: cwd },
     operationId: expect.stringMatching(/^[a-f0-9-]{36}$/),
   });
   await project(page, 2, "account-a", [lifecycle(childId)]);
@@ -469,7 +470,51 @@ test("lost Continue response survives refresh, host restart and a newer record w
     ),
   );
   expect(persisted).toHaveLength(1);
-  expect(JSON.parse(persisted[0]![1])).toEqual(request);
+  const { expectedWorkspace, ...tuple } = request;
+  expect(expectedWorkspace).toEqual({ cwd, canonicalCwd: cwd });
+  expect(JSON.parse(persisted[0]![1])).toEqual(tuple);
+});
+
+test("workspace conflict preserves uncertain Continue without offering a new operation", async ({
+  page,
+}, info) => {
+  const probe = await setup(page);
+  probe.fail = true;
+  await review(page);
+  await button(page).click();
+  await expect(page.getByRole("alert")).toContainText("Retry this operation");
+  const original = probe.requests[0]!.request().postDataJSON();
+  probe.fail = false;
+  probe.hold = true;
+  await button(page).click();
+  await expect.poll(() => probe.requests.length).toBe(2);
+  await probe.requests[1]!.fulfill({
+    status: 409,
+    json: { error: openCodeTransportFailure("workspace_changed") },
+  });
+  await expect(page.getByRole("alert")).toContainText(
+    "select it again after the list refreshes",
+  );
+  await expect(button(page)).toHaveText("Retry Continue");
+  await expect(
+    page.getByRole("button", { name: "Review latest record", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Start a new continuation", exact: true }),
+  ).toHaveCount(0);
+  expect(probe.requests[1]!.request().postDataJSON()).toEqual(original);
+  const persisted = await page.evaluate(() =>
+    Object.entries(localStorage).filter(([key]) =>
+      key.startsWith("studio.assistant-continue."),
+    ),
+  );
+  const { expectedWorkspace, ...tuple } = original;
+  expect(expectedWorkspace).toEqual({ cwd, canonicalCwd: cwd });
+  expect(persisted).toHaveLength(1);
+  expect(JSON.parse(persisted[0]![1])).toEqual(tuple);
+  await page.screenshot({
+    path: info.outputPath("continue-workspace-conflict.png"),
+  });
 });
 
 for (const invalid of ["source", "record", "hash", "child", "lease"]) {

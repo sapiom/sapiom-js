@@ -224,3 +224,11 @@ canonical record path. History, inspection, Resume and mixed Terminal records
 keep both identities, and reject a changed or retargeted path. Refreshes through
 aliases share canonical publication ordering, so an empty response clears stale
 rows without hiding failures in a different workspace.
+
+Inspection, Resume and Continue send the selected workspace pair as an optional
+transport precondition, checked before native work. A `workspace_changed` 409
+requires closing the record and selecting it again after Past sessions refreshes;
+it does not prove that an earlier unacknowledged operation was never prepared.
+Legacy requests remain accepted. The original saved operation UUID/revisions and
+receipt fingerprints are unchanged. Explicit re-selection can refresh Resume's
+launch spelling only with the same verified canonical binding and retry scope.

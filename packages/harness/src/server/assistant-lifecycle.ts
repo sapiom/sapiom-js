@@ -19,11 +19,16 @@ import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { createBootTokenMiddleware } from "./auth.js";
 import {
   assistantHistoryMatches,
+  assistantHistoryWorkspaceSchema,
+  assistantWorkspace,
   sameAssistantWorkspace,
 } from "../shared/assistant-history.js";
 
 const inspectionRequest = z
-  .object({ expectedRevision: z.number().int().nonnegative().safe() })
+  .object({
+    expectedRevision: z.number().int().nonnegative().safe(),
+    expectedWorkspace: assistantHistoryWorkspaceSchema.optional(),
+  })
   .strict();
 const resumeRequest = inspectionRequest
   .extend({ operationId: z.string().uuid() })
@@ -79,6 +84,7 @@ function failure(res: Response, error: unknown) {
     ? 403
     : [
           "lifecycle_changed",
+          "workspace_changed",
           "session_ended",
           "cleanup_unconfirmed",
           "continuation_unconfirmed",
@@ -139,6 +145,23 @@ export function createAssistantLifecycleRouter(options: {
           res.sendStatus(404);
           return;
         }
+        // Compare selected intent before any native work. This transport
+        // precondition is deliberately not part of a durable operation tuple.
+        const expectedWorkspace = parsed.data.expectedWorkspace;
+        if (expectedWorkspace) {
+          const current = assistantWorkspace(entry);
+          const session = options.getSession(id);
+          if (
+            expectedWorkspace.cwd !== current.cwd ||
+            expectedWorkspace.canonicalCwd !== entry.cwd ||
+            !session ||
+            session.id !== id ||
+            session.cwd !== expectedWorkspace.cwd
+          )
+            throw new OpenCodeTransportError(
+              openCodeTransportFailure("workspace_changed"),
+            );
+        }
         if (action === "inspect") {
           if (entry.lifecycle.revision !== parsed.data.expectedRevision)
             throw changed();
@@ -192,10 +215,13 @@ export function createAssistantLifecycleRouter(options: {
             throw new OpenCodeTransportError(
               openCodeTransportFailure("context_unavailable"),
             );
-          const prepared = await options.continue(
-            id,
-            continueRequest.parse(parsed.data),
-          );
+          const { expectedRevision, operationId, expectedRecordRevision } =
+            continueRequest.parse(parsed.data);
+          const prepared = await options.continue(id, {
+            expectedRevision,
+            operationId,
+            expectedRecordRevision,
+          });
           res.json({
             session: sessionView(prepared.session),
             attachment: prepared.attachment,

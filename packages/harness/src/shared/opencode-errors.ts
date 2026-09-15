@@ -8,6 +8,7 @@ export const openCodeTransportErrorCodes = [
   "context_unavailable",
   "transport_unavailable",
   "lifecycle_changed",
+  "workspace_changed",
   "session_ended",
   "execution_paused",
   "cleanup_unconfirmed",
@@ -50,6 +51,13 @@ export interface OpenCodeStudioErrorEvent {
 }
 
 const fixedFailures = {
+  workspace_changed: {
+    code: "workspace_changed",
+    message:
+      "This session's workspace changed. Close this record, reopen Past sessions, and select it again after the list refreshes.",
+    retryable: true,
+    action: "reconnect",
+  },
   continuation_unconfirmed: {
     code: "continuation_unconfirmed",
     message:

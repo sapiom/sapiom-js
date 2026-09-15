@@ -259,6 +259,97 @@ it("returns the current raw/canonical proof on same-ID alias Resume", async () =
   });
 });
 
+it.each(["inspect", "resume", "continue"])(
+  "rejects a stale selected workspace before %s can start",
+  async (action) => {
+    const current = { cwd: "/alias-b", canonicalCwd: savedEntry.cwd };
+    session.cwd = current.cwd;
+    entry.mockResolvedValue({ ...savedEntry, workspace: current });
+    for (const expectedWorkspace of [
+      { ...current, cwd: "/alias-a" },
+      { ...current, canonicalCwd: "/previous-target" },
+    ]) {
+      const response = await post(action, {
+        expectedRevision: 4,
+        expectedWorkspace,
+        ...(action !== "inspect" ? { operationId: op } : {}),
+        ...(action === "continue" ? { expectedRecordRevision: 7 } : {}),
+      });
+      expect(response.status).toBe(409);
+      expect((await response.json()).error.code).toBe("workspace_changed");
+    }
+    expect(inspect).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+    expect(continuation).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects a raw session rebind between history verification and action admission", async () => {
+  const expectedWorkspace = { cwd: session.cwd, canonicalCwd: savedEntry.cwd };
+  entry.mockImplementationOnce(async () => {
+    session.cwd = "/rebound";
+    return { ...savedEntry, workspace: expectedWorkspace };
+  });
+  expect(
+    (await post("inspect", { expectedRevision: 4, expectedWorkspace })).status,
+  ).toBe(409);
+  expect(inspect).not.toHaveBeenCalled();
+});
+
+it.each([
+  null,
+  {},
+  { cwd: 1, canonicalCwd: "/workspace" },
+  { cwd: "/workspace", canonicalCwd: "relative" },
+  { cwd: "/workspace", canonicalCwd: "/workspace", extra: true },
+])(
+  "rejects malformed selected workspace %j before action admission",
+  async (expectedWorkspace) => {
+    expect(
+      (await post("inspect", { expectedRevision: 4, expectedWorkspace }))
+        .status,
+    ).toBe(400);
+    expect(entry).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps prepared Continue retries on the original durable tuple, with or without a workspace precondition", async () => {
+  const request = {
+    expectedRevision: 4,
+    operationId: op,
+    expectedRecordRevision: 7,
+  };
+  const expectedWorkspace = { cwd: "/alias-a", canonicalCwd: savedEntry.cwd };
+  session.cwd = expectedWorkspace.cwd;
+  const current = {
+    ...savedEntry,
+    workspace: expectedWorkspace,
+    lifecycle: { ...lifecycle, revision: 9 },
+  };
+  entry.mockResolvedValue(current);
+  const first = await post("continue", { ...request, expectedWorkspace });
+  expect(first.status).toBe(200);
+  // The first ACK may have been lost: stale intent blocks only this retry,
+  // never claims the durable prepared child does not exist or erases its tuple.
+  entry.mockResolvedValue({
+    ...current,
+    workspace: { ...expectedWorkspace, cwd: "/alias-b" },
+  });
+  session.cwd = "/alias-b";
+  expect(
+    (await post("continue", { ...request, expectedWorkspace })).status,
+  ).toBe(409);
+  expect(continuation).toHaveBeenCalledTimes(1);
+  entry.mockResolvedValue(current);
+  session.cwd = expectedWorkspace.cwd;
+  for (const body of [request, { ...request, expectedWorkspace }])
+    expect((await post("continue", body)).status).toBe(200);
+  expect(continuation.mock.calls).toEqual(
+    Array.from({ length: 3 }, () => ["studio-a", request]),
+  );
+});
+
 it.each(["inspect", "resume"])(
   "rejects %s when a raw alias rebind leaves the canonical binding unchanged",
   async (action) => {

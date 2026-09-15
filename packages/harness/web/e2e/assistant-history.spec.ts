@@ -121,7 +121,12 @@ async function setup(page: Page, mode = "valid") {
     mode === "alias" ? { cwd, canonicalCwd: `/private${cwd}` } : undefined;
   const savedEntry = (id: string) =>
     workspace
-      ? { ...entry(id), cwd: workspace.canonicalCwd, workspace }
+      ? {
+          ...entry(id),
+          cwd: workspace.canonicalCwd,
+          workspace,
+          continuationScope: "a".repeat(64),
+        }
       : entry(id);
   const streams = new Set<ServerResponse>();
   const events = createServer((req, res) => {
@@ -1173,4 +1178,107 @@ test("a slow sibling alias cannot replace a newer canonical history bucket", asy
   await expect(
     page.getByTestId("assistant-history-ordered-alias"),
   ).toContainText("Fresh alias history");
+});
+
+test("workspace conflict retains lost-ACK Resume and refreshes only its proof after explicit re-selection", async ({
+  page,
+}, info) => {
+  const probe = await setup(page, "alias");
+  probe.holdResume = true;
+  await review(page);
+  await checkResume(page).click();
+  await resumeButton(page).click();
+  await expect.poll(() => probe.resumes.length).toBe(1);
+  const original = probe.resumes[0]!.request().postDataJSON();
+  await publish(page, {
+    type: "assistant.state",
+    snapshot: {
+      hostInstanceId: "history-host",
+      authorityRevision: "account-a",
+      revision: 2,
+      enabled: true,
+      sessions: [],
+      lifecycles: [probe.resumed("assistant-only").attachment.lifecycle],
+    },
+  });
+  await probe.resumes[0]!.fulfill({ status: 503, json: {} });
+  await expect(page.getByRole("alert")).toContainText(
+    "Retry to check the same operation",
+  );
+  const workspace = {
+    cwd: "/Users/demo/refreshed-alias",
+    canonicalCwd: `/private${cwd}`,
+  };
+  const retries: Route[] = [];
+  probe.resumedRevision = 4;
+  await page.route("**/api/sessions/*/assistant/resume", (route) => {
+    retries.push(route);
+    if (route.request().postDataJSON().expectedWorkspace.cwd !== workspace.cwd)
+      return route.fulfill({
+        status: 409,
+        json: { error: openCodeTransportFailure("workspace_changed") },
+      });
+    const result = probe.resumed("assistant-only");
+    return route.fulfill({
+      json: {
+        ...result,
+        workspace,
+        session: { ...result.session, cwd: workspace.cwd },
+      },
+    });
+  });
+  await resumeButton(page).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "select it again after the list refreshes",
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry Resume", exact: true }),
+  ).toBeVisible();
+  expect(retries[0]!.request().postDataJSON()).toEqual(original);
+  await page.screenshot({
+    path: info.outputPath("workspace-selection-conflict.png"),
+  });
+  await page
+    .getByTestId("assistant-history-pane")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  await page.route("**/api/sessions/assistant-history?**", (route) => {
+    const query = new URL(route.request().url()).searchParams.get("cwd")!;
+    return route.fulfill({
+      json:
+        query === cwd
+          ? {
+              workspace: { cwd, canonicalCwd: workspace.canonicalCwd },
+              entries: [
+                {
+                  ...entry("assistant-only"),
+                  cwd: workspace.canonicalCwd,
+                  workspace,
+                  continuationScope: "a".repeat(64),
+                  lifecycle: {
+                    ...entry("assistant-only").lifecycle,
+                    lifecycle: "open",
+                    revision: 3,
+                  },
+                },
+              ],
+            }
+          : { entries: [] },
+    });
+  });
+  await rows(page);
+  await expect(page.getByText("Loading…", { exact: true })).toHaveCount(0);
+  await page.getByTestId("assistant-history-assistant-only").click();
+  await resumeButton(page).click();
+  await expect(page.getByText("Paused", { exact: true })).toBeVisible();
+  expect(retries[1]!.request().postDataJSON()).toEqual({
+    ...original,
+    expectedWorkspace: workspace,
+  });
+  await page.screenshot({
+    path: info.outputPath("workspace-selection-retry.png"),
+  });
+  expect(
+    probe.calls.filter((url) => /prompt_async|final-response/.test(url)),
+  ).toEqual([]);
 });

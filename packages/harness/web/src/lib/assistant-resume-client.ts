@@ -59,6 +59,21 @@ export const isAssistantLifecycleConflict = (error: unknown): boolean =>
   error.status === 409 &&
   error.failure?.code === "lifecycle_changed";
 
+/** A refreshed selection may change only transport spelling for the same proven binding. */
+export function resumeEntryForSelection(
+  original: AssistantHistoryEntry,
+  selected: AssistantHistoryEntry,
+): AssistantHistoryEntry {
+  return selected.harnessSessionId === original.harnessSessionId &&
+    selected.cwd === original.cwd &&
+    selected.workspace?.canonicalCwd === original.cwd &&
+    !!selected.continuationScope &&
+    /^[a-f\d]{64}$/.test(selected.continuationScope) &&
+    selected.continuationScope === original.continuationScope
+    ? { ...original, workspace: selected.workspace }
+    : original;
+}
+
 export async function assistantActionRequest(
   entry: AssistantHistoryEntry,
   action: "inspect" | "resume" | "continue",
@@ -77,7 +92,12 @@ export async function assistantActionRequest(
       credentials: "omit",
       cache: "no-store",
       signal,
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...body,
+        expectedWorkspace: assistantHistoryWorkspaceSchema.parse(
+          assistantWorkspace(entry),
+        ),
+      }),
     },
   );
   const value = object(await response.json().catch(() => null));

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { openCodeTransportFailure } from "../../../src/shared/opencode-errors";
 import {
   assistantHistoryMatches,
   type AssistantHistoryEntry,
@@ -10,9 +11,15 @@ import {
 } from "./assistant-history-client";
 import {
   inspectAssistant,
+  isAssistantLifecycleConflict,
+  resumeEntryForSelection,
   resumeAssistantRequest,
 } from "./assistant-resume-client";
-import { continueAssistantRequest } from "./assistant-continuation-client";
+import {
+  continueAssistantRequest,
+  prepareContinueRequest,
+  savedContinueRequest,
+} from "./assistant-continuation-client";
 
 const operationId = "11111111-1111-4111-8111-111111111111";
 const workspace = { cwd: "/launch-alias", canonicalCwd: "/canonical" };
@@ -142,7 +149,47 @@ it("resumes through the exact verified pair without changing the requested opera
   expect(JSON.parse(request.body as string)).toEqual({
     operationId,
     expectedRevision: 2,
+    expectedWorkspace: workspace,
   });
+});
+
+it("sends inspected intent even for an older entry with only exact cwd", async () => {
+  const legacy = { ...entry, workspace: undefined };
+  respond({ entry: legacy });
+  await inspectAssistant(legacy, "boot", signal());
+  expect(
+    JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
+  ).toEqual({
+    expectedRevision: 2,
+    expectedWorkspace: { cwd: entry.cwd, canonicalCwd: entry.cwd },
+  });
+});
+
+it("refreshes only Resume transport spelling after re-selection of the same proven binding", () => {
+  const selected = {
+    ...entry,
+    workspace: { ...workspace, cwd: "/alias-b" },
+    lifecycle: { ...entry.lifecycle, revision: 8 },
+  };
+  const retried = resumeEntryForSelection(entry, selected);
+  expect(retried).toEqual({ ...entry, workspace: selected.workspace });
+  expect(entry.workspace).toEqual(workspace);
+  expect(retried.lifecycle).toBe(entry.lifecycle);
+  for (const unsafe of [
+    { ...selected, continuationScope: undefined },
+    { ...selected, continuationScope: "b".repeat(64) },
+    { ...selected, cwd: "/different-project" },
+    { ...selected, harnessSessionId: "different-studio" },
+    { ...selected, workspace: undefined },
+  ])
+    expect(resumeEntryForSelection(entry, unsafe)).toBe(entry);
+  const legacy = { ...entry, continuationScope: undefined };
+  expect(
+    resumeEntryForSelection(legacy, {
+      ...selected,
+      continuationScope: undefined,
+    }),
+  ).toBe(legacy);
 });
 
 it.each(["missing", "malformed", "canonical", "raw", "session"])(
@@ -208,9 +255,68 @@ it("verifies a Continue child against the source launch spelling without substit
     (await continueAssistantRequest(entry, request, "boot", signal())).session
       .cwd,
   ).toBe(workspace.cwd);
+  expect(
+    JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
+  ).toEqual({ ...request, expectedWorkspace: workspace });
+  expect(request).toEqual({
+    operationId,
+    expectedRevision: 2,
+    expectedRecordRevision: 1,
+  });
   value.session.cwd = entry.cwd;
   respond(value);
   await expect(
     continueAssistantRequest(entry, request, "boot", signal()),
   ).rejects.toThrow("could not be verified");
+});
+
+it("retains a persisted uncertain Continue tuple after a workspace preflight conflict", async () => {
+  const key = `studio.assistant-continue.v1:${entry.continuationScope}:${entry.harnessSessionId}`;
+  const request = {
+    operationId,
+    expectedRevision: 2,
+    expectedRecordRevision: 1,
+  };
+  const storage = new Map([[key, JSON.stringify(request)]]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+  vi.stubGlobal("navigator", {
+    locks: {
+      request: async (_name: string, callback: () => unknown) => callback(),
+    },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: openCodeTransportFailure("workspace_changed"),
+          }),
+          { status: 409 },
+        ),
+    ),
+  );
+  const pending = await prepareContinueRequest(entry, 99);
+  const error = await continueAssistantRequest(
+    entry,
+    pending,
+    "boot",
+    signal(),
+  ).catch((error: unknown) => error);
+  expect(error).toMatchObject({
+    status: 409,
+    failure: { code: "workspace_changed" },
+  });
+  expect(isAssistantLifecycleConflict(error)).toBe(false);
+  expect(savedContinueRequest(entry)).toEqual(request);
+  expect(storage.get(key)).toBe(JSON.stringify(request));
+  expect(
+    await prepareContinueRequest(
+      { ...entry, lifecycle: { ...entry.lifecycle, revision: 10 } },
+      99,
+    ),
+  ).toEqual(request);
 });
