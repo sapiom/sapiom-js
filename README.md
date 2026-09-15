@@ -6,6 +6,6 @@ Before/after images describe states before and after an explicit user action, no
 
 No baseline feature-before image was captured for the recorded-history pane (#1008); its screenshot shows the resulting read-only reconstructed record. Private canonical design references and raw runtime/model evidence are deliberately excluded.
 
-The native-lifecycle media uses the actual source-built SPA, Studio server, corrected native runtime and real bash PTY, with disposable loopback account/model fixtures. It shows Continue paused, explicit Send, End, same-ID paused Resume, explicit Start Terminal and final End. The14-second viewport video was decoded and visually reviewed. All five managed processes were confirmed absent after cleanup. This is E2 source/candidate evidence, not a signed or activated production install.
+The native-lifecycle media uses the actual source-built SPA, Studio server, corrected native runtime and real bash PTY, with disposable loopback account/model fixtures. It shows Continue paused, explicit Send, End, same-ID paused Resume, explicit Start Terminal and final End. The 14-second viewport video was decoded and visually reviewed. All five managed processes were confirmed absent after cleanup. This is E2 source/candidate evidence, not a signed or activated production install.
 
-The1041 image pair shows pending Start before its held acknowledgement and Terminal after it, using the isolated UI fixture with a blank PTY.
+The #1041 image pair shows pending Start before its held acknowledgement and Terminal after it, using the isolated UI fixture with a blank PTY.
