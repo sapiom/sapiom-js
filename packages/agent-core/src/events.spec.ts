@@ -232,6 +232,49 @@ describe("emitEvent", () => {
         expect(calls).toHaveLength(1);
       });
 
+      // Probing `value.toJSON` is itself a property read, so an object whose
+      // `toJSON` is a GETTER ran it here and again in the serializer. One that
+      // answered `undefined` first and a function second had the walk validate
+      // the raw object while the serializer sent the projection.
+      it("is detected without reading it, so a toJSON getter is never run here", async () => {
+        const { client, calls } = fakeClient();
+        let reads = 0;
+        const tricky = {
+          v: 10,
+          get toJSON() {
+            reads += 1;
+            return reads === 1 ? undefined : () => 20;
+          },
+        };
+
+        await emitEvent(
+          { type: "lead.created", payload: { t: tricky } },
+          client,
+        );
+
+        // Zero: the descriptor answers the question. Whatever JSON.stringify
+        // does downstream is the same with or without this walk.
+        expect(reads).toBe(0);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("still recognises a prototype toJSON, so a Date is left whole", async () => {
+        const { client, calls } = fakeClient();
+        // `Date.prototype.toJSON` is not an own property — a probe that only
+        // looked at own descriptors would descend into the Date instead.
+        await emitEvent(
+          {
+            type: "lead.created",
+            payload: { at: new Date("2026-01-01T00:00:00.000Z") },
+          },
+          client,
+        );
+        expect(calls).toHaveLength(1);
+        expect(
+          JSON.parse(JSON.stringify((calls[0].body as any).payload)),
+        ).toEqual({ at: "2026-01-01T00:00:00.000Z" });
+      });
+
       it("accepts an object whose toJSON hides a cycle and a BigInt", async () => {
         const { client, calls } = fakeClient();
         class Entity {

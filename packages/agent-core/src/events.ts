@@ -214,8 +214,15 @@ function findUnserializable(
   // and degrades to what every other verb in this SDK already does with it.
   // The object's own author controls that, and this check never claimed reach
   // into code it does not run.
+  // Probed by descriptor, not by reading `value.toJSON`: that read is itself a
+  // property access, and an object whose `toJSON` is a GETTER would run it here
+  // and again inside `JSON.stringify`. A getter answering `undefined` first and
+  // a function second had this walk validate the raw object and the serializer
+  // send the projection — `10` validated, `20` sent, and the `Infinity` variant
+  // past the check as `null`. Same rule as everywhere else in this walk: if
+  // deciding requires running caller code, don't decide — leave it whole.
   const resolved: object = value;
-  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return null;
+  if (hasSerializerHook(value)) return null;
 
   // The guard that keeps a self-referential payload from exhausting the stack.
   // Checked before descending, so the cycle is reported at the edge that closes
@@ -252,6 +259,34 @@ function findUnserializable(
   // Only an ancestor repeating itself is a cycle.
   seen.delete(resolved);
   return null;
+}
+
+/**
+ * Whether `JSON.stringify` will hand this value's serialization to a `toJSON`,
+ * decided WITHOUT reading the property.
+ *
+ * The descriptor is looked up along the prototype chain because that is where
+ * the real ones live — `Date.prototype.toJSON` is a method on the prototype,
+ * not an own property, and missing it would send the walk descending into a
+ * `Date` it has no business inspecting.
+ *
+ * An accessor counts as a hook even though we cannot see what it returns. That
+ * is the safe direction: treating the object as opaque costs only the narrow
+ * check this walk already declines to make on `toJSON` output, while reading
+ * the getter to find out would reintroduce the double read this exists to stop.
+ */
+function hasSerializerHook(value: object): boolean {
+  for (
+    let node: object | null = value;
+    node !== null;
+    node = Object.getPrototypeOf(node) as object | null
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, "toJSON");
+    if (!descriptor) continue;
+    if (descriptor.get || descriptor.set) return true;
+    return typeof descriptor.value === "function";
+  }
+  return false;
 }
 
 /**
