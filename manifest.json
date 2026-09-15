@@ -130,6 +130,21 @@
     "sha256": "cbfc667c871651dcb83c5f02c3fee43cb8fe5998e1c9762d2a025ef655211193"
   },
   {
+    "file": "media/1044/after.png",
+    "bytes": 63873,
+    "sha256": "48298913dfb13cce8d5b9eaac522b699471dee3b0874c0b060e6db0857560f5b"
+  },
+  {
+    "file": "media/1044/before.png",
+    "bytes": 101494,
+    "sha256": "8425c731c7e27ea7c387961e8e36d2e63bc37fd0311e0cca290ac36345c3f534"
+  },
+  {
+    "file": "media/1044/continue-conflict.png",
+    "bytes": 93235,
+    "sha256": "07beda9be44ffc3c34e7af60e2af792f1faee5ba7f8dbd5a946da5ecb00e29e2"
+  },
+  {
     "file": "media/native-lifecycle/continued-paused.png",
     "bytes": 122776,
     "sha256": "186b35d4ff0717f52ae35bd094a5a0ce631dde51b47607510c8390df030ef70b"
