@@ -441,7 +441,30 @@ async function checkSessionCreate(
     }
 
     const inherited = await checkAgentEnvironment(session.id);
-    return `spawned a session in ${path.basename(cwd)} (status ${found.status ?? session.status ?? "?"}, ready via SessionStart hook); ${inherited}`;
+    // Exercise the same persisted End and action contracts in the packaged
+    // shared server. This needs no Assistant grant or model/provider access.
+    const headers = { "X-Harness-Token": token, "content-type": "application/json" };
+    for (const action of ["inspect", "resume", "continue"]) {
+      const route = `${base}/api/sessions/${session.id}/assistant/${action}`;
+      const rejected = await fetch(route, { method: "POST", headers, body: "{}" });
+      if (rejected.status !== 400) throw new Error(`Packaged ${action} contract missing (${rejected.status})`);
+      const unauthorized = await fetch(route, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      if (unauthorized.status !== 401) throw new Error(`Packaged ${action} accepted missing boot token`);
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ended = await fetch(`${base}/api/sessions/${session.id}`, { method: "DELETE", headers });
+      if (!ended.ok) throw new Error(`Packaged End cleanup unconfirmed (${ended.status})`);
+    }
+    const descriptor = JSON.parse(await fetchOk(`${base}/opencode/${session.id}/lifecycle`, token, 200));
+    if (descriptor.lifecycle !== "ended" || descriptor.execution !== "paused")
+      throw new Error("Packaged End did not retain paused lifecycle metadata");
+    found = (await readState()).sessions?.find(s => s.id === session.id);
+    if (found?.status !== "exited") throw new Error("Packaged End lost the retained session row");
+    const attach = await fetch(`${base}/opencode/${session.id}/attach`, {
+      method: "POST", headers, body: JSON.stringify({ expectedRevision: descriptor.revision }),
+    });
+    if (attach.status !== 409) throw new Error("Packaged ended session accepted ordinary Attach");
+    return `spawned and ended a retained session in ${path.basename(cwd)} (ready via SessionStart hook); lifecycle actions authenticated; ${inherited}`;
   } finally {
     // Best-effort ONLY, and deliberately so: this directory is the live pty's
     // cwd, and Windows refuses to delete a directory that is a running

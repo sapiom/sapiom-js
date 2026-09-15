@@ -12,6 +12,11 @@ map/history bytes unchanged. The report includes raw/gzip worker size and cold/
 warm UI readiness timings; a screenshot is saved beside the smoke report.
 Run with `CI` unset on a developer machine to use the runner's temporary profile.
 
+The same smoke run verifies boot-token protection for Assistant history actions,
+repeated End of a real Terminal, retained paused lifecycle metadata, and rejection
+of ordinary Assistant attachment after End. These checks need no model access.
+Activated accepted-context and signed installed release checks remain separate.
+
 ## Coding-agent updates
 
 On each normal launch, Studio checks installed Claude Code and Codex against npm
