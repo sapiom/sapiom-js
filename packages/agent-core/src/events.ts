@@ -253,21 +253,14 @@ function findUnserializable(
   }
   seen.add(resolved);
 
-  // Indexed rather than `.map`/`Object.entries` on an array: `.map` preserves
-  // holes, so a sparse array (`new Array(1)`, `[1, , 3]`) yielded an `undefined`
-  // slot that destructuring then choked on. `JSON.stringify` writes a hole as
-  // `null` and moves on, so the walk has to reach every index and accept them.
-  // `Object.keys` for both shapes, and for an array that is the load-bearing
-  // choice rather than a tidy one: on a sparse array it returns only the
-  // indices that EXIST. Walking `0..length` instead meant a payload could
-  // declare `length = 100_000_000` while holding nothing and make this
-  // allocate a string per index — gigabytes to validate something that
-  // serializes to almost nothing. A hole serializes to `null`, so there is
-  // nothing to check in the gaps anyway.
-  //
+  const isArray = Array.isArray(resolved);
+  if (isArray) {
+    const oversize = arrayCannotFit(resolved, at);
+    if (oversize) return oversize;
+  }
+
   // Enumerating is caller code once a Proxy is involved (the ownKeys trap), so
   // this fails opaque like the rest: a throw means stop inspecting, not reject.
-  const isArray = Array.isArray(resolved);
   const keys = isArray ? arrayIndexKeys(resolved) : ownEnumerableKeys(resolved);
   if (keys === UNREADABLE) {
     seen.delete(resolved);
@@ -289,6 +282,46 @@ function findUnserializable(
   // Only an ancestor repeating itself is a cycle.
   seen.delete(resolved);
   return null;
+}
+
+/**
+ * The route caps an event body at 256 kb. Restated here by value the way the
+ * API restates the engine's own limits across its proxy boundary, and used for
+ * ONE narrow purpose: see {@link arrayCannotFit}.
+ */
+const MAX_EVENT_BODY_BYTES = 256 * 1024;
+
+/**
+ * An array too long to fit in the body no matter what it holds.
+ *
+ * Not an attempt to enforce the size limit — the server owns that, and answers
+ * 413. This exists because for a sparse array that answer is UNREACHABLE: the
+ * serializer writes `null` for every hole up to `length`, so an array holding
+ * nothing at all still becomes megabytes of `null,null,…`. A length of 50
+ * million measured 250 MB and a quarter of a billion characters here; beyond
+ * that the process dies before `fetch` is ever called, and a dead process
+ * cannot receive a 413. Same shape as the non-finite check: the only reason to
+ * do it locally is that the server's answer cannot arrive.
+ *
+ * The bound is a floor, never a guess. Each element costs at least one
+ * character, plus a separating comma, plus the two brackets — so `2n + 1` is
+ * the smallest any array of that length can serialize to. Only lengths whose
+ * FLOOR already exceeds the cap are rejected, which means nothing the server
+ * would have accepted is refused here; everything borderline still goes and
+ * still gets the server's own verdict.
+ */
+function arrayCannotFit(value: object, at: string): Unserializable | null {
+  let length: number;
+  try {
+    length = (value as unknown[]).length;
+  } catch {
+    return null;
+  }
+  if (2 * length + 1 <= MAX_EVENT_BODY_BYTES) return null;
+  return {
+    path: at,
+    reason: `declares a length of ${length}; JSON writes every slot up to it, so this cannot fit the ${MAX_EVENT_BODY_BYTES / 1024} kb event body however few elements it holds.`,
+  };
 }
 
 /**

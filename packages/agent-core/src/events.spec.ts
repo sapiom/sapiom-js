@@ -482,30 +482,69 @@ describe("emitEvent", () => {
         expect(calls).toHaveLength(1);
       });
 
-      it("costs nothing on a huge declared length holding nothing", async () => {
+      // A hole is not free on the wire: the serializer writes `null` for every
+      // slot up to `length`, so an array holding NOTHING still becomes
+      // megabytes. At 50 million that measured 250 MB and a quarter of a
+      // billion characters, and further up the process dies before `fetch` —
+      // which is why this cannot be left to the server's 413 to answer.
+      it("rejects a length that cannot fit the body however few elements it holds", async () => {
         const { client, calls } = fakeClient();
         const items: unknown[] = [];
         items.length = 50_000_000;
-
-        // Walking `0..length` allocated a string per index: ~1.6 GB and
-        // several seconds here, an out-of-memory abort at 100M. `Object.keys`
-        // returns only the indices that exist, so this is bounded by content.
-        // The 5s default timeout is the regression guard — it used to blow it.
-        await emitEvent({ type: "lead.created", payload: { items } }, client);
-        expect(calls).toHaveLength(1);
-      });
-
-      it("still checks the indices a mostly-sparse array does hold", async () => {
-        const { client } = fakeClient();
-        const items: unknown[] = [];
-        items.length = 1_000_000;
-        items[999_999] = Infinity;
 
         await expect(
           emitEvent({ type: "lead.created", payload: { items } }, client),
         ).rejects.toMatchObject({
           code: "BAD_PAYLOAD",
-          message: expect.stringContaining("`payload.items[999999]`"),
+          message: expect.stringContaining("`payload.items`"),
+        });
+        expect(calls).toEqual([]);
+      });
+
+      // The bound is a floor, so nothing the server would have accepted is
+      // refused here: an element costs at least one character plus a comma.
+      it.each([
+        ["just inside the floor", 131_071, true],
+        ["just past it", 131_072, false],
+      ])("%s", async (_label, length, sendable) => {
+        // Serializes for real, so the test exercises the path that allocates
+        // rather than a fake that only records the object.
+        const seen: number[] = [];
+        const client = {
+          post: async (_path: string, body: { payload: unknown }) => {
+            seen.push(JSON.stringify(body.payload).length);
+            return RECEIPT;
+          },
+        } as unknown as GatewayClient;
+        const items: unknown[] = [];
+        items.length = length;
+
+        const emit = emitEvent(
+          { type: "lead.created", payload: { items } },
+          client,
+        );
+        if (sendable) {
+          await emit;
+          expect(seen).toHaveLength(1);
+        } else {
+          await expect(emit).rejects.toMatchObject({ code: "BAD_PAYLOAD" });
+          expect(seen).toEqual([]);
+        }
+      });
+
+      it("still checks the indices a mostly-sparse array does hold", async () => {
+        const { client } = fakeClient();
+        const items: unknown[] = [];
+        items.length = 100_000;
+        items[99_999] = Infinity;
+
+        // Enumeration is bounded by content, so the one real value is found
+        // without touching the 99,999 holes before it.
+        await expect(
+          emitEvent({ type: "lead.created", payload: { items } }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.items[99999]`"),
         });
       });
 
