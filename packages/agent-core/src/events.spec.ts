@@ -275,6 +275,21 @@ describe("emitEvent", () => {
         ).toEqual({ at: "2026-01-01T00:00:00.000Z" });
       });
 
+      it("does not treat a setter-only toJSON as a hook", async () => {
+        const { client } = fakeClient();
+        // Reading such a property yields `undefined`, so JSON.stringify walks
+        // into the object normally. Calling it a hook made the whole object
+        // opaque and let the Infinity below it through.
+        const payload = { amount: Infinity, set toJSON(_value: unknown) {} };
+
+        await expect(
+          emitEvent({ type: "lead.created", payload }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.amount`"),
+        });
+      });
+
       it("accepts an object whose toJSON hides a cycle and a BigInt", async () => {
         const { client, calls } = fakeClient();
         class Entity {
@@ -360,6 +375,68 @@ describe("emitEvent", () => {
           code: "BAD_PAYLOAD",
           message: expect.stringContaining("`payload.amount`"),
         });
+      });
+    });
+
+    // Reflection is caller code once a Proxy is involved: the traps below run
+    // on `Object.getOwnPropertyDescriptor`, `Object.getPrototypeOf` and
+    // `Object.keys`, none of which `JSON.stringify` needs. Every one of them
+    // fails opaque, so a payload the serializer handles is never rejected —
+    // and an unbounded prototype chain can no longer spin.
+    describe("proxies cannot steer the walk", () => {
+      it("terminates on a prototype chain that reports itself", async () => {
+        const { client, calls } = fakeClient();
+        const looping: object = new Proxy(
+          {},
+          { getPrototypeOf: () => looping },
+        );
+
+        // Before the visited-set guard this spun forever, blocking the thread
+        // outright rather than answering — a hang, not a slow answer.
+        await emitEvent(
+          { type: "lead.created", payload: { v: looping } },
+          client,
+        );
+        expect(calls).toHaveLength(1);
+      });
+
+      it("does not reject a payload whose descriptor trap throws", async () => {
+        const { client, calls } = fakeClient();
+        const hostile = new Proxy(
+          {},
+          {
+            get: (_t, key) =>
+              key === "toJSON" ? () => ({ id: 1 }) : undefined,
+            getOwnPropertyDescriptor() {
+              throw new Error("trap boom");
+            },
+          },
+        );
+        // It serializes perfectly well; only the preflight's reflection trips.
+        expect(JSON.stringify({ v: hostile })).toBe('{"v":{"id":1}}');
+
+        await emitEvent(
+          { type: "lead.created", payload: { v: hostile } },
+          client,
+        );
+        expect(calls).toHaveLength(1);
+      });
+
+      it("does not reject a payload whose ownKeys trap throws", async () => {
+        const { client, calls } = fakeClient();
+        const hostile = new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("keys boom");
+            },
+          },
+        );
+        await emitEvent(
+          { type: "lead.created", payload: { v: hostile } },
+          client,
+        );
+        expect(calls).toHaveLength(1);
       });
     });
 

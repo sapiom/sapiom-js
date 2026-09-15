@@ -239,20 +239,28 @@ function findUnserializable(
   // holes, so a sparse array (`new Array(1)`, `[1, , 3]`) yielded an `undefined`
   // slot that destructuring then choked on. `JSON.stringify` writes a hole as
   // `null` and moves on, so the walk has to reach every index and accept them.
-  if (Array.isArray(resolved)) {
-    for (let index = 0; index < resolved.length; index += 1) {
-      const entry = readDataProperty(resolved, String(index));
-      if (entry.accessor) continue;
-      const found = findUnserializable(entry.value, `${at}[${index}]`, seen);
-      if (found) return found;
-    }
-  } else {
-    for (const key of Object.keys(resolved)) {
-      const entry = readDataProperty(resolved, key);
-      if (entry.accessor) continue;
-      const found = findUnserializable(entry.value, `${at}.${key}`, seen);
-      if (found) return found;
-    }
+  // Enumerating is caller code once a Proxy is involved (`length` hits its get
+  // trap, `Object.keys` its ownKeys trap), so this fails opaque like the rest:
+  // a throw here means stop inspecting, not reject.
+  let keys: string[];
+  try {
+    keys = Array.isArray(resolved)
+      ? Array.from({ length: resolved.length }, (_unused, index) =>
+          String(index),
+        )
+      : Object.keys(resolved);
+  } catch {
+    seen.delete(resolved);
+    return null;
+  }
+  const step = Array.isArray(resolved)
+    ? (key: string) => `[${key}]`
+    : (key: string) => `.${key}`;
+  for (const key of keys) {
+    const entry = readDataProperty(resolved, key);
+    if (entry.accessor) continue;
+    const found = findUnserializable(entry.value, `${at}${step(key)}`, seen);
+    if (found) return found;
   }
   // Dropped once its subtree is cleared: a value repeated across sibling
   // branches (the same object under two keys) is fine — JSON writes it twice.
@@ -270,21 +278,46 @@ function findUnserializable(
  * not an own property, and missing it would send the walk descending into a
  * `Date` it has no business inspecting.
  *
- * An accessor counts as a hook even though we cannot see what it returns. That
- * is the safe direction: treating the object as opaque costs only the narrow
- * check this walk already declines to make on `toJSON` output, while reading
- * the getter to find out would reintroduce the double read this exists to stop.
+ * A GETTER counts as a hook even though we cannot see what it returns: treating
+ * the object as opaque costs only the narrow check this walk already declines
+ * to make on `toJSON` output, while reading the getter to find out would
+ * reintroduce the double read this exists to stop. A SETTER-ONLY accessor is
+ * the opposite — reading it yields `undefined`, so it cannot be a hook, and it
+ * shadows anything further up the chain. Calling it one would have made the
+ * whole object opaque while `JSON.stringify` walked into it normally.
+ *
+ * Reflection on a `Proxy` runs its traps, which is caller code this function
+ * has no more business running than a getter. Both probes are therefore
+ * guarded, and both fail OPAQUE: when the shape cannot be established without
+ * running something, stop inspecting and let the serializer decide. The same
+ * guard bounds the chain — a proxy can report itself from `getPrototypeOf`, and
+ * an unbounded walk over that spins forever, blocking the thread outright
+ * rather than answering.
  */
 function hasSerializerHook(value: object): boolean {
-  for (
-    let node: object | null = value;
-    node !== null;
-    node = Object.getPrototypeOf(node) as object | null
-  ) {
-    const descriptor = Object.getOwnPropertyDescriptor(node, "toJSON");
-    if (!descriptor) continue;
-    if (descriptor.get || descriptor.set) return true;
-    return typeof descriptor.value === "function";
+  const visited = new WeakSet<object>();
+  let node: object | null = value;
+  while (node !== null) {
+    if (visited.has(node)) return true;
+    visited.add(node);
+
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(node, "toJSON");
+    } catch {
+      return true;
+    }
+    if (descriptor) {
+      if (descriptor.get) return true;
+      if (descriptor.set) return false;
+      return typeof descriptor.value === "function";
+    }
+
+    try {
+      node = Object.getPrototypeOf(node) as object | null;
+    } catch {
+      return true;
+    }
   }
   return false;
 }
@@ -305,7 +338,14 @@ function readDataProperty(
   holder: object,
   key: string,
 ): { accessor: true } | { accessor: false; value: unknown } {
-  const descriptor = Object.getOwnPropertyDescriptor(holder, key);
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(holder, key);
+  } catch {
+    // A Proxy trap threw. Reflection is caller code too, so this fails the same
+    // way the rest of the walk does: skip the property, let the serializer say.
+    return { accessor: true };
+  }
   // Absent: an array hole. JSON writes `null` for it, so there is nothing to check.
   if (!descriptor) return { accessor: false, value: undefined };
   if (descriptor.get || descriptor.set) return { accessor: true };

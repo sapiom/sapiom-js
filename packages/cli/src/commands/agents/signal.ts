@@ -24,7 +24,11 @@ export async function runSignal(
     // prove nothing was waiting — the server sends `message` exactly when the
     // count needs qualifying, and a CLI that printed only the count would state
     // the ambiguous half and swallow the half that resolves it.
-    ok({ matched: result.matched, ...(result.message ? { message: result.message } : {}) }, [
+    // `--json` mirrors the SDK result exactly — present means present, so the
+    // test is `!== undefined` and an empty string survives as one. The human
+    // line uses truthiness instead, because a blank indented line under the
+    // success line reads as a rendering bug rather than as information.
+    ok({ matched: result.matched, ...(result.message !== undefined ? { message: result.message } : {}) }, [
       `✓ Signal '${opts.name}' delivered (matched ${result.matched}).`,
       ...(result.message ? [`  ${result.message}`] : []),
     ]);
