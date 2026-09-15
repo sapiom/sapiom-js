@@ -213,3 +213,8 @@ Transcript-only Terminal records remain reachable, and explicit Terminal focus
 outranks an earlier Assistant reveal. Assistant history tracks failures and newer
 results per cwd; another directory's refresh cannot erase or roll them back.
 A dormant Terminal does not label the Studio ended before lifecycle state arrives.
+
+Starting Terminal keeps the same conversation and pending request through host
+status updates, including readiness before the HTTP acknowledgement. Terminal
+focus stays selected, and settling the request shows the latest live or exited
+state. Navigation, account changes and End still invalidate stale operations.

@@ -3451,60 +3451,73 @@ export const App = (): JSX.Element => {
                   }}
                   onClose={() => setReviewSummary(null)}
                 />
-              ) : showDead && conversationSession ? (
-                <AssistantPane
-                  sessionId={conversationSession.id}
-                    selectedAgentPath={
-                      atMapAltitude ? null : effectiveFocusedAgentPath
-                    }
-                  bootToken={harness.bootToken}
-                  authRevision={harness.authRevision}
-                  drafts={assistantDrafts}
-                  authorityRevision={assistantAuthorityRevision}
-                  onAuthorityRevision={setAssistantAuthorityRevision}
-                  onSignIn={signInForAssistant}
-                  onOpenSettings={() => setSettingsOpen(true)}
-                  terminalRevision={
-                    harness.terminalRevealBySession.get(
-                      conversationSession.id,
-                    ) ?? 0
-                  }
-                  assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
-                  onReviewHistory={() => void reviewLiveAssistant(conversationSession.id)}
-                >
-                  {conversationSession.terminalState === "not-started" ? <DormantTerminalPane
-                    session={conversationSession}
-                    authRevision={harness.authRevision}
-                    ending={harness.endingSessionIds.has(conversationSession.id) || assistantLifecycles.some((row) => row.harnessSessionId === conversationSession.id && row.lifecycle === "ending")}
-                    onStart={async (signal) => {
-                      const navigation = studioRestoreGenerationRef.current;
-                      return (await harness.startTerminal(conversationSession.id, signal, () => navigation === studioRestoreGenerationRef.current)) !== null;
-                    }}
-                  /> : <DeadSessionPane
-                    session={conversationSession}
-                    terminalOnly={assistantNeedsEnd(conversationSession.id)}
-                    resumeMode={deadResumeMode}
-                    loadRecord={harness.sessionRecord}
-                    onResume={() =>
-                      void harness.resumeSession(conversationSession.id)
-                    }
-                    onContinue={() =>
-                      void harness.rehydrateSession({
-                        cwd: conversationSession.cwd,
-                        harness: conversationSession.harness,
-                        from: conversationSession.id,
-                      })
-                    }
-                    onClose={() => {
-                      if (assistantNeedsEnd(conversationSession.id))
-                        setConfirmEndSessionId(conversationSession.id);
-                      else
-                        void harness
-                          .closeSession(conversationSession.id)
-                          .catch(() => undefined);
-                    }}
-                  />}
-                </AssistantPane>
+              ) : (showDead || showWorkbench) && conversationSession ? (
+                /* Status updates must not replace the conversation or the
+                   owner awaiting an explicit Terminal start acknowledgment. */
+                <div className="agent-view" data-testid={showWorkbench ? "agent-view" : undefined}>
+                  <div className="agent-view-panel" id="agent-panel-terminal">
+                    <AssistantPane
+                      sessionId={conversationSession.id}
+                      selectedAgentPath={
+                        atMapAltitude ? null : effectiveFocusedAgentPath
+                      }
+                      bootToken={harness.bootToken}
+                      authRevision={harness.authRevision}
+                      drafts={assistantDrafts}
+                      authorityRevision={assistantAuthorityRevision}
+                      onAuthorityRevision={setAssistantAuthorityRevision}
+                      onSignIn={signInForAssistant}
+                      onOpenSettings={() => setSettingsOpen(true)}
+                      terminalRevision={
+                        harness.terminalRevealBySession.get(
+                          conversationSession.id,
+                        ) ?? 0
+                      }
+                      assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
+                      onReviewHistory={() => void reviewLiveAssistant(conversationSession.id)}
+                    >
+                      <DormantTerminalPane
+                        key={conversationSession.id}
+                        session={conversationSession}
+                        authRevision={harness.authRevision}
+                        ending={harness.endingSessionIds.has(conversationSession.id) || assistantLifecycles.some((row) => row.harnessSessionId === conversationSession.id && row.lifecycle === "ending")}
+                        onStart={async (signal) => {
+                          const navigation = studioRestoreGenerationRef.current;
+                          return (await harness.startTerminal(conversationSession.id, signal, () => navigation === studioRestoreGenerationRef.current)) !== null;
+                        }}
+                      >
+                        {conversationSession.status === "exited" ? <DeadSessionPane
+                          session={conversationSession}
+                          terminalOnly={assistantNeedsEnd(conversationSession.id)}
+                          resumeMode={deadResumeMode}
+                          loadRecord={harness.sessionRecord}
+                          onResume={() =>
+                            void harness.resumeSession(conversationSession.id)
+                          }
+                          onContinue={() =>
+                            void harness.rehydrateSession({
+                              cwd: conversationSession.cwd,
+                              harness: conversationSession.harness,
+                              from: conversationSession.id,
+                            })
+                          }
+                          onClose={() => {
+                            if (assistantNeedsEnd(conversationSession.id))
+                              setConfirmEndSessionId(conversationSession.id);
+                            else
+                              void harness
+                                .closeSession(conversationSession.id)
+                                .catch(() => undefined);
+                          }}
+                        /> : <Terminal
+                          sessionId={conversationSession.id}
+                          token={harness.bootToken}
+                          cwd={conversationSession.cwd}
+                        />}
+                      </DormantTerminalPane>
+                    </AssistantPane>
+                  </div>
+                </div>
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session that can WORK on this agent — its
                    board still draws on the right, from the workflow-keyed route
@@ -3565,37 +3578,6 @@ export const App = (): JSX.Element => {
                   title={`Starting a session in ${startingProject.label}…`}
                   body="Sessions boot at the project root, so the coding agent comes up with this project's instructions and skills."
                 />
-              ) : showWorkbench && conversationSession ? (
-                <div className="agent-view" data-testid="agent-view">
-                  <div className="agent-view-panel" id="agent-panel-terminal">
-                    <AssistantPane
-                      sessionId={conversationSession.id}
-                    selectedAgentPath={
-                      atMapAltitude ? null : effectiveFocusedAgentPath
-                    }
-                      bootToken={harness.bootToken}
-                      authRevision={harness.authRevision}
-                      drafts={assistantDrafts}
-                      authorityRevision={assistantAuthorityRevision}
-                      onAuthorityRevision={setAssistantAuthorityRevision}
-                      onSignIn={signInForAssistant}
-                      onOpenSettings={() => setSettingsOpen(true)}
-                      terminalRevision={
-                        harness.terminalRevealBySession.get(
-                          conversationSession.id,
-                        ) ?? 0
-                      }
-                      assistantRevision={harness.assistantRevealBySession.get(conversationSession.id) ?? 0}
-                      onReviewHistory={() => void reviewLiveAssistant(conversationSession.id)}
-                    >
-                      <Terminal
-                        sessionId={conversationSession.id}
-                        token={harness.bootToken}
-                        cwd={conversationSession.cwd}
-                      />
-                    </AssistantPane>
-                  </div>
-                </div>
               ) : (
                 /* The composer-first home: no terminal, no canvas yet. Describe
                    an outcome (or pick a template) and a session starts; this

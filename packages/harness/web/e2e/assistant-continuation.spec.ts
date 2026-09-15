@@ -817,6 +817,128 @@ test("Start Terminal commits after an earlier preparation frame", async ({
   await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
+async function startingBeforeAcknowledgment(page: Page) {
+  const probe = await dormant(page);
+  const nativeCalls = () =>
+    probe.calls.filter((url) => url.includes("/opencode/"));
+  const before = nativeCalls();
+  await startTerminal(page).click();
+  await expect.poll(() => probe.starts.length).toBe(1);
+  // spawn() clears not-started before emitting starting. Let React commit
+  // that frame while the HTTP response remains held; an immediate fulfill
+  // after publish can miss the real component-unmount race.
+  await publish(page, {
+    type: "session.status",
+    session: { ...probe.started(), status: "starting", ready: false },
+  });
+  await expect(
+    page.getByTestId("session-context").locator('[data-status="starting"]'),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Starting Terminal…" }),
+  ).toBeDisabled();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(nativeCalls()).toEqual(before);
+  return { ...probe, nativeCalls, before };
+}
+
+test("starting and ready bus frames retain Terminal focus and the pending Start acknowledgment", async ({
+  page,
+}, info) => {
+  const probe = await startingBeforeAcknowledgment(page);
+  await page.screenshot({
+    path: info.outputPath("terminal-starting-before-ack.png"),
+  });
+  await publish(page, {
+    type: "session.status",
+    session: { ...probe.started(), title: "Ready before acknowledgment" },
+  });
+  await expect(page.getByTestId("session-context")).toContainText(
+    "Ready before acknowledgment",
+  );
+  await expect(
+    page.getByRole("button", { name: "Starting Terminal…" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Terminal", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  const acknowledged = page.waitForResponse((response) =>
+    response.url().endsWith("/terminal/start"),
+  );
+  await probe.starts[0]!.fulfill({
+    json: { ...probe.started(), ready: false },
+  });
+  expect(await (await acknowledged).finished()).toBeNull();
+  await expect(page.locator(".harness-terminal")).toBeVisible();
+  await expect(page.getByTestId("session-context")).toContainText(
+    "Ready before acknowledgment",
+  );
+  expect(probe.starts).toHaveLength(1);
+  expect(probe.nativeCalls()).toEqual(probe.before);
+  await page.screenshot({
+    path: info.outputPath("terminal-ready-after-ack.png"),
+  });
+});
+
+test("a failed Start acknowledgment after spawn retains the actual Terminal exit", async ({
+  page,
+}) => {
+  const probe = await startingBeforeAcknowledgment(page);
+  await publish(page, {
+    type: "session.status",
+    session: {
+      ...probe.started(),
+      status: "exited",
+      ready: false,
+      exitCode: 2,
+      exitTail: "Agent exited during startup",
+    },
+  });
+  await expect(
+    page.getByRole("button", { name: "Starting Terminal…" }),
+  ).toBeDisabled();
+  await probe.starts[0]!.fulfill({ status: 503, json: {} });
+  await expect(page.getByTestId("dead-session-pane")).toContainText(
+    "exit code 2",
+  );
+  await expect(page.getByTestId("dormant-terminal-pane")).toHaveCount(0);
+  await expect(page.locator(".harness-terminal")).toHaveCount(0);
+  expect(probe.nativeCalls()).toEqual(probe.before);
+});
+
+test("End after the starting bus frame still outranks the late Start acknowledgment", async ({
+  page,
+}) => {
+  const probe = await startingBeforeAcknowledgment(page);
+  await page.evaluate(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .find(
+        (entry) => new URL(entry.name).pathname === "/src/lib/api.ts",
+      )!.name;
+    const { MockApi } = await import(url);
+    MockApi.prototype.killSession = async () => {};
+  });
+  await page.getByTestId("session-menu").click();
+  await page.getByTestId("session-end-btn").click();
+  await page.getByTestId("end-session-confirm-btn").click();
+  await expect(page.getByTestId("session-context")).not.toHaveAttribute(
+    "data-session-id",
+    childId,
+  );
+  await probe.starts[0]!.fulfill({ json: probe.started() });
+  await expect(page.getByTestId("session-context")).not.toHaveAttribute(
+    "data-session-id",
+    childId,
+  );
+  expect(probe.nativeCalls()).toEqual(probe.before);
+});
+
 test("a Terminal that exits during startup shows its actual exit instead of a dormant session", async ({
   page,
 }, info) => {

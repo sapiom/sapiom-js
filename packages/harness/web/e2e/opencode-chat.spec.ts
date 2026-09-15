@@ -137,14 +137,17 @@ test.beforeEach(async ({ page }) => {
     };
     if (path === "lifecycle") {
       res.json(lifecycle);
-      if (endBeforeAttach) {
-        lifecycleState = "ended";
-        lifecycleRevision++;
-      }
       return;
     }
     if (path === "attach") {
       attachRevisions.push(req.body.expectedRevision);
+      // StrictMode can abort a lifecycle GET after the fixture receives it.
+      // End must race the surviving Attach, not that discarded read.
+      if (endBeforeAttach) {
+        endBeforeAttach = false;
+        lifecycleState = "ended";
+        lifecycleRevision++;
+      }
       if (
         req.body.expectedRevision !== lifecycleRevision ||
         lifecycleState !== "open"
@@ -933,7 +936,7 @@ test("keeps Working after streamed text until the engine finishes", async ({
   await expect(status).toHaveText("Finished");
 });
 
-test("opens saved Assistant history when its Terminal session has exited", async ({
+test("preserves Assistant focus and saved history when its Terminal session exits", async ({
   page,
 }) => {
   await openAssistant(page);
@@ -966,6 +969,13 @@ test("opens saved Assistant history when its Terminal session has exited", async
       },
     }),
   );
+  await expect(
+    page.getByRole("button", { name: "Assistant", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Finished");
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(
@@ -1290,7 +1300,7 @@ test("streams, disposes the old tab's connection, restores history, and sends a 
   await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
-test("keeps principal-scoped session drafts across centre-pane routes and exited-session remounts", async ({
+test("keeps principal-scoped session drafts across centre-pane routes and Terminal exits", async ({
   page,
 }) => {
   await openAssistant(page);
@@ -1325,8 +1335,8 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
   await tabs.nth(0).click();
   await expect(input).toHaveValue("First session draft");
 
-  // Natural Terminal exit swaps the live workbench for the dead-session pane.
-  // The remounted Assistant still owns the same session-keyed draft.
+  // Natural Terminal exit preserves the selected Assistant and its draft.
+  // Explicitly opening Terminal still exposes its saved exit state.
   await page.evaluate(() =>
     (window as any).__HARNESS_TEST__.publish({
       type: "session.status",
@@ -1345,6 +1355,11 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
       },
     }),
   );
+  await expect(
+    page.getByRole("button", { name: "Assistant", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(input).toHaveValue("First session draft");
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(input).toHaveValue("First session draft");

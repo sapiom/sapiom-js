@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { HarnessSession } from "@shared/types";
 import { Icon } from "./Icon";
 
@@ -7,11 +7,13 @@ export function DormantTerminalPane({
   authRevision,
   ending,
   onStart,
+  children,
 }: {
   session: HarnessSession;
   authRevision: number;
   ending: boolean;
   onStart: (signal: AbortSignal) => Promise<boolean>;
+  children: ReactNode;
 }) {
   const pending = useRef<AbortController | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,13 +51,19 @@ export function DormantTerminalPane({
       }
     }
   };
+  // The host publishes starting/ready before its POST acknowledgment. Keep
+  // this operation's owner mounted until it settles, then show the latest
+  // Terminal state. Navigation, a different Studio, or auth still abort it.
+  if (session.terminalState !== "not-started" && !busy) return children;
   return (
     <div className="dead-session-pane" data-testid="dormant-terminal-pane">
       <div className="dead-session-summary">
         <span className="empty-state-icon" aria-hidden="true">
           <Icon name="SquareTerminal" size={18} />
         </span>
-        <div className="dead-session-title">Terminal has not started</div>
+        <div className="dead-session-title">
+          {busy ? "Starting Terminal" : "Terminal has not started"}
+        </div>
         <div className="dead-session-meta">{session.cwd}</div>
         <p className="dead-session-resume-reason">
           Start a terminal for your coding agent in this session's workspace.
