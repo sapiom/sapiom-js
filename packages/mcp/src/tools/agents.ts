@@ -670,7 +670,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       payload: z
         .unknown()
         .describe(
-          "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict). Omit it for an event that carries no data.",
+          "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict). If a matched agent's entry step declares an inputSchema that closes the object (additionalProperties: false), keys that schema does not name are dropped before the run starts — so a field missing from the run is an entry-schema question, not an emit failure. Omit it for an event that carries no data.",
         ),
       eventId: z
         .string()

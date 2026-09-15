@@ -279,8 +279,14 @@ const { matched, message } = await signal(
 );
 ```
 
-Two results worth reading rather than assuming:
+Three things worth knowing rather than assuming:
 
+- **An entry schema can drop payload keys.** If a matched agent's entry step
+  declares an `inputSchema` that closes the object
+  (`additionalProperties: false`), keys it does not name are dropped before the
+  run starts — the guard against a relayed third-party body overriding a stored
+  setting at the same path. An open schema filters nothing. So a field missing
+  from the run is a question about that agent's entry schema, not a failed emit.
 - `emitEvent` returns `fireIds` — trigger fires, not execution ids. To see what
   actually started, read the receipt back (`GET /v1/workflows/receipts/:id`).
 - `signal` takes an `executionId` to address the run, but delivery is matched on
@@ -288,5 +294,4 @@ Two results worth reading rather than assuming:
   the runs that actually resumed, which under-reports a partial fanout — read
   `message` whenever it is present.
 
-Full guides: [Triggers](https://docs.sapiom.ai/guides/triggers) and
-[Using signals](https://docs.sapiom.ai/guides/use-signals).
+Full guide: [Using signals](https://docs.sapiom.ai/guides/use-signals).

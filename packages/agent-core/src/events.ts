@@ -41,6 +41,18 @@ export interface EmitEventOptions {
    * non-object as absent and start a run with the data dropped. `emitEvent`
    * checks the same rule locally so a JS caller gets the answer without the
    * round-trip.
+   *
+   * **Undeclared keys can be dropped at fire time.** When a matched agent's
+   * ENTRY step declares an `inputSchema` that closes the object
+   * (`additionalProperties: false`), every payload key that schema does not
+   * name is dropped before the run starts — a guard against a relayed
+   * third-party body whose key names nobody here chose overriding a stored
+   * setting at the same path. The filter is top level only: a declared key
+   * keeps its whole subtree. A schema that stays open (the default, or a zod
+   * `looseObject`/`catchall`) filters nothing. So when a field is missing from
+   * a run this event started, the entry schema is the first place to look —
+   * the emit itself still succeeds, and the drop is recorded on the run rather
+   * than returned here.
    */
   payload: Record<string, unknown>;
   /**
