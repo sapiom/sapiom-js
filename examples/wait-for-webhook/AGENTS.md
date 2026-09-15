@@ -26,17 +26,20 @@ When you've made a coherent change and want to validate it — the same point yo
 
 ### Firing the resume signal in dev
 
-A real `run` pauses at `kickoff`. To resume it without a real webhook, fire the signal via the MCP `signal_workflow` / `workflow_signal` tool — the manual stand-in for the callback:
+A real `run` pauses at `kickoff`. To resume it without a real webhook, fire the signal with `sapiom_dev_agents_signal` — the manual stand-in for the callback:
 
 ```json
 {
-  "signal": "webhook.callback",
+  "executionId": "<executionId of the paused run>",
+  "name": "webhook.callback",
   "correlationId": "<executionId of the paused run>",
   "payload": { "status": "succeeded", "result": { "note": "job done" } }
 }
 ```
 
-The `payload` arrives as `decide`'s input.
+The `payload` arrives as `decide`'s input. A signal only ever resumes a run that
+is already paused; to *start* runs from outside, arm an `event` trigger and emit
+its type with `sapiom_dev_agents_emit_event` — events start, signals resume.
 
 > Write each step the way it should run in production. `run_local` adapts to your code (stub capabilities + the `dryRun` guard), not the other way around — never weaken or drop real logic to shape a local run.
 
