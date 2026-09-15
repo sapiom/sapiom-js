@@ -268,27 +268,17 @@ function findUnserializable(
   // Enumerating is caller code once a Proxy is involved (the ownKeys trap), so
   // this fails opaque like the rest: a throw means stop inspecting, not reject.
   const isArray = Array.isArray(resolved);
-  let keys: string[];
-  try {
-    // `Object.keys` for an object, because JSON serializes only its enumerable
-    // own properties. For an ARRAY it is the wrong question: JSON writes every
-    // index from 0 to length regardless of enumerability, so a non-enumerable
-    // index holding an `Infinity` was skipped here and shipped as `null`.
-    // `getOwnPropertyNames` sees those, and on a sparse array still returns
-    // only what exists, so the content bound above survives.
-    keys = isArray
-      ? Object.getOwnPropertyNames(resolved)
-      : Object.keys(resolved);
-    // Drops `length` and an array's non-index own keys (`arr.note = …`), which
-    // `JSON.stringify` ignores — flagging one would reject a payload over a
-    // value that never reaches the wire.
-    if (isArray) keys = keys.filter(isArrayIndex);
-  } catch {
+  const keys = isArray ? arrayIndexKeys(resolved) : ownEnumerableKeys(resolved);
+  if (keys === UNREADABLE) {
     seen.delete(resolved);
     return null;
   }
   for (const key of keys) {
-    const entry = readDataProperty(resolved, key);
+    // An array reads each slot the way a property lookup does, so an index the
+    // prototype supplies is a real value on the wire; a plain object serializes
+    // only its OWN properties, and following its chain would inspect values
+    // that never ship.
+    const entry = readDataProperty(resolved, key, isArray);
     if (entry.accessor) continue;
     const step = isArray ? `[${key}]` : `.${key}`;
     const found = findUnserializable(entry.value, `${at}${step}`, seen);
@@ -299,6 +289,74 @@ function findUnserializable(
   // Only an ancestor repeating itself is a cycle.
   seen.delete(resolved);
   return null;
+}
+
+/**
+ * Sentinel for "the shape could not be established without running something".
+ * Every probe that touches caller code returns it, and every caller treats it
+ * the same way: stop inspecting, let the serializer decide.
+ */
+const UNREADABLE = Symbol("unreadable");
+
+/** The own enumerable keys — exactly what `JSON.stringify` writes for a plain object. */
+function ownEnumerableKeys(value: object): string[] | typeof UNREADABLE {
+  try {
+    return Object.keys(value);
+  } catch {
+    return UNREADABLE;
+  }
+}
+
+/**
+ * The index keys whose values `JSON.stringify` will actually write for an array.
+ *
+ * Three things make this more than `Object.keys`:
+ *
+ * - **Enumerability is irrelevant.** JSON writes every slot up to `length`, so
+ *   a non-enumerable index counts.
+ * - **So is ownership.** A slot is read like any property lookup, so an index
+ *   the PROTOTYPE supplies is a real value on the wire — a hole over a
+ *   prototype that defines that index serializes the inherited value, not
+ *   `null`. Own names alone missed those.
+ * - **`length` is the wrong bound to iterate.** A sparse array can declare a
+ *   length of 100 million while holding nothing; walking `0..length` allocated
+ *   gigabytes to validate a payload that serializes to almost nothing. Reading
+ *   the names each object in the chain actually defines keeps this bounded by
+ *   content. The gaps left over are holes, and a hole serializes to `null`.
+ */
+function arrayIndexKeys(value: object): string[] | typeof UNREADABLE {
+  let length: number;
+  try {
+    length = (value as unknown[]).length;
+  } catch {
+    return UNREADABLE;
+  }
+
+  const keys = new Set<string>();
+  const visited = new WeakSet<object>();
+  let node: object | null = value;
+  while (node !== null) {
+    if (visited.has(node)) return UNREADABLE;
+    visited.add(node);
+    let names: string[];
+    try {
+      names = Object.getOwnPropertyNames(node);
+    } catch {
+      return UNREADABLE;
+    }
+    for (const name of names) {
+      // Drops `length` and any non-index key (`arr.note = …`), which the
+      // serializer ignores — flagging one would reject a payload over a value
+      // that never reaches the wire. Past `length` is equally unwritten.
+      if (isArrayIndex(name) && Number(name) < length) keys.add(name);
+    }
+    try {
+      node = Object.getPrototypeOf(node) as object | null;
+    } catch {
+      return UNREADABLE;
+    }
+  }
+  return [...keys];
 }
 
 /**
@@ -382,19 +440,36 @@ function hasSerializerHook(value: object): boolean {
 function readDataProperty(
   holder: object,
   key: string,
+  throughChain = false,
 ): { accessor: true } | { accessor: false; value: unknown } {
-  let descriptor: PropertyDescriptor | undefined;
-  try {
-    descriptor = Object.getOwnPropertyDescriptor(holder, key);
-  } catch {
-    // A Proxy trap threw. Reflection is caller code too, so this fails the same
-    // way the rest of the walk does: skip the property, let the serializer say.
-    return { accessor: true };
+  const visited = new WeakSet<object>();
+  let node: object | null = holder;
+  while (node !== null) {
+    if (visited.has(node)) return { accessor: true };
+    visited.add(node);
+
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(node, key);
+    } catch {
+      // A Proxy trap threw. Reflection is caller code too, so this fails the
+      // same way the rest of the walk does: skip it, let the serializer say.
+      return { accessor: true };
+    }
+    // The first descriptor found wins, which is how shadowing resolves.
+    if (descriptor) {
+      if (descriptor.get || descriptor.set) return { accessor: true };
+      return { accessor: false, value: descriptor.value };
+    }
+    if (!throughChain) break;
+    try {
+      node = Object.getPrototypeOf(node) as object | null;
+    } catch {
+      return { accessor: true };
+    }
   }
-  // Absent: an array hole. JSON writes `null` for it, so there is nothing to check.
-  if (!descriptor) return { accessor: false, value: undefined };
-  if (descriptor.get || descriptor.set) return { accessor: true };
-  return { accessor: false, value: descriptor.value };
+  // Nothing defines it: an array hole, which JSON writes as `null`.
+  return { accessor: false, value: undefined };
 }
 
 /**

@@ -532,6 +532,55 @@ describe("emitEvent", () => {
         });
       });
 
+      // A slot is read the way any property lookup is, so a hole over a
+      // prototype that defines that index serializes the INHERITED value, not
+      // `null`. Own names alone missed those.
+      it.each([
+        ["a non-finite number", Infinity, '{"items":[null]}'],
+        ["a BigInt", 10n, null],
+      ])(
+        "checks an index the prototype supplies: %s",
+        async (_label, value, wire) => {
+          const { client } = fakeClient();
+          const items = new Array(1);
+          Object.setPrototypeOf(items, { 0: value });
+          expect(Object.getOwnPropertyNames(items)).toEqual(["length"]);
+          // Infinity ships as a null the sender never wrote; a BigInt makes the
+          // serializer throw, which surfaces as a NETWORK error for what is
+          // entirely a payload fault.
+          if (wire !== null) expect(JSON.stringify({ items })).toBe(wire);
+          else expect(() => JSON.stringify({ items })).toThrow();
+
+          await expect(
+            emitEvent({ type: "lead.created", payload: { items } }, client),
+          ).rejects.toMatchObject({
+            code: "BAD_PAYLOAD",
+            message: expect.stringContaining("`payload.items[0]`"),
+          });
+        },
+      );
+
+      it("lets an own index shadow the prototype's", async () => {
+        const { client, calls } = fakeClient();
+        const items = [1];
+        Object.setPrototypeOf(items, { 0: Infinity });
+        // The own value is what serializes, so the inherited one is not a fault.
+        expect(JSON.stringify({ items })).toBe('{"items":[1]}');
+
+        await emitEvent({ type: "lead.created", payload: { items } }, client);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("ignores a prototype index past the array's length", async () => {
+        const { client, calls } = fakeClient();
+        const items = new Array(1);
+        Object.setPrototypeOf(items, { 5: Infinity });
+        expect(JSON.stringify({ items })).toBe('{"items":[null]}');
+
+        await emitEvent({ type: "lead.created", payload: { items } }, client);
+        expect(calls).toHaveLength(1);
+      });
+
       it("ignores a key past the last real array index", async () => {
         const { client, calls } = fakeClient();
         const items: unknown[] = [];
