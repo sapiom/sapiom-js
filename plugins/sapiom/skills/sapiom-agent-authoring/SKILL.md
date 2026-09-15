@@ -570,7 +570,6 @@ field per kind, the signing scheme a webhook sender must follow, secret rotation
 Slack / Stripe / GitHub / Meta sender needs an App Link `/hook/*` receiver instead of our HMAC:
 served sections [Trigger kinds](https://api.sapiom.ai/v1/agents/authoring-rules#trigger-kinds)
 and [App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links).
-Full guide: [Triggers](https://docs.sapiom.ai/guides/triggers).
 
 Arming an `event` trigger is only half of it — something has to emit the event.
 `sapiom_dev_agents_emit_event` (or `sapiom agents emit`, or `emitEvent` from
@@ -700,5 +699,4 @@ Write each step the way it should run in production — never weaken logic to sh
 | [Quickstart](https://docs.sapiom.ai/agents/quick-start)                      | Scaffold → write → test → deploy walkthrough                                                                   |
 | [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |
 | [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface) | `llm.run` vs `models.run` vs `agents.run` — which to call and why                                              |
-| [Triggers](https://docs.sapiom.ai/guides/triggers)                           | Cron, one-off, event, and webhook triggers; webhook signing + secret rotation                                  |
 | `AGENTS.md` in your scaffold                                                 | The quick in-project reference                                                                                 |
