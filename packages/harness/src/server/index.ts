@@ -197,6 +197,7 @@ import {
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { OpenCodeHost } from "../core/opencode-host.js";
+import { OpenCodeObserver } from "../core/opencode-observer.js";
 import { OpenCodeBridge } from "./opencode-bridge.js";
 import { createStaticRouter } from "./static.js";
 import { createTerminalWebSocketHandler } from "./terminal-ws.js";
@@ -3533,6 +3534,8 @@ export const startServer = async (
 
   const openCodeHost = new OpenCodeHost({
     access: assistantAccess,
+    createObserver: (hosted, id, update) =>
+      new OpenCodeObserver(hosted, id, update),
     bridge: openCodeBridge,
     origin: () => `http://127.0.0.1:${actualPort}`,
     stateRoot: statePaths.root,
@@ -3546,6 +3549,10 @@ export const startServer = async (
       return { harnessSessionId: id, cwd: session.cwd };
     },
   });
+  const getAssistantState = () => openCodeHost.getAssistantState();
+  const unsubscribeAssistant = openCodeHost.subscribeAssistantState(() =>
+    bus.publish({ type: "assistant.state", snapshot: getAssistantState() }),
+  );
   const app: Express = express();
   app.disable("x-powered-by");
   app.use("/opencode-runtime", openCodeBridge.router);
@@ -3575,6 +3582,7 @@ export const startServer = async (
   app.use(
     "/api",
     createRestRouter({
+      getAssistantState,
       sessionManager,
       adapters,
       version: readVersion(),
@@ -4250,7 +4258,7 @@ export const startServer = async (
     {
       path: "/ws/events",
       wss: eventsWss,
-      onConnection: createEventsWebSocketHandler(bus, options.bootToken),
+      onConnection: createEventsWebSocketHandler(bus, options.bootToken, getAssistantState),
     },
   ]);
 
@@ -4278,6 +4286,7 @@ export const startServer = async (
       unsubscribeCredentialChanges();
       assistantAccess.close();
       await settle(() => openCodeHost.close());
+      unsubscribeAssistant();
       openCodeBridge.close();
       await settle(() => sessionManager.beginShutdown());
       const bootstrapClosing = settle(() => projectBootstrap?.close());

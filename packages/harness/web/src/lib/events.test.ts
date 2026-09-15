@@ -28,7 +28,7 @@ it("delivers supported events, ignores retired frames and removes its exact subs
       publishMockBusMessage({ type } as unknown as BusMessage);
     expect(listener).not.toHaveBeenCalled();
     publishMockBusMessage(message);
-    expect(listener).toHaveBeenCalledExactlyOnceWith(message);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(message, expect.any(Number));
   } finally {
     unsubscribe();
   }

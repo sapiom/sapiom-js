@@ -15,6 +15,10 @@ with your coding agent (Claude Code or Codex) running in an embedded
 terminal — pre-wired with the Sapiom MCP servers and an agent-authoring
 system prompt, in whatever project directory you choose.
 
+Assistant summaries use the existing `/api/state` seed and `/ws/events` full snapshots. The browser preserves the last known state as uncertain until a validated current socket snapshot arrives; account changes clear it immediately. Summaries contain activity and pending counts only.
+
+Session tabs and retained-session rows show independent Assistant activity. Hover or use the accessible label for Working, Waiting for input, Checking status or Unavailable. Terminal output keeps its existing pulse; an idle Assistant has no success badge. See the [native acceptance record](docs/assistant-background-acceptance.md) for the combined integration checks.
+
 ## What you get
 
 - **Terminal sessions** — your agent, your subscription, your machine; the
@@ -70,7 +74,34 @@ selected initially. Assistant sends prompts and streams Sapiom responses in the
 selected project. Returning to a session reopens its OpenCode conversation;
 switching views detaches the display while execution continues. Connection errors
 offer **Reconnect**, which reloads history without resending accepted prompts.
+Initial attachment and reconnect synchronize status after a real native event
+frame. Newer activity wins over old status snapshots; disconnecting or detaching
+the display invalidates outstanding status/history reads.
+History catch-up uses one active read and bounded follow-ups. Disconnecting the
+display cancels queued reads; failed or malformed reads preserve visible history.
+Native updates and removals received during a history read survive its response.
+Queued stream frames preserve completed content, and history merging preserves
+newer execution status.
+After a stream gap, Assistant retains visible output and shows **Catching up…**
+until native history or a complete stream update repairs its text baseline.
+Disconnecting also cancels outstanding catch-up requests before reconnection.
+Attachment and reconnect also reconcile pending permissions and questions.
+Assistant shows **Waiting for input** for current pending requests; failed request
+reads retain last-known state while the status remains uncertain.
+Event transport scopes each frame to the authorized conversation and cancels
+its reader and status catch-up when the browser connection ends.
+The shared observer module derives activity and pending-request counts without
+storing transcript content or issuing execution commands.
+Host observation starts after an authorized conversation attaches and ends with
+runtime retirement. Reading summaries never launches inactive conversations.
 This first slice includes basic tool status; richer controls arrive separately.
+An unconfirmed response keeps the answer and tool results visible as **Stopped**.
+Studio hides its internal completion markers even if the model supplies an
+incorrect turn ID, including extra markers inside a confirmed answer.
+Literal prose and invalid marker syntax remain visible. Incomplete marker
+candidates are hidden while streaming and restored when the response ends.
+After automatic answer recovery, Studio reconnects the conversation's event
+stream to reconcile history and status while keeping the chat and draft visible.
 Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
 rejected send shows its error and keeps the selected view. Unsent chat text is
 keyed by authenticated principal and Studio session above the centre pane, so it
@@ -99,9 +130,13 @@ native conversation.
 The Assistant's model and remote MCP requests use a Studio-owned local bridge.
 Its short-lived runtime credential is separate from browser authentication;
 Studio adds the Sapiom key only when forwarding to the configured services.
-Production uses the Sapiom LLM gateway. Other environments must explicitly set
-`services.llm` to their gateway origin in the matching credentials-file environment
-entry; Studio never falls back from a custom environment to production.
+Production sends Responses API requests to `https://router.sapiom.ai/v1/responses`
+with the explicit `gpt-luna` model and the signed-in account's `x-api-key`. Luna uses
+low reasoning effort and streams both tool calls and answers. Responses are not
+stored by the provider; encrypted reasoning travels with native conversation
+history. Other environments must explicitly set `services.llm` to a router origin
+that supports `/v1/responses` in the matching credentials-file environment entry;
+Studio never falls back from a custom environment to production.
 
 Studio owns each Assistant runtime for the authorized session and working
 directory. Browser detachment leaves it running; sign-out, access revocation,

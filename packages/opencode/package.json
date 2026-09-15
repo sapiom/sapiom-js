@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/opencode",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Studio-managed headless OpenCode runtime with a private credential bridge.",
   "license": "MIT",
   "author": "Sapiom",
@@ -37,6 +37,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@opencode-ai/plugin": "1.18.29",
     "opencode-ai": "1.18.29"
   },
   "devDependencies": {

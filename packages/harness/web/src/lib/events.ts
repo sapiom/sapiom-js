@@ -3,6 +3,7 @@
  * ../../../src/shared/types.ts). No-op in mock mode — there's no server to
  * connect to, and the mock fixtures are static.
  */
+import type { EventConnection } from "./assistant-state";
 import type { BusMessage } from "@shared/types";
 
 import {
@@ -14,7 +15,8 @@ import {
 import { MOCK_ACTIVITY_SESSION_ID } from "./mock-data";
 import { hasKnownBusMessageType } from "./bus-message-type";
 
-export type BusListener = (message: BusMessage) => void;
+export type BusListener = (message: BusMessage, generation?: number) => void;
+let nextConnectionGeneration = 0;
 export type EventReconnectListener = () => void;
 
 const RECONNECT_DELAY_MS = 2000;
@@ -65,12 +67,17 @@ if (isMockMode() && typeof window !== "undefined") {
 export function subscribeEvents(
   onMessage: BusListener,
   onReconnect?: EventReconnectListener,
+  onConnection?: (connection: EventConnection) => void,
 ): () => void {
-  const deliver = (message: unknown): void => {
-    if (hasKnownBusMessageType(message)) onMessage(message as BusMessage);
+  const deliver = (message: unknown, generation: number): void => {
+    if (hasKnownBusMessageType(message))
+      onMessage(message as BusMessage, generation);
   };
   if (isMockMode()) {
-    mockListeners.add(deliver);
+    const generation = ++nextConnectionGeneration;
+    const receive = (message: BusMessage) => deliver(message, generation);
+    onConnection?.({ generation, phase: "open" });
+    mockListeners.add(receive);
     if (!mockActivitySimulated) {
       mockActivitySimulated = true;
       // Fixture nicety, not test infrastructure: shows the tab strip's busy
@@ -106,7 +113,10 @@ export function subscribeEvents(
         );
       }, DEMO_RUN_DELAY_MS);
     }
-    return () => mockListeners.delete(deliver);
+    return () => {
+      mockListeners.delete(receive);
+      onConnection?.({ generation, phase: "closed" });
+    };
   }
 
   const url = new URL("/ws/events", window.location.href);
@@ -118,21 +128,32 @@ export function subscribeEvents(
   let stopped = false;
   let opened = false;
 
+  let generation = 0;
   const connect = (): void => {
-    socket = new WebSocket(url);
-    socket.addEventListener("open", () => {
+    generation = ++nextConnectionGeneration;
+    const currentGeneration = generation;
+    onConnection?.({ generation, phase: "connecting" });
+    const current = new WebSocket(url);
+    socket = current;
+    const isCurrent = () => !stopped && socket === current;
+    current.addEventListener("open", () => {
+      if (!isCurrent()) return;
+      onConnection?.({ generation: currentGeneration, phase: "open" });
       if (opened) onReconnect?.();
       opened = true;
     });
-    socket.addEventListener("message", (event) => {
+    current.addEventListener("message", (event) => {
+      if (!isCurrent()) return;
       try {
-        deliver(JSON.parse(event.data as string));
+        deliver(JSON.parse(event.data as string), currentGeneration);
       } catch {
         // Ignore malformed frames rather than tearing down the socket.
       }
     });
-    socket.addEventListener("close", () => {
-      if (stopped) return;
+    current.addEventListener("close", () => {
+      if (!isCurrent()) return;
+      socket = null;
+      onConnection?.({ generation: currentGeneration, phase: "closed" });
       retryTimer = setTimeout(connect, RECONNECT_DELAY_MS);
     });
   };
@@ -142,5 +163,7 @@ export function subscribeEvents(
     stopped = true;
     if (retryTimer) clearTimeout(retryTimer);
     socket?.close();
+    socket = null;
+    onConnection?.({ generation, phase: "closed" });
   };
 }

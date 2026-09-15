@@ -86,6 +86,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      "@shared/assistant-state": fileURLToPath(
+        new URL("../src/shared/assistant-state.ts", import.meta.url),
+      ),
       "@shared/initial-prompt": fileURLToPath(
         new URL("../src/shared/initial-prompt.ts", import.meta.url),
       ),

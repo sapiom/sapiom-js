@@ -1,7 +1,9 @@
 # @sapiom/opencode
 
-Pinned OpenCode 1.18.29, started directly through `startOpenCodeServer()` without
-an installation command at runtime. Studio owns authorization, working directory,
+Pinned OpenCode 1.18.29 and its matching plugin dependencies are installed with
+the package. Each native launch links that installed plugin into its private
+configuration, so opening another Assistant session does not run an npm install
+or wait for the package registry. Studio owns authorization, working directory,
 state directory, credentials, and shutdown. OpenCode owns conversations and agent
 execution.
 
@@ -13,7 +15,11 @@ await server.close();
 ```
 
 The bridge URL must be loopback. Only its revocable credential enters the model
-and remote MCP configuration. The runtime inherits an allowlist of platform
+and remote MCP configuration. The default model is `sapiom/gpt-luna`, using
+the bundled Responses provider at the bridge's `/llm/v1/responses` route.
+Low reasoning effort, encrypted reasoning history, and `store: false` keep
+reasoning and tool use compatible with the Sapiom router across turns.
+The runtime inherits an allowlist of platform
 environment variables; provider keys and the Electron esbuild pin are excluded
 from the runtime. A controlled native plugin removes the bridge configuration
 and runtime-admin credential from the runtime environment before tool execution,
@@ -43,6 +49,8 @@ cleanup proof. A missing proof fails closed so another runtime cannot write the
 same state. The proof remains outside the ephemeral launch directory until the
 runtime lock consumes it. Windows uses its native process-tree termination for
 normal close; installed-platform validation remains tracked by SAP-3297.
+Linux process scans tolerate entries that disappear during the read; unreadable
+entries still fail cleanup, and a missing tracked process cannot prove it stopped.
 Binary paths inside `app.asar` resolve to their unpacked counterparts; the
 generated supervisor needs no source loader and runs under Electron with
 `ELECTRON_RUN_AS_NODE` without forwarding that variable to native or tools.

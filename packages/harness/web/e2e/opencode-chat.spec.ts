@@ -16,6 +16,7 @@ type Conversation = {
   prompts: string[];
   busy: boolean;
   recoveries: string[];
+  pending: Record<"permission" | "question", Array<Record<string, unknown>>>;
 };
 let server: Server;
 let origin: string;
@@ -103,6 +104,7 @@ test.beforeEach(async ({ page }) => {
         prompts: [],
         busy: false,
         recoveries: [],
+        pending: { permission: [], question: [] },
       };
       conversations.set(id, c);
     }
@@ -138,7 +140,7 @@ test.beforeEach(async ({ page }) => {
       return;
     }
     if (path === "permission" || path === "question") {
-      res.json([]);
+      res.json(c.pending[path]);
       return;
     }
     if (path === "session/status") {
@@ -387,6 +389,77 @@ for (const reported of ["finished", "failed"] as const) {
   });
 }
 
+for (const [position, reported] of [
+  ["prefix", "finished"],
+  ["prefix", "failed"],
+  ["footer", "finished"],
+  ["footer", "failed"],
+] as const) {
+  test(`hides mismatched markers in a confirmed ${position} ${reported} answer and restored history`, async ({
+    page,
+  }, testInfo) => {
+    await openAssistant(page);
+    await page
+      .getByRole("textbox", { name: "Message Assistant" })
+      .fill("Explain the completion placeholder.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    const token = useCompletionContract(c);
+    const expected = `<!-- studio-result:${token}:${reported} -->`;
+    const mismatched = `<!-- studio-result:00000000-0000-0000-0000-000000000000:${reported === "finished" ? "failed" : "finished"} -->`;
+    const prose =
+      "Document the <!-- studio-result: placeholder used by Studio.";
+    const incomplete =
+      "Incomplete example: <!-- studio-result:00000000-0000-0000-0000-000000000000:finished --";
+    const answer = `Done.\n\n${prose}\n\n${incomplete}`;
+    const text =
+      position === "prefix"
+        ? `${expected}\n${answer}\n\n${mismatched}`
+        : `${mismatched}\n${answer}\n\n${expected}`;
+    const split = text.indexOf(mismatched) + 30;
+    const turn = c.turns.at(-1)!;
+    turn.parts[0].text = text.slice(0, split);
+    turn.parts.push({
+      ...turn.parts[0],
+      id: "prt_answer_tail",
+      text: text.slice(split),
+    });
+    turn.info.finish = "stop";
+    turn.info.time.completed = Date.now();
+    for (const part of turn.parts) emit(c, "message.part.updated", { part });
+    emit(c, "message.updated", { info: turn.info });
+    emit(c, "session.status", { sessionID: c.id, status: { type: "idle" } });
+    const status = page.getByRole("status", { name: "Assistant status" });
+    const response = page.locator(".studio-chat-assistant");
+    await expect(status).toHaveText(
+      reported === "finished" ? "Finished" : "Failed",
+    );
+    await response.screenshot({
+      path: testInfo.outputPath("confirmed-answer.png"),
+    });
+    await expect(response).not.toContainText(mismatched);
+    await expect(response).not.toContainText(expected);
+    for (const paragraph of ["Done.", prose, incomplete])
+      await expect(response.getByText(paragraph, { exact: true })).toHaveCount(
+        1,
+      );
+    await page.reload();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(status).toHaveText(
+      reported === "finished" ? "Finished" : "Failed",
+    );
+    await expect(response).not.toContainText(mismatched);
+    await expect(response).not.toContainText(expected);
+    for (const paragraph of ["Done.", prose, incomplete])
+      await expect(response.getByText(paragraph, { exact: true })).toHaveCount(
+        1,
+      );
+    expect(c.prompts).toHaveLength(1);
+    expect(c.recoveries).toHaveLength(0);
+  });
+}
+
 test("hides a footer split across text parts when the native turn is interrupted", async ({
   page,
 }) => {
@@ -423,6 +496,125 @@ test("hides a footer split across text parts when the native turn is interrupted
   );
   expect(c.recoveries).toHaveLength(0);
   expect(c.prompts).toHaveLength(1);
+});
+
+for (const position of ["prefix", "footer"]) {
+  test(`hides a mismatched recovery ${position} while preserving Stopped after history restoration`, async ({
+    page,
+  }) => {
+    await openAssistant(page);
+    const input = page.getByRole("textbox", { name: "Message Assistant" });
+    await input.fill("Read the README and explain what's here.");
+    await input.press("Enter");
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    useCompletionContract(c);
+    endWithoutAnswer(c);
+    await expect.poll(() => c.recoveries.length).toBe(1);
+    const marker =
+      "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished -->";
+    const answer =
+      "The README describes a project for testing Studio Assistant.";
+    recoveryReply!(
+      position === "prefix" ? `${marker}\n${answer}` : `${answer}\n\n${marker}`,
+    );
+    useCompletionContract(c);
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await expect(status).toHaveText("Stopped");
+    await expect(page.getByText(answer, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("studio-result:", { exact: false }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("read · Complete", { exact: true }),
+    ).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await expect(status).toHaveText("Stopped");
+    await expect(page.getByText(answer, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("studio-result:", { exact: false }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("note")).toContainText(
+      "Completion was not confirmed",
+    );
+    expect(c.recoveries).toHaveLength(1);
+    expect(c.prompts).toHaveLength(1);
+  });
+}
+
+test("restores incomplete marker prose on completion and after reload", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Explain Studio's completion format.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  useCompletionContract(c);
+  const turn = c.turns.at(-1)!;
+  const partial =
+    "<!-- studio-result:00000000-0000-0000-0000-000000000000:finished --";
+  const response = page.locator(`[data-message-id="${turn.info.id}"]`);
+  const delta = `\n\nIncomplete example:\n\n${partial}`;
+  turn.parts[0].text += delta;
+  emit(c, "message.part.delta", {
+    sessionID: c.id,
+    messageID: turn.info.id,
+    partID: turn.parts[0].id,
+    field: "text",
+    delta,
+  });
+  await expect(
+    page.getByText("Incomplete example:", { exact: true }),
+  ).toBeVisible();
+  await expect(response).not.toContainText(partial);
+  finish(c.id, "");
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Stopped");
+  await expect(response).toContainText(partial);
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(response).toContainText(partial);
+  expect(c.prompts).toHaveLength(1);
+  expect(c.recoveries).toHaveLength(0);
+});
+
+test("preserves literal completion-prefix prose during streaming and restored history", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  await page
+    .getByRole("textbox", { name: "Message Assistant" })
+    .fill("Document the completion placeholder.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+  const c = conversations.get("ses_sess_boot")!;
+  useCompletionContract(c);
+  const turn = c.turns.at(-1)!;
+  const text = "Document the <!-- studio-result: placeholder used by Studio.";
+  const response = page.locator(`[data-message-id="${turn.info.id}"]`);
+  turn.parts[0].text += `\n\n${text}`;
+  emit(c, "message.part.delta", {
+    sessionID: c.id,
+    messageID: turn.info.id,
+    partID: turn.parts[0].id,
+    field: "text",
+    delta: `\n\n${text}`,
+  });
+  await expect(response).toContainText(text);
+  finish(c.id, "");
+  await expect(
+    page.getByRole("status", { name: "Assistant status" }),
+  ).toHaveText("Stopped");
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await expect(response).toContainText(text);
+  expect(c.prompts).toHaveLength(1);
+  expect(c.recoveries).toHaveLength(0);
 });
 
 for (const recovered of [true, false]) {
@@ -464,6 +656,67 @@ for (const recovered of [true, false]) {
     await expect(status).toHaveText(recovered ? "Finished" : "Stopped");
     expect(c.recoveries).toHaveLength(1);
     expect(c.prompts).toHaveLength(1);
+  });
+}
+
+for (const delivery of ["streamed", "history only"]) {
+  test(`keeps the conversation visible while reconciling a recovered answer (${delivery})`, async ({
+    page,
+  }, testInfo) => {
+    let attachments = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.endsWith("/attach")) attachments++;
+    });
+    await openAssistant(page);
+    const input = page.getByRole("textbox", { name: "Message Assistant" });
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await input.fill("Read the README and explain what's here.");
+    await input.press("Enter");
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    await input.fill("Keep this next question as a draft.");
+    const chat = await page.locator(".studio-chat").elementHandle();
+    const composer = await input.elementHandle();
+    const initialAttachments = attachments;
+    const c = conversations.get("ses_sess_boot")!;
+    endWithoutAnswer(c);
+    await expect.poll(() => c.recoveries.length).toBe(1);
+    await expect(page.locator(".studio-chat-meta")).toContainText(
+      "read · Complete",
+    );
+
+    holdHistory = true;
+    const streams = [...c.streams];
+    if (delivery === "history only") c.streams.clear();
+    recoveryReply!("The project contains a README and a .sapiom folder.");
+    for (const stream of streams) c.streams.add(stream);
+    await expect.poll(() => historyReplies.length).toBeGreaterThan(0);
+    await page.locator(".studio-conversation").screenshot({
+      path: testInfo.outputPath("reconciling-answer.png"),
+    });
+    expect(await chat!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(await composer!.evaluate((element) => element.isConnected)).toBe(
+      true,
+    );
+    await expect(page.locator(".studio-chat-meta")).toContainText(
+      "read · Complete",
+    );
+    await expect(input).toHaveValue("Keep this next question as a draft.");
+    await expect(
+      page.getByText("Opening Assistant…", { exact: true }),
+    ).toHaveCount(0);
+
+    holdHistory = false;
+    for (const reply of historyReplies.splice(0)) reply();
+    await expect(status).toHaveText("Finished");
+    await expect(page.locator(".studio-chat-assistant")).toContainText(
+      "The project contains a README and a .sapiom folder.",
+    );
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveValue("Keep this next question as a draft.");
+    expect(attachments).toBe(initialAttachments);
+    expect(c.prompts).toHaveLength(1);
+    expect(c.recoveries).toHaveLength(1);
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 }
 
@@ -1079,6 +1332,43 @@ test("shows stream loss and reconnects without replaying an accepted prompt", as
   expect(c.prompts).toEqual(["A single request"]);
 });
 
+test("keeps a partial answer visible while reconnect catches up a missing middle delta", async ({
+  page,
+}) => {
+  await openAssistant(page);
+  const input = page.getByRole("textbox", { name: "Message Assistant" });
+  await input.fill("One streamed request");
+  await input.press("Enter");
+  const answer = page.locator('[data-message-id="msg_assistant_1"]');
+  await expect(answer).toContainText("First chunk");
+  const c = conversations.get("ses_sess_boot")!;
+  failEvents = true;
+  for (const stream of c.streams) stream.end();
+  await expect(page.getByRole("alert")).toContainText("Connection lost");
+  // Match pinned native persistence: an active history part remains empty.
+  const part = c.turns.at(-1)!.parts[0];
+  part.text = "";
+  failEvents = false;
+  await expect.poll(() => c.streams.size).toBe(1);
+  const status = page.getByRole("status", { name: "Assistant status" });
+  await expect(status).toHaveText("Catching up…");
+  emit(c, "message.part.delta", {
+    sessionID: c.id,
+    messageID: part.messageID,
+    partID: part.id,
+    field: "text",
+    delta: " suffix",
+  });
+  await expect(answer).toContainText("First chunk");
+  await expect(answer).not.toContainText("First chunk suffix");
+  expect(c.prompts).toEqual(["One streamed request"]);
+  part.text = "First chunk missing middle";
+  finish(c.id, " suffix");
+  await expect(answer).toContainText("First chunk missing middle suffix");
+  await expect(status).toHaveText("Finished");
+  expect(c.prompts).toHaveLength(1);
+});
+
 test("surfaces a rejected prompt POST and reconnects without replaying it", async ({
   page,
 }) => {
@@ -1270,3 +1560,52 @@ test("shows a rejected inspector command without leaving Assistant or losing its
   expect(conversations.get("ses_sess_boot")!.streams.size).toBe(1);
   expect(errors).toEqual([]);
 });
+
+for (const kind of ["permission", "question"] as const) {
+  test(`restores pending ${kind} and clears it when settled during a stream gap`, async ({
+    page,
+  }) => {
+    await openAssistant(page);
+    await page
+      .getByRole("textbox", { name: "Message Assistant" })
+      .fill("Start a task.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("First chunk", { exact: true })).toBeVisible();
+    const c = conversations.get("ses_sess_boot")!;
+    // A pending tool request follows a finished text part while the task stays busy.
+    c.turns.at(-1)!.parts[0].time = { start: 1, end: 2 };
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    c.pending[kind] = [
+      {
+        id: "request-a",
+        sessionID: c.id,
+        ...(kind === "permission"
+          ? {
+              permission: "read",
+              patterns: ["file.txt"],
+              always: [],
+              metadata: {},
+            }
+          : {
+              questions: [
+                {
+                  question: "Continue?",
+                  header: "Continue",
+                  options: [{ label: "Yes", description: "Continue the task" }],
+                },
+              ],
+            }),
+      },
+    ];
+    await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    const status = page.getByRole("status", { name: "Assistant status" });
+    await expect(status).toHaveText("Waiting for input");
+    failEvents = true;
+    for (const stream of c.streams) stream.end();
+    await expect(page.getByRole("alert")).toContainText("Connection lost");
+    c.pending[kind] = [];
+    failEvents = false;
+    await expect(status).toHaveText("Working");
+    expect(c.prompts).toHaveLength(1);
+  });
+}

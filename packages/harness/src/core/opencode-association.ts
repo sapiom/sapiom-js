@@ -8,8 +8,8 @@ import {
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
 import { DurableFileLock } from "./durable-file-lock.js";
 
-export const isConversationId = (id: unknown): id is string =>
-  typeof id === "string" && /^ses_[A-Za-z0-9_-]{1,128}$/.test(id);
+import { isConversationId } from "../shared/assistant-state.js";
+export { isConversationId } from "../shared/assistant-state.js";
 
 /** One native conversation per Studio session; the host holds the owner lock. */
 export class OpenCodeAssociations {

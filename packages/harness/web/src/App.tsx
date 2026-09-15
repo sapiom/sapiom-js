@@ -2900,6 +2900,7 @@ export const App = (): JSX.Element => {
           }
         >
           <WorkflowsRail
+            assistant={harness.assistant}
             projectRoot={projectRoot || null}
             onSaveProjectRoot={saveProjectRoot}
             width={widths.rail}
@@ -3174,6 +3175,7 @@ export const App = (): JSX.Element => {
 
           <div className="center-pane">
             <SessionBar
+              assistant={harness.assistant}
               openedAgentName={
                 showAgentEmpty ? (focusedWorkflow?.name ?? null) : null
               }

@@ -21,6 +21,11 @@ on:
     paths-ignore:
       - '**/*.md'
   workflow_dispatch:
+    inputs:
+      publish_mcp_registry:
+        description: Register the current MCP version even if it is already published to npm
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -64,6 +69,8 @@ jobs:
 
       - name: Publish to npm (OIDC trusted publishing — no token)
         id: publish
+        env:
+          PUBLISH_MCP_REGISTRY: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_mcp_registry }}
         run: |
           # Stream output live AND capture it. `set +e` + PIPESTATUS so a failing
           # `changeset publish` doesn't kill the step before we've logged its
@@ -74,7 +81,7 @@ jobs:
           pnpm changeset publish 2>&1 | tee publish-output.txt
           STATUS=${PIPESTATUS[0]}
           set -e
-          if grep -q "@sapiom/mcp@" publish-output.txt; then
+          if [ "$PUBLISH_MCP_REGISTRY" = "true" ] || grep -q "@sapiom/mcp@" publish-output.txt; then
             echo "mcp-changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "mcp-changed=false" >> "$GITHUB_OUTPUT"
