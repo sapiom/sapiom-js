@@ -269,6 +269,57 @@ describe("emitEvent", () => {
       });
     });
 
+    // A getter is caller code, like `toJSON`, and `JSON.stringify` reads the
+    // property again on the way out. Reading it here too made that two reads,
+    // so a getter that does not answer the same twice shipped a value the walk
+    // never saw — including an `Infinity` that sailed past the check below it.
+    describe("getters are left to the serializer", () => {
+      it("is not invoked by the preflight, so validated and sent cannot diverge", async () => {
+        const { client, calls } = fakeClient();
+        let reads = 0;
+        const payload = {
+          get n() {
+            reads += 1;
+            return reads === 1 ? 10 : 20;
+          },
+        };
+
+        await emitEvent({ type: "lead.created", payload }, client);
+
+        // Zero reads from the walk: the serializer downstream is the only one.
+        expect(reads).toBe(0);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("does not report a non-finite number a getter would produce", async () => {
+        const { client, calls } = fakeClient();
+        const payload = {
+          get n() {
+            return Infinity;
+          },
+        };
+        // The documented edge of this check: it stops at code it does not run.
+        await emitEvent({ type: "lead.created", payload }, client);
+        expect(calls).toHaveLength(1);
+      });
+
+      it("still checks the plain data properties beside a getter", async () => {
+        const { client } = fakeClient();
+        const payload = {
+          get lazy() {
+            return "fine";
+          },
+          amount: Infinity,
+        };
+        await expect(
+          emitEvent({ type: "lead.created", payload }, client),
+        ).rejects.toMatchObject({
+          code: "BAD_PAYLOAD",
+          message: expect.stringContaining("`payload.amount`"),
+        });
+      });
+    });
+
     // `.map` preserves holes, so the previous walk handed `for...of` an empty
     // slot and destructuring threw a raw TypeError on a payload the serializer
     // writes without complaint.

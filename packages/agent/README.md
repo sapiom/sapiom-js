@@ -281,12 +281,15 @@ const { matched, message } = await signal(
 
 Three things worth knowing rather than assuming:
 
-- **An entry schema can drop payload keys.** If a matched agent's entry step
-  declares an `inputSchema` that closes the object
-  (`additionalProperties: false`), keys it does not name are dropped before the
-  run starts — the guard against a relayed third-party body overriding a stored
-  setting at the same path. An open schema filters nothing. So a field missing
-  from the run is a question about that agent's entry schema, not a failed emit.
+- **Extra payload keys reach the run, and the entry schema decides their fate.**
+  The engine can drop keys an entry step did not declare, but only when the
+  stored manifest literally closes the object (`additionalProperties: false`) —
+  and `buildManifest` strips that marker at every depth, deliberately and even
+  for `z.strictObject()`, so a stored schema stays forward-compatible with
+  inputs that gain fields. So for an agent authored with this SDK the extra key
+  is not dropped: it lands in the run input and the author's own parse rules.
+  `z.object()` ignores it; `z.strictObject()` rejects it and the step fails.
+  Either way the emit itself succeeds, so match the entry schema when you can.
 - `emitEvent` returns `fireIds` — trigger fires, not execution ids. To see what
   actually started, read the receipt back (`GET /v1/workflows/receipts/:id`).
 - `signal` takes an `executionId` to address the run, but delivery is matched on

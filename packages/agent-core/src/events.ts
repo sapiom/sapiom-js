@@ -42,17 +42,20 @@ export interface EmitEventOptions {
    * checks the same rule locally so a JS caller gets the answer without the
    * round-trip.
    *
-   * **Undeclared keys can be dropped at fire time.** When a matched agent's
-   * ENTRY step declares an `inputSchema` that closes the object
-   * (`additionalProperties: false`), every payload key that schema does not
-   * name is dropped before the run starts — a guard against a relayed
-   * third-party body whose key names nobody here chose overriding a stored
-   * setting at the same path. The filter is top level only: a declared key
-   * keeps its whole subtree. A schema that stays open (the default, or a zod
-   * `looseObject`/`catchall`) filters nothing. So when a field is missing from
-   * a run this event started, the entry schema is the first place to look —
-   * the emit itself still succeeds, and the drop is recorded on the run rather
-   * than returned here.
+   * **Extra keys reach the run; what happens to them is the entry schema's
+   * call.** The engine can drop payload keys an agent's entry step did not
+   * declare, but only when the STORED manifest literally closes the object
+   * (`additionalProperties: false`). Agents built with `@sapiom/agent` do not
+   * hit that path: `buildManifest` strips that marker at every depth, by
+   * design and even for `z.strictObject()`, so the stored schema stays
+   * forward-compatible with inputs that gain fields. So for an SDK-authored
+   * agent the extra key is NOT dropped — it arrives in the run input, and the
+   * author's own Zod parse at the step decides: `z.object()` ignores it,
+   * `z.strictObject()` REJECTS it and the step fails.
+   *
+   * Practical reading: sending keys the entry step does not declare is safe
+   * against a loose schema and fails the run against a strict one. Neither
+   * shows up here — the emit succeeds either way.
    */
   payload: Record<string, unknown>;
   /**
@@ -161,9 +164,11 @@ export async function emitEvent(
  * indistinguishable from one never set), and an array hole, which serializes to
  * `null` by the same documented mapping.
  *
- * Anything defining `toJSON` is left to the serializer entirely — see the
- * comment at that branch. So the reach of this check stops at code it does not
- * run, which is the boundary that keeps it side-effect free.
+ * Anything whose value is produced by CALLER CODE is left to the serializer
+ * entirely — a `toJSON`, and a getter (see those two branches). The reach of
+ * this check stops at code it does not run: that is what keeps the pass free of
+ * side effects, and what makes "validated" and "sent" the same bytes rather
+ * than two separate reads that can disagree.
  *
  * An explicit walk rather than a `JSON.stringify` replacer, even though a
  * replacer would visit the same values: a replacer is handed the immediate key
@@ -229,16 +234,16 @@ function findUnserializable(
   // `null` and moves on, so the walk has to reach every index and accept them.
   if (Array.isArray(resolved)) {
     for (let index = 0; index < resolved.length; index += 1) {
-      const found = findUnserializable(
-        resolved[index],
-        `${at}[${index}]`,
-        seen,
-      );
+      const entry = readDataProperty(resolved, String(index));
+      if (entry.accessor) continue;
+      const found = findUnserializable(entry.value, `${at}[${index}]`, seen);
       if (found) return found;
     }
   } else {
-    for (const [key, entry] of Object.entries(resolved)) {
-      const found = findUnserializable(entry, `${at}.${key}`, seen);
+    for (const key of Object.keys(resolved)) {
+      const entry = readDataProperty(resolved, key);
+      if (entry.accessor) continue;
+      const found = findUnserializable(entry.value, `${at}.${key}`, seen);
       if (found) return found;
     }
   }
@@ -247,6 +252,29 @@ function findUnserializable(
   // Only an ancestor repeating itself is a cycle.
   seen.delete(resolved);
   return null;
+}
+
+/**
+ * One own property, but only when reading it runs no caller code.
+ *
+ * A getter is skipped rather than invoked, for the reason `toJSON` is: this is
+ * a validation pass, and `JSON.stringify` is going to read the property again
+ * on its way out. Invoking it here made that two reads, so a getter that does
+ * not return the same thing twice sent a value this function never saw — it
+ * validated `10` and shipped `20`, and a second read of `Infinity` sailed
+ * through the non-finite check to land as the `null` that check exists to
+ * prevent. Not reading it leaves the serializer as the only reader, which is
+ * the property that makes "validated" and "sent" the same thing.
+ */
+function readDataProperty(
+  holder: object,
+  key: string,
+): { accessor: true } | { accessor: false; value: unknown } {
+  const descriptor = Object.getOwnPropertyDescriptor(holder, key);
+  // Absent: an array hole. JSON writes `null` for it, so there is nothing to check.
+  if (!descriptor) return { accessor: false, value: undefined };
+  if (descriptor.get || descriptor.set) return { accessor: true };
+  return { accessor: false, value: descriptor.value };
 }
 
 /**
