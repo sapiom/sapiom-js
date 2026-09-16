@@ -1,17 +1,17 @@
 /**
  * `github` capability — tenant-scoped GitHub methods executed server-side in the
- * connectors gateway (AGENT-314 / Path 2). The args are POSTed to the gateway's
- * method-dispatch route on the run credential (`x-sapiom-api-key`); the gateway
- * resolves the tenant's GitHub credential (a static Personal Access Token) INTERNALLY
- * and calls GitHub — the PAT NEVER crosses this boundary, only the result comes back.
+ * connectors gateway. The args are POSTed to the gateway's method route on the run
+ * credential (`x-sapiom-api-key`); the gateway resolves the tenant's GitHub
+ * credential (a static Personal Access Token) INTERNALLY and calls GitHub — the PAT
+ * NEVER crosses this boundary, only the result comes back.
  *
- *   import { github } from "@sapiom/tools";
- *   const repos = await github.listRepos({ visibility: "all" });
+ *   import { connectors } from "@sapiom/tools";
+ *   const repos = await connectors.github.listRepos({ visibility: "all" });
  *
- * Or on the step context: `ctx.sapiom.github.listRepos()`.
+ * Or on the step context: `ctx.sapiom.connectors.github.listRepos()`.
  *
  * WHY this exists: a run must call GitHub WITHOUT the PAT ever living in the run env
- * or on disk. Unlike Google's OAuth `token()` materialization, GitHub uses a `static`
+ * or on disk. Unlike Google's OAuth-based `authClient()`, GitHub uses a `static`
  * credential the gateway injects itself — so there is NO SDK-side credential surface
  * at all, and NO `@octokit`/GitHub SDK dependency. This module only shapes the request.
  *
@@ -20,7 +20,7 @@
  * carrying the gateway body: 404 connector_not_found (connect GitHub first),
  * 400 connector_method_invalid_args, 502 connector_method_upstream_failed.
  */
-import { Transport, defaultTransport } from "../_client/index.js";
+import { Transport, defaultTransport } from "../../_client/index.js";
 
 // Same tools host agents/models resolve — via SAPIOM_TOOLS_BASE. No new per-cap config.
 const DEFAULT_BASE_URL =

@@ -73,15 +73,10 @@
       "import": "./dist/esm/memory/index.js",
       "require": "./dist/cjs/memory/index.js"
     },
-    "./google": {
-      "types": "./dist/cjs/google/index.d.ts",
-      "import": "./dist/esm/google/index.js",
-      "require": "./dist/cjs/google/index.js"
-    },
-    "./github": {
-      "types": "./dist/cjs/github/index.d.ts",
-      "import": "./dist/esm/github/index.js",
-      "require": "./dist/cjs/github/index.js"
+    "./connectors": {
+      "types": "./dist/cjs/connectors/index.d.ts",
+      "import": "./dist/esm/connectors/index.js",
+      "require": "./dist/cjs/connectors/index.js"
     },
     "./speech": {
       "types": "./dist/cjs/speech/index.d.ts",

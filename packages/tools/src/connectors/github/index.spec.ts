@@ -1,4 +1,4 @@
-import { Transport } from "../_client/index.js";
+import { Transport } from "../../_client/index.js";
 import * as github from "./index.js";
 
 interface FetchCall {

@@ -194,17 +194,16 @@ export * as keys from "./keys/index.js";
 export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
 
-export * as google from "./google/index.js";
+// connectors — connection-backed third-party providers (Google, GitHub), grouped
+// under one namespace: `import { connectors } from "@sapiom/tools"; connectors.google.fetch(...)`.
+export * as connectors from "./connectors/index.js";
 export type {
   DriveFile,
   DrivePermission,
   DriveShareFileArgs,
   DriveUploadFileArgs,
   GmailAttachment,
-  LiveCredential,
   SendEmailArgs,
   SendEmailResult,
-} from "./google/index.js";
-
-export * as github from "./github/index.js";
-export type { ListReposArgs, GitHubRepo } from "./github/index.js";
+} from "./connectors/google/index.js";
+export type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";

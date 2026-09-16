@@ -120,12 +120,11 @@ import type {
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
 import type {
-  LiveCredential,
   DrivePermission,
   DriveFile,
   SendEmailResult,
-} from "../google/index.js";
-import type { GitHubRepo } from "../github/index.js";
+} from "../connectors/google/index.js";
+import type { GitHubRepo } from "../connectors/github/index.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -596,7 +595,7 @@ function stubRunHandle(
 
 // Default media results for the contentGeneration stub — ONE factory per media type, shared by
 // `create` and `launch` so the two verbs can never drift (the create/launch resolvedModel drift
-// fixed in #664 came from inlined twin literals). SAP-2576: the routed backend always echoes a
+// fixed in #664 came from inlined twin literals). The routed backend always echoes a
 // resolvedModel (a required field), so the factory does too — set here, inside the fallback,
 // never post-mutated onto a resolved override.
 function stubImageResult(input: ImageCreateInput): ImageGenerationResult {
@@ -1863,7 +1862,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           }) as void,
         ),
     },
-    // Read-only vault (SAP-1471). Stubs return empty/absent — a local run must
+    // Read-only vault. Stubs return empty/absent — a local run must
     // never surface real credentials, and "no secret found" is the safe default.
     vault: {
       list: (ref: string) =>
@@ -1881,7 +1880,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           r("vault.getAll", [ref], () => ({})) as Record<string, string>,
         ),
     },
-    // Scoped-key mint (SAP-2300). A local run mints no real credential — it returns a
+    // Scoped-key mint. A local run mints no real credential — it returns a
     // clearly-fake, shape-faithful key so a deploy step can trace the full graph
     // offline. The `key` is an obvious placeholder, never a usable secret.
     keys: {
@@ -1899,91 +1898,103 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           })) as ScopedKey,
         ),
     },
-    // A live Google credential is fetched server-side in production; the stub returns
-    // a clearly-fake, shape-faithful bearer so an offline run can exercise the call
-    // graph. The `value` is an obvious placeholder, never a usable token.
-    google: {
-      token: async () =>
-        r("google.token", [], () => ({
-          kind: "bearer" as const,
-          value: "ya29.stub-google-token",
-          expiresAt: "2099-01-01T00:00:00.000Z",
-          baseUrl: "https://www.googleapis.com",
-        })) as LiveCredential,
-      // A REAL google-auth-library OAuth2 client wired to the stub's fake bearer — an
-      // offline `check`/run drives a genuine vendor-SDK client (googleapis, @googleapis/*)
-      // with no network and no Google connector. `google-auth-library` ships with those
-      // SDKs, so it is present whenever an agent references `authClient()`; absent it, the
-      // dynamic import throws the same clear error as production.
-      // The override (when present) wins and is returned — awaited, so a rejected
-      // override propagates. Only when there is no override do we import the optional
-      // peer and build the default client, so an override can both control the result
-      // and avoid requiring `google-auth-library`.
-      authClient: async () =>
-        (await r("google.authClient", [], async () => {
-          let mod: typeof import("google-auth-library");
-          try {
-            mod = await import("google-auth-library");
-          } catch {
-            throw new Error(
-              "google.authClient() needs the 'google-auth-library' package, which ships with " +
-                "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
-                "`npm i @googleapis/drive`) to use the vendor SDKs. For a token-only path that " +
-                "needs no extra dependency, use google.token() instead.",
-            );
-          }
-          const client = new mod.OAuth2Client();
-          const mint = async () => ({
-            access_token: "ya29.stub-google-token",
-            expiry_date: Date.parse("2099-01-01T00:00:00.000Z"),
-          });
-          client.refreshHandler = mint;
-          client.setCredentials(await mint());
-          return client;
-        })) as InstanceType<(typeof import("google-auth-library"))["OAuth2Client"]>,
-      // Drive methods run server-side in the gateway in production; the stub returns
-      // shape-faithful, obviously-fake results so an offline run can exercise the call
-      // graph without a Google connector or network call.
-      drive: {
-        shareFile: async (args) =>
-          r("google.drive.shareFile", [args], () => ({
-            id: "stub-permission-id",
-            type: "user",
-            role: "reader",
-          })) as DrivePermission,
-        uploadFile: async (args) =>
-          r("google.drive.uploadFile", [args], () => ({
-            id: "stub-file-id",
-            name: "stub-file.txt",
-            mimeType: "text/plain",
-          })) as DriveFile,
+    // Connection-backed third-party providers (Google, GitHub) — mirrors the
+    // `connectors` grouping on the real client.
+    connectors: {
+      // A live Google credential is fetched server-side in production; the stub returns
+      // a clearly-fake, shape-faithful bearer so an offline run can exercise the call
+      // graph. The `value` is an obvious placeholder, never a usable token.
+      google: {
+        // A REAL google-auth-library OAuth2 client wired to the stub's fake bearer — an
+        // offline `check`/run drives a genuine vendor-SDK client (googleapis, @googleapis/*)
+        // with no network and no Google connector. `google-auth-library` ships with those
+        // SDKs, so it is present whenever an agent references `authClient()`; absent it, the
+        // dynamic import throws the same clear error as production.
+        // The override (when present) wins and is returned — awaited, so a rejected
+        // override propagates. Only when there is no override do we import the optional
+        // peer and build the default client, so an override can both control the result
+        // and avoid requiring `google-auth-library`.
+        authClient: async () =>
+          (await r("google.authClient", [], async () => {
+            let mod: typeof import("google-auth-library");
+            try {
+              mod = await import("google-auth-library");
+            } catch {
+              throw new Error(
+                "google.authClient() needs the 'google-auth-library' package, which ships with " +
+                  "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
+                  "`npm i @googleapis/drive`) to use the vendor SDKs. For a raw proxied path that " +
+                  "needs no extra dependency, use connectors.google.fetch() instead.",
+              );
+            }
+            const client = new mod.OAuth2Client();
+            const mint = async () => ({
+              access_token: "ya29.stub-google-token",
+              expiry_date: Date.parse("2099-01-01T00:00:00.000Z"),
+            });
+            client.refreshHandler = mint;
+            client.setCredentials(await mint());
+            return client;
+          })) as InstanceType<
+            (typeof import("google-auth-library"))["OAuth2Client"]
+          >,
+        // The generic proxied tail's stub — no network, no Google connector. Returns a
+        // shape-faithful, obviously-fake JSON Response so an offline run can exercise the
+        // call graph and read `.json()`/`.status` the same way the real proxy response does.
+        fetch: async (pathOrUrl, init) =>
+          r(
+            "google.fetch",
+            [pathOrUrl, init],
+            () =>
+              new Response(JSON.stringify({ stub: true }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+          ) as Response,
+        // Drive methods run server-side in the gateway in production; the stub returns
+        // shape-faithful, obviously-fake results so an offline run can exercise the call
+        // graph without a Google connector or network call.
+        drive: {
+          shareFile: async (args) =>
+            r("google.drive.shareFile", [args], () => ({
+              id: "stub-permission-id",
+              type: "user",
+              role: "reader",
+            })) as DrivePermission,
+          uploadFile: async (args) =>
+            r("google.drive.uploadFile", [args], () => ({
+              id: "stub-file-id",
+              name: "stub-file.txt",
+              mimeType: "text/plain",
+            })) as DriveFile,
+        },
+        // Gmail methods run server-side in the gateway in production; the stub returns a
+        // shape-faithful, obviously-fake send result so an offline run can exercise the
+        // call graph without a Google connector or network call.
+        gmail: {
+          sendEmail: async (args) =>
+            r("google.gmail.sendEmail", [args], () => ({
+              id: "stub-message-id",
+              threadId: "stub-thread-id",
+            })) as SendEmailResult,
+        },
       },
-      // Gmail methods run server-side in the gateway in production; the stub returns a
-      // shape-faithful, obviously-fake send result so an offline run can exercise the
-      // call graph without a Google connector or network call.
-      gmail: {
-        sendEmail: async (args) =>
-          r("google.gmail.sendEmail", [args], () => ({
-            id: "stub-message-id",
-            threadId: "stub-thread-id",
-          })) as SendEmailResult,
+      // GitHub methods run server-side in the gateway (the PAT is injected there) in
+      // production; the stub returns a shape-faithful, obviously-fake repo list so an
+      // offline run can exercise the call graph without a GitHub connector or network call.
+      github: {
+        listRepos: async (args) =>
+          r("github.listRepos", [args], () => [
+            {
+              id: 1,
+              name: "stub-repo",
+              fullName: "stub-org/stub-repo",
+              private: false,
+              htmlUrl: "https://github.com/stub-org/stub-repo",
+              description: "stub repository",
+            },
+          ]) as GitHubRepo[],
       },
-    },
-    // GitHub methods run server-side in the gateway (the PAT is injected there) in
-    // production; the stub returns a shape-faithful, obviously-fake repo list so an
-    // offline run can exercise the call graph without a GitHub connector or network call.
-    github: {
-      listRepos: async (args) =>
-        r("github.listRepos", [args], () => [
-          {
-            id: 1,
-            name: "stub-repo",
-            fullName: "stub-org/stub-repo",
-            private: false,
-            htmlUrl: "https://github.com/stub-org/stub-repo",
-            description: "stub repository",
-          },
-        ]) as GitHubRepo[],
     },
     speech: {
       textToSpeech: {

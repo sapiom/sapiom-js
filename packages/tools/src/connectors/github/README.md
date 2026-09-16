@@ -9,13 +9,13 @@ first — an unconnected tenant gets a `404 connector_not_found`.
 import { createClient } from "@sapiom/tools";
 const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 
-const repos = await sapiom.github.listRepos({ perPage: 20 });
+const repos = await sapiom.connectors.github.listRepos({ perPage: 20 });
 for (const r of repos) {
   console.log(r.fullName, r.private ? "(private)" : "");
 }
 ```
 
-Ambient import works too: `import { github } from "@sapiom/tools"`.
+Ambient import works too: `import { connectors } from "@sapiom/tools"` (then `connectors.github`).
 
 ## Operations
 
