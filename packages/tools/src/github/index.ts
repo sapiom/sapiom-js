@@ -52,10 +52,9 @@ export interface GitHubRepo {
 export async function listRepos(
   args?: ListReposArgs,
   transport: Transport = defaultTransport(),
-  baseUrl: string = DEFAULT_BASE_URL,
 ): Promise<GitHubRepo[]> {
   return transport.request<GitHubRepo[]>(
-    `${baseUrl}/connectors/v1/github/methods/listRepos`,
+    `${DEFAULT_BASE_URL}/connectors/v1/github/methods/listRepos`,
     {
       method: "POST",
       body: JSON.stringify(args ?? {}),

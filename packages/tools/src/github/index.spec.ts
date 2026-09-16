@@ -41,7 +41,7 @@ function makeTransport(
   return { transport: new Transport({ apiKey, fetch: fetchMock }), calls };
 }
 
-const BASE = "https://tools.test";
+const BASE = "https://tools.sapiom.ai";
 const headerOf = (c: FetchCall, k: string) =>
   (c.init.headers as Record<string, string>)[k];
 
@@ -69,7 +69,7 @@ describe("github.listRepos", () => {
     const { transport, calls } = makeTransport([() => jsonResponse(REPOS)]);
 
     const args = { perPage: 50, page: 1, visibility: "all" } as const;
-    const result = await github.listRepos(args, transport, BASE);
+    const result = await github.listRepos(args, transport);
 
     expect(calls[0]!.url).toBe(
       `${BASE}/connectors/v1/github/methods/listRepos`,
@@ -87,7 +87,7 @@ describe("github.listRepos", () => {
   it("POSTs an empty object body when called with no args", async () => {
     const { transport, calls } = makeTransport([() => jsonResponse(REPOS)]);
 
-    const result = await github.listRepos(undefined, transport, BASE);
+    const result = await github.listRepos(undefined, transport);
 
     expect(calls[0]!.url).toBe(
       `${BASE}/connectors/v1/github/methods/listRepos`,
@@ -106,10 +106,8 @@ describe("github.listRepos", () => {
           headers: { "Content-Type": "application/json" },
         }),
     ]);
-    await expect(github.listRepos(undefined, transport, BASE)).rejects.toThrow(
-      /404/,
-    );
-    await expect(github.listRepos(undefined, transport, BASE)).rejects.toThrow(
+    await expect(github.listRepos(undefined, transport)).rejects.toThrow(/404/);
+    await expect(github.listRepos(undefined, transport)).rejects.toThrow(
       /connector_not_found/,
     );
   });
@@ -125,8 +123,8 @@ describe("github.listRepos", () => {
           },
         ),
     ]);
-    await expect(
-      github.listRepos({ perPage: 10 }, transport, BASE),
-    ).rejects.toThrow(/502/);
+    await expect(github.listRepos({ perPage: 10 }, transport)).rejects.toThrow(
+      /502/,
+    );
   });
 });

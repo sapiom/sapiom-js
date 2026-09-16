@@ -41,7 +41,7 @@ function makeTransport(
   return { transport: new Transport({ apiKey, fetch: fetchMock }), calls };
 }
 
-const BASE = "https://tools.test";
+const BASE = "https://tools.sapiom.ai";
 const headerOf = (c: FetchCall, k: string) =>
   (c.init.headers as Record<string, string>)[k];
 
@@ -53,9 +53,11 @@ describe("google.token()", () => {
       expiresAt: "2026-08-28T01:00:00.000Z",
       baseUrl: "https://www.googleapis.com",
     };
-    const { transport, calls } = makeTransport([() => jsonResponse(credential)]);
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(credential),
+    ]);
 
-    const result = await google.token(transport, BASE);
+    const result = await google.token(transport);
 
     expect(calls[0]!.url).toBe(`${BASE}/connectors/v1/google/materialize`);
     expect(calls[0]!.init.method).toBe("POST");
@@ -75,8 +77,8 @@ describe("google.token()", () => {
           headers: { "Content-Type": "application/json" },
         }),
     ]);
-    await expect(google.token(transport, BASE)).rejects.toThrow(/404/);
-    await expect(google.token(transport, BASE)).rejects.toThrow(
+    await expect(google.token(transport)).rejects.toThrow(/404/);
+    await expect(google.token(transport)).rejects.toThrow(
       /connector_not_found/,
     );
   });
@@ -89,7 +91,7 @@ describe("google.token()", () => {
           headers: { "Content-Type": "application/json" },
         }),
     ]);
-    await expect(google.token(transport, BASE)).rejects.toThrow(/400/);
+    await expect(google.token(transport)).rejects.toThrow(/400/);
   });
 });
 
@@ -99,10 +101,11 @@ describe("google.authClient()", () => {
 
   it("returns an OAuth2 client whose request headers carry the materialized bearer", async () => {
     const { transport, calls } = makeTransport([
-      () => jsonResponse({ kind: "bearer", value: "tok-1", expiresAt: FAR_FUTURE }),
+      () =>
+        jsonResponse({ kind: "bearer", value: "tok-1", expiresAt: FAR_FUTURE }),
     ]);
 
-    const client = await google.authClient(transport, BASE);
+    const client = await google.authClient(transport);
     const headers = await client.getRequestHeaders();
 
     expect(headers.get("authorization")).toBe("Bearer tok-1");
@@ -123,7 +126,7 @@ describe("google.authClient()", () => {
         ),
     ]);
 
-    const client = await google.authClient(transport, BASE);
+    const client = await google.authClient(transport);
     const headers = await client.getRequestHeaders();
 
     expect(headers.get("authorization")).toBe("Bearer tok-2");
@@ -135,7 +138,9 @@ describe("google.authClient()", () => {
 describe("google.drive", () => {
   it("shareFile POSTs methods/shareFile on x-sapiom-api-key with the args body, returns the permission", async () => {
     const permission = { id: "perm-1", type: "user", role: "writer" };
-    const { transport, calls } = makeTransport([() => jsonResponse(permission)]);
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(permission),
+    ]);
 
     const args = {
       fileId: "file-1",
@@ -143,7 +148,7 @@ describe("google.drive", () => {
       type: "user",
       emailAddress: "a@b.com",
     } as const;
-    const result = await google.driveShareFile(args, transport, BASE);
+    const result = await google.driveShareFile(args, transport);
 
     expect(calls[0]!.url).toBe(
       `${BASE}/connectors/v1/google/methods/shareFile`,
@@ -165,7 +170,7 @@ describe("google.drive", () => {
       content: "hello",
       mimeType: "text/plain",
     } as const;
-    const result = await google.driveUploadFile(args, transport, BASE);
+    const result = await google.driveUploadFile(args, transport);
 
     expect(calls[0]!.url).toBe(
       `${BASE}/connectors/v1/google/methods/uploadFile`,
@@ -187,14 +192,12 @@ describe("google.drive", () => {
       google.driveShareFile(
         { fileId: "f", role: "reader", type: "anyone" },
         transport,
-        BASE,
       ),
     ).rejects.toThrow(/404/);
     await expect(
       google.driveShareFile(
         { fileId: "f", role: "reader", type: "anyone" },
         transport,
-        BASE,
       ),
     ).rejects.toThrow(/connector_not_found/);
   });
@@ -211,7 +214,7 @@ describe("google.drive", () => {
         ),
     ]);
     await expect(
-      google.driveUploadFile({ name: "x", content: "y" }, transport, BASE),
+      google.driveUploadFile({ name: "x", content: "y" }, transport),
     ).rejects.toThrow(/502/);
   });
 });
@@ -222,9 +225,13 @@ describe("google.gmail", () => {
     const { transport, calls } = makeTransport([() => jsonResponse(sent)]);
 
     const result = await google.gmailSendEmail(
-      { to: "a@b.com", cc: ["c@d.com", "e@f.com"], subject: "Hello", text: "Hi" },
+      {
+        to: "a@b.com",
+        cc: ["c@d.com", "e@f.com"],
+        subject: "Hello",
+        text: "Hi",
+      },
       transport,
-      BASE,
     );
 
     expect(calls[0]!.url).toBe(
@@ -263,7 +270,6 @@ describe("google.gmail", () => {
         ],
       },
       transport,
-      BASE,
     );
 
     // Single-string bcc → array; no `cc` key emitted when absent.
@@ -287,18 +293,10 @@ describe("google.gmail", () => {
         }),
     ]);
     await expect(
-      google.gmailSendEmail(
-        { to: "a@b.com", subject: "x" },
-        transport,
-        BASE,
-      ),
+      google.gmailSendEmail({ to: "a@b.com", subject: "x" }, transport),
     ).rejects.toThrow(/404/);
     await expect(
-      google.gmailSendEmail(
-        { to: "a@b.com", subject: "x" },
-        transport,
-        BASE,
-      ),
+      google.gmailSendEmail({ to: "a@b.com", subject: "x" }, transport),
     ).rejects.toThrow(/connector_not_found/);
   });
 
@@ -314,7 +312,7 @@ describe("google.gmail", () => {
         ),
     ]);
     await expect(
-      google.gmailSendEmail({ to: "a@b.com", subject: "x" }, transport, BASE),
+      google.gmailSendEmail({ to: "a@b.com", subject: "x" }, transport),
     ).rejects.toThrow(/502/);
   });
 });

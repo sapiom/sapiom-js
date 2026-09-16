@@ -52,13 +52,12 @@ export interface LiveCredential {
  * (no Google connector for this tenant — connect Google first) and 400 (unknown
  * provider); the thrown Error carries the gateway's response body.
  */
-export async function token(
-  transport: Transport = defaultTransport(),
-  baseUrl: string = DEFAULT_BASE_URL,
-): Promise<LiveCredential> {
+export async function token(transport: Transport = defaultTransport()): Promise<LiveCredential> {
   // No body — provider-only contract (mirrors agents.launch's transport.request path).
+  // The tools host is fixed (DEFAULT_BASE_URL / SAPIOM_TOOLS_BASE) — never a caller
+  // argument, so a credential-bearing request can't be redirected to a foreign origin.
   return transport.request<LiveCredential>(
-    `${baseUrl}/connectors/v1/google/materialize`,
+    `${DEFAULT_BASE_URL}/connectors/v1/google/materialize`,
     { method: "POST" },
   );
 }
@@ -93,10 +92,7 @@ export async function token(
  *   const auth = await ctx.sapiom.google.authClient();
  *   const res = await drive({ version: "v3", auth }).files.list({ pageSize: 10 });
  */
-export async function authClient(
-  transport: Transport = defaultTransport(),
-  baseUrl: string = DEFAULT_BASE_URL,
-): Promise<OAuth2Client> {
+export async function authClient(transport: Transport = defaultTransport()): Promise<OAuth2Client> {
   let mod: typeof import("google-auth-library");
   try {
     mod = await import("google-auth-library");
@@ -113,7 +109,7 @@ export async function authClient(
   // The single source of tokens: every mint is a server-side materialize, so no OAuth
   // token or refresh token ever lives in this process beyond the returned bearer.
   const mint = async () => {
-    const cred = await token(transport, baseUrl);
+    const cred = await token(transport);
     return {
       access_token: cred.value,
       // google-auth-library requires a numeric epoch expiry. Google always sends one;
@@ -169,10 +165,9 @@ export interface DriveFile {
 export async function driveShareFile(
   args: DriveShareFileArgs,
   transport: Transport = defaultTransport(),
-  baseUrl: string = DEFAULT_BASE_URL,
 ): Promise<DrivePermission> {
   return transport.request<DrivePermission>(
-    `${baseUrl}/connectors/v1/google/methods/shareFile`,
+    `${DEFAULT_BASE_URL}/connectors/v1/google/methods/shareFile`,
     {
       method: "POST",
       body: JSON.stringify(args),
@@ -184,10 +179,9 @@ export async function driveShareFile(
 export async function driveUploadFile(
   args: DriveUploadFileArgs,
   transport: Transport = defaultTransport(),
-  baseUrl: string = DEFAULT_BASE_URL,
 ): Promise<DriveFile> {
   return transport.request<DriveFile>(
-    `${baseUrl}/connectors/v1/google/methods/uploadFile`,
+    `${DEFAULT_BASE_URL}/connectors/v1/google/methods/uploadFile`,
     {
       method: "POST",
       body: JSON.stringify(args),
@@ -239,7 +233,6 @@ const toRecipientArray = (value: string | string[]): string[] =>
 export async function gmailSendEmail(
   args: SendEmailArgs,
   transport: Transport = defaultTransport(),
-  baseUrl: string = DEFAULT_BASE_URL,
 ): Promise<SendEmailResult> {
   const body = {
     ...args,
@@ -248,7 +241,7 @@ export async function gmailSendEmail(
     ...(args.bcc !== undefined ? { bcc: toRecipientArray(args.bcc) } : {}),
   };
   return transport.request<SendEmailResult>(
-    `${baseUrl}/connectors/v1/google/methods/sendEmail`,
+    `${DEFAULT_BASE_URL}/connectors/v1/google/methods/sendEmail`,
     {
       method: "POST",
       body: JSON.stringify(body),
