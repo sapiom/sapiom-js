@@ -194,4 +194,20 @@ describe("google authClient via the connectors proxy (multi-host)", () => {
 
     expect(captured.at(-1)!.connectorHost).toBe("sheets.googleapis.com");
   });
+
+  it("forwards the caller's abort signal (an already-aborted request rejects)", async () => {
+    const client = await authClient();
+    const before = captured.length;
+
+    await expect(
+      client.request({
+        url: "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        method: "GET",
+        signal: AbortSignal.abort(),
+      }),
+    ).rejects.toThrow();
+
+    // Aborted before dialing — the proxy never received the request.
+    expect(captured.length).toBe(before);
+  });
 });

@@ -1915,13 +1915,13 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // peer and build the default client, so an override can both control the result
         // and avoid requiring `google-auth-library`.
         authClient: async () =>
-          (await r("google.authClient", [], async () => {
+          (await r("connectors.google.authClient", [], async () => {
             let mod: typeof import("google-auth-library");
             try {
               mod = await import("google-auth-library");
             } catch {
               throw new Error(
-                "google.authClient() needs the 'google-auth-library' package, which ships with " +
+                "connectors.google.authClient() needs the 'google-auth-library' package, which ships with " +
                   "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
                   "`npm i @googleapis/drive`) to use the vendor SDKs. For a raw proxied path that " +
                   "needs no extra dependency, use connectors.google.fetch() instead.",
@@ -1943,7 +1943,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // call graph and read `.json()`/`.status` the same way the real proxy response does.
         fetch: async (pathOrUrl, init) =>
           r(
-            "google.fetch",
+            "connectors.google.fetch",
             [pathOrUrl, init],
             () =>
               new Response(JSON.stringify({ stub: true }), {
@@ -1956,13 +1956,13 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // graph without a Google connector or network call.
         drive: {
           shareFile: async (args) =>
-            r("google.drive.shareFile", [args], () => ({
+            r("connectors.google.drive.shareFile", [args], () => ({
               id: "stub-permission-id",
               type: "user",
               role: "reader",
             })) as DrivePermission,
           uploadFile: async (args) =>
-            r("google.drive.uploadFile", [args], () => ({
+            r("connectors.google.drive.uploadFile", [args], () => ({
               id: "stub-file-id",
               name: "stub-file.txt",
               mimeType: "text/plain",
@@ -1973,7 +1973,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         // call graph without a Google connector or network call.
         gmail: {
           sendEmail: async (args) =>
-            r("google.gmail.sendEmail", [args], () => ({
+            r("connectors.google.gmail.sendEmail", [args], () => ({
               id: "stub-message-id",
               threadId: "stub-thread-id",
             })) as SendEmailResult,
@@ -1984,7 +1984,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       // offline run can exercise the call graph without a GitHub connector or network call.
       github: {
         listRepos: async (args) =>
-          r("github.listRepos", [args], () => [
+          r("connectors.github.listRepos", [args], () => [
             {
               id: 1,
               name: "stub-repo",

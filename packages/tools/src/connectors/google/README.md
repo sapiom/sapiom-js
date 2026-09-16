@@ -1,6 +1,6 @@
 # google
 
-Act as a tenant inside Google — Drive, Gmail, and the raw OAuth credential — over
+Act as a tenant inside Google — Drive, Gmail, and the raw Google API surface — over
 the tenant's connected Google connector. The same Google capability your agents
 call over MCP, callable directly from your code or from within a Sapiom agent
 step. The tenant must have connected Google first — an unconnected tenant gets a
