@@ -52,7 +52,9 @@ export interface LiveCredential {
  * (no Google connector for this tenant — connect Google first) and 400 (unknown
  * provider); the thrown Error carries the gateway's response body.
  */
-export async function token(transport: Transport = defaultTransport()): Promise<LiveCredential> {
+export async function token(
+  transport: Transport = defaultTransport(),
+): Promise<LiveCredential> {
   // No body — provider-only contract (mirrors agents.launch's transport.request path).
   // The tools host is fixed (DEFAULT_BASE_URL / SAPIOM_TOOLS_BASE) — never a caller
   // argument, so a credential-bearing request can't be redirected to a foreign origin.
@@ -92,7 +94,9 @@ export async function token(transport: Transport = defaultTransport()): Promise<
  *   const auth = await ctx.sapiom.google.authClient();
  *   const res = await drive({ version: "v3", auth }).files.list({ pageSize: 10 });
  */
-export async function authClient(transport: Transport = defaultTransport()): Promise<OAuth2Client> {
+export async function authClient(
+  transport: Transport = defaultTransport(),
+): Promise<OAuth2Client> {
   let mod: typeof import("google-auth-library");
   try {
     mod = await import("google-auth-library");
@@ -248,3 +252,16 @@ export async function gmailSendEmail(
     },
   );
 }
+
+// ----- Namespace exports -----
+//
+// `token` and `authClient` sit directly on the namespace; Drive and Gmail nest
+// their verbs under `drive`/`gmail`. This mirrors the client surface built in
+// client.ts (`ctx.sapiom.google.drive.shareFile(...)`), so the ambient import
+// `import { google } from "@sapiom/tools"` exposes the identical shape.
+
+/** Drive operations. */
+export const drive = { shareFile: driveShareFile, uploadFile: driveUploadFile };
+
+/** Gmail operations. */
+export const gmail = { sendEmail: gmailSendEmail };

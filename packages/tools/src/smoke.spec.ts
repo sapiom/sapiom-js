@@ -127,7 +127,21 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof browserAutomation).toBe("object");
     expect(typeof keys).toBe("object");
     expect(typeof google).toBe("object");
+    // The ambient namespace must expose the SAME nested shape as the client
+    // surface (sapiom.google.*) above — token/authClient flat, drive/gmail
+    // nested. Without the `export const drive`/`gmail` namespace objects,
+    // `google.drive` is undefined here and the documented ambient call
+    // `import { google } from "@sapiom/tools"; google.drive.shareFile(...)`
+    // throws at runtime while typechecking clean everywhere it isn't used.
+    expect(typeof google.token).toBe("function");
+    expect(typeof google.authClient).toBe("function");
+    expect(typeof google.drive).toBe("object");
+    expect(typeof google.drive.shareFile).toBe("function");
+    expect(typeof google.drive.uploadFile).toBe("function");
+    expect(typeof google.gmail).toBe("object");
+    expect(typeof google.gmail.sendEmail).toBe("function");
     expect(typeof github).toBe("object");
+    expect(typeof github.listRepos).toBe("function");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof MemoryHttpError).toBe("function");
     expect(typeof SpeechHttpError).toBe("function");
