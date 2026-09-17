@@ -210,4 +210,45 @@ describe("google authClient via the connectors proxy (multi-host)", () => {
     // Aborted before dialing — the proxy never received the request.
     expect(captured.length).toBe(before);
   });
+
+  // responseType: "stream" is googleapis' download contract (e.g. drive.files.get({ alt: "media" })
+  // then res.data.pipe(...)). Transport uses undici (web streams); we must hand back a Node Readable.
+  it("returns a Node Readable for responseType: 'stream' (not a web ReadableStream)", async () => {
+    const client = await authClient();
+    const res = await client.request({
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+      method: "GET",
+      responseType: "stream",
+    });
+    const data = res.data as {
+      pipe?: unknown;
+      on?: unknown;
+      getReader?: unknown;
+    };
+    expect(typeof data.pipe).toBe("function");
+    expect(typeof data.on).toBe("function");
+    expect(data.getReader).toBeUndefined(); // i.e. NOT a web ReadableStream
+  });
+
+  it("streams the response bytes for responseType: 'stream'", async () => {
+    const client = await authClient();
+    const res = await client.request({
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+      method: "GET",
+      responseType: "stream",
+    });
+    const chunks: Buffer[] = [];
+    for await (const chunk of res.data as AsyncIterable<Buffer>)
+      chunks.push(chunk);
+    expect(Buffer.concat(chunks).toString("utf8")).toContain("msg-1");
+  });
+
+  it("still parses JSON responses (the stream shim leaves res.json() untouched)", async () => {
+    const client = await authClient();
+    const res = await client.request<{ messages: { id: string }[] }>({
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+      method: "GET",
+    });
+    expect(res.data.messages.map((m) => m.id)).toEqual(["msg-1", "msg-2"]);
+  });
 });
