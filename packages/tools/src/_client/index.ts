@@ -243,18 +243,20 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
+    // Built BEFORE the try: `attributionToHeaders` serializes caller-supplied
+    // metadata and throws a TypeError on a circular or BigInt value. That is a
+    // deterministic local failure, and marking it as a network one would buy the
+    // caller three attempts at something that can never succeed.
+    const headers = {
+      [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
+      "x-sapiom-client": CLIENT_MARKER,
+      ...attributionToHeaders(this.attribution),
+      ...(init.headers ?? {}),
+    };
     const startedAt = Date.now();
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        ...init,
-        headers: {
-          [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
-          "x-sapiom-client": CLIENT_MARKER,
-          ...attributionToHeaders(this.attribution),
-          ...(init.headers ?? {}),
-        },
-      });
+      response = await this.fetchImpl(url, { ...init, headers });
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
       // No response ever existed, so there is no status to record. `fetch`

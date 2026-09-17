@@ -100,15 +100,20 @@ export function toRetryableStepErrorPayload(
   facts: SapiomCallFacts | undefined,
 ): RetryableStepErrorPayload | undefined {
   if (!facts || !isTransientSapiomCall(facts)) return undefined;
-  return sapiomCallTransientErrorPayloadSchema.parse({
-    name: error.name || 'Error',
-    message: error.message,
+  const parsed = sapiomCallTransientErrorPayloadSchema.safeParse({
+    // Read defensively, not trusted: a step body can assign anything to `name`,
+    // `message` or `stack`, or hang a throwing accessor on them.
+    name: asString(readField(error, 'name')) || 'Error',
+    message: asString(readField(error, 'message')),
     code: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.errorCode,
     version: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.version,
     retryable: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.retryable,
     ...normalizeFacts(facts),
-    ...(error.stack === undefined ? {} : { stack: error.stack }),
+    ...stackOf(error),
   });
+  // The last resort behind the normalization above: whatever slipped through, the
+  // error ships as a legacy one rather than this helper becoming the failure.
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -132,8 +137,38 @@ function normalizeFacts(facts: SapiomCallFacts): Partial<RetryableStepErrorPaylo
   if (typeof facts.capability === 'string' && facts.capability.length > 0) {
     normalized.capability = facts.capability.slice(0, MAX_CAPABILITY_LENGTH);
   }
-  if (typeof facts.retryAfterMs === 'number' && Number.isFinite(facts.retryAfterMs) && facts.retryAfterMs >= 0) {
-    normalized.retryAfterMs = Math.round(facts.retryAfterMs);
+  if (typeof facts.retryAfterMs === 'number' && facts.retryAfterMs >= 0) {
+    // A `Retry-After` header is caller-controlled, so the delay can be any
+    // magnitude. Beyond the safe-integer range the schema rejects it, and a
+    // rejection here would replace the HTTP error with a validation one.
+    const rounded = Math.round(facts.retryAfterMs);
+    if (Number.isSafeInteger(rounded)) normalized.retryAfterMs = rounded;
   }
   return normalized;
+}
+
+/** Read a field a step body may have replaced, or hung a throwing accessor on. */
+function readField(error: Error, key: 'name' | 'message' | 'stack'): unknown {
+  try {
+    return error[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Coerce to a string, or empty when the value refuses to become one. */
+function asString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return '';
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+}
+
+/** The stack only when it really is one: a coerced object helps nobody debug. */
+function stackOf(error: Error): { stack?: string } {
+  const stack = readField(error, 'stack');
+  return typeof stack === 'string' ? { stack } : {};
 }

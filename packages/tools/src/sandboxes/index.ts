@@ -550,10 +550,11 @@ export class Sandbox {
 
       async function readStatus(): Promise<ProcessStatus> {
         const s = await transport.fetch(statusUrl, { signal });
-        if (!s.ok)
-          throw new Error(
-            `Failed to get final status for process ${proc.pid}: ${s.status} ${await s.text()}`,
-          );
+        await failIfNotOk(
+          s,
+          `Failed to get final status for process ${proc.pid}`,
+          "sandboxes",
+        );
         return (await s.json()) as ProcessStatus;
       }
     }

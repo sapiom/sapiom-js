@@ -89,6 +89,27 @@ describe("Transport.fetch()", () => {
     expect(readSapiomCall(err)).not.toHaveProperty("status");
   });
 
+  it("leaves a local serialization failure unmarked", async () => {
+    // `attributionToHeaders` JSON-stringifies caller metadata. A circular value
+    // throws a TypeError before fetch is ever called: deterministic, so marking
+    // it transient would buy three attempts at something that cannot succeed.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const transport = new Transport({
+      apiKey: "test-key",
+      attribution: { metadata: circular },
+      fetch: (async () => new Response("{}")) as typeof globalThis.fetch,
+    });
+
+    const err = await transport
+      .fetch("https://api.sapiom.ai/v1/memory")
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(TypeError);
+    expect(readSapiomCall(err)).toBeUndefined();
+  });
+
   it("leaves a deliberate abort unmarked", async () => {
     const transport = transportWith(async () => {
       throw new DOMException("Aborted", "AbortError");
