@@ -11060,6 +11060,43 @@ button.system-graph-node.is-navigable:focus-visible {
   display: none;
 }
 
+/* The header overflows its own width once the agent is PINNED.
+ *
+ * `min-width: 0` above lets these three items shrink, but they are all
+ * `white-space: nowrap` with no overflow rule — so a deficit is not clipped, it
+ * is PAINTED OVER the neighbour. That is the overlap seen in review: "· pinned"
+ * running into "YOUR FILES not deployed" running into the chip.
+ *
+ * Measured on the pinned `hello` demo agent, total overflow by header width:
+ *   740px → 0    690px → 11px    640px → 59px    590px → 108px    490px → 205px
+ *
+ * Two parts, because one is not enough:
+ *
+ * 1. Drop the count and the picker below the threshold. Not clipping the text,
+ *    because clipping reads as "not deploye" / "· pinne" mid-word. Both are
+ *    redundant in THIS tab specifically — the count restates the list directly
+ *    below it, and the picker's job (switch version) is what the per-row
+ *    Activate buttons already do. Scoped to this header: elsewhere the picker
+ *    is the only way to switch version at all.
+ *
+ * 2. `overflow: hidden` as a floor. Below every threshold there is still some
+ *    width where the remaining items do not fit, and clipping inside your own
+ *    box is merely ugly, where painting over a sibling is wrong.
+ *
+ * 707px = a 740px header minus its 2 × --pane-pad-x, matching the content-box
+ * convention used by the 347px query above. */
+@container (max-width: 707px) {
+  .versions-panel-header [data-testid="versions-count"],
+  .versions-panel-header .version-picker {
+    display: none;
+  }
+}
+
+.versions-panel-header .versions-live-summary,
+.versions-panel-header .version-picker {
+  overflow: hidden;
+}
+
 /* Backstop: if the header is still over-subscribed at a narrow width, the chip
  * clips rather than shoving the agent name back out of existence. */
 .versions-panel-header .version-picker > * {
