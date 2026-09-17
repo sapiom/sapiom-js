@@ -1,3 +1,5 @@
+import { runInNewContext } from "node:vm";
+
 import { Transport } from "./index.js";
 import { TransportHttpError } from "./errors.js";
 import { readSapiomCall } from "./sapiom-call.js";
@@ -109,8 +111,79 @@ describe("Transport.fetch()", () => {
       .then(() => null)
       .catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(TypeError);
+    expect((err as Error).name).toBe("TypeError");
     expect(readSapiomCall(err)).toBeUndefined();
+  });
+
+  it("records a network rejection minted in another realm", async () => {
+    // The artifact bundle is handed an injected fetch, so the rejection can come
+    // from a different realm, where `instanceof TypeError` is false. Recognition
+    // has to be structural or the fact is silently never recorded.
+    const foreign = runInNewContext('new TypeError("fetch failed")') as Error;
+    expect(foreign).not.toBeInstanceOf(TypeError);
+    const transport = transportWith(async () => {
+      throw foreign;
+    });
+
+    const err = await transport
+      .fetch("https://api.sapiom.ai/v1/capabilities/web.search")
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBe(foreign);
+    expect(readSapiomCall(err)).toEqual({
+      version: 1,
+      capability: "web.search",
+      network: true,
+    });
+  });
+
+  // `fetch` rejects with a bare TypeError for a malformed request AND for a dead
+  // connection. Anything deterministic has to be raised before the call, or it
+  // ships as SAPIOM_CALL_TRANSIENT and buys three attempts at the impossible.
+  it.each([
+    ["a malformed URL", "not a url", {}],
+    [
+      "an invalid header name",
+      "https://api.sapiom.ai/v1/memory",
+      { "bad header": "v" },
+    ],
+    [
+      "an invalid header value",
+      "https://api.sapiom.ai/v1/memory",
+      { "x-a": "bad\nvalue" },
+    ],
+  ])("leaves %s unmarked", async (_label, url, headers) => {
+    let called = false;
+    const transport = new Transport({
+      apiKey: "test-key",
+      fetch: (async () => {
+        called = true;
+        return new Response("{}");
+      }) as typeof globalThis.fetch,
+    });
+
+    const err = await transport
+      .fetch(url, { headers })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect((err as Error).name).toBe("TypeError");
+    expect(readSapiomCall(err)).toBeUndefined();
+    // Raised before the call, so nothing was ever sent.
+    expect(called).toBe(false);
+  });
+
+  it("still sends a request whose URL and headers are valid", async () => {
+    const transport = transportWith(
+      async () => new Response("{}", { status: 200 }),
+    );
+
+    await expect(
+      transport.fetch("https://api.sapiom.ai/v1/memory", {
+        headers: { "x-custom": "ok" },
+      }),
+    ).resolves.toMatchObject({ status: 200 });
   });
 
   it("leaves a deliberate abort unmarked", async () => {
