@@ -118,6 +118,44 @@ export interface TransportRequestOptions {
   authHeader?: AuthHeader;
 }
 
+/**
+ * Did `fetch` reject because the connection never happened?
+ *
+ * Structural on `name` rather than `instanceof TypeError`: this package is
+ * bundled into agent artifacts and is handed an injected `fetch`, so the error
+ * can be minted in another realm, where `instanceof` against our own globals is
+ * false and the fact would silently never be recorded. Same reason
+ * `readSapiomCall` recognizes the marker structurally.
+ *
+ * An `AbortError` is a deliberate cancellation, not a failure to connect, and is
+ * excluded by construction since it carries its own name.
+ */
+function isNetworkRejection(error: unknown): error is Error {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "TypeError"
+  );
+}
+
+/**
+ * Raise a malformed URL or header before the call instead of letting `fetch`
+ * reject with the same `TypeError` it uses for a dead connection. The two
+ * constructors run the very validation `fetch` runs internally, so this cannot
+ * reject a request that would otherwise have gone out.
+ *
+ * Not everything is separable: an unsupported scheme surfaces as a plain
+ * `fetch failed` with a cause, identical to a transport failure. The base URL is
+ * platform-controlled, so that case does not arise from a step body.
+ */
+function assertRequestable(
+  url: string,
+  headers: ConstructorParameters<typeof Headers>[0],
+): void {
+  new URL(url);
+  new Headers(headers);
+}
+
 function attributionToHeaders(a: Attribution): Record<string, string> {
   const h: Record<string, string> = {};
   if (a.agentName) h["x-sapiom-agent-name"] = a.agentName;
@@ -243,26 +281,28 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
-    // Built BEFORE the try: `attributionToHeaders` serializes caller-supplied
-    // metadata and throws a TypeError on a circular or BigInt value. That is a
-    // deterministic local failure, and marking it as a network one would buy the
-    // caller three attempts at something that can never succeed.
+    // Everything that can fail while BUILDING the request happens before the try:
+    // serializing caller metadata (circular, BigInt), parsing the URL, validating
+    // the headers. `fetch` rejects with a bare TypeError for all of those AND for
+    // a connection that never happened, with nothing on the error to tell them
+    // apart, so raising them here is the only way to keep a deterministic local
+    // failure out of the transient bucket. Marking one transient would buy the
+    // caller three attempts at something that cannot succeed.
     const headers = {
       [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,
       ...attributionToHeaders(this.attribution),
       ...(init.headers ?? {}),
     };
+    assertRequestable(url, headers);
     const startedAt = Date.now();
     let response: Response;
     try {
       response = await this.fetchImpl(url, { ...init, headers });
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
-      // No response ever existed, so there is no status to record. `fetch`
-      // rejects with a TypeError for a connection that never happened; an
-      // AbortError is a deliberate cancellation and is left unmarked.
-      if (error instanceof TypeError && error.name !== "AbortError") {
+      // No response ever existed, so there is no status to record.
+      if (isNetworkRejection(error)) {
         markSapiomCall(error, { network: true, capability: capabilityOf(url) });
       }
       throw error;
