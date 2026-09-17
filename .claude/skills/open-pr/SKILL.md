@@ -1,6 +1,6 @@
 ---
 name: open-pr
-description: How to open (or fix) a pull request in this repo so the deterministic PR labeler accepts it — the body MUST follow .github/pull_request_template.md exactly or the PR is flagged `contribution: incomplete`. Use whenever asked to "open/make/create a PR", "push and PR", "fix the incomplete-contribution label", or when a PR was flagged by the labeler.
+description: How to open (or fix) a pull request in this repo so the deterministic PR labeler accepts it — every new PR opens as a draft, and the body MUST follow .github/pull_request_template.md exactly or the PR is flagged `contribution: incomplete`. Use whenever asked to "open/make/create a PR", "push and PR", "mark the PR ready for review", "fix the incomplete-contribution label", or when a PR was flagged by the labeler.
 ---
 
 # Opening a pull request that passes the labeler
@@ -11,6 +11,22 @@ Every PR to `main`, including each layer of a native GitHub stack targeting
 follow `.github/pull_request_template.md` gets the **`contribution: incomplete`**
 label (the workflow logs say which check failed). The classifier re-runs on
 `edited`/`synchronize`, so the fix is always: repair the body, never close the PR.
+
+## Draft first
+
+Every new PR opens as a **draft** (`gh pr create --draft`), including each layer
+of a native stack. The labeler runs on drafts too (`opened`, `synchronize`,
+`edited`, `ready_for_review` and `converted_to_draft` all trigger it), so repair a
+flagged body while the PR is still a draft. Mark it ready for review
+(`gh pr ready <num>`) only when all of the following hold:
+
+- CI is green on the current head;
+- the body passes the local classifier (step 3 below) and matches the final diff;
+- a `.changeset/*.md` exists if a published package changed;
+- the user has explicitly asked for it.
+
+Never open a PR ready-for-review directly, and never flip a draft to ready on
+your own initiative.
 
 ## The contract (what the classifier actually checks)
 
@@ -65,14 +81,17 @@ import('./scripts/pr-label-classifier.mjs').then(async (m) => {
 });"
 # → must print "complete": true with empty "reasons" (each reason names the fix)
 
-# 4. Open (or repair) the PR:
-gh pr create --base main --title "type(scope): imperative summary" --body-file /tmp/pr-body.md
+# 4. Open (or repair) the PR — always as a draft:
+gh pr create --draft --base main --title "type(scope): imperative summary" --body-file /tmp/pr-body.md
 gh pr edit <num> --body-file /tmp/pr-body.md    # fixing a flagged PR — labeler re-runs on edit
+
+# 5. Only once every "Draft first" condition holds AND the user asks:
+gh pr ready <num>
 ```
 
 For a native stack targeting `main`, later PRs use the preceding branch as
-their base. Keep that base when you create or edit the PR. Each PR still needs
-its own complete description.
+their base. Keep that base when you create or edit the PR. Each PR still opens
+as a draft and needs its own complete description.
 
 ## Reading the labels it applies
 
@@ -96,3 +115,5 @@ its own complete description.
 - The title is NOT checked by the classifier, but follow the repo's
   conventional-commit style anyway (`feat(harness): …`) — it becomes the squash
   commit subject.
+- A draft PR still gets labeled. `contribution: incomplete` on a draft is real;
+  fix the body before anyone asks to mark it ready.
