@@ -31,9 +31,9 @@ active for the whole session. Follow them.
   delivery; they do not replace the authoring tools or execute deployed agents.
 
 **Direct LLM gateway discovery:** on the hosted capability server,
-\`sapiom_list_models\` reports a dated snapshot of the rebuilt gateway's model
-IDs, routing labels, and HTTP request formats. Read the returned catalog's
-scope and date before using it. \`sapiom_chat\` has a separate model catalog
+\`sapiom_list_models\` fetches the rebuilt gateway's current public catalog on
+each call: model IDs, routing labels, HTTP request formats, and lanes.
+\`sapiom_chat\` has a separate model catalog
 in its tool schema; gateway IDs and labels do not change what that tool accepts.
 For deployed agent steps, follow the SDK guidance below.
 
