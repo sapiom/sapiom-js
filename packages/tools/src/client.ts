@@ -167,6 +167,24 @@ import type {
 import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
+import * as google from "./google/index.js";
+import type {
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  LiveCredential,
+  SendEmailArgs,
+  SendEmailResult,
+} from "./google/index.js";
+// Type-only (erased at emit): the return type of `google.authClient()`. Referencing it
+// here does not make `google-auth-library` a runtime dependency of this module —
+// `authClient()` loads it dynamically, and only when called. Agent tsconfigs use
+// `skipLibCheck`, so this reference in the emitted `.d.ts` never forces the peer on agents
+// that only use `token()`.
+import type { OAuth2Client } from "google-auth-library";
+import * as github from "./github/index.js";
+import type { ListReposArgs, GitHubRepo } from "./github/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -464,6 +482,64 @@ export interface Sapiom {
   readonly keys: {
     mintScoped(input: MintScopedInput): Promise<ScopedKey>;
   };
+  /**
+   * A live, tenant-scoped Google credential for in-run code (AGENT-311). `token()`
+   * pulls a short-lived bearer from the connectors gateway ON DEMAND — the OAuth
+   * token never lives in the run env or on disk, and the refresh happens
+   * server-side. The raw token is returned to the caller only; never log or persist
+   * it. `authClient()` wraps `token()` as a googleapis-style self-refreshing client.
+   */
+  readonly google: {
+    /** Pull a fresh Google `LiveCredential` (server-side refresh). Throws 404 when no Google connector is connected. */
+    token(): Promise<LiveCredential>;
+    /**
+     * A GENUINE `google-auth-library` `OAuth2Client` for the Google vendor SDKs
+     * (`googleapis`, `@googleapis/*`) — pass it straight to `drive({ version, auth })`.
+     * Its `refreshHandler` sources every token from `token()` (server-side refresh), so
+     * the OAuth token is minted on demand and never lives in the run. A real client is
+     * required because the vendor SDKs call `authClient.request(...)` and type `auth` as
+     * `OAuth2Client | …`; it is also a superset of a header-only client
+     * (`getRequestHeaders()`). For a raw-bearer path with no extra dependency, use
+     * `token()`. `google-auth-library` is an optional peer, imported dynamically — it
+     * ships with `googleapis`/`@googleapis/*`, and this throws a clear error if missing.
+     */
+    authClient(): Promise<OAuth2Client>;
+    /**
+     * Google Drive server-side methods (Path 2). The gateway resolves the tenant's
+     * Google credential internally and calls Drive — the token never reaches the run.
+     */
+    readonly drive: {
+      /** Share a Drive file. Throws 404 when no Google connector is connected. */
+      shareFile(args: DriveShareFileArgs): Promise<DrivePermission>;
+      /** Upload a new Drive file. */
+      uploadFile(args: DriveUploadFileArgs): Promise<DriveFile>;
+    };
+    /**
+     * Google Gmail server-side methods (Path 2). The gateway resolves the tenant's
+     * Google credential internally and calls Gmail — the token never reaches the run.
+     */
+    readonly gmail: {
+      /**
+       * Send an email via Gmail. `to`/`cc`/`bcc` accept a single address or an
+       * array. Throws 404 when no Google connector is connected.
+       */
+      sendEmail(args: SendEmailArgs): Promise<SendEmailResult>;
+    };
+  };
+  /**
+   * GitHub server-side methods (AGENT-314 / Path 2). The gateway resolves the tenant's
+   * GitHub credential — a static Personal Access Token — internally and calls GitHub;
+   * the PAT never reaches the run. GitHub exercises the `static`/`injected` credential
+   * strategy (the contrast to Google's OAuth) through the identical dispatch path.
+   */
+  readonly github: {
+    /**
+     * List the tenant's GitHub repositories. All args are optional — call with none
+     * to list the first page of every repo the PAT can see. Throws 404 when no
+     * GitHub connector is connected.
+     */
+    listRepos(args?: ListReposArgs): Promise<GitHubRepo[]>;
+  };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
     /** Generate speech audio from text. */
@@ -677,6 +753,20 @@ function bind(transport: Transport): Sapiom {
     },
     keys: {
       mintScoped: (input) => keys.mintScoped(input, transport),
+    },
+    google: {
+      token: () => google.token(transport),
+      authClient: () => google.authClient(transport),
+      drive: {
+        shareFile: (args) => google.driveShareFile(args, transport),
+        uploadFile: (args) => google.driveUploadFile(args, transport),
+      },
+      gmail: {
+        sendEmail: (args) => google.gmailSendEmail(args, transport),
+      },
+    },
+    github: {
+      listRepos: (args) => github.listRepos(args, transport),
     },
     speech: {
       textToSpeech: {

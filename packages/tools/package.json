@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/tools",
-  "version": "0.36.1",
+  "version": "0.37.0",
   "description": "Typed client for Sapiom capabilities (sandboxes, repositories, agent, file storage, …) — the same tools your agents call over MCP, callable from your code, auth'd to your tenant.",
   "license": "MIT",
   "author": "Sapiom",
@@ -73,6 +73,16 @@
       "import": "./dist/esm/memory/index.js",
       "require": "./dist/cjs/memory/index.js"
     },
+    "./google": {
+      "types": "./dist/cjs/google/index.d.ts",
+      "import": "./dist/esm/google/index.js",
+      "require": "./dist/cjs/google/index.js"
+    },
+    "./github": {
+      "types": "./dist/cjs/github/index.d.ts",
+      "import": "./dist/esm/github/index.js",
+      "require": "./dist/cjs/github/index.js"
+    },
     "./speech": {
       "types": "./dist/cjs/speech/index.d.ts",
       "import": "./dist/esm/speech/index.js",
@@ -99,6 +109,14 @@
   "dependencies": {
     "@sapiom/analytics-core": "workspace:^"
   },
+  "peerDependencies": {
+    "google-auth-library": ">=9"
+  },
+  "peerDependenciesMeta": {
+    "google-auth-library": {
+      "optional": true
+    }
+  },
   "scripts": {
     "build": "npm run gen:version && npm run build:cjs && npm run build:esm && npm run build:esm-pkg",
     "build:cjs": "tsc --project tsconfig.cjs.json",
@@ -121,6 +139,7 @@
     "@typescript-eslint/eslint-plugin": "^7.3.1",
     "@typescript-eslint/parser": "^7.3.1",
     "eslint": "^8.57.0",
+    "google-auth-library": "^10.5.0",
     "jest": "^29.7.0",
     "prettier": "^3.2.5",
     "ts-jest": "^29.1.2",
