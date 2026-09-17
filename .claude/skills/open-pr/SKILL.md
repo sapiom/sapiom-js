@@ -115,5 +115,7 @@ as a draft and needs its own complete description.
 - The title is NOT checked by the classifier, but follow the repo's
   conventional-commit style anyway (`feat(harness): …`) — it becomes the squash
   commit subject.
-- A draft PR still gets labeled. `contribution: incomplete` on a draft is real;
-  fix the body before anyone asks to mark it ready.
+- The labeler runs on drafts, but trusted (team) authors sit outside the
+  labeling pipeline and get no labels at all — `contribution: incomplete`
+  only ever lands on external PRs. The local classifier in step 3 is the only
+  body check a team member will see; run it before anyone asks to mark ready.
