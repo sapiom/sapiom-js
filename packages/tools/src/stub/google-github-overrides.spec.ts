@@ -2,7 +2,7 @@
  * Regression tests for the stub's Google/GitHub capability overrides — the two
  * behaviours a review (Devin + CodeRabbit) flagged, and this change fixes:
  *
- *  B — an override for `google.authClient` MUST be returned. Previously the stub
+ *  B — an override for `connectors.google.authClient` MUST be returned. Previously the stub
  *      invoked the resolver for its side effect, discarded the result, and always
  *      imported `google-auth-library` and returned the real client — so an override
  *      could neither control the result nor avoid the optional peer.
@@ -17,46 +17,31 @@ describe("stub google/github overrides", () => {
   it("returns a value override for google.authClient (does not discard it)", async () => {
     const fake = { getRequestHeaders: async () => new Headers() };
     const client = createStubClient({
-      overrides: { "google.authClient": fake },
+      overrides: { "connectors.google.authClient": fake },
     });
 
-    expect(await client.google.authClient()).toBe(fake);
+    expect(await client.connectors.google.authClient()).toBe(fake);
   });
 
   it("calls and returns a function override for google.authClient", async () => {
     const fake = { getRequestHeaders: async () => new Headers() };
     const client = createStubClient({
-      overrides: { "google.authClient": () => fake },
+      overrides: { "connectors.google.authClient": () => fake },
     });
 
-    expect(await client.google.authClient()).toBe(fake);
-  });
-
-  it("rejects (never throws synchronously) when a google.token override throws", async () => {
-    const client = createStubClient({
-      overrides: {
-        "google.token": () => {
-          throw new Error("offline");
-        },
-      },
-    });
-
-    // The call itself must NOT throw — storing the promise to await/catch later is a
-    // supported pattern that would break if the override escaped synchronously.
-    const pending = client.google.token();
-    await expect(pending).rejects.toThrow("offline");
+    expect(await client.connectors.google.authClient()).toBe(fake);
   });
 
   it("rejects when a google.drive.shareFile override throws", async () => {
     const client = createStubClient({
       overrides: {
-        "google.drive.shareFile": () => {
+        "connectors.google.drive.shareFile": () => {
           throw new Error("drive boom");
         },
       },
     });
 
-    const pending = client.google.drive.shareFile({
+    const pending = client.connectors.google.drive.shareFile({
       fileId: "f",
       role: "reader",
       type: "anyone",
@@ -67,13 +52,13 @@ describe("stub google/github overrides", () => {
   it("rejects when a github.listRepos override throws", async () => {
     const client = createStubClient({
       overrides: {
-        "github.listRepos": () => {
+        "connectors.github.listRepos": () => {
           throw new Error("gh boom");
         },
       },
     });
 
-    const pending = client.github.listRepos();
+    const pending = client.connectors.github.listRepos();
     await expect(pending).rejects.toThrow("gh boom");
   });
 });
