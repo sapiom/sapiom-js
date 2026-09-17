@@ -38,8 +38,9 @@ import {
   resolveCredentialPolicy,
   type CredentialPolicy,
 } from "./credential-policy.js";
+import { capabilityOf, ensureOk, markSapiomCall } from "./sapiom-call.js";
 import { VERSION } from "../_generated/version.js";
-import { TransportHttpError, readErrorBody } from "./errors.js";
+import { TransportHttpError } from "./errors.js";
 
 /**
  * Client marker stamped on EVERY request so the gateway can tell SDK traffic
@@ -278,6 +279,12 @@ export class Transport {
       );
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      // No response ever existed, so there is no status to record. `fetch`
+      // rejects with a TypeError for a connection that never happened; an
+      // AbortError is a deliberate cancellation and is left unmarked.
+      if (error instanceof TypeError && error.name !== "AbortError") {
+        markSapiomCall(error, { network: true, capability: capabilityOf(url) });
+      }
       throw error;
     }
     this.trackCapabilityCall(url, init, startedAt, response);
@@ -338,17 +345,24 @@ export class Transport {
       },
       options,
     );
-    if (!res.ok) {
-      const method = init.method ?? "GET";
-      const { text, body } = await readErrorBody(res);
-      throw new TransportHttpError({
-        message: `${method} ${url} → ${res.status} ${text}`,
-        status: res.status,
-        method,
-        url,
-        body,
-      });
-    }
+    // Through the shared non-2xx path so the call's facts are recorded here like
+    // everywhere else, but still throwing `TransportHttpError`: `agents` branches
+    // on that class. The `→` separator stands in for the `<prefix>: <status>`
+    // form the capability namespaces use, so the factory formats the message
+    // rather than taking the default, and it stays byte-identical.
+    await ensureOk(
+      res,
+      `${init.method ?? "GET"} ${url} →`,
+      ({ errorPrefix, status, body, text }) =>
+        new TransportHttpError({
+          message: `${errorPrefix} ${status} ${text}`,
+          status,
+          method: init.method ?? "GET",
+          url,
+          body,
+        }),
+      capabilityOf(url),
+    );
     return (await res.json()) as T;
   }
 }
@@ -366,3 +380,18 @@ export {
 } from "./capability-call.js";
 
 export { TransportHttpError } from "./errors.js";
+
+export {
+  SAPIOM_CALL_MARKER_KEY,
+  SapiomCallError,
+  capabilityOf,
+  ensureOk,
+  failIfNotOk,
+  markSapiomCall,
+  parseRetryAfter,
+  readSapiomCall,
+  type SapiomCallErrorFactory,
+  type SapiomCallFactsInput,
+  type SapiomCallFailure,
+  type SapiomCallMarker,
+} from "./sapiom-call.js";

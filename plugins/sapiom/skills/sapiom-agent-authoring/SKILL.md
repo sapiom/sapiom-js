@@ -460,6 +460,14 @@ async run(input, ctx) {
 `timeoutMs` caps one attempt of a step's `run`. The engine allows three attempts per step by
 default, counting the initial attempt; keep author-controlled retry logic inside that ceiling.
 
+When an error from a `ctx.sapiom.*` call escapes your step instead of being caught, the platform
+can tell whether the failure was transient (a 5xx, a rate limit, a connection that never happened)
+because our own code made the call and read the response: those keep their retries, and the status
+and message survive onto the run's failure reason. A raw `fetch` to a third party carries no such
+signal, so handle its failures yourself with the `try`/`catch` above. Every Sapiom error also
+exposes the status uniformly: `readSapiomCall(err)?.status`, alongside the class's own
+`err.status`.
+
 ## Pause & Resume (Long-Running Dispatched Steps)
 
 A step's `run` completes in one synchronous dispatch. For long-running capabilities (a
