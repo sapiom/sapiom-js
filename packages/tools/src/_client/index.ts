@@ -28,6 +28,12 @@ import {
   capabilityCallData,
   type AnalyticsHolder,
 } from "./analytics.js";
+import {
+  SapiomCallError,
+  capabilityOf,
+  ensureOk,
+  markSapiomCall,
+} from "./sapiom-call.js";
 import { VERSION } from "../_generated/version.js";
 
 /**
@@ -251,6 +257,12 @@ export class Transport {
       });
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      // No response ever existed, so there is no status to record. `fetch`
+      // rejects with a TypeError for a connection that never happened; an
+      // AbortError is a deliberate cancellation and is left unmarked.
+      if (error instanceof TypeError && error.name !== "AbortError") {
+        markSapiomCall(error, { network: true, capability: capabilityOf(url) });
+      }
       throw error;
     }
     this.trackCapabilityCall(url, init, startedAt, response);
@@ -307,11 +319,16 @@ export class Transport {
       },
       options,
     );
-    if (!res.ok) {
-      throw new Error(
-        `${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`,
-      );
-    }
+    // Same message as before this call site was shared: the `→` separator
+    // stands in for the `<prefix>: <status>` form the capability namespaces use,
+    // so the factory formats it rather than taking the default.
+    await ensureOk(
+      res,
+      `${init.method ?? "GET"} ${url} →`,
+      ({ errorPrefix, status, body, text }) =>
+        new SapiomCallError(`${errorPrefix} ${status} ${text}`, status, body),
+      capabilityOf(url),
+    );
     return (await res.json()) as T;
   }
 }
@@ -327,3 +344,18 @@ export {
   resolveCoreBaseUrl,
   type CapabilityCallOptions,
 } from "./capability-call.js";
+
+export {
+  SAPIOM_CALL_MARKER_KEY,
+  SapiomCallError,
+  capabilityOf,
+  ensureOk,
+  failIfNotOk,
+  markSapiomCall,
+  parseRetryAfter,
+  readSapiomCall,
+  type SapiomCallErrorFactory,
+  type SapiomCallFactsInput,
+  type SapiomCallFailure,
+  type SapiomCallMarker,
+} from "./sapiom-call.js";

@@ -107,6 +107,32 @@ const { downloadUrl } = await fileStorage.getDownloadUrl(
 );
 ```
 
+## Errors
+
+A failed call throws the capability's own error class (`SearchHttpError`,
+`DatabaseHttpError`, …), each carrying `status` and the parsed `body`. On top of
+that, every error from a Sapiom call carries the same facts about the call under
+`sapiomCall`, so you can read the status without remembering which class you are
+holding:
+
+```typescript
+import { readSapiomCall } from "@sapiom/tools";
+
+try {
+  await search.webSearch({ query: "..." });
+} catch (err) {
+  readSapiomCall(err); // { version: 1, capability: "web.search", status: 503, retryAfterMs: 2000 }
+}
+```
+
+These are facts, not a verdict: nothing in the SDK decides whether a call is
+worth retrying. Inside a Sapiom agent run, the platform reads them. An error
+that escapes your step after a transient failure (a 5xx, a rate limit, a
+connection that never happened) is one the platform can recognise as worth
+another attempt, and the status and message survive onto the run's failure
+reason when the retries run out. An error from a raw `fetch` to a third party
+carries no such facts, so it cannot be told apart from any other throw.
+
 ## Usage analytics
 
 The SDK can emit anonymous usage analytics — one `capability.call` event per

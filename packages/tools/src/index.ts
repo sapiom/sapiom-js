@@ -15,6 +15,18 @@ export { createClient, createClientFromEnv } from "./client.js";
 export type { Sapiom } from "./client.js";
 export type { TransportConfig, Attribution } from "./_client/index.js";
 
+// What a failed Sapiom-surface call records about itself. Every error thrown by
+// a `ctx.sapiom.*` call carries `err.sapiomCall`: the uniform way to read the
+// status without remembering which error class this capability uses. Facts
+// only: nothing here decides whether the call is worth retrying. That rule
+// lives in @sapiom/agent, and the policy lives in the platform.
+export {
+  SAPIOM_CALL_MARKER_KEY,
+  SapiomCallError,
+  readSapiomCall,
+} from "./_client/sapiom-call.js";
+export type { SapiomCallMarker } from "./_client/sapiom-call.js";
+
 // The generic dispatch contract: any capability handle that carries a `dispatch`
 // member is pausable via `pauseUntilSignal` in @sapiom/agent.
 export type { DispatchHandle } from "./dispatch.js";

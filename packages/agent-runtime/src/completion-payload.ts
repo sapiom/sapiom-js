@@ -1,7 +1,13 @@
 import { z } from 'zod';
 
-import { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from '@sapiom/agent';
-import type { NonRetryableStepErrorPayload } from '@sapiom/agent';
+import {
+  isNonRetryableStepErrorPayload,
+  isRetryableStepErrorPayload,
+  parseNonRetryableStepErrorPayload,
+  parseRetryableStepErrorPayload,
+  toRetryableStepErrorPayload,
+} from '@sapiom/agent';
+import type { NonRetryableStepErrorPayload, RetryableStepErrorPayload, SapiomCallFacts } from '@sapiom/agent';
 
 export { MAX_SHARED_SNAPSHOT_BYTES } from '@sapiom/agent';
 
@@ -80,8 +86,21 @@ const nonRetryableStepCompletionErrorSchema = z
   })
   .transform((value) => parseNonRetryableStepErrorPayload(value) as NonRetryableStepErrorPayload);
 
+/**
+ * The other direction of the same registry: a Sapiom-surface call that failed
+ * transiently. Recognized structurally, for the same reason, and parsed before
+ * the legacy branch so its fields survive rather than being stripped to
+ * `name`/`message`/`stack`.
+ */
+const retryableStepCompletionErrorSchema = z
+  .custom<RetryableStepErrorPayload>(isRetryableStepErrorPayload, {
+    message: 'Invalid retryable platform step error payload',
+  })
+  .transform((value) => parseRetryableStepErrorPayload(value) as RetryableStepErrorPayload);
+
 export const stepCompletionErrorSchema = z.union([
   nonRetryableStepCompletionErrorSchema,
+  retryableStepCompletionErrorSchema,
   legacyStepCompletionErrorSchema,
 ]);
 
@@ -132,12 +151,24 @@ export type StepCompletionError = z.infer<typeof stepCompletionErrorSchema>;
  * `name`, `message`, and `stack`: it preserves normalized fields for the
  * closed set of platform errors that the runner may settle without retrying.
  * Ordinary and unrecognized throws retain the legacy error shape.
+ *
+ * `facts` is what the Sapiom-surface call recorded about its own failure, read
+ * by the host from the thrown error (`readSapiomCall` in `@sapiom/tools`). It is
+ * passed in rather than read here so this package keeps its single dependency:
+ * the SDK owns the marker, this contract owns the rule, and the host composes
+ * the two. Omit it and the error serializes exactly as it did before.
  */
-export function serializeStepCompletionError(error: unknown): StepCompletionError {
+export function serializeStepCompletionError(error: unknown, facts?: SapiomCallFacts): StepCompletionError {
   const platformError = parseNonRetryableStepErrorPayload(error);
   if (platformError) return platformError;
 
   const normalized = error instanceof Error ? error : new Error(String(error));
+
+  // Only a transient failure gets a disposition. A deterministic one (4xx)
+  // deliberately ships as a legacy error carrying no disposition field at all.
+  const transient = toRetryableStepErrorPayload(normalized, facts);
+  if (transient) return transient;
+
   return {
     name: normalized.name,
     message: normalized.message,

@@ -1,5 +1,6 @@
 import { Transport } from "./index.js";
 import { capabilityCall, resolveCoreBaseUrl } from "./capability-call.js";
+import { readSapiomCall } from "./sapiom-call.js";
 
 interface FetchCall {
   url: string;
@@ -164,5 +165,52 @@ describe("capabilityCall()", () => {
         { transport, makeError, errorPrefix: "Failed to scrape" },
       ),
     ).rejects.toMatchObject({ status: 502, body: "upstream exploded" });
+  });
+
+  // The facts ride on the capability's OWN error class, so an author's
+  // `catch (e) { if (e instanceof SearchHttpError) return fail(); }` is
+  // unaffected. Nothing here decides a retry.
+  it.each([503, 429, 408, 404, 400])(
+    "records what the call saw on a %s, keeping the capability's own error class",
+    async (status) => {
+      const { transport } = makeTransport(
+        () => new Response("nope", { status }),
+      );
+
+      const err = await capabilityCall(
+        "web.scrape",
+        {},
+        { transport, makeError, errorPrefix: "Failed to scrape" },
+      )
+        .then(() => null)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(FakeError);
+      expect(readSapiomCall(err)).toEqual({
+        version: 1,
+        capability: "web.scrape",
+        status,
+      });
+    },
+  );
+
+  it("records Retry-After when the router sends one", async () => {
+    const { transport } = makeTransport(
+      () =>
+        new Response("slow down", {
+          status: 429,
+          headers: { "Retry-After": "3" },
+        }),
+    );
+
+    const err = await capabilityCall(
+      "web.scrape",
+      {},
+      { transport, makeError, errorPrefix: "Failed to scrape" },
+    )
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(readSapiomCall(err)?.retryAfterMs).toBe(3000);
   });
 });

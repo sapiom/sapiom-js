@@ -296,20 +296,7 @@ export async function forget(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    throw new MemoryHttpError(
-      `Failed to forget memories: ${res.status} ${text}`,
-      res.status,
-      parsed,
-    );
-  }
+  await ensureOk(res, "Failed to forget memories");
   // 204 No Content — nothing to parse.
 }
 
@@ -327,19 +314,6 @@ export async function drop(
     `${baseUrl}/v1/memory/namespaces/${encodeURIComponent(namespace)}`,
     { method: "DELETE" },
   );
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    throw new MemoryHttpError(
-      `Failed to drop namespace '${namespace}': ${res.status} ${text}`,
-      res.status,
-      parsed,
-    );
-  }
+  await ensureOk(res, `Failed to drop namespace '${namespace}'`);
   // 204 No Content — nothing to parse.
 }

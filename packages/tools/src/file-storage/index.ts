@@ -285,20 +285,7 @@ async function deleteFile(
     `${baseUrl}/${encodeURIComponent(fileId)}`,
     { method: "DELETE" },
   );
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    throw new FileStorageHttpError(
-      `Failed to delete file '${fileId}': ${res.status} ${text}`,
-      res.status,
-      parsed,
-    );
-  }
+  await ensureOk(res, `Failed to delete file '${fileId}'`);
   // 204 No Content — nothing to parse.
 }
 
