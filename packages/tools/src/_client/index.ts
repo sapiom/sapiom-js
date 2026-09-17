@@ -260,6 +260,11 @@ export class Transport {
     }
     // A malformed URL or a refused channel throws here, before anything is sent.
     assertCredentialMayTravel(new URL(url), this.policy);
+    // Headers are built BEFORE the try for a second reason:
+    // `attributionToHeaders` serializes caller-supplied metadata and throws a
+    // TypeError on a circular or BigInt value. That is a deterministic local
+    // failure, and marking it as a network one would buy the caller three
+    // attempts at something that can never succeed.
     const headers: Record<string, string> = {
       [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,

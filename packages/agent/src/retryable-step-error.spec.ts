@@ -110,6 +110,47 @@ describe('toRetryableStepErrorPayload()', () => {
     expect(payload?.retryAfterMs).toBe(1501);
   });
 
+  // This runs on the failure path. If it can throw, it replaces the error the step
+  // actually hit with a validation error, and the run reports the wrong cause.
+  it('is total: never throws, whatever the error and facts carry', () => {
+    const hostile = new Error('boom');
+    (hostile as unknown as { name: unknown }).name = 42;
+    (hostile as unknown as { stack: unknown }).stack = { not: 'a string' };
+
+    const payload = toRetryableStepErrorPayload(hostile, {
+      status: 503,
+      // `Retry-After: 99999999999999999` seconds: past the safe-integer range.
+      retryAfterMs: 1e20,
+    });
+
+    expect(payload).toMatchObject({ name: '42', message: 'boom', status: 503 });
+    expect(payload).not.toHaveProperty('retryAfterMs');
+    expect(payload).not.toHaveProperty('stack');
+  });
+
+  it('keeps a large but representable Retry-After', () => {
+    expect(toRetryableStepErrorPayload(new Error('boom'), { status: 429, retryAfterMs: 86_400_000 })).toMatchObject({
+      retryAfterMs: 86_400_000,
+    });
+  });
+
+  it.each([
+    ['a message replaced by an object', { message: { nope: true } }],
+    ['a name replaced by null', { name: null }],
+    ['a message replaced by a throwing getter', {}],
+  ])('survives %s', (_label, overrides) => {
+    const error = Object.assign(new Error('boom'), overrides);
+    if (_label.includes('throwing getter')) {
+      Object.defineProperty(error, 'message', {
+        get() {
+          throw new Error('hostile accessor');
+        },
+      });
+    }
+
+    expect(() => toRetryableStepErrorPayload(error, { status: 503 })).not.toThrow();
+  });
+
   it('never emits a stack key when the error has none', () => {
     const error = new Error('boom');
     delete error.stack;
