@@ -35,7 +35,7 @@ const result = await sapiom.browserAutomation.withSession(async (session) => {
   session.cdpUrl; // pass to Playwright's browser.connectOverCDP(...)
   session.expiresAt; // ISO-8601 max lifetime
   session.liveViewUrl; // interactive view of the same browser, for a person to watch or take over
-  session.liveViewMode; // lifetime of that link ("single-use" or "persistent")
+  session.liveViewMode; // "single-use" (default: link dies after the first viewer disconnects) or "persistent"
 
   // session-bound screenshot — sessionId injected automatically:
   const shot = await session.screenshot({ url: "https://example.com" });
