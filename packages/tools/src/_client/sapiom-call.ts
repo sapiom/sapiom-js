@@ -40,7 +40,14 @@ export interface SapiomCallMarker {
    * common fields are still readable.
    */
   readonly version: number;
-  /** Routed capability id (`web.search`), or the namespace the call belonged to. */
+  /**
+   * Routed capability id (`web.search`), or the namespace the call belonged to.
+   *
+   * Exact on a response failure, where the capability names itself. Best-effort
+   * on a network failure, where it is derived from the URL and can be coarser
+   * than the namespace label (`files` rather than `fileStorage`), so treat the
+   * two as the same namespace when grouping.
+   */
   readonly capability?: string;
   /** HTTP status of the response. Absent when no response ever existed. */
   readonly status?: number;
@@ -180,16 +187,30 @@ export function failIfNotOk(
   );
 }
 
+/** Numeric-looking, but not the `1*DIGIT` the grammar allows. */
+const MALFORMED_DELTA_SECONDS = /^[+-]?[\d.]+(?:[eE][+-]?\d+)?$/;
+
 /**
- * Parse a `Retry-After` header value. Supports both forms:
- *  - delta-seconds integer (e.g. `"30"`)
+ * Parse a `Retry-After` header value. RFC 9110 allows two forms:
+ *  - delta-seconds, strictly `1*DIGIT` (e.g. `"30"`)
  *  - HTTP-date (e.g. `"Wed, 21 Oct 2015 07:28:00 GMT"`)
+ *
+ * A malformed numeric value is rejected rather than coerced, and deliberately
+ * does NOT fall through to the date branch: `Date.parse("1.5")` returns a date
+ * in 2001, so a sloppy header would otherwise become a confident wrong answer.
+ * The caller falls back to its own backoff, which is the honest outcome.
  */
 export function parseRetryAfter(header: string | null): number | undefined {
   if (!header) return undefined;
-  const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const date = Date.parse(header);
+  const value = header.trim();
+  if (/^\d+$/.test(value)) {
+    const ms = Number(value) * 1000;
+    // A delay we cannot represent is no delay: the schema that carries this
+    // fact rejects an unsafe integer, and the caller has its own backoff.
+    return Number.isSafeInteger(ms) ? ms : undefined;
+  }
+  if (MALFORMED_DELTA_SECONDS.test(value)) return undefined;
+  const date = Date.parse(value);
   if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
   return undefined;
 }

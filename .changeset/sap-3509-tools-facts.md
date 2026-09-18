@@ -18,4 +18,6 @@ keeps working. Two behavior notes:
 - Every capability's `ensureOk` is now a wrapper over one shared non-2xx path,
   which also means every capability reads `Retry-After`, not just `sandboxes`.
   `parseRetryAfter` moved from `sandboxes/multipart` into that shared module and
-  is still re-exported from its old path.
+  is still re-exported from its old path. It is also stricter now: delta-seconds
+  must be `1*DIGIT` per RFC 9110, and a malformed numeric value is ignored rather
+  than passed to `Date.parse`, which used to turn `"1.5"` into a date in 2001.

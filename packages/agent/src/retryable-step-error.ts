@@ -51,14 +51,31 @@ const isHttpStatus = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599;
 
 /**
- * The single platform rule: 5xx, 429, 408, or a connection that never produced
- * a response. Versioned with the contract, and the engine may refine it without
- * an SDK release because `status` ships on the payload.
+ * Statuses a repeat can plausibly get past: the server is unavailable (5xx),
+ * asking us to slow down (429), or timed out waiting for the request (408, 425).
+ *
+ * 425 is `Too Early`, a refusal to replay a request sent over TLS early data.
+ * It is here because `sandboxes/multipart.ts` already retries it locally, and a
+ * failure the SDK retries by itself must not read as deterministic once it
+ * escapes the step.
+ */
+const TRANSIENT_STATUSES: ReadonlySet<number> = new Set([408, 425, 429]);
+
+/**
+ * The single platform rule: a 5xx, one of {@link TRANSIENT_STATUSES}, or a
+ * connection that never produced a response. Versioned with the contract, and
+ * the engine may refine it without an SDK release because `status` ships on the
+ * payload.
+ *
+ * Reads through {@link readFacts} so a caller that hands over a Proxy or a
+ * throwing getter gets `false`, never an exception: this runs on the failure
+ * path, where throwing would replace the error the step actually hit.
  */
 export function isTransientSapiomCall(facts: SapiomCallFacts): boolean {
-  if (facts.network === true) return true;
-  if (!isHttpStatus(facts.status)) return false;
-  return facts.status >= 500 || facts.status === 429 || facts.status === 408;
+  const safe = readFacts(facts);
+  if (safe.network === true) return true;
+  if (!isHttpStatus(safe.status)) return false;
+  return safe.status >= 500 || TRANSIENT_STATUSES.has(safe.status);
 }
 
 const httpStatusSchema = z.number().int().min(100).max(599);
@@ -99,16 +116,20 @@ export function toRetryableStepErrorPayload(
   error: Error,
   facts: SapiomCallFacts | undefined,
 ): RetryableStepErrorPayload | undefined {
-  if (!facts || !isTransientSapiomCall(facts)) return undefined;
+  if (!facts) return undefined;
+  // Snapshot once, then work off the copy: `facts` may be a duck-typed object
+  // from another bundle, or one a step body built with throwing accessors.
+  const safe = readFacts(facts);
+  if (!isTransientSapiomCall(safe)) return undefined;
   const parsed = sapiomCallTransientErrorPayloadSchema.safeParse({
-    // Read defensively, not trusted: a step body can assign anything to `name`,
-    // `message` or `stack`, or hang a throwing accessor on them.
+    // Same reason: a step body can assign anything to `name`, `message` or
+    // `stack`, or hang a throwing accessor on them.
     name: asString(readField(error, 'name')) || 'Error',
     message: asString(readField(error, 'message')),
     code: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.errorCode,
     version: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.version,
     retryable: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.retryable,
-    ...normalizeFacts(facts),
+    ...normalizeFacts(safe),
     ...stackOf(error),
   });
   // The last resort behind the normalization above: whatever slipped through, the
@@ -145,6 +166,27 @@ function normalizeFacts(facts: SapiomCallFacts): Partial<RetryableStepErrorPaylo
     if (Number.isSafeInteger(rounded)) normalized.retryAfterMs = rounded;
   }
   return normalized;
+}
+
+/**
+ * Copy the facts field by field, swallowing a throwing getter or Proxy trap.
+ * Every read of an untrusted `facts` goes through this, so the rule and the
+ * normalizer below work on plain values that cannot throw again.
+ */
+function readFacts(facts: SapiomCallFacts): SapiomCallFacts {
+  const read = (key: keyof SapiomCallFacts): unknown => {
+    try {
+      return facts[key];
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    capability: read('capability') as string | undefined,
+    status: read('status') as number | undefined,
+    retryAfterMs: read('retryAfterMs') as number | undefined,
+    network: read('network') as boolean | undefined,
+  };
 }
 
 /** Read a field a step body may have replaced, or hung a throwing accessor on. */

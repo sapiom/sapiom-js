@@ -460,13 +460,19 @@ async run(input, ctx) {
 `timeoutMs` caps one attempt of a step's `run`. The engine allows three attempts per step by
 default, counting the initial attempt; keep author-controlled retry logic inside that ceiling.
 
-When an error from a `ctx.sapiom.*` call escapes your step instead of being caught, the platform
-can tell whether the failure was transient (a 5xx, a rate limit, a connection that never happened)
-because our own code made the call and read the response: those keep their retries, and the status
-and message survive onto the run's failure reason. A raw `fetch` to a third party carries no such
-signal, so handle its failures yourself with the `try`/`catch` above. Every Sapiom error also
-exposes the status uniformly: `readSapiomCall(err)?.status`, alongside the class's own
-`err.status`.
+When an error from a `ctx.sapiom.*` call escapes your step instead of being caught, it carries facts
+the platform can read: our own code made the call, so it knows whether the failure was transient
+(a 5xx, a rate limit, a request timeout, a connection that never happened) or deterministic, and it
+keeps the status and message on the run's failure reason instead of a generic one. How many
+attempts that earns is platform policy, not a guarantee of this SDK: when you want to control the
+retry yourself, use the explicit `try`/`catch` + `retry()` above.
+
+A raw `fetch` to a third party carries no such facts, and the same `try`/`catch` is not enough on
+its own: it retries every error, including a malformed URL or a bad payload that will fail the same
+way three times. Branch on the error before calling `retry()`.
+
+`readSapiomCall(err)?.status` reads the status of any Sapiom call uniformly, alongside the error
+class's own `err.status`. Both are absent when the call never reached a server.
 
 ## Pause & Resume (Long-Running Dispatched Steps)
 

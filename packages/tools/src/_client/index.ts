@@ -139,14 +139,20 @@ export interface TransportRequestOptions {
  * false and the fact would silently never be recorded. Same reason
  * `readSapiomCall` recognizes the marker structurally.
  *
- * An `AbortError` is a deliberate cancellation, not a failure to connect, and is
- * excluded by construction since it carries its own name.
+ * A `TypeError` alone is not enough: `fetch` uses one for every deterministic
+ * request-construction failure too (a GET with a body, an invalid method, an
+ * abort whose reason happens to be a TypeError). Those carry no `cause`, while a
+ * connection that never happened always hangs the underlying socket error there.
+ * Requiring a cause keeps a deterministic mistake out of the transient bucket,
+ * and erring the other way is safe: a rejection without one records no fact and
+ * simply behaves as it did before this contract existed.
  */
 function isNetworkRejection(error: unknown): error is Error {
   return (
     typeof error === "object" &&
     error !== null &&
-    (error as { name?: unknown }).name === "TypeError"
+    (error as { name?: unknown }).name === "TypeError" &&
+    (error as { cause?: unknown }).cause !== undefined
   );
 }
 
@@ -325,8 +331,10 @@ export class Transport {
       );
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
-      // No response ever existed, so there is no status to record.
-      if (isNetworkRejection(error)) {
+      // No response ever existed, so there is no status to record. An aborted
+      // signal means the caller stopped waiting on purpose, whatever shape the
+      // rejection took.
+      if (init.signal?.aborted !== true && isNetworkRejection(error)) {
         markSapiomCall(error, { network: true, capability: capabilityOf(url) });
       }
       throw error;
