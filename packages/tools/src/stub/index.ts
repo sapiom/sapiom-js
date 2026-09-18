@@ -2021,14 +2021,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       sessions: {
         create: (options?: SessionTimeoutOptions) =>
           Promise.resolve(
-            r("browserAutomation.sessions.create", [options ?? {}], () => ({
-              sessionId: "stub-session",
-              cdpUrl: "ws://stub.local/session/stub-session",
-              expiresAt: "2099-01-01T00:00:00Z",
-              idleTimeoutMinutes: options?.idleTimeoutMinutes ?? 5,
-              maxDurationMinutes: options?.maxDurationMinutes ?? 20,
-              maxDurationSec: (options?.maxDurationMinutes ?? 20) * 60,
-            })) as BrowserSession,
+            r(
+              "browserAutomation.sessions.create",
+              options === undefined ? [] : [options],
+              () => ({
+                sessionId: "stub-session",
+                cdpUrl: "ws://stub.local/session/stub-session",
+                expiresAt: "2099-01-01T00:00:00Z",
+                idleTimeoutMinutes: options?.idleTimeoutMinutes ?? 5,
+                maxDurationMinutes: options?.maxDurationMinutes ?? 20,
+                maxDurationSec: (options?.maxDurationMinutes ?? 20) * 60,
+              }),
+            ) as BrowserSession,
           ),
         createWithIdentity: (input) =>
           Promise.resolve(
