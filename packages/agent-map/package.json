@@ -136,6 +136,10 @@
     "./node/state-paths": {
       "types": "./dist/core/state-paths.d.ts",
       "import": "./dist/core/state-paths.js"
+    },
+    "./host-protocol": {
+      "types": "./dist/shared/host-protocol.d.ts",
+      "import": "./dist/shared/host-protocol.js"
     }
   },
   "files": [

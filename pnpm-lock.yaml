@@ -672,6 +672,9 @@ importers:
       '@sapiom/agent-core':
         specifier: workspace:^
         version: link:../agent-core
+      '@sapiom/agent-map':
+        specifier: workspace:^
+        version: link:../agent-map
       '@sapiom/analytics-core':
         specifier: workspace:^
         version: link:../analytics-core
