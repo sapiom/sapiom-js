@@ -100,6 +100,16 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
   );
   expect((await fs.stat(launchOpts!.mcpConfigFile!)).mode & 0o777).toBe(0o600);
 
+  const hostResponse = await fetch(`${metadata!.url}/host-context`, {
+    headers: { Authorization: `Bearer ${metadata!.bearerToken}` },
+  });
+  expect(hostResponse.status).toBe(200);
+  expect(await hostResponse.json()).toEqual({
+    protocolVersion: 1, host: "sapiom-studio", stateRoot: root,
+    projectId, sessionId: session.id, userId: "user-1", generation: 1,
+    capabilities: ["session-context"],
+  });
+
   const client = new Client({ name: "full-server-wiring-test", version: "1" });
   const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
     requestInit: {
@@ -245,6 +255,9 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     }),
   });
   expect(rejected.status).toBe(401);
+  expect((await fetch(`${metadata!.url}/host-context`, {
+    headers: { Authorization: `Bearer ${metadata!.bearerToken}` },
+  })).status).toBe(401);
 });
 
 it("keeps an evicted descendant session resumable in its durable canonical project after restart", async () => {
@@ -416,6 +429,13 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
     projectId,
     sessionId: created.id,
     userId: "local:machine-1",
+  });
+  const host = await fetch(`${launches[0]!.agentMapMcp!.url}/host-context`, {
+    headers: { Authorization: `Bearer ${launches[0]!.agentMapMcp!.bearerToken}` },
+  });
+  expect(host.status).toBe(200);
+  expect(await host.json()).toMatchObject({
+    ...created.agentMapIdentity, stateRoot: root, generation: 1,
   });
   expect(created.projectBootstrap).toBeUndefined();
 

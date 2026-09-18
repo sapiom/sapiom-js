@@ -3130,6 +3130,24 @@ export const startServer = async (
     buildPlanService,
     agentBriefService,
     subsessionCoordinator,
+    hostContextFor: async (scope) => {
+      const assertScope = () => {
+        const session = sessionManager.get(scope.sessionId);
+        const current = session?.agentMapIdentity;
+        if (!session || session.status === "exited" ||
+          current?.projectId !== scope.projectId || current.userId !== scope.userId ||
+          current.sessionId !== scope.sessionId ||
+          localProjectPrincipal(projectUserId, machineId) !== scope.userId) {
+          throw new AgentMapMcpProjectUnavailableError();
+        }
+        return session;
+      };
+      const session = assertScope();
+      const project = await studioProjectCatalog.resolveIdentityForPath(session.cwd);
+      assertScope();
+      if (project?.projectId !== scope.projectId) throw new AgentMapMcpProjectUnavailableError();
+      return { stateRoot: statePaths.root };
+    },
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
