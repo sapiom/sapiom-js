@@ -30,12 +30,13 @@ Playwright or Puppeteer. Screenshots taken inside a session carry no per-call
 charge — billing settles when you close the session.
 
 ```typescript
-// Option A — withSession (recommended): opens + auto-closes in a finally block.
+// Option A — withSession: opens + attempts close in a finally block.
 const result = await sapiom.browserAutomation.withSession(async (session) => {
   session.cdpUrl; // pass to Playwright's browser.connectOverCDP(...)
-  session.expiresAt; // ISO-8601 max lifetime
+  session.expiresAt; // payment-context expiry, including a settlement buffer
+  session.maxDurationSec; // browser maximum duration in seconds
   session.liveViewUrl; // interactive view of the same browser, for a person to watch or take over
-  session.liveViewMode; // "persistent" (whole session), "single-use" (dies after the first viewer disconnects), or absent
+  session.liveViewMode; // "persistent" (whole session), or absent on older gateways
 
   // session-bound screenshot — sessionId injected automatically:
   const shot = await session.screenshot({ url: "https://example.com" });
@@ -54,22 +55,23 @@ try {
     session.sessionId,
   );
   settlement.settled; // true on success
-  settlement.capturedAmountUsd; // exact amount charged (≤ $1.00)
+  settlement.capturedAmountUsd; // amount captured on successful settlement
 }
 ```
 
-`withSession` is strongly recommended: it guarantees the session is always
-closed — preventing the auto-expiry $1.00 ceiling charge if the session leaks.
+`withSession` attempts to close the session in a `finally` block. It suppresses close errors
+to preserve the callback result or error. Use `sessions.close` directly when your code must
+check settlement success.
 
 **Live view.** `session.liveViewUrl` opens an interactive view of the same browser in any web
 browser, on any device. Use it to hand a step the agent should not do itself — a sign-in, a
 one-time code, a payment confirmation — to a person: they act inside the same session, and your
 code resumes over `cdpUrl` with cookies intact. Anyone holding the link can act in the browser, so
 treat it like a credential: send it to one person over a channel you trust, and close the session
-when the step is done. `session.liveViewMode` reports the lifetime of that link: `"persistent"`
-lasts for the whole session (what current gateways return), `"single-use"` expires after the first
-viewer disconnects; older gateways omit the field. Local Run stub
-sessions do not include `liveViewUrl`.
+when the step is done. Current gateways return `session.liveViewMode: "persistent"`: the link
+lasts for the whole session and can be reopened after a viewer disconnects. Single-use live
+views are not supported. Older gateways omit `liveViewMode`. Local Run stub sessions do not
+include `liveViewUrl`.
 
 ## Sessions with identity
 
@@ -104,7 +106,15 @@ const session = await sapiom.browserAutomation.sessions.create({
 accepts 1–240. Values outside those ranges are rejected by the gateway with HTTP 400. The idle
 timer starts only when all CDP/live-view clients disconnect. Reconnecting resets idle but never
 extends maximum duration, so idle 30 / max 20 still ends at 20 minutes. Always close sessions
-when finished to settle usage early.
+when finished to request settlement of actual usage.
+
+`maxDurationSec` reports the configured browser maximum. `expiresAt` reports the gateway
+payment-context expiry, which includes a settlement buffer. It does not prove the browser is
+still active; the browser can end earlier due to the idle timeout or explicit close.
+
+The gateway must support configurable session timeouts before you use these options. The
+180-minute example above authorizes $3. The default 20-minute duration authorizes $1; see
+[Billing](#billing) for the authorization policy and settlement limits.
 
 ## Screenshot options
 
@@ -167,13 +177,19 @@ try {
 
 ## Billing
 
-| Operation                                         | Charge                                          |
-| ------------------------------------------------- | ----------------------------------------------- |
-| `sessions.create` / `sessions.createWithIdentity` | `upto $1.00` (pre-authorized; settled on close) |
-| `sessions.close`                                  | Settles actual cost (≤ $1.00)                   |
-| `screenshot` (one-shot)                           | `$0.01` per call                                |
-| `screenshot` (in-session)                         | No per-call charge                              |
-| `identities.create`                               | Free                                            |
+| Operation                                         | Charge                                                                                    |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `sessions.create` / `sessions.createWithIdentity` | Authorizes $1 per started hour of the requested maximum duration; $1 by default, up to $4 |
+| `sessions.close`                                  | Requests settlement of actual usage against the authorization                             |
+| `screenshot` (one-shot)                           | `$0.01` per call                                                                          |
+| `screenshot` (in-session)                         | No per-call charge                                                                        |
+| `identities.create`                               | Free                                                                                      |
 
-Sessions auto-expire at the configured maximum duration; if never explicitly closed, billing
-settles at the applicable authorization ceiling. Use `withSession` to guarantee close-on-exit.
+The authorization is `ceil(maxDurationMinutes / 60) × $1`, using 20 minutes when omitted.
+For example, 60 minutes authorizes $1, 61 minutes authorizes $2, and 240 minutes authorizes $4.
+This payment authorization does not impose a provider usage or traffic limit. Proxy usage can
+exceed it, which can cause settlement to fail.
+
+Sessions expire at the configured maximum duration, but expiry does not guarantee payment
+settlement. Always close sessions when finished. `withSession` attempts to close the session;
+use `sessions.close` directly and check `settled` when you must verify settlement success.

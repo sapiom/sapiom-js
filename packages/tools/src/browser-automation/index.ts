@@ -38,10 +38,9 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
 // ----- Types -----
 
 /**
- * Lifetime of a session's `liveViewUrl`. `"single-use"` expires after the first viewer
- * disconnects; `"persistent"` works for as long as the session does.
+ * Lifetime of a session's `liveViewUrl`. `"persistent"` works for as long as the session does.
  */
-export type LiveViewMode = "single-use" | "persistent";
+export type LiveViewMode = "persistent";
 
 /**
  * Session lifetime in integer minutes. Omitted values use the gateway defaults: 5 minutes
@@ -67,10 +66,10 @@ export interface BrowserSession {
    * a one-time code, a payment confirmation. They act inside the same session, and the agent
    * resumes over `cdpUrl` with cookies intact.
    *
-   * The link lifetime depends on `liveViewMode`: `"persistent"` works for as long as the
-   * session does (see `expiresAt` / `maxDurationSec`), while `"single-use"` expires after the
-   * first viewer disconnects; older gateways omit `liveViewMode`. Anyone holding the link can
-   * act in the browser. Treat it like a credential: send it to one
+   * The link works for as long as the session does (see `maxDurationSec`).
+   * Current gateways return `liveViewMode: "persistent"`; older gateways omit the field.
+   * Single-use live views are not supported. Anyone holding the link can act in the browser.
+   * Treat it like a credential: send it to one
    * person over a channel you trust, and close the session when the step is done.
    * Absent from Local Run stub sessions.
    *
@@ -79,7 +78,10 @@ export interface BrowserSession {
   liveViewUrl?: string;
   /** Lifetime the capability applied to `liveViewUrl`; see {@link LiveViewMode}. */
   liveViewMode?: LiveViewMode;
-  /** ISO-8601 timestamp when this session expires. */
+  /**
+   * ISO-8601 expiry of the gateway payment context. This includes a settlement buffer;
+   * it is not a browser liveness deadline. See `maxDurationSec` for the browser limit.
+   */
   expiresAt: string;
   /** Maximum session duration in seconds. */
   maxDurationSec: number;
@@ -381,8 +383,10 @@ function assertUrl(url: unknown): void {
 
 /**
  * Open a new browser session. Returns a `BrowserSession` with a CDP WebSocket
- * you can pass to Playwright or Puppeteer. The session is billed at `upto $1.00`;
- * call `sessions.close` (or use `withSession`) to settle the exact cost.
+ * you can pass to Playwright or Puppeteer. The gateway authorizes $1 per started hour of
+ * the requested maximum duration ($1 by default, up to $4 for 240 minutes). This is a payment
+ * authorization, not a provider usage limit. Call `sessions.close` (or use `withSession`)
+ * when finished to request settlement of actual usage.
  * Failed requests throw {@link BrowserAutomationHttpError}.
  */
 export function createSession(
@@ -478,9 +482,9 @@ export async function createSessionWithIdentity(
 
 /**
  * Close a session and settle its billing. Returns a `SessionSettlement` with
- * `capturedAmountUsd` (the exact amount charged, never more than $1.00) and
- * `creditsUsed`. Always call this or use `withSession` to avoid the auto-expiry
- * $1.00 ceiling. Failed requests throw {@link BrowserAutomationHttpError}.
+ * `capturedAmountUsd` (the amount captured on successful settlement) and `creditsUsed`.
+ * Settlement can fail if usage exceeds the payment authorization. Session expiry does not
+ * guarantee settlement. Failed requests throw {@link BrowserAutomationHttpError}.
  */
 export async function closeSession(
   sessionId: string,
@@ -586,12 +590,12 @@ export async function createIdentity(
 
 /**
  * Open a browser session, invoke `fn` with an `ActiveSession` (which includes a
- * session-bound `screenshot` convenience), and **always** close the session in a
+ * session-bound `screenshot` convenience), and attempt to close the session in a
  * `finally` block — even when `fn` throws.
  *
- * This is the recommended way to run a browser automation task: it prevents the
- * session from leaking at the $1.00 ceiling charge if you forget to close it.
- * Failed requests throw {@link BrowserAutomationHttpError}.
+ * Close errors are suppressed to preserve the callback result or error. Use
+ * `sessions.close` directly when your code must check settlement success.
+ * Other failed requests throw {@link BrowserAutomationHttpError}.
  *
  * @example
  * const result = await sapiom.browserAutomation.withSession(async (session) => {
