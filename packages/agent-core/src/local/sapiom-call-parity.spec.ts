@@ -6,6 +6,8 @@
  * Neither package imports the other's half, so nothing but a test that runs a
  * real capability call through a real serializer catches a drift between them.
  */
+import { runInNewContext } from "node:vm";
+
 import { SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT } from "@sapiom/agent";
 import { serializeStepCompletionError } from "@sapiom/agent-runtime";
 import { createClient, readSapiomCall, SearchHttpError } from "@sapiom/tools";
@@ -85,6 +87,29 @@ describe("a ctx.sapiom.* call that fails", () => {
       capability: "web.search",
     });
     expect(payload).not.toHaveProperty("status");
+  });
+
+  it("reads the facts off the thrown value, not a replacement", async () => {
+    // A cross-realm error fails `instanceof Error`, so any host that normalizes
+    // with `err instanceof Error ? err : new Error(String(err))` must still read
+    // the marker off the original value. The replacement carries nothing.
+    const thrown = runInNewContext(
+      'Object.assign(new Error("Failed to search: 503"), { name: "SearchHttpError", sapiomCall: { version: 1, capability: "web.search", status: 503 } })',
+    ) as Error;
+    expect(thrown).not.toBeInstanceOf(Error);
+
+    const normalized =
+      thrown instanceof Error ? thrown : new Error(String(thrown));
+
+    expect(readSapiomCall(normalized)).toBeUndefined();
+    expect(
+      serializeStepCompletionError(normalized, readSapiomCall(thrown)),
+    ).toMatchObject({
+      code: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.errorCode,
+      retryable: true,
+      status: 503,
+      capability: "web.search",
+    });
   });
 
   it("leaves an error the author threw themselves untouched", async () => {
