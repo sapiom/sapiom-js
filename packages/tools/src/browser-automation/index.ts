@@ -67,8 +67,10 @@ export interface BrowserSession {
    * a one-time code, a payment confirmation. They act inside the same session, and the agent
    * resumes over `cdpUrl` with cookies intact.
    *
-   * The link works for as long as the session does (see `expiresAt` / `maxDurationSec`) and
-   * anyone holding it can act in the browser. Treat it like a credential: send it to one
+   * The link lifetime depends on `liveViewMode`: `"persistent"` works for as long as the
+   * session does (see `expiresAt` / `maxDurationSec`), while `"single-use"` expires after the
+   * first viewer disconnects; older gateways omit `liveViewMode`. Anyone holding the link can
+   * act in the browser. Treat it like a credential: send it to one
    * person over a channel you trust, and close the session when the step is done.
    * Absent from Local Run stub sessions.
    *
