@@ -6,7 +6,7 @@ import type {
   AgentMapVersionId,
   PlanNodeId,
   ProjectMutationOrigin,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   canonicalJson,
   computeAgentMapVersionRecordDigest,

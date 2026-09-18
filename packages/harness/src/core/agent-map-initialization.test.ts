@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DraftRef } from "../shared/agent-map.js";
+import type { DraftRef } from "@sapiom/agent-map";
 import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
 import { AgentMapProposalService } from "./agent-map-proposal-service.js";
 import {

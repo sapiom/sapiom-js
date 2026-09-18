@@ -10,7 +10,7 @@ import type {
   PlanRelationshipId,
   ProposalBatchRequest,
   RelationshipKind,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   canonicalizeAgentMapGraph,
   materializeValidatedMapBatch,

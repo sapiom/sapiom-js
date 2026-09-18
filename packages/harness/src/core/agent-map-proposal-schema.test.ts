@@ -7,7 +7,7 @@ import type {
   MapProposalId,
   ProposalOperationId,
   ProposalBatchResult,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   parseProposalBatchRequest,
   proposalBatchRequestSchema,

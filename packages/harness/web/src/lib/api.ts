@@ -1,4 +1,4 @@
-import type { AgentMapImplementationsResponse } from "@shared/agent-map";
+import type { AgentMapImplementationsResponse } from "@sapiom/agent-map";
 import { parseAgentMapImplementations } from "./agent-map-deployment";
 import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
 /**
@@ -55,7 +55,7 @@ import type {
   StudioProjectId,
   StudioProjectSummary,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 

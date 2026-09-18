@@ -6,7 +6,7 @@ import type {
   StudioProjectSummary,
   StudioCurrentWorkspaceResponse,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 import {
   parseAcceptedProposalDelta as parseSharedAcceptedProposalDelta,
   parseMapChangeProposal,

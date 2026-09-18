@@ -5,7 +5,7 @@ import type {
   ProjectBuildPlanContent,
   ProjectBuildPlanVersion,
 } from "../shared/build-plan.js";
-import type { RecordDigest } from "../shared/agent-map.js";
+import type { RecordDigest } from "@sapiom/agent-map";
 import {
   canonicalDigest,
   canonicalJson,

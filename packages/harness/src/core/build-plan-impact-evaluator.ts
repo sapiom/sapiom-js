@@ -1,4 +1,4 @@
-import type { AgentMapGraph, PlanNodeId } from "../shared/agent-map.js";
+import type { AgentMapGraph, PlanNodeId } from "@sapiom/agent-map";
 import { canonicalDigest, canonicalJson, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
 import type {
   AgentBriefDependencyFingerprint,

@@ -1,4 +1,4 @@
-import type { AgentMapVersion, PlanNode } from "../shared/agent-map.js";
+import type { AgentMapVersion, PlanNode } from "@sapiom/agent-map";
 import {
   canonicalDigest,
   canonicalJson,

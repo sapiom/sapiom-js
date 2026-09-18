@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalProjectError,

@@ -1,4 +1,4 @@
-import type { AgentMapGraph, PlanNodeId, PlanRelationship } from "../shared/agent-map.js";
+import type { AgentMapGraph, PlanNodeId, PlanRelationship } from "@sapiom/agent-map";
 import type {
   BuildPlanDiagnostic,
   BuildPlanDependencyIntent,

@@ -4,7 +4,7 @@ import type {
   AgentMapVersionRef,
   ProjectAgentSession,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { canonicalJson } from "../shared/agent-map-canonical.js";
 import type {
   BuildPlanDiagnostic,

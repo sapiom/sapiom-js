@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlanNode, PlanNodeId } from "../shared/agent-map.js";
+import type { PlanNode, PlanNodeId } from "@sapiom/agent-map";
 import {
   computeProjectPlanningAggregateDigest,
   migrateProjectPlanningAggregate,

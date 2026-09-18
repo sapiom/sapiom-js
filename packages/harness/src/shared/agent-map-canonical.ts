@@ -7,7 +7,7 @@ import type {
   PlanNode,
   PlanRelationship,
   RecordDigest,
-} from "./agent-map.js";
+} from "@sapiom/agent-map";
 
 export const compareCanonicalStrings = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;

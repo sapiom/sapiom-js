@@ -12,7 +12,7 @@ import {
   type MapChangeProposal,
   type MapProposalId,
   type StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { parseProjectAgentActorRef } from "../shared/agent-map-codec.js";
 import { canonicalJson } from "../shared/agent-map-canonical.js";
 import type {

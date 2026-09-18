@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import type { SessionSummary } from "@shared/types";
 import type { WorkspaceKey } from "@shared/workspace-scope";
-import type { StudioProjectId } from "@shared/agent-map";
+import type { StudioProjectId } from "@sapiom/agent-map";
 
 /**
  * One place the user was working. Distinct from past-session "history" (ended

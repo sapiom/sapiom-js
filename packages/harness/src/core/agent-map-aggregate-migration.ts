@@ -4,7 +4,7 @@ import type {
   ProposalOperationId,
   RoleNeutralMapOperationRecord,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   parseAgentMapProposalReceipt,
   parseMapChangeProposal,

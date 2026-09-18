@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { ProjectAgentSession, StudioProjectId } from "../shared/agent-map.js";
+import type { ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
 import { canonicalDigest } from "../shared/agent-map-canonical.js";
 import {
   hasAgentMapControlCharacter,

@@ -50,7 +50,7 @@ import type {
   ProjectBootstrapLifecycleEvent,
   ProjectAgentSession,
   StudioProjectSummary,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   preferredProjectRoot,
   projectRoots,

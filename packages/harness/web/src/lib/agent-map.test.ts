@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StudioProjectSummary } from "@shared/agent-map";
+import type { StudioProjectSummary } from "@sapiom/agent-map";
 
 import {
   mostSpecificStudioScope,

@@ -2,7 +2,7 @@ import type {
   ProjectAgentActorRef,
   ProjectMutationOrigin,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type {
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,

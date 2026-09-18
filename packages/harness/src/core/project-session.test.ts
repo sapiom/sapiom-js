@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentMapWorkspaceState } from "../shared/agent-map.js";
+import type { AgentMapWorkspaceState } from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
 import {
   buildFocusedProjectContext,

@@ -2,7 +2,7 @@ import type {
   AgentMapVersionRef,
   ProjectAgentActorRef,
   ProjectMutationOrigin,
-} from "./agent-map.js";
+} from "@sapiom/agent-map";
 import {
   AGENT_MAP_UUID_V7_PATTERN,
   isAgentMapBoundedText,

@@ -12,7 +12,7 @@ import type {
   ProposalValidationIssue,
   ProposalValidationResult,
   RelationshipKind,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   canonicalizeAgentMapGraph,
   compareCanonicalStrings,

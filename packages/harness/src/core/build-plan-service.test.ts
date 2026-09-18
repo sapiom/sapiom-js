@@ -8,7 +8,7 @@ import type {
   PlanNodeId,
   ProjectAgentSession,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type {
   AgentBriefId,
   AgentBriefScopeKey,

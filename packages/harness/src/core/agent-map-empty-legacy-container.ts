@@ -1,4 +1,4 @@
-import type { StudioProjectId } from "../shared/agent-map.js";
+import type { StudioProjectId } from "@sapiom/agent-map";
 import {
   createEmptyProjectPlanningAggregate,
   parseLegacyWorkspaceState,

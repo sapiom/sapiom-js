@@ -6,7 +6,7 @@ import type {
   AgentMapVersion,
   AgentMapVersionId,
   PlanNodeId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,

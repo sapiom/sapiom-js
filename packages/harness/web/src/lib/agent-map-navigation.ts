@@ -1,4 +1,4 @@
-import type { PlanNodeId, StudioProjectId } from "@shared/agent-map";
+import type { PlanNodeId, StudioProjectId } from "@sapiom/agent-map";
 import { AGENT_MAP_UUID_V7_PATTERN } from "@shared/agent-map-codec";
 import type { WorkflowInfo } from "@shared/types";
 

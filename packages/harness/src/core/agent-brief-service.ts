@@ -1,4 +1,4 @@
-import type { AgentMapVersion, AgentMapVersionRef, ProjectAgentSession, StudioProjectId } from "../shared/agent-map.js";
+import type { AgentMapVersion, AgentMapVersionRef, ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
 import { canonicalDigest, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
 import type {
   AgentBriefRefreshRequest,

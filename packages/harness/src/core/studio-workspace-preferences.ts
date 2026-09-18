@@ -9,7 +9,7 @@ import {
   type StudioWorkspaceAgentSummary,
   type StudioWorkspacePreference,
   type StudioWorkspaceSelection,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { workspaceRelativeLocalKey } from "../shared/workspace-scope.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 

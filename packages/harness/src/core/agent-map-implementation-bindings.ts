@@ -4,7 +4,7 @@ import type {
   AgentMapImplementationsResponse,
   AgentMapVersionId,
   PlanNode,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { AGENT_MAP_UUID_V7_PATTERN } from "../shared/agent-map-codec.js";
 import { planNodeIdSchema } from "./agent-map-proposal-schema.js";
 import {

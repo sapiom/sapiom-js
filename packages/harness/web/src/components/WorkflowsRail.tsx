@@ -22,7 +22,7 @@ import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectSummary,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import type { AuthStartResponse, FsListResponse } from "../lib/api";
 import type { ToastTone } from "../lib/toast";

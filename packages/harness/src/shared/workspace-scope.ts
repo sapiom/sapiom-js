@@ -6,7 +6,7 @@ export interface WorkspaceScopeSummary {
   /** Used only to join the existing workspace-folder projection in AppState. */
   cwd: string;
   /** Durable Agent Map identity joined server-side; distinct from the scope key. */
-  projectId?: import("./agent-map.js").StudioProjectId;
+  projectId?: import("@sapiom/agent-map").StudioProjectId;
 }
 
 interface ParsedWorkspacePath {

@@ -2,7 +2,7 @@ import type {
   AcceptedProposalDelta,
   AgentMapWorkspaceResponse,
   StudioProjectId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import { applyAcceptedProposalDelta } from "./agent-map-projector";
 

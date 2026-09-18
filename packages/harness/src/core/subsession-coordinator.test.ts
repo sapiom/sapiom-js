@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
-import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
+import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "@sapiom/agent-map";
 import {
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,

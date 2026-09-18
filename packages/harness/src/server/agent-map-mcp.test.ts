@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
 import { AgentMapProposalService, AgentMapProposalQuotaError } from "../core/agent-map-proposal-service.js";

@@ -13,7 +13,7 @@ import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-prefere
 import type {
   AgentMapWorkspaceResponse,
   StudioProjectSummary,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { createAgentMapImplementations } from "./agent-map-implementations.js";

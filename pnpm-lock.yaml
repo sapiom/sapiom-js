@@ -133,6 +133,18 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
 
+  packages/agent-map:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.30
+        version: 20.19.43
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(tsx@4.23.0)(yaml@2.9.1)
+
   packages/agent-runtime:
     dependencies:
       '@sapiom/agent':
@@ -388,6 +400,9 @@ importers:
       '@sapiom/agent-core':
         specifier: workspace:^
         version: link:../agent-core
+      '@sapiom/agent-map':
+        specifier: workspace:^
+        version: link:../agent-map
       '@sapiom/analytics-core':
         specifier: workspace:^
         version: link:../analytics-core

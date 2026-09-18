@@ -7,7 +7,7 @@ import {
   type AgentMapWorkspaceResponse,
   type StudioProjectSummary,
   type StudioWorkspaceSelection,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { WorkflowInfo } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
 import { samePath } from "../shared/paths.js";

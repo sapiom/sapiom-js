@@ -11,7 +11,7 @@ import type {
   ProjectAgentSession,
   ProposalBatchRequest,
   ProposalOperationId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   AgentMapProposalQuotaError,
   AgentMapProposalService,

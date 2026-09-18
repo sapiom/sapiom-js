@@ -2,7 +2,7 @@ import type {
   AgentMapVersionRef,
   PlanNodeId,
   StudioProjectId,
-} from "./agent-map.js";
+} from "@sapiom/agent-map";
 import type {
   AgentBriefVersionRef,
   PlanningAssignmentId,

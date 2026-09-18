@@ -5,7 +5,7 @@ import type {
   PlanNode,
   PlanNodeId,
   PlanRelationship,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   canonicalDigest,
   canonicalJson,

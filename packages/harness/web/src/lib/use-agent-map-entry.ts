@@ -4,7 +4,7 @@ import type {
   AgentMapWorkspaceResponse,
   AcceptedProposalDelta,
   StudioProjectId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import { ApiError, errorMessage, type HarnessApi } from "./api";
 import { track } from "./track";

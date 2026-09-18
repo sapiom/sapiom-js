@@ -18,7 +18,7 @@ import {
   type ProposalOperationId,
   type ProposalValidationIssue,
   type StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { canonicalDigest, computeGraphContentDigest } from "../shared/agent-map-canonical.js";
 import { parseProjectAgentActorRef } from "../shared/agent-map-codec.js";
 import {

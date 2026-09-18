@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlanNodeId } from "./agent-map.js";
+import type { PlanNodeId } from "@sapiom/agent-map";
 import {
   canonicalWorkstreamScopes,
   canonicalizeAgentBriefFocusScope,

@@ -15,7 +15,7 @@ import type {
 import type {
   AgentMapVersionId,
   PlanNodeId,
-} from "./agent-map.js";
+} from "@sapiom/agent-map";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,

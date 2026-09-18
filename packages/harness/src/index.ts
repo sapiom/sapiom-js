@@ -14,7 +14,7 @@ export {
   EXECUTION_MODES,
   PLAN_NODE_KINDS,
   RELATIONSHIP_KINDS,
-} from "./shared/agent-map.js";
+} from "@sapiom/agent-map";
 export type {
   AcceptedProposalDelta,
   ExecutionMode,
@@ -45,7 +45,7 @@ export type {
   RelationshipChanges,
   RelationshipKind,
   StudioProjectId,
-} from "./shared/agent-map.js";
+} from "@sapiom/agent-map";
 export {
   canonicalJson,
   canonicalizeAgentMapGraph,

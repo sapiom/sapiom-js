@@ -6,7 +6,7 @@ import {
   RELATIONSHIP_KINDS,
   type DraftRef,
   type ProposalBatchRequest,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,

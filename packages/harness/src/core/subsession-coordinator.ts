@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ProjectAgentSession,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { canonicalDigest } from "../shared/agent-map-canonical.js";
 import {
   agentMapVersionRefsEqual,

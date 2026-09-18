@@ -11,7 +11,7 @@ import type {
   AgentMapImplementationsResponse,
   AgentMapWorkspaceResponse,
   PlanNodeId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 import type { WorkflowInfo } from "@shared/types";
 import type { HarnessApi } from "../lib/api";
 import type { GraphViewportStore } from "../lib/graph-viewport";

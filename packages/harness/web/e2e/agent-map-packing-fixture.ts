@@ -3,7 +3,7 @@ import type {
   MapOperation,
   PlanNodeId,
   PlanRelationshipId,
-} from "../../src/shared/agent-map.js";
+} from "@sapiom/agent-map";
 
 /** Anonymous graph: 34 nodes, 13 edges, 21 components, 17 singleton agents. */
 export function agentMapPackingFixture(

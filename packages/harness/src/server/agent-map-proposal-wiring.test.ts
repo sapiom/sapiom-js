@@ -34,7 +34,7 @@ it("publishes exactly one accepted proposal delta after durable commit", async (
     operations: [
       {
         kind: "add-node" as const,
-        draftRef: "research" as import("../shared/agent-map.js").DraftRef,
+        draftRef: "research" as import("@sapiom/agent-map").DraftRef,
         node: {
           kind: "agent" as const,
           name: "Research",

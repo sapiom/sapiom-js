@@ -7,7 +7,7 @@ import type {
   PlanNodeId,
   ProposalOperationId,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   agentMapVersionRef,
   appendRestoredAgentMapVersion,

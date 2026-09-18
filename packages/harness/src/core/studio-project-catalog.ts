@@ -1,3 +1,5 @@
+import { isStudioProjectId } from "@sapiom/agent-map/project-id";
+export { isStudioProjectId } from "@sapiom/agent-map/project-id";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -8,7 +10,7 @@ import {
   type ProjectRootBindingStatus,
   type StudioProjectId,
   type StudioProjectSummary,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
 import { resolveProjectRootForPath } from "../shared/project-roots.js";
 import { pathComparisonKey } from "../shared/paths.js";
@@ -119,14 +121,6 @@ function isSafeDisplayName(value: unknown): value is string {
   return isSafeText(value) && !value.includes("/") && !value.includes("\\");
 }
 
-export function isStudioProjectId(value: unknown): value is StudioProjectId {
-  return (
-    typeof value === "string" &&
-    /^project_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      value,
-    )
-  );
-}
 
 function isBindingId(value: unknown): value is string {
   return (

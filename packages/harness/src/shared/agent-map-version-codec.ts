@@ -1,4 +1,4 @@
-import type { AgentMapVersion } from "./agent-map.js";
+import type { AgentMapVersion } from "@sapiom/agent-map";
 import {
   AGENT_MAP_UUID_V7_PATTERN,
   isAgentMapBoundedText,

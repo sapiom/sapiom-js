@@ -1,5 +1,5 @@
 import type { JSX } from "react";
-import type { AgentMapWorkspaceResponse, PlanNodeId } from "@shared/agent-map";
+import type { AgentMapWorkspaceResponse, PlanNodeId } from "@sapiom/agent-map";
 
 import {
   agentMapDeploymentLabel,
