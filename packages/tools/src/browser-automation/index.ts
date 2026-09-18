@@ -38,10 +38,23 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
 // ----- Types -----
 
 /**
- * Lifetime of a session's `liveViewUrl`. `"persistent"` means the link works for as long as
- * the session does.
+ * Lifetime of a session's `liveViewUrl`. `"single-use"` expires after the first viewer
+ * disconnects; `"persistent"` works for as long as the session does.
  */
-export type LiveViewMode = "persistent";
+export type LiveViewMode = "single-use" | "persistent";
+
+/**
+ * Session lifetime in integer minutes. Omitted values use the gateway defaults: 5 minutes
+ * idle timeout and 20 minutes maximum duration. Idle timeout accepts 1–60 minutes and max
+ * duration accepts 1–240 minutes; out-of-range values are rejected by the gateway with HTTP
+ * 400. The idle timer starts only after all CDP/live-view clients disconnect. Reconnecting
+ * resets idle but never extends maximum duration. For example, idle 30 / max 20 ends at 20
+ * minutes regardless.
+ */
+export interface SessionTimeoutOptions {
+  idleTimeoutMinutes?: number;
+  maxDurationMinutes?: number;
+}
 
 export interface BrowserSession {
   /** Unique session identifier. */
@@ -68,6 +81,10 @@ export interface BrowserSession {
   expiresAt: string;
   /** Maximum session duration in seconds. */
   maxDurationSec: number;
+  /** Applied idle timeout in minutes, when returned by the gateway. */
+  idleTimeoutMinutes?: number;
+  /** Applied maximum duration in minutes, when returned by the gateway. */
+  maxDurationMinutes?: number;
   /** Additional fields returned by the capability, passed through as-is. */
   [k: string]: unknown;
 }
@@ -163,7 +180,7 @@ export interface Identity {
   [k: string]: unknown;
 }
 
-export interface WithSessionOptions {
+export interface WithSessionOptions extends SessionTimeoutOptions {
   /**
    * When provided, opens the session with the given identity so it starts with
    * a pre-authenticated browser context.
@@ -200,6 +217,10 @@ interface RawBrowserSession {
   expiresAt?: string;
   max_duration_sec?: number;
   maxDurationSec?: number;
+  idle_timeout_minutes?: number;
+  idleTimeoutMinutes?: number;
+  max_duration_minutes?: number;
+  maxDurationMinutes?: number;
   [k: string]: unknown;
 }
 
@@ -244,6 +265,10 @@ function mapBrowserSession(raw: RawBrowserSession): BrowserSession {
     expiresAt,
     max_duration_sec,
     maxDurationSec,
+    idle_timeout_minutes,
+    idleTimeoutMinutes,
+    max_duration_minutes,
+    maxDurationMinutes,
     ...rest
   } = raw;
   const resolvedLiveViewUrl = liveViewUrl ?? live_view_url;
@@ -259,6 +284,12 @@ function mapBrowserSession(raw: RawBrowserSession): BrowserSession {
     }),
     expiresAt: (expiresAt ?? expires_at ?? "") as string,
     maxDurationSec: (maxDurationSec ?? max_duration_sec ?? 0) as number,
+    ...((idleTimeoutMinutes ?? idle_timeout_minutes) !== undefined && {
+      idleTimeoutMinutes: idleTimeoutMinutes ?? idle_timeout_minutes,
+    }),
+    ...((maxDurationMinutes ?? max_duration_minutes) !== undefined && {
+      maxDurationMinutes: maxDurationMinutes ?? max_duration_minutes,
+    }),
     ...rest,
   };
 }
@@ -352,18 +383,51 @@ function assertUrl(url: unknown): void {
  * call `sessions.close` (or use `withSession`) to settle the exact cost.
  * Failed requests throw {@link BrowserAutomationHttpError}.
  */
+export function createSession(
+  options?: SessionTimeoutOptions,
+  transport?: Transport,
+  baseUrl?: string,
+): Promise<BrowserSession>;
+export function createSession(
+  transport: Transport,
+  baseUrl?: string,
+): Promise<BrowserSession>;
 export async function createSession(
-  transport: Transport = defaultTransport(),
+  optionsOrTransport?: SessionTimeoutOptions | Transport,
+  transportOrBaseUrl?: Transport | string,
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<BrowserSession> {
+  const isTransport = (value: unknown): value is Transport =>
+    typeof value === "object" && value !== null && "fetch" in value;
+  const transport = isTransport(optionsOrTransport)
+    ? optionsOrTransport
+    : isTransport(transportOrBaseUrl)
+      ? transportOrBaseUrl
+      : defaultTransport();
+  const resolvedBaseUrl = isTransport(optionsOrTransport)
+    ? typeof transportOrBaseUrl === "string"
+      ? transportOrBaseUrl
+      : DEFAULT_BASE_URL
+    : baseUrl;
+  const options = isTransport(optionsOrTransport)
+    ? undefined
+    : optionsOrTransport;
+  const body = {
+    ...(options?.idleTimeoutMinutes !== undefined && {
+      idleTimeoutMinutes: options.idleTimeoutMinutes,
+    }),
+    ...(options?.maxDurationMinutes !== undefined && {
+      maxDurationMinutes: options.maxDurationMinutes,
+    }),
+  };
   const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/sessions`, {
+    await transport.fetch(`${resolvedBaseUrl}/v1/sessions`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     }),
     "Failed to create session",
   );
@@ -376,7 +440,7 @@ export async function createSession(
  * {@link BrowserAutomationHttpError}.
  */
 export async function createSessionWithIdentity(
-  input: { identityId: string },
+  input: { identityId: string } & SessionTimeoutOptions,
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<BrowserSession> {
@@ -389,7 +453,15 @@ export async function createSessionWithIdentity(
         "content-type": "application/json",
         accept: "application/json",
       },
-      body: JSON.stringify({ identityId: input.identityId }),
+      body: JSON.stringify({
+        identityId: input.identityId,
+        ...(input.idleTimeoutMinutes !== undefined && {
+          idleTimeoutMinutes: input.idleTimeoutMinutes,
+        }),
+        ...(input.maxDurationMinutes !== undefined && {
+          maxDurationMinutes: input.maxDurationMinutes,
+        }),
+      }),
     }),
     "Failed to create session with identity",
   );
@@ -527,11 +599,15 @@ export async function withSession<T>(
 ): Promise<T> {
   const browserSession = opts?.identityId
     ? await createSessionWithIdentity(
-        { identityId: opts.identityId },
+        {
+          identityId: opts.identityId,
+          idleTimeoutMinutes: opts.idleTimeoutMinutes,
+          maxDurationMinutes: opts.maxDurationMinutes,
+        },
         transport,
         baseUrl,
       )
-    : await createSession(transport, baseUrl);
+    : await createSession(opts, transport, baseUrl);
 
   const activeSession: ActiveSession = {
     ...browserSession,

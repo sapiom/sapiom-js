@@ -12,8 +12,8 @@ const sapiom = createClient({ apiKey: process.env.SAPIOM_API_KEY });
 const shot = await sapiom.browserAutomation.screenshot({
   url: "https://example.com",
 });
-shot.url;        // absolute hosted image URL
-shot.expiresAt;  // ISO-8601 expiry (~1 hour)
+shot.url; // absolute hosted image URL
+shot.expiresAt; // ISO-8601 expiry (~1 hour)
 ```
 
 Ambient import works too:
@@ -32,10 +32,10 @@ charge — billing settles when you close the session.
 ```typescript
 // Option A — withSession (recommended): opens + auto-closes in a finally block.
 const result = await sapiom.browserAutomation.withSession(async (session) => {
-  session.cdpUrl;          // pass to Playwright's browser.connectOverCDP(...)
-  session.expiresAt;       // ISO-8601 max lifetime
-  session.liveViewUrl;     // interactive view of the same browser, for a person to watch or take over
-  session.liveViewMode;    // lifetime of that link ("persistent": lasts for the whole session)
+  session.cdpUrl; // pass to Playwright's browser.connectOverCDP(...)
+  session.expiresAt; // ISO-8601 max lifetime
+  session.liveViewUrl; // interactive view of the same browser, for a person to watch or take over
+  session.liveViewMode; // lifetime of that link ("single-use" or "persistent")
 
   // session-bound screenshot — sessionId injected automatically:
   const shot = await session.screenshot({ url: "https://example.com" });
@@ -47,11 +47,13 @@ const session = await sapiom.browserAutomation.sessions.create();
 try {
   const shot = await sapiom.browserAutomation.screenshot({
     url: "https://example.com",
-    sessionId: session.sessionId,  // no per-call charge
+    sessionId: session.sessionId, // no per-call charge
   });
 } finally {
-  const settlement = await sapiom.browserAutomation.sessions.close(session.sessionId);
-  settlement.settled;           // true on success
+  const settlement = await sapiom.browserAutomation.sessions.close(
+    session.sessionId,
+  );
+  settlement.settled; // true on success
   settlement.capturedAmountUsd; // exact amount charged (≤ $1.00)
 }
 ```
@@ -76,24 +78,44 @@ When you have a stored identity, open a session pre-authenticated:
 const result = await sapiom.browserAutomation.withSession(
   async (session) => {
     // browser starts logged in to the identity's site
-    const shot = await session.screenshot({ url: "https://app.example.com/dashboard" });
+    const shot = await session.screenshot({
+      url: "https://app.example.com/dashboard",
+    });
     return shot;
   },
   { identityId: "id_abc123" },
 );
 ```
 
+## Session lifetime
+
+Pass integer-minute timeout options to `sessions.create`, `sessions.createWithIdentity`, or
+`withSession`:
+
+```typescript
+const session = await sapiom.browserAutomation.sessions.create({
+  idleTimeoutMinutes: 30,
+  maxDurationMinutes: 180,
+});
+```
+
+`idleTimeoutMinutes` defaults to 5 and accepts 1–60; `maxDurationMinutes` defaults to 20 and
+accepts 1–240. Values outside those ranges are rejected by the gateway with HTTP 400. The idle
+timer starts only when all CDP/live-view clients disconnect. Reconnecting resets idle but never
+extends maximum duration, so idle 30 / max 20 still ends at 20 minutes. Always close sessions
+when finished to settle usage early.
+
 ## Screenshot options
 
 ```typescript
 const shot = await sapiom.browserAutomation.screenshot({
   url: "https://example.com",
-  width: 1280,           // viewport width in pixels
-  height: 800,           // viewport height in pixels
-  fullPage: true,        // capture full scrollable height
-  format: "jpeg",        // "png" (default) or "jpeg"
-  imageQuality: 85,      // JPEG quality 0–100 (only for format: "jpeg")
-  waitMs: 1000,          // wait 1 s after load before capturing
+  width: 1280, // viewport width in pixels
+  height: 800, // viewport height in pixels
+  fullPage: true, // capture full scrollable height
+  format: "jpeg", // "png" (default) or "jpeg"
+  imageQuality: 85, // JPEG quality 0–100 (only for format: "jpeg")
+  waitMs: 1000, // wait 1 s after load before capturing
 });
 ```
 
@@ -103,16 +125,20 @@ Store credentials once; reuse them across sessions:
 
 ```typescript
 const identity = await sapiom.browserAutomation.identities.create({
-  source: "https://app.example.com/login",   // login page URL (required)
-  name: "My App Account",                    // optional label
+  source: "https://app.example.com/login", // login page URL (required)
+  name: "My App Account", // optional label
   credentials: [
-    { type: "username_password", username: "user@example.com", password: "secret" },
+    {
+      type: "username_password",
+      username: "user@example.com",
+      password: "secret",
+    },
   ],
   shouldCache: true,
 });
 
-identity.id;      // pass as identityId to sessions.createWithIdentity / withSession
-identity.status;  // lifecycle status
+identity.id; // pass as identityId to sessions.createWithIdentity / withSession
+identity.status; // lifecycle status
 ```
 
 Supported credential types: `"profile"`, `"username_password"`, `"authenticator"`,
@@ -140,13 +166,13 @@ try {
 
 ## Billing
 
-| Operation | Charge |
-|---|---|
+| Operation                                         | Charge                                          |
+| ------------------------------------------------- | ----------------------------------------------- |
 | `sessions.create` / `sessions.createWithIdentity` | `upto $1.00` (pre-authorized; settled on close) |
-| `sessions.close` | Settles actual cost (≤ $1.00) |
-| `screenshot` (one-shot) | `$0.01` per call |
-| `screenshot` (in-session) | No per-call charge |
-| `identities.create` | Free |
+| `sessions.close`                                  | Settles actual cost (≤ $1.00)                   |
+| `screenshot` (one-shot)                           | `$0.01` per call                                |
+| `screenshot` (in-session)                         | No per-call charge                              |
+| `identities.create`                               | Free                                            |
 
-Sessions auto-expire after ~20 minutes; if never explicitly closed, billing
-settles at the $1.00 ceiling. Use `withSession` to guarantee close-on-exit.
+Sessions auto-expire at the configured maximum duration; if never explicitly closed, billing
+settles at the applicable authorization ceiling. Use `withSession` to guarantee close-on-exit.

@@ -100,6 +100,33 @@ describe("browserAutomation.sessions.create()", () => {
     expect(result.liveViewMode).toBe("persistent");
   });
 
+  it("sends custom session timeout options", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          sessionId: "sess-timeout",
+          cdpUrl: "ws://cdp.example.com/timeout",
+          expiresAt: "2099-01-01T00:00:00Z",
+          maxDurationSec: 10800,
+          idleTimeoutMinutes: 30,
+          maxDurationMinutes: 180,
+        }),
+    ]);
+
+    const result = await browserAutomation.createSession(
+      { idleTimeoutMinutes: 30, maxDurationMinutes: 180 },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      idleTimeoutMinutes: 30,
+      maxDurationMinutes: 180,
+    });
+    expect(result.idleTimeoutMinutes).toBe(30);
+    expect(result.maxDurationMinutes).toBe(180);
+  });
+
   it("maps snake_case live_view_mode to liveViewMode", async () => {
     const { transport } = makeTransport([
       () =>
@@ -140,6 +167,8 @@ describe("browserAutomation.sessions.create()", () => {
           live_view_url: "https://live.example.com/snake",
           expires_at: "2099-01-01T00:00:00Z",
           max_duration_sec: 600,
+          idle_timeout_minutes: 12,
+          max_duration_minutes: 90,
         }),
     ]);
 
@@ -150,6 +179,8 @@ describe("browserAutomation.sessions.create()", () => {
     expect(result.liveViewUrl).toBe("https://live.example.com/snake");
     expect(result.expiresAt).toBe("2099-01-01T00:00:00Z");
     expect(result.maxDurationSec).toBe(600);
+    expect(result.idleTimeoutMinutes).toBe(12);
+    expect(result.maxDurationMinutes).toBe(90);
   });
 
   it("omits liveViewUrl when not in the response", async () => {
@@ -232,6 +263,30 @@ describe("browserAutomation.sessions.createWithIdentity()", () => {
     expect(result.sessionId).toBe("sess-ident");
   });
 
+  it("sends custom timeout options with identity sessions", async () => {
+    const { transport, calls } = makeTransport([
+      () =>
+        jsonResponse({
+          sessionId: "sess-ident-timeout",
+          cdpUrl: "ws://cdp.example.com/ident-timeout",
+          expiresAt: "2099-01-01T00:00:00Z",
+          maxDurationSec: 10800,
+        }),
+    ]);
+
+    await browserAutomation.createSessionWithIdentity(
+      { identityId: "id-abc", idleTimeoutMinutes: 30, maxDurationMinutes: 180 },
+      transport,
+      BASE,
+    );
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      identityId: "id-abc",
+      idleTimeoutMinutes: 30,
+      maxDurationMinutes: 180,
+    });
+  });
+
   it("throws BrowserAutomationHttpError (before fetch) when identityId is empty", async () => {
     const { transport, calls } = makeTransport([() => jsonResponse({})]);
 
@@ -241,7 +296,10 @@ describe("browserAutomation.sessions.createWithIdentity()", () => {
         transport,
         BASE,
       ),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
     expect(calls.length).toBe(0);
   });
 
@@ -254,13 +312,17 @@ describe("browserAutomation.sessions.createWithIdentity()", () => {
         transport,
         BASE,
       ),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
     expect(calls.length).toBe(0);
   });
 
   it("throws BrowserAutomationHttpError on a non-2xx response", async () => {
     const { transport } = makeTransport([
-      () => new Response(JSON.stringify({ message: "not found" }), { status: 404 }),
+      () =>
+        new Response(JSON.stringify({ message: "not found" }), { status: 404 }),
     ]);
 
     await expect(
@@ -269,7 +331,10 @@ describe("browserAutomation.sessions.createWithIdentity()", () => {
         transport,
         BASE,
       ),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 404 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 404,
+    });
   });
 });
 
@@ -334,7 +399,9 @@ describe("browserAutomation.sessions.close()", () => {
     expect(result.sessionId).toBe("sess-snake");
     expect(result.capturedAmountUsd).toBe("0.10");
     expect(result.creditsUsed).toBe(10);
-    expect((result as Record<string, unknown>)["captured_amount_usd"]).toBeUndefined();
+    expect(
+      (result as Record<string, unknown>)["captured_amount_usd"],
+    ).toBeUndefined();
     expect((result as Record<string, unknown>)["credits_used"]).toBeUndefined();
   });
 
@@ -362,7 +429,10 @@ describe("browserAutomation.sessions.close()", () => {
 
     await expect(
       browserAutomation.closeSession("no-such-session", transport, BASE),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 404 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 404,
+    });
   });
 });
 
@@ -419,7 +489,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
   it("maps fullPage → scroll_all_content + capture_full_height in the request body", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -437,7 +510,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
   it("does NOT send scroll_all_content when fullPage is false/omitted", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -454,7 +530,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
   it("maps imageQuality → image_quality in the request body", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -471,7 +550,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
   it("maps waitMs → wait in the request body", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -488,7 +570,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
   it("passes width, height, format through as-is", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -511,7 +596,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
   it("spreads params FIRST so they cannot clobber the url field", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -533,7 +621,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
 
     await expect(
       browserAutomation.screenshot({}, transport, BASE),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
     expect(calls.length).toBe(0);
   });
 
@@ -542,7 +633,10 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
 
     await expect(
       browserAutomation.screenshot({ url: "" }, transport, BASE),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
     expect(calls.length).toBe(0);
   });
 
@@ -553,8 +647,15 @@ describe("browserAutomation.screenshot() — one-shot mode", () => {
     ]);
 
     await expect(
-      browserAutomation.screenshot({ url: "https://example.com" }, transport, BASE),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+      browserAutomation.screenshot(
+        { url: "https://example.com" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
   });
 });
 
@@ -583,7 +684,10 @@ describe("browserAutomation.screenshot() — session mode", () => {
   it("sends both sessionId and url when both are provided", async () => {
     const { transport, calls } = makeTransport([
       () =>
-        jsonResponse({ url: "/v1/tools/screenshots/abc.png", expiresAt: "2099-01-01T00:00:00Z" }),
+        jsonResponse({
+          url: "/v1/tools/screenshots/abc.png",
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
     ]);
 
     await browserAutomation.screenshot(
@@ -693,7 +797,10 @@ describe("browserAutomation.identities.create()", () => {
         transport,
         BASE,
       ),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
     expect(calls.length).toBe(0);
   });
 
@@ -706,14 +813,19 @@ describe("browserAutomation.identities.create()", () => {
         transport,
         BASE,
       ),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
     expect(calls.length).toBe(0);
   });
 
   it("throws BrowserAutomationHttpError on a non-2xx response", async () => {
     const { transport } = makeTransport([
       () =>
-        new Response(JSON.stringify({ message: "bad request" }), { status: 400 }),
+        new Response(JSON.stringify({ message: "bad request" }), {
+          status: 400,
+        }),
     ]);
 
     await expect(
@@ -725,7 +837,10 @@ describe("browserAutomation.identities.create()", () => {
         transport,
         BASE,
       ),
-    ).rejects.toMatchObject({ name: "BrowserAutomationHttpError", status: 400 });
+    ).rejects.toMatchObject({
+      name: "BrowserAutomationHttpError",
+      status: 400,
+    });
   });
 });
 
@@ -757,7 +872,11 @@ describe("browserAutomation.withSession()", () => {
         });
       }
       if (url.includes("/v1/sessions/") && init.method === "DELETE") {
-        return jsonResponse({ sessionId, settled: true, capturedAmountUsd: "0.05" });
+        return jsonResponse({
+          sessionId,
+          settled: true,
+          capturedAmountUsd: "0.05",
+        });
       }
       if (url.endsWith("/v1/tools/screenshot") && init.method === "POST") {
         return jsonResponse({
@@ -790,8 +909,36 @@ describe("browserAutomation.withSession()", () => {
 
     expect(result).toBe("done");
     // open + close
-    expect(calls.some((c) => c.url.endsWith("/v1/sessions") && c.init.method === "POST")).toBe(true);
-    expect(calls.some((c) => c.url.includes("/v1/sessions/") && c.init.method === "DELETE")).toBe(true);
+    expect(
+      calls.some(
+        (c) => c.url.endsWith("/v1/sessions") && c.init.method === "POST",
+      ),
+    ).toBe(true);
+    expect(
+      calls.some(
+        (c) => c.url.includes("/v1/sessions/") && c.init.method === "DELETE",
+      ),
+    ).toBe(true);
+  });
+
+  it("forwards timeout options to session creation", async () => {
+    const { transport, calls } = makeSessionTransport("sess-ws-timeout");
+
+    await browserAutomation.withSession(
+      async () => "done",
+      { idleTimeoutMinutes: 30, maxDurationMinutes: 180 },
+      transport,
+      BASE,
+    );
+
+    const openCall = calls.find(
+      (call) =>
+        call.url.endsWith("/v1/sessions") && call.init.method === "POST",
+    );
+    expect(JSON.parse(openCall!.init.body as string)).toEqual({
+      idleTimeoutMinutes: 30,
+      maxDurationMinutes: 180,
+    });
   });
 
   it("closes the session even when fn throws", async () => {
@@ -809,7 +956,13 @@ describe("browserAutomation.withSession()", () => {
     ).rejects.toThrow("step failed");
 
     // close was still called
-    expect(calls.some((c) => c.url.includes("/v1/sessions/sess-ws-throw") && c.init.method === "DELETE")).toBe(true);
+    expect(
+      calls.some(
+        (c) =>
+          c.url.includes("/v1/sessions/sess-ws-throw") &&
+          c.init.method === "DELETE",
+      ),
+    ).toBe(true);
   });
 
   it("session-bound screenshot injects sessionId automatically", async () => {
@@ -960,7 +1113,9 @@ describe("browserAutomation — client wiring + credential", () => {
 
     const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
     await sapiom.browserAutomation.sessions.create();
-    await sapiom.browserAutomation.sessions.createWithIdentity({ identityId: "id-1" });
+    await sapiom.browserAutomation.sessions.createWithIdentity({
+      identityId: "id-1",
+    });
     await sapiom.browserAutomation.sessions.close("s");
     await sapiom.browserAutomation.screenshot({ url: "https://example.com" });
     await sapiom.browserAutomation.identities.create({
@@ -974,7 +1129,9 @@ describe("browserAutomation — client wiring + credential", () => {
     }
 
     expect(calls.some((c) => c.url.includes("/v1/sessions"))).toBe(true);
-    expect(calls.some((c) => c.url.includes("/v1/tools/screenshot"))).toBe(true);
+    expect(calls.some((c) => c.url.includes("/v1/tools/screenshot"))).toBe(
+      true,
+    );
     expect(calls.some((c) => c.url.includes("/v1/identities"))).toBe(true);
   });
 
