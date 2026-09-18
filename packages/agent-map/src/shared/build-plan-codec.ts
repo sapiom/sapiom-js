@@ -2,13 +2,13 @@ import type {
   AgentMapVersionRef,
   ProjectAgentActorRef,
   ProjectMutationOrigin,
-} from "@sapiom/agent-map";
+} from "./agent-map.js";
 import {
   AGENT_MAP_UUID_V7_PATTERN,
   isAgentMapBoundedText,
   parseProjectAgentActorRef,
   parseProjectMutationOrigin,
-} from "@sapiom/agent-map/codec";
+} from "./agent-map-codec.js";
 import {
   BUILD_PLAN_SCHEMA_VERSION,
   type AgentBriefFocusScope,

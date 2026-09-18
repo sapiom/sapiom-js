@@ -14,7 +14,7 @@ import type {
   ProjectBuildPlanId,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import type {
   AnalyticsEvent,
   HarnessAdapter,
@@ -24,9 +24,9 @@ import type { BuildPlanStore } from "./build-plan-store.js";
 import {
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 import { compileCanonicalWorkstreamBriefs } from "./agent-brief-compiler.js";
-import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
+import { createEmptyProjectPlanningAggregate } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import type { EventReader } from "./collector/store.js";
 import { SubsessionBindingMismatchError } from "./errors.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";

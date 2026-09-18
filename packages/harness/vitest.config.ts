@@ -28,7 +28,6 @@ export default defineConfig({
       "@shared/workspace-scope": fileURLToPath(
         new URL("src/shared/workspace-scope.ts", import.meta.url),
       ),
-      "@shared/agent-map-initialization": fileURLToPath(new URL("src/shared/agent-map-initialization.ts", import.meta.url)),
       "@shared/agent-name": fileURLToPath(
         new URL("src/shared/agent-name.ts", import.meta.url),
       ),

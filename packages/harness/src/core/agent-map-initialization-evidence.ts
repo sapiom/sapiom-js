@@ -11,7 +11,7 @@ import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,
 } from "./canvas-interconnections.js";
-import { AgentMapInitializationFailure } from "./agent-map-initialization-record.js";
+import { AgentMapInitializationFailure } from "@sapiom/agent-map/node/agent-map-initialization-record";
 import { parseProposalBatchRequest } from "@sapiom/agent-map/schema";
 import { RELATIONSHIP_ENDPOINT_MATRIX } from "@sapiom/agent-map/validation";
 

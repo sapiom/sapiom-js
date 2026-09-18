@@ -7,12 +7,12 @@ import {
   AgentMapImplementationBindings,
   AgentMapBindingError,
   type ImplementationInventory,
-} from "./agent-map-implementation-bindings.js";
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+} from "@sapiom/agent-map/node/agent-map-implementation-bindings";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import {
   AgentMapProposalService,
   UuidV7AgentMapIdAllocator,
-} from "./agent-map-proposal-service.js";
+} from "@sapiom/agent-map/node/agent-map-proposal-service";
 import {
   restoreAgentMapVersion,
   agentMapVersionRef,

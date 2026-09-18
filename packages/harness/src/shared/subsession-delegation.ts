@@ -7,7 +7,7 @@ import type {
   AgentBriefVersionRef,
   PlanningAssignmentId,
   ProjectBuildPlanVersionRef,
-} from "./build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 
 export const PROJECT_SUBSESSION_SCHEMA_VERSION = 1 as const;
 export const SUBSESSION_COORDINATOR_STORAGE_SCHEMA_VERSION = 1 as const;

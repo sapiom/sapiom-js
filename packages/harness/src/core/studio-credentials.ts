@@ -6,7 +6,7 @@ import {
   type ResolvedEnvironment,
   type StudioCredentials,
 } from "@sapiom/mcp/auth";
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 
 export class StudioCredentialRefreshError extends Error {
   constructor(

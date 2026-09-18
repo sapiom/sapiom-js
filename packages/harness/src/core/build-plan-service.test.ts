@@ -17,16 +17,16 @@ import type {
   AgentBriefVersionId,
   ProjectBuildPlanVersionId,
   ProjectBuildPlanVersionRef,
-} from "../shared/build-plan.js";
-import { parseProjectBuildPlanVersion } from "../shared/build-plan-codec.js";
-import { AgentMapProposalService } from "./agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+} from "@sapiom/agent-map/build-plan";
+import { parseProjectBuildPlanVersion } from "@sapiom/agent-map/node/build-plan-codec";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { BuildPlanService } from "./build-plan-service.js";
 import { appendRestoredBuildPlanVersion, BuildPlanStore } from "./build-plan-store.js";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 
 const projectId = "project_018f0000-0000-4000-8000-000000000001" as StudioProjectId;
 const identity = (sessionId = "session-plan"): ProjectAgentSession => ({ projectId, userId: "user-1", sessionId });

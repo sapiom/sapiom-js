@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
 import { TaskManager } from "../core/task-manager.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string | undefined;

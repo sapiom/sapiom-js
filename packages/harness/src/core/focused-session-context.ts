@@ -6,14 +6,14 @@ import {
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
 } from "@sapiom/agent-map/node/canonical";
-import type { AgentBriefVersion, BuildPlanDiagnostic, ProjectBuildPlanVersion } from "../shared/build-plan.js";
-import { agentMapVersionRefsEqual, projectBuildPlanVersionRefsEqual } from "../shared/build-plan.js";
+import type { AgentBriefVersion, BuildPlanDiagnostic, ProjectBuildPlanVersion } from "@sapiom/agent-map/build-plan";
+import { agentMapVersionRefsEqual, projectBuildPlanVersionRefsEqual } from "@sapiom/agent-map/build-plan";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 
 export const FOCUSED_SESSION_CONTEXT_MAX_BYTES = 128_000;
 export const FOCUSED_SESSION_CONTEXT_MAX_LIST_LENGTH = 256;

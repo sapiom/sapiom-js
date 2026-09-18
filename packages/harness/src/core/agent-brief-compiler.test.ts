@@ -19,14 +19,14 @@ import type {
   ProjectBuildPlanId,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
-} from "../shared/build-plan.js";
-import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
+} from "@sapiom/agent-map/build-plan";
+import { parseAgentBriefVersion } from "@sapiom/agent-map/node/build-plan-codec";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 import {
   compileCanonicalWorkstreamBriefs,
   projectFocusedBriefs,

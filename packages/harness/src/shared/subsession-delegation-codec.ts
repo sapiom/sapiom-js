@@ -9,7 +9,7 @@ import {
   parseAgentBriefVersionRef,
   parseAgentMapVersionRef,
   parseProjectBuildPlanVersionRef,
-} from "./build-plan-codec.js";
+} from "@sapiom/agent-map/node/build-plan-codec";
 import {
   PROJECT_SUBSESSION_DELEGATION_LIMIT,
   PROJECT_SUBSESSION_KEY_BYTES,

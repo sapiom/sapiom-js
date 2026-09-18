@@ -135,6 +135,9 @@ importers:
 
   packages/agent-map:
     dependencies:
+      uuid:
+        specifier: ^10.0.0
+        version: 10.0.0
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -142,6 +145,9 @@ importers:
       '@types/node':
         specifier: ^20.11.30
         version: 20.19.43
+      '@types/uuid':
+        specifier: ^10.0.0
+        version: 10.0.0
       typescript:
         specifier: ~5.9.3
         version: 5.9.3

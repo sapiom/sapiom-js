@@ -14,13 +14,13 @@ import { samePath } from "../shared/paths.js";
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
-} from "../core/agent-map-workspace-store.js";
+} from "@sapiom/agent-map/node/agent-map-workspace-store";
 import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
 } from "../core/studio-project-catalog.js";
 import { canonicalGraphPath } from "../core/canonical-graph-path.js";
-import { AgentMapBindingError, type AgentMapImplementationBindings } from "../core/agent-map-implementation-bindings.js";
+import { AgentMapBindingError, type AgentMapImplementationBindings } from "@sapiom/agent-map/node/agent-map-implementation-bindings";
 import { createAgentMapImplementations } from "./agent-map-implementations.js";
 import {
   StudioWorkspacePreferenceStore,

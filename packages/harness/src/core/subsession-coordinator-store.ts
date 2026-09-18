@@ -31,7 +31,7 @@ import {
   type SubsessionKickoffDelivery,
   type SubsessionProjectionDigest,
 } from "../shared/subsession-delegation.js";
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 
 export const SUBSESSION_COORDINATOR_BINDING_LIMIT = 8_192;

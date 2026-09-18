@@ -5,8 +5,8 @@ import type {
   AgentMapVersion,
   PlanNodeId,
   StudioProjectId,
-} from "@sapiom/agent-map";
-import { canonicalDigest, compareCanonicalStrings } from "@sapiom/agent-map/node/canonical";
+} from "./agent-map.js";
+import { canonicalDigest, compareCanonicalStrings } from "./agent-map-canonical.js";
 import type {
   AgentBriefDependencyFingerprint,
   AgentBriefDisposition,

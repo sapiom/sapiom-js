@@ -3,7 +3,7 @@ import { canonicalGraphPath } from "../core/canonical-graph-path.js";
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
-import { hasAuthoredAgentMap } from "../core/agent-map-initialization-record.js";
+import { hasAuthoredAgentMap } from "@sapiom/agent-map/node/agent-map-initialization-record";
 /**
  * Harness server — integration point for every workstream.
  *
@@ -168,8 +168,8 @@ import {
 import { createRestRouter } from "./rest.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
 import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,

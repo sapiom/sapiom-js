@@ -4,17 +4,17 @@ import type {
   ProposalOperationId,
   RoleNeutralMapOperationRecord,
   StudioProjectId,
-} from "@sapiom/agent-map";
+} from "../shared/agent-map.js";
 import {
   parseAgentMapProposalReceipt,
   parseMapChangeProposal,
   parseMapOperation,
   parseProjectAgentActorRef,
   type PersistedAgentMapProposalReceipt,
-} from "@sapiom/agent-map/codec";
+} from "../shared/agent-map-codec.js";
 import { parseLegacyE2ProposalActor } from "../shared/agent-map-legacy-migration.js";
-import { parseAgentMapVersion } from "@sapiom/agent-map/node/version-codec";
-import { canonicalDigest, canonicalJson } from "@sapiom/agent-map/node/canonical";
+import { parseAgentMapVersion } from "../shared/agent-map-version-codec.js";
+import { canonicalDigest, canonicalJson } from "../shared/agent-map-canonical.js";
 import type {
   AgentBriefVersion,
   AgentBriefHistoryPointer,
@@ -41,9 +41,9 @@ import {
   createAgentMapVersion,
   deterministicVersionId,
   validateAgentMapVersionHistory,
-} from "@sapiom/agent-map/node/version";
-import { derivePersistedMapOperationTouchSet } from "@sapiom/agent-map/validation";
-import { isStudioProjectId } from "./studio-project-catalog.js";
+} from "./agent-map-version.js";
+import { derivePersistedMapOperationTouchSet } from "./agent-map-proposal-validator.js";
+import { isStudioProjectId } from "../shared/project-id.js";
 
 export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = PROJECT_PLANNING_STORAGE_SCHEMA_VERSION;
 export const AGENT_MAP_OPERATION_HISTORY_LIMIT = 65_536;

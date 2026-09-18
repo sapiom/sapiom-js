@@ -5,8 +5,8 @@ import { expect, it } from "vitest";
 
 import type { AcceptedProposalDelta, BusMessage } from "../index.js";
 import { EventBus } from "../core/event-bus.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 
 it("publishes exactly one accepted proposal delta after durable commit", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-map-wiring-"));

@@ -1,5 +1,5 @@
 import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,

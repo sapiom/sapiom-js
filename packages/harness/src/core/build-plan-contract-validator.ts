@@ -3,7 +3,7 @@ import type {
   BuildPlanDiagnostic,
   BuildPlanDependencyIntent,
   ProjectBuildPlanContent,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 
 export const BUILD_PLAN_DIAGNOSTIC_LIMIT = 64;
 

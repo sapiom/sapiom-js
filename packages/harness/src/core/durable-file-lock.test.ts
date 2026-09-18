@@ -9,7 +9,7 @@ import {
 } from "@sapiom/opencode";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 
 const roots: string[] = [];
 

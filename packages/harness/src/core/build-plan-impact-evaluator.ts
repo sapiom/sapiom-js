@@ -6,8 +6,8 @@ import type {
   AgentBriefImpact,
   AgentBriefImpactEntry,
   AgentBriefStaleReason,
-} from "../shared/build-plan.js";
-import type { CompiledAgentBriefCandidate, PreviousAgentBrief } from "../shared/agent-brief.js";
+} from "@sapiom/agent-map/build-plan";
+import type { CompiledAgentBriefCandidate, PreviousAgentBrief } from "@sapiom/agent-map/node/agent-brief";
 
 export const AGENT_BRIEF_IMPACT_ENTRY_LIMIT = 256;
 export const AGENT_BRIEF_IMPACT_EVIDENCE_LIMIT = 32;

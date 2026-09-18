@@ -1,4 +1,4 @@
-import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import type { AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentMapWorkspaceResponse,

@@ -16,7 +16,7 @@ import type {
   ProjectBuildPlanVersionId,
   ProjectBuildPlanVersionRef,
   ProjectMutationReceipt,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import {
   BUILD_PLAN_ID_MAPPING_LIMIT,
   BUILD_PLAN_VERSION_HISTORY_LIMIT,
@@ -24,15 +24,15 @@ import {
   PROJECT_MUTATION_TOMBSTONE_LIMIT,
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,
-} from "../shared/build-plan.js";
-import { parseProjectBuildPlanContent } from "../shared/build-plan-codec.js";
+} from "@sapiom/agent-map/build-plan";
+import { parseProjectBuildPlanContent } from "@sapiom/agent-map/node/build-plan-codec";
 import {
   computeBuildPlanRecordDigest,
   computeBuildPlanRequestDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 import { validateProjectBuildPlanContent } from "./build-plan-contract-validator.js";
-import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration.js";
+import type { ProjectPlanningAggregateV2 } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import { AgentMapVersionResolver } from "@sapiom/agent-map/node/version-resolver";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {

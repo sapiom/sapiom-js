@@ -1,6 +1,6 @@
 import type { AgentMapImplementationsResponse } from "@sapiom/agent-map";
 import { parseAgentMapImplementations } from "./agent-map-deployment";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
  * section of ../../../src/shared/types.ts). Gated at this layer: with

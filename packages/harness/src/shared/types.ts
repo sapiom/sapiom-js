@@ -599,7 +599,7 @@ export type BusMessage =
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
-  | { type: "agent-map.initialization.changed"; status: import("./agent-map-initialization.js").AgentMapInitializationStatus }
+  | { type: "agent-map.initialization.changed"; status: import("@sapiom/agent-map/agent-map-initialization").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled

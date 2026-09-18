@@ -9,7 +9,7 @@ import {
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,
   type AgentBriefVersion,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import {
   parseProjectSubsessionRequest,
   SubsessionDelegationValidationError,

@@ -7,7 +7,7 @@ import type {
   ProjectVersionChangeKind,
   RecordDigest,
   StudioProjectId,
-} from "@sapiom/agent-map";
+} from "./agent-map.js";
 
 export const BUILD_PLAN_SCHEMA_VERSION = 1 as const;
 export const PROJECT_PLANNING_STORAGE_SCHEMA_VERSION = 2 as const;

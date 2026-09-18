@@ -18,7 +18,7 @@ import { canonicalGraphPath } from "./canonical-graph-path.js";
 import {
   DurableFileLock,
   type DurableFileLockTestHooks,
-} from "./durable-file-lock.js";
+} from "@sapiom/agent-map/node/durable-file-lock";
 
 export interface ProjectRootBinding {
   id: string;

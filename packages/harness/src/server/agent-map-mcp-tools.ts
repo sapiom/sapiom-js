@@ -8,10 +8,10 @@ import {
   AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
-} from "../core/agent-map-proposal-service.js";
+} from "@sapiom/agent-map/node/agent-map-proposal-service";
 import { proposalBatchRequestSchema } from "@sapiom/agent-map/schema";
-import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
-import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
+import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "@sapiom/agent-map/node/agent-map-workspace-store";
+import { AgentMapAggregateError } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
 import { BuildPlanService, BuildPlanServiceError } from "../core/build-plan-service.js";
 import {

@@ -548,7 +548,7 @@
   {
     "id": "legacy-proposal-actor-decoder",
     "rule": "unified-agent-model",
-    "path": "packages/harness/src/shared/agent-map-legacy-migration.ts",
+    "path": "packages/agent-map/src/shared/agent-map-legacy-migration.ts",
     "pattern": "map-planner|agent-builder",
     "occurrences": 2,
     "reason": "Read-only E2 proposal-history decoder; live writes use ProjectAgentActorRef and the migration module is reachability-tested."

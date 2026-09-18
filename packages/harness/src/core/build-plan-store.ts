@@ -7,15 +7,15 @@ import type {
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
   ProjectBuildPlanVersionRef,
-} from "../shared/build-plan.js";
-import { parseProjectBuildPlanVersion } from "../shared/build-plan-codec.js";
-import { computeBuildPlanRecordDigest } from "./build-plan-canonicalization.js";
-import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration.js";
+} from "@sapiom/agent-map/build-plan";
+import { parseProjectBuildPlanVersion } from "@sapiom/agent-map/node/build-plan-codec";
+import { computeBuildPlanRecordDigest } from "@sapiom/agent-map/node/build-plan-canonicalization";
+import type { ProjectPlanningAggregateV2 } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import {
   AgentMapWorkspaceStore,
   type AppendBriefVersionsRequest,
   type AppendBriefVersionsResult,
-} from "./agent-map-workspace-store.js";
+} from "@sapiom/agent-map/node/agent-map-workspace-store";
 
 const planRef = (version: ProjectBuildPlanVersion): ProjectBuildPlanVersionRef => ({
   projectId: version.projectId,

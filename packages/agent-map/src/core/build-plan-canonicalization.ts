@@ -5,12 +5,12 @@ import type {
   ProjectBuildPlanContent,
   ProjectBuildPlanVersion,
 } from "../shared/build-plan.js";
-import type { RecordDigest } from "@sapiom/agent-map";
+import type { RecordDigest } from "../shared/agent-map.js";
 import {
   canonicalDigest,
   canonicalJson,
   compareCanonicalStrings,
-} from "@sapiom/agent-map/node/canonical";
+} from "../shared/agent-map-canonical.js";
 
 export { canonicalJson };
 

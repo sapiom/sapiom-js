@@ -1,4 +1,4 @@
-import { isAgentMapBoundedText } from "@sapiom/agent-map/codec";
+import { isAgentMapBoundedText } from "./agent-map-codec.js";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
