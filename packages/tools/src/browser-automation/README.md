@@ -35,7 +35,7 @@ const result = await sapiom.browserAutomation.withSession(async (session) => {
   session.cdpUrl; // pass to Playwright's browser.connectOverCDP(...)
   session.expiresAt; // ISO-8601 max lifetime
   session.liveViewUrl; // interactive view of the same browser, for a person to watch or take over
-  session.liveViewMode; // "single-use" (default: link dies after the first viewer disconnects) or "persistent"
+  session.liveViewMode; // "single-use" (link dies after the first viewer disconnects), "persistent", or absent on older gateways
 
   // session-bound screenshot — sessionId injected automatically:
   const shot = await session.screenshot({ url: "https://example.com" });
@@ -64,10 +64,11 @@ closed — preventing the auto-expiry $1.00 ceiling charge if the session leaks.
 **Live view.** `session.liveViewUrl` opens an interactive view of the same browser in any web
 browser, on any device. Use it to hand a step the agent should not do itself — a sign-in, a
 one-time code, a payment confirmation — to a person: they act inside the same session, and your
-code resumes over `cdpUrl` with cookies intact. The link works for as long as the session does and
-anyone holding it can act in the browser, so treat it like a credential: send it to one person over
-a channel you trust, and close the session when the step is done. `session.liveViewMode` reports
-the lifetime of that link; `"persistent"` means it lasts for the whole session. Local Run stub
+code resumes over `cdpUrl` with cookies intact. Anyone holding the link can act in the browser, so
+treat it like a credential: send it to one person over a channel you trust, and close the session
+when the step is done. `session.liveViewMode` reports the lifetime of that link: `"single-use"`
+(the gateway default) expires after the first viewer disconnects, `"persistent"` lasts for the whole
+session; older gateways omit the field. Local Run stub
 sessions do not include `liveViewUrl`.
 
 ## Sessions with identity
