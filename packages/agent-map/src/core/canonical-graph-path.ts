@@ -5,16 +5,19 @@ const MAX_CACHED_PATHS = 20_000;
 const canonicalPaths = new Map<string, string>();
 let probe: ((path: string) => void) | null = null;
 
+/** Recognize drive and UNC syntax independently of the current operating system. */
 function isWindowsAbsolute(input: string): boolean {
   return (
     /^[A-Za-z]:[\\/]/.test(input) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(input)
   );
 }
 
+/** Choose lexical parsing rules from the input, including foreign-host paths. */
 function pathApi(input: string): typeof path.posix {
   return isWindowsAbsolute(input) ? path.win32 : path.posix;
 }
 
+/** Resolve lexical segments before caching or probing filesystem identity. */
 function normalizedAbsolute(input: string): string {
   const api = pathApi(input);
   return api.resolve(
@@ -22,6 +25,7 @@ function normalizedAbsolute(input: string): string {
   );
 }
 
+/** Refresh LRU order and bound the shared canonical-path cache. */
 function remember(key: string, value: string): void {
   canonicalPaths.delete(key);
   canonicalPaths.set(key, value);
@@ -49,11 +53,27 @@ export function rememberCanonicalGraphPath(
  * providers and watcher paths that have not yet been reconciled.
  */
 export function canonicalGraphPath(input: string): string {
+  return resolveCanonicalGraphPath(input, false);
+}
+
+/** Refresh identity without a watcher; non-missing filesystem errors propagate. */
+export function refreshCanonicalGraphPath(input: string): string {
+  return resolveCanonicalGraphPath(input, true);
+}
+
+/** Only missing path segments permit reconstructing identity from an ancestor. */
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** Fresh scope lookup surfaces I/O failures; graph projection stays best effort. */
+function resolveCanonicalGraphPath(input: string, fresh: boolean): string {
   const windows = isWindowsAbsolute(input);
   const api = pathApi(input);
   const resolved = normalizedAbsolute(input);
   const cached = canonicalPaths.get(resolved);
-  if (cached !== undefined) {
+  if (!fresh && cached !== undefined) {
     remember(resolved, cached);
     return cached;
   }
@@ -63,7 +83,9 @@ export function canonicalGraphPath(input: string): string {
   try {
     probe?.(resolved);
     result = realpathSync.native(resolved);
-  } catch {
+  } catch (error) {
+    // Cached graph projections retain their legacy best-effort fallback.
+    if (fresh && !isMissingPathError(error)) throw error;
     const missingSegments: string[] = [];
     let ancestor = resolved;
     let parent = api.dirname(ancestor);
@@ -74,7 +96,8 @@ export function canonicalGraphPath(input: string): string {
         probe?.(ancestor);
         result = api.join(realpathSync.native(ancestor), ...missingSegments);
         break;
-      } catch {
+      } catch (error) {
+        if (fresh && !isMissingPathError(error)) throw error;
         parent = api.dirname(ancestor);
       }
     }
@@ -90,6 +113,7 @@ export function setCanonicalGraphPathProbeForTest(
   probe = next;
 }
 
+/** Reset process-wide canonical evidence and its probe between isolated tests. */
 export function clearCanonicalGraphPathCacheForTest(): void {
   canonicalPaths.clear();
   probe = null;

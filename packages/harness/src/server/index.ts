@@ -1,5 +1,5 @@
 import { LocalWorkspaceScopeCatalog } from "../core/workspace-scope-catalog.js";
-import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
@@ -56,7 +56,7 @@ import {
   projectRoots,
   projectSessionRoot,
 } from "../shared/project-roots.js";
-import { samePath } from "../shared/paths.js";
+import { samePath } from "@sapiom/agent-map/paths";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
@@ -177,7 +177,7 @@ import {
 import {
   StudioProjectCatalog,
   type ReconciledStudioProjects,
-} from "../core/studio-project-catalog.js";
+} from "@sapiom/agent-map/node/studio-project-catalog";
 import { ProjectBootstrapOutbox } from "../core/project-bootstrap-outbox.js";
 import {
   createAgentMapMcpRouter,

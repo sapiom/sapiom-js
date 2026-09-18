@@ -108,6 +108,34 @@
     "./agent-map-initialization": {
       "types": "./dist/shared/agent-map-initialization.d.ts",
       "import": "./dist/shared/agent-map-initialization.js"
+    },
+    "./workspace-scope": {
+      "types": "./dist/shared/workspace-scope.d.ts",
+      "import": "./dist/shared/workspace-scope.js"
+    },
+    "./project-roots": {
+      "types": "./dist/shared/project-roots.d.ts",
+      "import": "./dist/shared/project-roots.js"
+    },
+    "./paths": {
+      "types": "./dist/shared/paths.d.ts",
+      "import": "./dist/shared/paths.js"
+    },
+    "./node/canonical-graph-path": {
+      "types": "./dist/core/canonical-graph-path.d.ts",
+      "import": "./dist/core/canonical-graph-path.js"
+    },
+    "./node/studio-project-catalog": {
+      "types": "./dist/core/studio-project-catalog.d.ts",
+      "import": "./dist/core/studio-project-catalog.js"
+    },
+    "./node/project-resolution": {
+      "types": "./dist/core/project-resolution.d.ts",
+      "import": "./dist/core/project-resolution.js"
+    },
+    "./node/state-paths": {
+      "types": "./dist/core/state-paths.d.ts",
+      "import": "./dist/core/state-paths.js"
     }
   },
   "files": [

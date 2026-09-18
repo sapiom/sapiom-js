@@ -10,7 +10,7 @@ import {
 } from "@sapiom/agent-map";
 import type { WorkflowInfo } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
-import { samePath } from "../shared/paths.js";
+import { samePath } from "@sapiom/agent-map/paths";
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
@@ -18,8 +18,8 @@ import {
 import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
-} from "../core/studio-project-catalog.js";
-import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+} from "@sapiom/agent-map/node/studio-project-catalog";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import { AgentMapBindingError, type AgentMapImplementationBindings } from "@sapiom/agent-map/node/agent-map-implementation-bindings";
 import { createAgentMapImplementations } from "./agent-map-implementations.js";
 import {

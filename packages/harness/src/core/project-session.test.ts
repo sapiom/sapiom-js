@@ -8,7 +8,7 @@ import {
   isWithinCurrentProject,
   localProjectPrincipal,
 } from "./project-session.js";
-import type { StudioProjectIdentity } from "./studio-project-catalog.js";
+import type { StudioProjectIdentity } from "@sapiom/agent-map/node/studio-project-catalog";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 const projectRoot = "/Users/private/customer-secret-project";

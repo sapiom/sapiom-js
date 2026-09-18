@@ -13,7 +13,7 @@ import type {
   SpawnSpec,
 } from "../shared/types.js";
 import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string;

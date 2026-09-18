@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { WorkspaceKey, WorkspaceScopeSummary } from "../shared/workspace-scope.js";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 
 export interface WorkspaceScope {
   workspaceKey: WorkspaceKey;

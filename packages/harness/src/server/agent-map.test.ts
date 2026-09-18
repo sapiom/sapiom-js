@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import type {
   AgentMapWorkspaceResponse,

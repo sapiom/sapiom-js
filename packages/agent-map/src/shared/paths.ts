@@ -26,10 +26,18 @@ export function sepOf(p: string): "\\" | "/" {
   return p.includes("\\") ? "\\" : "/";
 }
 
+/** Scan each trailing separator once, including for caller-supplied paths. */
+function trimTrailingSeparators(value: string): string {
+  let end = value.length;
+  while (end > 0 && (value[end - 1] === "/" || value[end - 1] === "\\"))
+    end -= 1;
+  return value.slice(0, end);
+}
+
 /** `<root><sep><name>` in the root's native separator, with no doubled
  *  separator when the root carries a trailing one. */
 export function joinPath(root: string, name: string): string {
-  const trimmedRoot = root.trim().replace(/[\\/]+$/, "");
+  const trimmedRoot = trimTrailingSeparators(root.trim());
   return `${trimmedRoot}${sepOf(root)}${name.trim()}`;
 }
 
@@ -48,7 +56,7 @@ export function basenameOf(p: string): string {
  * learn whether it is itself an agent project by asking its parent.
  */
 export function parentOf(input: string): string | null {
-  const trimmed = input.replace(/[\\/]+$/, "");
+  const trimmed = trimTrailingSeparators(input);
   if (trimmed === "" || /^[A-Za-z]:$/.test(trimmed)) return null;
   const lastSep = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   if (lastSep < 0) return null;
@@ -63,7 +71,7 @@ export function parentOf(input: string): string | null {
  *  breaks a path comparison. Bare roots (`/`, `C:\`) pass through unchanged —
  *  stripping them would leave something that isn't a path. */
 export function stripTrailingSep(p: string): string {
-  const trimmed = p.replace(/[\\/]+$/, "");
+  const trimmed = trimTrailingSeparators(p);
   if (trimmed === p) return p;
   if (trimmed === "") return p[0];
   if (/^[A-Za-z]:$/.test(trimmed)) return trimmed + p[trimmed.length];

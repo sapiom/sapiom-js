@@ -6,7 +6,7 @@ import type {
   StudioProjectId,
   StudioProjectSummary,
 } from "@sapiom/agent-map";
-import { isStudioProjectId } from "./studio-project-catalog.js";
+import { isStudioProjectId } from "@sapiom/agent-map/node/studio-project-catalog";
 
 interface PersistedProjectBootstrapOutboxEntry {
   schemaVersion: 1;

@@ -1,3 +1,5 @@
+import { resolveProjectRootForPath, type DurableProjectRoot } from "@sapiom/agent-map/project-roots";
+export { resolveProjectRootForPath, type DurableProjectRoot } from "@sapiom/agent-map/project-roots";
 /**
  * Canonical project-root derivation shared by Studio's browser and server.
  *
@@ -13,7 +15,7 @@ import {
   pathComparisonKey,
   pathSegmentDepth,
   parentOf,
-} from "./paths.js";
+} from "@sapiom/agent-map/paths";
 
 /**
  * Row order within a container. "name" is A-Z; "recent" is
@@ -61,34 +63,6 @@ export interface ProjectRootSources {
    */
   agentPaths: readonly string[];
   sort: RailSort;
-}
-
-export interface DurableProjectRoot {
-  projectId: string;
-  cwd: string;
-}
-
-/**
- * Resolve the most-specific containing durable root with one deterministic
- * browser/server rule. Equal-specificity claims by different projects fail
- * closed; multiple bindings owned by one durable project remain valid.
- */
-export function resolveProjectRootForPath<T extends DurableProjectRoot>(
-  targetPath: string,
-  roots: readonly T[],
-): T | null {
-  const matches = roots.filter((root) => isWithinDir(root.cwd, targetPath));
-  if (matches.length === 0) return null;
-  const depth = Math.max(...matches.map((root) => pathSegmentDepth(root.cwd)));
-  const nearest = matches.filter(
-    (root) => pathSegmentDepth(root.cwd) === depth,
-  );
-  if (new Set(nearest.map((root) => root.projectId)).size !== 1) return null;
-  return [...nearest].sort(
-    (left, right) =>
-      lexicalCompare(canonical(left.cwd), canonical(right.cwd)) ||
-      lexicalCompare(left.cwd, right.cwd),
-  )[0]!;
 }
 
 /**
