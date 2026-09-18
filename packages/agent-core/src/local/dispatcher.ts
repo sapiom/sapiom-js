@@ -227,7 +227,11 @@ export class LocalStubDispatcher implements StepDispatcher {
           // Compose the SDK's facts with the contract's rule, exactly as the
           // sandbox step-runner does, so a transient Sapiom-surface failure
           // looks the same locally as it does in a real run.
-          error: serializeStepCompletionError(e, readSapiomCall(e)),
+          //
+          // Facts come off `err`, the value the step actually threw, not off
+          // `e`: a cross-realm error fails `instanceof Error` and gets replaced
+          // by a fresh one above, which carries no marker.
+          error: serializeStepCompletionError(e, readSapiomCall(err)),
           shared: sharedStore.snapshot(),
         },
         parsed,

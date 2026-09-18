@@ -451,15 +451,26 @@ async run(input, ctx) {
 default, counting the initial attempt; keep author-controlled retry logic inside that ceiling.
 
 When an error from a `ctx.sapiom.*` call escapes your step instead of being caught, it carries facts
-the platform can read: our own code made the call, so it knows whether the failure was transient
-(a 5xx, a rate limit, a request timeout, a connection that never happened) or deterministic, and it
-keeps the status and message on the run's failure reason instead of a generic one. How many
-attempts that earns is platform policy, not a guarantee of this SDK: when you want to control the
-retry yourself, use the explicit `try`/`catch` + `retry()` above.
+the platform can read: our own code made the call, so it knows whether the failure was transient or
+deterministic, and it keeps the status and message on the run's failure reason instead of a generic
+one. How many attempts that earns is platform policy, not a guarantee of this SDK.
 
-A raw `fetch` to a third party carries no such facts, and the same `try`/`catch` is not enough on
-its own: it retries every error, including a malformed URL or a bad payload that will fail the same
-way three times. Branch on the error before calling `retry()`.
+The `try`/`catch` above is not enough on its own: it retries **every** error, including a bad
+payload that will fail the same way three times. Branch on the facts first. `isTransientSapiomCall`
+is the same rule the platform applies, so you never have to keep your own status list in sync:
+
+```typescript
+import { isTransientSapiomCall } from "@sapiom/agent";
+import { readSapiomCall } from "@sapiom/tools";
+
+catch (err) {
+  const facts = readSapiomCall(err);          // undefined for a raw `fetch` to a third party
+  if (facts && isTransientSapiomCall(facts) && ctx.attempts + 1 < 3) {
+    return retry({ delayMs: facts.retryAfterMs ?? 1000 });
+  }
+  return fail("the search service is unavailable");  // requires canFail: true
+}
+```
 
 `readSapiomCall(err)?.status` reads the status of any Sapiom call uniformly, alongside the error
 class's own `err.status`. Both are absent when the call never reached a server.
