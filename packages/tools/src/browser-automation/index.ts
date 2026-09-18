@@ -392,6 +392,10 @@ export function createSession(
   transport: Transport,
   baseUrl?: string,
 ): Promise<BrowserSession>;
+export function createSession(
+  transport: Transport | undefined,
+  baseUrl?: string,
+): Promise<BrowserSession>;
 export async function createSession(
   optionsOrTransport?: SessionTimeoutOptions | Transport,
   transportOrBaseUrl?: Transport | string,
@@ -404,14 +408,16 @@ export async function createSession(
     : isTransport(transportOrBaseUrl)
       ? transportOrBaseUrl
       : defaultTransport();
-  const resolvedBaseUrl = isTransport(optionsOrTransport)
+  const isLegacyCall =
+    isTransport(optionsOrTransport) ||
+    (optionsOrTransport === undefined &&
+      typeof transportOrBaseUrl === "string");
+  const resolvedBaseUrl = isLegacyCall
     ? typeof transportOrBaseUrl === "string"
       ? transportOrBaseUrl
       : DEFAULT_BASE_URL
     : baseUrl;
-  const options = isTransport(optionsOrTransport)
-    ? undefined
-    : optionsOrTransport;
+  const options = isLegacyCall ? undefined : optionsOrTransport;
   const body = {
     ...(options?.idleTimeoutMinutes !== undefined && {
       idleTimeoutMinutes: options.idleTimeoutMinutes,

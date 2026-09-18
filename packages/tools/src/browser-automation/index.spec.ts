@@ -83,6 +83,38 @@ describe("browserAutomation.sessions.create()", () => {
     expect(result.maxDurationSec).toBe(1200);
   });
 
+  it("supports the legacy undefined transport plus base URL call shape", async () => {
+    const fetchMock = jest.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        sessionId: "sess-legacy-url",
+        cdpUrl: "ws://cdp.example.com/legacy-url",
+        expiresAt: "2099-01-01T00:00:00Z",
+        maxDurationSec: 1200,
+      }),
+    );
+
+    const savedApiKey = process.env["SAPIOM_API_KEY"];
+    process.env["SAPIOM_API_KEY"] = "test-key";
+    try {
+      await browserAutomation.createSession(undefined, "http://localhost:3000");
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:3000/v1/sessions",
+        expect.objectContaining({
+          body: "{}",
+          method: "POST",
+        }),
+      );
+    } finally {
+      if (savedApiKey === undefined) {
+        delete process.env["SAPIOM_API_KEY"];
+      } else {
+        process.env["SAPIOM_API_KEY"] = savedApiKey;
+      }
+      fetchMock.mockRestore();
+    }
+  });
+
   it("maps liveViewMode (camelCase) from the response", async () => {
     const { transport } = makeTransport([
       () =>
@@ -1148,6 +1180,38 @@ describe("browserAutomation — client wiring + credential", () => {
     } finally {
       if (saved !== undefined) process.env["SAPIOM_API_KEY"] = saved;
     }
+  });
+
+  it("forwards session timeout options through the client binding", async () => {
+    const calls: FetchCall[] = [];
+    const fetchMock = (async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init: RequestInit = {},
+    ): Promise<Response> => {
+      const url = typeof input === "string" ? input : (input as URL).toString();
+      calls.push({ url, init });
+      return jsonResponse({
+        sessionId: "s",
+        cdpUrl: "ws://x",
+        expiresAt: "2099-01-01T00:00:00Z",
+        maxDurationSec: 1200,
+      });
+    }) as typeof globalThis.fetch;
+
+    const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
+    await sapiom.browserAutomation.sessions.create({ maxDurationMinutes: 180 });
+    await sapiom.browserAutomation.sessions.createWithIdentity({
+      identityId: "id_1",
+      idleTimeoutMinutes: 30,
+    });
+
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      maxDurationMinutes: 180,
+    });
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({
+      identityId: "id_1",
+      idleTimeoutMinutes: 30,
+    });
   });
 });
 

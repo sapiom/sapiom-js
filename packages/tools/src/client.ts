@@ -156,6 +156,7 @@ import type {
 import * as browserAutomation from "./browser-automation/index.js";
 import type {
   BrowserSession,
+  SessionTimeoutOptions,
   SessionSettlement,
   ScreenshotInput,
   Screenshot,
@@ -258,7 +259,10 @@ export interface Sapiom {
     /** Read a `run`/`redeem`/`callSession` result's plain-text reply, skipping a `thinking` block if present. */
     textOf(response: unknown): string | undefined;
     /** Read a `run`/`redeem`/`callSession` result's structured output (see `LlmRunSpec.output`). */
-    structuredOf<TSchema = unknown>(response: unknown, name?: string): TSchema | undefined;
+    structuredOf<TSchema = unknown>(
+      response: unknown,
+      name?: string,
+    ): TSchema | undefined;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -564,11 +568,11 @@ export interface Sapiom {
     /** Open and close browser sessions. */
     sessions: {
       /** Open a new browser session. */
-      create(): Promise<BrowserSession>;
+      create(options?: SessionTimeoutOptions): Promise<BrowserSession>;
       /** Open a new browser session pre-authenticated with an identity. */
-      createWithIdentity(input: {
-        identityId: string;
-      }): Promise<BrowserSession>;
+      createWithIdentity(
+        input: { identityId: string } & SessionTimeoutOptions,
+      ): Promise<BrowserSession>;
       /** Close a session and settle its billing. */
       close(sessionId: string): Promise<SessionSettlement>;
     };
@@ -781,7 +785,8 @@ function bind(transport: Transport): Sapiom {
     },
     browserAutomation: {
       sessions: {
-        create: () => browserAutomation.createSession(transport),
+        create: (options) =>
+          browserAutomation.createSession(options, transport),
         createWithIdentity: (input) =>
           browserAutomation.createSessionWithIdentity(input, transport),
         close: (sessionId) =>

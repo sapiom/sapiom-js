@@ -113,10 +113,12 @@ import type {
 import type { SpeechResult, VoicesResult } from "../speech/index.js";
 import type {
   BrowserSession,
+  SessionTimeoutOptions,
   SessionSettlement,
   Screenshot,
   Identity,
   ActiveSession,
+  WithSessionOptions,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
 import type {
@@ -1940,7 +1942,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           client.refreshHandler = mint;
           client.setCredentials(await mint());
           return client;
-        })) as InstanceType<(typeof import("google-auth-library"))["OAuth2Client"]>,
+        })) as InstanceType<
+          (typeof import("google-auth-library"))["OAuth2Client"]
+        >,
       // Drive methods run server-side in the gateway in production; the stub returns
       // shape-faithful, obviously-fake results so an offline run can exercise the call
       // graph without a Google connector or network call.
@@ -2015,13 +2019,15 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     },
     browserAutomation: {
       sessions: {
-        create: () =>
+        create: (options?: SessionTimeoutOptions) =>
           Promise.resolve(
-            r("browserAutomation.sessions.create", [], () => ({
+            r("browserAutomation.sessions.create", [options ?? {}], () => ({
               sessionId: "stub-session",
               cdpUrl: "ws://stub.local/session/stub-session",
               expiresAt: "2099-01-01T00:00:00Z",
-              maxDurationSec: 1200,
+              idleTimeoutMinutes: options?.idleTimeoutMinutes ?? 5,
+              maxDurationMinutes: options?.maxDurationMinutes ?? 20,
+              maxDurationSec: (options?.maxDurationMinutes ?? 20) * 60,
             })) as BrowserSession,
           ),
         createWithIdentity: (input) =>
@@ -2030,7 +2036,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               sessionId: "stub-session",
               cdpUrl: "ws://stub.local/session/stub-session",
               expiresAt: "2099-01-01T00:00:00Z",
-              maxDurationSec: 1200,
+              idleTimeoutMinutes: input.idleTimeoutMinutes ?? 5,
+              maxDurationMinutes: input.maxDurationMinutes ?? 20,
+              maxDurationSec: (input.maxDurationMinutes ?? 20) * 60,
             })) as BrowserSession,
           ),
         close: (sessionId) =>
@@ -2052,7 +2060,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         ),
       withSession: async <T>(
         fn: (session: ActiveSession) => Promise<T>,
-        sessionOpts?: { identityId?: string },
+        sessionOpts?: WithSessionOptions,
       ) => {
         const stubSession = r(
           "browserAutomation.withSession",
@@ -2063,7 +2071,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             sessionId: "stub-session",
             cdpUrl: "ws://stub.local/session/stub-session",
             expiresAt: "2099-01-01T00:00:00Z",
-            maxDurationSec: 1200,
+            idleTimeoutMinutes: sessionOpts?.idleTimeoutMinutes ?? 5,
+            maxDurationMinutes: sessionOpts?.maxDurationMinutes ?? 20,
+            maxDurationSec: (sessionOpts?.maxDurationMinutes ?? 20) * 60,
           }),
         ) as BrowserSession;
         const activeSession: ActiveSession = {
