@@ -51,7 +51,8 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "prepublishOnly": "pnpm build",
-    "test:capabilities": "pnpm build && node --test scripts/capabilities.test.mjs"
+    "test:capabilities": "pnpm build && node --test scripts/capabilities.test.mjs",
+    "test:package": "pnpm --filter \"@sapiom/mcp...\" build && node scripts/check-package.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
