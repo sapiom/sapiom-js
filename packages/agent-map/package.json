@@ -20,6 +20,42 @@
     "./project-id": {
       "types": "./dist/shared/project-id.d.ts",
       "import": "./dist/shared/project-id.js"
+    },
+    "./codec": {
+      "types": "./dist/shared/agent-map-codec.d.ts",
+      "import": "./dist/shared/agent-map-codec.js"
+    },
+    "./canonical": {
+      "types": "./dist/shared/agent-map-canonical-pure.d.ts",
+      "import": "./dist/shared/agent-map-canonical-pure.js"
+    },
+    "./schema": {
+      "types": "./dist/core/agent-map-proposal-schema.d.ts",
+      "import": "./dist/core/agent-map-proposal-schema.js"
+    },
+    "./validation": {
+      "types": "./dist/core/agent-map-proposal-validator.d.ts",
+      "import": "./dist/core/agent-map-proposal-validator.js"
+    },
+    "./node/canonical": {
+      "types": "./dist/shared/agent-map-canonical.d.ts",
+      "import": "./dist/shared/agent-map-canonical.js"
+    },
+    "./node/version-codec": {
+      "types": "./dist/shared/agent-map-version-codec.d.ts",
+      "import": "./dist/shared/agent-map-version-codec.js"
+    },
+    "./node/version": {
+      "types": "./dist/core/agent-map-version.d.ts",
+      "import": "./dist/core/agent-map-version.js"
+    },
+    "./node/version-resolver": {
+      "types": "./dist/core/agent-map-version-resolver.d.ts",
+      "import": "./dist/core/agent-map-version-resolver.js"
+    },
+    "./request-namespace": {
+      "types": "./dist/core/project-request-namespace.d.ts",
+      "import": "./dist/core/project-request-namespace.js"
     }
   },
   "files": [
@@ -44,5 +80,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "zod": "^3.25.0"
   }
 }

@@ -14,7 +14,7 @@ import {
   type ProposalBatchRequest,
   type ProposalValidationIssue,
   type ProposalValidationResult,
-} from "@sapiom/agent-map";
+} from "../shared/agent-map.js";
 import {
   AGENT_MAP_UUID_V7_PATTERN,
   isAgentMapBoundedText,

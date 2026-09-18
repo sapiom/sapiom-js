@@ -5,7 +5,7 @@ import {
   compareCanonicalStrings,
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type { AgentBriefVersion, BuildPlanDiagnostic, ProjectBuildPlanVersion } from "../shared/build-plan.js";
 import { agentMapVersionRefsEqual, projectBuildPlanVersionRefsEqual } from "../shared/build-plan.js";
 import {

@@ -52,7 +52,7 @@ export {
   computeAgentMapVersionRecordDigest,
   computeArchitectureGraphDigest,
   computeGraphContentDigest,
-} from "./shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 export {
   AGENT_BRIEF_COMPILER_VERSION,
   AGENT_BRIEF_FINGERPRINT_KINDS,

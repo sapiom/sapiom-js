@@ -12,8 +12,8 @@ import {
   readWorkflowSourceFile,
 } from "./canvas-interconnections.js";
 import { AgentMapInitializationFailure } from "./agent-map-initialization-record.js";
-import { parseProposalBatchRequest } from "./agent-map-proposal-schema.js";
-import { RELATIONSHIP_ENDPOINT_MATRIX } from "./agent-map-proposal-validator.js";
+import { parseProposalBatchRequest } from "@sapiom/agent-map/schema";
+import { RELATIONSHIP_ENDPOINT_MATRIX } from "@sapiom/agent-map/validation";
 
 export interface InitializationAgent {
   agentId: string;

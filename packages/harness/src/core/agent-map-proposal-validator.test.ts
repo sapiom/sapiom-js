@@ -18,7 +18,7 @@ import {
   RELATIONSHIP_ENDPOINT_MATRIX,
   semanticRelationshipKey,
   validateMapOperationBatch,
-} from "./agent-map-proposal-validator.js";
+} from "@sapiom/agent-map/validation";
 
 const uuid = (value: number): string =>
   `018f0000-0000-7000-8000-${value.toString(16).padStart(12, "0")}`;

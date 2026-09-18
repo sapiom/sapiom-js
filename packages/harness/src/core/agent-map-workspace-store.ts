@@ -13,8 +13,8 @@ import {
   type MapProposalId,
   type StudioProjectId,
 } from "@sapiom/agent-map";
-import { parseProjectAgentActorRef } from "../shared/agent-map-codec.js";
-import { canonicalJson } from "../shared/agent-map-canonical.js";
+import { parseProjectAgentActorRef } from "@sapiom/agent-map/codec";
+import { canonicalJson } from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefHistoryPointer,
   AgentBriefVersion,
@@ -38,7 +38,7 @@ import {
   parseProjectPlanningAggregate,
   type AgentMapProjectAggregate,
 } from "./agent-map-aggregate-migration.js";
-import { deterministicVersionId } from "./agent-map-version.js";
+import { deterministicVersionId } from "@sapiom/agent-map/node/version";
 import { DurableFileLock } from "./durable-file-lock.js";
 import { isStudioProjectId } from "./studio-project-catalog.js";
 import { convertEmptyLegacyContainer } from "./agent-map-empty-legacy-container.js";

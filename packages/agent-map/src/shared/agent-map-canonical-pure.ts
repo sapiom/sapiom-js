@@ -1,13 +1,4 @@
-import { createHash } from "node:crypto";
-
-import type {
-  AgentMapGraph,
-  AgentMapVersion,
-  GraphContentDigest,
-  PlanNode,
-  PlanRelationship,
-  RecordDigest,
-} from "@sapiom/agent-map";
+import type { AgentMapGraph, PlanNode, PlanRelationship } from "./agent-map.js";
 
 export const compareCanonicalStrings = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
@@ -18,7 +9,8 @@ const normalizedLineEndings = (value: string): string =>
 /** RFC-8259-shaped canonical JSON with binary key ordering and normalized text. */
 export function canonicalJson(value: unknown): string {
   const visit = (entry: unknown): unknown => {
-    if (entry === undefined) throw new TypeError("undefined is not canonical JSON");
+    if (entry === undefined)
+      throw new TypeError("undefined is not canonical JSON");
     if (typeof entry === "string") return normalizedLineEndings(entry);
     if (typeof entry === "number" && !Number.isFinite(entry))
       throw new TypeError("non-finite number is not canonical JSON");
@@ -43,13 +35,6 @@ export function canonicalJson(value: unknown): string {
   };
   return JSON.stringify(visit(value));
 }
-
-export const canonicalDigest = (domain: string, value: unknown): string =>
-  `sha256:${createHash("sha256")
-    .update(domain, "utf8")
-    .update("\0", "utf8")
-    .update(canonicalJson(value), "utf8")
-    .digest("hex")}`;
 
 const canonicalNode = (node: PlanNode): PlanNode => ({
   ...node,
@@ -80,26 +65,3 @@ export function canonicalizeAgentMapGraph(graph: AgentMapGraph): AgentMapGraph {
     throw new TypeError("duplicate Agent Map contract reference");
   return { nodes, relationships };
 }
-
-export const computeGraphContentDigest = (
-  graph: AgentMapGraph,
-): GraphContentDigest =>
-  canonicalDigest(
-    "sapiom.agent-map.content.v1",
-    canonicalizeAgentMapGraph(graph),
-  ) as GraphContentDigest;
-
-export const computeAgentMapVersionRecordDigest = (
-  version: Omit<AgentMapVersion, "recordDigest"> | AgentMapVersion,
-): RecordDigest => {
-  const record = Object.fromEntries(
-    Object.entries(version).filter(([key]) => key !== "recordDigest"),
-  );
-  return canonicalDigest(
-    "sapiom.agent-map.version-record.v1",
-    record,
-  ) as RecordDigest;
-};
-
-/** Compatibility alias for callers introduced before the neutral vocabulary. */
-export const computeArchitectureGraphDigest = computeGraphContentDigest;

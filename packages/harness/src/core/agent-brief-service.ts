@@ -1,5 +1,5 @@
 import type { AgentMapVersion, AgentMapVersionRef, ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
-import { canonicalDigest, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
+import { canonicalDigest, compareCanonicalStrings } from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefRefreshRequest,
   AgentBriefRefreshReceipt,
@@ -18,7 +18,7 @@ import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration
 import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "./agent-map-workspace-store.js";
 import { BuildPlanStore } from "./build-plan-store.js";
 import { agentBriefRefreshRequestSchema, parseAgentBriefRefreshRequest } from "./build-plan-schema.js";
-import { INTERNAL_BRIEF_REFRESH_REQUEST_PREFIX } from "./project-request-namespace.js";
+import { INTERNAL_BRIEF_REFRESH_REQUEST_PREFIX } from "@sapiom/agent-map/request-namespace";
 import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
 import { evaluateAgentBriefImpact } from "./build-plan-impact-evaluator.js";
 import {

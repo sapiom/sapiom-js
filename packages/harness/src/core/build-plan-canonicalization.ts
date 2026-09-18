@@ -10,7 +10,7 @@ import {
   canonicalDigest,
   canonicalJson,
   compareCanonicalStrings,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 
 export { canonicalJson };
 

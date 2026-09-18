@@ -134,6 +134,10 @@ importers:
         version: 3.25.76
 
   packages/agent-map:
+    dependencies:
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^20.11.30
@@ -11976,7 +11980,7 @@ snapshots:
 
   mutation-server-protocol@0.4.1:
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.1
 
   mutation-testing-elements@3.7.3: {}
 

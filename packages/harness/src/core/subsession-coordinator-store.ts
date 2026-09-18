@@ -3,11 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import type { ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
-import { canonicalDigest } from "../shared/agent-map-canonical.js";
+import { canonicalDigest } from "@sapiom/agent-map/node/canonical";
 import {
   hasAgentMapControlCharacter,
   parseProjectAgentActorRef,
-} from "../shared/agent-map-codec.js";
+} from "@sapiom/agent-map/codec";
 import type { HarnessKind } from "../shared/types.js";
 import {
   computeCanonicalDelegationBindingDigest,

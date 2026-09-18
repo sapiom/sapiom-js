@@ -9,7 +9,7 @@ import {
   AgentMapProposalService,
   AgentMapProposalValidationError,
 } from "../core/agent-map-proposal-service.js";
-import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
+import { proposalBatchRequestSchema } from "@sapiom/agent-map/schema";
 import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
 import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";

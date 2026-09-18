@@ -22,7 +22,7 @@ import {
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
 } from "../core/build-plan-canonicalization.js";
-import { computeGraphContentDigest } from "./agent-map-canonical.js";
+import { computeGraphContentDigest } from "@sapiom/agent-map/node/canonical";
 import {
   parseAgentBriefFocusScope,
   parseAgentBriefVersion,

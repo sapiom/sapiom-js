@@ -1,5 +1,5 @@
 import type { AgentMapGraph, PlanNodeId } from "@sapiom/agent-map";
-import { canonicalDigest, canonicalJson, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
+import { canonicalDigest, canonicalJson, compareCanonicalStrings } from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefDependencyFingerprint,
   AgentBriefFingerprintKind,

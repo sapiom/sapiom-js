@@ -8,7 +8,7 @@ import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } fr
 import {
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type {
   BuildPlanAssignmentIntent,
   ProjectBuildPlanId,

@@ -11,7 +11,7 @@ import type {
 import {
   parseProposalBatchRequest,
   proposalBatchRequestSchema,
-} from "./agent-map-proposal-schema.js";
+} from "@sapiom/agent-map/schema";
 
 const nodeId = "node_018f0000-0000-7000-8000-000000000001";
 const relationshipId = "rel_018f0000-0000-7000-8000-000000000001";

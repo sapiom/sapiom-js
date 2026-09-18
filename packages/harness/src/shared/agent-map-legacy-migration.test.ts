@@ -45,7 +45,7 @@ describe("deployed E2 actor migration isolation", () => {
 
     for (const live of [
       "agent-map-proposal-service.ts",
-      "agent-map-version.ts",
+      "../../../agent-map/src/core/agent-map-version.ts",
       "build-plan-service.ts",
       "subsession-coordinator.ts",
     ]) {

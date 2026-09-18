@@ -4,7 +4,7 @@ import type {
   PlanNodeId,
   StudioProjectId,
 } from "@sapiom/agent-map";
-import { AGENT_MAP_UUID_V7_PATTERN } from "@shared/agent-map-codec";
+import { AGENT_MAP_UUID_V7_PATTERN } from "@sapiom/agent-map/codec";
 import type { WorkflowInfo } from "@shared/types";
 import {
   DEPLOYMENT_UNAVAILABLE,

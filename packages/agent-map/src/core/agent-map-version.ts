@@ -11,7 +11,7 @@ import type {
   ProjectMutationOrigin,
   RecordDigest,
   StudioProjectId,
-} from "@sapiom/agent-map";
+} from "../shared/agent-map.js";
 import {
   canonicalizeAgentMapGraph,
   computeAgentMapVersionRecordDigest,

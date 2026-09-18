@@ -13,9 +13,9 @@ import {
   appendRestoredAgentMapVersion,
   createAgentMapVersion,
   validateAgentMapVersionHistory,
-} from "./agent-map-version.js";
-import { computeAgentMapVersionRecordDigest } from "../shared/agent-map-canonical.js";
-import { AgentMapVersionResolver } from "./agent-map-version-resolver.js";
+} from "@sapiom/agent-map/node/version";
+import { computeAgentMapVersionRecordDigest } from "@sapiom/agent-map/node/canonical";
+import { AgentMapVersionResolver } from "@sapiom/agent-map/node/version-resolver";
 
 const projectId = "project_018f0000-0000-4000-8000-000000000001" as StudioProjectId;
 const actor = { userId: "user", sessionId: "session" };

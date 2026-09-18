@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createAgentMapVersion } from "../core/agent-map-version.js";
-import { parseAgentMapVersion } from "./agent-map-version-codec.js";
+import { createAgentMapVersion } from "@sapiom/agent-map/node/version";
+import { parseAgentMapVersion } from "@sapiom/agent-map/node/version-codec";
 import type { AgentMapVersionId } from "@sapiom/agent-map";
 
 const projectId = "project_018f0000-0000-4000-8000-000000000001";

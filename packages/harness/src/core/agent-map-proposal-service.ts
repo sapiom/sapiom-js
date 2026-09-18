@@ -19,15 +19,15 @@ import {
   type ProposalValidationIssue,
   type StudioProjectId,
 } from "@sapiom/agent-map";
-import { canonicalDigest, computeGraphContentDigest } from "../shared/agent-map-canonical.js";
-import { parseProjectAgentActorRef } from "../shared/agent-map-codec.js";
+import { canonicalDigest, computeGraphContentDigest } from "@sapiom/agent-map/node/canonical";
+import { parseProjectAgentActorRef } from "@sapiom/agent-map/codec";
 import {
   BUILD_PLAN_VERSION_HISTORY_LIMIT,
   PROJECT_MUTATION_RECEIPT_LIMIT,
   PROJECT_MUTATION_TOMBSTONE_LIMIT,
   type ProjectMutationReceipt,
 } from "../shared/build-plan.js";
-import { parseProposalBatchRequest } from "./agent-map-proposal-schema.js";
+import { parseProposalBatchRequest } from "@sapiom/agent-map/schema";
 import {
   derivePersistedMapOperationTouchSet,
   materializeValidatedMapBatch,
@@ -35,12 +35,12 @@ import {
   validateMapOperationBatch,
   type AgentMapIdAllocator,
   type ProposalTouchSet,
-} from "./agent-map-proposal-validator.js";
+} from "@sapiom/agent-map/validation";
 import {
   agentMapVersionRef,
   applyPersistedMapOperations,
   createAgentMapVersion,
-} from "./agent-map-version.js";
+} from "@sapiom/agent-map/node/version";
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,

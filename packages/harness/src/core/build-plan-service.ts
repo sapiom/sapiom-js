@@ -5,7 +5,7 @@ import type {
   ProjectAgentSession,
   StudioProjectId,
 } from "@sapiom/agent-map";
-import { canonicalJson } from "../shared/agent-map-canonical.js";
+import { canonicalJson } from "@sapiom/agent-map/node/canonical";
 import type {
   BuildPlanDiagnostic,
   BuildPlanIdMapping,
@@ -33,7 +33,7 @@ import {
 } from "./build-plan-canonicalization.js";
 import { validateProjectBuildPlanContent } from "./build-plan-contract-validator.js";
 import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration.js";
-import { AgentMapVersionResolver } from "./agent-map-version-resolver.js";
+import { AgentMapVersionResolver } from "@sapiom/agent-map/node/version-resolver";
 import { BuildPlanStore } from "./build-plan-store.js";
 import {
   parseBuildPlanApplyRequest,

@@ -16,7 +16,7 @@ import {
   type AgentMapGraph,
   type ProjectAgentActorRef,
   type ProjectMutationOrigin,
-} from "@sapiom/agent-map";
+} from "./agent-map.js";
 
 export const AGENT_MAP_UUID_V7_PATTERN =
   "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";

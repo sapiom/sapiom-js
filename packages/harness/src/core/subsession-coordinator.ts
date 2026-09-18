@@ -4,7 +4,7 @@ import type {
   ProjectAgentSession,
   StudioProjectId,
 } from "@sapiom/agent-map";
-import { canonicalDigest } from "../shared/agent-map-canonical.js";
+import { canonicalDigest } from "@sapiom/agent-map/node/canonical";
 import {
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,

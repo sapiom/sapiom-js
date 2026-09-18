@@ -1,4 +1,4 @@
-import type { AgentMapVersion, AgentMapVersionRef, StudioProjectId } from "@sapiom/agent-map";
+import type { AgentMapVersion, AgentMapVersionRef, StudioProjectId } from "../shared/agent-map.js";
 import { validateAgentMapVersionHistory } from "./agent-map-version.js";
 
 export class AgentMapVersionResolutionError extends Error {

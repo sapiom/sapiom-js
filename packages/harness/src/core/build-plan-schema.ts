@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isCallerProjectRequestId } from "./project-request-namespace.js";
+import { isCallerProjectRequestId } from "@sapiom/agent-map/request-namespace";
 
 export const BUILD_PLAN_MAX_ITEMS = 128;
 export const BUILD_PLAN_MAX_TEXT = 8_192;

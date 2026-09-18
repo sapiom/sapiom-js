@@ -1,3 +1,4 @@
+import { isStudioProjectId } from "@sapiom/agent-map/project-id";
 import type {
   AcceptedProposalDelta,
   AgentMapWorkspaceResponse,
@@ -10,7 +11,7 @@ import type {
 import {
   parseAcceptedProposalDelta as parseSharedAcceptedProposalDelta,
   parseMapChangeProposal,
-} from "@shared/agent-map-codec";
+} from "@sapiom/agent-map/codec";
 import type { WorkspaceScopeSummary } from "@shared/workspace-scope";
 import type { WorkflowInfo } from "@shared/types";
 import { resolveProjectRootForPath } from "../../../src/shared/project-roots.js";
@@ -52,14 +53,7 @@ function isOpaqueId(value: unknown): value is string {
   );
 }
 
-function isProjectId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^project_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      value,
-    )
-  );
-}
+const isProjectId = isStudioProjectId;
 
 function isTimestamp(value: unknown): value is string {
   if (typeof value !== "string") return false;

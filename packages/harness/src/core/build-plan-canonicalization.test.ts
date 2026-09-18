@@ -11,7 +11,7 @@ import {
   canonicalJson,
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefId,
   AgentBriefSemanticDigest,

@@ -16,7 +16,7 @@ import {
 import {
   restoreAgentMapVersion,
   agentMapVersionRef,
-} from "./agent-map-version.js";
+} from "@sapiom/agent-map/node/version";
 import type { MapOperationInput } from "@sapiom/agent-map";
 
 vi.mock("node:fs/promises", async (original) => ({

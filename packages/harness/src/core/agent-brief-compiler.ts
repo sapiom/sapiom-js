@@ -12,7 +12,7 @@ import {
   compareCanonicalStrings,
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefFocusSelection,
   CompileAgentBriefsRequest,

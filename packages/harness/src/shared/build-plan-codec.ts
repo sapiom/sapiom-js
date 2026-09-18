@@ -8,7 +8,7 @@ import {
   isAgentMapBoundedText,
   parseProjectAgentActorRef,
   parseProjectMutationOrigin,
-} from "./agent-map-codec.js";
+} from "@sapiom/agent-map/codec";
 import {
   BUILD_PLAN_SCHEMA_VERSION,
   type AgentBriefFocusScope,

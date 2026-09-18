@@ -3,8 +3,8 @@ import { Buffer } from "node:buffer";
 import {
   AGENT_MAP_UUID_V7_PATTERN,
   hasAgentMapControlCharacter,
-} from "./agent-map-codec.js";
-import { canonicalDigest, canonicalJson } from "./agent-map-canonical.js";
+} from "@sapiom/agent-map/codec";
+import { canonicalDigest, canonicalJson } from "@sapiom/agent-map/node/canonical";
 import {
   parseAgentBriefVersionRef,
   parseAgentMapVersionRef,
