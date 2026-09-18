@@ -48,8 +48,8 @@ it("built entry describes support without importing the normal server or contact
     );
     assert.equal(pkg.sapiomCapabilities, 1);
     assert.equal(descriptor.packageVersion, pkg.version);
-    assert.deepEqual(descriptor.features, []);
-    assert.deepEqual(descriptor.hostProtocolVersions, []);
+    assert.deepEqual(descriptor.features, ["studio-context"]);
+    assert.deepEqual(descriptor.hostProtocolVersions, [1]);
     assert.deepEqual(descriptor.mapSchemaVersions, [1]);
   } finally {
     await rm(temporary, { recursive: true, force: true });

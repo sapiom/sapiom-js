@@ -11,9 +11,17 @@ import { register as registerSandbox } from "./tools/sandbox.js";
 import { register as registerAppPublish } from "./tools/app-publish.js";
 import { register as registerAppManage } from "./tools/app-manage.js";
 import { register as registerFeedback } from "./tools/feedback.js";
+import { studioHostContext } from "./studio-host-context.js";
 import { fetchInstructions } from "./instructions-fetch.js";
 
 async function main(): Promise<void> {
+  const host = await studioHostContext.resolve();
+  if (host.kind === "unavailable-studio") {
+    console.error(
+      `Studio map context unavailable (${host.reason}); existing tools remain available.`,
+    );
+  }
+
   // Resolve environment: SAPIOM_ENVIRONMENT env var > file > "production"
   const env = await resolveEnvironment(process.env.SAPIOM_ENVIRONMENT);
 

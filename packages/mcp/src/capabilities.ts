@@ -41,8 +41,8 @@ export async function describeCapabilities(): Promise<McpCapabilities> {
     packageName: "@sapiom/mcp",
     packageVersion: packageVersion(),
     artifactHash: await artifactHash(),
-    hostProtocolVersions: [],
+    hostProtocolVersions: [1],
     mapSchemaVersions: [AGENT_MAP_WORKSPACE_SCHEMA_VERSION],
-    features: [],
+    features: ["studio-context"],
   });
 }
