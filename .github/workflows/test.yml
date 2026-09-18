@@ -43,6 +43,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Verify installed Agent Map package
+        run: pnpm --filter @sapiom/agent-map test:package
+
       - name: Type check
         run: pnpm typecheck
 
@@ -51,6 +54,23 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  agent-map-node18:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "18.x"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile --filter "@sapiom/agent-map..."
+      - run: pnpm --filter @sapiom/agent-map build
+      - run: pnpm --filter @sapiom/agent-map test
+      - run: pnpm --filter @sapiom/agent-map test:package
 
   # Template gallery gate. The `examples/` tree lives outside the pnpm workspace,
   # so the matrix job above never touches it — this is the only check that

@@ -34,3 +34,15 @@ Repository lookups refresh filesystem identity for both the working directory an
 Missing descendants can resolve through their nearest existing ancestor. Permission failures, symlink loops, and other filesystem errors produce `unavailable`, including errors reading candidate catalog roots.
 
 Studio owns discovery and calls the shared catalog's `reconcile` with the complete root inventory. A standalone lookup must never call `reconcile([cwd])`, which would mark other roots missing. Explicit registration uses catalog `create`/`addRootBinding` methods under the existing catalog lock; additional roots must be registered to reuse a project across worktrees.
+
+## Exports and verification
+
+Exports under `/node/*` provide storage, authoring, catalog lookup, hashing, and version services for trusted host code. All other exports are browser-safe contracts, schemas, validation, codecs, or pure helpers. Use explicit subpaths rather than importing unpublished internal files.
+
+Map writes preserve the complete planning aggregate (including plans, briefs, receipts, and tombstones); initialization records and implementation bindings remain separate sidecars. Hosts supply authenticated actor/project scope to the authoring service.
+
+Run `pnpm --filter @sapiom/agent-map test:package` after installing dependencies. It packs and installs the library outside the workspace, verifies every export and declaration, bundles all browser exports without tree shaking, and exercises authoring, restart, replay, and project lookup without Studio or MCP installed. Runtime regression suites remain in Harness and import this package.
+
+The check rejects Studio/MCP anywhere in the installed dependency graph, including aliases and optional dependencies, and in both workspace and installed browser bundle paths. Negative fixtures exercise these checks before the tarball smoke test.
+
+Package tests run on Node 18; the repository and Studio CI matrix covers Node 20/22, browser journeys, and Linux packaged Desktop smoke. New MCP tool activation is handled separately from this library.

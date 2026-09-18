@@ -148,13 +148,15 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "vitest run --passWithNoTests",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "test:package": "node --test scripts/package-boundaries.test.mjs && pnpm build && node scripts/check-package.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
     "typescript": "~5.9.3",
     "vitest": "^3.0.0",
-    "@types/uuid": "^10.0.0"
+    "@types/uuid": "^10.0.0",
+    "esbuild": "^0.28.1"
   },
   "engines": {
     "node": ">=18.0.0"
