@@ -1051,12 +1051,17 @@ describe("browserAutomation.withSession()", () => {
       async (session) => {
         expect(session.sessionId).toBe("sess-ident");
       },
-      { identityId: "id-xyz" },
+      { identityId: "id-xyz", idleTimeoutMinutes: 30, maxDurationMinutes: 180 },
       transport,
       BASE,
     );
 
     expect(createUrl).toBe(`${BASE}/v1/sessions/with-identity`);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      identityId: "id-xyz",
+      idleTimeoutMinutes: 30,
+      maxDurationMinutes: 180,
+    });
   });
 
   it("propagates the original error even if close also fails", async () => {
