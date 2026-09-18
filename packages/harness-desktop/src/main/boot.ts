@@ -15,6 +15,8 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import {
   runDoctor,
+  mcpCommandForEntry,
+  qualifyMcpCommand,
   pickDefaultHarness,
   ensureAuthenticated,
   ensureSpawnHelperExecutable,
@@ -571,11 +573,8 @@ export async function boot(setupWin: BrowserWindow, mode: BootMode): Promise<Boo
     // child and never leaks into the session at large.
     ...(sapiomDevMcpEntry
       ? {
-          sapiomDevMcp: {
-            command: process.execPath,
-            args: [sapiomDevMcpEntry],
-            env: { ELECTRON_RUN_AS_NODE: "1" },
-          },
+          sapiomDevMcp: mcpCommandForEntry(sapiomDevMcpEntry),
+          prepareSapiomDevMcp: () => qualifyMcpCommand(mcpCommandForEntry(sapiomDevMcpEntry!)),
         }
       : {}),
     autoCreateSession: !firstRun,

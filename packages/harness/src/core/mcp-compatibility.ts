@@ -211,3 +211,14 @@ export async function qualifyMcpCommand(
     return unavailable("invalid");
   }
 }
+
+/** CLI policy: use the runtime dependency only when verified; otherwise retain
+ * its existing npx @latest fallback (which is never treated as preflighted).
+ */
+export async function prepareBundledMcpCommand(
+  candidate = bundledMcpCommand(),
+): Promise<McpPreflightResult | undefined> {
+  if (!candidate) return undefined;
+  const result = await qualifyMcpCommand(candidate);
+  return result.kind === "verified" ? result : undefined;
+}

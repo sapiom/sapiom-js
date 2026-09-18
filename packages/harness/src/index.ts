@@ -289,6 +289,7 @@ export {
 
 export {
   bundledMcpCommand,
+  prepareBundledMcpCommand,
   mcpCommandForEntry,
   qualifyMcpCommand,
   type McpPreflightResult,

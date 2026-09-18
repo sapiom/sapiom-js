@@ -246,3 +246,21 @@ describe("generateMcpConfig", () => {
     expect((await fs.stat(filePath)).mode & 0o777).toBe(0o600);
   });
 });
+
+it("keeps verified host bootstrap private to sapiom-dev and ignores authority in launcher env", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-private-context-"));
+  try {
+    const studioHost = { contextUrl: "http://127.0.0.1:1234/mcp/agent-map/host-context", bearerToken: "private-token",
+      expectedMcp: { descriptorVersion: 1 as const, packageName: "@sapiom/mcp" as const, packageVersion: "1.0.0",
+        artifactHash: "a".repeat(64), hostProtocolVersions: [1], mapSchemaVersions: [1], features: ["studio-context"] } };
+    const devServer = { command: process.execPath, args: ["/mcp/index.js"], env: { SAPIOM_STUDIO_HOST_CONTEXT: "foreign" } };
+    const file = await generateMcpConfig("scoped", { generatedRoot: root, studioHost, devServer });
+    const config = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(JSON.parse(config.mcpServers["sapiom-dev"].env.SAPIOM_STUDIO_HOST_CONTEXT)).toEqual(studioHost);
+    expect(JSON.stringify(config.mcpServers.sapiom)).not.toContain("private-token");
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    const unscoped = await generateMcpConfig("background", { generatedRoot: root, devServer });
+    const other = JSON.parse(await fs.readFile(unscoped, "utf8"));
+    expect(other.mcpServers["sapiom-dev"].env.SAPIOM_STUDIO_HOST_CONTEXT).toBeUndefined();
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
