@@ -83,6 +83,54 @@ describe("browserAutomation.sessions.create()", () => {
     expect(result.maxDurationSec).toBe(1200);
   });
 
+  it("maps liveViewMode (camelCase) from the response", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          sessionId: "sess-lvm",
+          cdpUrl: "ws://cdp.example.com/lvm",
+          liveViewUrl: "https://live.example.com/lvm",
+          liveViewMode: "persistent",
+          expiresAt: "2099-01-01T00:00:00Z",
+          maxDurationSec: 1200,
+        }),
+    ]);
+
+    const result = await browserAutomation.createSession(transport, BASE);
+    expect(result.liveViewMode).toBe("persistent");
+  });
+
+  it("maps snake_case live_view_mode to liveViewMode", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          session_id: "sess-snake",
+          cdp_url: "ws://cdp.example.com/snake",
+          live_view_mode: "persistent",
+          expires_at: "2099-01-01T00:00:00Z",
+          max_duration_sec: 1200,
+        }),
+    ]);
+
+    const result = await browserAutomation.createSession(transport, BASE);
+    expect(result.liveViewMode).toBe("persistent");
+  });
+
+  it("omits liveViewMode when the response does not carry it (older gateways)", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse({
+          sessionId: "sess-none",
+          cdpUrl: "ws://cdp.example.com/none",
+          expiresAt: "2099-01-01T00:00:00Z",
+          maxDurationSec: 1200,
+        }),
+    ]);
+
+    const result = await browserAutomation.createSession(transport, BASE);
+    expect("liveViewMode" in result).toBe(false);
+  });
+
   it("maps snake_case response fields to camelCase", async () => {
     const { transport } = makeTransport([
       () =>

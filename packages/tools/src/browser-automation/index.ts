@@ -13,7 +13,8 @@
  *
  *   // Session + auto-close helper:
  *   const result = await sapiom.browserAutomation.withSession(async (session) => {
- *     session.cdpUrl;  // CDP WebSocket — connect Playwright/Puppeteer here
+ *     session.cdpUrl;      // CDP WebSocket — connect Playwright/Puppeteer here
+ *     session.liveViewUrl; // live view — hand a sign-in or 2FA step to a person
  *     const shot = await session.screenshot({ url: "https://example.com" });
  *     return shot;
  *   });
@@ -36,13 +37,33 @@ const DEFAULT_BASE_URL = resolveServiceUrl(
 
 // ----- Types -----
 
+/**
+ * Lifetime of a session's `liveViewUrl`. `"persistent"` means the link works for as long as
+ * the session does.
+ */
+export type LiveViewMode = "persistent";
+
 export interface BrowserSession {
   /** Unique session identifier. */
   sessionId: string;
   /** CDP WebSocket URL — connect Playwright or Puppeteer here. */
   cdpUrl: string;
-  /** Optional hosted live-view URL. */
+  /**
+   * Interactive live view of this session's browser. It opens in any web browser on any
+   * device, so a person can take over for a step the agent should not do itself — a sign-in,
+   * a one-time code, a payment confirmation. They act inside the same session, and the agent
+   * resumes over `cdpUrl` with cookies intact.
+   *
+   * The link works for as long as the session does (see `expiresAt` / `maxDurationSec`) and
+   * anyone holding it can act in the browser. Treat it like a credential: send it to one
+   * person over a channel you trust, and close the session when the step is done.
+   * Absent from Local Run stub sessions.
+   *
+   * @see https://docs.sapiom.ai/capabilities/browser#hand-a-step-to-a-human
+   */
   liveViewUrl?: string;
+  /** Lifetime the capability applied to `liveViewUrl`; see {@link LiveViewMode}. */
+  liveViewMode?: LiveViewMode;
   /** ISO-8601 timestamp when this session expires. */
   expiresAt: string;
   /** Maximum session duration in seconds. */
@@ -173,6 +194,8 @@ interface RawBrowserSession {
   cdpUrl?: string;
   live_view_url?: string;
   liveViewUrl?: string;
+  live_view_mode?: LiveViewMode;
+  liveViewMode?: LiveViewMode;
   expires_at?: string;
   expiresAt?: string;
   max_duration_sec?: number;
@@ -215,6 +238,8 @@ function mapBrowserSession(raw: RawBrowserSession): BrowserSession {
     cdpUrl,
     live_view_url,
     liveViewUrl,
+    live_view_mode,
+    liveViewMode,
     expires_at,
     expiresAt,
     max_duration_sec,
@@ -222,11 +247,15 @@ function mapBrowserSession(raw: RawBrowserSession): BrowserSession {
     ...rest
   } = raw;
   const resolvedLiveViewUrl = liveViewUrl ?? live_view_url;
+  const resolvedLiveViewMode = liveViewMode ?? live_view_mode;
   return {
     sessionId: (sessionId ?? session_id ?? "") as string,
     cdpUrl: (cdpUrl ?? cdp_url ?? "") as string,
     ...(resolvedLiveViewUrl !== undefined && {
       liveViewUrl: resolvedLiveViewUrl,
+    }),
+    ...(resolvedLiveViewMode !== undefined && {
+      liveViewMode: resolvedLiveViewMode,
     }),
     expiresAt: (expiresAt ?? expires_at ?? "") as string,
     maxDurationSec: (maxDurationSec ?? max_duration_sec ?? 0) as number,
@@ -497,7 +526,11 @@ export async function withSession<T>(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<T> {
   const browserSession = opts?.identityId
-    ? await createSessionWithIdentity({ identityId: opts.identityId }, transport, baseUrl)
+    ? await createSessionWithIdentity(
+        { identityId: opts.identityId },
+        transport,
+        baseUrl,
+      )
     : await createSession(transport, baseUrl);
 
   const activeSession: ActiveSession = {
