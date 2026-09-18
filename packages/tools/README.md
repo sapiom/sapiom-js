@@ -109,11 +109,12 @@ const { downloadUrl } = await fileStorage.getDownloadUrl(
 
 ## Errors
 
-A failed call throws the capability's own error class (`SearchHttpError`,
-`DatabaseHttpError`, …), each carrying `status` and the parsed `body`. On top of
-that, every error from a Sapiom call carries the same facts about the call under
-`sapiomCall`, so you can read the status without remembering which class you are
-holding:
+A call that gets a response and fails throws the capability's own error class
+(`SearchHttpError`, `DatabaseHttpError`, …), each carrying `status` and the
+parsed `body`. A call that never reaches the server rejects with whatever `fetch`
+threw, which has neither. On top of both, every error from a Sapiom call carries
+the same facts about the call under `sapiomCall`, so you can read what happened
+without remembering which class you are holding:
 
 ```typescript
 import { readSapiomCall } from "@sapiom/tools";
@@ -126,12 +127,14 @@ try {
 ```
 
 These are facts, not a verdict: nothing in the SDK decides whether a call is
-worth retrying. Inside a Sapiom agent run, the platform reads them. An error
-that escapes your step after a transient failure (a 5xx, a rate limit, a
-connection that never happened) is one the platform can recognise as worth
-another attempt, and the status and message survive onto the run's failure
-reason when the retries run out. An error from a raw `fetch` to a third party
-carries no such facts, so it cannot be told apart from any other throw.
+retried. Inside a Sapiom agent run, an error that escapes your step carries them
+to the platform, which can therefore tell a transient failure (a 5xx, a rate
+limit, a request timeout, a connection that never happened) from a deterministic
+one, and keeps the status and message on the run's failure reason instead of a
+generic message. How many attempts that earns is the platform's policy, not
+something this package promises: to control retries from your own code, catch
+the error and return the `retry()` directive. An error from a raw `fetch` to a
+third party carries no facts, so it cannot be told apart from any other throw.
 
 ## Usage analytics
 

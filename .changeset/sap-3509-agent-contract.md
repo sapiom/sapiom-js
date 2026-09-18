@@ -5,8 +5,8 @@
 Add the retryable direction of the closed step-error contract: a Sapiom-surface
 call that failed transiently.
 
-`isTransientSapiomCall(facts)` is the single versioned rule (5xx, 429, 408, or a
-connection that never produced a response). `toRetryableStepErrorPayload(error,
+`isTransientSapiomCall(facts)` is the single versioned rule (5xx, 429, 408, 425,
+or a connection that never produced a response). `toRetryableStepErrorPayload(error,
 facts)` builds the canonical wire payload from it, and
 `parseRetryableStepErrorPayload` / `isRetryableStepErrorPayload` read it back on
 the host side:

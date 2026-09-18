@@ -112,11 +112,52 @@ describe("Transport.fetch()", () => {
     expect(readSapiomCall(err)).toBeUndefined();
   });
 
+  it.each([
+    ["a GET with a body", { method: "GET", body: "x" }],
+    ["an invalid method", { method: "BAD METHOD" }],
+  ])("leaves %s unmarked", async (_label, init) => {
+    // `fetch` rejects these while CONSTRUCTING the request, with the same bare
+    // TypeError a dead connection gives. They carry no `cause`; a transport
+    // failure always does.
+    const transport = transportWith(async () => {
+      throw Object.assign(
+        new TypeError("Request with GET/HEAD method cannot have body."),
+        {},
+      );
+    });
+
+    const err = await transport
+      .fetch("https://api.sapiom.ai/v1/memory", init)
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect((err as Error).name).toBe("TypeError");
+    expect(readSapiomCall(err)).toBeUndefined();
+  });
+
+  it("leaves an abort whose reason is a TypeError unmarked", async () => {
+    const controller = new AbortController();
+    controller.abort(new TypeError("cancelled"));
+    const transport = transportWith(async () => {
+      throw controller.signal.reason as Error;
+    });
+
+    const err = await transport
+      .fetch("https://api.sapiom.ai/v1/memory", { signal: controller.signal })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe("cancelled");
+    expect(readSapiomCall(err)).toBeUndefined();
+  });
+
   it("records a network rejection minted in another realm", async () => {
     // The artifact bundle is handed an injected fetch, so the rejection can come
     // from a different realm, where `instanceof TypeError` is false. Recognition
     // has to be structural or the fact is silently never recorded.
-    const foreign = runInNewContext('new TypeError("fetch failed")') as Error;
+    const foreign = runInNewContext(
+      'Object.assign(new TypeError("fetch failed"), { cause: new Error("ECONNREFUSED") })',
+    ) as Error;
     expect(foreign).not.toBeInstanceOf(TypeError);
     const transport = transportWith(async () => {
       throw foreign;

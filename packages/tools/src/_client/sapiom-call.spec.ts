@@ -208,6 +208,24 @@ describe("parseRetryAfter()", () => {
     expect(parseRetryAfter("soon please")).toBeUndefined();
   });
 
+  // RFC 9110 spells delta-seconds `1*DIGIT`. A malformed numeric value must not
+  // fall through to the date branch: `Date.parse("1.5")` returns a date in 2001,
+  // which would turn a sloppy header into a confident wrong answer.
+  it.each(["1.5", "1e3", "-5", "+30", "0x10", "Infinity", "NaN"])(
+    "rejects the malformed delta-seconds %s rather than guessing",
+    (header) => {
+      expect(parseRetryAfter(header)).toBeUndefined();
+    },
+  );
+
+  it("tolerates surrounding whitespace on a well-formed value", () => {
+    expect(parseRetryAfter(" 7 ")).toBe(7000);
+  });
+
+  it("drops a delay too large to represent", () => {
+    expect(parseRetryAfter("9".repeat(20))).toBeUndefined();
+  });
+
   it("clamps a value already in the past to zero (ported behavior)", () => {
     expect(parseRetryAfter(new Date(Date.now() - 60_000).toUTCString())).toBe(
       0,

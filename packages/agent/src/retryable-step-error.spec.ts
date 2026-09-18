@@ -28,6 +28,9 @@ describe('isTransientSapiomCall()', () => {
     { status: 529 },
     { status: 429 },
     { status: 408 },
+    // 425 Too Early: `sandboxes/multipart.ts` already retries it locally, so it
+    // must not read as deterministic once it escapes the step.
+    { status: 425 },
     { network: true },
     // A network failure has no status to read; the connection never happened.
     { network: true, capability: 'web.search' },
@@ -126,6 +129,31 @@ describe('toRetryableStepErrorPayload()', () => {
     expect(payload).toMatchObject({ name: '42', message: 'boom', status: 503 });
     expect(payload).not.toHaveProperty('retryAfterMs');
     expect(payload).not.toHaveProperty('stack');
+  });
+
+  it('does not throw on facts built with hostile accessors', () => {
+    // `readSapiomCall` returns whatever duck-typed object it found, which may be
+    // a step body's own, so the rule and the normalizer must survive it.
+    const hostileFacts = {
+      get status(): number {
+        throw new Error('hostile getter');
+      },
+      get capability(): string {
+        throw new Error('hostile getter');
+      },
+      network: true,
+    };
+
+    expect(() => isTransientSapiomCall(hostileFacts)).not.toThrow();
+    expect(isTransientSapiomCall(hostileFacts)).toBe(true);
+    expect(toRetryableStepErrorPayload(new Error('boom'), hostileFacts)).toEqual({
+      name: 'Error',
+      message: 'boom',
+      code: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.errorCode,
+      version: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.version,
+      retryable: true,
+      stack: expect.any(String) as unknown as string,
+    });
   });
 
   it('keeps a large but representable Retry-After', () => {
