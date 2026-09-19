@@ -66,6 +66,16 @@ import { z } from "zod/v4";
 /** The signal a human fires to approve or reject the drafted proposal. */
 const DECISION_SIGNAL = "proposal.decision";
 
+/**
+ * Explicit deadline for a human gate, one year. A pause with no `timeoutMs`
+ * inherits the engine's 7-day default, and a lapsed deadline *terminates* the
+ * run rather than resuming it, so the default would hard-fail any approval
+ * slower than a week. It stays a terminal deadline: an approval that outlives
+ * the year is failed too. The year is picked so no realistic approver reaches
+ * it, while an abandoned gate still lands in a terminal state.
+ */
+const GATE_PAUSE_TIMEOUT_MS = 365 * 24 * 60 * 60 * 1000;
+
 /** Package the sandbox installs to lay out the PDF (pure JS, no native deps). */
 const PDF_PACKAGE = "pdf-lib@1.17.1";
 
@@ -612,6 +622,7 @@ const review = defineStep({
       signal: DECISION_SIGNAL,
       resumeStep: "onDecision",
       correlationId: ctx.executionId,
+      timeoutMs: GATE_PAUSE_TIMEOUT_MS,
     });
   },
 });

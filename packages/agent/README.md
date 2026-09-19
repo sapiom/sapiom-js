@@ -178,6 +178,41 @@ Things to know:
   ```
 - **Outside an agent run nothing changes** — `await launch().wait()` the capability as
   usual; the pause wiring only engages when a step pauses on the handle.
+- **A hosted pause has a deadline.** `timeoutMs` sets it; omitted, the hosted engine
+  applies its default of 7 days. A pause that receives no signal by then is finalized
+  as failed rather than parked forever, so a dropped result surfaces as an error. The
+  failure carries the engine's pause-timeout error, an engine state on the run rather
+  than a symbol this package exports. The default matches the sandboxed capability's
+  resume-token TTL, so for a coding pause a later result could not be accepted anyway.
+
+  **A pause on a child agent launched now needs no `timeoutMs`.** Its result comes
+  back through stored parent linkage rather than a resume token, and the engine
+  waives the deadline for as long as the child is alive. The waiver is narrow: it
+  covers a dispatch still pending or waiting on the parent, and lapses as soon as the
+  child reaches a terminal state or its run no longer exists.
+
+  **A child scheduled with `at` is the exception.** The parent's deadline runs from
+  the scheduled time rather than from the pause, which covers the wait until the
+  child starts, but the live-child waiver does not apply to it. Pass an explicit
+  `timeoutMs` when a scheduled child can take more than a week once it begins, for
+  instance because it opens a gate of its own.
+
+  Otherwise set `timeoutMs` for what the default does not fit: a human gate you
+  expect to outlive a week, or a wait that should give up sooner.
+
+  ```ts
+  // A human gate: nothing but this deadline bounds the wait.
+  return pauseUntilSignal({
+    signal: "approval.decision",
+    resumeStep: "decide",
+    timeoutMs: 365 * 24 * 60 * 60 * 1000, // one year
+  });
+  ```
+
+  `run_local` neither applies nor enforces any of this: it auto-resumes every pause
+  immediately, with the registered capability result or an empty payload. A local run
+  never sits at a gate and never times out, so the deadline is only observable against
+  the hosted engine.
 
 ### Compatible capabilities
 

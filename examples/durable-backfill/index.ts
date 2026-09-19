@@ -514,6 +514,9 @@ const processStep = defineStep({
       });
       return goto("process", {});
     }
+    // No `timeoutMs` on purpose: the engine's 7-day default is the right ceiling
+    // for a heartbeat. A schedule that has not ticked in a week has stopped, and
+    // failing the backfill loudly beats leaving it parked mid-cursor forever.
     return pauseUntilSignal({
       signal: HEARTBEAT,
       resumeStep: "process",
