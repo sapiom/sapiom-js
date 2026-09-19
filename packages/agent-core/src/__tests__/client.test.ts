@@ -15,6 +15,7 @@ import { inspect, inspectBuild, listExecutions } from '../inspect';
 import { link } from '../link';
 import { run, parseJsonInput } from '../run';
 import { signal, parseSignalPayload } from '../signal';
+import { emitEvent } from '../events';
 
 // ── Fetch mock helpers ────────────────────────────────────────────────────────
 
@@ -203,6 +204,61 @@ describe('signal', () => {
     );
     const body = JSON.parse((spy.mock.calls[0] as [string, RequestInit])[1].body as string);
     expect(body.payload).toEqual({ decision: true });
+  });
+
+  it("surfaces the server's message — what qualifies a `matched` that under-reports", async () => {
+    mockFetch([
+      { status: 200, body: { matched: 0, message: 'No execution was waiting on that pair.' } },
+    ]);
+    const result = await signal(
+      { executionId: 'exec-1', name: 'approve', correlationId: 'c1' },
+      client,
+    );
+    expect(result).toEqual({ matched: 0, message: 'No execution was waiting on that pair.' });
+  });
+
+  it('omits message entirely on a clean fanout (not a key that is always there and null)', async () => {
+    mockFetch([{ status: 200, body: { matched: 2 } }]);
+    const result = await signal(
+      { executionId: 'exec-1', name: 'approve', correlationId: 'c1' },
+      client,
+    );
+    expect(Object.keys(result)).toEqual(['matched']);
+  });
+});
+
+// ── emitEvent ─────────────────────────────────────────────────────────────────
+
+describe('emitEvent', () => {
+  const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+
+  it('posts to /v1/workflows/events with the event body', async () => {
+    const spy = mockFetch([
+      {
+        status: 202,
+        body: { receiptId: 'rcpt-1', outcome: 'matched', duplicate: false, fireIds: ['f-1'] },
+      },
+    ]);
+    const result = await emitEvent(
+      { type: 'lead.created', payload: { leadId: 'l_42' }, eventId: 'crm-evt-8f2a' },
+      client,
+    );
+
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://example.com/v1/workflows/events');
+    expect(JSON.parse(init.body as string)).toEqual({
+      type: 'lead.created',
+      payload: { leadId: 'l_42' },
+      id: 'crm-evt-8f2a',
+    });
+    expect(result.fireIds).toEqual(['f-1']);
+  });
+
+  it('maps the engine\'s reserved-type 400 onto AgentOperationError', async () => {
+    mockFetch([{ status: 400, body: { message: 'Event type "sapiom.x" is reserved.' } }]);
+    await expect(
+      emitEvent({ type: 'sapiom.x', payload: {} }, client),
+    ).rejects.toMatchObject({ code: 'HTTP_400' });
   });
 });
 
