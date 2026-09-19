@@ -1,5 +1,13 @@
 # @sapiom/harness
 
+## 0.17.1
+
+### Patch Changes
+
+- 0fd07fa: Sync Agent Studio's offline prompt with the served guidance, including the distinction between direct gateway model discovery and the separate `sapiom_chat` catalog.
+  - @sapiom/agent@0.14.2
+  - @sapiom/agent-core@0.14.2
+
 ## 0.17.0
 
 ### Minor Changes
