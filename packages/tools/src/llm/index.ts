@@ -108,7 +108,7 @@ export interface LlmRunSpec {
    * gateway choose; pass `"small"`/`"medium"`/`"large"` only to pick a billing
    * class deliberately. The full rule, with the worked example, is the served
    * platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
-   * (written against release 1.0).
+   * (written against release 1.1).
    */
   model?: RoutingLabel;
   /**
@@ -155,7 +155,7 @@ export interface LlmSubmitSpec {
    * gateway choose; pass `"small"`/`"medium"`/`"large"` only to pick a billing
    * class deliberately. The full rule, with the worked example, is the served
    * platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
-   * (written against release 1.0).
+   * (written against release 1.1).
    */
   model?: RoutingLabel;
   /**
