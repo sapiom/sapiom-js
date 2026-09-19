@@ -28,6 +28,12 @@ import {
   capabilityCallData,
   type AnalyticsHolder,
 } from "./analytics.js";
+import {
+  SapiomCallError,
+  capabilityOf,
+  ensureOk,
+  markSapiomCall,
+} from "./sapiom-call.js";
 import { VERSION } from "../_generated/version.js";
 
 /**
@@ -110,6 +116,50 @@ export interface TransportRequestOptions {
    * A capability sets this only when its destination expects a different header.
    */
   authHeader?: AuthHeader;
+}
+
+/**
+ * Did `fetch` reject because the connection never happened?
+ *
+ * Structural on `name` rather than `instanceof TypeError`: this package is
+ * bundled into agent artifacts and is handed an injected `fetch`, so the error
+ * can be minted in another realm, where `instanceof` against our own globals is
+ * false and the fact would silently never be recorded. Same reason
+ * `readSapiomCall` recognizes the marker structurally.
+ *
+ * A `TypeError` alone is not enough: `fetch` uses one for every deterministic
+ * request-construction failure too (a GET with a body, an invalid method, an
+ * abort whose reason happens to be a TypeError). Those carry no `cause`, while a
+ * connection that never happened always hangs the underlying socket error there.
+ * Requiring a cause keeps a deterministic mistake out of the transient bucket,
+ * and erring the other way is safe: a rejection without one records no fact and
+ * simply behaves as it did before this contract existed.
+ */
+function isNetworkRejection(error: unknown): error is Error {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "TypeError" &&
+    (error as { cause?: unknown }).cause !== undefined
+  );
+}
+
+/**
+ * Raise a malformed URL or header before the call instead of letting `fetch`
+ * reject with the same `TypeError` it uses for a dead connection. The two
+ * constructors run the very validation `fetch` runs internally, so this cannot
+ * reject a request that would otherwise have gone out.
+ *
+ * Not everything is separable: an unsupported scheme surfaces as a plain
+ * `fetch failed` with a cause, identical to a transport failure. The base URL is
+ * platform-controlled, so that case does not arise from a step body.
+ */
+function assertRequestable(
+  url: string,
+  headers: ConstructorParameters<typeof Headers>[0],
+): void {
+  new URL(url);
+  new Headers(headers);
 }
 
 function attributionToHeaders(a: Attribution): Record<string, string> {
@@ -237,20 +287,32 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
+    // Everything that can fail while BUILDING the request happens before the try:
+    // serializing caller metadata (circular, BigInt), parsing the URL, validating
+    // the headers. `fetch` rejects with a bare TypeError for all of those AND for
+    // a connection that never happened, with nothing on the error to tell them
+    // apart, so raising them here is the only way to keep a deterministic local
+    // failure out of the transient bucket. Marking one transient would buy the
+    // caller three attempts at something that cannot succeed.
+    const headers = {
+      [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
+      "x-sapiom-client": CLIENT_MARKER,
+      ...attributionToHeaders(this.attribution),
+      ...(init.headers ?? {}),
+    };
+    assertRequestable(url, headers);
     const startedAt = Date.now();
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        ...init,
-        headers: {
-          [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
-          "x-sapiom-client": CLIENT_MARKER,
-          ...attributionToHeaders(this.attribution),
-          ...(init.headers ?? {}),
-        },
-      });
+      response = await this.fetchImpl(url, { ...init, headers });
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      // No response ever existed, so there is no status to record. An aborted
+      // signal means the caller stopped waiting on purpose, whatever shape the
+      // rejection took.
+      if (init.signal?.aborted !== true && isNetworkRejection(error)) {
+        markSapiomCall(error, { network: true, capability: capabilityOf(url) });
+      }
       throw error;
     }
     this.trackCapabilityCall(url, init, startedAt, response);
@@ -307,11 +369,16 @@ export class Transport {
       },
       options,
     );
-    if (!res.ok) {
-      throw new Error(
-        `${init.method ?? "GET"} ${url} → ${res.status} ${await res.text()}`,
-      );
-    }
+    // Same message as before this call site was shared: the `→` separator
+    // stands in for the `<prefix>: <status>` form the capability namespaces use,
+    // so the factory formats it rather than taking the default.
+    await ensureOk(
+      res,
+      `${init.method ?? "GET"} ${url} →`,
+      ({ errorPrefix, status, body, text }) =>
+        new SapiomCallError(`${errorPrefix} ${status} ${text}`, status, body),
+      capabilityOf(url),
+    );
     return (await res.json()) as T;
   }
 }
@@ -327,3 +394,18 @@ export {
   resolveCoreBaseUrl,
   type CapabilityCallOptions,
 } from "./capability-call.js";
+
+export {
+  SAPIOM_CALL_MARKER_KEY,
+  SapiomCallError,
+  capabilityOf,
+  ensureOk,
+  failIfNotOk,
+  markSapiomCall,
+  parseRetryAfter,
+  readSapiomCall,
+  type SapiomCallErrorFactory,
+  type SapiomCallFactsInput,
+  type SapiomCallFailure,
+  type SapiomCallMarker,
+} from "./sapiom-call.js";

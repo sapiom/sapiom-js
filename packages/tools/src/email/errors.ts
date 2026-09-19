@@ -1,3 +1,5 @@
+import { ensureOk as sharedEnsureOk } from "../_client/sapiom-call.js";
+
 /**
  * Error thrown by the `email` capability when a request fails (non-2xx response).
  * Exposes `status` (HTTP status code) and `body` (parsed JSON body, or raw text
@@ -18,22 +20,19 @@ export class EmailHttpError extends Error {
 /**
  * Return the response when 2xx, otherwise throw an {@link EmailHttpError}.
  * Parses the error body as JSON when possible; falls back to raw text.
+ *
+ * A two-line wrapper over the shared non-2xx path: the public error class is
+ * unchanged, and the facts about the call (status, `Retry-After`, which
+ * capability) are recorded in exactly one place.
  */
-export async function ensureOk(
+export function ensureOk(
   response: Response,
   errorPrefix: string,
 ): Promise<Response> {
-  if (response.ok) return response;
-  let body: unknown;
-  const text = await response.text().catch(() => "");
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  throw new EmailHttpError(
-    `${errorPrefix}: ${response.status} ${text}`,
-    response.status,
-    body,
+  return sharedEnsureOk(
+    response,
+    errorPrefix,
+    ({ message, status, body }) => new EmailHttpError(message, status, body),
+    "email",
   );
 }

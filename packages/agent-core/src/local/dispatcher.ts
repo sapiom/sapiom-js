@@ -24,6 +24,7 @@ import {
   serializeStepCompletionError,
   STEP_COMPLETION_OUTCOME,
 } from "@sapiom/agent-runtime";
+import { readSapiomCall } from "@sapiom/tools";
 import { createStubClient, type StubCallRecord } from "@sapiom/tools/stub";
 
 import type { StubFile } from "./stubs.js";
@@ -223,7 +224,14 @@ export class LocalStubDispatcher implements StepDispatcher {
           protocol: 1,
           correlationId: request.correlationId,
           outcome: STEP_COMPLETION_OUTCOME.THREW,
-          error: serializeStepCompletionError(e),
+          // Compose the SDK's facts with the contract's rule, exactly as the
+          // sandbox step-runner does, so a transient Sapiom-surface failure
+          // looks the same locally as it does in a real run.
+          //
+          // Facts come off `err`, the value the step actually threw, not off
+          // `e`: a cross-realm error fails `instanceof Error` and gets replaced
+          // by a fresh one above, which carries no marker.
+          error: serializeStepCompletionError(e, readSapiomCall(err)),
           shared: sharedStore.snapshot(),
         },
         parsed,
