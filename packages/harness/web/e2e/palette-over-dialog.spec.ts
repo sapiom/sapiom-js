@@ -82,7 +82,8 @@ test.describe("⌘K over an open dialog", () => {
     await expect
       .poll(() =>
         page.evaluate(
-          () => (window as unknown as { __printKey?: boolean | null }).__printKey,
+          () =>
+            (window as unknown as { __printKey?: boolean | null }).__printKey,
         ),
       )
       .toBe(true);

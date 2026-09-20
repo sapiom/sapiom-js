@@ -19,7 +19,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-
 const ROW = (page: Page, label: string) =>
   page
     .getByTestId(`workspace-group-${label}`)

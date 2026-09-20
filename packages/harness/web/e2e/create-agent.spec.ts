@@ -26,7 +26,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-
 const ROOT = "/Users/demo/acme-app";
 
 /** The last prompt handed to a session, as `new-session-composer.spec.ts`
