@@ -268,14 +268,14 @@ const SORT_LABELS: Record<RailSort, string> = {
 };
 
 /**
- * The project row's trailing actions.
+ * The project row's trailing actions: New agent, then Remove.
  *
  * HOVER ACTIONS, NOT A MENU (design-eng D33: "a project row's verbs are hover
  * actions on the header ... a per-row menu would be a new idiom"). The overflow
- * this replaces wrapped a single destructive verb on every plan-first project,
- * because those let their Agent Map own creation: a popover, a card and a 248px
- * min-width spent on one X. The legacy create action, when a server still
- * offers one, is the other hover action rather than a menu's first row.
+ * this replaces was a popover, a card and a 248px min-width spent on two rows,
+ * one of them destructive. The `+` is New agent, scoped to this project (IA.md
+ * 219, D34a); a bare project (sessions, no agent yet) offers Scaffold instead,
+ * which grows an agent inside the session already running there.
  *
  * The X removes the project from the rail; it never touches a file. `onRemove`
  * is handed the button so the confirmation returns focus to the control that
@@ -290,7 +290,7 @@ function ProjectRowActions({
   label: string;
   /** The create action this project currently offers, or null while one is
    *  mid-creation. A bare project (sessions, no agent) scaffolds into its
-   *  existing session; every other project starts a new one at the root. */
+   *  existing session; every other project opens New agent scoped to it. */
   create: {
     kind: "create" | "scaffold";
     testid: string;
@@ -1424,7 +1424,7 @@ export function WorkflowsRail({
                               : {
                                   kind: "create",
                                   testid: `project-create-agent-${project.label}`,
-                                  label: `Create an agent in ${project.label}`,
+                                  label: `New agent in ${project.label}`,
                                   run: () =>
                                     onCreateAgent(project.root, project.label),
                                 }
@@ -1465,8 +1465,8 @@ export function WorkflowsRail({
                     />
                   )}
                 {/* Preserve the scan boundary explanation for an empty project.
-                    First-agent creation belongs to the project menu; an empty
-                    project never gets a separate inline creation action. */}
+                    First-agent creation is the row's own `+`; an empty project
+                    never gets a separate inline creation action (D36). */}
                 {!collapsed &&
                   empty &&
                   !creating &&
@@ -1525,6 +1525,13 @@ export function WorkflowsRail({
                     focusedAgentPath={focusedAgentPath}
                     onFocusAgent={focusProjectAgent}
                     sessions={projectSessions}
+                    /* D34(c): every group row carries the project row's `+`,
+                       scoped to the project holding the group's members. A
+                       group has no directory, so the project is the only place
+                       a new agent can go. */
+                    onCreateAgent={() =>
+                      onCreateAgent(project.root, project.label)
+                    }
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>

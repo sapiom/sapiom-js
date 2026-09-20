@@ -168,7 +168,7 @@ test.describe("the header + opens a project", () => {
     // pane (D34e).
     await expect(
       page.getByTestId("project-create-agent-blank-slate"),
-    ).toHaveAttribute("aria-label", "Create an agent in blank-slate");
+    ).toHaveAttribute("aria-label", "New agent in blank-slate");
     await expect(
       group.getByTestId("project-start-session-blank-slate"),
     ).toHaveCount(0);

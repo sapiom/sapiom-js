@@ -782,3 +782,33 @@ test("the group rail renders", async ({ page }) => {
     .locator(".rail-workflows")
     .screenshot({ path: "web/e2e/screenshots/group-axis-list-end.png" });
 });
+
+test.describe("New agent on the Group axis (D34c)", () => {
+  test("every group row carries the project's `+`, scoped to the project", async ({
+    page,
+  }) => {
+    // A group is a label over agents, not a directory, so the `+` on its row
+    // creates into the PROJECT that holds its members (design-eng D34c, IA.md
+    // 219) and its accessible name says so. Ungrouped carries it too: the axis
+    // would otherwise be the one arrangement of the rail with no create verb.
+    const project = page.getByTestId(POLSIA);
+    for (const group of ["gateway", "mailer", "Ungrouped"]) {
+      await expect(
+        project.getByTestId(`group-create-agent-${group}`),
+      ).toHaveAttribute("aria-label", "New agent in polsia");
+    }
+    // Create first, destructive last, as on the project row.
+    const rows = await project
+      .getByTestId("group-row-gateway")
+      .locator(".workspace-row-action")
+      .evaluateAll((actions) =>
+        actions.map((action) => action.getAttribute("data-testid")),
+      );
+    expect(rows[0]).toBe("group-create-agent-gateway");
+    expect(rows[rows.length - 1]).toBe("group-delete-gateway");
+
+    await project.getByTestId("group-create-agent-mailer").click();
+    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+    await expect(page.getByTestId("create-agent-project")).toHaveText("polsia");
+  });
+});

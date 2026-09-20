@@ -170,7 +170,7 @@ test.describe("durable Studio project navigation", () => {
 
     await expect(create).toHaveAttribute(
       "aria-label",
-      "Create an agent in dashboard-keeper",
+      "New agent in dashboard-keeper",
     );
     // Hover actions, not a menu (D33): New agent, then Remove. A plain session
     // is NOT a row verb: it starts from the tab strip or from the Start on the

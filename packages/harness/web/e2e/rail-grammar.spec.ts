@@ -56,7 +56,7 @@ test.describe("legacy-server project row grammar", () => {
     // Each states its subject where a glyph cannot: the accessible name.
     await expect(
       page.getByTestId("project-create-agent-acme-app"),
-    ).toHaveAttribute("aria-label", "Create an agent in acme-app");
+    ).toHaveAttribute("aria-label", "New agent in acme-app");
     await expect(page.getByTestId("project-remove-acme-app")).toHaveAttribute(
       "aria-label",
       "Remove acme-app from the rail",
