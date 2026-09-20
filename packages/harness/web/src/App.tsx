@@ -221,6 +221,34 @@ const knownRootsOf = (
   launchDir: string | null | undefined,
 ): string[] => [...(recentDirs ?? []), ...(launchDir ? [launchDir] : [])];
 
+/**
+ * A layer the COMMAND PALETTE must not open on top of.
+ *
+ * `.modal-backdrop` leads because it is the one thing every overlay in this app
+ * actually has, and because `CommandPalette` itself carries no `role` — a
+ * role-only selector (the shape the Escape handler below uses) cannot see it,
+ * so a guard written that way looks correct and detects nothing.
+ *
+ * THE OVERVIEW IS CARVED OUT, and it is not an oversight: the palette is
+ * deliberately reachable by shortcut while the Overview is up, and navigating
+ * from it dismisses the Overview rather than stacking behind it. That is a
+ * written contract with a spec behind it — `welcome.spec.ts`'s "the palette's
+ * Browse templates, opened over the Overview, leaves it (never stacks)". The
+ * Overview wears both `role="dialog"` and `aria-modal="true"`, so excluding it
+ * has to be done on each clause rather than by dropping a class from the list.
+ *
+ * DELIBERATELY NOT the dialog shell's layer selector. That one answers "which
+ * layer owns Tab", where the Overview IS a layer and belongs in the list. This
+ * one answers "may ⌘K open here", where it does not. Same shape, different
+ * question; collapsing them would break the contract above.
+ */
+const PALETTE_BLOCKING_LAYER_SELECTOR = [
+  ".modal-backdrop",
+  '[role="dialog"]:not(.overview-modal)',
+  '[role="alertdialog"]:not(.overview-modal)',
+  '[aria-modal="true"]:not(.overview-modal)',
+].join(",");
+
 /** Resolve the one Studio workspace selection every map consumer observes. */
 const effectiveStudioWorkspaceSelection = (
   selection: StudioWorkspaceSelection | null,
@@ -979,6 +1007,22 @@ export const App = (): JSX.Element => {
         return;
       }
       if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "p")) {
+        // A LAYER ON TOP SWALLOWS THE SHORTCUT. Unguarded, ⌘K stacked the
+        // palette over an open dialog and native Tab then walked out of the
+        // palette into the dialog behind it. A surface cannot contain focus for
+        // a surface it does not own, so the fix is here rather than in either.
+        // See the selector for what it excludes and why it is not the dialog
+        // shell's list.
+        //
+        // PREVENTED, THEN DROPPED — never returned unhandled. This handler owns
+        // ⌘P as well as ⌘K, and ⌘P is the browser's PRINT shortcut: returning
+        // early without preventing it opened a native print preview over the
+        // dialog, which is worse than the stacking it was added to stop. The
+        // shortcut does nothing here, exactly as it did nothing before.
+        if (document.querySelector(PALETTE_BLOCKING_LAYER_SELECTOR)) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         setPaletteOpen(true);
         return;

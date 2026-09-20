@@ -259,39 +259,33 @@ for (const dialog of CASES) {
       expect((await heading.textContent())?.trim()).toBeTruthy();
     });
 
-    test("Tab belongs to whatever opened OVER it, not to this dialog", async ({
+    test("the palette shortcut is inert over it, so Tab stays inside", async ({
       page,
     }) => {
       // A layer that mounts AFTER this dialog is not inert — the background
       // sweep ran before it existed — and the trap is a document listener, so
-      // every open dialog sees every Tab. Without a topmost-layer guard, this
-      // dialog's trap preventDefaults and pulls focus onto its own first
-      // control, which is behind the newer scrim: the next keystroke lands in a
-      // field nobody can see.
+      // every open dialog sees every Tab. The shell's rule for that case is
+      // `claimsTab` (lib/dialog-focus.ts, unit-tested): a dialog declines a Tab
+      // that belongs to a layer above it.
       //
-      // The command palette is the real case: App.tsx's Cmd-K handler opens it
-      // over an open dialog, and it carries no `role`, so only its
-      // `.modal-backdrop` identifies it as a layer at all.
-      //
-      // TWO presses, not ten, and the number is the claim. The guard makes this
-      // dialog decline the Tab; it cannot make the palette contain focus,
-      // because the palette has no trap and neither surface inerts the other.
-      // Native order therefore does walk out of the palette eventually — see
-      // the PR's note on App.tsx's missing dialog guard. What is asserted here
-      // is the part this shell owns: it does not SEIZE the Tab.
+      // The one real way to stack a layer over a dialog was the command
+      // palette: App.tsx's Cmd-K handler opened it unconditionally. That is
+      // now guarded (`PALETTE_BLOCKING_LAYER_SELECTOR`; `palette-over-dialog.spec.ts`),
+      // so the sequence this spec used to drive can no longer happen, and what
+      // is asserted is the contract as it stands: the shortcut does nothing
+      // over this dialog, the key is not handed to the browser, and Tab keeps
+      // cycling inside the surface rather than leaving it.
       const surface = dialog.surface(page);
+      expect(await focusIsInside(surface)).toBe(true);
       await page.keyboard.press("ControlOrMeta+k");
-      const palette = page.getByTestId("command-palette-input");
-      await expect(palette).toBeVisible();
-      // A path-shaped query is the branch where the palette does NOT handle Tab
-      // itself, so nothing but the guard keeps focus out of the dialog.
-      await palette.fill("/Users/demo");
-      for (let press = 0; press < 2; press += 1) {
+      await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
+      await expect(surface).toBeVisible();
+      for (let press = 0; press < 3; press += 1) {
         await page.keyboard.press("Tab");
         expect(
           await focusIsInside(surface),
-          `the dialog's trap seized Tab from the palette after ${press + 1} presses, onto ${await focusedDescription(page)}`,
-        ).toBe(false);
+          `focus left the dialog after ${press + 1} Tab presses, onto ${await focusedDescription(page)}`,
+        ).toBe(true);
       }
     });
 
