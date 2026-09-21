@@ -45,22 +45,22 @@ describe("planningInstructions", () => {
 
   it("says the scaffold is done and never asks for one", () => {
     expect(text).toContain("already scaffolded");
-    expect(text).toContain("do not scaffold or clone it again");
+    expect(text).toContain("do not scaffold it again");
     expect(text).not.toContain("sapiom_dev_agents_scaffold");
   });
 
   it("orders the planning steps: read, restate, ask (at most three, with defaults, then stop), framings when thin, propose, go, skill, gates", () => {
     const order = [
-      "Read every attached file and linked source",
+      "Read every attached source and the existing project",
       "Restate the outcome and the proof of success in two lines",
       "at most three clarifying questions",
-      "stop for my answer",
+      "stop for the answer",
       "ask nothing and say so",
       "three framings",
-      "Propose the shape in this conversation",
-      "Build only after I say go",
+      "Propose the shape in the conversation",
+      "Build only after the user says go",
       AGENT_AUTHORING_SKILL,
-      "sapiom_dev_agents_check and sapiom_dev_agents_run_local before calling anything built",
+      "run check and run_local before calling anything built",
     ];
     let cursor = -1;
     for (const marker of order) {
@@ -70,8 +70,9 @@ describe("planningInstructions", () => {
     }
   });
 
-  it("does not mention the Agent Map (out of scope for this batch, Q11)", () => {
-    expect(text.toLowerCase()).not.toContain("agent map");
+  it("reads the Agent Map and never writes it (Q11: the map is out of scope for this batch)", () => {
+    expect(text).toContain("its Agent Map");
+    expect(text).not.toMatch(/initial map|extend .{0,20}map|create .{0,20}map|write .{0,20}map/i);
   });
 
   it("names a gallery template as the starting point to bring in at build time", () => {
