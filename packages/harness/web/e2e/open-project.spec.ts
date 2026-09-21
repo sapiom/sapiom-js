@@ -42,11 +42,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("the header + opens a project", () => {
-  test("a folder with NO agent in it becomes a project row, and survives a reload", async ({
+  test("a folder with NO agent in it becomes a project row, with no session and no screen", async ({
     page,
   }) => {
-    await page.goto("/?mockFixtures=agent-map&mockAutoPlanAgents=1");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
     await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
 
     await page.getByTestId("rail-add-project").click();
@@ -79,44 +77,23 @@ test.describe("the header + opens a project", () => {
       "Nothing generated yet",
     );
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
-    // The server-owned project-open lifecycle contributes one real ordinary
-    // session. Plan Agents is only that tab's initial title—never a pinned row
-    // or a second synthetic navigation element.
-    const tabs = page.locator(".session-tabs-list > .session-tab");
-    await expect(tabs).toHaveCount(1);
-    await expect(page.getByText("Plan Agents", { exact: true })).toHaveCount(1);
-    const firstSessionId = (
-      await tabs.first().getAttribute("data-testid")
-    )?.replace("session-tab-", "");
-    expect(firstSessionId).toBeTruthy();
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            (
-              window as unknown as {
-                __HARNESS_TEST__?: { createSessionCalls?: unknown[] };
-              }
-            ).__HARNESS_TEST__?.createSessionCalls?.length ?? 0,
-        ),
-      )
-      .toBe(0);
-
-    await page.getByTestId(`session-tab-main-${firstSessionId}`).click();
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      firstSessionId!,
-    );
-    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-    await expect(page.getByTestId("agent-view")).toBeVisible();
-
-    await group.getByTestId("project-select-blank-slate").click();
-    await expect(page.getByTestId("agent-map-frame")).toBeVisible();
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      firstSessionId!,
-    );
-    await expect(tabs).toHaveCount(1);
+    // NOTHING FOLLOWS (flow-creation.md rev 4 §4.1 step 3, Q5): no automatic
+    // first session, no "Plan Agents" tab, no new-agent screen. The user types
+    // first.
+    await page.waitForTimeout(300);
+    await expect(page.locator(".session-tabs-list > .session-tab")).toHaveCount(0);
+    await expect(page.getByText("Plan Agents", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __HARNESS_TEST__?: { createSessionCalls?: unknown[] };
+            }
+          ).__HARNESS_TEST__?.createSessionCalls?.length ?? 0,
+      ),
+    ).toBe(0);
     // The row is REMEMBERED, not just rendered: `recentDirs` is the harness's
     // one workspace list, and the whole rail re-derives from it when the axis
     // changes. (A cross-RELOAD assertion belongs against a real server — the
@@ -127,23 +104,13 @@ test.describe("the header + opens a project", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
 
-    // Ending the automatic conversation must not bring back the retired
-    // first-agent action beneath the still-empty project.
-    await page.getByTestId(`session-tab-main-${firstSessionId}`).click();
-    await page.getByTestId("session-menu").click();
-    await page.getByTestId("session-end-btn").click();
-    await page.getByTestId("end-session-confirm-btn").click();
-    await expect(page.getByTestId("session-context")).not.toHaveAttribute(
-      "data-session-id",
-      firstSessionId!,
-    );
     await expect(group.getByTestId("project-empty-blank-slate")).toHaveCount(0);
     await expect(
       group.getByRole("button", { name: /^Create (the first |an )agent here$/ }),
     ).toHaveCount(0);
   });
 
-  test("a Studio project keeps ordinary session and agent creation available", async ({
+  test("a Studio project opens on its map with no session started for it", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
@@ -153,7 +120,8 @@ test.describe("the header + opens a project", () => {
     const group = page.getByTestId("workspace-group-blank-slate");
     await expect(group.getByTestId("agent-map-row")).toHaveCount(0);
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
-    await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
+    // No pty was spawned for it: the map is a view, not a session.
+    await expect(page.locator(".harness-terminal .xterm")).toHaveCount(0);
 
     // D36: an empty project gets no create ROW of its own — its Agent Map row
     // is the CTA. The row's `+` is a different control and is always there.
