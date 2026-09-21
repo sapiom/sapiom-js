@@ -244,27 +244,6 @@ export function cloneDefinitionPrompt(definitionId: string, dir: string): string
 }
 
 /**
- * What a session opens on after the HARNESS created the agent.
- *
- * It is not a scaffold prompt and must never read like one: the project is
- * already on disk, installed and committed, and an agent told to "scaffold a
- * new project in this directory" would find a non-empty folder and either
- * refuse or start over. So it says the scaffold is done, names the directory,
- * and hands over the only thing left — the user's instruction.
- */
-export function firstInstructionPrompt(
-  agentDir: string,
-  instruction: string,
-): string {
-  return (
-    `A new Sapiom agent project has just been created at ${agentDir} — the scaffold is done, ` +
-    "so do not scaffold or clone anything. Read its AGENTS.md, then use the sapiom-agent-authoring " +
-    `skill to build this:\n\n${instruction.trim()}\n\n` +
-    "When the agent is ready, offer a local test run with no Sapiom capability spend (sapiom_dev_agents_run_local) as the next step."
-  );
-}
-
-/**
  * A template's declared graph as a CanvasGraph, so the dialog previews step
  * structure in the same vocabulary the canvas projections use (kind dots, elbow
  * transitions). Pure projection of what core served — core expands the registry's
