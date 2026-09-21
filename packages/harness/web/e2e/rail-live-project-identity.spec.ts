@@ -92,7 +92,7 @@ test("groups count shared agent paths only within their own project", async ({
   const childId = await projectId(page, CHILD);
   expect(childId).not.toBe(parentId);
 
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("rail-options").click();
   await page.getByTestId("filing-group-by").selectOption("group");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId(`group-create-${CHILD}`)).toBeVisible();

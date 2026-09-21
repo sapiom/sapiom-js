@@ -81,7 +81,7 @@ test.describe("legacy-server project row grammar", () => {
     page,
   }) => {
     // The menu changed what the control SAYS; SAP-2981 changed what it does —
-    // it opens the create dialog instead of starting a pty and asking the
+    // it opens the new-agent screen instead of starting a pty and asking the
     // coding agent, in English, to scaffold. What must not change is the
     // SUBJECT: the project named on the row is the project it creates in, and
     // the session that follows is rooted there.
@@ -102,14 +102,15 @@ test.describe("legacy-server project row grammar", () => {
       );
 
     await page.getByTestId("project-create-agent-acme-app").click();
-    await expect(page.getByTestId("create-agent-project")).toHaveText(
-      "acme-app",
+    // The screen STATES the project the row named (flow-creation.md §4.3).
+    await expect(page.getByTestId("composer-project")).toHaveText(
+      "New agent in acme-app",
     );
     // Nothing has started yet — the old handler started a pty on this click.
     expect(await order()).toEqual([]);
 
-    await page.getByTestId("create-agent-name").fill("menu-made");
-    await page.getByTestId("create-agent-submit").click();
+    await page.getByTestId("composer-input").fill("Build a menu made agent");
+    await page.getByTestId("composer-send").click();
     await expect
       .poll(order)
       .toEqual([

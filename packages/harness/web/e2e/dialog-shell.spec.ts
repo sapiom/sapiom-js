@@ -28,12 +28,11 @@ interface DialogCase {
   /**
    * The control that opened it — focus must come back here on close.
    *
-   * OMITTED where the door is a control that unmounts when it is used, which is
-   * `CreateAgentDialog`: its project-row menu closes on the click that opens the
-   * dialog, so there is no node left to return focus to and the honest outcome
-   * is that focus falls back to the document. Asserting THAT is the point of
-   * making this optional rather than dropping the case — a dialog that left
-   * focus on a detached node would fail either way.
+   * OMITTED where the door is a control that unmounts when it is used (a menu
+   * item that closes its menu on the click): there is no node left to return
+   * focus to and the honest outcome is that focus falls back to the document.
+   * Asserting THAT is the point of making this optional rather than dropping
+   * the case; a dialog that left focus on a detached node would fail either way.
    */
   trigger?: (page: Page) => Locator;
   /**
@@ -49,17 +48,17 @@ interface DialogCase {
 
 const CASES: DialogCase[] = [
   {
-    name: "StartDialog (Add existing agents)",
+    name: "ProjectFolderDialog (Add project, web host)",
     open: async (page) => {
       await page.goto("/");
       await expect(page.locator(".rail-workflows")).toBeVisible();
-      await page.getByTestId("add-existing-agents").click();
-      await expect(page.locator(".modal-start")).toBeVisible();
+      await page.getByTestId("rail-add-project").click();
+      await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
     },
-    surface: (page) => page.locator(".modal-start"),
-    trigger: (page) => page.getByTestId("add-existing-agents"),
+    surface: (page) => page.getByTestId("project-folder-dialog"),
+    trigger: (page) => page.getByTestId("rail-add-project"),
     opensFocusedOn: (page) => page.getByTestId("folder-field-input"),
-    behind: (page) => page.getByTestId("rail-create-new"),
+    behind: (page) => page.getByTestId("rail-new-project"),
   },
   {
     name: "RemoveProjectConfirm",
@@ -73,22 +72,7 @@ const CASES: DialogCase[] = [
     trigger: (page) => page.getByTestId("project-remove-acme-app"),
     // The SAFE action, on a destructive dialog: Enter keeps the project.
     opensFocusedOn: (page) => page.getByRole("button", { name: "Keep project" }),
-    behind: (page) => page.getByTestId("rail-create-new"),
-  },
-  {
-    name: "CreateAgentDialog",
-    open: async (page) => {
-      await page.goto("/?seed=0&mockStudioProjects=absent");
-      await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-      await page.getByTestId("project-create-agent-acme-app").click();
-      await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
-    },
-    surface: (page) => page.getByTestId("create-agent-dialog"),
-    // The row action survives the dialog now. It used to be a menu item that
-    // unmounted with its popover, so focus had nowhere to go but the document.
-    trigger: (page) => page.getByTestId("project-create-agent-acme-app"),
-    opensFocusedOn: (page) => page.getByTestId("create-agent-name"),
-    behind: (page) => page.getByTestId("rail-create-new"),
+    behind: (page) => page.getByTestId("rail-new-project"),
   },
   {
     name: "EndSessionConfirm",
@@ -103,28 +87,7 @@ const CASES: DialogCase[] = [
     trigger: (page) => page.getByTestId("session-menu"),
     // The SAFE action: Enter keeps the session.
     opensFocusedOn: (page) => page.getByRole("button", { name: "Keep session" }),
-    behind: (page) => page.getByTestId("rail-create-new"),
-  },
-  {
-    name: "TemplateUseDialog",
-    open: async (page) => {
-      await page.goto("/?mockState=fresh");
-      await expect(page.getByTestId("new-session-composer")).toBeVisible();
-      await page.getByTestId("composer-browse-templates").click();
-      await expect(page.getByTestId("templates-panel")).toBeVisible();
-      // Opened from the template's own detail view rather than from the card's
-      // spec-sheet popover: that popover light-dismisses on the same press that
-      // closes the dialog, so its button is gone by the time focus should come
-      // back to it, and "restores focus to the trigger" has no subject.
-      await page.getByTestId("template-card-open-hello-agent").click();
-      await expect(page.getByTestId("template-detail")).toBeVisible();
-      await page.getByTestId("template-use-btn").click();
-      await expect(page.getByTestId("template-use-dialog")).toBeVisible();
-    },
-    surface: (page) => page.getByTestId("template-use-dialog"),
-    trigger: (page) => page.getByTestId("template-use-btn"),
-    opensFocusedOn: (page) => page.getByTestId("folder-field-input"),
-    behind: (page) => page.getByTestId("template-detail-back"),
+    behind: (page) => page.getByTestId("rail-new-project"),
   },
 ];
 

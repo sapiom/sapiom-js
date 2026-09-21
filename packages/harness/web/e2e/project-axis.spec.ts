@@ -15,6 +15,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { openNewAgentScreen } from "./mock-navigation";
 
 const ROOT = "/Users/demo/polsia";
 /** `polsia/services/workers` opened as its own project. */
@@ -161,7 +162,7 @@ test.describe("durable Studio project navigation", () => {
   test("the row's plus is New agent; a coding session starts from the project's own pane", async ({
     page,
   }) => {
-    await page.getByTestId("rail-create-new").click();
+    await openNewAgentScreen(page);
     await page.getByTestId("composer-harness-select").click();
     await page.getByTestId("composer-harness-option-codex").click();
     const group = page.getByTestId("workspace-group-dashboard-keeper");
@@ -470,15 +471,15 @@ test.describe("row chrome", () => {
     await expect(page.locator(".rail-header .row-disclosure")).toHaveCount(0);
     await expect(
       page.locator(".rail-header button[aria-expanded]"),
-    ).toHaveAttribute("data-testid", "history-trigger");
+    ).toHaveAttribute("data-testid", "rail-options");
   });
 
-  test("the header's + sits LEFT OF the settings ellipsis, and adds a PROJECT", async ({
+  test("the header's + sits LEFT OF the options glyph, and adds a PROJECT", async ({
     page,
   }) => {
     await expect(page.getByTestId("rail-add-project")).toHaveAttribute(
       "aria-label",
-      "Add a project",
+      "Add project",
     );
 
     // ORDER, asserted from the live DOM rather than from CSS: the LABEL owns the
@@ -495,7 +496,7 @@ test.describe("row chrome", () => {
     expect(headerOrder).toEqual([
       "label",
       "rail-add-project",
-      "history-trigger",
+      "rail-options",
     ]);
 
     // And the header's label is NOT indented like a nav row: it aligns to the
@@ -507,7 +508,7 @@ test.describe("row chrome", () => {
       ),
       navRow: Math.round(
         document
-          .querySelector('[data-testid="add-existing-agents"] span')!
+          .querySelector('[data-testid="rail-templates"] span')!
           .getBoundingClientRect().left,
       ),
     }));
@@ -517,35 +518,29 @@ test.describe("row chrome", () => {
     await expect(page.locator(".modal-start")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    // AN ELLIPSIS, reversing the design doc's "sliders, not an ellipsis". That
-    // rule held while the panel had exactly one subject; it now carries filing
-    // AND past sessions, so sliders would promise filing and nothing else.
-    //
-    // VERTICAL, and it is the app's only overflow glyph — the horizontal one is
-    // unregistered, because a horizontal ellipsis is what every truncated name
-    // in this rail already renders. Asserted on the class lucide actually emits
-    // (`lucide-ellipsis-vertical`), not on the component name: the earlier
-    // version of this spec asserted `lucide-more-horizontal` and was wrong,
-    // because a deprecated alias does not name its own output.
+    // SLIDERS, as the design says (IA.md, D35): this menu holds exactly one
+    // subject, how the tree is filed, so a sliders glyph promises filing and
+    // nothing else. It wore an ellipsis while it also held Past sessions; that
+    // list has its own glyph in the brand header now (flow-creation.md §4.7).
     await expect(
       page
-        .getByTestId("history-trigger")
-        .locator("svg.lucide-ellipsis-vertical"),
+        .getByTestId("rail-options")
+        .locator("svg.lucide-sliders-horizontal"),
     ).toHaveCount(1);
     await expect(
       page
-        .getByTestId("history-trigger")
-        .locator("svg.lucide-sliders-horizontal"),
+        .getByTestId("rail-options")
+        .locator("svg.lucide-ellipsis-vertical"),
     ).toHaveCount(0);
     // No HORIZONTAL ellipsis anywhere in the rail.
     await expect(page.locator(".rail-shell svg.lucide-ellipsis")).toHaveCount(
       0,
     );
-    await expect(page.getByTestId("history-trigger")).toHaveAttribute(
+    await expect(page.getByTestId("rail-options")).toHaveAttribute(
       "aria-label",
-      "Rail settings",
+      "Group and sort projects",
     );
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     // VISIBLE dropdowns, not a menu of radio rows: each states its current
     // value on the face of the control.
     await expect(page.getByTestId("filing-group-by")).toBeVisible();
@@ -585,7 +580,7 @@ test.describe("row chrome", () => {
       "scratch",
     ]);
 
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-sort-by").selectOption("name");
     await page.keyboard.press("Escape");
     expect(await labels()).toEqual([
@@ -602,7 +597,7 @@ test.describe("row chrome", () => {
 
     await page.reload();
     await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await expect(page.getByTestId("filing-sort-by")).toHaveValue("name");
   });
 });
