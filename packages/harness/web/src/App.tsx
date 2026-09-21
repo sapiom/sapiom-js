@@ -490,6 +490,9 @@ export const App = (): JSX.Element => {
   );
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
+  // True while openProjectIntoRail awaits the server. The restoration effect
+  // below yields to that open rather than bumping the generation it holds.
+  const projectOpenInFlightRef = useRef(false);
   const effectiveStudioSelection = effectiveStudioWorkspaceSelection(
     studioSelection,
     harness.state,
@@ -539,6 +542,11 @@ export const App = (): JSX.Element => {
     if (
       !state?.studioProjects || !active || selectedProject || studioSelection
     ) return;
+    // openProject refreshes identities before it resolves. If the active
+    // session now falls under the folder being opened, this effect would
+    // restore it and bump the generation, making that open reject its own
+    // result and skip the new-agent screen. The open restores its own project.
+    if (projectOpenInFlightRef.current) return;
     const identityProjectId = active.agentMapIdentity?.projectId ?? null;
     const identityProject = identityProjectId
       ? state.studioProjects.find(
@@ -2129,6 +2137,16 @@ export const App = (): JSX.Element => {
    * the new-agent screen scoped to exactly what was opened.
    */
   const openProjectIntoRail = async (
+    requestedRoot: string,
+  ): Promise<ComposerProject | null> => {
+    projectOpenInFlightRef.current = true;
+    try {
+      return await openProjectIntoRailUnguarded(requestedRoot);
+    } finally {
+      projectOpenInFlightRef.current = false;
+    }
+  };
+  const openProjectIntoRailUnguarded = async (
     requestedRoot: string,
   ): Promise<ComposerProject | null> => {
     // This operation's generation, taken BEFORE the first await: any
