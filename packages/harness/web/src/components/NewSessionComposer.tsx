@@ -73,6 +73,13 @@ function chipSlug(label: string): string {
 }
 
 interface NewSessionComposerProps {
+  /**
+   * The project this screen is creating IN (flow-creation.md §4.3). Present
+   * from both entrances (New project's folder step, a row's New agent), the
+   * screen states it and never asks for it. Null is the no-project home a
+   * fresh install boots into.
+   */
+  project: { root: string; label: string } | null;
   harness: HarnessKind;
   entries: HarnessEntry[];
   onHarnessChange: (harness: HarnessKind) => void;
@@ -109,6 +116,7 @@ interface NewSessionComposerProps {
 }
 
 export function NewSessionComposer({
+  project,
   harness,
   entries,
   onHarnessChange,
@@ -280,8 +288,18 @@ export function NewSessionComposer({
     >
       <div className="composer-hero">
         <p className="composer-greeting" data-testid="composer-greeting">
-          {timeGreeting(new Date())}{" "}
-          {firstRun ? "Let's build your first agent." : "Let's build a new agent."}
+          {/* THE PROJECT IS STATED, never chosen (D27, §4.3). Both entrances
+              land here and only one of them just picked a folder; arriving
+              from the other with no mention of it is how an agent ends up in
+              a folder nobody meant. */}
+          {project ? (
+            <span data-testid="composer-project">New agent in {project.label}</span>
+          ) : (
+            <>
+              {timeGreeting(new Date())}{" "}
+              {firstRun ? "Let's build your first agent." : "Let's build a new agent."}
+            </>
+          )}
         </p>
         <h1 className="composer-heading">What should your agent do?</h1>
 

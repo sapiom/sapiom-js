@@ -11,7 +11,6 @@ import type { JSX } from "react";
 import type {
   AppState,
   EditorKind,
-  HarnessEntry,
   HarnessKind,
   HarnessSession,
   SessionResumeMode,
@@ -24,7 +23,7 @@ import type {
   StudioWorkspaceSelection,
 } from "@shared/agent-map";
 
-import type { AuthStartResponse, FsListResponse } from "../lib/api";
+import type { AuthStartResponse } from "../lib/api";
 import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
@@ -32,8 +31,6 @@ import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { openHelpOverlay } from "./HelpOverlay";
 import { Icon } from "./Icon";
-import { StartDialog } from "./StartDialog";
-import type { StartMode } from "./StartDialog";
 import { PlanCard } from "./PlanCard";
 import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
@@ -140,7 +137,6 @@ interface WorkflowsRailProps {
    *  session tab strip to that subject's sessions. */
   onFocusAgent: (path: string) => void;
   onOpenPalette: () => void;
-  onConnect: (path: string) => Promise<void>;
   /** Collapses the rail — the session bar grows an expand affordance. */
   onCollapse: () => void;
   canGoBack: boolean;
@@ -154,8 +150,19 @@ interface WorkflowsRailProps {
    *  agent, or other destination leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
-  /** The "Create new" CTA opens the composer-first "new session" home. */
-  onNewSession: () => void;
+  /**
+   * NEW PROJECT, the rail's one CTA (flow-creation.md §4.1, D27). Runs the
+   * folder step (the OS picker on desktop, the one-field dialog on the web),
+   * opens the folder as a project, and lands on the new-agent screen scoped
+   * to it. App owns the step because more than one surface runs it.
+   */
+  onNewProject: () => void;
+  /**
+   * ADD PROJECT, the Projects header's folder-plus (§4.5, D28). The same
+   * folder step and nothing after it: the folder joins the rail, agents or
+   * not. No composer, no session.
+   */
+  onAddProject: () => void;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
   history: SessionSummary[];
@@ -182,10 +189,6 @@ interface WorkflowsRailProps {
    * no agent in it could not be added at all.
    */
   onOpenProject: (root: string) => Promise<unknown>;
-  launchDir: string | null;
-  listDir: (path?: string) => Promise<FsListResponse>;
-  /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
-  listHarnesses: () => Promise<HarnessEntry[]>;
   /**
    * Compatibility path for a state payload without a durable Studio project.
    * Opens the create dialog App owns; the harness then does the scaffold and
@@ -198,10 +201,6 @@ interface WorkflowsRailProps {
    * confused model instead of an error.
    */
   onCreateAgent: (root: string, label: string) => void;
-  /** Where NEW projects are created (resolveProjectRoot in App). */
-  projectRoot: string | null;
-  /** Persist a changed project root as the user's default. */
-  onSaveProjectRoot: (root: string) => Promise<void>;
   /** Compatibility-only bare-project affordance: create the folder's first
    *  agent, binding the live session it already has rather than opening a
    *  second one. */
@@ -210,7 +209,6 @@ interface WorkflowsRailProps {
   onBrowseTemplates: () => void;
   /** True while that destination is the visible view, so the nav row can say so. */
   templatesActive: boolean;
-  onScanWorkflows: (root: string) => Promise<number>;
   /** Push a message onto the app's toast rail (copy confirmations etc.).
    *  Defaults to the "error" tone; result announcements opt into "info". */
   onToast: (message: string, tone?: ToastTone) => void;
@@ -436,7 +434,6 @@ export function WorkflowsRail({
   onSelectStudioAgent,
   onFocusAgent,
   onOpenPalette,
-  onConnect,
   onCollapse,
   canGoBack,
   canGoForward,
@@ -445,7 +442,8 @@ export function WorkflowsRail({
   onSelectSession,
   overviewSelected,
   onSelectOverview,
-  onNewSession,
+  onNewProject,
+  onAddProject,
   onReviewSummary,
   history,
   historyLoading,
@@ -455,16 +453,10 @@ export function WorkflowsRail({
   unsearchedCheckouts,
   onRemoveProject,
   onOpenProject,
-  launchDir,
-  listDir,
-  listHarnesses,
   onCreateAgent,
   onScaffoldInSession,
-  projectRoot,
-  onSaveProjectRoot,
   onBrowseTemplates,
   templatesActive,
-  onScanWorkflows,
   onToast,
   telemetryOptIn,
   productAnalyticsOptIn,
@@ -503,19 +495,6 @@ export function WorkflowsRail({
       );
     });
   }, []);
-  // "Add existing agents" opens the detection-driven StartDialog (register a
-  // folder that already holds an agent project). "Create new" goes to the
-  // composer home instead. connectTriggerRef anchors Escape focus return.
-  // ONE dialog, TWO questions. "Add a project" (the header `+`) and "find
-  // agents under here" (the nav row) both start from the same folder picker —
-  // that part is one question — but they differ in what they DO with the
-  // answer, so each gets its own control and its own primary action. Round 1
-  // pointed both at the detection flow, which made "add a project" mean "add a
-  // project that already contains an agent".
-  const [startMode, setStartMode] = useState<StartMode | null>(null);
-  const startOpen = startMode !== null;
-  const connectTriggerRef = useRef<HTMLButtonElement>(null);
-  const addProjectTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋮ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
@@ -863,39 +842,33 @@ export function WorkflowsRail({
         onGoForward={onGoForward}
       />
 
-      {/* The rail's top stack of labelled destinations. "Create new" leads as
-          the primary affirmative action (a solid ink button — the app's primary
-          CTA, like Deploy); Search opens the command palette (carrying the
-          unboxed ⌘K / Ctrl+K shortcut) and Templates opens the catalog. Search
-          and Templates read as rows, not a boxed field or a bare magnifier — a
-          destination is not chrome. */}
+      {/* The rail's top stack of labelled destinations (flow-creation.md
+          §4.7, Q10): New project, Search, Templates, then the Projects header.
+          New project leads as the one CTA (a filled button, no menu); Search
+          opens the command palette (carrying the unboxed ⌘K / Ctrl+K
+          shortcut) and Templates opens the catalog. Search and Templates read
+          as rows, not a boxed field or a bare magnifier: a destination is not
+          chrome. */}
       <nav className="rail-nav" aria-label="Primary">
-        {/* The primary creative action, promoted out of the header + ABOVE
-            Search: the fastest path to a new agent. It opens the composer-first
-            "new session" home. A standing ink-button CTA; when the rail has
-            nothing yet it gains a soft brand halo so an empty workspace has an
-            obvious next step. */}
+        {/* NEW PROJECT (D27). A new agent lives in a project, so the rail's
+            creation verb is the project first and the agent inside it: pick
+            the folder, then land on the new-agent screen scoped to it. It
+            opens no menu; a menu of ways to create is more doors, not fewer.
+            When the rail has nothing yet it gains a soft brand halo so an
+            empty install has one obvious next step. */}
         <button
           type="button"
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
-          data-testid="rail-create-new"
-          aria-label="Create a new agent"
-          data-tooltip="Describe an agent and this scaffolds it"
+          data-testid="rail-new-project"
+          aria-label="New project"
+          data-tooltip="Pick a folder, then describe its first agent"
           onClick={() => {
             setHistoryOpen(false);
-            onNewSession();
+            onNewProject();
           }}
         >
           <Icon name="Plus" size={14} />
-          {/* "Create new AGENT", not "Create new" and not "Create new project".
-              Bare "Create new" never said what it made. "Project" would be
-              false: this opens the composer, which scaffolds an AGENT — and
-              adding a project is already the header's folder-plus, so calling
-              this one "project" would give two controls the same name for
-              different jobs. The related complaint, that it drops the agent
-              somewhere arbitrary, is not a naming problem: the fix is a create
-              affordance on each project row, which this does not replace. */}
-          <span>Create new agent</span>
+          <span>New project</span>
         </button>
 
         <button
@@ -920,24 +893,8 @@ export function WorkflowsRail({
           <Icon name="LayoutTemplate" size={14} />
           <span>Templates</span>
         </button>
-
-        {/* Add EXISTING agents — a folder that already holds an agent project.
-            Creating a new one is "Create new" (the composer). */}
-        <button
-          type="button"
-          ref={connectTriggerRef}
-          className="rail-nav-row"
-          data-testid="add-existing-agents"
-          aria-haspopup="dialog"
-          aria-expanded={startOpen}
-          onClick={() => {
-            setHistoryOpen(false);
-            setStartMode("detect");
-          }}
-        >
-          <Icon name="FolderPlus" size={14} />
-          <span>Add existing agents</span>
-        </button>
+        {/* No "Add existing agents" row (D28): a folder full of agents is
+            added the same way as any other, through the header's Add project. */}
       </nav>
 
       {/* A TITLE, not a control. Folding this header hid the only thing the
@@ -955,23 +912,23 @@ export function WorkflowsRail({
             of the Group-by control that set it. */}
         <span className="rail-header-label">Projects</span>
         <div className="rail-header-actions">
-          {/* ADD sits to the LEFT OF THE ELLIPSIS, both in the trailing group.
-              The label owns the leading edge: putting a control there made the
-              header read as one more nav button in the stack above it — same
-              icon slot, same indent — rather than as the title of the tree
-              below. FOLDER-with-plus, because what it adds is a folder. The
-              project-row `+` starts a session at that root; the tab-strip `+`
-              starts a sibling of the session already in view. */}
+          {/* ADD PROJECT sits to the LEFT OF THE OPTIONS glyph, both in the
+              trailing group. The label owns the leading edge: putting a
+              control there made the header read as one more nav button in the
+              stack above it (same icon slot, same indent) rather than as the
+              title of the tree below. FOLDER-with-plus, because what it adds
+              is a folder. It runs the folder step and stops (§4.5): the OS
+              picker on desktop, the one-field dialog on the web, then the
+              folder is in the rail. Nothing follows. */}
           <button
             type="button"
             className="theme-toggle rail-header-btn"
-            ref={addProjectTriggerRef}
             data-testid="rail-add-project"
-            aria-label="Add a project"
-            data-tooltip="Add a project"
+            aria-label="Add project"
+            data-tooltip="Add project"
             onClick={() => {
               setHistoryOpen(false);
-              setStartMode("open");
+              onAddProject();
             }}
           >
             <Icon name="FolderPlus" size={14} />
@@ -1225,7 +1182,7 @@ export function WorkflowsRail({
               className="rail-empty"
               icon="Folder"
               title="No agents yet"
-              body="Add a project folder to start a session in it. Agents (sapiom.json) anywhere inside it appear here automatically."
+              body="New project picks a folder and describes its first agent. Agents (sapiom.json) anywhere inside a project appear here."
             />
           )}
 
@@ -1658,28 +1615,6 @@ export function WorkflowsRail({
           onSelectOverview={onSelectOverview}
         />
       </div>
-
-      {/* Add EXISTING agents: one detection-driven dialog that registers a
-          folder holding an agent project (or a folder of them). Creating a NEW
-          agent is "Create new" → the composer home (onNewSession). */}
-      {startMode && (
-        <StartDialog
-          mode={startMode}
-          recentDirs={recentDirs}
-          launchDir={launchDir}
-          projectRoot={projectRoot}
-          listDir={listDir}
-          onClose={() => setStartMode(null)}
-          onConnect={onConnect}
-          onOpenProject={async (root) => {
-            await onOpenProject(root);
-          }}
-          onScan={onScanWorkflows}
-          triggerRef={
-            startMode === "open" ? addProjectTriggerRef : connectTriggerRef
-          }
-        />
-      )}
 
       {removing && (
         <RemoveProjectConfirm
