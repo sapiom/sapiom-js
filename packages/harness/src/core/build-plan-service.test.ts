@@ -8,7 +8,7 @@ import type {
   PlanNodeId,
   ProjectAgentSession,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type {
   AgentBriefId,
   AgentBriefScopeKey,
@@ -17,16 +17,16 @@ import type {
   AgentBriefVersionId,
   ProjectBuildPlanVersionId,
   ProjectBuildPlanVersionRef,
-} from "../shared/build-plan.js";
-import { parseProjectBuildPlanVersion } from "../shared/build-plan-codec.js";
-import { AgentMapProposalService } from "./agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+} from "@sapiom/agent-map/build-plan";
+import { parseProjectBuildPlanVersion } from "@sapiom/agent-map/node/build-plan-codec";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { BuildPlanService } from "./build-plan-service.js";
 import { appendRestoredBuildPlanVersion, BuildPlanStore } from "./build-plan-store.js";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 
 const projectId = "project_018f0000-0000-4000-8000-000000000001" as StudioProjectId;
 const identity = (sessionId = "session-plan"): ProjectAgentSession => ({ projectId, userId: "user-1", sessionId });
@@ -568,5 +568,53 @@ describe("BuildPlanService", () => {
     await aggregateStore.resetLegacyMaps();
     await new AgentMapWorkspaceStore(root).resetLegacyMaps();
     expect(await fs.readFile(file)).toEqual(beforeReset);
+
+    // A map edit through the shared writer must preserve populated neighboring
+    // streams, including historical brief receipts and compacted tombstones.
+    const mapService = new AgentMapProposalService(
+      new AgentMapWorkspaceStore(root),
+    );
+    const snapshot = await mapService.read(projectId);
+    await mapService.propose(identity("external-map-session"), {
+      schemaVersion: 1,
+      proposalId: snapshot.proposal!.id,
+      expectedVersion: snapshot.proposal!.version,
+      requestId: "external-map-edit",
+      operations: [{
+        kind: "update-node",
+        nodeId: refs.research,
+        changes: { purpose: "Expanded research scope" },
+      }],
+    });
+    const afterMapEdit = await new AgentMapWorkspaceStore(root).readAggregate(
+      projectId,
+    );
+    expect(afterMapEdit.mapVersions).toHaveLength(aggregate.mapVersions.length + 1);
+    expect(afterMapEdit.mapVersions.at(-1)?.graph.nodes).toContainEqual(
+      expect.objectContaining({
+        id: refs.research,
+        purpose: "Expanded research scope",
+      }),
+    );
+    expect(afterMapEdit.mapOperationHistory.at(-1)?.requestId).toBe(
+      "external-map-edit",
+    );
+    expect(afterMapEdit.requestReceipts).toContainEqual(
+      expect.objectContaining({
+        operation: "map",
+        requestId: "external-map-edit",
+        sessionId: "external-map-session",
+      }),
+    );
+    expect(afterMapEdit.buildPlanVersions).toEqual(aggregate.buildPlanVersions);
+    expect(afterMapEdit.briefVersionsById).toEqual(aggregate.briefVersionsById);
+    expect(afterMapEdit.current.buildPlan).toEqual(aggregate.current.buildPlan);
+    expect(afterMapEdit.current.briefsByScope).toEqual(aggregate.current.briefsByScope);
+    expect(
+      afterMapEdit.requestReceipts.filter(({ operation }) => operation !== "map"),
+    ).toEqual(
+      aggregate.requestReceipts.filter(({ operation }) => operation !== "map"),
+    );
+    expect(afterMapEdit.requestTombstones).toEqual(aggregate.requestTombstones);
   });
 });

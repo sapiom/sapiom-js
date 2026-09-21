@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import {
   AgentMapCapabilityError,
   AgentMapCapabilityRegistry,

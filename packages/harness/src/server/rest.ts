@@ -1,3 +1,4 @@
+import type { AssistantStateSnapshot } from "../shared/assistant-state.js";
 /**
  * REST surface under /api — see src/shared/types.ts for the full contract
  * table. This router covers the session-lifecycle endpoints (W1); workflows,
@@ -30,8 +31,8 @@ import type {
   WorkflowInfo,
   SessionInputSubmissionResult,
 } from "../shared/types.js";
-import type { WorkspaceScopeSummary } from "../shared/system-graph.js";
-import type { StudioProjectSummary } from "../shared/agent-map.js";
+import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
+import type { StudioProjectSummary } from "@sapiom/agent-map";
 import {
   CREATE_SESSION_JSON_LIMIT_BYTES,
   JSON_BODY_LIMIT_BYTES,
@@ -193,6 +194,7 @@ async function agentHoldsConversation(
 }
 
 export interface RestRouterOptions {
+  getAssistantState?: () => AssistantStateSnapshot;
   sessionManager: SessionManager;
   adapters: Partial<Record<HarnessKind, HarnessAdapter>>;
   version: string;
@@ -203,7 +205,7 @@ export interface RestRouterOptions {
     organizationName: string;
   } | null;
   listWorkflows: () => Promise<WorkflowInfo[]>;
-  /** Workspace identities backing the folder projection and system-graph route. */
+  /** Scope identities joining visible folders to durable Studio projects. */
   listWorkspaceScopes?: () =>
     | WorkspaceScopeSummary[]
     | Promise<WorkspaceScopeSummary[]>;
@@ -388,6 +390,7 @@ export function createRestRouter(options: RestRouterOptions): Router {
           ? { agentsBaseUrl: options.agentsBaseUrl }
           : {}),
       };
+      if (options.getAssistantState) state.assistant = options.getAssistantState();
       res.json(state);
     } catch (err) {
       next(err);

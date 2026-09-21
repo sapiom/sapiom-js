@@ -1,4 +1,5 @@
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
@@ -25,7 +26,7 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
-import type { StudioProjectId } from "@shared/agent-map";
+import type { StudioProjectId } from "@sapiom/agent-map";
 
 import {
   ApiError,
@@ -39,6 +40,7 @@ import {
   type WorkflowScanOutcome,
 } from "./api";
 import { unavailableWorkflowDeployment } from "./workflow-deployment";
+import { macroNeedsReadySession } from "./macro-actions";
 import { type ConnectivityErrorInput } from "./connectivity";
 import { isWithinDir, samePath } from "./paths";
 import { projectToOpen } from "./project-tree";
@@ -55,14 +57,7 @@ import { mergeHistory } from "./history-meta";
 import { createToastMessage, type ToastMessage, type ToastTone } from "./toast";
 import { subscribeEvents } from "./events";
 import { agentMapLoader } from "./agent-map-loader";
-import { systemGraphLoader } from "./system-graph-loader";
 import { WorkflowProjectionOrder } from "./workflow-projection-order";
-import {
-  retainSystemGraphAnnouncements,
-  systemGraphAnnouncementsAfterMessage,
-  type SystemGraphAnnouncement,
-} from "./system-graph-announcements";
-import type { WorkspaceKey } from "@shared/system-graph";
 import { track as trackProduct } from "./analytics/events";
 import {
   agentProvenance,
@@ -141,6 +136,7 @@ export interface PendingWorkspace {
 }
 
 export interface HarnessStateHook {
+  assistant: AssistantProjection;
   authRevision: number;
   state: AppState | null;
   loading: boolean;
@@ -155,6 +151,8 @@ export interface HarnessStateHook {
    *  refreshed the held key, this re-hydrates the shell in place — no reload,
    *  no lockout. Safe to call repeatedly; a success clears the error. */
   reload: () => void;
+  /** Refresh project identities without hydrating or selecting a session. */
+  refreshWorkspaceScopes: () => Promise<void>;
   settings: HarnessSettings | null;
   bootToken: string;
   selectedWorkflowPath: string | null;
@@ -350,6 +348,8 @@ export interface HarnessStateHook {
    * by showing the reason inline rather than as a toast.
    */
   injectInput: (sessionId: string, text: string) => Promise<void>;
+  /** Reveal app-driven foreground PTY work in the matching conversation pane. */
+  terminalRevealBySession: Map<string, number>;
   /** Expose the toast setter so panels can push their own toasts. Defaults
    *  to the "error" tone; callers announcing a result opt into "info". */
   showToast: (message: string, tone?: ToastTone) => void;
@@ -365,13 +365,11 @@ export interface HarnessStateHook {
   subscribeAgentMapInitializationChanges: (listener: (status: AgentMapInitializationStatus) => void) => () => void;
   subscribeAgentMapProposalChanges: (
     listener: (
-      delta: import("@shared/agent-map").AcceptedProposalDelta,
+      delta: import("@sapiom/agent-map").AcceptedProposalDelta,
     ) => void,
   ) => () => void;
   /** Signals that the shared event socket reconnected after an interruption. */
   subscribeEventReconnects: (listener: () => void) => () => void;
-  /** Latest monotonic graph invalidation per retained Project scope. */
-  systemGraphAnnouncements: ReadonlyMap<WorkspaceKey, SystemGraphAnnouncement>;
   /** The run each session's Steps tab is showing (the latest observed by
    *  default, or a past run picked via selectRun), with its target. */
   runsBySession: Map<string, ObservedRun>;
@@ -421,24 +419,15 @@ export interface HarnessStateHook {
 /** Central store for the SPA shell: fetches AppState + settings once, then keeps sessions/workflows fresh via the event bus. */
 export function useHarnessState(): HarnessStateHook {
   const [state, setState] = useState<AppState | null>(null);
-  const [systemGraphAnnouncements, setSystemGraphAnnouncements] = useState<
-    Map<WorkspaceKey, SystemGraphAnnouncement>
-  >(new Map());
-
+  const assistantOrder = useRef(new AssistantStateOrder()).current;
+  const [assistant, setAssistant] = useState(() => assistantOrder.current());
   useEffect(() => {
     if (!state) return;
-    const workspaceKeys = new Set(
-      (state.workspaceScopes ?? []).map((scope) => scope.workspaceKey),
-    );
     const projectIds = new Set(
       (state.studioProjects ?? []).map((project) => project.projectId),
     );
-    systemGraphLoader.retain(workspaceKeys);
     agentMapLoader.retain(projectIds);
-    setSystemGraphAnnouncements((current) =>
-      retainSystemGraphAnnouncements(current, workspaceKeys),
-    );
-  }, [state?.studioProjects, state?.workspaceScopes]);
+  }, [state?.studioProjects]);
   const [settings, setSettings] = useState<HarnessSettings | null>(null);
   /**
    * Mirror of `settings` for the one reader that cannot wait for a re-render:
@@ -492,6 +481,14 @@ export function useHarnessState(): HarnessStateHook {
     new WorkflowProjectionOrder<WorkflowInfo>(),
   ).current;
   const [authRevision, setAuthRevision] = useState(0);
+  const [terminalRevealBySession, setTerminalRevealBySession] = useState(
+    () => new Map<string, number>(),
+  );
+  const revealTerminal = useCallback((sessionId: string) => {
+    setTerminalRevealBySession((previous) =>
+      new Map(previous).set(sessionId, (previous.get(sessionId) ?? 0) + 1),
+    );
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Boot-error facts (HTTP status / network-throw flag), shaped for the
@@ -539,13 +536,13 @@ export function useHarnessState(): HarnessStateHook {
   }, []);
   const agentMapProposalChangeListeners = useRef(
     new Set<
-      (delta: import("@shared/agent-map").AcceptedProposalDelta) => void
+      (delta: import("@sapiom/agent-map").AcceptedProposalDelta) => void
     >(),
   );
   const subscribeAgentMapProposalChanges = useCallback(
     (
       listener: (
-        delta: import("@shared/agent-map").AcceptedProposalDelta,
+        delta: import("@sapiom/agent-map").AcceptedProposalDelta,
       ) => void,
     ): (() => void) => {
       agentMapProposalChangeListeners.current.add(listener);
@@ -1135,6 +1132,7 @@ export function useHarnessState(): HarnessStateHook {
   useEffect(() => {
     let cancelled = false;
     const workflowRequest = workflowProjectionOrder.begin();
+    const assistantRequest = assistantOrder.beginHttp();
     // A retry re-enters the loading state and clears the prior failure so the
     // shell shows "reconnecting", not a stale error, while the refetch runs.
     if (reloadSeq > 0) {
@@ -1156,7 +1154,9 @@ export function useHarnessState(): HarnessStateHook {
         const workflows = bootWorkflowsAccepted
           ? appState.workflows
           : [...(workflowProjectionOrder.current() ?? [])];
-        setState({ ...appState, workflows });
+        const { assistant: assistantSeed, ...shell } = appState;
+        setAssistant(assistantOrder.http(assistantRequest, assistantSeed));
+        setState({ ...shell, workflows });
         // Baseline the built-agents metric: everything present at load already
         // existed, so seed it into the seen-set and never count it as built.
         const seenAtLoad = (seenAgentPathsRef.current ??= new Set<string>());
@@ -1234,14 +1234,15 @@ export function useHarnessState(): HarnessStateHook {
 
   useEffect(() => {
     return subscribeEvents(
-      (message) => {
+      (message, generation) => {
+        if (message.type === "assistant.state") {
+          setAssistant(assistantOrder.socket(generation, message.snapshot));
+          return;
+        }
         // SessionRecord invalidations have a targeted listener below. Keeping
         // them out of the legacy last-message slot avoids repainting the entire
         // Studio for records no mounted transcript is watching.
         if (message.type !== "session.record.changed") setLastMessage(message);
-        setSystemGraphAnnouncements((current) =>
-          systemGraphAnnouncementsAfterMessage(current, message),
-        );
         if (message.type === "session.status") {
           sessionStatusRevisions.current.set(
             message.session.id,
@@ -1310,10 +1311,6 @@ export function useHarnessState(): HarnessStateHook {
             // and let the next event/auth/manual refresh retry; never create an
             // unhandled rejection from the event callback.
             .catch(() => undefined);
-        } else if (message.type === "system-graph.changed") {
-          // Invalidate even while its workspace destination is closed. The next
-          // open must never resurrect a pre-edit process-lifetime promise.
-          systemGraphLoader.invalidate(message.workspaceKey, message.revision);
         } else if (message.type === "agent-map.initialization.changed") {
           try {
             const status = parseAgentMapInitializationStatus(message.status);
@@ -1366,6 +1363,7 @@ export function useHarnessState(): HarnessStateHook {
             }, BUSY_WINDOW_MS),
           );
         } else if (message.type === "auth.changed") {
+          setAssistant(assistantOrder.authChanged());
           // Accept a barrier synchronously: merely issuing the refresh cannot
           // stop an older in-flight success from restoring another account.
           const workflows = (workflowProjectionOrder.current() ?? workflowsRef.current)
@@ -1396,8 +1394,9 @@ export function useHarnessState(): HarnessStateHook {
         eventReconnectListeners.current.forEach((listener) => listener());
         void refreshWorkflows().catch(() => undefined);
       },
+      connection => setAssistant(assistantOrder.transport(connection)),
     );
-  }, [refreshWorkflows, startRunPolling]);
+  }, [refreshWorkflows, startRunPolling, assistantOrder]);
 
   /**
    * Loads history for `cwds` and folds it into the store via `mergeHistory`,
@@ -1456,8 +1455,11 @@ export function useHarnessState(): HarnessStateHook {
    * Replacing the full AppState here could overwrite newer session/workflow bus
    * updates with a slower HTTP snapshot; the scope catalog is the only field
    * the mutation made stale. */
+  const workspaceScopesRefreshOrder = useRef(0);
   const refreshWorkspaceScopes = useCallback(async (): Promise<void> => {
+    const request = ++workspaceScopesRefreshOrder.current;
     const refreshed = await api.getState();
+    if (request !== workspaceScopesRefreshOrder.current) return;
     setState((prev) =>
       prev
         ? {
@@ -2131,8 +2133,15 @@ export function useHarnessState(): HarnessStateHook {
 
   const runMacro = useCallback(
     async (id: string, req: RunMacroRequest): Promise<void> => {
+      const macro = state?.macros.find((candidate) => candidate.id === id);
       try {
         await api.runMacro(id, req);
+        if (
+          macro &&
+          macroNeedsReadySession(macro) &&
+          macro.execution !== "background"
+        )
+          revealTerminal(req.harnessSessionId);
       } catch (err) {
         // App.tsx fires this without awaiting — surface failures as a toast
         // instead of an invisible unhandled rejection (which is exactly how
@@ -2147,7 +2156,7 @@ export function useHarnessState(): HarnessStateHook {
         );
       }
     },
-    [],
+    [revealTerminal, state?.macros],
   );
 
   // Deploy via the direct route: stream build status to the toast, then refresh
@@ -2373,8 +2382,9 @@ export function useHarnessState(): HarnessStateHook {
   const injectInput = useCallback(
     async (sessionId: string, text: string): Promise<void> => {
       await api.injectInput(sessionId, { text, submit: true });
+      revealTerminal(sessionId);
     },
-    [],
+    [revealTerminal],
   );
 
   const showToast = useCallback(
@@ -2402,6 +2412,7 @@ export function useHarnessState(): HarnessStateHook {
   );
 
   return {
+    assistant,
     state,
     authRevision,
     loading,
@@ -2446,6 +2457,7 @@ export function useHarnessState(): HarnessStateHook {
     startProdRun,
     runLocal,
     injectInput,
+    terminalRevealBySession,
     showToast,
     lastDeployErrorFor,
     deployStateByPath,
@@ -2461,7 +2473,7 @@ export function useHarnessState(): HarnessStateHook {
     subscribeAgentMapProposalChanges,
     subscribeAgentMapInitializationChanges,
     subscribeEventReconnects,
-    systemGraphAnnouncements,
+    refreshWorkspaceScopes,
     runsBySession,
     runsByExecution,
     runIdsBySession,

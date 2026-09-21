@@ -5,7 +5,7 @@ import {
   useState,
   type RefObject,
 } from "react";
-import type { MapChangeProposal } from "@shared/agent-map";
+import type { MapChangeProposal } from "@sapiom/agent-map";
 import {
   NODE_HEIGHT,
   NODE_WIDTH,
@@ -26,7 +26,7 @@ async function measureLabels(
     svg.namespaceURI,
     "text",
   ) as SVGTextElement;
-  text.setAttribute("class", "system-graph-edge-label agent-map-edge-label");
+  text.setAttribute("class", "agent-map-edge-label");
   text.setAttribute("text-anchor", "middle");
   svg.append(text);
   viewport.append(svg);

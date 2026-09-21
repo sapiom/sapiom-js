@@ -1,3 +1,5 @@
+import { AssistantActivity } from "./AssistantActivity";
+import type { AssistantProjection } from "../lib/assistant-state";
 import { useEffect, useRef } from "react";
 import type { JSX, RefObject } from "react";
 import type { HarnessSession } from "@shared/types";
@@ -7,6 +9,7 @@ import { HARNESS_LABELS } from "../lib/history-meta";
 import { Icon } from "./Icon";
 
 interface SessionTabsProps {
+  assistant?: AssistantProjection;
   sessions: HarnessSession[];
   activeSessionId: string | null;
   busySessionIds: ReadonlySet<string>;
@@ -34,6 +37,7 @@ interface SessionTabsProps {
  * the active tab's options menu rather than becoming per-tab close buttons.
  */
 export function SessionTabs({
+  assistant,
   sessions,
   activeSessionId,
   busySessionIds,
@@ -169,6 +173,7 @@ export function SessionTabs({
                   >
                     {label}
                   </span>
+                  <AssistantActivity assistant={assistant} sessionId={session.id} />
                 </button>
               )}
 

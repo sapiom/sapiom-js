@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PlanNodeId, StudioProjectId } from "@shared/agent-map";
+import type { PlanNodeId, StudioProjectId } from "@sapiom/agent-map";
 import type { WorkflowInfo } from "@shared/types";
 import { createApi } from "./api";
 import {

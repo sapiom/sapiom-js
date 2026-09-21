@@ -11,14 +11,14 @@ import type {
   ProjectAgentSession,
   ProposalBatchRequest,
   ProposalOperationId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
   type AgentMapPermanentIdAllocator,
-} from "./agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+} from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 

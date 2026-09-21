@@ -6,7 +6,7 @@ import type {
   ProjectAgentSession,
   ProjectBootstrapMetadata,
   ProjectBootstrapState,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
 import {
   ProjectBootstrapStore,

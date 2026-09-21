@@ -21,7 +21,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AgentMapInitializationFailure } from "./agent-map-initialization-record.js";
+import { AgentMapInitializationFailure } from "@sapiom/agent-map/node/agent-map-initialization-record";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";

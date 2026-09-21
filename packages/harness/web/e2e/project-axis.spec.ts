@@ -19,15 +19,8 @@ import type { Locator, Page } from "@playwright/test";
 const ROOT = "/Users/demo/polsia";
 /** `polsia/services/workers` opened as its own project. */
 const NESTED_LABEL = "polsia/services/workers";
-const LEGACY_CONTAINMENT_TEST =
-  "parent and nested project graphs follow their visible containment";
-
-test.beforeEach(async ({ page }, testInfo) => {
-  // A server without durable Studio project summaries remains on the legacy
-  // System Graph path. Every other deep fixture exercises the plan-first path.
-  const studioProjects =
-    testInfo.title === LEGACY_CONTAINMENT_TEST ? "absent" : "present";
-  await page.goto(`/?mockFixtures=deep&mockStudioProjects=${studioProjects}`);
+test.beforeEach(async ({ page }) => {
+  await page.goto("/?mockFixtures=deep&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
 });
@@ -165,7 +158,7 @@ test.describe("ordering", () => {
 });
 
 test.describe("durable Studio project navigation", () => {
-  test("the project plus starts a coding session at its root without creating an agent", async ({
+  test("the row's plus is New agent; a coding session starts from the project's own pane", async ({
     page,
   }) => {
     await page.getByTestId("rail-create-new").click();
@@ -173,13 +166,18 @@ test.describe("durable Studio project navigation", () => {
     await page.getByTestId("composer-harness-option-codex").click();
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const row = group.getByTestId("project-row-dashboard-keeper");
-    const start = group.getByTestId("project-start-session-dashboard-keeper");
+    const create = group.getByTestId("project-create-agent-dashboard-keeper");
 
-    await expect(start).toHaveAttribute(
+    await expect(create).toHaveAttribute(
       "aria-label",
-      "Start a session in dashboard-keeper",
+      "New agent in dashboard-keeper",
     );
-    await expect(start).toHaveAttribute("data-tooltip", "Start a session here");
+    // Hover actions, not a menu (D33): New agent, then Remove. A plain session
+    // is NOT a row verb: it starts from the tab strip or from the Start on the
+    // project's own pane (D34e, D35 item 6).
+    await expect(
+      group.getByTestId("project-start-session-dashboard-keeper"),
+    ).toHaveCount(0);
     expect(
       await row
         .locator(":scope > .workspace-row-action")
@@ -187,17 +185,19 @@ test.describe("durable Studio project navigation", () => {
           actions.map((action) => action.getAttribute("data-testid")),
         ),
     ).toEqual([
-      "project-start-session-dashboard-keeper",
-      "project-menu-dashboard-keeper",
+      "project-create-agent-dashboard-keeper",
+      "project-remove-dashboard-keeper",
     ]);
 
-    // The ordinary project action also works while its read-only map is open.
-    // A successful create selects the exact new conversation and no scaffold
-    // operation is smuggled into that session action.
+    // At map altitude, a project with no conversation offers the Start in the
+    // centre. A successful create selects the exact new conversation, rooted
+    // at the project and on the preferred harness, and no scaffold operation
+    // is smuggled into that session action.
     const map = group.getByTestId("project-select-dashboard-keeper");
     await map.click();
     await expect(map).toHaveAttribute("aria-pressed", "true");
-    await start.click();
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await page.getByTestId("project-start-session").click();
     await expect
       .poll(() =>
         page.evaluate(
@@ -244,16 +244,16 @@ test.describe("durable Studio project navigation", () => {
   }) => {
     const group = page.getByTestId("workspace-group-dashboard-keeper");
     const map = group.getByTestId("project-select-dashboard-keeper");
-    const start = group.getByTestId("project-start-session-dashboard-keeper");
 
-    // Establish a real conversation in this project first. Cross-project map
-    // navigation deliberately clears an unrelated active session, so it cannot
-    // supply the conversation whose preservation this scenario verifies. Open
-    // the map first so its true -> false transition is also the completion
-    // signal for the asynchronous successful create.
+    // Establish a real conversation in this project first, from the pane's
+    // Start. Cross-project map navigation deliberately clears an unrelated
+    // active session, so it cannot supply the conversation whose preservation
+    // this scenario verifies. Open the map first so its true -> false
+    // transition is also the completion signal for the asynchronous create.
     await map.click();
     await expect(map).toHaveAttribute("aria-pressed", "true");
-    await start.click();
+    await expect(page.getByTestId("project-session-empty")).toBeVisible();
+    await page.getByTestId("project-start-session").click();
     await expect(map).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByTestId("session-context-title")).toContainText(
       "dashboard-keeper",
@@ -271,9 +271,11 @@ test.describe("durable Studio project navigation", () => {
       ).__MOCK_CREATE_SESSION_FAIL_ONCE__ = true;
     });
 
-    await start.click();
+    // With a conversation open, the next plain session comes from the tab
+    // strip (D34e). Its failure must leave the map and the conversation alone.
+    await page.getByTestId("session-tab-new").click();
     await expect(page.getByTestId("toast")).toContainText(
-      "mock: couldn't create session",
+      "Couldn't start the session.",
     );
     await expect(map).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("agent-map-frame")).toBeVisible();
@@ -337,7 +339,7 @@ test.describe("durable Studio project navigation", () => {
         .locator(".workflow-status"),
     ).toHaveCount(1);
     await expect(
-      group.getByTestId("project-start-session-dashboard-keeper"),
+      group.getByTestId("project-create-agent-dashboard-keeper"),
     ).toBeVisible();
     // The removed legacy shortcut is not a second project-level `+`.
     await expect(
@@ -362,25 +364,6 @@ test.describe("durable Studio project navigation", () => {
 });
 
 test.describe("multi-root", () => {
-  test(LEGACY_CONTAINMENT_TEST, async ({ page }) => {
-    await page.getByTestId("project-select-polsia").click();
-    await expect(page.getByTestId("system-graph-node-gateway")).toBeVisible();
-    await expect(page.getByTestId("system-graph-node-queue")).toBeVisible();
-    await expect(
-      page.getByTestId("system-graph-node-ads-worker"),
-    ).toBeVisible();
-
-    await page.getByTestId(`project-select-${NESTED_LABEL}`).click();
-    await expect(page.getByTestId("system-graph-node-queue")).toBeVisible();
-    await expect(
-      page.getByTestId("system-graph-node-ads-worker"),
-    ).toBeVisible();
-    await expect(page.getByTestId("system-graph-isolated-label")).toHaveText(
-      "2 agents · no detected relationships",
-    );
-    await expect(page.getByTestId("system-graph-node-gateway")).toHaveCount(0);
-  });
-
   test("an agent files under EVERY open root, and the nested project reads parent/child", async ({
     page,
   }) => {

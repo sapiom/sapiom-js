@@ -11,24 +11,24 @@ import type {
   ProjectBuildPlanId,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
-} from "./build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import type {
   AgentMapVersionId,
   PlanNodeId,
-} from "./agent-map.js";
+} from "@sapiom/agent-map";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "../core/build-plan-canonicalization.js";
-import { computeGraphContentDigest } from "./agent-map-canonical.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
+import { computeGraphContentDigest } from "@sapiom/agent-map/node/canonical";
 import {
   parseAgentBriefFocusScope,
   parseAgentBriefVersion,
   parseProjectBuildPlanContent,
   parseProjectBuildPlanVersion,
-} from "./build-plan-codec.js";
+} from "@sapiom/agent-map/node/build-plan-codec";
 
 const projectId = "project_018f0000-0000-7000-8000-000000000001";
 const nodeId = "node_018f0000-0000-7000-8000-000000000010" as PlanNodeId;

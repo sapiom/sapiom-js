@@ -16,6 +16,27 @@ export function unhandledRequestErrorHandler(
   res: express.Response,
   _next: express.NextFunction,
 ): void {
+  const httpError = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    type?: unknown;
+  } | null;
+  if (
+    httpError?.type === "entity.too.large" &&
+    (httpError.status === 413 || httpError.statusCode === 413)
+  ) {
+    // Body-parser errors can retain request details. Keep the only expected
+    // parser failure content-free in logs as well as in the response.
+    console.error("[harness] request body too large");
+    res.status(413).json({
+      error: {
+        message: "Request body is too large.",
+        type: "invalid_request_error",
+        code: "request_body_too_large",
+      },
+    });
+    return;
+  }
   console.error("[harness] unhandled request error:", err);
   const message = err instanceof Error && err.message ? err.message : "internal error";
   const code = (err as { code?: unknown } | null)?.code;

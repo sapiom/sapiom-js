@@ -1,5 +1,98 @@
 # @sapiom/mcp
 
+## 0.16.0
+
+### Minor Changes
+
+- 4c9bafb: Stop restating the platform rules in npm-shipped files; point at the served copy
+  and stamp the pointer (SAP-3181).
+
+  The rules that are true of Sapiom regardless of the installed SDK — one-off call
+  vs agent, the capability catalog, database lifetime, trigger kinds, App Links,
+  which capability calls an LLM, composing deployed agents, platform vocabulary —
+  are served by the Sapiom API at `GET /v1/agents/authoring-rules`. Every copy
+  this repo used to ship of them was frozen at publish or scaffold time and could
+  never be corrected; that is how the 7-day database claim and the two-kind
+  trigger list reached customers.
+
+  - The `sapiom-agent-authoring` skill's platform chapters are now a short
+    summary plus a pointer to the served section, bracketed by
+    `<!-- section: … -->` markers so a Studio session can splice the served text
+    in. The authoring mechanics (step model, directives, `ctx.shared`,
+    pause/resume, stubs) are unchanged.
+  - Every scaffolded `AGENTS.md` (both `@sapiom/agent-core` templates, the
+    `@sapiom/cli` template and all gallery examples) and `examples/AUTHORING.md`
+    carry a one-paragraph pointer and a stamp:
+    `<!-- sapiom-authoring-rules release=… digest=… -->`.
+  - `@sapiom/tools`' JSDoc on the `model` field of `llm.run`, `llm.submit`,
+    `models.run` and `models.coding.run` points at the served rule instead of
+    restating it.
+  - `sapiom_dev_agents_check` reads the stamps in the project's `AGENTS.md` and
+    skill, makes one best-effort anonymous read of the served endpoint's
+    `X-Sapiom-Content-*` headers, and warns when a stamp differs from the served
+    copy. No stamp means no request; unreachable means no warning. The wording is
+    "differs from", never "older than" — digests do not order.
+  - `@sapiom/agent-core` exports the stamp vocabulary
+    (`AUTHORING_RULES_*`, `parseAuthoringRulesStamp`,
+    `renderAuthoringRulesStamp`, `authoringRulesDriftWarning`), and
+    `node scripts/authoring-rules-stamp.mjs --from-served` moves every stamp in
+    the repo to the current release at once.
+
+- fefb4f8: Expose the shared credential-store path to authenticated local integrations and stop affected Studio-managed Claude sessions and background tasks when the current Sapiom connection is removed.
+- d7f5c04: Let Studio request and privately retain a delegated signed-in user credential alongside its existing organization connection. Serialize user-token refresh with Studio login/sign-out, persist rotations atomically, and revoke the user-token family on sign-out when the backend is reachable. Existing CLI callers and legacy project ownership remain unchanged.
+- 5d18ba3: Expose all four backend trigger kinds from the local authoring MCP (SAP-3174).
+  `sapiom_dev_agents_schedule` now accepts `kind: "event"` (+ `eventType`) and
+  `kind: "webhook"` alongside `schedule_cron` / `schedule_once`. A webhook create
+  returns the public hook URL, the shown-once signing secret, and the signing
+  scheme in the tool result (HMAC-SHA256 over `timestamp.eventId.rawBody`, sent as
+  `X-Sapiom-Timestamp` / `X-Sapiom-Event-Id` / `X-Sapiom-Signature`), and the
+  description says when a webhook trigger fits versus an App Link `/hook/*`
+  receiver (third-party senders cannot produce our HMAC). `_schedule_inspect` and
+  `_schedule_cancel` describe every kind; the new `sapiom_dev_agents_schedule_secret`
+  tool rotates, completes a rotation of, or revokes a webhook secret.
+
+  `@sapiom/agent-core` gains the matching `ScheduleKind` members, the webhook /
+  event fields on `ScheduleSummary`, `CreateScheduleResult`, and
+  `rotateScheduleSecret` / `completeScheduleSecretRotation` / `revokeScheduleSecret`.
+
+  **Breaking (types only, `@sapiom/agent-core`):** `ScheduleFireRecord.scheduledFor`
+  is now `string | null` — an event or webhook fire has no occurrence time, so code
+  that did `new Date(fire.scheduledFor)` must guard for `null` (or read
+  `fire.receiptId` for those kinds). `ScheduleSummary` gains five required fields
+  (`eventType`, `publicId`, `secretVersion`, `graceUntil`, `revokedAt`, all
+  nullable) that the server always returns; hand-built `ScheduleSummary` values
+  (test fakes, adapters) must add them. `ScheduleKind` widens to include `"event"`
+  and `"webhook"`, so an exhaustive `switch` over it needs the two new arms. No
+  runtime behaviour changes for existing cron / one-off callers.
+
+  The offline `AUTHORING_INSTRUCTIONS` fallback and the `sapiom-agent-authoring`
+  skill gain a triggers paragraph teaching the same thing; the served-text change
+  is version-gated on `@sapiom/mcp` >= 0.15 because older clients are never
+  offered the new kinds.
+
+### Patch Changes
+
+- 0710301: Say that an App Link is a redirector, not a reverse proxy. `sapiom_dev_app_publish`'s description and its publish summary now state that the link's root answers a 302 to whichever preview URL is currently serving the app, that sub-paths are not proxied, and that the app's own API therefore lives at the preview URL — which must be re-resolved per use rather than stored, because it changes when a wake recreates the sandbox and for an org-scoped app carries a short-lived token that expires. They also say who can take those routes: for an org-scoped app the redirect and `GET {link}/__status` both need a logged-in member's browser session rather than an API key, so its API is browser-only and a machine caller needs the app published `public` (whose link and `__status` need no session) or inbound traffic on `/hook/…`, which requires `webhooksEnabled`, off by default. The summary branches on visibility, so a public app is not warned about a gate it does not have.
+- 6b0b11f: Name the two Sapiom MCP servers by role in both offline fallbacks — "the local
+  authoring server" and "the hosted capability server" — instead of by registration
+  alias (SAP-3179).
+
+  The two texts disagreed: the Studio prompt called the servers `sapiom` (hosted) and
+  `sapiom-dev` (local), which is what Studio registers; the authoring primer called them
+  `sapiom` (local) and `sapiom-direct` (hosted), which is what a plain Claude Code user is
+  told to register. A Studio session reads both, so "use the `sapiom` alias to author
+  agents" pointed it at the remote server the prompt had just said not to call while
+  authoring. Aliases now appear only inside the two `claude mcp add` commands, which are
+  unchanged. The Studio prompt also disambiguates the two same-named `sapiom_authenticate`
+  / `sapiom_status` pairs, so a session signs in against the local server.
+
+  Both digest pins move with the bodies. The paired backend content release
+  (sapiom/Sapiom#4884) must adopt the same two bodies for the cross-repo pins to agree.
+
+- Updated dependencies [4c9bafb]
+- Updated dependencies [5d18ba3]
+  - @sapiom/agent-core@0.14.0
+
 ## 0.15.0
 
 ### Minor Changes

@@ -10,7 +10,7 @@ import type {
   ProjectBootstrapLifecycleEvent,
   ProjectBootstrapMetadata,
   ProjectBootstrapState,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
 import type { SessionManager } from "./session-manager.js";
 import {

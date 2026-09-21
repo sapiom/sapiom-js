@@ -9,9 +9,9 @@ import {
   type StudioWorkspaceAgentSummary,
   type StudioWorkspacePreference,
   type StudioWorkspaceSelection,
-} from "../shared/agent-map.js";
-import { workspaceRelativeLocalKey } from "../shared/system-graph.js";
-import { isStudioProjectId } from "./studio-project-catalog.js";
+} from "@sapiom/agent-map";
+import { workspaceRelativeLocalKey } from "../shared/workspace-scope.js";
+import { isStudioProjectId } from "@sapiom/agent-map/node/studio-project-catalog";
 
 interface PrivateAgentBinding extends StudioWorkspaceAgentSummary {
   projectId: StudioProjectId;

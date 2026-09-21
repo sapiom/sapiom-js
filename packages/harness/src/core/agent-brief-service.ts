@@ -1,25 +1,25 @@
-import type { AgentMapVersion, AgentMapVersionRef, ProjectAgentSession, StudioProjectId } from "../shared/agent-map.js";
-import { canonicalDigest, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
+import type { AgentMapVersion, AgentMapVersionRef, ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
+import { canonicalDigest, compareCanonicalStrings } from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefRefreshRequest,
   AgentBriefRefreshReceipt,
   AgentBriefRefreshResult,
   PreviousAgentBrief,
-} from "../shared/agent-brief.js";
+} from "@sapiom/agent-map/node/agent-brief";
 import type {
   AgentBriefImpact,
   BuildPlanDiagnostic,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionRef,
-} from "../shared/build-plan.js";
-import { agentMapVersionRefsEqual, projectBuildPlanVersionRefsEqual } from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
+import { agentMapVersionRefsEqual, projectBuildPlanVersionRefsEqual } from "@sapiom/agent-map/build-plan";
 import { compileCanonicalWorkstreamBriefs, projectFocusedBriefs } from "./agent-brief-compiler.js";
-import type { ProjectPlanningAggregateV2 } from "./agent-map-aggregate-migration.js";
-import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "./agent-map-workspace-store.js";
+import type { ProjectPlanningAggregateV2 } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
+import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { BuildPlanStore } from "./build-plan-store.js";
 import { agentBriefRefreshRequestSchema, parseAgentBriefRefreshRequest } from "./build-plan-schema.js";
-import { INTERNAL_BRIEF_REFRESH_REQUEST_PREFIX } from "./project-request-namespace.js";
-import { parseAgentBriefVersion } from "../shared/build-plan-codec.js";
+import { INTERNAL_BRIEF_REFRESH_REQUEST_PREFIX } from "@sapiom/agent-map/request-namespace";
+import { parseAgentBriefVersion } from "@sapiom/agent-map/node/build-plan-codec";
 import { evaluateAgentBriefImpact } from "./build-plan-impact-evaluator.js";
 import {
   serializeFocusedSessionContext,

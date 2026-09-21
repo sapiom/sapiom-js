@@ -156,6 +156,7 @@ import type {
 import * as browserAutomation from "./browser-automation/index.js";
 import type {
   BrowserSession,
+  SessionTimeoutOptions,
   SessionSettlement,
   ScreenshotInput,
   Screenshot,
@@ -167,6 +168,23 @@ import type {
 import * as vault from "./vault/index.js";
 import * as keys from "./keys/index.js";
 import type { MintScopedInput, ScopedKey } from "./keys/index.js";
+import * as google from "./connectors/google/index.js";
+import type {
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  SendEmailArgs,
+  SendEmailResult,
+} from "./connectors/google/index.js";
+// Type-only (erased at emit): the return type of `google.authClient()`. Referencing it
+// here does not make `google-auth-library` a runtime dependency of this module —
+// `authClient()` loads it dynamically, and only when called. Agent tsconfigs use
+// `skipLibCheck`, so this reference in the emitted `.d.ts` never forces the peer on agents
+// that only use `fetch()`.
+import type { OAuth2Client } from "google-auth-library";
+import * as github from "./connectors/github/index.js";
+import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
 
 export interface Sapiom {
   readonly sandboxes: {
@@ -240,7 +258,10 @@ export interface Sapiom {
     /** Read a `run`/`redeem`/`callSession` result's plain-text reply, skipping a `thinking` block if present. */
     textOf(response: unknown): string | undefined;
     /** Read a `run`/`redeem`/`callSession` result's structured output (see `LlmRunSpec.output`). */
-    structuredOf<TSchema = unknown>(response: unknown, name?: string): TSchema | undefined;
+    structuredOf<TSchema = unknown>(
+      response: unknown,
+      name?: string,
+    ): TSchema | undefined;
   };
   readonly fileStorage: {
     upload(input: UploadInput): Promise<UploadResponse>;
@@ -442,7 +463,7 @@ export interface Sapiom {
     drop(namespace: string): Promise<void>;
   };
   /**
-   * READ-ONLY tenant vault secrets (SAP-1471): `list` returns key names, `get`
+   * READ-ONLY tenant vault secrets: `list` returns key names, `get`
    * one value (or null when absent), `getMany`/`getAll` a key→value map. No
    * set/delete by decision — write secrets from the dashboard or `@sapiom/core`'s
    * `VaultAPI`. Values are credentials: use them, don't persist or echo them.
@@ -454,8 +475,8 @@ export interface Sapiom {
     getAll(ref: string): Promise<Record<string, string>>;
   };
   /**
-   * Mint a durable, narrowly-scoped Sapiom API key for an artifact this step deploys
-   * (SAP-2300). The per-run credential expires with the step, so a long-lived child
+   * Mint a durable, narrowly-scoped Sapiom API key for an artifact this step deploys.
+   * The per-run credential expires with the step, so a long-lived child
    * (e.g. a deployed HTTP endpoint) needs its own key: `mintScoped` returns one that
    * is attenuated to a subset of this run's authority (never wildcard), attributed to
    * the workflow definition, and always expiring/revocable. Inject the returned `key`
@@ -463,6 +484,76 @@ export interface Sapiom {
    */
   readonly keys: {
     mintScoped(input: MintScopedInput): Promise<ScopedKey>;
+  };
+  /**
+   * Connection-backed third-party providers — OAuth/credential-backed
+   * capabilities resolved and governed server-side against the tenant's
+   * connector, distinct from Sapiom's first-party capabilities above.
+   */
+  readonly connectors: {
+    /**
+     * A live, tenant-scoped Google credential for in-run code.
+     * `authClient()` returns a real `google-auth-library` `OAuth2Client` whose HTTP is
+     * redirected through the connectors proxy — the OAuth token is resolved and injected
+     * SERVER-SIDE, so it never lives in the run env or on disk. `fetch()` is the generic
+     * proxied tail for an endpoint not covered by a method or the vendor SDK.
+     */
+    readonly google: {
+      /**
+       * A GENUINE `google-auth-library` `OAuth2Client` for the Google vendor SDKs
+       * (`googleapis`, `@googleapis/*`) — pass it straight to `drive({ version, auth })`.
+       * Every request it makes is redirected through the connectors proxy, which resolves
+       * the tenant's Google credential and injects it server-side (metered, governed), so
+       * the OAuth token never enters the run. A real client is required because the vendor
+       * SDKs call `authClient.request(...)` and type `auth` as `OAuth2Client | …`.
+       * `google-auth-library` is an optional peer, imported dynamically — it ships with
+       * `googleapis`/`@googleapis/*`, and this throws a clear error if missing.
+       */
+      authClient(): Promise<OAuth2Client>;
+      /**
+       * The generic proxied tail — for an endpoint not covered by a method or the vendor
+       * SDK. Pass an absolute Google URL (its host is forwarded via
+       * `x-sapiom-connector-host`) or a bare path (joined onto the connector's default
+       * origin server-side). The tenant credential + attribution are added automatically;
+       * the OAuth token is injected server-side, never in the run.
+       */
+      fetch(pathOrUrl: string, init?: RequestInit): Promise<Response>;
+      /**
+       * Google Drive server-side methods. The gateway resolves the tenant's
+       * Google credential internally and calls Drive — the token never reaches the run.
+       */
+      readonly drive: {
+        /** Share a Drive file. Throws 404 when no Google connector is connected. */
+        shareFile(args: DriveShareFileArgs): Promise<DrivePermission>;
+        /** Upload a new Drive file. */
+        uploadFile(args: DriveUploadFileArgs): Promise<DriveFile>;
+      };
+      /**
+       * Google Gmail server-side methods. The gateway resolves the tenant's
+       * Google credential internally and calls Gmail — the token never reaches the run.
+       */
+      readonly gmail: {
+        /**
+         * Send an email via Gmail. `to`/`cc`/`bcc` accept a single address or an
+         * array. Throws 404 when no Google connector is connected.
+         */
+        sendEmail(args: SendEmailArgs): Promise<SendEmailResult>;
+      };
+    };
+    /**
+     * GitHub server-side methods. The gateway resolves the tenant's
+     * GitHub credential — a static Personal Access Token — internally and calls GitHub;
+     * the PAT never reaches the run. GitHub exercises the `static`/`injected` credential
+     * strategy (the contrast to Google's OAuth) through the identical dispatch path.
+     */
+    readonly github: {
+      /**
+       * List the tenant's GitHub repositories. All args are optional — call with none
+       * to list the first page of every repo the PAT can see. Throws 404 when no
+       * GitHub connector is connected.
+       */
+      listRepos(args?: ListReposArgs): Promise<GitHubRepo[]>;
+    };
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -488,11 +579,11 @@ export interface Sapiom {
     /** Open and close browser sessions. */
     sessions: {
       /** Open a new browser session. */
-      create(): Promise<BrowserSession>;
+      create(options?: SessionTimeoutOptions): Promise<BrowserSession>;
       /** Open a new browser session pre-authenticated with an identity. */
-      createWithIdentity(input: {
-        identityId: string;
-      }): Promise<BrowserSession>;
+      createWithIdentity(
+        input: { identityId: string } & SessionTimeoutOptions,
+      ): Promise<BrowserSession>;
       /** Close a session and settle its billing. */
       close(sessionId: string): Promise<SessionSettlement>;
     };
@@ -678,6 +769,22 @@ function bind(transport: Transport): Sapiom {
     keys: {
       mintScoped: (input) => keys.mintScoped(input, transport),
     },
+    connectors: {
+      google: {
+        authClient: () => google.authClient(transport),
+        fetch: (pathOrUrl, init) => google.fetch(pathOrUrl, init, transport),
+        drive: {
+          shareFile: (args) => google.driveShareFile(args, transport),
+          uploadFile: (args) => google.driveUploadFile(args, transport),
+        },
+        gmail: {
+          sendEmail: (args) => google.gmailSendEmail(args, transport),
+        },
+      },
+      github: {
+        listRepos: (args) => github.listRepos(args, transport),
+      },
+    },
     speech: {
       textToSpeech: {
         create: (input) => speech.createSpeech(input, transport),
@@ -691,7 +798,8 @@ function bind(transport: Transport): Sapiom {
     },
     browserAutomation: {
       sessions: {
-        create: () => browserAutomation.createSession(transport),
+        create: (options) =>
+          browserAutomation.createSession(options, transport),
         createWithIdentity: (input) =>
           browserAutomation.createSessionWithIdentity(input, transport),
         close: (sessionId) =>

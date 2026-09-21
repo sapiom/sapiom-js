@@ -8,7 +8,7 @@ import type {
   ProjectBootstrapQueuedInput,
   ProjectBootstrapMetadata,
   ProjectAgentSession,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
 import type { SessionManager } from "./session-manager.js";
 

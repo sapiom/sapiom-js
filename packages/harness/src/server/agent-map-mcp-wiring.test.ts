@@ -13,7 +13,7 @@ import type {
   SpawnSpec,
 } from "../shared/types.js";
 import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string;
@@ -44,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await server?.close();
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5 });
 });
@@ -371,6 +372,17 @@ it("keeps an evicted descendant session resumable in its durable canonical proje
     status: "running",
     agentMapIdentity: { projectId },
   });
+  const beforeFailure = await restartedCatalog.list();
+  const sessionsBeforeFailure = server.sessionManager.list();
+  const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
+  vi.spyOn(StudioProjectCatalog.prototype, "lookupIdentityForPath")
+    .mockResolvedValue({ kind: "unavailable" });
+  await expect(server.sessionManager.create({
+    cwd: descendant, harness: "claude-code",
+  })).rejects.toMatchObject({ code: "storage_unavailable" });
+  expect(reconcile).not.toHaveBeenCalled();
+  expect(await restartedCatalog.list()).toEqual(beforeFailure);
+  expect(server.sessionManager.list()).toEqual(sessionsBeforeFailure);
 });
 
 it("gives every signed-out project session the same coding prompt and Agent Map tools", async () => {

@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { ProjectAgentSession, StudioProjectId } from "../shared/agent-map.js";
-import { canonicalDigest } from "../shared/agent-map-canonical.js";
+import type { ProjectAgentSession, StudioProjectId } from "@sapiom/agent-map";
+import { canonicalDigest } from "@sapiom/agent-map/node/canonical";
 import {
   hasAgentMapControlCharacter,
   parseProjectAgentActorRef,
-} from "../shared/agent-map-codec.js";
+} from "@sapiom/agent-map/codec";
 import type { HarnessKind } from "../shared/types.js";
 import {
   computeCanonicalDelegationBindingDigest,
@@ -31,8 +31,8 @@ import {
   type SubsessionKickoffDelivery,
   type SubsessionProjectionDigest,
 } from "../shared/subsession-delegation.js";
-import { DurableFileLock } from "./durable-file-lock.js";
-import { isStudioProjectId } from "./studio-project-catalog.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
+import { isStudioProjectId } from "@sapiom/agent-map/node/studio-project-catalog";
 
 export const SUBSESSION_COORDINATOR_BINDING_LIMIT = 8_192;
 export const SUBSESSION_COORDINATOR_RECEIPT_LIMIT = 8_192;
