@@ -448,6 +448,8 @@ export const App = (): JSX.Element => {
   const [folderPrompt, setFolderPrompt] = useState<{
     intent: ProjectFolderIntent;
     template: StudioTemplate | null;
+    /** The control that ran the step, so Escape hands focus back to it. */
+    trigger: HTMLElement | null;
   } | null>(null);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
   // pending affordance; the ref closes React's same-frame double-click window.
@@ -2227,10 +2229,16 @@ export const App = (): JSX.Element => {
     intent: ProjectFolderIntent,
     template: StudioTemplate | null = null,
   ): void => {
+    // The control that asked is the one focus returns to when the web dialog
+    // closes; captured here because more than one surface runs this step.
+    const trigger =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     void chooseProjectFolder({
       chooseDirectory: getDesktopBridge()?.chooseDirectory ?? null,
       startingAt: null,
-      openDialog: () => setFolderPrompt({ intent, template }),
+      openDialog: () => setFolderPrompt({ intent, template, trigger }),
       onPicked: (root) => {
         void handleProjectFolderChosen(root, intent, template).catch(
           (err: unknown) => {
@@ -4085,6 +4093,7 @@ export const App = (): JSX.Element => {
           intent={folderPrompt.intent}
           initialPath=""
           listDir={harness.listDir}
+          triggerRef={{ current: folderPrompt.trigger }}
           onClose={() => setFolderPrompt(null)}
           onChoose={(root) =>
             handleProjectFolderChosen(
