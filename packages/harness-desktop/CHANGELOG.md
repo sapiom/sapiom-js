@@ -1,5 +1,11 @@
 # @sapiom/harness-desktop
 
+## 0.4.9
+
+### Patch Changes
+
+- 575267a: Bundle the Google and GitHub capability clients and fix local agent checks and runs when dependencies such as Google client libraries call `require()` at runtime.
+
 ## 0.4.7
 
 ### Patch Changes
