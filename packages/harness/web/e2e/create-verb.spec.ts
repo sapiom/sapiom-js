@@ -261,4 +261,25 @@ test.describe("intake", () => {
     // Nothing has been created or started: intake is not submit.
     expect((await evidence(page)).createSessionCalls).toEqual([]);
   });
+
+  test("a pasted link reaches the session with the idea; it does not die with the screen", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openNewAgentScreen(page);
+    await page.getByTestId("composer-input").fill("Summarise this spec.");
+    await page.evaluate(() => {
+      const transfer = new DataTransfer();
+      transfer.setData("text/plain", "https://a.example/spec");
+      document.querySelector("[data-testid='composer-input']")!.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }),
+      );
+    });
+    await expect(page.getByTestId("composer-source")).toHaveCount(1);
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    const [call] = (await evidence(page)).createSessionCalls;
+    expect(call?.req.initialPrompt).toBe("Summarise this spec.\nhttps://a.example/spec");
+  });
 });

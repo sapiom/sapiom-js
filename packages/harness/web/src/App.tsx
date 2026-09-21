@@ -2646,8 +2646,12 @@ export const App = (): JSX.Element => {
   const handleComposerSubmitIdea = async (
     idea: string,
     attachments: readonly NewSessionAttachment[],
-    _sources: readonly string[],
+    sources: readonly string[],
   ): Promise<void> => {
+    // The pre-existing session-side scaffold, in the stated project, until
+    // slice 4 (SAP-3576) replaces it with the scaffold call of §4.4. The
+    // pasted links ride the first prompt after the idea so they reach the
+    // session rather than dying with the screen.
     const cwd = uniqueProjectDir(
       idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
       composerRoot(),
@@ -2661,7 +2665,7 @@ export const App = (): JSX.Element => {
       keepComposerOpen: true,
       standaloneBuilder: true,
       scaffold: { template: "default" },
-      initialPrompt: idea.trim(),
+      initialPrompt: [idea.trim(), ...sources].filter(Boolean).join("\n"),
       initialAttachments: attachments.map((attachment) =>
         attachment.kind === "path"
           ? { kind: "path", path: attachment.path }
@@ -3282,6 +3286,10 @@ export const App = (): JSX.Element => {
                 studioRestoreGenerationRef.current += 1;
                 setStudioSelection(null);
               }
+              // The screen is mounted only with a project that exists.
+              if (composerProject && samePath(composerProject.root, root)) {
+                setComposerProject(null);
+              }
               await harness.removeProject(root);
             }}
             onOpenProject={openProjectIntoRail}
@@ -3737,10 +3745,14 @@ export const App = (): JSX.Element => {
                   }}
                 />
               ) : (
-                /* Nothing to show and no project to create in (a fresh
-                   install, every project removed): the honest state before
-                   the screen, with the one move that fills it. */
-                <NoProjectHome onNewProject={handleNewProject} />
+                /* Nothing to show and no project chosen to create in: a fresh
+                   install or every project removed says so; projects in the
+                   rail with nothing open says that instead. Either way the
+                   one move is New project, or a row. */
+                <NoProjectHome
+                  hasProjects={workspaceScopes.length > 0}
+                  onNewProject={handleNewProject}
+                />
               )}
             </div>
           </div>

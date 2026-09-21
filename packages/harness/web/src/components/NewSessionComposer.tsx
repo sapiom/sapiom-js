@@ -44,9 +44,11 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
  * a LONG paste becomes an attached document rather than a wall of text.
  * Nothing is fetched client-side; the list is handed to the session.
  *
- * Submit is App's (`onSubmitIdea`): the harness scaffolds the agent first and
- * a normal session opens on it. A refusal comes back here as a sentence under
- * the field, and nothing has started.
+ * Submit is App's (`onSubmitIdea`), handed the idea, the files and the
+ * sources. Under §4.4 the harness scaffolds the agent first and a normal
+ * session opens on it; that is slice 4 (SAP-3576), and until it lands App
+ * runs the pre-existing path, in the stated project. A refusal comes back
+ * here as a sentence under the field, and nothing has started.
  */
 
 /** Quick-start prompts. A curated set that PREFILLS the box (editable before
