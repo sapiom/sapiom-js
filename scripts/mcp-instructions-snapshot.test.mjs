@@ -84,6 +84,28 @@ test("refuses a body served without X-Sapiom-Content-Release", async (t) => {
   assert.match(result.stderr, /carried no X-Sapiom-Content-Release header/);
 });
 
+test("refuses a digest header that is not exactly twelve hex characters", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-snapshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // A one-character header that IS a prefix of the real digest: a prefix
+  // comparison would accept it.
+  const backend = await serve(`${BODY}\n\n${FOOTER}`, {
+    "x-sapiom-content-release": "9.9",
+    "x-sapiom-content-digest": DIGEST.slice(0, 1),
+  });
+  t.after(backend.close);
+
+  const out = join(dir, "instructions.generated.ts");
+  const result = await run(backend.url, out);
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /malformed X-Sapiom-Content-Digest header .*expected exactly 12 hex characters/,
+  );
+  await assert.rejects(readFile(out), { code: "ENOENT" });
+});
+
 test("refuses a body whose sha-256 does not match the served digest", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-snapshot-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

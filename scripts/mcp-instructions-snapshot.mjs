@@ -26,6 +26,13 @@ import { fileURLToPath } from "node:url";
 
 import prettier from "prettier";
 
+import {
+  STAMP_DIGEST_LENGTH,
+  normalizeStampDigest,
+  sha256Hex,
+  stripStampFooter,
+} from "./lib/mcp-content-stamp.mjs";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_API_URL = "https://api.sapiom.ai";
 const INSTRUCTIONS_PATH = "/v1/mcp/instructions";
@@ -33,9 +40,6 @@ export const OUTPUT_PATH = path.join(
   ROOT,
   "packages/mcp/src/instructions.generated.ts",
 );
-
-/** The serve-time footer, `_Sapiom teaching content · authoring · release 2.14 · 055076ab6773 · served live._` */
-const STAMP_FOOTER = /\n\n_Sapiom teaching content · [^\n]*\._\s*$/;
 
 export function parseArgs(argv) {
   const args = { apiURL: DEFAULT_API_URL, outputPath: OUTPUT_PATH };
@@ -60,15 +64,6 @@ export function parseArgs(argv) {
   }
   args.apiURL = args.apiURL.replace(/\/+$/, "");
   return args;
-}
-
-/** The served body without its footer, which the digest does not cover. */
-export function stripStampFooter(served) {
-  return served.trim().replace(STAMP_FOOTER, "");
-}
-
-export function sha256Hex(text) {
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 /** Escape a string for a backtick template literal with no interpolation. */
@@ -122,10 +117,16 @@ async function fetchServed(apiURL) {
       `GET ${url} carried no X-Sapiom-Content-Digest header; refusing to snapshot an unstamped body`,
     );
   }
+  const expected = normalizeStampDigest(servedDigest);
+  if (expected === null) {
+    throw new Error(
+      `GET ${url} carried a malformed X-Sapiom-Content-Digest header (${JSON.stringify(servedDigest)}); expected exactly ${STAMP_DIGEST_LENGTH} hex characters`,
+    );
+  }
   const body = stripStampFooter(served);
   if (body.length === 0) throw new Error(`GET ${url} returned an empty body`);
   const digest = sha256Hex(body);
-  if (!digest.startsWith(servedDigest.toLowerCase())) {
+  if (digest.slice(0, STAMP_DIGEST_LENGTH) !== expected) {
     throw new Error(
       `digest mismatch: sha-256 of the served body is ${digest}, but X-Sapiom-Content-Digest says ${servedDigest}. ` +
         "The footer strip may not match what the server appends, or the body changed in flight.",
