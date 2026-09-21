@@ -523,7 +523,10 @@ test.describe("templates route through the screen", () => {
     await expect(page.getByTestId("composer-source")).toHaveCount(1);
     await page.getByTestId("composer-send").click();
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    // §4.4: the idea is the user's turn; the link is handed as a source, not
+    // appended to the idea (the pre-slice-4 interim did that).
     const [call] = (await evidence(page)).createSessionCalls;
-    expect(call?.req.initialPrompt).toBe("Summarise this spec.\nhttps://a.example/spec");
+    expect(call?.req.initialPrompt).toBe("Summarise this spec.");
+    expect(call?.req.initialSources).toEqual(["https://a.example/spec"]);
   });
 });
