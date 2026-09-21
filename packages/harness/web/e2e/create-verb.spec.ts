@@ -225,6 +225,22 @@ test.describe("the two verbs", () => {
     expect((await evidence(page)).createSessionCalls).toEqual([]);
   });
 
+  test("New agent lands on the screen even over an exited session's pane", async ({
+    page,
+  }) => {
+    // Measured on the real server: with a dead session on screen, pressing the
+    // row's New agent showed nothing, because the dead pane outranked the
+    // screen. Every entrance lands on the screen.
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("rail-history").click();
+    await page.getByTestId("exited-session-sess-leasing").click();
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+
+    await openNewAgentInProject(page, "acme-app");
+    await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
+  });
+
   test("a fresh install shows the no-project home, and its one move is New project", async ({
     page,
   }) => {
