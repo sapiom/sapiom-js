@@ -2497,7 +2497,10 @@ export const App = (): JSX.Element => {
       const fallback = selectable[0]?.id as HarnessKind | undefined;
       if (fallback) setSelectedHarness(fallback);
     }
-    if (composerProject) {
+    // The screen's project counts only while the screen is open: Back leaves
+    // `composerProject` set for the disclosure and the clip, and a later Use
+    // must land in the project selected since, not the one left behind.
+    if (composing && composerProject) {
       composeInProject({
         ...composerProject,
         template,
@@ -2593,10 +2596,11 @@ export const App = (): JSX.Element => {
       projectLabel: project.label,
       template,
     });
+    let session: HarnessSession;
     try {
       // Terminal-first: the new session's canvas slides in once it paints.
       setRightCollapsed(true);
-      const session = await createSessionAt(project.root, selectedHarness, {
+      session = await createSessionAt(project.root, selectedHarness, {
         keepComposerOpen: true,
         initialPrompt: idea.trim(),
         initialAttachments: attachments.map((attachment) =>
@@ -2608,12 +2612,6 @@ export const App = (): JSX.Element => {
         initialSetup: setup,
         initialUserInputPending: true,
       });
-      setSetupBySession((previous) =>
-        new Map(previous).set(session.id, setup),
-      );
-      await harness.bindWorkflow(session.id, created.path);
-      harness.setActiveSessionId(session.id);
-      setFocusedAgentPath(created.path);
     } catch (err) {
       // The agent exists (it is a row in the rail); the SESSION did not start.
       // Say exactly that under the field, keep the screen and its files, and
@@ -2627,6 +2625,21 @@ export const App = (): JSX.Element => {
         `${created.name} was created, but its session didn't start. ${errorMessage(err, "")}`.trim(),
       );
     }
+    setSetupBySession((previous) => new Map(previous).set(session.id, setup));
+    try {
+      await harness.bindWorkflow(session.id, created.path);
+      setFocusedAgentPath(created.path);
+    } catch {
+      // The session is live and already received the first prompt; only the
+      // binding write failed. Keep it as an unbound folder session (as the
+      // sibling-session path does) rather than reporting a start that did
+      // happen, which would make the retry launch a second live session.
+      setFocusedAgentPath(project.root);
+      harness.showToast(
+        `Session started, but couldn't attach it to ${created.name}.`,
+      );
+    }
+    harness.setActiveSessionId(session.id);
     // Only now does the screen give way: the agent exists and its session is
     // the active one.
     setComposing(false);
@@ -2906,7 +2919,7 @@ export const App = (): JSX.Element => {
     // the one on screen, else the most recently opened one. With none open,
     // the honest answer is to open one first.
     const parentRoot =
-      composerProject?.root ??
+      (composing ? composerProject?.root : undefined) ??
       (effectiveStudioSelection
         ? workspaceScopes.find(
             (candidate) =>
