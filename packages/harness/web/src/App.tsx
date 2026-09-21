@@ -2563,23 +2563,28 @@ export const App = (): JSX.Element => {
   //
   // The folder is the STATED project's (flow-creation.md §4.3): the screen
   // names one and the request creates in it. Only the no-project home falls
-  // back to the project root. Slice 4 (SAP-3576) replaces this path with the
-  // scaffold endpoint; until then the destination and the label agree.
-  const uniqueProjectDir = (base: string): string => {
+  // back to the project root. Each caller passes its own root, so a project
+  // the screen stated earlier never decides where an unrelated clone lands.
+  // Slice 4 (SAP-3576) replaces this path with the scaffold endpoint; until
+  // then the destination and the label agree.
+  const uniqueProjectDir = (base: string, root: string | null): string => {
+    // Collisions are local to the destination: only its direct children are
+    // taken, so a same-named agent in another project costs no suffix here.
     const taken = new Set<string>();
-    for (const session of state.sessions) {
-      const name = basenameOf(session.cwd);
-      if (name) taken.add(name);
+    if (root) {
+      for (const dir of [
+        ...state.sessions.map((session) => session.cwd),
+        ...state.workflows.map((workflow) => workflow.path),
+      ]) {
+        const parent = parentOf(dir);
+        if (parent && samePath(parent, root)) taken.add(basenameOf(dir));
+      }
     }
-    for (const workflow of state.workflows) {
-      const name = basenameOf(workflow.path);
-      if (name) taken.add(name);
-    }
-    return projectDirSuggestion(
-      nextAvailableName(base, taken),
-      composerProject?.root ?? (projectRoot || null),
-    );
+    return projectDirSuggestion(nextAvailableName(base, taken), root);
   };
+  /** Where the composer creates: the stated project, else the project root. */
+  const composerRoot = (): string | null =>
+    composerProject?.root ?? (projectRoot || null);
 
   const handleComposerSubmitIdea = async (
     idea: string,
@@ -2587,6 +2592,7 @@ export const App = (): JSX.Element => {
   ): Promise<void> => {
     const cwd = uniqueProjectDir(
       idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
+      composerRoot(),
     );
     if (!cwd) {
       throw new Error("Choose a project first: New project picks its folder.");
@@ -2610,7 +2616,7 @@ export const App = (): JSX.Element => {
   };
 
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
-    const cwd = uniqueProjectDir(template.id);
+    const cwd = uniqueProjectDir(template.id, composerRoot());
     if (!cwd) {
       harness.showToast("Choose a project first: New project picks its folder.");
       return;
@@ -2882,8 +2888,11 @@ export const App = (): JSX.Element => {
     target: DeepLinkAgentTarget,
   ): Promise<void> => {
     setCloneRequest(null);
+    // The global root, never a project the screen stated earlier: no screen
+    // names a project for a deep-linked clone.
     const cwd = uniqueProjectDir(
       target.slug?.trim() || `agent-${target.definitionId}`,
+      projectRoot || null,
     );
     if (!cwd) {
       harness.showToast("Choose a project first: New project picks its folder.");
