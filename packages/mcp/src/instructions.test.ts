@@ -43,11 +43,9 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
   });
 
-  // SKIPPED, deliberately, like the SAP-3178 and SAP-3180 blocks: #814 moved this fallback to
-  // a body whose server-side release (sapiom/Sapiom#4884) has not merged. Sapiom `main` serves
-  // 2.10 (digest 47a4e3a3…), which is what this copy tracks. Un-skip when #4884 lands and this
-  // copy is re-synced to that body.
-  it.skip("names the two servers by role and keeps distinct aliases in the registration commands", () => {
+  it("names the two servers by role and keeps distinct aliases in the registration commands (SAP-3179)", () => {
+    // Served since the 2.12 release (sapiom/Sapiom#5026, which folded the closed #4884 in);
+    // #814 parked this block while that wording was unserved, and this copy carries it from 2.14 on.
     // Two-MCP frame: this server authors agents; the hosted capability server answers
     // one-off calls. Under SAP-3179 both are named by ROLE — "the local authoring
     // server", "the hosted capability server" — with the same phrases the Agent Studio
@@ -109,7 +107,7 @@ describe("server instructions", () => {
     // could not learn that webhooks are off by default, how to turn them on, or
     // that `/hook/*` is the receiver. The three management tools shipped in 0.15;
     // the gate is the same one `_publish` carries, for the same reason. Served since
-    // the 2.12 release (sapiom/Sapiom#4886), which folded them into 2.11's webhook
+    // the 2.12 release (sapiom/Sapiom#5026), which folded them into 2.11's webhook
     // paragraph and retired its "no `sapiom_dev_*` tool sets it yet" clause.
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_list");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_settings");
@@ -242,21 +240,22 @@ describe("server instructions", () => {
     // of PRs. Never re-point this digest on its own — that just re-blesses the
     // drift the guard exists to catch.
     //
-    // Current release: 2.12 (App Link management tools folded into the webhook paragraph,
-    // SAP-3178) on top of 2.11 (Vault, `agents.launch`, receipts/replay, App Link webhooks,
-    // SAP-3180) and 2.10 (trigger kinds, SAP-3174). SAP-3179's alias wording is NOT in this
-    // body: its server-side release (sapiom/Sapiom#4884) is still open, so that block stays
-    // skipped until it lands and re-syncs this copy.
+    // Current release: 2.14 (App Link is a redirector, not a reverse proxy; the `/hook/*`
+    // exposure caveats, SAP-3217) on top of 2.13 (a Sapiom Postgres is permanent), 2.12
+    // (servers named by role, SAP-3179; App Link management tools folded into the webhook
+    // paragraph, SAP-3178), 2.11 (Vault, `agents.launch`, receipts/replay, App Link webhooks,
+    // SAP-3180) and 2.10 (trigger kinds, SAP-3174). The backend's frozen-digest spec pins this
+    // same value for AUTHORING_CONTENT_V2_14 and for SAPIOM_JS_FALLBACK_DIGEST.
     const sha256 = createHash("sha256")
       .update(AUTHORING_INSTRUCTIONS, "utf8")
       .digest("hex");
     expect(sha256).toBe(
-      "ab310467f24b5b5fad94f030dfe9341544144a3c6842a25a1bfda13a5d008cba",
+      "055076ab6773f92133a88da8aae71e2130f4c693a79779176c3e0707cb4ffeac",
     );
   });
 
   it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
-    // Served since 2.11 (sapiom/Sapiom#4885); this copy carries it from 2.12 on.
+    // Served since 2.11 (sapiom/Sapiom#4885); this copy carries it from 2.14 on.
     // Each of these shipped without any served text teaching it, so an agent could only
     // guess at it. Byte-identical to the backend copy, so asserted here too.
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
@@ -276,5 +275,33 @@ describe("server instructions", () => {
     // one-shot caller. Scoped to that clause, not the identifier: `LlmSubmitSpec` has a
     // real `deadlineMinutes`, and a later primer may document the deferred lane's knob.
     expect(AUTHORING_INSTRUCTIONS).not.toContain("Say how long you can wait");
+  });
+
+  it("says a Sapiom Postgres is permanent, with no lifetime to pick (2.13)", () => {
+    // 2.13 (sapiom/Sapiom#4972) retired the 7-day database claim: a database lives until
+    // deleted and holds a plan slot while held, so an author must not look for a `duration`.
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.database.create");
+    expect(AUTHORING_INSTRUCTIONS).toContain("is permanent");
+    expect(AUTHORING_INSTRUCTIONS).toContain("no `duration` to pass");
+  });
+
+  it("says an App Link is a redirector, not a reverse proxy, and how to reach the app (SAP-3217)", () => {
+    // 2.14 (sapiom/Sapiom#4926), from Studio feedback: an agent treated the durable URL as a
+    // stable base and pointed the app's own fetches at sub-paths of it, which the host 404s.
+    // The primer must name the redirect-then-`__status` discovery loop, its ordering trap, and
+    // the token expiry that makes storing the address wrong too.
+    const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
+    expect(flat).toContain("**redirector, not a reverse proxy**");
+    expect(flat).toContain("request the root WITHOUT following redirects");
+    expect(flat).toContain("Do NOT make `__status` your FIRST call");
+    expect(flat).toContain(
+      "Re-read the address per use rather than storing it",
+    );
+    expect(flat).toContain("an org-scoped app's API is browser-only");
+    // The `/hook/*` exposure caveats 2.11 omitted: any method on any sub-path, no caller auth.
+    expect(flat).toContain(
+      "the hook accepts ANY method on ANY path under `/hook/`",
+    );
+    expect(flat).toContain("treat the URL as a secret");
   });
 });

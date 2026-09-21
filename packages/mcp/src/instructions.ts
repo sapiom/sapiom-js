@@ -18,9 +18,9 @@
  */
 export const AUTHORING_INSTRUCTIONS = `# Sapiom local authoring MCP
 
-\`sapiom-dev\` is this package's MCP server identity. In Claude Code, register it under the
-supported local alias \`sapiom\` with \`claude mcp add sapiom -- npx -y @sapiom/mcp\`.
-It is the terminal surface for building and managing your Sapiom projects. Today it drives
+This package (\`@sapiom/mcp\`) is **the local authoring server**: the terminal surface for
+building and managing your Sapiom projects. Agent Studio pre-wires it; in Claude Code,
+register it with \`claude mcp add sapiom -- npx -y @sapiom/mcp\`. Today it drives
 **agent authoring, sandbox app previews, and durable app publishing** (more
 dev/management tools will land here over time). Agent authoring: build, test, and deploy a
 Sapiom agent — a \`defineAgent({ name, entry, steps })\` (from \`@sapiom/agent\`) where each
@@ -28,16 +28,17 @@ step's \`run(input, ctx)\` does work and returns a directive. All from the termi
 dashboard required.
 
 ## Two ways to use Sapiom
-Use the local \`sapiom\` alias to **author agents** — the \`sapiom_dev_agents_*\` tools
-scaffold, typecheck, run with stubs, and deploy from a local checkout. For a **one-off
-capability call** without an agent (a search, a scrape, one image), use the hosted capability
-MCP under the distinct \`sapiom-direct\` alias:
+Use **the local authoring server** (this one) to **author agents** — the \`sapiom_dev_agents_*\`
+tools scaffold, typecheck, run with stubs, and deploy from a local checkout. For a **one-off
+capability call** without an agent (a search, a scrape, one image), use **the hosted capability
+server** at \`https://api.sapiom.ai/v1/mcp\`. Agent Studio pre-wires it too; in Claude Code,
+register it with
 \`claude mcp add --scope user --transport http sapiom-direct https://api.sapiom.ai/v1/mcp --header "x-api-key: $SAPIOM_API_KEY"\`.
 Its runtime \`tools/list\` response is authoritative; use \`tool_discover\` to find a direct
 \`sapiom_*\` capability tool. The endpoint may also advertise implemented cloud workflow and
 governance tools, but the supported public authoring route is this local MCP or Agent Studio.
 Rule of thumb: author an agent for anything multi-step, scheduled, or deployable; use the
-hosted capability MCP or the TypeScript SDK for a single action.
+hosted capability server or the TypeScript SDK for a single action.
 
 ## Lifecycle (in order)
 1. Start a project — \`sapiom_dev_agents_scaffold\` (a fresh starter) or \`sapiom_dev_agents_clone\`
@@ -49,8 +50,10 @@ hosted capability MCP or the TypeScript SDK for a single action.
    definition, then validates its graph; top-level author code can execute) →
    \`sapiom_dev_agents_run_local\` (Sapiom capabilities are stubbed with no Sapiom
    capability spend; authored code and its ordinary side effects still execute).
-3. Before the first cloud action, call \`sapiom_authenticate\`; browser login caches the shared
-   credential required by link/deploy/run. Confirm with \`sapiom_status\`.
+3. Before the first cloud action, call this server's \`sapiom_authenticate\` — the one alongside
+   the \`sapiom_dev_agents_*\` tools; the hosted server's same-named tool only describes the auth
+   flows. Browser login caches the shared credential required by link/deploy/run. Confirm with
+   this server's \`sapiom_status\`.
 4. Ship: \`sapiom_dev_agents_link\` → \`_deploy\` → \`_run\` (real cloud execution; costs
    depend on the work performed) → \`_inspect\`.
 
@@ -68,11 +71,25 @@ sharing, not always-on hosting. From this project that is \`sapiom_dev_app_publi
 name only — it reads the same \`sapiom.json\` sandbox resource \`_preview\` uses, so source,
 start, port, build and env are already set); it needs \`@sapiom/mcp\` >= 0.13, so if your
 \`tools/list\` does not offer it, upgrade or use the next line. Without a project on disk:
-\`sapiom_app_publish\` on the \`sapiom-direct\` alias above, or
+\`sapiom_app_publish\` on the hosted capability server above, or
 \`POST /v1/app-links\` → \`PUT …/bundle\` → \`POST …/publish\`. Bundles are text-only UTF-8
 and self-contained; republishing the same slug replaces the app in place at the same URL.
 Org-scoped by default; \`public\` needs an explicit confirmation and a daily spend cap because
 your org pays for every wake. See https://docs.sapiom.ai/capabilities/app-links.
+
+An App Link is a wake-on-visit **redirector, not a reverse proxy**: no sub-path is forwarded,
+so the app's own API lives at whichever preview URL is serving the app, never under the link.
+To get that address, request the root WITHOUT following redirects — a WARM app answers 302 and
+\`Location\` is the address; a COLD one answers 200 with the "Starting …" page and starts a
+wake, and \`{link}/__status\` then polls to \`{"status":"ready","url":…}\`. Do NOT make
+\`__status\` your FIRST call: with no wake in flight it starts one and answers \`waking\` with
+no url. Re-read the address per use rather than storing it — it changes when a wake recreates
+the sandbox and, for an org-scoped app, carries a short-lived token that expires. The check on
+both is the link's own, so an org-scoped app's API is browser-only: a logged-in member's
+session, not an API key. A \`public\` app needs no session, but the daily spend cap it must
+carry flips it back to \`organization\` permanently on the first breach (only an \`org.write\`
+republish with \`confirmPublic\` restores it), so a machine caller built on that route can stop
+working with nothing republished.
 
 An App Link can also receive webhooks. Webhooks are OFF by default on a link: turn on
 \`webhooksEnabled\` with \`sapiom_dev_app_settings\` and third parties POST to
@@ -85,7 +102,11 @@ wakeRateLimitPerHour; \`sapiom_dev_app_list\` shows every link; \`sapiom_dev_app
 one. All three need \`@sapiom/mcp\` >= 0.15 — on an older client use the dashboard App Links page
 or the REST routes: \`GET /v1/app-links\` to find the id, then \`PATCH\` / \`DELETE
 /v1/app-links/{id}\`. These settings need \`org.write\` — a credential without it gets the
-permission named in the tool's error; tell the user, do not retry.
+permission named in the tool's error; tell the user, do not retry. Two things to weigh before
+turning webhooks on: the hook accepts ANY method on ANY path under \`/hook/\` — the one case
+where a sub-path IS forwarded — with no caller auth at either visibility, and for an org-scoped
+app with no wake or spend cap either. Enable it only for an app whose own handler
+authenticates the caller, and treat the URL as a secret.
 
 ## Triggers (run a deployed agent without a human)
 \`sapiom_dev_agents_schedule\` creates a trigger of one of four kinds on a deployed agent:
@@ -120,6 +141,9 @@ https://docs.sapiom.ai/guides/triggers.
   models.coding, fileStorage, search, database, email, domains, memory, and more) —
   don't memorize the catalog; use autocomplete/typecheck. Schedules (cron triggers) are
   a top-level \`@sapiom/tools\` import, not under \`ctx.sapiom\`.
+- A Sapiom Postgres (\`ctx.sapiom.database.create\`) is permanent: it lives until you delete
+  it, holds one slot of your plan's database limit while held, and never expires — there is
+  no lifetime to pick and no \`duration\` to pass.
 
 ## Secrets, inbound events, receipts
 - **Secrets** set in the dashboard per deployed agent reach a step only as env vars
