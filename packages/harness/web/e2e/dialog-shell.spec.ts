@@ -17,6 +17,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { openNewAgentScreen } from "./mock-navigation";
 
 
 interface DialogCase {
@@ -94,7 +95,9 @@ const CASES: DialogCase[] = [
     name: "TemplateUseDialog",
     open: async (page) => {
       await page.goto("/?mockState=fresh");
-      await expect(page.getByTestId("new-session-composer")).toBeVisible();
+      // A fresh install has no project: New project opens one and lands on
+      // the screen, whose "Browse all templates" is the way in.
+      await openNewAgentScreen(page);
       await page.getByTestId("composer-browse-templates").click();
       await expect(page.getByTestId("templates-panel")).toBeVisible();
       // Opened from the template's own detail view rather than from the card's

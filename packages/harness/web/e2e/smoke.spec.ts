@@ -138,7 +138,7 @@ test("rail: the New project CTA leads the nav and runs the folder step", async (
   await page.getByTestId("folder-field-input").fill("/Users/demo/blank-slate");
   await page.getByTestId("project-folder-continue").click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-project")).toContainText("blank-slate");
+  await expect(page.getByTestId("new-agent-project")).toContainText("blank-slate");
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({

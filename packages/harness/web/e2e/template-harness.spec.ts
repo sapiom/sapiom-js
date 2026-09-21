@@ -109,7 +109,7 @@ for (const surface of [
     page,
   }) => {
     await page.goto("/?mockState=fresh");
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await openNewAgentScreen(page);
     await chooseCodex(page);
     await launchTemplate(page, surface);
     await expectTemplateSession(page, "codex", surface.startsWith("starter"));
@@ -125,6 +125,7 @@ for (const surface of [
     page,
   }) => {
     await page.goto("/?mockState=fresh");
+    await openNewAgentScreen(page);
     await expect(page.getByTestId("composer-harness-select")).toContainText(
       "Claude",
     );
@@ -151,6 +152,7 @@ for (const surface of [
       ).__MOCK_UNINSTALLED_HARNESSES__ = ["claude-code"];
     });
     await page.goto("/?mockState=fresh");
+    await openNewAgentScreen(page);
     await expect(page.getByTestId("composer-harness-select")).toContainText(
       "Codex",
     );
@@ -174,6 +176,7 @@ for (const surface of [
       };
     });
     await page.goto("/?mockState=fresh");
+    await openNewAgentScreen(page);
     await chooseCodex(page);
     await launchTemplate(page, surface);
     await expectTemplateSession(page, "codex", surface === "starter-detail");
@@ -185,6 +188,7 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
     page,
   }) => {
     await page.goto("/?mockState=fresh");
+    await openNewAgentScreen(page);
     await chooseCodex(page);
     if (entry === "deep-link") {
       await page.goto("/?mockState=fresh&template=hello-agent");
@@ -213,6 +217,7 @@ test("a direct gallery visit uses the current selection after leaving the compos
   page,
 }) => {
   await page.goto("/?mockState=fresh");
+    await openNewAgentScreen(page);
   await chooseCodex(page);
   await page.getByTestId("composer-browse-templates").click();
   await page.getByTestId("templates-exit").click();
@@ -241,6 +246,7 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
       await page.getByTestId("template-use-btn").click();
       await page.getByTestId("template-use-confirm").click();
     } else {
+      await openNewAgentScreen(page);
       await expect(page.getByTestId("composer-harness-select")).toContainText(
         "Codex",
       );
@@ -312,6 +318,7 @@ test("a registry failure still launches the selected harness from the composer",
     ).__MOCK_HARNESS_REGISTRY_FAIL__ = true;
   });
   await page.goto("/?mockState=fresh");
+    await openNewAgentScreen(page);
   await chooseCodex(page);
   await launchTemplate(page, "composer");
   await expectTemplateSession(page, "codex");

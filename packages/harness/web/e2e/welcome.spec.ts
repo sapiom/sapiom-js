@@ -16,6 +16,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { openNewAgentScreen } from "./mock-navigation";
+
 /** Open the Overview modal from the account menu. */
 async function openOverview(page: Page): Promise<void> {
   await page.getByTestId("brand-identity").click();
@@ -39,16 +41,21 @@ test.describe("first run", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("opens on the composer: the question, quick ideas, and templates", async ({ page }) => {
-    const composer = page.getByTestId("new-session-composer");
-    await expect(composer).toBeVisible();
-    // No terminal, no canvas yet — the composer stands in the centre pane.
-    await expect(page.locator(".terminal-empty")).toHaveCount(0);
+  test("opens on the no-project home; New project leads to the screen with its question, chips and templates", async ({ page }) => {
+    const home = page.getByTestId("no-project-home");
+    await expect(home).toBeVisible();
+    // No terminal, no canvas, and no screen yet: there is no project to
+    // create in, so the screen is not shown with the project left blank.
+    await expect(page.locator(".terminal-empty")).toHaveCount(1);
     await expect(page.getByTestId("agent-view")).toHaveCount(0);
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    await expect(home).toContainText("No project yet");
 
+    await openNewAgentScreen(page);
+    const composer = page.getByTestId("new-session-composer");
     await expect(composer).toContainText("What should your agent do?");
-    // The first-run greeting is the one thing that marks a first run.
-    await expect(page.getByTestId("composer-greeting")).toContainText("first agent");
+    // The screen states the project it is creating in.
+    await expect(page.getByTestId("new-agent-project")).toHaveText("New agent in blank-slate");
 
     // The four quick-idea chips, the box, and the send.
     await expect(page.getByTestId("composer-chip-sales-outreach")).toBeVisible();
@@ -66,23 +73,6 @@ test.describe("first run", () => {
     await expect(docs).toHaveAttribute("target", "_blank");
 
     await page.screenshot({ path: "web/e2e/screenshots/composer-home.png", fullPage: true });
-  });
-
-  test("the + opens the Add existing agents dialog, and the workspace joins the rail", async ({ page }) => {
-    // The composer's leading + reaches the same "add existing agents" dialog the
-    // rail's button does — one detection-driven picker, no doors.
-    await page.getByTestId("composer-open-folder").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
-    await expect(page.getByTestId("aw-doors")).toHaveCount(0);
-
-    // Pick a fixture folder that holds an agent project — detection is reactive.
-    await page.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
-    await expect(page.getByTestId("start-hint")).toHaveText("This folder is an agent project.");
-    await page.getByTestId("aw-add").click();
-
-    // The workspace joins the rail.
-    await expect(page.locator(".modal-start")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-rfq-agent")).toBeVisible();
   });
 });
 

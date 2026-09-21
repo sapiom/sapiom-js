@@ -811,7 +811,7 @@ test.describe("New agent on the Group axis (D34c)", () => {
     // The same screen every entrance lands on, scoped to the holding project
     // (flow-creation.md §4.2, §4.3).
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
-    await expect(page.getByTestId("composer-project")).toHaveText(
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
       "New agent in polsia",
     );
   });

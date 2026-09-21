@@ -17,6 +17,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { openNewAgentScreen } from "./mock-navigation";
 
 interface ProductEvent {
   event: string;
@@ -76,7 +77,7 @@ test.describe("agent-lifecycle product events → PostHog", () => {
     page,
   }) => {
     await page.goto("/?mockState=fresh");
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await openNewAgentScreen(page);
     await page.getByTestId("composer-browse-templates").click();
     await expect(page.getByTestId("templates-grid").first()).toBeVisible();
 

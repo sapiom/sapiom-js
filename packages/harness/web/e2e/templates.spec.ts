@@ -55,9 +55,10 @@ async function open(page: Page, id: string): Promise<void> {
 test.describe("templates journey (from the composer)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/?mockState=fresh");
-    // A fresh install opens on the composer-first "new session" home; its
-    // "Browse all templates" is the way into the catalog destination.
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    // A fresh install has no project; New project opens one and lands on the
+    // new-agent screen, whose "Browse all templates" is the way into the
+    // catalog destination.
+    await openNewAgentScreen(page);
     await page.getByTestId("composer-browse-templates").click();
     await expect(page.getByTestId("templates-panel")).toBeVisible();
     // The grid renders from the fetch; waiting on it keeps every test below

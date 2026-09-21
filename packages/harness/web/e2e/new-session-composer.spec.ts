@@ -446,11 +446,11 @@ test("attachment controls expose names, live status, and keyboard removal", asyn
     };
   });
 
-  await expect(page.getByTestId("composer-attach-files")).toHaveAccessibleName(
+  await expect(page.getByTestId("composer-attach-file")).toHaveAccessibleName(
     "Attach files",
   );
   await expect(page.getByTestId("composer-send")).toHaveAccessibleName(
-    "Start session",
+    "Create agent",
   );
   await expect(page.getByRole("status")).toHaveText("No files attached.");
 
@@ -635,15 +635,13 @@ test("an upload failure rolls back, retains the queue, sends nothing, and retrie
   });
 
   await expect(page.getByTestId("composer-send")).toBeDisabled();
-  await expect(page.getByRole("status")).toHaveText(
-    "Starting session with 1 file attached.",
-  );
+  await expect(page.getByRole("status")).toHaveText("1 file attached.");
   await expect(page.getByTestId("composer-send")).toBeEnabled();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
   await expect(page.getByTestId("composer-files")).toContainText(
     "retry-screenshot.png",
   );
-  await expect(page.getByTestId("toast")).toContainText(
+  await expect(page.getByTestId("new-agent-error")).toContainText(
     /retry-screenshot\.png.*materialization failed/i,
   );
 
