@@ -1048,9 +1048,15 @@ export function WorkflowsRail({
           className="menu-flyer"
           testid="history-menu"
         >
-          <div className="connect-card history-card">
+          {/* The glyph promises a dialog (`aria-haspopup`), so the card is one,
+              named by its visible heading. */}
+          <div
+            className="connect-card history-card"
+            role="dialog"
+            aria-labelledby="past-sessions-heading"
+          >
             <div className="connect-card-header">
-              <span>Past sessions</span>
+              <span id="past-sessions-heading">Past sessions</span>
               <button
                 className="theme-toggle connect-card-close"
                 onClick={closeHistory}
@@ -1275,12 +1281,13 @@ export function WorkflowsRail({
                   tooltip={
                     creating
                       ? "Creating agent…"
-                      : planFirst &&
-                          project.rootAgent == null &&
-                          project.agents.length === 0
+                      : planFirst && empty
                         ? /* D36: an empty project has no map to draw, so its
                              name is the door to the new-agent screen, and the
-                             tooltip says so where the row is. */
+                             tooltip says so where the row is. `empty` is
+                             `projectIsEmpty`, the one emptiness answer, so a
+                             project whose agents all sit under directory rows
+                             keeps its map tooltip. */
                           "Create this project's first agent"
                         : bare
                           ? "Project with sessions, no agent yet. Focus to work in it."

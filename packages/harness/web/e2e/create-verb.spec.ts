@@ -561,6 +561,9 @@ test.describe("the rail top", () => {
     await expect(history).toHaveAttribute("aria-haspopup", "dialog");
     await history.click();
     await expect(page.getByTestId("history-menu")).toBeVisible();
+    // The promised popup IS a dialog, named by its heading.
+    await expect(page.getByRole("dialog", { name: "Past sessions" })).toBeVisible();
+    await expect(history).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId("past-sessions-card")).toBeVisible();
     await expect(page.getByTestId("exited-session-sess-leasing")).toBeVisible();
     // One flyer at a time: opening the options menu retires the card.
