@@ -106,7 +106,7 @@ export function FolderField({
           className="modal-input folder-field-input"
           data-testid="folder-field-input"
           value={value}
-          placeholder="/path/to/folder"
+          placeholder="/path/to/project"
           list={chooseDirectory ? undefined : listId}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
