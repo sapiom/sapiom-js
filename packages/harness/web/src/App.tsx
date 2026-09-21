@@ -317,6 +317,8 @@ interface ComposerProject {
   projectId: StudioProjectId | null;
   /** The template the screen opens with as its idea, if Use brought us here. */
   template: StudioTemplate | null;
+  /** Which template surface Use was pressed on; the product metric names it. */
+  templateSurface?: "welcome" | "template_gallery" | "template_detail";
 }
 
 interface CreateSessionAtOptions {
@@ -469,6 +471,13 @@ export const App = (): JSX.Element => {
   const [setupBySession, setSetupBySession] = useState<Map<string, string>>(
     () => new Map(),
   );
+  /** An agent the screen created whose first session failed to start; the
+   *  next submit of the same idea in the same project reuses it. */
+  const scaffoldedButUnstartedRef = useRef<{
+    root: string;
+    name: string;
+    path: string;
+  } | null>(null);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
   // pending affordance; the ref closes React's same-frame double-click window.
   const [siblingSessionPending, setSiblingSessionPending] = useState(false);
@@ -2218,7 +2227,13 @@ export const App = (): JSX.Element => {
     // A newer navigation won while the folder opened: it decided where the
     // user is, and a late folder choice does not replace that.
     if (!opened) return;
-    if (intent === "new-project") composeInProject({ ...opened, template });
+    if (intent === "new-project") {
+      composeInProject({
+        ...opened,
+        template,
+        ...(template ? { templateSurface: "template_gallery" as const } : {}),
+      });
+    }
   };
 
   /**
@@ -2479,7 +2494,11 @@ export const App = (): JSX.Element => {
       if (fallback) setSelectedHarness(fallback);
     }
     if (composerProject) {
-      composeInProject({ ...composerProject, template });
+      composeInProject({
+        ...composerProject,
+        template,
+        templateSurface: "template_gallery",
+      });
       return;
     }
     const scope = effectiveStudioSelection
@@ -2493,6 +2512,7 @@ export const App = (): JSX.Element => {
         label: selectedStudioProject?.displayName ?? basenameOf(scope.cwd),
         projectId: scope.projectId ?? null,
         template,
+        templateSurface: "template_gallery",
       });
       return;
     }
@@ -2502,6 +2522,7 @@ export const App = (): JSX.Element => {
         label: selectedProject.label,
         projectId: null,
         template,
+        templateSurface: "template_gallery",
       });
       return;
     }
@@ -2537,18 +2558,28 @@ export const App = (): JSX.Element => {
       throw new Error("Pick a project first: New project opens the folder step.");
     }
     const template = project.template;
-    const created = await harness.scaffoldAgent(
-      project.root,
-      deriveAgentName(idea),
-      template?.kind === "starter" ? template.id : "default",
-    );
-    if (template) {
+    const name = deriveAgentName(idea);
+    // A RETRY AFTER THE SESSION FAILED reuses the agent the first attempt
+    // created: the scaffold succeeded, so scaffolding again would be refused
+    // as a duplicate of our own work. The screen stayed open with the files
+    // and links intact, and this is what lets the second press finish the job.
+    const retained = scaffoldedButUnstartedRef.current;
+    const created =
+      retained && samePath(retained.root, project.root) && retained.name === name
+        ? retained
+        : await harness.scaffoldAgent(
+            project.root,
+            name,
+            template?.kind === "starter" ? template.id : "default",
+          );
+    scaffoldedButUnstartedRef.current = null;
+    if (template && created !== retained) {
       // Product metric: "templates used", at the one choke point every
       // template surface now funnels through.
       trackProduct("agent.template_cloned", {
         template_slug: template.id,
         template_id: template.id,
-        surface: "welcome",
+        surface: project.templateSurface ?? "welcome",
       });
     }
     // The rail already has it (the server rescanned before answering).
@@ -2580,12 +2611,20 @@ export const App = (): JSX.Element => {
       harness.setActiveSessionId(session.id);
       setFocusedAgentPath(created.path);
     } catch (err) {
-      harness.showToast(
+      // The agent exists (it is a row in the rail); the SESSION did not start.
+      // Say exactly that under the field, keep the screen and its files, and
+      // let the next press reuse the agent instead of scaffolding a duplicate.
+      scaffoldedButUnstartedRef.current = {
+        root: project.root,
+        name: created.name,
+        path: created.path,
+      };
+      throw new Error(
         `${created.name} was created, but its session didn't start. ${errorMessage(err, "")}`.trim(),
       );
     }
-    // Only now does the screen give way: the agent exists and its session,
-    // if it started, is the active one.
+    // Only now does the screen give way: the agent exists and its session is
+    // the active one.
     setComposing(false);
     setComposerProject(null);
   };
@@ -2593,7 +2632,7 @@ export const App = (): JSX.Element => {
   /** The screen's own template row: the template becomes this screen's idea. */
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
     if (!composerProject) return;
-    composeInProject({ ...composerProject, template });
+    composeInProject({ ...composerProject, template, templateSurface: "welcome" });
   };
 
   // Bulk discovery from the add dialog.
