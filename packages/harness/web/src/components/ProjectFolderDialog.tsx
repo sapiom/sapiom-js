@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { JSX, RefObject } from "react";
 
 import type { FsListResponse } from "../lib/api";
 import { parentOf, stripTrailingSep } from "../lib/paths";
@@ -51,6 +51,7 @@ export function ProjectFolderDialog({
   intent,
   initialPath,
   listDir,
+  triggerRef,
   onClose,
   onChoose,
 }: {
@@ -58,6 +59,8 @@ export function ProjectFolderDialog({
   /** Where the field opens: the most recent folder, or empty. */
   initialPath: string;
   listDir: (path?: string) => Promise<FsListResponse>;
+  /** The control that ran the folder step; Escape hands focus back to it. */
+  triggerRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
   /** The folder the user settled on. Rejects with a sentence to show. */
   onChoose: (root: string) => Promise<void>;
@@ -139,6 +142,7 @@ export function ProjectFolderDialog({
       onSubmit={submit}
       dismissable={!busy}
       closeDisabled={busy}
+      triggerRef={triggerRef}
       tracking={{ dialog: "project_folder" }}
       actions={
         <>
