@@ -1936,6 +1936,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             });
             client.refreshHandler = mint;
             client.setCredentials(await mint());
+            // Keep local runs offline: intercept gaxios' transporter (the same hook production
+            // uses for the proxy) so a vendor-SDK call through this client never touches the
+            // network — return an obviously-fake, shape-faithful JSON response instead.
+            (
+              client.transporter as unknown as {
+                defaults: { fetchImplementation?: typeof fetch };
+              }
+            ).defaults.fetchImplementation = (async () =>
+              new Response(JSON.stringify({ stub: true }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              })) as typeof fetch;
             return client;
           })) as InstanceType<
             (typeof import("google-auth-library"))["OAuth2Client"]

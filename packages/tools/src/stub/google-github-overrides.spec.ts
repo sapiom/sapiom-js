@@ -61,4 +61,17 @@ describe("stub google/github overrides", () => {
     const pending = client.connectors.github.listRepos();
     await expect(pending).rejects.toThrow("gh boom");
   });
+
+  it("keeps the default authClient offline (an SDK request returns stub data, never the network)", async () => {
+    const client = createStubClient();
+    const auth = await client.connectors.google.authClient();
+
+    // A vendor-SDK-style call to a real Google URL must NOT hit the network — the stub's
+    // transporter interception returns fake data, mirroring production's proxy interception.
+    const res = await auth.request({
+      url: "https://www.googleapis.com/drive/v3/files",
+      method: "GET",
+    });
+    expect(res.data).toEqual({ stub: true });
+  });
 });
