@@ -195,6 +195,8 @@ import {
   type RunTarget,
 } from "./lib/use-harness-state";
 import { useAgentMapEntry } from "./lib/use-agent-map-entry";
+import { agentMapLoader } from "./lib/agent-map-loader";
+import type { AgentMapWorkspaceResponse } from "@sapiom/agent-map";
 import {
   deploymentStateLabel,
   deploymentStateTitle,
@@ -1901,21 +1903,54 @@ export const App = (): JSX.Element => {
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
     // AN EMPTY PROJECT'S NAME IS THE DOOR (D36, flow-creation.md §4.3). A
-    // project with no agent has no map to draw, so selecting it lands on the
-    // new-agent screen scoped to it rather than on a map with nothing in it.
-    // "Holds" is the rail's own membership rule, so the door and the row
-    // agree on which project an agent belongs to.
+    // project with nothing to draw lands on the new-agent screen scoped to it
+    // rather than on a map with nothing in it. "Nothing to draw" means no
+    // agent under the rail's own membership rule AND no map content: a
+    // durable project can carry map nodes the folder does not (the desktop
+    // smoke seeds one that way), so the map is consulted, from the loader's
+    // cache when it has it and by a load otherwise. New projects reach the
+    // screen through the folder step, not this door.
     const holdsAgents = state.workflows.some((workflow) =>
       agentBelongsToProjectRoot(workflow, root, workspaceScopes),
     );
-    if (!holdsAgents) {
+    const generation = studioRestoreGenerationRef.current;
+    const openDoor = () =>
       composeInProject({
         root,
         label,
         projectId: studioProjectId ?? null,
         template: null,
       });
-      return;
+    const mapIsEmpty = (snapshot: AgentMapWorkspaceResponse | null) =>
+      !snapshot ||
+      (snapshot.workspace.confirmedRevisionId === null && !snapshot.proposal);
+    if (!holdsAgents) {
+      if (!studioProjectId) {
+        openDoor();
+        return;
+      }
+      const cached = agentMapLoader.peek(studioProjectId);
+      if (cached) {
+        if (mapIsEmpty(cached)) {
+          openDoor();
+          return;
+        }
+      } else {
+        // Unknown map: show the map pane now, and open the door once the
+        // load proves it empty, if this project is still the selection.
+        void agentMapLoader
+          .load(harness.api, studioProjectId)
+          .then((snapshot) => {
+            // Still the same selection: no later click moved the generation.
+            if (
+              mapIsEmpty(snapshot) &&
+              studioRestoreGenerationRef.current === generation
+            ) {
+              openDoor();
+            }
+          })
+          .catch(() => {});
+      }
     }
     if (
       studioProjectId &&
