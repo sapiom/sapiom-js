@@ -1,5 +1,6 @@
 /**
- * TWO VERBS, ONE SCREEN (flow-creation.md rev 4, §4.1, §4.2, §4.5; SAP-3573).
+ * TWO VERBS, ONE SCREEN, ONE SESSION TYPE (flow-creation.md rev 4, §4 and §5;
+ * SAP-3143 E1 to E4, SAP-3153).
  *
  * These assert destinations and side effects, not menus opening:
  *
@@ -8,13 +9,14 @@
  *     creates a session (Q5).
  *  2. On desktop the OS picker is called DIRECTLY and no Studio dialog opens
  *     (D29). Playwright is the browser host, so the bridge is injected.
- *  3. A project row's New agent lands on the same screen, scoped to that
- *     project (§4.2), and so does an empty project's name (D36).
- *  4. Links and long pastes are intake, not text (§4.6 step 1).
- *  5. An install with no project sees the no-project home.
- *
- * Submit, intake, the empty project's door and the rail's history glyph are
- * guarded by the slices that add them (SAP-3574, SAP-3576, SAP-3575).
+ *  3. Submit scaffolds through the endpoint first, then opens one ordinary
+ *     session bound to the agent, whose first prompt is the idea, the
+ *     resources, and the planning instructions as session setup. No English
+ *     scaffold prompt is typed anywhere (D30).
+ *  4. A refusal lands under the field and nothing starts (D31).
+ *  5. Links and long pastes are intake, not text (§4.6 step 1).
+ *  6. Template Use routes through the screen (CF-D11).
+ *  7. An empty project's name lands on the screen (D36).
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
@@ -27,7 +29,12 @@ import {
 } from "./mock-navigation";
 
 interface Evidence {
+  createOrder: string[];
   createSessionCalls: Array<{ req: Record<string, unknown> }>;
+  lastCreateSession: { req: Record<string, unknown> } | null;
+  lastInitialInput: { id: string; text: string } | null;
+  lastInjectInput: { req?: { text?: string } } | null;
+  bindWorkflowCalls: unknown[];
 }
 
 const evidence = (page: Page): Promise<Evidence> =>
@@ -36,9 +43,17 @@ const evidence = (page: Page): Promise<Evidence> =>
       window as unknown as { __HARNESS_TEST__?: Record<string, unknown> }
     ).__HARNESS_TEST__ ?? {};
     return {
+      createOrder: (state.createOrder as string[]) ?? [],
       createSessionCalls:
         (state.createSessionCalls as Array<{ req: Record<string, unknown> }>) ??
         [],
+      lastCreateSession:
+        (state.lastCreateSession as { req: Record<string, unknown> }) ?? null,
+      lastInitialInput:
+        (state.lastInitialInput as { id: string; text: string }) ?? null,
+      lastInjectInput:
+        (state.lastInjectInput as { req?: { text?: string } }) ?? null,
+      bindWorkflowCalls: (state.bindWorkflowCalls as unknown[]) ?? [],
     };
   });
 
@@ -235,7 +250,104 @@ test.describe("the two verbs", () => {
   });
 });
 
-test.describe("intake", () => {
+test.describe("submit", () => {
+  test("creation completes before the chat starts, and the first turn plans", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openNewAgentScreen(page);
+
+    const idea = "Watch our competitors' pricing pages and send a sourced digest every Monday.";
+    await page.getByTestId("composer-input").fill(idea);
+    await expect(page.getByTestId("composer-send")).toHaveAccessibleName("Create agent");
+    await page.getByTestId("composer-send").click();
+
+    // THE ORDER IS THE CRITERION (D30): scaffold in the project, then one
+    // session in the project folder. The name is derived from the idea (D31).
+    await expect
+      .poll(async () => (await evidence(page)).createOrder)
+      .toEqual([
+        `scaffold:${BLANK_PROJECT_ROOT}/competitors-pricing`,
+        `session:${BLANK_PROJECT_ROOT}`,
+      ]);
+    // The agent is a row in the rail under its project.
+    await expect(page.getByTestId("workflow-competitors-pricing")).toBeVisible();
+    // The screen gave way to the live workbench.
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    await expect(page.getByTestId("agent-view")).toBeVisible();
+
+    const after = await evidence(page);
+    const req = after.lastCreateSession!.req;
+    // An ORDINARY session: the ordinary request, with the idea as the first
+    // prompt and the planning instructions as setup, never a scaffold option.
+    expect(req.cwd).toBe(BLANK_PROJECT_ROOT);
+    expect(req.initialPrompt).toBe(idea);
+    expect(req.initialUserInputPending).toBe(true);
+    expect(req).not.toHaveProperty("scaffold");
+    expect(String(req.initialSetup)).toContain("already scaffolded");
+    expect(String(req.initialSetup)).toContain("sapiom-agent-authoring");
+    // The composed first turn: idea first, setup last, nothing typed later.
+    const text = after.lastInitialInput!.text;
+    expect(text.startsWith(idea)).toBe(true);
+    expect(text).toContain("at most three clarifying questions");
+    expect(text).toContain("Build only after the user says go");
+    expect(text).not.toContain("sapiom_dev_agents_scaffold");
+    expect(after.lastInjectInput).toBeNull();
+    // Bound to the agent it created.
+    expect(after.bindWorkflowCalls).toHaveLength(1);
+    // The setup is disclosed quietly, not as the user's words.
+    const setup = page.getByTestId("session-setup");
+    await expect(setup).toBeVisible();
+    await expect(setup.locator("summary")).toContainText("Planning instructions");
+    await setup.locator("summary").click();
+    await expect(page.getByTestId("session-setup-body")).toContainText(
+      "Restate the outcome and the proof of success",
+    );
+  });
+
+  test("a duplicate name is refused by the server, under the field, and nothing starts", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openNewAgentInProject(page, "acme-app");
+
+    // `leasing` is a fixture agent in acme-app; the idea derives to that name.
+    const idea = "Build a leasing agent";
+    await page.getByTestId("composer-input").fill(idea);
+    await page.getByTestId("composer-send").click();
+
+    const error = page.getByTestId("new-agent-error");
+    await expect(error).toBeVisible();
+    await expect(error).toHaveText("acme-app already has an agent called leasing.");
+    await expect(error).not.toContainText("/api/agents/scaffold");
+    // The screen stays, holding what was typed, and NOTHING started.
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toHaveValue(idea);
+    await expect(page.getByTestId("composer-input")).toBeFocused();
+    const after = await evidence(page);
+    expect(after.createOrder).toEqual([]);
+    expect(after.createSessionCalls).toEqual([]);
+    // Editing clears the refusal.
+    await page.getByTestId("composer-input").fill("Build a leasing renewals agent");
+    await expect(error).toHaveCount(0);
+  });
+
+  test("an endpoint refusal is the server's sentence, not the wire shape", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present&mockError=scaffold");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openNewAgentScreen(page);
+    await page.getByTestId("composer-input").fill("Triage support tickets by urgency.");
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("new-agent-error")).toHaveText(
+      "Can't create an agent in blank-slate right now.",
+    );
+    expect((await evidence(page)).createSessionCalls).toEqual([]);
+  });
+
   test("links pasted into the box are sources; a long paste is a document", async ({
     page,
   }) => {
@@ -271,12 +383,127 @@ test.describe("intake", () => {
     await expect(page.locator(".composer-file-name")).toContainText(["Pasted document"]);
     await expect(page.getByTestId("composer-source-document")).toContainText(/\d+ words/);
     await expect(input).toHaveValue("Summarise these every morning.");
+    // A sentence with a link inside it still types.
     await expect(page.getByRole("status")).toHaveText("1 file and 2 links attached.");
     // One link can be removed like a file.
     await page.getByRole("button", { name: "Remove https://b.example/pricing" }).click();
     await expect(page.getByTestId("composer-source")).toHaveCount(1);
-    // Nothing has been created or started: intake is not submit.
-    expect((await evidence(page)).createSessionCalls).toEqual([]);
+
+    await page.getByTestId("composer-send").click();
+    await expect
+      .poll(async () => (await evidence(page)).lastCreateSession?.req.initialSources)
+      .toEqual(["https://a.example/spec"]);
+    const req = (await evidence(page)).lastCreateSession!.req;
+    expect(req.initialAttachments).toEqual([
+      expect.objectContaining({ kind: "inline", filename: "pasted-1.md" }),
+    ]);
+    // The composed first turn lands once the mock has materialized the paste.
+    await expect
+      .poll(async () => (await evidence(page)).lastInitialInput?.text ?? "")
+      .toContain("Linked sources");
+    const text = (await evidence(page)).lastInitialInput!.text;
+    expect(text).toContain("Linked sources (read each as context):\nhttps://a.example/spec");
+    expect(text).toContain("mock-pasted-1.md");
+    expect(text.indexOf("Attached files")).toBeLessThan(text.indexOf("Linked sources"));
+    expect(text.indexOf("Linked sources")).toBeLessThan(text.indexOf("already scaffolded"));
+  });
+
+  test("a failed session start keeps the screen and reuses the created agent on retry", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openNewAgentScreen(page);
+    await page.getByTestId("composer-input").fill("Build from this screenshot.");
+    await page.evaluate(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["pixels"], "shot.png", { type: "image/png" }));
+      document.querySelector("[data-testid='composer-input']")!.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }),
+      );
+    });
+    await expect(page.locator(".composer-file-name")).toHaveText(["shot.png"]);
+    await page.evaluate(() => {
+      (window as unknown as { __MOCK_ATTACH_FILE_FAIL_ONCE__?: boolean }).__MOCK_ATTACH_FILE_FAIL_ONCE__ = true;
+    });
+    await page.getByTestId("composer-send").click();
+
+    // The agent exists; the session did not start; the screen says exactly that.
+    await expect(page.getByTestId("new-agent-error")).toContainText(
+      "screenshot was created, but its session didn't start",
+    );
+    await expect(page.getByTestId("workflow-screenshot")).toBeVisible();
+    await expect(page.locator(".composer-file-name")).toHaveText(["shot.png"]);
+    expect((await evidence(page)).createOrder).toEqual([
+      `scaffold:${BLANK_PROJECT_ROOT}/screenshot`,
+    ]);
+
+    // The retry does not scaffold a duplicate of our own work.
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    await expect
+      .poll(async () => (await evidence(page)).createOrder)
+      .toEqual([
+        `scaffold:${BLANK_PROJECT_ROOT}/screenshot`,
+        `session:${BLANK_PROJECT_ROOT}`,
+      ]);
+  });
+});
+
+test.describe("templates route through the screen", () => {
+  test("Use on a fresh install: the folder step, then the template as the idea", async ({
+    page,
+  }) => {
+    await page.goto("/?mockState=fresh");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await page.getByTestId("rail-templates").click();
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    await page.getByTestId("template-card-open-coding-pause").click();
+    await page.getByTestId("template-use-btn").click();
+
+    // No project on screen: the folder comes first (§4.1), carrying the template.
+    await expect(page.getByTestId("template-use-dialog")).toHaveCount(0);
+    const dialog = page.getByTestId("project-folder-dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByTestId("folder-field-input").fill(BLANK_PROJECT_ROOT);
+    await dialog.getByTestId("project-folder-continue").click();
+
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("templates-panel")).toHaveCount(0);
+    await expect(page.getByTestId("composer-input")).toHaveValue(
+      /^Start from the Coding pause template\./,
+    );
+    await page.getByTestId("composer-send").click();
+    // A starter is scaffolded AS that starter, and nobody was asked to clone.
+    await expect
+      .poll(async () => (await evidence(page)).createOrder)
+      .toEqual([
+        `scaffold:${BLANK_PROJECT_ROOT}/coding-pause`,
+        `session:${BLANK_PROJECT_ROOT}`,
+      ]);
+    const created = (await evidence(page)).lastInitialInput!.text;
+    expect(created).toContain("scaffolded from the Coding pause starter");
+    expect(created).not.toContain("sapiom_dev_agents_scaffold");
+  });
+
+  test("Use with a project on screen lands there; a gallery template is named for build time", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await openNewAgentInProject(page, "acme-app");
+    await page.getByTestId("composer-browse-templates").click();
+    await page.getByTestId("template-card-open-web-research-digest").click();
+    await page.getByTestId("template-use-btn").click();
+
+    await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("new-agent-project")).toContainText("acme-app");
+    await expect(page.getByTestId("composer-input")).toHaveValue(/^Start from the .* template\./);
+    await page.getByTestId("composer-send").click();
+    await expect
+      .poll(async () => (await evidence(page)).lastInitialInput?.text ?? "")
+      .toContain('templateId "web-research-digest"');
+    expect((await evidence(page)).lastInitialInput!.text).toContain("sapiom_dev_agents_clone");
   });
 
   test("a pasted link reaches the session with the idea; it does not die with the screen", async ({

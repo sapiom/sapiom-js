@@ -17,7 +17,6 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { openNewAgentScreen } from "./mock-navigation";
 
 
 interface DialogCase {
@@ -29,12 +28,11 @@ interface DialogCase {
   /**
    * The control that opened it — focus must come back here on close.
    *
-   * OMITTED where the door is a control that unmounts when it is used, which is
-   * `CreateAgentDialog`: its project-row menu closes on the click that opens the
-   * dialog, so there is no node left to return focus to and the honest outcome
-   * is that focus falls back to the document. Asserting THAT is the point of
-   * making this optional rather than dropping the case — a dialog that left
-   * focus on a detached node would fail either way.
+   * OMITTED where the door is a control that unmounts when it is used (a menu
+   * item that closes its menu on the click): there is no node left to return
+   * focus to and the honest outcome is that focus falls back to the document.
+   * Asserting THAT is the point of making this optional rather than dropping
+   * the case; a dialog that left focus on a detached node would fail either way.
    */
   trigger?: (page: Page) => Locator;
   /**
@@ -90,29 +88,6 @@ const CASES: DialogCase[] = [
     // The SAFE action: Enter keeps the session.
     opensFocusedOn: (page) => page.getByRole("button", { name: "Keep session" }),
     behind: (page) => page.getByTestId("rail-new-project"),
-  },
-  {
-    name: "TemplateUseDialog",
-    open: async (page) => {
-      await page.goto("/?mockState=fresh");
-      // A fresh install has no project: New project opens one and lands on
-      // the screen, whose "Browse all templates" is the way in.
-      await openNewAgentScreen(page);
-      await page.getByTestId("composer-browse-templates").click();
-      await expect(page.getByTestId("templates-panel")).toBeVisible();
-      // Opened from the template's own detail view rather than from the card's
-      // spec-sheet popover: that popover light-dismisses on the same press that
-      // closes the dialog, so its button is gone by the time focus should come
-      // back to it, and "restores focus to the trigger" has no subject.
-      await page.getByTestId("template-card-open-hello-agent").click();
-      await expect(page.getByTestId("template-detail")).toBeVisible();
-      await page.getByTestId("template-use-btn").click();
-      await expect(page.getByTestId("template-use-dialog")).toBeVisible();
-    },
-    surface: (page) => page.getByTestId("template-use-dialog"),
-    trigger: (page) => page.getByTestId("template-use-btn"),
-    opensFocusedOn: (page) => page.getByTestId("folder-field-input"),
-    behind: (page) => page.getByTestId("template-detail-back"),
   },
 ];
 

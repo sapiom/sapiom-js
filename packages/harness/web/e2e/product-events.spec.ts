@@ -83,12 +83,12 @@ test.describe("agent-lifecycle product events → PostHog", () => {
 
     await page.getByTestId("template-card-open-web-research-digest").click();
     await expect(page.getByTestId("template-detail")).toBeVisible();
+    // Use routes through the new-agent screen: the template is the idea, and
+    // the metric fires when the agent is created from it.
     await page.getByTestId("template-use-btn").click();
-    await page.getByTestId("template-use-confirm").click();
-
-    await expect(page.getByTestId("session-context-title")).toContainText(
-      "web-research-digest",
-    );
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await page.getByTestId("composer-send").click();
+    await expect(page.getByTestId("agent-view")).toBeVisible();
 
     await expect
       .poll(async () => names(await productEvents(page)))

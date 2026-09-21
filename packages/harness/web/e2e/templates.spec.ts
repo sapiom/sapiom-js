@@ -4,10 +4,11 @@
  * Ground truth this exercises: the catalog is FETCHED (GET /api/templates, which
  * the server relays from core) rather than pinned in lib/templates.ts, only the
  * bundled starters are local, the detail view renders only real manifest fields,
- * and "Use template" performs the REAL handoff shape — a session at the
- * destination folder plus the agent prompt naming sapiom_dev_agents_clone
- * (gallery) or `sapiom_dev_agents_scaffold` (bundled starter). MockApi records the
- * injection on window.__HARNESS_TEST__.lastInjectInput.
+ * and "Use template" routes through the new-agent screen (flow-creation.md §5,
+ * CF-D11): the template is the idea, the harness scaffolds the agent in the
+ * project on screen, and a normal session opens on it. MockApi records the
+ * create order on window.__HARNESS_TEST__.createOrder and any injection on
+ * lastInjectInput (there must be none).
  *
  * Browsing is a DESTINATION now, not a dialog, and that changes the shape of
  * these tests in three ways worth knowing before editing them:
@@ -15,23 +16,34 @@
  *  - a template is opened from its card (`template-card-open-<id>`) and closed
  *    with the bar's back button, so reading two in a row means going back
  *    between them — see `open()`;
- *  - the destination is a view and cannot be dismissed with Escape. Escape
- *    belongs to the use-confirm dialog, which is where a commit is now asked
- *    for;
- *  - the destination folder is asked once, in that dialog, by the same
- *    FolderField the session and workspace flows use (`folder-field-input`).
- *    It is therefore no longer a persistent field that can be hand-edited and
- *    carried across template switches — that behaviour is gone deliberately.
+ *  - the destination is a view and cannot be dismissed with Escape;
+ *  - no destination folder is asked for: Use lands on the new-agent screen
+ *    scoped to the project already on screen (here `blank-slate`, opened by
+ *    New project in `beforeEach`), and the agent is created in it on submit.
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openNewAgentScreen } from "./mock-navigation";
+import { BLANK_PROJECT_ROOT, openNewAgentScreen } from "./mock-navigation";
 
 interface InjectRecord {
   id: string;
   req: { text: string; submit?: boolean };
 }
+
+const createOrder = (page: Page): Promise<string[]> =>
+  page.evaluate(
+    () =>
+      ((window as unknown as { __HARNESS_TEST__?: { createOrder?: string[] } })
+        .__HARNESS_TEST__?.createOrder ?? []) as string[],
+  );
+
+const firstTurn = (page: Page): Promise<string> =>
+  page.evaluate(
+    () =>
+      (window as unknown as { __HARNESS_TEST__?: { lastInitialInput?: { text?: string } } })
+        .__HARNESS_TEST__?.lastInitialInput?.text ?? "",
+  );
 
 const lastInject = (page: Page): Promise<InjectRecord | undefined> =>
   page.evaluate(
@@ -228,79 +240,58 @@ test.describe("templates journey (from the composer)", () => {
     );
   });
 
-  test("use (gallery): session at the destination + the real clone-tool prompt", async ({
+  test("use (gallery): the template is the idea; submit creates the agent, then one session", async ({
     page,
   }) => {
     await open(page, "web-research-digest");
     await page.getByTestId("template-use-btn").click();
 
-    // The destination is asked once, and defaults to a new folder named after
-    // the template under the resolved project root.
-    await expect(page.getByTestId("folder-field-input")).toHaveValue(
-      "/Users/demo/acme-app/projects/web-research-digest",
-    );
-    await page.getByTestId("template-use-confirm").click();
-
-    // The browser yields to the session it just started — leaving it mounted
-    // would bury the thing you asked for.
+    // No destination is asked for: the screen is scoped to the project on
+    // screen and the template arrives as the idea, editable before send.
+    await expect(page.getByTestId("template-use-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await expect(page.getByTestId("templates-panel")).toHaveCount(0);
-    await expect(page.getByTestId("session-context-title")).toContainText(
-      "web-research-digest",
-    );
+    await expect(page.getByTestId("new-agent-project")).toContainText("blank-slate");
+    await expect(page.getByTestId("composer-input")).toHaveValue(/^Start from the .* template\./);
+    expect(await createOrder(page)).toEqual([]);
 
-    // The workspace folder joins the rail from the instant the clone starts (a
-    // "creating agent" placeholder first), so switching away mid-clone can never
-    // lose the in-progress agent — on a fresh install this is the very first row.
-    await expect(
-      page.getByTestId("workspace-group-web-research-digest"),
-    ).toBeVisible();
+    await page.getByTestId("composer-send").click();
+    // Created first, THEN talked to, both inside the project.
+    await expect.poll(() => createOrder(page)).toHaveLength(2);
+    const order = await createOrder(page);
+    expect(order[0]).toMatch(new RegExp(`^scaffold:${BLANK_PROJECT_ROOT}/`));
+    expect(order[1]).toBe(`session:${BLANK_PROJECT_ROOT}`);
+    await expect(page.getByTestId("workspace-group-blank-slate")).toBeVisible();
 
-    // The injected prompt names the real operation and its arguments, and ends
-    // with the run continuation: use → edit → run is one path.
-    await expect
-      .poll(async () => (await lastInject(page))?.req.text ?? "")
-      .toContain("sapiom_dev_agents_clone");
-    const record = await lastInject(page);
-    expect(record?.req.text).toContain('templateId "web-research-digest"');
-    expect(record?.req.text).toContain(
-      'dir "/Users/demo/acme-app/projects/web-research-digest"',
-    );
-    expect(record?.req.text).toContain(
-      "local test run with no Sapiom capability spend (sapiom_dev_agents_run_local)",
-    );
+    // The setup names the gallery template for build time and the real tool;
+    // nothing is typed at the pty afterwards.
+    await expect.poll(() => firstTurn(page)).toContain('templateId "web-research-digest"');
+    expect(await firstTurn(page)).toContain("sapiom_dev_agents_clone");
+    expect(await lastInject(page)).toBeUndefined();
   });
 
-  test("use (starter): the HARNESS scaffolds it, no prompt", async ({ page }) => {
-    // SAP-2981, E4.6. A bundled starter is the same local scaffold the project
-    // `+` does, so it goes through the same endpoint: two creation paths for
-    // one operation is how they drift. The clone path above still hands the
-    // work to the coding agent, because forking a published template over the
-    // network is a different operation with a different failure mode.
+  test("use (starter): the HARNESS scaffolds it as that starter, no prompt", async ({ page }) => {
+    // A bundled starter is scaffolded AS that starter through the same
+    // endpoint every create uses; a gallery template is brought in at build
+    // time because forking over the network is the coding agent's operation.
     await open(page, "coding-pause");
     await page.getByTestId("template-use-btn").click();
-    await expect(page.getByTestId("folder-field-input")).toHaveValue(
-      "/Users/demo/acme-app/projects/coding-pause",
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toHaveValue(
+      /^Start from the Coding pause template\./,
     );
-    await page.getByTestId("template-use-confirm").click();
+    await page.getByTestId("composer-send").click();
 
-    // Created first, THEN talked to — the same order the create dialog keeps.
     await expect
-      .poll(async () =>
-        page.evaluate(
-          () =>
-            ((window as unknown as { __HARNESS_TEST__?: { createOrder?: string[] } })
-              .__HARNESS_TEST__?.createOrder ?? []) as string[],
-        ),
-      )
+      .poll(() => createOrder(page))
       .toEqual([
-        "scaffold:/Users/demo/acme-app/projects/coding-pause",
-        "session:/Users/demo/acme-app/projects",
+        `scaffold:${BLANK_PROJECT_ROOT}/coding-pause`,
+        `session:${BLANK_PROJECT_ROOT}`,
       ]);
     await expect(page.getByTestId("workflow-coding-pause")).toBeVisible();
     // And nobody was asked, in English, to perform a filesystem operation.
-    expect((await lastInject(page))?.req.text ?? "").not.toContain(
-      "sapiom_dev_agents_scaffold",
-    );
+    expect(await firstTurn(page)).not.toContain("sapiom_dev_agents_scaffold");
+    expect(await lastInject(page)).toBeUndefined();
   });
 
   test("use: straight from a card's spec sheet, skipping the read", async ({
@@ -309,10 +300,9 @@ test.describe("templates journey (from the composer)", () => {
     // Someone who already knows the template shouldn't have to open it first.
     await page.getByTestId("template-card-info-hello-agent").click();
     await page.getByTestId("template-facts-use-hello-agent").click();
-    await expect(page.getByTestId("template-use-dialog")).toBeVisible();
-    await expect(page.getByTestId("folder-field-input")).toHaveValue(
-      "/Users/demo/acme-app/projects/hello-agent",
-    );
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toHaveValue(/template/i);
+    expect(await createOrder(page)).toEqual([]);
   });
 
   test("read: the step graph renders in the canvas vocabulary before anything is cloned", async ({
@@ -384,17 +374,19 @@ test.describe("templates journey (from the composer)", () => {
     expect(await lastInject(page)).toBeUndefined();
   });
 
-  test("Escape abandons the commit, not the browsing", async ({ page }) => {
-    // Escape belongs to the dialog that asks the one question. The destination
-    // itself is a view: it is left with the back button, not dismissed.
+  test("Use leaves for the screen and creates nothing until submit", async ({ page }) => {
+    // Use is a navigation, not a commit: the screen is where the idea is
+    // finished, and nothing exists on disk until it is sent.
     await open(page, "hello-agent");
     await page.getByTestId("template-use-btn").click();
-    await expect(page.getByTestId("template-use-dialog")).toBeVisible();
-
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("template-use-dialog")).toHaveCount(0);
-    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("templates-panel")).toHaveCount(0);
+    expect(await createOrder(page)).toEqual([]);
     expect(await lastInject(page)).toBeUndefined();
+    // The gallery is one rail row away, and still creates nothing.
+    await page.getByTestId("rail-templates").click();
+    await expect(page.getByTestId("templates-panel")).toBeVisible();
+    expect(await createOrder(page)).toEqual([]);
   });
 });
 

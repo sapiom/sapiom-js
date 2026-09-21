@@ -1,6 +1,11 @@
 /** SAP-3121: every template launch keeps the user's selected coding agent.
  * Mock sessions record the actual create request; telemetry alone would not
- * prove which adapter the server is asked to launch. */
+ * prove which adapter the server is asked to launch.
+ *
+ * Templates route through the new-agent screen now (flow-creation.md §5,
+ * CF-D11): Use makes the template the idea on the screen, scoped to the
+ * project on screen or to the folder the folder step picks, and the harness
+ * picker on that screen is the one choice every launch honours. */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { BLANK_PROJECT_ROOT, openNewAgentScreen } from "./mock-navigation";
@@ -19,19 +24,9 @@ async function chooseCodex(page: Page): Promise<void> {
   );
 }
 
-async function launchTemplate(
-  page: Page,
-  surface: LaunchSurface,
-): Promise<void> {
-  if (surface === "composer") {
-    await page.getByTestId("composer-template-hello-agent").click();
-    return;
-  }
-  await page.getByTestId("composer-browse-templates").click();
-  const id = surface.startsWith("starter") ? "coding-pause" : "hello-agent";
-  await confirmTemplate(page, id, surface.endsWith("card"));
-}
-
+/** Use a template from the gallery. With no project on screen the folder
+ *  step runs first (the web dialog here); either way it ends on the screen
+ *  with the template as the idea. */
 async function confirmTemplate(
   page: Page,
   id: string,
@@ -44,19 +39,40 @@ async function confirmTemplate(
     await page.getByTestId(`template-card-open-${id}`).click();
     await page.getByTestId("template-use-btn").click();
   }
-  await page.getByTestId("template-use-confirm").click();
+  const dialog = page.getByTestId("project-folder-dialog");
+  if (await dialog.isVisible().catch(() => false)) {
+    await dialog.getByTestId("folder-field-input").fill(BLANK_PROJECT_ROOT);
+    await dialog.getByTestId("project-folder-continue").click();
+  }
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("composer-input")).toHaveValue(/template/i);
 }
 
+async function launchTemplate(
+  page: Page,
+  surface: LaunchSurface,
+): Promise<void> {
+  if (surface === "composer") {
+    await page.getByTestId("composer-template-hello-agent").click();
+    await expect(page.getByTestId("composer-input")).toHaveValue(/template/i);
+    return;
+  }
+  await page.getByTestId("composer-browse-templates").click();
+  const id = surface.startsWith("starter") ? "coding-pause" : "hello-agent";
+  await confirmTemplate(page, id, surface.endsWith("card"));
+}
+
+/** Submit the screen and prove the session was asked for with `harness`. */
 async function expectTemplateSession(
   page: Page,
   harness: "claude-code" | "codex",
   surface: LaunchSurface | "gallery" = "gallery",
 ): Promise<void> {
-  const root = "/Users/demo/acme-app/projects";
   const starter = surface.startsWith("starter");
-  // The screen creates in the project it states (New project's folder); the
-  // gallery, with no stated project, creates under the project root.
-  const parent = surface === "composer" ? BLANK_PROJECT_ROOT : root;
+  await expect(page.getByTestId("composer-harness-select")).toContainText(
+    harness === "codex" ? "Codex" : "Claude",
+  );
+  await page.getByTestId("composer-send").click();
   await expect
     .poll(() =>
       page.evaluate(
@@ -69,23 +85,21 @@ async function expectTemplateSession(
                 }>;
               };
             }
-          ).__HARNESS_TEST__?.createSessionCalls ?? [],
+          ).__HARNESS_TEST__?.createSessionCalls?.map(({ req }) => ({
+            cwd: req.cwd,
+            harness: req.harness,
+          })) ?? [],
       ),
     )
-    .toEqual([
-      {
-        req: {
-          cwd: starter ? root : `${parent}/hello-agent`,
-          harness,
-          ...(!starter ? { initialUserInputPending: true } : {}),
-        },
-      },
-    ]);
+    .toEqual([{ cwd: BLANK_PROJECT_ROOT, harness }]);
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("templates-panel")).toHaveCount(0);
   if (starter) {
+    // A starter is scaffolded AS that starter, under the project.
     await expect(page.getByTestId("workflow-coding-pause")).toBeVisible();
   } else {
+    // A gallery template is named in the setup for build time; nothing is
+    // typed at the pty after launch.
     await expect
       .poll(() =>
         page.evaluate(
@@ -93,10 +107,10 @@ async function expectTemplateSession(
             (
               window as unknown as {
                 __HARNESS_TEST__?: {
-                  lastInjectInput?: { req?: { text?: string } };
+                  lastInitialInput?: { text?: string };
                 };
               }
-            ).__HARNESS_TEST__?.lastInjectInput?.req?.text ?? "",
+            ).__HARNESS_TEST__?.lastInitialInput?.text ?? "",
         ),
       )
       .toContain('templateId "hello-agent"');
@@ -193,7 +207,6 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
     if (entry === "deep-link") {
       await page.goto("/?mockState=fresh&template=hello-agent");
       await page.getByTestId("template-use-btn").click();
-      await page.getByTestId("template-use-confirm").click();
     } else {
       // Reload to verify the saved preference, independent of composer state.
       await page.reload();
@@ -207,8 +220,16 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
           .getByText("Browse templates")
           .click();
       }
-      await confirmTemplate(page, "hello-agent");
+      await page.getByTestId("template-card-open-hello-agent").click();
+      await page.getByTestId("template-use-btn").click();
     }
+    // A fresh mock forgets its projects on reload, so Use runs the folder
+    // step first; the saved preference still drives the screen it lands on.
+    const dialog = page.getByTestId("project-folder-dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByTestId("folder-field-input").fill(BLANK_PROJECT_ROOT);
+    await dialog.getByTestId("project-folder-continue").click();
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await expectTemplateSession(page, "codex");
   });
 }
@@ -217,7 +238,7 @@ test("a direct gallery visit uses the current selection after leaving the compos
   page,
 }) => {
   await page.goto("/?mockState=fresh");
-    await openNewAgentScreen(page);
+  await openNewAgentScreen(page);
   await chooseCodex(page);
   await page.getByTestId("composer-browse-templates").click();
   await page.getByTestId("templates-exit").click();
@@ -244,7 +265,11 @@ for (const entry of ["rail", "palette", "deep-link"] as const) {
     );
     if (entry === "deep-link") {
       await page.getByTestId("template-use-btn").click();
-      await page.getByTestId("template-use-confirm").click();
+      const dialog = page.getByTestId("project-folder-dialog");
+      await expect(dialog).toBeVisible();
+      await dialog.getByTestId("folder-field-input").fill(BLANK_PROJECT_ROOT);
+      await dialog.getByTestId("project-folder-continue").click();
+      await expect(page.getByTestId("new-session-composer")).toBeVisible();
     } else {
       await openNewAgentScreen(page);
       await expect(page.getByTestId("composer-harness-select")).toContainText(
@@ -283,7 +308,6 @@ for (const navigation of ["exit-back", "back-forward"] as const) {
       };
     });
     await page.goto("/?mockState=fresh");
-    // New project records a composer visit for Back/Forward replay.
     await openNewAgentScreen(page);
     await chooseCodex(page);
     await page.getByTestId("composer-browse-templates").click();
@@ -318,7 +342,7 @@ test("a registry failure still launches the selected harness from the composer",
     ).__MOCK_HARNESS_REGISTRY_FAIL__ = true;
   });
   await page.goto("/?mockState=fresh");
-    await openNewAgentScreen(page);
+  await openNewAgentScreen(page);
   await chooseCodex(page);
   await launchTemplate(page, "composer");
   await expectTemplateSession(page, "codex", "composer");

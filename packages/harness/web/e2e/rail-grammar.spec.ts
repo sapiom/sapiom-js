@@ -77,19 +77,20 @@ test.describe("legacy-server project row grammar", () => {
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
   });
 
-  test("creating from the row lands on the screen scoped to that project, and starts nothing", async ({
+  test("creating from the row creates IN that project, and only then talks", async ({
     page,
   }) => {
-    // The menu changed what the control SAYS; the flow changes what it does:
+    // The menu changed what the control SAYS; SAP-2981 changed what it does —
     // it opens the new-agent screen instead of starting a pty and asking the
     // coding agent, in English, to scaffold. What must not change is the
-    // SUBJECT: the project named on the row is the project the screen states.
-    // The submit half (scaffold in that project, then one session rooted
-    // there) lands with SAP-3576 and is guarded there.
+    // SUBJECT: the project named on the row is the project it creates in, and
+    // the session that follows is rooted there.
     //
-    // THE REQUEST, not a tab count: `/?seed=0` renders two session tabs plus
-    // `session-tab-new` before anything is clicked, so a tab count holds with
-    // the handler stubbed to a no-op.
+    // THE REQUEST, not a tab count. This spec first counted
+    // `[data-testid^='session-tab-']` and was worthless: `/?seed=0` renders two
+    // session tabs plus `session-tab-new` before anything is clicked, so the
+    // assertion held with the handler stubbed to a no-op — a spec that cannot
+    // fail, guarding the one behaviour this PR promises it did not change.
     const order = (): Promise<string[]> =>
       page.evaluate(
         () =>
@@ -102,12 +103,20 @@ test.describe("legacy-server project row grammar", () => {
 
     await page.getByTestId("project-create-agent-acme-app").click();
     // The screen STATES the project the row named (flow-creation.md §4.3).
-    await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await expect(page.getByTestId("new-agent-project")).toHaveText(
       "New agent in acme-app",
     );
     // Nothing has started yet — the old handler started a pty on this click.
     expect(await order()).toEqual([]);
+
+    await page.getByTestId("composer-input").fill("Build a menu made agent");
+    await page.getByTestId("composer-send").click();
+    await expect
+      .poll(order)
+      .toEqual([
+        "scaffold:/Users/demo/acme-app/menu-made",
+        "session:/Users/demo/acme-app",
+      ]);
   });
 });
 

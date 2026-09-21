@@ -305,18 +305,27 @@ describe live authority. `AgentMapToolEvent.role` is also removed; consumers use
 neutral project, session, tool, and outcome fields. Persisted pre-upgrade
 project-session data is migration input only.
 Read the optional `projectBootstrap` field when displaying bootstrap lifecycle
-state. If an embedder already owns the first prompt for a session, set
+state for sessions that already carry it; opening or adding a project no longer
+creates a session or a bootstrap turn (the user's first idea starts the first
+session). If an embedder already owns the first prompt for a session, set
 `initialUserInputPending: true` in that session's `CreateSessionRequest`; this
-content-free flag makes project bootstrap yield before launch and never changes
-the session's authority or tools.
+content-free flag never changes the session's authority or tools.
 
-To deliver the first task as part of session creation, send `initialPrompt`
-with optional `initialAttachments` and `scaffold: { template }` in
-`CreateSessionRequest`. Attachments accept `{ kind: "path", path }` references or inline
-`{ kind: "inline", filename, dataUrl }` data. Studio prepares the scaffold and
-attachments before launching the CLI with that first task. Adapter authors
-receive it as `LaunchOpts.initialPrompt` on fresh launches; resume does not
-replay it. Embedders that configure their own HTTP body parser can use the
+Creating an agent is two requests, in this order: `POST /api/agents/scaffold`
+`{ root, name, template? }` creates the agent in the project (a 409 duplicate
+or 400 invalid name is the refusal; nothing starts), then `POST /api/sessions`
+opens one ordinary session in the project folder. To deliver the first task
+as part of that session's creation, send `initialPrompt` with optional
+`initialAttachments`, `initialSources` (URLs, handed over as text and never
+fetched by the harness) and `initialSetup` (instructions the harness appends
+after the user's words, shown in Studio as a collapsed setup disclosure) in
+`CreateSessionRequest`. Attachments accept `{ kind: "path", path }` references
+or inline `{ kind: "inline", filename, dataUrl }` data. The first turn is
+composed in one order (`buildFirstPrompt`): idea, attached files, linked
+sources, setup. There is no session-side `scaffold` option and no English
+scaffold prompt on any creation path. Adapter authors receive the composed
+turn as `LaunchOpts.initialPrompt` on fresh launches; resume does not replay
+it. Embedders that configure their own HTTP body parser can use the
 exported `CREATE_SESSION_JSON_LIMIT_BYTES` for this route. Session creation
 and attachment uploads each allow 30 requests per minute in independent
 buckets.
