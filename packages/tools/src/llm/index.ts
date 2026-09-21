@@ -380,10 +380,7 @@ export interface LlmDisclosureResult {
 export function readDisclosure(result: unknown): LlmDisclosureResult {
   const body = (result ?? {}) as LlmDisclosure;
   return {
-    servedClass:
-      typeof body.served_class === "string" && body.served_class
-        ? body.served_class
-        : null,
+    servedClass: typeof body.served_class === "string" && body.served_class ? body.served_class : null,
     lane: typeof body.lane === "string" && body.lane ? body.lane : null,
   };
 }
@@ -402,16 +399,11 @@ interface AnthropicContentBlock {
 }
 
 function isContentBlock(value: unknown): value is AnthropicContentBlock {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { type?: unknown }).type === "string"
-  );
+  return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
 }
 
 function contentBlocksOf(response: unknown): AnthropicContentBlock[] {
-  const content = (response as { content?: unknown } | null | undefined)
-    ?.content;
+  const content = (response as { content?: unknown } | null | undefined)?.content;
   return Array.isArray(content) ? content.filter(isContentBlock) : [];
 }
 
@@ -434,10 +426,7 @@ export function textOf(response: unknown): string | undefined {
  * `tool_use` block wins. Returns `undefined` when no matching block is
  * present — never guesses at a shape the response didn't actually return.
  */
-export function structuredOf<TSchema = unknown>(
-  response: unknown,
-  name?: string,
-): TSchema | undefined {
+export function structuredOf<TSchema = unknown>(response: unknown, name?: string): TSchema | undefined {
   const block = contentBlocksOf(response).find(
     (b) => b.type === "tool_use" && (name === undefined || b.name === name),
   );
@@ -450,17 +439,11 @@ export function structuredOf<TSchema = unknown>(
  * caller-declared tools, and forces `tool_choice` onto it — the blessed
  * tool-calling pattern for structured output, automated.
  */
-function withStructuredOutput(
-  request: Record<string, unknown>,
-  output: LlmStructuredOutputSpec,
-): Record<string, unknown> {
+function withStructuredOutput(request: Record<string, unknown>, output: LlmStructuredOutputSpec): Record<string, unknown> {
   const existingTools = Array.isArray(request.tools) ? request.tools : [];
   return {
     ...request,
-    tools: [
-      ...existingTools,
-      { name: output.name, input_schema: output.schema },
-    ],
+    tools: [...existingTools, { name: output.name, input_schema: output.schema }],
     tool_choice: { type: "tool", name: output.name },
   };
 }
@@ -493,9 +476,7 @@ export async function run<T = Record<string, unknown>>(
   headers["x-sapiom-never-fail"] = String(spec.neverFail ?? true);
   if (spec.complexity !== undefined)
     headers["x-sapiom-complexity"] = String(spec.complexity);
-  const request = spec.output
-    ? withStructuredOutput(spec.request, spec.output)
-    : spec.request;
+  const request = spec.output ? withStructuredOutput(spec.request, spec.output) : spec.request;
   return transport.request<T>(`${baseUrl}/v2/anthropic/v1/messages`, {
     method: "POST",
     body: JSON.stringify(request),
@@ -660,11 +641,7 @@ export interface LlmSession {
    */
   baseUrls?: { anthropic: string; openai: string };
   expiresAtMs?: number;
-  budget?: {
-    maxTokens: number | null;
-    usedTokens?: number;
-    ttlMinutes?: number | null;
-  };
+  budget?: { maxTokens: number | null; usedTokens?: number; ttlMinutes?: number | null };
   /** Set when `state === "failed"` (e.g. `deadline_exhausted`, `released_by_client`). */
   error?: string;
 }
@@ -812,9 +789,7 @@ export async function createSession(
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<LlmSessionHandle> {
   if (spec.label !== undefined && spec.model !== undefined) {
-    throw new Error(
-      "llm.createSession: `label` and `model` are mutually exclusive",
-    );
+    throw new Error("llm.createSession: `label` and `model` are mutually exclusive");
   }
   const body: Record<string, unknown> = {};
   if (spec.label) body.label = spec.label;
@@ -823,10 +798,8 @@ export async function createSession(
     body.deadline_minutes = spec.deadlineMinutes;
   if (spec.budget) {
     const budget: Record<string, unknown> = {};
-    if (spec.budget.maxTokens !== undefined)
-      budget.max_tokens = spec.budget.maxTokens;
-    if (spec.budget.ttlMinutes !== undefined)
-      budget.ttl_minutes = spec.budget.ttlMinutes;
+    if (spec.budget.maxTokens !== undefined) budget.max_tokens = spec.budget.maxTokens;
+    if (spec.budget.ttlMinutes !== undefined) budget.ttl_minutes = spec.budget.ttlMinutes;
     body.budget = budget;
   }
   if (spec.neverFail !== undefined) body.never_fail = spec.neverFail;
