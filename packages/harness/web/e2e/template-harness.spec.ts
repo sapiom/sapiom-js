@@ -3,7 +3,7 @@
  * prove which adapter the server is asked to launch. */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openNewAgentScreen } from "./mock-navigation";
+import { BLANK_PROJECT_ROOT, openNewAgentScreen } from "./mock-navigation";
 
 type LaunchSurface =
   | "composer"
@@ -50,9 +50,13 @@ async function confirmTemplate(
 async function expectTemplateSession(
   page: Page,
   harness: "claude-code" | "codex",
-  starter = false,
+  surface: LaunchSurface | "gallery" = "gallery",
 ): Promise<void> {
   const root = "/Users/demo/acme-app/projects";
+  const starter = surface.startsWith("starter");
+  // The screen creates in the project it states (New project's folder); the
+  // gallery, with no stated project, creates under the project root.
+  const parent = surface === "composer" ? BLANK_PROJECT_ROOT : root;
   await expect
     .poll(() =>
       page.evaluate(
@@ -71,7 +75,7 @@ async function expectTemplateSession(
     .toEqual([
       {
         req: {
-          cwd: starter ? root : `${root}/hello-agent`,
+          cwd: starter ? root : `${parent}/hello-agent`,
           harness,
           ...(!starter ? { initialUserInputPending: true } : {}),
         },
@@ -112,7 +116,7 @@ for (const surface of [
     await openNewAgentScreen(page);
     await chooseCodex(page);
     await launchTemplate(page, surface);
-    await expectTemplateSession(page, "codex", surface.startsWith("starter"));
+    await expectTemplateSession(page, "codex", surface);
   });
 }
 
@@ -130,11 +134,7 @@ for (const surface of [
       "Claude",
     );
     await launchTemplate(page, surface);
-    await expectTemplateSession(
-      page,
-      "claude-code",
-      surface.startsWith("starter"),
-    );
+    await expectTemplateSession(page, "claude-code", surface);
   });
 }
 
@@ -157,7 +157,7 @@ for (const surface of [
       "Codex",
     );
     await launchTemplate(page, surface);
-    await expectTemplateSession(page, "codex", surface === "starter-detail");
+    await expectTemplateSession(page, "codex", surface);
   });
 
   test(`selected Codex is preserved from ${surface} when preferences cannot be saved`, async ({
@@ -179,7 +179,7 @@ for (const surface of [
     await openNewAgentScreen(page);
     await chooseCodex(page);
     await launchTemplate(page, surface);
-    await expectTemplateSession(page, "codex", surface === "starter-detail");
+    await expectTemplateSession(page, "codex", surface);
   });
 }
 
@@ -321,5 +321,5 @@ test("a registry failure still launches the selected harness from the composer",
     await openNewAgentScreen(page);
   await chooseCodex(page);
   await launchTemplate(page, "composer");
-  await expectTemplateSession(page, "codex");
+  await expectTemplateSession(page, "codex", "composer");
 });

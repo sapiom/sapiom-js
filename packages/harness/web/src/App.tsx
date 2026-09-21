@@ -111,6 +111,7 @@ import {
   slugifyIdea,
 } from "./lib/project-dir";
 import { basenameOf, isWithinDir, parentOf, samePath } from "./lib/paths";
+import { agentBelongsToProjectRoot } from "./lib/project-tree";
 import {
   canvasSourceFor,
   canvasSubject,
@@ -1902,13 +1903,10 @@ export const App = (): JSX.Element => {
     // AN EMPTY PROJECT'S NAME IS THE DOOR (D36, flow-creation.md §4.3). A
     // project with no agent has no map to draw, so selecting it lands on the
     // new-agent screen scoped to it rather than on a map with nothing in it.
-    const holdsAgents = state.workflows.some(
-      (workflow) =>
-        (studioProjectId != null &&
-          workflow.studioBindings?.some(
-            (binding) => binding.projectId === studioProjectId,
-          )) ||
-        rootContains(root, workflow.path),
+    // "Holds" is the rail's own membership rule, so the door and the row
+    // agree on which project an agent belongs to.
+    const holdsAgents = state.workflows.some((workflow) =>
+      agentBelongsToProjectRoot(workflow, root, workspaceScopes),
     );
     if (!holdsAgents) {
       composeInProject({
@@ -3444,7 +3442,7 @@ export const App = (): JSX.Element => {
                 showComposer && !(projectMapSelected && focusTabs.length > 0)
               }
               composerProjectLabel={
-                showComposer ? (composerProject?.label ?? null) : null
+                composing && composerProject ? composerProject.label : null
               }
               onBack={composerCanCancel ? () => setComposing(false) : null}
               activeSession={sessionBarSession}
@@ -3709,12 +3707,14 @@ export const App = (): JSX.Element => {
                     </AssistantPane>
                   </div>
                 </div>
-              ) : composerProject ? (
+              ) : composing && composerProject ? (
                 /* THE NEW-AGENT SCREEN, scoped to a project (§4.3): no
                    terminal, no canvas yet. Describe the agent and submit; the
                    harness scaffolds it and a normal session opens on it, and
                    this screen gives way to the terminal. Keyed on the project
-                   and the template so a second entrance starts clean. */
+                   and the template so a second entrance starts clean. Only
+                   while composing: a project stated on an earlier visit does
+                   not bring the screen back when the centre empties. */
                 <NewSessionComposer
                   key={`${composerProject.root}::${composerProject.template?.id ?? ""}`}
                   project={composerProject}

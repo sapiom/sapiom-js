@@ -128,9 +128,11 @@ for (const scenario of [
     expect(failed.injectInputCalls ?? []).toHaveLength(0);
     const firstRequest = failed.createSessionCalls![0]!.req;
     expect(failed.createOrder).toEqual([`scaffold:${firstRequest.cwd}`]);
-    // Discovery has reached the UI even though the unrooted section is
-    // collapsed by default on a fresh install.
-    await expect(page.getByTestId("unrooted-count")).toHaveText("1");
+    // Discovery has reached the UI: the scaffolded folder is a row under the
+    // project the screen stated (it was created in it, not beside it).
+    await expect(
+      page.getByTestId(`workflow-${firstRequest.cwd.split("/").pop()}`),
+    ).toBeVisible();
 
     await page.getByTestId("composer-send").click();
     await expect(composer).toHaveCount(0);
