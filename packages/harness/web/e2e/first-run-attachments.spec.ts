@@ -103,10 +103,10 @@ for (const scenario of [
 
     // The refusal lands under the field and names both facts: the agent was
     // created, its session did not start.
-    await expect(page.getByTestId("composer-error")).toContainText(
+    await expect(page.getByTestId("new-agent-error")).toContainText(
       /materialization failed/i,
     );
-    await expect(page.getByTestId("composer-error")).toContainText(
+    await expect(page.getByTestId("new-agent-error")).toContainText(
       "files was created, but its session didn't start",
     );
     // Reopening an empty screen after the error is not recovery: its local
@@ -166,7 +166,7 @@ for (const scenario of [
         `Attached files (read each as context):\n${paths.join("\n")}`,
       ].join("\n\n"),
     )).toBe(true);
-    expect(completed.lastInitialInput?.text).toContain("Session setup.");
+    expect(completed.lastInitialInput?.text).toContain("already scaffolded");
     expect(completed.injectInputCalls ?? []).toHaveLength(0);
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",

@@ -103,7 +103,7 @@ test.describe("legacy-server project row grammar", () => {
 
     await page.getByTestId("project-create-agent-acme-app").click();
     // The screen STATES the project the row named (flow-creation.md §4.3).
-    await expect(page.getByTestId("composer-project")).toHaveText(
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
       "New agent in acme-app",
     );
     // Nothing has started yet — the old handler started a pty on this click.

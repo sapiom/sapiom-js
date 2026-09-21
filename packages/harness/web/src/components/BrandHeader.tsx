@@ -87,7 +87,7 @@ export function BrandHeader({
           className="theme-toggle brand-header-history"
           data-testid="rail-history"
           aria-label="Past sessions"
-          aria-haspopup="menu"
+          aria-haspopup="dialog"
           aria-expanded={historyOpen}
           data-tooltip="Past sessions"
           onClick={onToggleHistory}

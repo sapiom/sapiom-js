@@ -87,16 +87,19 @@ export function planningInstructions({
       : template?.kind === "gallery"
         ? ` I chose the gallery template ${template.id} as the starting point: at build time, bring it in with the sapiom_dev_agents_clone tool (templateId "${template.id}") into a scratch folder beside this agent and port what fits.`
         : "";
+  // The wording is the design's (design-eng agent-studio-v2
+  // `lib/creation-entry.ts`, D37), so the disclosure in the pane reads the
+  // same seven moves the mock shows. Step 1 reads the Agent Map; nothing here
+  // writes it (Q11).
   return [
-    `Session setup. The agent ${agentName} is already scaffolded in the project ${projectLabel}; do not scaffold or clone it again.${origin}`,
-    "Plan before you build, in this order:",
-    "1. Read every attached file and linked source, and the existing project: its agents and the names of its secrets.",
+    `${agentName} is already scaffolded in ${projectLabel}; do not scaffold it again.${origin} Plan before you build, in this order:`,
+    "1. Read every attached source and the existing project: its agents, its Agent Map, its secrets by name.",
     "2. Restate the outcome and the proof of success in two lines.",
-    "3. Ask at most three clarifying questions, each with the default you will take if I do not answer, and stop for my answer. Ask only where the answer changes the agent. If the idea and the resources already answer everything, ask nothing and say so.",
-    "4. If the idea falls short of what a design needs, offer three framings of the agent before asking anything, and let me pick or edit one.",
-    "5. Propose the shape in this conversation: the steps, the capabilities they need, the resources still missing, and the schedule if there is one. Short and structured.",
-    "6. Build only after I say go or accept the defaults.",
-    `7. Use the ${AGENT_AUTHORING_SKILL} skill. Run sapiom_dev_agents_check and sapiom_dev_agents_run_local before calling anything built.`,
+    "3. Ask at most three clarifying questions, each with the default you will take if unanswered, and stop for the answer. Ask only where the answer changes the agent. If the idea and the sources already answer everything, ask nothing and say so.",
+    "4. When the idea falls short of what a design needs, offer three framings of the agent before asking anything, and let the user pick or edit one.",
+    "5. Propose the shape in the conversation, short and structured: steps, capabilities needed, resources missing, schedule if any.",
+    "6. Build only after the user says go or accepts the defaults.",
+    `7. Use the ${AGENT_AUTHORING_SKILL} skill; run check and run_local before calling anything built.`,
   ].join("\n");
 }
 

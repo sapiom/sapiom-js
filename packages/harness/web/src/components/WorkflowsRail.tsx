@@ -306,7 +306,9 @@ function ProjectRowActions({
           className="workspace-row-action"
           data-testid={create.testid}
           aria-label={create.label}
-          data-tooltip={create.label}
+          data-tooltip={
+            create.kind === "create" ? "New agent in this project" : create.label
+          }
           onClick={create.run}
         >
           <Icon
@@ -868,7 +870,6 @@ export function WorkflowsRail({
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
           data-testid="rail-new-project"
           aria-label="New project"
-          data-tooltip="Pick a folder, then describe its first agent"
           onClick={() => {
             closeOverlays();
             onNewProject();
@@ -897,7 +898,7 @@ export function WorkflowsRail({
           aria-current={templatesActive ? "page" : undefined}
           onClick={onBrowseTemplates}
         >
-          <Icon name="LayoutTemplate" size={14} />
+          <Icon name="LayoutGrid" size={14} />
           <span>Templates</span>
         </button>
         {/* No "Add existing agents" row (D28): a folder full of agents is
@@ -932,7 +933,7 @@ export function WorkflowsRail({
             className="theme-toggle rail-header-btn"
             data-testid="rail-add-project"
             aria-label="Add project"
-            data-tooltip="Add project"
+            data-tooltip="Add project: open a folder that already has agents"
             onClick={() => {
               closeOverlays();
               onAddProject();
@@ -952,7 +953,7 @@ export function WorkflowsRail({
             aria-label="Group and sort projects"
             aria-haspopup="menu"
             aria-expanded={optionsOpen}
-            data-tooltip="Group by and sort by"
+            data-tooltip="Group and sort projects"
             onClick={toggleOptions}
           >
             <Icon name="SlidersHorizontal" size={14} />
@@ -1147,8 +1148,8 @@ export function WorkflowsRail({
             <EmptyState
               className="rail-empty"
               icon="Folder"
-              title="No agents yet"
-              body="New project picks a folder and describes its first agent. Agents (sapiom.json) anywhere inside a project appear here."
+              title="No projects yet"
+              body="New project above creates a project and its first agent. Agents (sapiom.json) anywhere inside a project appear here."
             />
           )}
 

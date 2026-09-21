@@ -84,5 +84,5 @@ export async function openNewAgentInProject(
 ): Promise<void> {
   await page.getByTestId(`project-create-agent-${label}`).click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-project")).toContainText(label);
+  await expect(page.getByTestId("new-agent-project")).toContainText(label);
 }

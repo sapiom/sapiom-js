@@ -122,7 +122,7 @@ test.describe("the two verbs", () => {
 
     // THE DESTINATION: the screen, stating the project in both places.
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
-    await expect(page.getByTestId("composer-project")).toHaveText(
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
       "New agent in blank-slate",
     );
     await expect(page.getByTestId("session-project-chip")).toContainText(
@@ -153,7 +153,7 @@ test.describe("the two verbs", () => {
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
     await expect(page.locator(".modal-start")).toHaveCount(0);
-    await expect(page.getByTestId("composer-project")).toContainText("blank-slate");
+    await expect(page.getByTestId("new-agent-project")).toContainText("blank-slate");
     expect((await evidence(page)).createSessionCalls).toEqual([]);
   });
 
@@ -205,7 +205,7 @@ test.describe("the two verbs", () => {
     await page.goto("/?seed=0&mockStudioProjects=present");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await openNewAgentInProject(page, "acme-app");
-    await expect(page.getByTestId("composer-project")).toHaveText(
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
       "New agent in acme-app",
     );
     expect((await evidence(page)).createOrder).toEqual([]);
@@ -219,7 +219,7 @@ test.describe("the two verbs", () => {
 
     await page.getByTestId("project-select-blank-slate").click();
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
-    await expect(page.getByTestId("composer-project")).toContainText("blank-slate");
+    await expect(page.getByTestId("new-agent-project")).toContainText("blank-slate");
     // Not a map with nothing drawn in it.
     await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
     expect((await evidence(page)).createSessionCalls).toEqual([]);
@@ -294,7 +294,7 @@ test.describe("submit", () => {
     const text = after.lastInitialInput!.text;
     expect(text.startsWith(idea)).toBe(true);
     expect(text).toContain("at most three clarifying questions");
-    expect(text).toContain("Build only after I say go");
+    expect(text).toContain("Build only after the user says go");
     expect(text).not.toContain("sapiom_dev_agents_scaffold");
     expect(after.lastInjectInput).toBeNull();
     // Bound to the agent it created.
@@ -321,7 +321,7 @@ test.describe("submit", () => {
     await page.getByTestId("composer-input").fill(idea);
     await page.getByTestId("composer-send").click();
 
-    const error = page.getByTestId("composer-error");
+    const error = page.getByTestId("new-agent-error");
     await expect(error).toBeVisible();
     await expect(error).toHaveText("acme-app already has an agent called leasing.");
     await expect(error).not.toContainText("/api/agents/scaffold");
@@ -345,7 +345,7 @@ test.describe("submit", () => {
     await openNewAgentScreen(page);
     await page.getByTestId("composer-input").fill("Triage support tickets by urgency.");
     await page.getByTestId("composer-send").click();
-    await expect(page.getByTestId("composer-error")).toHaveText(
+    await expect(page.getByTestId("new-agent-error")).toHaveText(
       "Can't create an agent in blank-slate right now.",
     );
     expect((await evidence(page)).createSessionCalls).toEqual([]);
@@ -381,7 +381,10 @@ test.describe("submit", () => {
     await expect(page.getByRole("status")).toHaveText("2 links attached.");
     // A wall of text: attached, not typed.
     await paste(Array.from({ length: 40 }, (_, i) => `Requirement ${i + 1}: something.`).join("\n"));
-    await expect(page.locator(".composer-file-name")).toContainText(["pasted-1.md"]);
+    // The chip says what it is (the design's "Pasted document, N words"); the
+    // file it rides in keeps the pasted-N.md name on the chip's title.
+    await expect(page.locator(".composer-file-name")).toContainText(["Pasted document"]);
+    await expect(page.getByTestId("composer-source-document")).toContainText(/\d+ words/);
     await expect(input).toHaveValue("Summarise these every morning.");
     // A sentence with a link inside it still types.
     await expect(page.getByRole("status")).toHaveText("1 file and 2 links attached.");
@@ -405,7 +408,7 @@ test.describe("submit", () => {
     expect(text).toContain("Linked sources (read each as context):\nhttps://a.example/spec");
     expect(text).toContain("mock-pasted-1.md");
     expect(text.indexOf("Attached files")).toBeLessThan(text.indexOf("Linked sources"));
-    expect(text.indexOf("Linked sources")).toBeLessThan(text.indexOf("Session setup"));
+    expect(text.indexOf("Linked sources")).toBeLessThan(text.indexOf("already scaffolded"));
   });
 
   test("a failed session start keeps the screen and reuses the created agent on retry", async ({
@@ -429,7 +432,7 @@ test.describe("submit", () => {
     await page.getByTestId("composer-send").click();
 
     // The agent exists; the session did not start; the screen says exactly that.
-    await expect(page.getByTestId("composer-error")).toContainText(
+    await expect(page.getByTestId("new-agent-error")).toContainText(
       "screenshot was created, but its session didn't start",
     );
     await expect(page.getByTestId("workflow-screenshot")).toBeVisible();
@@ -497,7 +500,7 @@ test.describe("templates route through the screen", () => {
     await page.getByTestId("template-use-btn").click();
 
     await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
-    await expect(page.getByTestId("composer-project")).toContainText("acme-app");
+    await expect(page.getByTestId("new-agent-project")).toContainText("acme-app");
     await expect(page.getByTestId("composer-input")).toHaveValue(/^Start from the .* template\./);
     await page.getByTestId("composer-send").click();
     await expect

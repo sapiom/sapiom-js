@@ -3416,7 +3416,7 @@ export const App = (): JSX.Element => {
                         data-testid="session-setup"
                       >
                         <summary className="session-setup-summary">
-                          <Icon name="Info" size={13} />
+                          <Icon name="ListChecks" size={13} />
                           <span className="session-setup-title">
                             {SETUP_CARD.title}
                           </span>

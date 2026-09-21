@@ -251,7 +251,7 @@ test.describe("templates journey (from the composer)", () => {
     await expect(page.getByTestId("template-use-dialog")).toHaveCount(0);
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await expect(page.getByTestId("templates-panel")).toHaveCount(0);
-    await expect(page.getByTestId("composer-project")).toContainText("blank-slate");
+    await expect(page.getByTestId("new-agent-project")).toContainText("blank-slate");
     await expect(page.getByTestId("composer-input")).toHaveValue(/^Start from the .* template\./);
     expect(await createOrder(page)).toEqual([]);
 

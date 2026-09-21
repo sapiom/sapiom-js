@@ -56,7 +56,7 @@ test.describe("first run", () => {
     const composer = page.getByTestId("new-session-composer");
     await expect(composer).toContainText("What should your agent do?");
     // The screen states the project it is creating in.
-    await expect(page.getByTestId("composer-project")).toHaveText("New agent in blank-slate");
+    await expect(page.getByTestId("new-agent-project")).toHaveText("New agent in blank-slate");
 
     // The four quick-idea chips, the box, and the send.
     await expect(page.getByTestId("composer-chip-sales-outreach")).toBeVisible();

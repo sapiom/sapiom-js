@@ -9608,6 +9608,12 @@ button.rail-footer-card:hover {
   white-space: nowrap;
   font-size: var(--type-label);
 }
+.composer-file-detail {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  white-space: nowrap;
+}
 .composer-file-remove {
   display: inline-flex;
   align-items: center;

@@ -66,7 +66,7 @@ test("New project opens the screen with no terminal or canvas, and a chip prefil
   page,
 }) => {
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-project")).toHaveText(
+  await expect(page.getByTestId("new-agent-project")).toHaveText(
     "New agent in blank-slate",
   );
 
@@ -106,7 +106,7 @@ test("describing the agent creates it in the project, then one session opens on 
   await expect
     .poll(() => initialTaskText(page))
     .toMatch(new RegExp(`^${escapeRegExp(idea)}\n\n`));
-  expect(await initialTaskText(page)).toContain("Session setup.");
+  expect(await initialTaskText(page)).toContain("already scaffolded");
   expect(await initialTaskText(page)).not.toContain("sapiom_dev_agents_scaffold");
   expect(await injectCallCount(page)).toBe(0);
   const req = await lastCreateRequest(page);
@@ -285,7 +285,7 @@ test("attachment controls expose names, live status, and keyboard removal", asyn
     };
   });
 
-  await expect(page.getByTestId("composer-attach-files")).toHaveAccessibleName(
+  await expect(page.getByTestId("composer-attach-file")).toHaveAccessibleName(
     "Attach files",
   );
   await expect(page.getByTestId("composer-send")).toHaveAccessibleName(
@@ -417,7 +417,7 @@ test("an attachment-only submit is refused: the idea is what names the agent", a
   });
 
   await page.getByTestId("composer-send").click();
-  await expect(page.getByTestId("composer-error")).toHaveText(
+  await expect(page.getByTestId("new-agent-error")).toHaveText(
     "Give the agent a name.",
   );
   await expect(page.locator(".composer-file-name")).toHaveText(["brief.pdf"]);
@@ -473,10 +473,10 @@ test("an upload failure keeps the screen and its queue; the retry reuses the cre
   // and the screen says exactly that under the field, keeping the queue.
   await expect(page.getByTestId("composer-send")).toBeEnabled();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-error")).toContainText(
+  await expect(page.getByTestId("new-agent-error")).toContainText(
     "screenshot was created, but its session didn't start",
   );
-  await expect(page.getByTestId("composer-error")).toContainText(
+  await expect(page.getByTestId("new-agent-error")).toContainText(
     /materialization failed/i,
   );
   await expect(page.getByTestId("composer-files")).toContainText(
