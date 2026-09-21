@@ -22,6 +22,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { addProject } from "./mock-navigation";
 
 const ACME = "/Users/demo/acme-app";
 
@@ -239,9 +240,7 @@ test.describe("Remove project", () => {
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("workspace-group-acme-app")).toHaveCount(0);
 
-    await page.getByTestId("add-existing-agents").click();
-    await page.getByTestId("folder-field-input").fill(`${ACME}/leasing`);
-    await page.getByTestId("aw-add").click();
+    await addProject(page, `${ACME}/leasing`);
 
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
     await expect(page.getByTestId("workflow-leasing")).toBeVisible();

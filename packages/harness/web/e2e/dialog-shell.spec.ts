@@ -49,17 +49,17 @@ interface DialogCase {
 
 const CASES: DialogCase[] = [
   {
-    name: "StartDialog (Add existing agents)",
+    name: "ProjectFolderDialog (Add project, web host)",
     open: async (page) => {
       await page.goto("/");
       await expect(page.locator(".rail-workflows")).toBeVisible();
-      await page.getByTestId("add-existing-agents").click();
-      await expect(page.locator(".modal-start")).toBeVisible();
+      await page.getByTestId("rail-add-project").click();
+      await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
     },
-    surface: (page) => page.locator(".modal-start"),
-    trigger: (page) => page.getByTestId("add-existing-agents"),
+    surface: (page) => page.getByTestId("project-folder-dialog"),
+    trigger: (page) => page.getByTestId("rail-add-project"),
     opensFocusedOn: (page) => page.getByTestId("folder-field-input"),
-    behind: (page) => page.getByTestId("rail-create-new"),
+    behind: (page) => page.getByTestId("rail-new-project"),
   },
   {
     name: "RemoveProjectConfirm",
@@ -73,22 +73,7 @@ const CASES: DialogCase[] = [
     trigger: (page) => page.getByTestId("project-remove-acme-app"),
     // The SAFE action, on a destructive dialog: Enter keeps the project.
     opensFocusedOn: (page) => page.getByRole("button", { name: "Keep project" }),
-    behind: (page) => page.getByTestId("rail-create-new"),
-  },
-  {
-    name: "CreateAgentDialog",
-    open: async (page) => {
-      await page.goto("/?seed=0&mockStudioProjects=absent");
-      await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-      await page.getByTestId("project-create-agent-acme-app").click();
-      await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
-    },
-    surface: (page) => page.getByTestId("create-agent-dialog"),
-    // The row action survives the dialog now. It used to be a menu item that
-    // unmounted with its popover, so focus had nowhere to go but the document.
-    trigger: (page) => page.getByTestId("project-create-agent-acme-app"),
-    opensFocusedOn: (page) => page.getByTestId("create-agent-name"),
-    behind: (page) => page.getByTestId("rail-create-new"),
+    behind: (page) => page.getByTestId("rail-new-project"),
   },
   {
     name: "EndSessionConfirm",
@@ -103,7 +88,7 @@ const CASES: DialogCase[] = [
     trigger: (page) => page.getByTestId("session-menu"),
     // The SAFE action: Enter keeps the session.
     opensFocusedOn: (page) => page.getByRole("button", { name: "Keep session" }),
-    behind: (page) => page.getByTestId("rail-create-new"),
+    behind: (page) => page.getByTestId("rail-new-project"),
   },
   {
     name: "TemplateUseDialog",

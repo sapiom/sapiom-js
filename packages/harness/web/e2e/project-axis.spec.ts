@@ -15,6 +15,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
+import { openNewAgentScreen } from "./mock-navigation";
 
 const ROOT = "/Users/demo/polsia";
 /** `polsia/services/workers` opened as its own project. */
@@ -161,7 +162,7 @@ test.describe("durable Studio project navigation", () => {
   test("the row's plus is New agent; a coding session starts from the project's own pane", async ({
     page,
   }) => {
-    await page.getByTestId("rail-create-new").click();
+    await openNewAgentScreen(page);
     await page.getByTestId("composer-harness-select").click();
     await page.getByTestId("composer-harness-option-codex").click();
     const group = page.getByTestId("workspace-group-dashboard-keeper");
@@ -478,7 +479,7 @@ test.describe("row chrome", () => {
   }) => {
     await expect(page.getByTestId("rail-add-project")).toHaveAttribute(
       "aria-label",
-      "Add a project",
+      "Add project",
     );
 
     // ORDER, asserted from the live DOM rather than from CSS: the LABEL owns the
@@ -507,14 +508,14 @@ test.describe("row chrome", () => {
       ),
       navRow: Math.round(
         document
-          .querySelector('[data-testid="add-existing-agents"] span')!
+          .querySelector('[data-testid="rail-templates"] span')!
           .getBoundingClientRect().left,
       ),
     }));
     expect(indents.header).toBeLessThan(indents.navRow);
 
     await page.getByTestId("rail-add-project").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
     await page.keyboard.press("Escape");
 
     // AN ELLIPSIS, reversing the design doc's "sliders, not an ellipsis". That

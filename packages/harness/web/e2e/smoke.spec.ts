@@ -120,20 +120,25 @@ test.describe("theme — defaults to light until the user chooses", () => {
   });
 });
 
-test("rail: the Create-new CTA sits below Search and opens the composer", async ({
+test("rail: the New project CTA leads the nav and runs the folder step", async ({
   page,
 }) => {
-  const cta = page.getByTestId("rail-create-new");
+  const cta = page.getByTestId("rail-new-project");
   await expect(cta).toBeVisible();
-  // Says WHAT it creates. Bare "Create new" named nothing, and "project" would
-  // be false — this opens the composer, which scaffolds an agent.
-  await expect(cta).toContainText("Create new agent");
+  // Says WHAT it creates (flow-creation.md §4.1, D27): a new agent lives in a
+  // project, so the rail's verb is the project first.
+  await expect(cta).toHaveText("New project");
+  await expect(page.getByTestId("rail-create-new")).toHaveCount(0);
+  await expect(page.getByTestId("add-existing-agents")).toHaveCount(0);
 
-  // It opens the composer-first "new session" home — the primary creative
-  // action, reachable straight from the nav.
+  // On the browser host the folder step is the one-field dialog; the screen
+  // opens once the folder is chosen.
   await cta.click();
+  await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
+  await page.getByTestId("folder-field-input").fill("/Users/demo/blank-slate");
+  await page.getByTestId("project-folder-continue").click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await expect(page.getByTestId("composer-input")).toBeVisible();
+  await expect(page.getByTestId("composer-project")).toContainText("blank-slate");
 });
 
 test("brand header shows the Sapiom wordmark and the demo-workspace identity", async ({
@@ -169,7 +174,7 @@ test("auto-selects the running boot session on initial load", async ({
   ).toHaveAttribute("data-status", "running");
 });
 
-test("session header: compact identity (name only; path in the tooltip); New session opens from the rail's history menu", async ({
+test("session header: compact identity (name only; path in the tooltip)", async ({
   page,
 }) => {
   const header = page.getByTestId("session-context");
@@ -186,10 +191,6 @@ test("session header: compact identity (name only; path in the tooltip); New ses
   );
 
   await page.screenshot({ path: "web/e2e/screenshots/session-header.png" });
-
-  await page.getByTestId("add-existing-agents").click();
-  await expect(page.locator(".modal-start")).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
 });
 
 test("Cmd/Ctrl+1..9 selects the nth tab of the focused agent", async ({
@@ -272,13 +273,13 @@ test("Overview opens the introduction, and Escape returns to the session behind 
   );
 });
 
-test("creation IA: Add existing agents opens detection; the tab + starts a sibling directly", async ({
+test("creation IA: Add project is one folder question; the tab + starts a sibling directly", async ({
   page,
 }) => {
-  // Adding what already exists is ONE detection-driven dialog — no doors, no
-  // modes, no agent picker.
-  await page.getByTestId("add-existing-agents").click();
-  const modal = page.locator(".modal-start");
+  // Adding a folder is ONE question, asked once, with no detection, no doors
+  // and no agent picker (flow-creation.md §4.5, D28).
+  await page.getByTestId("rail-add-project").click();
+  const modal = page.getByTestId("project-folder-dialog");
   await expect(modal).toBeVisible();
   await expect(page.getByTestId("add-menu")).toHaveCount(0);
   await expect(page.getByTestId("aw-doors")).toHaveCount(0);
@@ -287,7 +288,7 @@ test("creation IA: Add existing agents opens detection; the tab + starts a sibli
   await expect(modal).toHaveCount(0);
 
   // The workbench + means another conversation in this folder. The rail's
-  // Create new remains the composer entry for a new project/agent.
+  // New project remains the entry for a new project and its first agent.
   const newBtn = page.getByTestId("session-tab-new");
   await expect(newBtn).toHaveAttribute("aria-label", "New session on leasing");
   await newBtn.click();
@@ -295,7 +296,7 @@ test("creation IA: Add existing agents opens detection; the tab + starts a sibli
     3,
   );
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
-  await expect(page.locator(".modal-start")).toHaveCount(0);
+  await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
 });
 
 test("workflows rail lists the fixtures and the FOCUSED one drives macro gating", async ({
@@ -652,17 +653,17 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
   });
 });
 
-test("Add existing agents: the folder field seeds itself and drives the action", async ({
+test("Add project: the folder field completes a path and drives the one action", async ({
   page,
 }) => {
-  await page.getByTestId("add-existing-agents").click();
-  const modal = page.locator(".modal-start");
+  await page.getByTestId("rail-add-project").click();
+  const modal = page.getByTestId("project-folder-dialog");
   await expect(modal).toBeVisible();
 
   const input = page.getByTestId("folder-field-input");
-
-  // Seeded from the project root (…/projects).
-  await expect(input).toHaveValue("/Users/demo/acme-app/projects");
+  // NO PRE-CHOSEN PARENT (flow-creation.md Q8): the field opens empty.
+  await expect(input).toHaveValue("");
+  await expect(page.getByTestId("project-folder-continue")).toBeDisabled();
 
   /* NO IN-APP FILE BROWSER. The path bar, the up-one-level button and the
      scrolling folder list are gone: on desktop the OS folder browser is the
@@ -675,40 +676,41 @@ test("Add existing agents: the folder field seeds itself and drives the action",
   await expect(page.getByTestId("folder-field-choose")).toHaveCount(0);
 
   await page.screenshot({
-    path: "web/e2e/screenshots/add-existing-agents.png",
+    path: "web/e2e/screenshots/add-project.png",
   });
 
-  // A folder that already holds an agent gets the register action; a plain one
-  // gets the deep scan rather than a disabled button.
-  await input.fill("/Users/demo/rfq-agent");
-  await expect(page.getByTestId("aw-add")).toBeEnabled();
+  // A folder that exists can be added; one that does not cannot, and says so.
   await input.fill("/Users/demo/scratch");
-  await expect(page.getByTestId("aw-add")).toHaveCount(0);
-  await expect(page.getByTestId("aw-add-all")).toBeEnabled();
+  await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
+  await input.fill("/Users/demo/scratch/brand-new-thing");
+  await expect(page.getByTestId("project-folder-hint")).toHaveText(
+    "That folder doesn't exist yet.",
+  );
+  await expect(page.getByTestId("project-folder-continue")).toBeDisabled();
 
   await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.locator(".modal-start")).toBeHidden();
+  await expect(modal).toBeHidden();
 });
 
-test("Add existing agents: a failed directory read is reported, not swallowed", async ({
+test("Add project: a failed directory read is reported, not swallowed", async ({
   page,
 }) => {
   // ?mockError=listDir makes the filesystem probe reject.
   await page.goto("/?mockError=listDir&seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-existing-agents").click();
-  const modal = page.locator(".modal-start");
+  await page.getByTestId("rail-add-project").click();
+  const modal = page.getByTestId("project-folder-dialog");
   await expect(modal).toBeVisible();
+  await page.getByTestId("folder-field-input").fill("/Users/demo/scratch");
 
-  const err = modal.locator(".modal-error");
+  const err = page.getByTestId("project-folder-error");
   await expect(err).toBeVisible({ timeout: 3_000 });
   await expect(err).toContainText("Couldn't read that directory");
 
-  // And the dialog offers nothing it cannot do: an unreadable folder yields no
-  // register action and no scan.
-  await expect(page.getByTestId("aw-add")).toHaveCount(0);
-  await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
+  // And the dialog offers nothing it cannot do: an unreadable folder cannot be
+  // added.
+  await expect(page.getByTestId("project-folder-continue")).toBeDisabled();
 });
 
 test("command palette: a failed path read shows an error but still offers the typed path", async ({
@@ -2242,14 +2244,16 @@ test("folder field: Enter fires the dialog's primary action", async ({
 }) => {
   // The in-app listing's arrow-key navigation went with the listing; Enter is
   // no longer "drill into the highlighted row", it is "do the one thing this
-  // dialog is for".
-  await page.getByTestId("add-existing-agents").click();
+  // dialog is for": add the folder as a project.
+  await page.getByTestId("rail-add-project").click();
   const input = page.getByTestId("folder-field-input");
   await input.fill("/Users/demo/rfq-agent");
-  await expect(page.getByTestId("aw-add")).toBeEnabled();
+  await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
 
   await input.press("Enter");
-  await expect(page.locator(".modal-start")).toBeHidden();
+  await expect(page.getByTestId("project-folder-dialog")).toBeHidden();
+  // rfq-agent's folder IS its agent, so it renders as the agent's own row.
+  await expect(page.getByTestId("workflow-rfq")).toBeVisible();
 });
 
 test("canvas controls: the board widget zooms; the subheader's expand lifts the pane to an overlay", async ({

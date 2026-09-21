@@ -64,48 +64,6 @@ test.describe("command palette sections and highlighting", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Add existing agents dialog: detection + bulk scan
-// ---------------------------------------------------------------------------
-
-test.describe("add existing agents (detection-driven)", () => {
-  test("a root holding several projects offers to add them all, and toasts the count", async ({ page }) => {
-    await page.getByTestId("add-existing-agents").click();
-    const modal = page.locator(".modal-start");
-    await modal.getByTestId("folder-field-input").fill("/Users/demo");
-
-    /* RE-POINTED IN ROUND 2, and this fixture is the defect in miniature.
-       Detection sees TWO agent projects directly under /Users/demo (the third
-       is nested inside acme-app); the scan is recursive and registers THREE.
-       Round 1 printed the first number on the button — `Add all 2` — for an
-       action that did the second. At real scale that mismatch was 1 vs 87, and
-       those 87 rows are the flood this whole round is about.
-
-       So the count is not printed at all — the shallow probe cannot speak for
-       the deep scan in either direction — the reach is stated once in the
-       dialog's single hint line, and the button promises nothing. */
-    await expect(modal.getByTestId("start-hint")).toContainText(
-      "Adds every agent below this folder",
-    );
-    await expect(modal.getByTestId("aw-add-all")).toContainText("Add agents");
-
-    /* And it takes TWO presses. The first arms and the hint restates the
-       consequence in the terms that actually bit — one unconfirmed click is how
-       87 rows arrived — and only the second registers anything. */
-    await modal.getByTestId("aw-add-all").click();
-    await expect(modal).toBeVisible();
-    await expect(modal.getByTestId("aw-add-all")).toHaveAttribute("data-armed", "true");
-    await expect(modal.getByTestId("aw-add-all")).toContainText("Add them all");
-    await expect(modal.getByTestId("start-hint")).toContainText("Press again to confirm");
-    await expect(page.locator(".toast")).toHaveCount(0);
-
-    await modal.getByTestId("aw-add-all").click();
-    await expect(modal).toBeHidden();
-    // The scan itself is recursive, so it finds all three.
-    await expect(page.locator(".toast")).toContainText("Found 3 agent projects.");
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Dead session context
 // ---------------------------------------------------------------------------
 
@@ -163,17 +121,19 @@ test("a folder that cannot be read says so, and the field stays the way out", as
   await page.goto("/?mockError=listDir");
   await expect(page.locator(".rail-workflows")).toBeVisible();
 
-  await page.getByTestId("add-existing-agents").click();
-  const modal = page.locator(".modal-start");
+  await page.getByTestId("rail-add-project").click();
+  const modal = page.getByTestId("project-folder-dialog");
+  await modal.getByTestId("folder-field-input").fill("/Users/demo/scratch");
 
-  const err = modal.locator(".modal-error");
+  const err = modal.getByTestId("project-folder-error");
   await expect(err).toBeVisible();
   await expect(err).toContainText("Couldn't read that directory");
 
   /* RECOVERY IS THE FIELD. The in-app listing carried its own Retry button;
      with the listing gone, re-pointing the field is what re-runs the read. The
      fault persists here, so it lands back on the same honest error rather than
-     a blank dialog that looks like it worked. */
+     a stale one. */
   await modal.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
-  await expect(err).toBeVisible();
+  await expect(err).toContainText("Couldn't read that directory");
+  await expect(modal.getByTestId("project-folder-continue")).toBeDisabled();
 });

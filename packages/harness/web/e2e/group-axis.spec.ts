@@ -808,7 +808,11 @@ test.describe("New agent on the Group axis (D34c)", () => {
     expect(rows[rows.length - 1]).toBe("group-delete-gateway");
 
     await project.getByTestId("group-create-agent-mailer").click();
-    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
-    await expect(page.getByTestId("create-agent-project")).toHaveText("polsia");
+    // The same screen every entrance lands on, scoped to the holding project
+    // (flow-creation.md §4.2, §4.3).
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("composer-project")).toHaveText(
+      "New agent in polsia",
+    );
   });
 });

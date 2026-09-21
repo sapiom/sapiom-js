@@ -11,11 +11,9 @@
  * **chose**"). You open a project in order to build the FIRST agent in it, so
  * whether it currently holds one is not the question being asked.
  *
- * "Add a project" and "find agents under here" stay two different CONTROLS —
- * the header `+` and the nav row — pointing at one picker with the primary
- * flipped, because the folder question is genuinely one question and two
- * folder browsers would be the thing the "one `+` per question" rule is
- * against.
+ * Under flow-creation.md rev 4 there is one folder question and one control
+ * for it, the header's Add project (D28); a folder full of agents is added
+ * the same way as an empty one, and detection is gone.
  *
  * `/Users/demo/scratch` is the mock filesystem's plain, agent-free folder.
  */
@@ -48,22 +46,21 @@ test.describe("the header + opens a project", () => {
     await expect(page.getByTestId("project-row-blank-slate")).toHaveCount(0);
 
     await page.getByTestId("rail-add-project").click();
-    await expect(page.locator(".modal-title")).toHaveText(
-      "Add a project",
-    );
+    const dialog = page.getByTestId("project-folder-dialog");
+    await expect(dialog.locator(".modal-title")).toHaveText("Add project");
     await page.getByTestId("folder-field-input").fill(BLANK);
 
-    /* ONE LINE, ONE ACTION. Detection still runs — it decides whether the
-       folder EXISTS — but it no longer prints what it did or did not find, and
-       the primary is the only thing in the footer. */
-    await expect(page.getByTestId("start-hint")).toHaveText(
-      "Choose a folder to work in — any agents inside come with it.",
+    /* ONE LINE, ONE ACTION. The dialog checks that the folder EXISTS, and
+       nothing else: no detection, no readout of what it found, and the primary
+       is the only thing in the footer (flow-creation.md §4.5, D28). */
+    await expect(page.getByTestId("project-folder-hint")).toHaveText(
+      "Choose a folder to work in. Any agents inside come with it.",
     );
     await expect(page.getByTestId("aw-result")).toHaveCount(0);
     await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
-    await expect(page.getByTestId("open-project")).toHaveText("Add project");
-    await expect(page.getByTestId("open-project")).toBeEnabled();
-    await page.getByTestId("open-project").click();
+    await expect(page.getByTestId("project-folder-continue")).toHaveText("Add project");
+    await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
+    await page.getByTestId("project-folder-continue").click();
 
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
     const group = page.getByTestId("workspace-group-blank-slate");
@@ -96,9 +93,8 @@ test.describe("the header + opens a project", () => {
     ).toBe(0);
     // The row is REMEMBERED, not just rendered: `recentDirs` is the harness's
     // one workspace list, and the whole rail re-derives from it when the axis
-    // changes. (A cross-RELOAD assertion belongs against a real server — the
-    // mock holds settings in memory for one page load — and was run against
-    // one; see `real_mode_evidence` in the report.)
+    // changes. (A cross-RELOAD assertion belongs against a real server; the
+    // mock holds settings in memory for one page load.)
     await page.getByTestId("history-trigger").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
@@ -115,7 +111,7 @@ test.describe("the header + opens a project", () => {
   }) => {
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill(BLANK);
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
 
     const group = page.getByTestId("workspace-group-blank-slate");
     await expect(group.getByTestId("agent-map-row")).toHaveCount(0);
@@ -160,7 +156,7 @@ test.describe("the header + opens a project", () => {
     await page
       .getByTestId("folder-field-input")
       .fill("/Users/demo/acme-app/leasing");
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
     /* AN AGENT'S OWN FOLDER DOES NOT BECOME A PROJECT, so the agent stays the
        ONE row it already was under `acme-app`. This asserted 2 before: opening
        `leasing` minted a second root for the agent's own directory and the same
@@ -181,38 +177,7 @@ test.describe("the header + opens a project", () => {
   });
 });
 
-test.describe("the two questions stay two controls", () => {
-  test("the nav row still asks the DETECTION question, with its own primary", async ({
-    page,
-  }) => {
-    await page.getByTestId("add-existing-agents").click();
-    await expect(page.locator(".modal-title")).toHaveText(
-      "Add existing agents",
-    );
-    await page.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
-    // Round 1's primary, unchanged.
-    await expect(page.getByTestId("aw-add")).toBeVisible();
-    await expect(page.getByTestId("open-project")).toHaveCount(0);
-  });
-
-  test("a no-agent folder in the detection flow is no longer a dead end", async ({
-    page,
-  }) => {
-    await page.getByTestId("add-existing-agents").click();
-    await page.getByTestId("folder-field-input").fill(BLANK);
-    // The immediate-child probe has nothing to register, so its button is gone
-    // rather than sitting there disabled.
-    await expect(page.getByTestId("aw-add")).toHaveCount(0);
-    // But the other question is one press away rather than a closed dialog,
-    // and it is NAMED for the outcome so it cannot be mistaken for the primary.
-    await expect(page.getByTestId("open-project")).toHaveText(
-      "Open as project",
-    );
-    await expect(page.getByTestId("open-project")).toBeEnabled();
-    await page.getByTestId("open-project").click();
-    await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
-  });
-
+test.describe("Add project is one question", () => {
   /**
    * THE COMPETING BUTTON IS GONE, and it was a duplicate rather than a choice.
    * "Add a project" used to offer BOTH "Add every agent under this folder" and
@@ -220,16 +185,16 @@ test.describe("the two questions stay two controls", () => {
    * they did not: `openProject` (use-harness-state) scans the whole tree after
    * remembering the root, so the folder's agents arrive either way.
    */
-  test("Add a project offers ONE action, and it still brings the agents", async ({
+  test("Add project offers ONE action, and it still brings the agents", async ({
     page,
   }) => {
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill("/Users/demo/acme-app");
     await expect(page.getByTestId("aw-add-all")).toHaveCount(0);
     await expect(page.getByTestId("aw-add")).toHaveCount(0);
-    await expect(page.getByTestId("open-project")).toBeEnabled();
+    await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
 
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
     await expect(page.getByTestId("project-row-acme-app")).toBeVisible();
     await expect(page.getByTestId("workflow-leasing")).toBeVisible();
   });
@@ -258,7 +223,7 @@ test.describe("round trip: removed, then back", () => {
 
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill("/Users/demo/acme-app");
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
 
     await expect(page.getByTestId("project-row-acme-app")).toBeVisible();
     await expect(page.getByTestId("workflow-leasing")).toBeVisible();
@@ -297,7 +262,7 @@ test.describe("round trip: removed, then back", () => {
 
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill("/Users/demo");
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
 
     await expect(page.getByTestId("project-row-demo")).toBeVisible();
     /* ONE row, and the hole is still closed. The invariant this test exists for

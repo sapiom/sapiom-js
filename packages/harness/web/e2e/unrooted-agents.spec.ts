@@ -440,7 +440,7 @@ test.describe("(c) there is a way OUT", () => {
     // reopen path the project could never come back at all.
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill("/Users/demo/design-eng");
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
     // The TOMBSTONE is cleared, not merely out-voted by this render — it is the
     // one part of a removal that outlives the page, so a stale entry would

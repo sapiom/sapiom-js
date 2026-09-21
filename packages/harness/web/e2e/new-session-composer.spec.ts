@@ -9,7 +9,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { selectMockSessionFromPalette } from "./mock-navigation";
+import { openNewAgentScreen, selectMockSessionFromPalette } from "./mock-navigation";
 
 const initialTaskText = (page: Page): Promise<string> =>
   page.evaluate(
@@ -70,7 +70,7 @@ test.beforeEach(async ({ page }) => {
 test("Create new opens the composer with no terminal or canvas, and a chip prefills the box", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
   // No terminal, no canvas while composing.
@@ -88,7 +88,7 @@ test("Create new opens the composer with no terminal or canvas, and a chip prefi
 test("describing an outcome starts a session and hands the agent that outcome", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page
     .getByTestId("composer-input")
     .fill("Diff our competitors' pricing pages every morning.");
@@ -118,7 +118,7 @@ test("Enter keeps a new-agent prompt in its exact session while the project map 
   expect(before.activeSessionId).toBeNull();
   expect(before.createSessionCalls).toBe(0);
 
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   const idea = "Build a sales outreach agent.";
   await page.getByTestId("composer-input").fill(idea);
   await page.evaluate(() => {
@@ -222,7 +222,7 @@ test("returning to an in-progress standalone session does not restore the projec
   const before = await sessionEvidence(page);
   expect(before.createSessionCalls).toBe(0);
 
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   const idea = "Build a revisit guard agent.";
   await page.getByTestId("composer-input").fill(idea);
   await page.getByTestId("composer-input").press("Enter");
@@ -270,7 +270,7 @@ test("returning to an in-progress standalone session does not restore the projec
 test("a picked file reaches the first request without naming the project", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -309,7 +309,7 @@ test("a picked file reaches the first request without naming the project", async
 test("picker, drop, and pathless clipboard files reach one ordered first request", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -423,7 +423,7 @@ test("ordinary clipboard text pastes natively without creating an attachment", a
   page,
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => navigator.clipboard.writeText("pasted plain text"));
 
   const input = page.getByTestId("composer-input");
@@ -437,7 +437,7 @@ test("ordinary clipboard text pastes natively without creating an attachment", a
 test("attachment controls expose names, live status, and keyboard removal", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -475,7 +475,7 @@ test("attachment controls expose names, live status, and keyboard removal", asyn
 test("attachment rows stay contained with touch-sized removal at a narrow viewport", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.setViewportSize({ width: 360, height: 800 });
   await page.evaluate(() => {
     window.sapiomDesktop = {
@@ -523,7 +523,7 @@ test("attachment rows stay contained with touch-sized removal at a narrow viewpo
 test("re-adding and removing files keeps only the intended first-request paths", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -563,7 +563,7 @@ test("re-adding and removing files keeps only the intended first-request paths",
 test("an attachment-only start uses the fallback project and sends the file", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -595,7 +595,7 @@ test("an attachment-only start uses the fallback project and sends the file", as
 test("an upload failure rolls back, retains the queue, sends nothing, and retries once", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -697,7 +697,7 @@ for (const agent of [
     await page.goto("/?seed=0");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    await page.getByTestId("rail-create-new").click();
+    await openNewAgentScreen(page);
     if (agent.id === "codex") {
       await page.getByTestId("composer-harness-select").click();
       await page.getByTestId("composer-harness-option-codex").click();
@@ -753,7 +753,7 @@ for (const agent of [
 test("a new session opens terminal-only; the canvas stays hidden until it has content", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await page.getByTestId("composer-input").fill("Build a small thing.");
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("agent-view")).toBeVisible();
@@ -785,10 +785,12 @@ test("a new session opens terminal-only; the canvas stays hidden until it has co
 test("the new agent's folder appears in the rail at once and is never lost mid-creation", async ({
   page,
 }) => {
+  // The folder step makes the project a row of its own, so the count starts
+  // after it: what is asserted is the AGENT's row, not the project's.
+  await openNewAgentScreen(page);
   const groups = page.locator(".rail-list .workspace-group");
   const before = await groups.count();
 
-  await page.getByTestId("rail-create-new").click();
   await page
     .getByTestId("composer-input")
     .fill("Diff competitor pricing pages every morning.");
@@ -814,7 +816,7 @@ test("Back returns to the session the composer was opened over", async ({
     "data-session-id",
     "sess-boot",
   );
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
   await page.getByTestId("composer-back").click();
@@ -826,7 +828,7 @@ test("Back returns to the session the composer was opened over", async ({
 });
 
 test("the agent selector lists the coding agents", async ({ page }) => {
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   const select = page.getByTestId("composer-harness-select");
   await expect(select).toContainText("Claude Code");
 

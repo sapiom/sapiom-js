@@ -77,30 +77,29 @@ test.describe("settings popover", () => {
   });
 });
 
-test.describe("Start dialog", () => {
+test.describe("Add project dialog", () => {
   test("closes on Escape and returns focus to the button that spawned it", async ({
     page,
   }) => {
-    await page.getByTestId("add-existing-agents").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
+    await page.getByTestId("rail-add-project").click();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(page.locator(".modal-start")).toBeHidden();
-    await expect(page.getByTestId("add-existing-agents")).toBeFocused();
+    await expect(page.getByTestId("project-folder-dialog")).toBeHidden();
+    await expect(page.getByTestId("rail-add-project")).toBeFocused();
   });
 
   test("still closes on a backdrop click, but not on clicks inside the panel", async ({
     page,
   }) => {
-    await page.getByTestId("add-existing-agents").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
+    await page.getByTestId("rail-add-project").click();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
 
     await page.getByTestId("folder-field-input").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
 
-    // The panel is centered, so the backdrop's top-left corner is outside it.
     await page.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
-    await expect(page.locator(".modal-start")).toBeHidden();
+    await expect(page.getByTestId("project-folder-dialog")).toBeHidden();
   });
 });
 

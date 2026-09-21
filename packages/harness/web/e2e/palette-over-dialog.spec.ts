@@ -13,9 +13,9 @@ import { expect, test } from "@playwright/test";
 
 test.describe("⌘K over an open dialog", () => {
   test.beforeEach(async ({ page }) => {
-    // The legacy payload, because it is the one that still offers a dialog
-    // from the rail: the row's New agent opens `CreateAgentDialog`.
-    await page.goto("/?seed=0&mockStudioProjects=absent");
+    // The one dialog the rail still offers on the browser host: Add project's
+    // folder dialog (the desktop host gets the OS picker instead).
+    await page.goto("/?seed=0");
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
@@ -26,17 +26,17 @@ test.describe("⌘K over an open dialog", () => {
     // opened over the dialog and native Tab then walked out of the palette into
     // the dialog behind it. `CommandPalette` carries no `role`, so the guard has
     // to match `.modal-backdrop` — a role-only selector cannot see it.
-    await page.getByTestId("project-create-agent-acme-app").click();
-    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+    await page.getByTestId("rail-add-project").click();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
 
     await page.keyboard.press("ControlOrMeta+k");
     await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
     // The dialog is still the top layer and still the thing that has focus.
-    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
 
     // And the shortcut is not broken — it works again once the layer is gone.
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("create-agent-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
     await page.keyboard.press("ControlOrMeta+k");
     await expect(page.getByTestId("command-palette-input")).toBeVisible();
   });
@@ -72,12 +72,12 @@ test.describe("⌘K over an open dialog", () => {
       });
     });
 
-    await page.getByTestId("project-create-agent-acme-app").click();
-    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+    await page.getByTestId("rail-add-project").click();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
 
     await page.keyboard.press("ControlOrMeta+p");
     await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
-    await expect(page.getByTestId("create-agent-dialog")).toBeVisible();
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
     // Seen by the listener, and prevented by the app during dispatch.
     await expect
       .poll(() =>

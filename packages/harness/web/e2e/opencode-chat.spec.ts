@@ -3,6 +3,7 @@ import express, { type Response } from "express";
 import type { Server } from "node:http";
 import { openCodeCompletionPrompt } from "../../src/shared/opencode-completion";
 import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
+import { openNewAgentScreen } from "./mock-navigation";
 
 // Exercise the pinned adapter over actual incremental HTTP SSE, without a model.
 test.describe.configure({ mode: "serial" });
@@ -960,7 +961,7 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
   await input.fill("Second session draft");
 
   // The create-new destination unmounts the whole conversation branch.
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
   await page.getByTestId("composer-back").click();
   await expect(page.locator(".harness-terminal")).toBeVisible();

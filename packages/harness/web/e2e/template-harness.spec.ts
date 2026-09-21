@@ -3,6 +3,7 @@
  * prove which adapter the server is asked to launch. */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { openNewAgentScreen } from "./mock-navigation";
 
 type LaunchSurface =
   | "composer"
@@ -276,8 +277,8 @@ for (const navigation of ["exit-back", "back-forward"] as const) {
       };
     });
     await page.goto("/?mockState=fresh");
-    // The create button records a composer visit for Back/Forward replay.
-    await page.getByTestId("rail-create-new").click();
+    // New project records a composer visit for Back/Forward replay.
+    await openNewAgentScreen(page);
     await chooseCodex(page);
     await page.getByTestId("composer-browse-templates").click();
     await expect(page.getByTestId("templates-panel")).toBeVisible();

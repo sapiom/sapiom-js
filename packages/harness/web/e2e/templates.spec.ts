@@ -26,6 +26,8 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { openNewAgentScreen } from "./mock-navigation";
+
 interface InjectRecord {
   id: string;
   req: { text: string; submit?: boolean };
@@ -424,7 +426,7 @@ test("the rail navigates away from templates: another nav row dismisses the brow
   await expect(page.getByTestId("templates-panel")).toBeVisible();
   await expect(page.locator(".center-pane")).toBeHidden();
 
-  await page.getByTestId("rail-create-new").click();
+  await openNewAgentScreen(page);
 
   // The template destination is gone and the workbench is back — you actually
   // navigated, rather than staying stranded on the browser.
