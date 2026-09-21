@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { STAMP_DIGEST_LENGTH, validateStampedBody } from "./content-stamp.js";
 import { sapiomStateDirPath, type ResolvedEnvironment } from "./credentials.js";
 import {
   AUTHORING_INSTRUCTIONS,
@@ -11,12 +12,6 @@ import {
 
 /** How long to wait for the instructions endpoint before falling back. */
 const FETCH_TIMEOUT_MS = 5000;
-
-/**
- * How much of a sha-256 a stamp carries — the same prefix the backend puts in
- * `X-Sapiom-Content-Digest`, so a value read off a transcript matches by eye.
- */
-const DIGEST_PREFIX_LENGTH = 12;
 
 /**
  * Where the served primer came from, in order of preference:
@@ -45,14 +40,25 @@ export interface ResolveInstructionsOptions {
   cacheDir?: string;
 }
 
-/** On-disk shape of one cached primer. One file per `apiURL`. */
+/**
+ * On-disk shape of one cached primer. One file per `apiURL`. `body` is the
+ * CANONICAL body (serve-time footer stripped): the footer names the source
+ * the server saw ("served live"), which is not what a later offline session
+ * is serving, and the digest describes the body without it.
+ */
 interface PrimerCacheRecord {
   body: string;
-  release: string | null;
-  digest: string | null;
+  release: string;
+  digest: string;
   key: string | null;
   fetchedAt: string;
   apiURL: string;
+}
+
+/** A validated live response: the body as delivered, plus its cache record. */
+interface ServedInstructions {
+  delivered: string;
+  record: PrimerCacheRecord;
 }
 
 /**
@@ -84,9 +90,10 @@ export function instructionsCachePath(
  * install still starts offline.
  *
  * Never throws and never rejects: the MCP server must always start with
- * usable instructions. A non-200, an empty body, a network error or a timeout
- * moves on to the next source; a cache that is missing, unreadable, corrupt or
- * for another shape is ignored; a cache write that fails is ignored.
+ * usable instructions. A non-200, an empty body, a network error, a timeout,
+ * or a body that does not carry a complete stamp it hashes to, moves on to the
+ * next source without touching the cache; a cache that is missing, unreadable,
+ * corrupt or for another shape is ignored; a cache write that fails is ignored.
  */
 export async function resolveInstructions(
   env: Pick<ResolvedEnvironment, "apiURL">,
@@ -96,12 +103,12 @@ export async function resolveInstructions(
 
   const served = await fetchServedInstructions(env.apiURL);
   if (served) {
-    await writeCache(cachePath, served);
+    await writeCache(cachePath, served.record);
     return {
-      body: served.body,
+      body: served.delivered,
       source: "served",
-      release: served.release,
-      digest: served.digest,
+      release: served.record.release,
+      digest: served.record.digest,
     };
   }
 
@@ -119,17 +126,21 @@ export async function resolveInstructions(
     body: AUTHORING_INSTRUCTIONS,
     source: "bundled",
     release: AUTHORING_INSTRUCTIONS_RELEASE,
-    digest: AUTHORING_INSTRUCTIONS_DIGEST.slice(0, DIGEST_PREFIX_LENGTH),
+    digest: AUTHORING_INSTRUCTIONS_DIGEST.slice(0, STAMP_DIGEST_LENGTH),
   };
 }
 
 /**
- * The live fetch: `GET {apiURL}/v1/mcp/instructions` (public, no auth), with the
- * content stamp read from the response headers. `null` on any failure.
+ * The live fetch: `GET {apiURL}/v1/mcp/instructions` (public, no auth). The
+ * body is accepted only when it carries both stamp headers and its
+ * footer-stripped sha-256 starts with the digest header
+ * ({@link validateStampedBody}); an unstamped, malformed or tampered 200 is
+ * treated like a failed fetch, so it can never displace a good cached copy.
+ * `null` on any failure.
  */
 async function fetchServedInstructions(
   apiURL: string,
-): Promise<PrimerCacheRecord | null> {
+): Promise<ServedInstructions | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -138,15 +149,21 @@ async function fetchServedInstructions(
       signal: controller.signal,
     });
     if (!response.ok) return null;
-    const body = (await response.text()).trim();
-    if (body.length === 0) return null;
-    return {
-      body,
+    const stamped = validateStampedBody(await response.text(), {
       release: response.headers.get("x-sapiom-content-release"),
       digest: response.headers.get("x-sapiom-content-digest"),
-      key: response.headers.get("x-sapiom-content-key"),
-      fetchedAt: new Date().toISOString(),
-      apiURL,
+    });
+    if (!stamped) return null;
+    return {
+      delivered: stamped.delivered,
+      record: {
+        body: stamped.canonical,
+        release: stamped.release,
+        digest: stamped.digest,
+        key: response.headers.get("x-sapiom-content-key"),
+        fetchedAt: new Date().toISOString(),
+        apiURL,
+      },
     };
   } catch {
     return null;
@@ -186,12 +203,18 @@ async function readCache(cachePath: string): Promise<PrimerCacheRecord | null> {
     if (typeof record.body !== "string" || record.body.trim().length === 0) {
       return null;
     }
+    if (
+      typeof record.release !== "string" ||
+      typeof record.digest !== "string"
+    ) {
+      return null;
+    }
     const optionalString = (value: unknown): string | null =>
       typeof value === "string" ? value : null;
     return {
       body: record.body,
-      release: optionalString(record.release),
-      digest: optionalString(record.digest),
+      release: record.release,
+      digest: record.digest,
       key: optionalString(record.key),
       fetchedAt: optionalString(record.fetchedAt) ?? "",
       apiURL: optionalString(record.apiURL) ?? "",
