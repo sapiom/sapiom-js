@@ -5,7 +5,7 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { SessionManagerClosingError } from "../core/session-manager.js";
 import type { HarnessAdapter, LaunchOpts, SpawnSpec } from "../shared/types.js";
