@@ -4,9 +4,11 @@ import {
   LONG_PASTE_CHARS,
   LONG_PASTE_LINES,
   classifyPaste,
+  countWords,
   extractUrls,
   isOnlyUrls,
   pastedDocumentName,
+  urlLabel,
 } from "./composer-intake";
 
 describe("extractUrls", () => {
@@ -63,5 +65,18 @@ describe("pastedDocumentName", () => {
   it("numbers pasted documents", () => {
     expect(pastedDocumentName(1)).toBe("pasted-1.md");
     expect(pastedDocumentName(3)).toBe("pasted-3.md");
+  });
+});
+
+describe("source chip labels", () => {
+  it("shows a link as host and path, without scheme or www", () => {
+    expect(urlLabel("https://www.acme.com/blog/changelog?x=1")).toBe("acme.com/blog/changelog");
+    expect(urlLabel("https://globex.example/")).toBe("globex.example");
+    expect(urlLabel("not a url")).toBe("not a url");
+  });
+
+  it("counts the words of a pasted document", () => {
+    expect(countWords("one two  three\nfour")).toBe(4);
+    expect(countWords("   ")).toBe(0);
   });
 });

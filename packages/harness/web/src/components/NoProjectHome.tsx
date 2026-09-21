@@ -21,7 +21,7 @@ export function NoProjectHome({
         className="terminal-empty"
         icon="FolderPlus"
         title="No project yet"
-        body="An agent lives in a project. Pick the folder first; describing the agent comes next."
+        body="An agent lives in a project. Pick the folder first. Describing the agent comes next."
         cta={
           <button
             type="button"

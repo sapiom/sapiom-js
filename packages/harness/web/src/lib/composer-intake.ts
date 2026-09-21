@@ -72,3 +72,22 @@ export function classifyPaste(text: string): PasteIntake {
 export function pastedDocumentName(ordinal: number): string {
   return `pasted-${ordinal}.md`;
 }
+
+/** "https://www.example.com/blog/changelog?x=1" -> "example.com/blog/changelog":
+ *  what a source chip shows. The full URL stays on the chip's title. */
+export function urlLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    const path = parsed.pathname.replace(/\/$/, "");
+    const label = host + path;
+    return label.length > 48 ? `${label.slice(0, 45)}…` : label;
+  } catch {
+    return url;
+  }
+}
+
+/** Words in a pasted document, for its chip. */
+export function countWords(text: string): number {
+  return text.split(/\s+/).filter((word) => word.length > 0).length;
+}

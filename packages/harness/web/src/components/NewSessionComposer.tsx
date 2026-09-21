@@ -13,7 +13,9 @@ import { formatComplexity, type GalleryTemplate } from "../lib/templates";
 import { getDesktopBridge } from "../lib/desktop";
 import {
   classifyPaste,
+  countWords,
   pastedDocumentName,
+  urlLabel,
 } from "../lib/composer-intake";
 import {
   filesToAttachments,
@@ -49,27 +51,24 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** Quick-start prompts. A curated set that PREFILLS the box (editable before
  *  send), not a hidden instant-submit. The label is the chip; the prompt is
- *  what it types. */
+ *  what it types. The three chips and their fills are the design's
+ *  (design-eng `design-system/src/ftux/content.ts` CHIPS, IA.md creation
+ *  section): sentence case, three of them. */
 const IDEA_CHIPS: ReadonlyArray<{ label: string; prompt: string }> = [
   {
-    label: "sales outreach",
+    label: "Sales outreach",
     prompt:
-      "Enrich a list of leads, then write a personalized first line for each prospect and draft an outreach email.",
+      "Build a sales agent that finds leads at logistics companies, writes a personalized first line for each, verifies their email, and follows up until someone replies.",
   },
   {
-    label: "support triage",
+    label: "Support triage",
     prompt:
-      "Triage incoming support tickets: classify each by urgency and topic, draft a first reply, and flag anything critical.",
+      "Build an agent that triages my support inbox into queues and drafts first replies.",
   },
   {
-    label: "research digest",
+    label: "Research digest",
     prompt:
-      "Search the web for the latest on a topic I give you, then publish a dated digest of what changed.",
-  },
-  {
-    label: "code review",
-    prompt:
-      "When a pull request opens, review the diff for bugs and style issues and post the findings as a review comment.",
+      "Build an agent that watches my competitors and sends a sourced digest every Monday.",
   },
 ];
 
@@ -77,7 +76,7 @@ const IDEA_CHIPS: ReadonlyArray<{ label: string; prompt: string }> = [
 const HOME_TEMPLATE_COUNT = 3;
 
 function chipSlug(label: string): string {
-  return label.replace(/\s+/g, "-");
+  return label.toLowerCase().replace(/\s+/g, "-");
 }
 
 interface NewSessionComposerProps {
@@ -157,6 +156,10 @@ export function NewSessionComposer({
   const queueTailRef = useRef<Promise<void>>(Promise.resolve());
   const pendingQueueCountRef = useRef(0);
   const pastedDocumentsRef = useRef(0);
+  // Word counts of the documents pasted here, by the file name each was
+  // attached under, so the chip can say "Pasted document, 540 words" the way
+  // the design does rather than "pasted-1.md".
+  const pastedWordsRef = useRef(new Map<string, number>());
   const closePicker = useCallback(() => setPickerOpen(false), []);
 
   // The first few catalog templates for the starter row. On failure the row
@@ -295,11 +298,9 @@ export function NewSessionComposer({
     }
     if (intake.kind === "document") {
       pastedDocumentsRef.current += 1;
-      queueFiles([
-        new File([text], pastedDocumentName(pastedDocumentsRef.current), {
-          type: "text/markdown",
-        }),
-      ]);
+      const name = pastedDocumentName(pastedDocumentsRef.current);
+      pastedWordsRef.current.set(name, countWords(text));
+      queueFiles([new File([text], name, { type: "text/markdown" })]);
       return true;
     }
     return false;
@@ -337,9 +338,9 @@ export function NewSessionComposer({
             the other with no mention of it is how an agent ends up in a folder
             nobody meant. */}
         <p className="composer-greeting" data-testid="composer-greeting">
-          <span className="composer-project" data-testid="composer-project">
+          <span className="composer-project" data-testid="new-agent-project">
             <Icon name="Folder" size={13} />
-            New agent in {project.label}
+            New agent in <strong>{project.label}</strong>
           </span>
         </p>
         <h1 className="composer-heading">What should your agent do?</h1>
@@ -425,7 +426,7 @@ export function NewSessionComposer({
             ref={textareaRef}
             className="composer-input"
             data-testid="composer-input"
-            placeholder="Describe the outcome you want"
+            placeholder="Describe the outcome you want. Paste links or a document to attach them."
             aria-label="Describe the outcome you want"
             aria-invalid={submitError != null}
             value={idea}
@@ -457,16 +458,28 @@ export function NewSessionComposer({
               data-testid="composer-files"
               aria-label="Attached resources"
             >
-              {attachments.map((attachment) => (
+              {attachments.map((attachment) => {
+                // A pasted document is shown as what it is, with its size in
+                // words (the design's chip), not as the file name it rides in.
+                const pastedWords = pastedWordsRef.current.get(attachment.name);
+                return (
                 <li
                   key={attachment.id}
                   className="composer-file"
+                  data-testid={
+                    pastedWords != null ? "composer-source-document" : undefined
+                  }
                   {...trackingAttrs({ object: "file" })}
                 >
-                  <Icon name="Paperclip" size={13} />
+                  <Icon name={pastedWords != null ? "FileText" : "Paperclip"} size={13} />
                   <span className="composer-file-name" title={attachment.name}>
-                    {attachment.name}
+                    {pastedWords != null ? "Pasted document" : attachment.name}
                   </span>
+                  {pastedWords != null && (
+                    <span className="composer-file-detail">
+                      {pastedWords.toLocaleString("en-US")} words
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="composer-file-remove"
@@ -477,7 +490,8 @@ export function NewSessionComposer({
                     <Icon name="X" size={11} />
                   </button>
                 </li>
-              ))}
+                );
+              })}
               {sources.map((url) => (
                 <li
                   key={url}
@@ -485,9 +499,9 @@ export function NewSessionComposer({
                   data-testid="composer-source"
                   {...trackingAttrs({ object: "link" })}
                 >
-                  <Icon name="Globe" size={13} />
+                  <Icon name="Link" size={13} />
                   <span className="composer-file-name" title={url}>
-                    {url}
+                    {urlLabel(url)}
                   </span>
                   <button
                     type="button"
@@ -506,9 +520,9 @@ export function NewSessionComposer({
             <button
               type="button"
               className="composer-attach"
-              data-testid="composer-attach-files"
+              data-testid="composer-attach-file"
               aria-label="Attach files"
-              data-tooltip="Attach files"
+              data-tooltip="Attach files, or paste links and documents"
               disabled={submitting}
               onClick={() => fileInputRef.current?.click()}
             >
@@ -586,7 +600,7 @@ export function NewSessionComposer({
         {submitError && (
           <p
             className="modal-error composer-error"
-            data-testid="composer-error"
+            data-testid="new-agent-error"
             role="alert"
           >
             {submitError}
