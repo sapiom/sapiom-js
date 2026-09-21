@@ -1,10 +1,11 @@
 /**
- * The first-run home is the composer-first "new session" screen
- * (NewSessionComposer), which replaced the WelcomePanel overlay. `/?mockState=fresh`
- * renders MockApi as a brand-new install: no sessions, no recent dirs, no
- * workflows, AppState.firstRun set — the state the real CLI produces on a machine
- * that has never run the harness. The default fixtures (a lived-in install)
- * double as the returning-user case, which boots straight into its session.
+ * The first-run home is the no-project home (NoProjectHome): an install with
+ * no project has nothing to create an agent in, so its one move is New
+ * project, which runs the folder step and lands on the new-agent screen
+ * (flow-creation.md §4.1, §4.3). `/?mockState=fresh` renders MockApi as a
+ * brand-new install: no sessions, no recent dirs, no workflows,
+ * AppState.firstRun set. The default fixtures (a lived-in install) double as
+ * the returning-user case, which boots straight into its session.
  *
  * The account menu's "Overview" no longer aliases the composer: it opens the
  * Overview modal (OverviewModal), a standalone introduction to the app that
@@ -74,6 +75,7 @@ test.describe("first run", () => {
 
     await page.screenshot({ path: "web/e2e/screenshots/composer-home.png", fullPage: true });
   });
+
 });
 
 test.describe("returning user", () => {
@@ -106,14 +108,17 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
   });
 
-  test("Overview's Open-folder CTA opens the folder dialog", async ({ page }) => {
+  test("Overview's Open-folder CTA runs the folder step and closes the card", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
     await page.getByTestId("overview-open-folder").click();
 
-    await expect(page.locator(".modal-start")).toBeVisible();
+    // Add project (flow-creation.md §4.5): the one-field dialog on the web,
+    // never a dialog behind the card's scrim.
+    await expect(page.getByTestId("overview-modal")).toHaveCount(0);
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
   });
 
   test("the palette's Browse templates, opened over the Overview, leaves it (never stacks)", async ({
