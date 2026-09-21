@@ -1148,10 +1148,26 @@ export const App = (): JSX.Element => {
   // while the scaffold path used whatever the user typed, so "where did my
   // project go?" had two answers. Precedence is
   // setting → host default → launch dir (see resolveProjectRoot).
+  //
+  // NO DEFAULT DESTINATION ON DESKTOP (flow-creation.md Q8). That host no
+  // longer passes `projects/`, so the server reports its launchDir as the host
+  // default, and the desktop's launchDir is the harness's own state store
+  // (`~/.sapiom/harness`). A new agent never lands beside `settings.json`:
+  // with no saved setting and no stated project there is nowhere to create,
+  // and the composer says so.
+  const launchDirIsHostDefault =
+    getDesktopBridge() !== null &&
+    !!harness.state?.launchDir &&
+    samePath(
+      harness.state.defaultProjectRoot ?? harness.state.launchDir,
+      harness.state.launchDir,
+    );
   const projectRoot = resolveProjectRoot({
     settingsRoot: harness.settings?.projectRoot,
-    defaultProjectRoot: harness.state?.defaultProjectRoot,
-    launchDir: harness.state?.launchDir,
+    defaultProjectRoot: launchDirIsHostDefault
+      ? null
+      : harness.state?.defaultProjectRoot,
+    launchDir: launchDirIsHostDefault ? null : harness.state?.launchDir,
   });
 
   const saveProjectRoot = async (root: string): Promise<void> => {
@@ -2541,9 +2557,14 @@ export const App = (): JSX.Element => {
   };
 
   // The composer home's two on-ramps. Both open a session in a FRESH project
-  // folder under the project root (deduped so an existing folder is never
-  // clobbered) and open the workbench terminal-only — the canvas reveals itself
-  // once the agent generates content (see CanvasPane's onCanvasState below).
+  // folder (deduped so an existing folder is never clobbered) and open the
+  // workbench terminal-only — the canvas reveals itself once the agent
+  // generates content (see CanvasPane's onCanvasState below).
+  //
+  // The folder is the STATED project's (flow-creation.md §4.3): the screen
+  // names one and the request creates in it. Only the no-project home falls
+  // back to the project root. Slice 4 (SAP-3576) replaces this path with the
+  // scaffold endpoint; until then the destination and the label agree.
   const uniqueProjectDir = (base: string): string => {
     const taken = new Set<string>();
     for (const session of state.sessions) {
@@ -2556,7 +2577,7 @@ export const App = (): JSX.Element => {
     }
     return projectDirSuggestion(
       nextAvailableName(base, taken),
-      projectRoot || null,
+      composerProject?.root ?? (projectRoot || null),
     );
   };
 
@@ -2568,7 +2589,7 @@ export const App = (): JSX.Element => {
       idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
     );
     if (!cwd) {
-      throw new Error("Set a project folder first — use the + to open one.");
+      throw new Error("Choose a project first: New project picks its folder.");
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
@@ -2591,7 +2612,7 @@ export const App = (): JSX.Element => {
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
     const cwd = uniqueProjectDir(template.id);
     if (!cwd) {
-      harness.showToast("Set a project folder first — use the + to open one.");
+      harness.showToast("Choose a project first: New project picks its folder.");
       return;
     }
     setRightCollapsed(true);
@@ -2865,7 +2886,7 @@ export const App = (): JSX.Element => {
       target.slug?.trim() || `agent-${target.definitionId}`,
     );
     if (!cwd) {
-      harness.showToast("Set a project folder first — use the + to open one.");
+      harness.showToast("Choose a project first: New project picks its folder.");
       return;
     }
     pendingCloneFocusRef.current = target.definitionId;

@@ -143,7 +143,7 @@ test("Enter keeps a new-agent prompt in its exact session while the project map 
         agentSessionId: null,
         boundWorkflowPath: null,
         harness: "claude-code",
-        cwd: "/Users/demo/acme-app/projects/build-sales-outreach",
+        cwd: "/Users/demo/blank-slate/build-sales-outreach",
         title: "Plan Agents",
         status: "running",
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -191,10 +191,10 @@ test("Enter keeps a new-agent prompt in its exact session while the project map 
   ).toBe(true);
 
   const project = page.getByTestId(
-    "workspace-group-acme-app/projects/build-sales-outreach",
+    "workspace-group-blank-slate/build-sales-outreach",
   );
   const projectMap = project.getByTestId(
-    "project-select-acme-app/projects/build-sales-outreach",
+    "project-select-blank-slate/build-sales-outreach",
   );
   await expect(projectMap).toHaveAttribute("aria-pressed", "false");
   await expect(project.getByTestId("agent-map-row")).toHaveCount(0);
@@ -261,8 +261,8 @@ test("returning to an in-progress standalone session does not restore the projec
   const afterReturn = await sessionEvidence(page);
   await expect(
     page
-      .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")
-      .getByTestId("project-select-acme-app/projects/build-revisit-guard"),
+      .getByTestId("workspace-group-blank-slate/build-revisit-guard")
+      .getByTestId("project-select-blank-slate/build-revisit-guard"),
   ).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
 });

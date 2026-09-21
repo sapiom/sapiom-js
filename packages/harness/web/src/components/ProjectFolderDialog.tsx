@@ -6,6 +6,14 @@ import { parentOf, stripTrailingSep } from "../lib/paths";
 import { Dialog } from "./Dialog";
 import { FolderField } from "./FolderField";
 
+/** `/a` is a strict ancestor of `/a/b` under either separator; `/a` of `/a` is not. */
+function isStrictAncestor(ancestor: string, path: string): boolean {
+  const a = stripTrailingSep(ancestor.trim()).replace(/\\/g, "/");
+  const p = stripTrailingSep(path.trim()).replace(/\\/g, "/");
+  if (!a || a === p) return false;
+  return p.startsWith(a.endsWith("/") ? a : `${a}/`);
+}
+
 /**
  * The web half of the folder step (flow-creation.md §4.1 step 2, D29).
  *
@@ -22,9 +30,14 @@ export type ProjectFolderIntent = "new-project" | "add-project";
 /**
  * Whether a typed folder exists, with the same rule both hosts honour: the
  * real server 404s a missing path (unreadable target, readable parent), and
- * the mock resolves to the nearest ancestor (a listing whose `path` is not
- * the one asked for). Throws only when neither the target nor its parent can
- * be read, which is a real error rather than a missing folder.
+ * the mock resolves to the nearest ancestor (a listing whose `path` is a
+ * strict ancestor of the one asked for). Throws only when neither the target
+ * nor its parent can be read, which is a real error rather than a missing
+ * folder.
+ *
+ * The server answers with its canonical spelling (separators, `~`, dot
+ * segments resolved), so the two paths are never compared for equality: a
+ * listing counts as the folder itself unless it is an ancestor of the request.
  */
 export async function folderExists(
   target: string,
@@ -34,7 +47,7 @@ export async function folderExists(
   if (!t) return false;
   try {
     const listed = await listDir(t);
-    return stripTrailingSep(listed.path) === t;
+    return !isStrictAncestor(listed.path, t);
   } catch {
     const parent = parentOf(t);
     if (!parent) throw new Error("Couldn't read that directory.");
