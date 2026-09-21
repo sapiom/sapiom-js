@@ -3084,51 +3084,11 @@ export class MockApi implements HarnessApi {
     // reload can (and in the spec does) start before this delay resolves. A
     // write behind the delay would lose the dismiss to its own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
-    const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
+    // Opening a project (a new `recentDirs` entry) mints the project and
+    // nothing else, like the server (flow-creation.md Q5): no automatic
+    // session, no seeding turn. The user types first.
     this.settings = { ...this.settings, ...patch };
-    // Opt-in parity fixture for the production project-open lifecycle: a newly
-    // durable project gets one ordinary first session titled Plan Agents. This
-    // is intentionally not routed through the mock create-session endpoint;
-    // the server owns it, so a project-name click still makes zero client
-    // session requests.
-    const autoPlanAgents =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockAutoPlanAgents") ===
-        "1";
-    const addedRoots = (patch.recentDirs ?? []).filter(
-      (root) => !previousRecentDirs.has(root),
-    );
-    if (autoPlanAgents && addedRoots.length > 0) {
-      const { publishMockBusMessage } = await import("./events");
-      for (const root of addedRoots) {
-        if (this.sessions.some((session) => samePath(session.cwd, root))) {
-          continue;
-        }
-        const projectId = this.studioProjectId(root);
-        const id = `sess-plan-agents-${this.sessions.length + 1}`;
-        const now = new Date().toISOString();
-        const session: HarnessSession = {
-          id,
-          agentSessionId: null,
-          boundWorkflowPath: null,
-          harness: "claude-code",
-          cwd: root,
-          title: "Plan Agents",
-          status: "running",
-          createdAt: now,
-          lastActiveAt: now,
-          ready: true,
-          agentMapIdentity: {
-            projectId,
-            userId: "user_mock",
-            sessionId: id,
-          },
-        };
-        this.sessions = [...this.sessions, session];
-        publishMockBusMessage({ type: "session.status", session });
-      }
-    }
     return this.settings;
   }
 

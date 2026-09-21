@@ -814,10 +814,14 @@ export const agent = defineAgent({ name: "checkout-agent" });`,
       ).json()) as WorkflowInfo[];
       expect(workflows).toHaveLength(1);
     });
-    // Project enrollment creates an ordinary bootstrap session. Use that sole
-    // owner so killing it really retires the final shared lease.
-    await vi.waitFor(() => expect(server!.sessionManager.list().filter((session) => session.status !== "exited")).toHaveLength(1));
-    const session = server.sessionManager.list().find((session) => session.status !== "exited")!;
+    // Opening a project no longer starts a session (flow-creation.md Q5), so
+    // the one live owner is the session the user starts. Use that sole owner
+    // so killing it really retires the final shared lease.
+    const session = await server.sessionManager.create({
+      cwd: workspaceRoot,
+      harness: "claude-code",
+    });
+    await vi.waitFor(() => expect(server!.sessionManager.list().filter((candidate) => candidate.status !== "exited")).toHaveLength(1));
     // Drain the shared watcher's initial reconciliation before holding a scan.
     await new Promise((resolve) => setTimeout(resolve, 2_500));
     blockPublication = true;
