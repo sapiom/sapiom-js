@@ -8,7 +8,7 @@ export interface BrowserMutation {
 export interface ManagedSessionInput extends BrowserMutation {
   recording: boolean;
   tags?: string[];
-  profileName?: string;
+  profileId?: string;
   idleTimeoutMinutes?: number;
   maxDurationMinutes?: number;
   headless?: false;
@@ -17,7 +17,7 @@ export interface ManagedSessionInput extends BrowserMutation {
   captchaSolver?: true;
   proxy?: true;
 }
-/** A tenant-owned session. Both a CDP client and a managed task can control it, at separate times. */
+/** A session accessed with its secret sessionId. Both a CDP client and a managed task can control it, at separate times. */
 export interface ManagedBrowserSession {
   sessionId: string;
   cdpUrl: string;
@@ -27,10 +27,6 @@ export interface BrowserSessionInfo {
   sessionId: string;
   status: string;
   tags: string[];
-}
-export interface BrowserSessionList {
-  sessions: BrowserSessionInfo[];
-  totalPages: number;
 }
 export interface BrowserCreationRecovery {
   status: "completed" | "cleanup_only" | "unknown";
@@ -127,7 +123,7 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
     );
   return {
     sessions: {
-      /** Create a session for the owned API. Existing sessions.create remains unchanged. */
+      /** Create a session for managed tasks. Existing sessions.create remains unchanged. */
       createManaged(
         input: ManagedSessionInput,
       ): Promise<ManagedBrowserSession> {
@@ -141,12 +137,7 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
       },
       get: (sessionId: string) =>
         call<BrowserSessionInfo>("GET", `/sessions/${segment(sessionId)}`),
-      list: (input: { tags?: string[]; page?: number } = {}) =>
-        call<BrowserSessionList>(
-          "GET",
-          `/sessions?${new URLSearchParams({ tags: (input.tags ?? []).join(","), page: String(input.page ?? 1) })}`,
-        ),
-      /** Find an uncertain create, including one without caller tags. Never creates or pays again. */
+      /** Recover with the original API key and creation key. Never creates or pays again. */
       recover: (idempotencyKey: string) =>
         call<BrowserCreationRecovery>(
           "GET",
@@ -160,7 +151,7 @@ export function managedBrowserApi(baseUrl: string, transport?: Transport) {
         ),
     },
     tasks: {
-      /** Start one task in an owned session. Stop client CDP actions before this call. */
+      /** Start one task using its secret sessionId. Stop client CDP actions before this call. */
       start(input: BrowserTaskInput): Promise<BrowserTask> {
         const { idempotencyKey, ...body } = input;
         return call("POST", "/tasks", body, idempotencyKey);

@@ -576,7 +576,7 @@ export interface Sapiom {
    * `screenshot` + `identities` for direct control.
    */
   readonly browserAutomation: {
-    /** Run and control managed tasks in an owned browser session. */
+    /** Run and control managed tasks with secret resource IDs. */
     tasks: ReturnType<typeof browserAutomation.bindManagedBrowser>["tasks"];
     /** Open and close browser sessions. */
     sessions: ReturnType<

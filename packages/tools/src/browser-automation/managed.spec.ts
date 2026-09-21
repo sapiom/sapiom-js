@@ -51,7 +51,7 @@ it("uses the public task contract and preserves one key across retries", async (
   }
 });
 
-it("creates an owned session with explicit recording consent and bounded defaults", async () => {
+it("creates a managed session with explicit recording consent and bounded defaults", async () => {
   const { fetch, api } = fixture({
     sessionId: "session-1",
     cdpUrl: "wss://fixture.test",
@@ -59,6 +59,7 @@ it("creates an owned session with explicit recording consent and bounded default
   expect(
     await api.sessions.createManaged({
       recording: false,
+      profileId: "secret-profile-id",
       idempotencyKey: "create-key",
     }),
   ).toEqual({ sessionId: "session-1", cdpUrl: "wss://fixture.test" });
@@ -66,6 +67,7 @@ it("creates an owned session with explicit recording consent and bounded default
   expect(call[0]).toBe("https://fixture.test/v1/browser/sessions");
   expect(JSON.parse(call[1].body as string)).toEqual({
     recording: false,
+    profileId: "secret-profile-id",
     idleTimeoutMinutes: 5,
     maxDurationMinutes: 20,
   });
@@ -101,6 +103,13 @@ it("uses read-only recovery and propagates an uncertain mutation without another
   expect(fetch).toHaveBeenCalledTimes(1);
   const recovery = fixture({ status: "cleanup_only", sessions: [] });
   await recovery.api.sessions.recover("create-key");
+  const recoveryCall = recovery.fetch.mock.calls[0] as unknown as [
+    string,
+    RequestInit,
+  ];
+  expect(new Headers(recoveryCall[1].headers).get("x-sapiom-api-key")).toBe(
+    "test-key",
+  );
   expect((recovery.fetch.mock.calls[0] as unknown as [string])[0]).toBe(
     "https://fixture.test/v1/browser/sessions/recovery/create-key",
   );

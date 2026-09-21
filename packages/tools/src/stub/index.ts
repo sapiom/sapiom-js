@@ -5,7 +5,6 @@ import type {
   ManagedBrowserSession,
   ManagedSessionSettlement,
   BrowserSessionInfo,
-  BrowserSessionList,
   BrowserCreationRecovery,
 } from "../browser-automation/managed.js";
 /**
@@ -2234,14 +2233,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               status: "active",
               tags: [],
             })) as BrowserSessionInfo,
-          ),
-        list: (input) =>
-          Promise.resolve(
-            r(
-              "browserAutomation.sessions.list",
-              input === undefined ? [] : [input],
-              () => ({ sessions: [], totalPages: 0 }),
-            ) as BrowserSessionList,
           ),
         recover: (idempotencyKey) =>
           Promise.resolve(

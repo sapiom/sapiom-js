@@ -658,9 +658,9 @@ export const identities = {
   create: createIdentity,
 };
 
-/** Managed browser tasks in tenant-owned sessions. */
+/** Managed browser tasks accessed with secret resource IDs. */
 export const tasks = managedBrowserApi(DEFAULT_BASE_URL).tasks;
 
-/** Bind the owned API to a client transport. */
+/** Bind the managed browser API to a client transport. */
 export const bindManagedBrowser = (transport: Transport) =>
   managedBrowserApi(DEFAULT_BASE_URL, transport);
