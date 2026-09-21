@@ -96,21 +96,20 @@ import {
   type ProjectFolderIntent,
 } from "./components/ProjectFolderDialog";
 import { chooseProjectFolder } from "./lib/folder-step";
-import { templateIdea } from "./lib/creation-entry";
+import {
+  SETUP_CARD,
+  deriveAgentName,
+  planningInstructions,
+  templateIdea,
+} from "./lib/creation-entry";
 import { NoProjectHome } from "./components/NoProjectHome";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf, createApi, errorMessage } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
-import {
-  FALLBACK_PROJECT_NAME,
-  nextAvailableName,
-  projectDirSuggestion,
-  resolveProjectRoot,
-  slugifyIdea,
-} from "./lib/project-dir";
-import { basenameOf, isWithinDir, parentOf, samePath } from "./lib/paths";
+import { resolveProjectRoot } from "./lib/project-dir";
+import { basenameOf, isWithinDir, joinPath, parentOf, samePath } from "./lib/paths";
 import { agentBelongsToProjectRoot } from "./lib/project-tree";
 import {
   canvasSourceFor,
@@ -149,9 +148,7 @@ import { editorLabel, editorUrl, resolveEditor } from "./lib/editors";
 import { CloneAgentConfirm } from "./components/CloneAgentConfirm";
 import {
   cloneDefinitionPrompt,
-  composerScaffoldPrompt,
   firstInstructionPrompt,
-  useTemplatePrompt,
   type GalleryTemplate,
   type StudioTemplate,
 } from "./lib/templates";
@@ -325,11 +322,10 @@ interface ComposerProject {
 interface CreateSessionAtOptions {
   initialPrompt?: CreateSessionRequest["initialPrompt"];
   initialAttachments?: CreateSessionRequest["initialAttachments"];
-  scaffold?: CreateSessionRequest["scaffold"];
-  /** Keep the create-new queue mounted while inline files are materialized. */
+  initialSources?: CreateSessionRequest["initialSources"];
+  initialSetup?: CreateSessionRequest["initialSetup"];
+  /** Keep the new-agent screen mounted while inline files are materialized. */
   keepComposerOpen?: boolean;
-  /** Keep an explicit new-agent builder active when its root joins Studio. */
-  standaloneBuilder?: boolean;
   /** The caller already owns the session's first real user-authored turn. */
   initialUserInputPending?: boolean;
 }
@@ -463,6 +459,16 @@ export const App = (): JSX.Element => {
     /** The control that ran the step, so Escape hands focus back to it. */
     trigger: HTMLElement | null;
   } | null>(null);
+  /**
+   * The planning instructions each new agent's first session was set up with
+   * (flow-creation.md §4.4 step 3): shown as a quiet setup disclosure above
+   * the terminal, never as the user's words. Held for this page's lifetime;
+   * the pty already received the text, so nothing is lost on reload except
+   * the disclosure itself.
+   */
+  const [setupBySession, setSetupBySession] = useState<Map<string, string>>(
+    () => new Map(),
+  );
   // The tab + is a one-at-a-time create/bind transaction. State renders the
   // pending affordance; the ref closes React's same-frame double-click window.
   const [siblingSessionPending, setSiblingSessionPending] = useState(false);
@@ -485,14 +491,6 @@ export const App = (): JSX.Element => {
   );
   const [studioSelection, setStudioSelection] =
     useState<StudioWorkspaceSelection | null>(null);
-  // A global create-new submit is a request to BUILD in a generic session,
-  // not a project visit whose saved/default workspace should be restored. The
-  // session id is null until createSession() selects the new session; binding
-  // it then prevents a later, unrelated visit to the same root from consuming
-  // stale intent when catalog refresh fails or the user switches away.
-  const pendingStandaloneBuilderSessionsRef = useRef(
-    new Map<string, string | null>(),
-  );
   const restoredStudioProjectsRef = useRef(new Set<string>());
   const studioRestoreGenerationRef = useRef(0);
   // True while openProjectIntoRail awaits the server. The restoration effect
@@ -523,24 +521,6 @@ export const App = (): JSX.Element => {
     const active = state?.sessions.find(
       (session) => session.id === harness.activeSessionId,
     );
-
-    // Once the create response binds an intent to its exact session, retain it
-    // across focus changes until that session disappears or exits. A pending
-    // null is deliberately NOT inferred from the active same-cwd session: a
-    // new project's automatic Plan Agents session can arrive while an explicit
-    // create is in flight, and cwd cannot correlate those two launches.
-    for (const [
-      root,
-      sessionId,
-    ] of pendingStandaloneBuilderSessionsRef.current) {
-      if (sessionId === null) continue;
-      const builder = state?.sessions.find(
-        (session) => session.id === sessionId,
-      );
-      if (!builder || builder.status === "exited") {
-        pendingStandaloneBuilderSessionsRef.current.delete(root);
-      }
-    }
 
     // Explicit navigation owns its destination even if boot could not restore
     // the active session's project until this catalog refresh.
@@ -582,25 +562,6 @@ export const App = (): JSX.Element => {
         (candidate) => candidate.projectId === scope?.projectId,
       );
     if (!scope?.projectId || !project) return;
-    const standaloneBuilderRoot = [
-      ...pendingStandaloneBuilderSessionsRef.current,
-    ].find(
-      ([root, sessionId]) =>
-        sessionId === active.id && isWithinDir(scope.cwd, root),
-    )?.[0];
-    if (standaloneBuilderRoot) {
-      // Before the new root has a durable Studio identity, its containing
-      // parent is the most-specific scope. Suppress that restore without
-      // consuming the intent; only the exact-root identity completes it.
-      if (samePath(standaloneBuilderRoot, scope.cwd)) {
-        pendingStandaloneBuilderSessionsRef.current.delete(
-          standaloneBuilderRoot,
-        );
-        restoredStudioProjectsRef.current.add(project.projectId);
-        studioRestoreGenerationRef.current += 1;
-      }
-      return;
-    }
     if (restoredStudioProjectsRef.current.has(project.projectId)) return;
     restoredStudioProjectsRef.current.add(project.projectId);
     const generation = ++studioRestoreGenerationRef.current;
@@ -2089,41 +2050,16 @@ export const App = (): JSX.Element => {
     // the real session/agent lands (see the store's pruning effect).
     harness.addPendingWorkspace(cwd);
     closeMobileDrawer();
-    if (options.standaloneBuilder) {
-      pendingStandaloneBuilderSessionsRef.current.set(cwd, null);
-      // Explicit create-new intent supersedes any preference read still in
-      // flight for the session/project the user just left.
-      studioRestoreGenerationRef.current += 1;
-    }
     try {
-      const session = await harness.createSession(
-        {
-          cwd,
-          harness: agentHarness,
-          ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
-          ...(options.initialAttachments?.length ? { initialAttachments: options.initialAttachments } : {}),
-          ...(options.scaffold ? { scaffold: options.scaffold } : {}),
-          ...((options.initialUserInputPending ?? options.standaloneBuilder)
-            ? { initialUserInputPending: true }
-            : {}),
-        },
-        (created) => {
-          if (
-            options.standaloneBuilder &&
-            pendingStandaloneBuilderSessionsRef.current.get(cwd) === null
-          ) {
-            // The POST response—not an active same-cwd status projection—is
-            // the first trustworthy correlation for this explicit create.
-            pendingStandaloneBuilderSessionsRef.current.set(cwd, created.id);
-          }
-        },
-      );
-      if (
-        options.standaloneBuilder &&
-        pendingStandaloneBuilderSessionsRef.current.get(cwd) === null
-      ) {
-        pendingStandaloneBuilderSessionsRef.current.set(cwd, session.id);
-      }
+      const session = await harness.createSession({
+        cwd,
+        harness: agentHarness,
+        ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
+        ...(options.initialAttachments?.length ? { initialAttachments: options.initialAttachments } : {}),
+        ...(options.initialSources?.length ? { initialSources: options.initialSources } : {}),
+        ...(options.initialSetup ? { initialSetup: options.initialSetup } : {}),
+        ...(options.initialUserInputPending ? { initialUserInputPending: true } : {}),
+      });
       track("session.created");
       trackProduct("session.started", {
         harness_kind: agentHarness,
@@ -2131,9 +2067,6 @@ export const App = (): JSX.Element => {
       });
       return session;
     } catch (err) {
-      if (options.standaloneBuilder) {
-        pendingStandaloneBuilderSessionsRef.current.delete(cwd);
-      }
       harness.removePendingWorkspace(cwd);
       throw err;
     }
@@ -2144,50 +2077,6 @@ export const App = (): JSX.Element => {
     agentHarness: HarnessKind,
   ): Promise<void> => {
     await createSessionAt(cwd, agentHarness);
-  };
-
-  /**
-   * The composer's scaffold prompt — the ONE door left where the coding agent
-   * creates the project (SAP-2981).
-   *
-   * Everywhere the project is already known, the harness creates the agent
-   * itself (`handleCreateAgentInProject` below). The composer is the home
-   * screen: no project, no name, just an idea, and the folder it invents does
-   * not exist yet — so there is nothing here to state and no row to create in.
-   * The prompt is honest about being a prompt, and its failure message names
-   * the tool the user would have to ask for by hand.
-   */
-  const sendScaffoldPrompt = (
-    session: HarnessSession,
-    cwd: string,
-    idea?: string,
-  ): void => {
-    sendPromptWhenReady(
-      session.id,
-      composerScaffoldPrompt(cwd, idea),
-      "Couldn't send the scaffold prompt. Ask the coding agent to call sapiom_dev_agents_scaffold.",
-    );
-  };
-
-  // The idea-to-agent path. Starts a session at the (new) folder, then
-  // hands the agent the scaffold prompt.
-  /**
-   * Start a session at `cwd` and hand the agent the scaffold prompt.
-   *
-   * `idea` is what the "start from an idea" door collects. It rides along
-   * verbatim — the agent needs the intent, not our paraphrase of it. Omitted
-   * (door 1's plain/new outcomes, the bare-folder affordance), the prompt keeps
-   * the same default-starter path without inventing an idea for the user.
-   */
-  const handleScaffoldSession = async (
-    cwd: string,
-    agentHarness: HarnessKind,
-    idea?: string,
-  ): Promise<void> => {
-    const session = await createSessionAt(cwd, agentHarness, {
-      initialUserInputPending: true,
-    });
-    sendScaffoldPrompt(session, cwd, idea);
   };
 
   /**
@@ -2556,176 +2445,155 @@ export const App = (): JSX.Element => {
   };
 
   /**
-   * Bare-project affordance: a live session sits in a folder with no agent yet.
-   *
-   * It used to inject the scaffold prompt into that session — the third copy of
-   * the same English sentence. It is the same create as any other project now,
-   * aimed at the session's own folder, and the session it already has is the
-   * one the new agent binds to rather than a second pty beside it.
+   * Bare-project affordance: a live session sits in a folder with no agent
+   * yet. The folder is the project; the first agent is created the way every
+   * agent is, on the new-agent screen scoped to it (§4.3).
    */
   const handleScaffoldInSession = (sessionId: string): void => {
     const session = state.sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    setCreatingAgent({
-      root: session.cwd,
-      label: basenameOf(session.cwd) || session.cwd,
-      sessionId,
-    });
-  };
-
-  /**
-   * "Use template" — one journey, two operations, and only one of them is a
-   * prompt (SAP-2981, E4.6).
-   *
-   * A STARTER is the same local scaffold the project `+` does, so it goes
-   * through the same endpoint: the folder is created before the session opens,
-   * and a refusal is an error the dialog shows. Two creation paths for one
-   * operation is exactly how they drift.
-   *
-   * A GALLERY template is a different operation — it forks a published agent
-   * into a repo the user owns, over the network, with an auth failure mode —
-   * and the harness has no route for that. It stays the coding agent's job, and
-   * says so.
-   */
-  const handleUseTemplate = async (
-    cwd: string,
-    template: StudioTemplate,
-    surface:
-      | "welcome"
-      | "template_gallery"
-      | "template_detail" = "template_gallery",
-  ): Promise<void> => {
-    // Capture the current choice for this launch, including async scaffolding.
-    let agentHarness = selectedHarness;
-    // A deep link can open before registry loading finishes. Resolve its
-    // selection before creating a session on an unavailable default adapter.
-    const registry =
-      harnessEntries ??
-      (await harness.listHarnesses().catch(() => FALLBACK_HARNESSES));
-    const selectable = registry.filter(isHarnessSelectable);
-    if (!selectable.some((entry) => entry.id === agentHarness)) {
-      agentHarness =
-        (selectable[0]?.id as HarnessKind | undefined) ?? agentHarness;
-      setSelectedHarness((current) =>
-        current === selectedHarness ? agentHarness : current,
-      );
-    }
-    // Product metric — "templates used". Fires at the choke point every
-    // template surface funnels through; `agent.created` fires later when the
-    // clone produces a real sapiom.json, so built ≥ templates holds.
-    const trackUse = (): void => {
-      trackProduct("agent.template_cloned", {
-        template_slug: template.id,
-        template_id: template.id,
-        surface,
-      });
-    };
-    if (template.kind === "starter") {
-      // `cwd` is the folder the destination picker settled on: its parent is
-      // the project, its basename the agent's name. The endpoint refuses both
-      // on its own findings, so a rejection here is the server's sentence and
-      // the dialog shows it verbatim.
-      const parent = parentOf(cwd);
-      if (!parent)
-        throw new Error(
-          `Can't create an agent at ${cwd} — pick a folder inside a project.`,
-        );
-      const created = await harness.scaffoldAgent(
-        parent,
-        basenameOf(cwd),
-        template.id,
-      );
-      trackUse();
-      setTemplatesOpen(false);
-      setFocusedAgentPath(created.path);
-      const session = await createSessionAt(parent, agentHarness);
-      await harness.bindWorkflow(session.id, created.path);
-      setFocusedAgentPath(created.path);
-      return;
-    }
-    const session = await createSessionAt(cwd, agentHarness, {
-      initialUserInputPending: true,
-    });
-    trackUse();
-    sendPromptWhenReady(
-      session.id,
-      useTemplatePrompt(template, cwd),
-      "Couldn't send the clone prompt. Ask the coding agent to run sapiom_dev_agents_clone.",
+    handleCreateAgentInProject(
+      session.cwd,
+      basenameOf(session.cwd) || session.cwd,
     );
   };
 
-  // The composer home's two on-ramps. Both open a session in a FRESH project
-  // folder (deduped so an existing folder is never clobbered) and open the
-  // workbench terminal-only — the canvas reveals itself once the agent
-  // generates content (see CanvasPane's onCanvasState below).
-  //
-  // The folder is the STATED project's (flow-creation.md §4.3): the screen
-  // names one and the request creates in it. Only the no-project home falls
-  // back to the project root. Each caller passes its own root, so a project
-  // the screen stated earlier never decides where an unrelated clone lands.
-  // Slice 4 (SAP-3576) replaces this path with the scaffold endpoint; until
-  // then the destination and the label agree.
-  const uniqueProjectDir = (base: string, root: string | null): string => {
-    // Collisions are local to the destination: only its direct children are
-    // taken, so a same-named agent in another project costs no suffix here.
-    const taken = new Set<string>();
-    if (root) {
-      for (const dir of [
-        ...state.sessions.map((session) => session.cwd),
-        ...state.workflows.map((workflow) => workflow.path),
-      ]) {
-        const parent = parentOf(dir);
-        if (parent && samePath(parent, root)) taken.add(basenameOf(dir));
-      }
+  /**
+   * "Use template" ROUTES THROUGH THE NEW-AGENT SCREEN (flow-creation.md §5,
+   * CF-D11): the template is the idea, editable before send, and the agent is
+   * created the way every agent is. In a project already on screen the
+   * template lands there; with none, the folder step runs first and carries
+   * the template to the screen. A starter is scaffolded as that starter at
+   * submit; a gallery template is named in the session setup as the starting
+   * point to bring in at build time (the clone is a network operation the
+   * coding agent owns, with its own auth failure mode).
+   */
+  const handleUseTemplate = (template: StudioTemplate): void => {
+    // A deep link can open before registry loading finishes. Resolve the
+    // harness choice before the screen opens on an unavailable default.
+    const selectable = (harnessEntries ?? FALLBACK_HARNESSES).filter(
+      isHarnessSelectable,
+    );
+    if (!selectable.some((entry) => entry.id === selectedHarness)) {
+      const fallback = selectable[0]?.id as HarnessKind | undefined;
+      if (fallback) setSelectedHarness(fallback);
     }
-    return projectDirSuggestion(nextAvailableName(base, taken), root);
+    if (composerProject) {
+      composeInProject({ ...composerProject, template });
+      return;
+    }
+    const scope = effectiveStudioSelection
+      ? workspaceScopes.find(
+          (candidate) => candidate.projectId === effectiveStudioSelection.projectId,
+        )
+      : undefined;
+    if (scope) {
+      composeInProject({
+        root: scope.cwd,
+        label: selectedStudioProject?.displayName ?? basenameOf(scope.cwd),
+        projectId: scope.projectId ?? null,
+        template,
+      });
+      return;
+    }
+    if (selectedProject) {
+      composeInProject({
+        root: selectedProject.root,
+        label: selectedProject.label,
+        projectId: null,
+        template,
+      });
+      return;
+    }
+    runFolderStep("new-project", template);
   };
   /** Where the composer creates: the stated project, else the project root. */
   const composerRoot = (): string | null =>
     composerProject?.root ?? (projectRoot || null);
 
+  /**
+   * SUBMIT, in order (flow-creation.md §4.4, D30, D31).
+   *
+   * 1. Creation completes before the chat starts: `POST /api/agents/scaffold`
+   *    in the screen's project, the name derived from the idea. The server is
+   *    the judge; a refusal (409 duplicate, 400 invalid) is thrown back to the
+   *    screen, which shows it under the field. Nothing has started.
+   * 2. One ordinary session opens in the project folder, bound to the agent.
+   *    The ordinary type, the ordinary system prompt.
+   * 3. Its first prompt is the idea, the files, the linked sources, and the
+   *    planning instructions as session setup (§4.6). No English scaffold
+   *    prompt is typed into any pty; the scaffold already happened.
+   *
+   * A session that fails to start after the agent exists is a session failure
+   * and is reported as one: the agent is a row in the rail either way.
+   */
   const handleComposerSubmitIdea = async (
     idea: string,
     attachments: readonly NewSessionAttachment[],
     sources: readonly string[],
   ): Promise<void> => {
-    // The pre-existing session-side scaffold, in the stated project, until
-    // slice 4 (SAP-3576) replaces it with the scaffold call of §4.4. The
-    // pasted links ride the first prompt after the idea so they reach the
-    // session rather than dying with the screen.
-    const cwd = uniqueProjectDir(
-      idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
-      composerRoot(),
-    );
-    if (!cwd) {
-      throw new Error("Choose a project first: New project picks its folder.");
+    const project = composerProject;
+    if (!project) {
+      throw new Error("Pick a project first: New project opens the folder step.");
     }
-    // Terminal-first: the new session's canvas slides in once it paints.
-    setRightCollapsed(true);
-    await createSessionAt(cwd, selectedHarness, {
-      keepComposerOpen: true,
-      standaloneBuilder: true,
-      scaffold: { template: "default" },
-      initialPrompt: [idea.trim(), ...sources].filter(Boolean).join("\n"),
-      initialAttachments: attachments.map((attachment) =>
-        attachment.kind === "path"
-          ? { kind: "path", path: attachment.path }
-          : { kind: "inline", filename: attachment.name, dataUrl: attachment.dataUrl },
-      ),
+    const template = project.template;
+    const created = await harness.scaffoldAgent(
+      project.root,
+      deriveAgentName(idea),
+      template?.kind === "starter" ? template.id : "default",
+    );
+    if (template) {
+      // Product metric: "templates used", at the one choke point every
+      // template surface now funnels through.
+      trackProduct("agent.template_cloned", {
+        template_slug: template.id,
+        template_id: template.id,
+        surface: "welcome",
+      });
+    }
+    // The rail already has it (the server rescanned before answering).
+    setFocusedAgentPath(created.path);
+    const setup = planningInstructions({
+      agentName: created.name,
+      projectLabel: project.label,
+      template,
     });
-    // Only a successful create clears the draft. Scaffolding and uploads
-    // complete server-side before the vendor receives its first user turn.
+    try {
+      // Terminal-first: the new session's canvas slides in once it paints.
+      setRightCollapsed(true);
+      const session = await createSessionAt(project.root, selectedHarness, {
+        keepComposerOpen: true,
+        initialPrompt: idea.trim(),
+        initialAttachments: attachments.map((attachment) =>
+          attachment.kind === "path"
+            ? { kind: "path", path: attachment.path }
+            : { kind: "inline", filename: attachment.name, dataUrl: attachment.dataUrl },
+        ),
+        initialSources: [...sources],
+        initialSetup: setup,
+        initialUserInputPending: true,
+      });
+      setSetupBySession((previous) =>
+        new Map(previous).set(session.id, setup),
+      );
+      await harness.bindWorkflow(session.id, created.path);
+      harness.setActiveSessionId(session.id);
+      setFocusedAgentPath(created.path);
+    } catch (err) {
+      harness.showToast(
+        `${created.name} was created, but its session didn't start. ${errorMessage(err, "")}`.trim(),
+      );
+    }
+    // Only now does the screen give way: the agent exists and its session,
+    // if it started, is the active one.
     setComposing(false);
+    setComposerProject(null);
   };
 
+  /** The screen's own template row: the template becomes this screen's idea. */
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
-    const cwd = uniqueProjectDir(template.id, composerRoot());
-    if (!cwd) {
-      harness.showToast("Choose a project first: New project picks its folder.");
-      return;
-    }
-    setRightCollapsed(true);
-    void handleUseTemplate(cwd, template, "welcome");
+    if (!composerProject) return;
+    composeInProject({ ...composerProject, template });
   };
 
   // Bulk discovery from the add dialog.
@@ -2991,16 +2859,28 @@ export const App = (): JSX.Element => {
     target: DeepLinkAgentTarget,
   ): Promise<void> => {
     setCloneRequest(null);
-    // The global root, never a project the screen stated earlier: no screen
-    // names a project for a deep-linked clone.
-    const cwd = uniqueProjectDir(
-      target.slug?.trim() || `agent-${target.definitionId}`,
-      projectRoot || null,
-    );
-    if (!cwd) {
-      harness.showToast("Choose a project first: New project picks its folder.");
+    // NO DEFAULT PARENT (Q8). A clone lands inside a project the user has:
+    // the one on screen, else the most recently opened one. With none open,
+    // the honest answer is to open one first.
+    const parentRoot =
+      composerProject?.root ??
+      (effectiveStudioSelection
+        ? workspaceScopes.find(
+            (candidate) =>
+              candidate.projectId === effectiveStudioSelection.projectId,
+          )?.cwd
+        : undefined) ??
+      selectedProject?.root ??
+      harness.settings?.recentDirs[0] ??
+      null;
+    if (!parentRoot) {
+      harness.showToast("Open a project first: New project picks the folder.");
       return;
     }
+    const cwd = joinPath(
+      parentRoot,
+      target.slug?.trim() || `agent-${target.definitionId}`,
+    );
     pendingCloneFocusRef.current = target.definitionId;
     setRightCollapsed(true); // terminal-first, like the template flow
     try {
@@ -3458,9 +3338,6 @@ export const App = (): JSX.Element => {
               a running Visualize enrichment lives there. */}
           {templatesOpen && (
             <TemplatesPanel
-              projectRoot={projectRoot || null}
-              recentDirs={harness.settings?.recentDirs ?? []}
-              listDir={harness.listDir}
               onExit={() => setTemplatesOpen(false)}
               onUse={handleUseTemplate}
               listTemplates={harness.listTemplates}
@@ -3727,6 +3604,34 @@ export const App = (): JSX.Element => {
               ) : showWorkbench && conversationSession ? (
                 <div className="agent-view" data-testid="agent-view">
                   <div className="agent-view-panel" id="agent-panel-terminal">
+                    {/* THE SETUP DISCLOSURE (§4.4 step 3): the planning
+                        instructions rode the first prompt as session setup.
+                        The pane shows the idea as the user's turn (the CLI
+                        prints its first argument) and the instructions here,
+                        quietly, so the user can read what the agent was told
+                        without it reading as their words. */}
+                    {setupBySession.has(conversationSession.id) && (
+                      <details
+                        className="session-setup"
+                        data-testid="session-setup"
+                      >
+                        <summary className="session-setup-summary">
+                          <Icon name="Info" size={13} />
+                          <span className="session-setup-title">
+                            {SETUP_CARD.title}
+                          </span>
+                          <span className="session-setup-hint">
+                            {SETUP_CARD.summary}
+                          </span>
+                        </summary>
+                        <pre
+                          className="session-setup-body"
+                          data-testid="session-setup-body"
+                        >
+                          {setupBySession.get(conversationSession.id)}
+                        </pre>
+                      </details>
+                    )}
                     <AssistantPane
                       sessionId={conversationSession.id}
                       bootToken={harness.bootToken}

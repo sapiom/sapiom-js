@@ -1143,9 +1143,19 @@ export interface CreateSessionRequest {
     | { kind: "path"; path: string }
     | ({ kind: "inline" } & AttachFileRequest)
   >;
-  /** Create a new project at cwd using the same guarded scaffold as agent +.
-   * Omitted for sessions in existing projects. */
-  scaffold?: { template: string };
+  /**
+   * Links the user listed as sources on the new-agent screen (flow-creation.md
+   * §4.6 step 1). Handed to the first prompt by URL, never fetched by the
+   * harness: the agent reads them as context.
+   */
+  initialSources?: string[];
+  /**
+   * Session setup that rides the first prompt after the idea and the
+   * resources: the planning instructions (§4.6 step 2). It is not the user's
+   * words, and the client shows it as a quiet setup disclosure rather than as
+   * the user's turn. Never a request to scaffold; the harness already did.
+   */
+  initialSetup?: string;
   /**
    * Content-free lifecycle hint: the UI already owns a real first input that
    * will be delivered after readiness/attachments. A new-project bootstrap
