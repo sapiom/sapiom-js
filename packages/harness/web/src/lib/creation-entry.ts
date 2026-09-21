@@ -25,7 +25,7 @@ const NOISE = new Set([
   "from", "into", "onto", "about", "as", "is", "are", "be", "it", "them", "me", "us", "we",
   "i", "you", "he", "she", "they", "who", "which", "what", "when", "where", "how", "every",
   "each", "all", "any", "some", "new", "first", "one", "per", "up", "out", "over",
-  "agent", "agents", "workflow", "bot", "assistant", "automation",
+  "agent", "agents", "bot", "assistant", "automation",
   "build", "builds", "create", "creates", "make", "makes", "want", "wants", "need", "needs",
   "should", "would", "could", "can", "will", "please", "help", "let", "lets",
   "watch", "watches", "send", "sends", "draft", "drafts", "triage", "triages", "find", "finds",
