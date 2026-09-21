@@ -228,10 +228,9 @@ export function matchesQuery(template: StudioTemplate, query: string): boolean {
 /**
  * Prompt handed to a session's agent to clone a DEPLOYED agent by its Sapiom
  * definition id — the deep-link ("Open in Studio") fallback when the agent isn't
- * on this machine yet. Mirrors the gallery branch of `useTemplatePrompt` but names
- * `definitionId`: the clone tool writes that id into the checkout's `sapiom.json`,
- * so the folder lands pre-linked and the server's workspace rescan surfaces it as
- * a workflow the SPA can focus.
+ * on this machine yet. It names `definitionId`: the clone tool writes that id into
+ * the checkout's `sapiom.json`, so the folder lands pre-linked and the server's
+ * workspace rescan surfaces it as a workflow the SPA can focus.
  */
 export function cloneDefinitionPrompt(definitionId: string, dir: string): string {
   return (
