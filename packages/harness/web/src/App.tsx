@@ -237,6 +237,13 @@ const knownRootsOf = (
  * Overview wears both `role="dialog"` and `aria-modal="true"`, so excluding it
  * has to be done on each clause rather than by dropping a class from the list.
  *
+ * THE HELP CARD IS NOT CARVED OUT, although it wears `.overview-modal` too:
+ * that class is `OverviewModal`'s visual recipe, shared by `HelpOverlay`
+ * ("How Studio is organised"), and the help card has no contract with the
+ * palette. Navigating from the palette does not dismiss it, so the palette
+ * would stack over it exactly as it did over a dialog. Its own class leads the
+ * list so the per-clause carve-out below cannot let it through.
+ *
  * DELIBERATELY NOT the dialog shell's layer selector. That one answers "which
  * layer owns Tab", where the Overview IS a layer and belongs in the list. This
  * one answers "may ⌘K open here", where it does not. Same shape, different
@@ -244,6 +251,7 @@ const knownRootsOf = (
  */
 const PALETTE_BLOCKING_LAYER_SELECTOR = [
   ".modal-backdrop",
+  ".help-overlay",
   '[role="dialog"]:not(.overview-modal)',
   '[role="alertdialog"]:not(.overview-modal)',
   '[aria-modal="true"]:not(.overview-modal)',

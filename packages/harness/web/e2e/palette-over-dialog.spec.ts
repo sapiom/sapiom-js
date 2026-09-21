@@ -89,6 +89,30 @@ test.describe("⌘K over an open dialog", () => {
       .toBe(true);
   });
 
+  test("the help card is a blocking layer, although it wears the Overview's class", async ({
+    page,
+  }) => {
+    // `HelpOverlay` ("How Studio is organised") borrows `OverviewModal`'s visual
+    // recipe, `.overview-modal`, so a carve-out written on that class alone
+    // exempts it too. It has no contract with the palette: navigating from
+    // the palette does not dismiss it, so the palette would stack over it
+    // exactly as over a dialog. `?help=1` opts the mock into the first-run
+    // auto-show the real app does by default.
+    await page.goto("/?seed=0&help=1");
+    const card = page.getByTestId("help-overlay");
+    await expect(card).toBeVisible();
+
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(page.getByTestId("command-palette-input")).toHaveCount(0);
+    await expect(card).toBeVisible();
+
+    // Dismissed, the shortcut works again.
+    await page.getByTestId("help-overlay-dismiss").click();
+    await expect(card).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(page.getByTestId("command-palette-input")).toBeVisible();
+  });
+
   test("the Overview is carved out: ⌘K still opens the palette over it", async ({
     page,
   }) => {
