@@ -1397,11 +1397,19 @@ export const App = (): JSX.Element => {
       applyingVisitRef.current = true;
       setOverviewOpen(false);
       setTemplatesOpen(visit.kind === "templates");
-      setComposing(visit.kind === "composer");
       // The screen derives its label and creation root from the project the
       // visit was recorded with, not from whichever project opened it last.
-      if (visit.kind === "composer" && visit.project) {
-        setComposerProject(visit.project);
+      // A project removed since the visit was recorded is not restored: the
+      // composer would otherwise create into a root the rail no longer holds.
+      const visitProject = visit.kind === "composer" ? visit.project : null;
+      const visitProjectOpen =
+        !visitProject ||
+        (harness.state?.workspaceScopes ?? []).some((scope) =>
+          samePath(scope.cwd, visitProject.root),
+        );
+      setComposing(visit.kind === "composer" && visitProjectOpen);
+      if (visit.kind === "composer") {
+        setComposerProject(visitProjectOpen ? visitProject ?? null : null);
       }
       setReviewSummary(visit.kind === "review" ? visit.summary : null);
       if (
