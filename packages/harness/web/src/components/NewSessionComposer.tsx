@@ -218,7 +218,10 @@ export function NewSessionComposer({
     }, 170);
   };
 
-  const queueFiles = (files: readonly File[]): void => {
+  const queueFiles = (
+    files: readonly File[],
+    onFailed?: () => void,
+  ): void => {
     if (files.length === 0 || submittingRef.current) return;
     const pathForFile = getDesktopBridge()?.pathForFile;
     pendingQueueCountRef.current += 1;
@@ -246,6 +249,7 @@ export function NewSessionComposer({
       }
       if (result.errors.length > 0) {
         onAttachmentError(result.errors.join(" "));
+        onFailed?.();
       }
     };
 
@@ -256,6 +260,7 @@ export function NewSessionComposer({
         onAttachmentError(
           (error as Error).message || "Couldn't attach those files.",
         );
+        onFailed?.();
       })
       .then(() => {
         pendingQueueCountRef.current -= 1;
@@ -302,7 +307,11 @@ export function NewSessionComposer({
       pastedDocumentsRef.current += 1;
       const name = pastedDocumentName(pastedDocumentsRef.current);
       pastedWordsRef.current.set(name, countWords(text));
-      queueFiles([new File([text], name, { type: "text/markdown" })]);
+      // The paste was consumed on the promise of an attachment. If the
+      // conversion refuses it, the words go back into the box.
+      queueFiles([new File([text], name, { type: "text/markdown" })], () =>
+        setIdea((current) => (current ? `${current}\n\n${text}` : text)),
+      );
       return true;
     }
     return false;
@@ -431,6 +440,12 @@ export function NewSessionComposer({
             placeholder="Describe the outcome you want. Paste links or a document to attach them."
             aria-label="Describe the outcome you want"
             aria-invalid={submitError != null}
+            aria-errormessage={submitError ? "new-agent-error" : undefined}
+            aria-describedby={
+              submitError
+                ? "composer-attachment-status new-agent-error"
+                : "composer-attachment-status"
+            }
             value={idea}
             rows={2}
             autoFocus
@@ -601,6 +616,7 @@ export function NewSessionComposer({
             never the wire shape, and nothing has started. */}
         {submitError && (
           <p
+            id="new-agent-error"
             className="modal-error composer-error"
             data-testid="new-agent-error"
             role="alert"

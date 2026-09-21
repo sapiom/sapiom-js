@@ -1360,7 +1360,7 @@ export const App = (): JSX.Element => {
     } else if (reviewSummary) {
       recordVisit({ kind: "review", summary: reviewSummary });
     } else if (composing) {
-      recordVisit({ kind: "composer" });
+      recordVisit({ kind: "composer", project: composerProject });
     } else if (
       activeSessionIdForNav &&
       (focusedAgentPath == null || focusHasLiveSession)
@@ -1397,6 +1397,11 @@ export const App = (): JSX.Element => {
       setOverviewOpen(false);
       setTemplatesOpen(visit.kind === "templates");
       setComposing(visit.kind === "composer");
+      // The screen derives its label and creation root from the project the
+      // visit was recorded with, not from whichever project opened it last.
+      if (visit.kind === "composer" && visit.project) {
+        setComposerProject(visit.project);
+      }
       setReviewSummary(visit.kind === "review" ? visit.summary : null);
       if (
         visit.kind === "templates" ||
@@ -3785,7 +3790,10 @@ export const App = (): JSX.Element => {
                    rail with nothing open says that instead. Either way the
                    one move is New project, or a row. */
                 <NoProjectHome
-                  hasProjects={workspaceScopes.length > 0}
+                  hasProjects={
+                    workspaceScopes.length > 0 ||
+                    (harness.settings?.recentDirs?.length ?? 0) > 0
+                  }
                   onNewProject={handleNewProject}
                 />
               )}
