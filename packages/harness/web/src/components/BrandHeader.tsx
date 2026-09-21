@@ -1,4 +1,4 @@
-import type { JSX } from "react";
+import type { JSX, RefObject } from "react";
 
 import { BrandLogotype } from "./BrandLogotype";
 import { Icon } from "./Icon";
@@ -15,10 +15,17 @@ import { SessionNav } from "./SessionNav";
  *
  * The chrome line carries window controls on the left — the OS traffic lights
  * in the frameless host, then the rail collapse immediately after them — and
- * back/forward on the right anchor. The rail toggle carries a resting surface
- * (.rail-toggle): full-screen macOS hides the lights, and a bare glyph sitting
- * alone in their reserved clearance reads as a gap rather than a control.
- * Theme lives in the account menu with the rest of the workspace preferences.
+ * the tools on the right anchor: the history glyph, then back/forward. The
+ * rail toggle carries a resting surface (.rail-toggle): full-screen macOS hides
+ * the lights, and a bare glyph sitting alone in their reserved clearance reads
+ * as a gap rather than a control. Theme lives in the account menu with the
+ * rest of the workspace preferences.
+ *
+ * THE HISTORY GLYPH (flow-creation.md §4.7, Q9). Past sessions used to sit in
+ * the Projects options menu beside Group by and Sort by: a settings card that
+ * also held an unbounded list. It is a glyph in this header now, and it opens
+ * the existing Past sessions side card beside the rail. Search (⌘K) keeps
+ * listing past sessions too.
  */
 export function BrandHeader({
   onCollapse,
@@ -26,12 +33,20 @@ export function BrandHeader({
   canGoForward,
   onGoBack,
   onGoForward,
+  historyOpen,
+  onToggleHistory,
+  historyTriggerRef,
 }: {
   onCollapse: () => void;
   canGoBack: boolean;
   canGoForward: boolean;
   onGoBack: () => void;
   onGoForward: () => void;
+  /** Whether the Past sessions side card is open; drives `aria-expanded`. */
+  historyOpen: boolean;
+  onToggleHistory: () => void;
+  /** The glyph, for the side card to anchor to and return focus to. */
+  historyTriggerRef: RefObject<HTMLButtonElement | null>;
 }): JSX.Element {
   return (
     <header className="brand-header">
@@ -63,12 +78,29 @@ export function BrandHeader({
         <span className="brand-product">agent.studio</span>
       </h1>
 
-      <SessionNav
-        canGoBack={canGoBack}
-        canGoForward={canGoForward}
-        onGoBack={onGoBack}
-        onGoForward={onGoForward}
-      />
+      {/* The right anchor of the chrome line: history, then back/forward. One
+          cluster, so the frameless-mac grid places it as one thing. */}
+      <div className="brand-header-tools">
+        <button
+          ref={historyTriggerRef}
+          type="button"
+          className="theme-toggle brand-header-history"
+          data-testid="rail-history"
+          aria-label="Past sessions"
+          aria-haspopup="menu"
+          aria-expanded={historyOpen}
+          data-tooltip="Past sessions"
+          onClick={onToggleHistory}
+        >
+          <Icon name="History" size={14} />
+        </button>
+        <SessionNav
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
+          onGoBack={onGoBack}
+          onGoForward={onGoForward}
+        />
+      </div>
     </header>
   );
 }

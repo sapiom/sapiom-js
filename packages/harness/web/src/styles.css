@@ -503,10 +503,19 @@ input {
   padding-left: calc(var(--mac-lights-inset) - var(--pane-pad-x));
 }
 
-:root[data-window-frame="macos"] .brand-header .session-nav {
+:root[data-window-frame="macos"] .brand-header .brand-header-tools {
   grid-column: 3;
   grid-row: 1;
   align-self: end;
+}
+
+/* The chrome line's right anchor: the history glyph, then back/forward. One
+   cluster at the same --sp0 rhythm as the nav pair, so the three glyphs read
+   as one tool group. */
+.brand-header-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp0);
 }
 
 /* The lockup drops in full to the line below the lights, reading inline as
@@ -1137,59 +1146,14 @@ input {
   z-index: 40;
 }
 
-.menu-flyer-track {
-  display: flex;
-  align-items: flex-start;
-  gap: 0;
-  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.22));
-}
-
-.menu-flyer-track .connect-card {
-  box-shadow: none;
-}
-
-.menu-flyer-bridge {
-  align-self: stretch;
-  flex: 0 0 2px;
-  width: 2px;
-  pointer-events: auto;
-}
-
-/* The sub-card is .connect-card plus the two things that make it nested: it
-   aligns to the top of the track (the row that opened it) and slides in from
-   the left as it appears. */
-.menu-flyer-nested {
-  align-self: flex-start;
-  width: min(320px, calc(100vw - var(--sp4)));
-  animation: menu-nested-in 0.1s var(--ease) both;
-}
-
-@keyframes menu-nested-in {
-  from {
-    opacity: 0;
-    transform: translateX(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .menu-flyer-nested {
-    animation: none;
-  }
-}
-
 /* The scroller lives HERE, on the unbounded set — never on the options card. */
 .past-sessions-list {
   max-height: min(360px, 60vh);
   overflow-y: auto;
 }
 
-/* The fixed-choices region (Group by + Sort). A hover target that closes the
-   Past-sessions flyout, so it must be a real box — but it re-states the body's
-   column + gap so wrapping the choices doesn't flatten their rhythm. */
+/* The fixed-choices region (Group by + Sort by): re-states the body's column
+   + gap so wrapping the choices doesn't flatten their rhythm. */
 .menu-choice-group {
   display: flex;
   flex-direction: column;
@@ -1207,27 +1171,6 @@ input {
   flex: 0 0 auto;
   width: var(--line-box, 20px);
   color: var(--text);
-}
-
-/* The Past-sessions trigger: a normal menu row whose trailing chevron and
-   count sit at the far edge, marking it as a row that opens another surface. */
-.nested-trigger > .session-history-badge {
-  margin-left: auto;
-}
-
-.nested-trigger > svg:last-child {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-}
-
-/* When a badge already pushed itself to the edge, the chevron follows it
-   rather than the copy column. */
-.nested-trigger > .session-history-badge + svg:last-child {
-  margin-left: var(--sp1);
-}
-
-.nested-trigger.is-open {
-  background: var(--active-shade);
 }
 
 .rail-list {
@@ -2731,22 +2674,6 @@ button.rail-footer-card:hover {
     opacity: 1;
     transform: scale(1.15);
   }
-}
-
-.session-history-badge {
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--surface-inset);
-  color: var(--text-dim);
-  font-size: var(--type-micro);
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
 }
 
 /* Right-anchored status slot, pushed past the flexible title/cwd/chip run —
