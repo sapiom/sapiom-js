@@ -4,7 +4,7 @@
  * served authoring rules runs under `run_local` exactly as it deploys, and it
  * must not invent a lifetime the real gateway no longer returns.
  */
-import { createStubClient } from "./index.js";
+import { createStubClient, type StubCallRecord } from "./index.js";
 
 describe("stub database is permanent", () => {
   it("accepts database.create({}) with no duration", async () => {
@@ -31,6 +31,18 @@ describe("stub database is permanent", () => {
       expect(db.expiresAt ?? null).toBeNull();
       expect(db.duration).toBeUndefined();
     }
+  });
+
+  it("records the caller's actual arguments, not the defaulted input", async () => {
+    const calls: StubCallRecord[] = [];
+    const client = createStubClient({ calls });
+
+    await client.database.create();
+    await client.database.create({ handle: "x" });
+
+    expect(calls[0]!.capability).toBe("database.create");
+    expect(calls[0]!.args).toEqual([]);
+    expect(calls[1]!.args).toEqual([{ handle: "x" }]);
   });
 
   it("still accepts a legacy duration without changing the result", async () => {

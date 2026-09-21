@@ -1537,9 +1537,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     database: {
       // A Sapiom Postgres is permanent (SAP-3100): `create({})` is the whole call,
       // and the stub, like the gateway, returns no `duration` and no `expiresAt`.
-      create: (input = {}) =>
+      create: (...args) =>
         Promise.resolve(
-          r("database.create", [input], () => {
+          // Record what the caller actually passed (`[]` for a bare `create()`);
+          // the default applies only when building the fallback result.
+          r("database.create", args, () => {
+            const input = args[0] ?? {};
             const handle = input.handle ?? null;
             const name = `stub-${handle ?? "db"}`;
             return {
