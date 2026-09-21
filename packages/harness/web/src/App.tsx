@@ -497,7 +497,7 @@ export const App = (): JSX.Element => {
   const studioRestoreGenerationRef = useRef(0);
   // True while openProjectIntoRail awaits the server. The restoration effect
   // below yields to that open rather than bumping the generation it holds.
-  const projectOpenInFlightRef = useRef(false);
+  const projectOpensInFlightRef = useRef(0);
   const effectiveStudioSelection = effectiveStudioWorkspaceSelection(
     studioSelection,
     harness.state,
@@ -551,7 +551,7 @@ export const App = (): JSX.Element => {
     // session now falls under the folder being opened, this effect would
     // restore it and bump the generation, making that open reject its own
     // result and skip the new-agent screen. The open restores its own project.
-    if (projectOpenInFlightRef.current) return;
+    if (projectOpensInFlightRef.current > 0) return;
     const identityProjectId = active.agentMapIdentity?.projectId ?? null;
     const identityProject = identityProjectId
       ? state.studioProjects.find(
@@ -1380,6 +1380,7 @@ export const App = (): JSX.Element => {
     templatesOpen,
     reviewSummary,
     composing,
+    composerProject,
     activeSessionIdForNav,
     focusedAgentPath,
     focusHasLiveSession,
@@ -1934,28 +1935,22 @@ export const App = (): JSX.Element => {
         openDoor();
         return;
       }
-      const cached = agentMapLoader.peek(studioProjectId);
-      if (cached) {
-        if (mapIsEmpty(cached)) {
-          openDoor();
-          return;
-        }
-      } else {
-        // Unknown map: show the map pane now, and open the door once the
-        // load proves it empty, if this project is still the selection.
-        void agentMapLoader
-          .load(harness.api, studioProjectId)
-          .then((snapshot) => {
-            // Still the same selection: no later click moved the generation.
-            if (
-              mapIsEmpty(snapshot) &&
-              studioRestoreGenerationRef.current === generation
-            ) {
-              openDoor();
-            }
-          })
-          .catch(() => {});
-      }
+      // The cache only receives deltas while a map is mounted, so a cached
+      // snapshot can be stale here; revalidate before letting emptiness route
+      // the selection. The map pane shows meanwhile; the door opens once the
+      // fresh read proves the map empty and this is still the selection.
+      agentMapLoader.invalidate(studioProjectId);
+      void agentMapLoader
+        .load(harness.api, studioProjectId)
+        .then((snapshot) => {
+          if (
+            mapIsEmpty(snapshot) &&
+            studioRestoreGenerationRef.current === generation
+          ) {
+            openDoor();
+          }
+        })
+        .catch(() => {});
     }
     if (
       studioProjectId &&
@@ -2199,11 +2194,11 @@ export const App = (): JSX.Element => {
   const openProjectIntoRail = async (
     requestedRoot: string,
   ): Promise<ComposerProject | null> => {
-    projectOpenInFlightRef.current = true;
+    projectOpensInFlightRef.current += 1;
     try {
       return await openProjectIntoRailUnguarded(requestedRoot);
     } finally {
-      projectOpenInFlightRef.current = false;
+      projectOpensInFlightRef.current -= 1;
     }
   };
   const openProjectIntoRailUnguarded = async (
@@ -3795,6 +3790,11 @@ export const App = (): JSX.Element => {
                     (harness.settings?.recentDirs?.length ?? 0) > 0
                   }
                   onNewProject={handleNewProject}
+                  firstRun={state.firstRun === true}
+                  telemetryOptIn={harness.settings?.telemetryOptIn === true}
+                  onToggleTelemetry={async (next) => {
+                    await harness.updateSettings({ telemetryOptIn: next });
+                  }}
                 />
               )}
             </div>

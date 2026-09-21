@@ -14,10 +14,17 @@ import { Icon } from "./Icon";
 export function NoProjectHome({
   hasProjects = false,
   onNewProject,
+  firstRun = false,
+  telemetryOptIn = false,
+  onToggleTelemetry,
 }: {
   /** Projects are in the rail but none is open: say that, not "no project". */
   hasProjects?: boolean;
   onNewProject: () => void;
+  /** A fresh install: the telemetry choice is offered here, before any project. */
+  firstRun?: boolean;
+  telemetryOptIn?: boolean;
+  onToggleTelemetry?: (next: boolean) => Promise<void>;
 }): JSX.Element {
   return (
     <div
@@ -44,6 +51,26 @@ export function NoProjectHome({
           </button>
         }
       />
+      {firstRun && onToggleTelemetry && (
+        <div className="composer-footer">
+          <label className="composer-consent" data-testid="welcome-consent">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={telemetryOptIn}
+              data-testid="welcome-telemetry-toggle"
+              className={"toggle-switch" + (telemetryOptIn ? " is-on" : "")}
+              onClick={() => void onToggleTelemetry(!telemetryOptIn)}
+            >
+              <span className="toggle-knob" />
+            </button>
+            <span className="composer-consent-copy">
+              Help us improve Agent Studio: share your session details with Sapiom. Off by
+              default; change it anytime in Settings.
+            </span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }
