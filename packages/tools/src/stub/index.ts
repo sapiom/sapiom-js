@@ -1,3 +1,13 @@
+import type {
+  BrowserTask,
+  BrowserTaskControlResult,
+  BrowserInterventions,
+  ManagedBrowserSession,
+  ManagedSessionSettlement,
+  BrowserSessionInfo,
+  BrowserSessionList,
+  BrowserCreationRecovery,
+} from "../browser-automation/managed.js";
 /**
  * `@sapiom/tools/stub` — a stub capability client for local development.
  *
@@ -2153,7 +2163,93 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     browserAutomation: {
+      tasks: {
+        start: (input) =>
+          Promise.resolve(
+            r("browserAutomation.tasks.start", [input], () => ({
+              taskId: "stub-task",
+              sessionId: input.sessionId,
+              status: "completed",
+            })) as BrowserTask,
+          ),
+        get: (taskId) =>
+          Promise.resolve(
+            r("browserAutomation.tasks.get", [taskId], () => ({
+              taskId,
+              sessionId: "stub-session",
+              status: "completed",
+            })) as BrowserTask,
+          ),
+        pause: (input) =>
+          Promise.resolve(
+            r("browserAutomation.tasks.pause", [input], () => ({
+              taskId: input.taskId,
+              sessionId: "stub-session",
+              status: "success",
+            })) as BrowserTaskControlResult,
+          ),
+        resume: (input) =>
+          Promise.resolve(
+            r("browserAutomation.tasks.resume", [input], () => ({
+              taskId: input.taskId,
+              sessionId: "stub-session",
+              status: "success",
+            })) as BrowserTaskControlResult,
+          ),
+        respond: (input) =>
+          Promise.resolve(
+            r("browserAutomation.tasks.respond", [input], () => ({
+              taskId: input.taskId,
+              sessionId: "stub-session",
+              status: "success",
+            })) as BrowserTaskControlResult,
+          ),
+        interventions: (taskId) =>
+          Promise.resolve(
+            r("browserAutomation.tasks.interventions", [taskId], () => ({
+              status: "completed",
+              requests: [],
+            })) as BrowserInterventions,
+          ),
+      },
       sessions: {
+        createManaged: (input) =>
+          Promise.resolve(
+            r("browserAutomation.sessions.createManaged", [input], () => ({
+              sessionId: "stub-session",
+              cdpUrl: "ws://stub.local/session/stub-session",
+            })) as ManagedBrowserSession,
+          ),
+        closeManaged: (sessionId) =>
+          Promise.resolve(
+            r("browserAutomation.sessions.closeManaged", [sessionId], () => ({
+              status: "terminated",
+              settlement: "completed",
+            })) as ManagedSessionSettlement,
+          ),
+        get: (sessionId) =>
+          Promise.resolve(
+            r("browserAutomation.sessions.get", [sessionId], () => ({
+              sessionId,
+              status: "active",
+              tags: [],
+            })) as BrowserSessionInfo,
+          ),
+        list: (input) =>
+          Promise.resolve(
+            r(
+              "browserAutomation.sessions.list",
+              input === undefined ? [] : [input],
+              () => ({ sessions: [], totalPages: 0 }),
+            ) as BrowserSessionList,
+          ),
+        recover: (idempotencyKey) =>
+          Promise.resolve(
+            r("browserAutomation.sessions.recover", [idempotencyKey], () => ({
+              status: "unknown",
+              sessions: [],
+            })) as BrowserCreationRecovery,
+          ),
         create: (options?: SessionTimeoutOptions) =>
           Promise.resolve(
             r(
