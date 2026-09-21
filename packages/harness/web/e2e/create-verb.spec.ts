@@ -220,8 +220,7 @@ test.describe("the two verbs", () => {
     // screen. Every entrance lands on the screen.
     await page.goto("/?seed=0&mockStudioProjects=present");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await expect(page.getByTestId("dead-session-pane")).toBeVisible();
 
