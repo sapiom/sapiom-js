@@ -43,7 +43,7 @@ import {
   validateAgentMapVersionHistory,
 } from "./agent-map-version.js";
 import { derivePersistedMapOperationTouchSet } from "./agent-map-proposal-validator.js";
-import { isStudioProjectId } from "./studio-project-catalog.js";
+import { isStudioProjectId } from "../shared/project-id.js";
 
 export const AGENT_MAP_AGGREGATE_STORAGE_SCHEMA_VERSION = PROJECT_PLANNING_STORAGE_SCHEMA_VERSION;
 export const AGENT_MAP_OPERATION_HISTORY_LIMIT = 65_536;

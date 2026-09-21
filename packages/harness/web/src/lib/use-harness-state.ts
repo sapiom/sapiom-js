@@ -1,5 +1,5 @@
 import { AssistantStateOrder, type AssistantProjection } from "./assistant-state";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppState,
@@ -26,7 +26,7 @@ import type {
   TemplateDetailView,
   TemplateListResponse,
 } from "@shared/types";
-import type { StudioProjectId } from "@shared/agent-map";
+import type { StudioProjectId } from "@sapiom/agent-map";
 
 import {
   ApiError,
@@ -365,7 +365,7 @@ export interface HarnessStateHook {
   subscribeAgentMapInitializationChanges: (listener: (status: AgentMapInitializationStatus) => void) => () => void;
   subscribeAgentMapProposalChanges: (
     listener: (
-      delta: import("@shared/agent-map").AcceptedProposalDelta,
+      delta: import("@sapiom/agent-map").AcceptedProposalDelta,
     ) => void,
   ) => () => void;
   /** Signals that the shared event socket reconnected after an interruption. */
@@ -536,13 +536,13 @@ export function useHarnessState(): HarnessStateHook {
   }, []);
   const agentMapProposalChangeListeners = useRef(
     new Set<
-      (delta: import("@shared/agent-map").AcceptedProposalDelta) => void
+      (delta: import("@sapiom/agent-map").AcceptedProposalDelta) => void
     >(),
   );
   const subscribeAgentMapProposalChanges = useCallback(
     (
       listener: (
-        delta: import("@shared/agent-map").AcceptedProposalDelta,
+        delta: import("@sapiom/agent-map").AcceptedProposalDelta,
       ) => void,
     ): (() => void) => {
       agentMapProposalChangeListeners.current.add(listener);

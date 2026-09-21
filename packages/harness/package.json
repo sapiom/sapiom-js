@@ -77,7 +77,8 @@
     "typescript": "~5.9.3",
     "uuid": "^10.0.0",
     "ws": "^8.18.0",
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "@sapiom/agent-map": "workspace:^"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",

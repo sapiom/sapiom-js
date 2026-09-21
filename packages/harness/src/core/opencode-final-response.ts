@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { HostedOpenCode } from "./opencode-host.js";
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 import { openCodeCompletionPrompt } from "../shared/opencode-completion.js";
 import {
   turnRecoveryAgent,

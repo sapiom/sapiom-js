@@ -22,7 +22,7 @@ import {
 import {
   DurableFileLock,
   type DurableFileLockRelease,
-} from "./durable-file-lock.js";
+} from "@sapiom/agent-map/node/durable-file-lock";
 import type {
   OpenCodeBridge,
   OpenCodeBridgeCredential,

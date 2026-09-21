@@ -6,7 +6,7 @@ import type {
   PlanNodeId,
   PlanRelationship,
   ProposalActor,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 export type AgentMapProjectionResult =
   | {

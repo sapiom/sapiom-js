@@ -8,11 +8,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
-import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
+import { AgentMapAggregateError } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import { AgentMapCapabilityRegistry } from "../core/agent-map-capability-registry.js";
-import { AgentMapProposalService, AgentMapProposalQuotaError } from "../core/agent-map-proposal-service.js";
-import { AgentMapWorkspaceStore, AgentMapWorkspaceStoreError, AgentBriefAppendQuotaError } from "../core/agent-map-workspace-store.js";
+import { AgentMapProposalService, AgentMapProposalQuotaError } from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { AgentMapWorkspaceStore, AgentMapWorkspaceStoreError, AgentBriefAppendQuotaError } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { BuildPlanService } from "../core/build-plan-service.js";
 import { BuildPlanStore } from "../core/build-plan-store.js";
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";

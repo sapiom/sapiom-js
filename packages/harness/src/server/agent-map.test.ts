@@ -5,15 +5,15 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import type {
   AgentMapWorkspaceResponse,
   StudioProjectSummary,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { createBootTokenMiddleware } from "./auth.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { createAgentMapImplementations } from "./agent-map-implementations.js";

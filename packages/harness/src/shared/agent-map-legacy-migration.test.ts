@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { parseLegacyE2ProposalActor } from "./agent-map-legacy-migration.js";
+import { parseLegacyE2ProposalActor } from "@sapiom/agent-map/node/agent-map-legacy-migration";
 
 describe("deployed E2 actor migration isolation", () => {
   it("accepts both persisted E2 actor shapes and rejects unknown authority", () => {
@@ -38,14 +38,14 @@ describe("deployed E2 actor migration isolation", () => {
     const shared = dirname(fileURLToPath(import.meta.url));
     const core = join(shared, "..", "core");
     const aggregateMigration = await readFile(
-      join(core, "agent-map-aggregate-migration.ts"),
+      join(core, "../../../agent-map/src/core/agent-map-aggregate-migration.ts"),
       "utf8",
     );
     expect(aggregateMigration).toContain("parseLegacyE2ProposalActor");
 
     for (const live of [
-      "agent-map-proposal-service.ts",
-      "agent-map-version.ts",
+      "../../../agent-map/src/core/agent-map-proposal-service.ts",
+      "../../../agent-map/src/core/agent-map-version.ts",
       "build-plan-service.ts",
       "subsession-coordinator.ts",
     ]) {

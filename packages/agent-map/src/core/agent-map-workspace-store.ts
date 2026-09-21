@@ -40,7 +40,7 @@ import {
 } from "./agent-map-aggregate-migration.js";
 import { deterministicVersionId } from "./agent-map-version.js";
 import { DurableFileLock } from "./durable-file-lock.js";
-import { isStudioProjectId } from "./studio-project-catalog.js";
+import { isStudioProjectId } from "../shared/project-id.js";
 import { convertEmptyLegacyContainer } from "./agent-map-empty-legacy-container.js";
 
 export {

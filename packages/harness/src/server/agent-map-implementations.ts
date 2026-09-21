@@ -1,6 +1,6 @@
-import { AgentMapImplementationBindings } from "../core/agent-map-implementation-bindings.js";
+import { AgentMapImplementationBindings } from "@sapiom/agent-map/node/agent-map-implementation-bindings";
 import type { RegistryWorkflowInfo } from "../core/workflow-registry.js";
-import { samePath } from "../shared/paths.js";
+import { samePath } from "@sapiom/agent-map/paths";
 import type { AgentMapRouterOptions } from "./agent-map.js";
 
 type ImplementationOptions = Pick<

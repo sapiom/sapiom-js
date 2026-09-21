@@ -133,6 +133,31 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
 
+  packages/agent-map:
+    dependencies:
+      uuid:
+        specifier: ^10.0.0
+        version: 10.0.0
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.30
+        version: 20.19.43
+      '@types/uuid':
+        specifier: ^10.0.0
+        version: 10.0.0
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@20.19.43)(tsx@4.23.0)(yaml@2.9.1)
+
   packages/agent-runtime:
     dependencies:
       '@sapiom/agent':
@@ -388,6 +413,9 @@ importers:
       '@sapiom/agent-core':
         specifier: workspace:^
         version: link:../agent-core
+      '@sapiom/agent-map':
+        specifier: workspace:^
+        version: link:../agent-map
       '@sapiom/analytics-core':
         specifier: workspace:^
         version: link:../analytics-core
@@ -11961,7 +11989,7 @@ snapshots:
 
   mutation-server-protocol@0.4.1:
     dependencies:
-      zod: 4.4.3
+      zod: 4.6.1
 
   mutation-testing-elements@3.7.3: {}
 

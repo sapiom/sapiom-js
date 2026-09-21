@@ -16,9 +16,9 @@ import type {
 import {
   canonicalizeAgentMapGraph,
   compareCanonicalStrings,
-} from "../shared/agent-map-canonical.js";
+} from "../shared/agent-map-canonical-pure.js";
 
-export { canonicalizeAgentMapGraph } from "../shared/agent-map-canonical.js";
+export { canonicalizeAgentMapGraph } from "../shared/agent-map-canonical-pure.js";
 
 const ACTOR_KINDS = new Set<PlanNodeKind>(["agent", "subagent"]);
 const ALL_NODE_KINDS = new Set<PlanNodeKind>([

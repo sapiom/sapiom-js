@@ -64,7 +64,7 @@ import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectId,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";

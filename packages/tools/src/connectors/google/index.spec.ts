@@ -1,4 +1,4 @@
-import { Transport } from "../_client/index.js";
+import { Transport } from "../../_client/index.js";
 import * as google from "./index.js";
 
 interface FetchCall {
@@ -45,93 +45,73 @@ const BASE = "https://tools.sapiom.ai";
 const headerOf = (c: FetchCall, k: string) =>
   (c.init.headers as Record<string, string>)[k];
 
-describe("google.token()", () => {
-  it("POSTs connectors/v1/google/materialize on x-sapiom-api-key, no body, and returns the LiveCredential", async () => {
-    const credential = {
-      kind: "bearer",
-      value: "ya29.live-access-token",
-      expiresAt: "2026-08-28T01:00:00.000Z",
-      baseUrl: "https://www.googleapis.com",
-    };
+describe("google.authClient()", () => {
+  // The deep multi-host / header / error-surfacing behavior of the proxy-backed client is
+  // covered by auth-client.e2e.spec.ts; this just checks the wiring from this module.
+
+  it("returns a real OAuth2Client", async () => {
+    const { transport } = makeTransport([]);
+
+    const client = await google.authClient(transport);
+
+    expect(client.constructor.name).toBe("OAuth2Client");
+    expect(typeof client.request).toBe("function");
+  });
+
+  it("routes a request through the connectors proxy, carrying the connector-host header and the run credential but no authorization", async () => {
     const { transport, calls } = makeTransport([
-      () => jsonResponse(credential),
+      () => jsonResponse({ emailAddress: "me@example.com" }),
     ]);
 
-    const result = await google.token(transport);
+    const client = await google.authClient(transport);
+    const res = await client.request<{ emailAddress: string }>({
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      method: "GET",
+    });
 
-    expect(calls[0]!.url).toBe(`${BASE}/connectors/v1/google/materialize`);
-    expect(calls[0]!.init.method).toBe("POST");
-    // Default gateway credential header — the run sat_ rides x-sapiom-api-key, NOT x-api-key.
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("sat_run-token");
-    expect(headerOf(calls[0]!, "x-api-key")).toBeUndefined();
-    // Provider-only contract: no request body.
-    expect(calls[0]!.init.body).toBeUndefined();
-    expect(result).toEqual(credential);
-  });
-
-  it("surfaces a 404 (no Google connector for this tenant) with the connector_not_found body", async () => {
-    const { transport } = makeTransport([
-      () =>
-        new Response(JSON.stringify({ error: "connector_not_found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        }),
-    ]);
-    await expect(google.token(transport)).rejects.toThrow(/404/);
-    await expect(google.token(transport)).rejects.toThrow(
-      /connector_not_found/,
+    expect(res.data).toEqual({ emailAddress: "me@example.com" });
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/providers/google/proxy/gmail/v1/users/me/profile`,
     );
-  });
-
-  it("surfaces a 400 (unknown provider) as a thrown error", async () => {
-    const { transport } = makeTransport([
-      () =>
-        new Response(JSON.stringify({ error: "invalid_connector_request" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }),
-    ]);
-    await expect(google.token(transport)).rejects.toThrow(/400/);
+    expect(headerOf(calls[0]!, "x-sapiom-connector-host")).toBe(
+      "gmail.googleapis.com",
+    );
+    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("sat_run-token");
+    expect(headerOf(calls[0]!, "authorization")).toBeUndefined();
   });
 });
 
-describe("google.authClient()", () => {
-  const FAR_FUTURE = "2999-01-01T00:00:00.000Z";
-  const EXPIRED = "2000-01-01T00:00:00.000Z";
-
-  it("returns an OAuth2 client whose request headers carry the materialized bearer", async () => {
+describe("google.fetch()", () => {
+  it("routes an absolute Google URL through the proxy, carrying the upstream host", async () => {
     const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse({ kind: "bearer", value: "tok-1", expiresAt: FAR_FUTURE }),
+      () => jsonResponse({ ok: true }),
     ]);
 
-    const client = await google.authClient(transport);
-    const headers = await client.getRequestHeaders();
+    await google.fetch(
+      "https://sheets.googleapis.com/v4/spreadsheets/X",
+      {},
+      transport,
+    );
 
-    expect(headers.get("authorization")).toBe("Bearer tok-1");
-    expect(calls[0]!.url).toBe(`${BASE}/connectors/v1/google/materialize`);
-    expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("sat_run-token");
-    // Primed at construction, so a still-valid token serves without a second materialize.
-    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/providers/google/proxy/v4/spreadsheets/X`,
+    );
+    expect(headerOf(calls[0]!, "x-sapiom-connector-host")).toBe(
+      "sheets.googleapis.com",
+    );
   });
 
-  it("re-materializes through the gateway when the primed token has expired", async () => {
-    let n = 0;
+  it("routes a bare path through the proxy with no connector-host header", async () => {
     const { transport, calls } = makeTransport([
-      () =>
-        jsonResponse(
-          (n += 1) === 1
-            ? { kind: "bearer", value: "tok-1", expiresAt: EXPIRED }
-            : { kind: "bearer", value: "tok-2", expiresAt: FAR_FUTURE },
-        ),
+      () => jsonResponse({ ok: true }),
     ]);
 
-    const client = await google.authClient(transport);
-    const headers = await client.getRequestHeaders();
+    await google.fetch("/drive/v3/files", {}, transport);
 
-    expect(headers.get("authorization")).toBe("Bearer tok-2");
-    // Prime (expired) then one refresh through the client's refreshHandler.
-    expect(calls).toHaveLength(2);
+    expect(calls[0]!.url).toBe(
+      `${BASE}/connectors/v1/providers/google/proxy/drive/v3/files`,
+    );
+    expect(headerOf(calls[0]!, "x-sapiom-connector-host")).toBeUndefined();
   });
 });
 

@@ -33,7 +33,7 @@ import {
 import type {
   ProjectAgentSession,
   ProjectBootstrapMetadata,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   migratePersistedProjectIdentity,
   removeLegacyProjectSessionMetadata,

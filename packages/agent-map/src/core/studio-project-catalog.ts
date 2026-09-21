@@ -1,3 +1,5 @@
+import { isStudioProjectId } from "../shared/project-id.js";
+export { isStudioProjectId } from "../shared/project-id.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -10,9 +12,12 @@ import {
   type StudioProjectSummary,
 } from "../shared/agent-map.js";
 import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
-import { resolveProjectRootForPath } from "../shared/project-roots.js";
+import { matchProjectRootForPath } from "../shared/project-roots.js";
 import { pathComparisonKey } from "../shared/paths.js";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
+import {
+  canonicalGraphPath,
+  refreshCanonicalGraphPath,
+} from "./canonical-graph-path.js";
 import {
   DurableFileLock,
   type DurableFileLockTestHooks,
@@ -53,6 +58,12 @@ export interface ResolvedStudioProjectIdentity {
   identityVersion: number;
   displayName: string;
 }
+
+export type StudioProjectPathLookup =
+  | { kind: "resolved"; project: ResolvedStudioProjectIdentity }
+  | { kind: "unregistered" }
+  | { kind: "ambiguous"; projectIds: string[] }
+  | { kind: "unavailable" };
 
 export class StudioProjectCatalogError extends Error {
   constructor(readonly code: Exclude<AgentMapErrorCode, "project_not_found">) {
@@ -119,14 +130,6 @@ function isSafeDisplayName(value: unknown): value is string {
   return isSafeText(value) && !value.includes("/") && !value.includes("\\");
 }
 
-export function isStudioProjectId(value: unknown): value is StudioProjectId {
-  return (
-    typeof value === "string" &&
-    /^project_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      value,
-    )
-  );
-}
 
 function isBindingId(value: unknown): value is string {
   return (
@@ -356,6 +359,10 @@ export class StudioProjectCatalog {
   private loadPromise: Promise<void> | null = null;
   private mutationQueue: Promise<void> = Promise.resolve();
   private migrationPending = false;
+  private rootPaths = new Map<
+    string,
+    { at: number; cwd: string; unavailable: boolean }
+  >();
 
   constructor(
     private readonly catalogPath: string,
@@ -472,41 +479,83 @@ export class StudioProjectCatalog {
 
   /**
    * Resolves a cwd to the most-specific active durable project root. Local
-   * roots remain private; ambiguous equal-specificity matches fail closed.
+   * roots remain private; ambiguous matches return null, I/O failures throw.
    */
-  async resolveIdentityForPath(
+  async resolveIdentityForPath(cwd: string): Promise<ResolvedStudioProjectIdentity | null> {
+    const result = await this.lookupIdentityForPath(cwd);
+    if (result.kind === "unavailable") throw storageError();
+    return result.kind === "resolved" ? result.project : null;
+  }
+
+  /** Isolate unrelated root failures; share root probes for one second per catalog. */
+  async lookupIdentityForPath(
     cwd: string,
-  ): Promise<ResolvedStudioProjectIdentity | null> {
+    projectId?: StudioProjectId,
+  ): Promise<StudioProjectPathLookup> {
     await this.mutationQueue;
     await this.load(true);
-    let canonical: string;
     try {
-      canonical = canonicalGraphPath(cwd);
-    } catch {
-      return null;
-    }
-    const match = resolveProjectRootForPath(
-      canonical,
-      this.projects!.flatMap((project) =>
+      const canonical = await refreshCanonicalGraphPath(cwd);
+      const activePaths = new Set(this.projects!.flatMap((project) =>
         project.rootBindings
           .filter(({ status }) => status === "active")
-          .flatMap((binding) => {
-            try {
-              const root = canonicalGraphPath(binding.localRootRef);
-              return [{ projectId: project.projectId, cwd: root, project }];
-            } catch {
-              return [];
-            }
-          }),
-      ),
-    );
-    if (!match) return null;
-    const project = match.project;
-    return {
-      projectId: project.projectId,
-      identityVersion: project.identityVersion,
-      displayName: project.displayName,
-    };
+          .map(({ localRootRef }) => localRootRef),
+      ));
+      for (const key of this.rootPaths.keys())
+        if (!activePaths.has(key)) this.rootPaths.delete(key);
+      const roots = await Promise.all(
+        this.projects!
+          .filter((project) => !projectId || project.projectId === projectId)
+          .flatMap((project) =>
+            project.rootBindings
+              .filter(({ status }) => status === "active")
+              .map(async (binding) => {
+                const previous = this.rootPaths.get(binding.localRootRef);
+                let value = previous;
+                if (!value || Date.now() < value.at || Date.now() - value.at >= 1_000) {
+                  try {
+                    const cwd = await refreshCanonicalGraphPath(binding.localRootRef);
+                    value = { cwd, unavailable: false, at: Date.now() };
+                  } catch {
+                    value = {
+                      cwd: previous?.cwd ?? binding.localRootRef,
+                      unavailable: true,
+                      at: Date.now(),
+                    };
+                  }
+                  this.rootPaths.set(binding.localRootRef, value);
+                }
+                return {
+                  ...value, localRootRef: binding.localRootRef,
+                  projectId: project.projectId, project,
+                };
+              }),
+          ),
+      );
+      const failed = roots
+        .filter((root) => root.unavailable)
+        .flatMap((root) => [root, { ...root, cwd: root.localRootRef }]);
+      if ([cwd, canonical].some((target) =>
+        matchProjectRootForPath(target, failed).kind !== "unregistered",
+      )) {
+        return { kind: "unavailable" };
+      }
+      const match = matchProjectRootForPath(
+        canonical, roots.filter((root) => !root.unavailable),
+      );
+      if (match.kind !== "resolved") return match;
+      const project = match.root.project;
+      return {
+        kind: "resolved",
+        project: {
+          projectId: project.projectId,
+          identityVersion: project.identityVersion,
+          displayName: project.displayName,
+        },
+      };
+    } catch {
+      return { kind: "unavailable" };
+    }
   }
 
   async create(displayName: string): Promise<StudioProjectSummary> {

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 
 function isWindowsAbsolute(input: string): boolean {
   return (

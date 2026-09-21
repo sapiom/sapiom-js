@@ -4,7 +4,7 @@ import type {
   MapProposalId,
   PlanNodeId,
   ProposalOperationId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 export const proposalProjectId = "project_00000000-0000-4000-8000-000000000001";
 const proposalId =

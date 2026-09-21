@@ -14,7 +14,7 @@ import type {
   MapChangeProposal,
   PlanNodeId,
   PlanNodeKind,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import {
   agentMapDeploymentLabel,
