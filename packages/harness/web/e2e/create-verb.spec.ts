@@ -573,6 +573,11 @@ test.describe("the rail top", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("history-menu")).toBeHidden();
     await expect(history).toBeFocused();
+    // Close does the same by hand: the focused control unmounts.
+    await history.click();
+    await page.getByTestId("history-menu").getByRole("button", { name: "Close" }).click();
+    await expect(page.getByTestId("history-menu")).toBeHidden();
+    await expect(history).toBeFocused();
     await history.click();
     await expect(page.getByTestId("history-menu")).toBeVisible();
     // One flyer at a time: opening the options menu retires the card.
