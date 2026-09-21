@@ -3,18 +3,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
-import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
+import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "@sapiom/agent-map";
 import {
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type {
   BuildPlanAssignmentIntent,
   ProjectBuildPlanId,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import type {
   AnalyticsEvent,
   HarnessAdapter,
@@ -24,9 +24,9 @@ import type { BuildPlanStore } from "./build-plan-store.js";
 import {
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 import { compileCanonicalWorkstreamBriefs } from "./agent-brief-compiler.js";
-import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
+import { createEmptyProjectPlanningAggregate } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import type { EventReader } from "./collector/store.js";
 import { SubsessionBindingMismatchError } from "./errors.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";
@@ -535,13 +535,22 @@ describe("SubsessionCoordinator", () => {
     const { manager, caller, newCoordinator, spawnPty, unsubscribe } = await fixture(false, "ready");
     unsubscribe();
     const timers: ReturnType<typeof setTimeout>[] = [];
+    // Expire the shared clock only after readiness, independent of setup I/O.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const deadline = Date.now() + 100;
+    let becameReady = false;
     const stop = manager.onStatusChange((session, context) => {
       if (session.id !== caller.sessionId && session.status === "running" && !session.ready && context.runtimeEpoch)
-        timers.push(setTimeout(() => manager.setReady(session.id, context.runtimeEpoch!), 50));
+        timers.push(setTimeout(() => {
+          manager.setReady(session.id, context.runtimeEpoch!);
+          becameReady = manager.get(session.id)?.ready === true;
+          vi.setSystemTime(deadline);
+        }, 50));
     });
     try {
       const coordinator = newCoordinator("identity-wait", { readinessTimeoutMs: 250, batchWaitTimeoutMs: 100 });
       const result = await coordinator.execute(caller, request);
+      expect(becameReady).toBe(true);
       expect(result.results[0]).toMatchObject({ sessionState: "awaiting-ready",
         error: { code: "readiness_timeout", retryable: true, recovery: "retry" } });
       expect(spawnPty).toHaveBeenCalledTimes(2);

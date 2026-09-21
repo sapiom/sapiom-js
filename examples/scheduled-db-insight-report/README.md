@@ -77,5 +77,9 @@ Input: `{ "schedule": "0 8 * * *", "deliverTo": "you@example.com" }`.
 
 - `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
+- `app/` — the dashboard this template ships (`node server.mjs`): the latest
+  report, the flagged anomaly, and the follow-up read as a chart. See
+  `app/README.md`. `preview.png` is its screenshot, referenced from
+  `template.json` → `app.preview`.
 
 Run `npm run typecheck` to confirm it compiles.

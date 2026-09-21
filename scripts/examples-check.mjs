@@ -16,7 +16,9 @@
 //      draft-07 cannot express readably. See scripts/examples-discipline-check.mjs.
 //   5. every template.json validates against examples/template.schema.json,
 //      including the declaration surface (requiredSecrets, settings,
-//      defaultInput, zeroSetup) — see scripts/examples-manifest-check.mjs.
+//      defaultInput, zeroSetup, app) — see scripts/examples-manifest-check.mjs.
+//   5a. a declared `app.entry` is a real directory in the example — the subtree
+//      the publish step uploads as the dashboard bundle (SAP-3252).
 //   5b. the manifest's renderable projection (defaultInput / settings) only
 //      names paths the code's entry `inputSchema` declares — a projection onto
 //      a field the schema never declares is the drift SAP-2226 exists to catch.
@@ -44,6 +46,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv from "ajv";
 import {
+  checkAppEntry,
   checkResourceReuse,
   checkResourceSeeds,
   checkSetupSync,
@@ -310,6 +313,16 @@ for (const t of templates) {
     ...checkResourceSeeds(t.id, manifest, (seed) =>
       existsSync(path.join(dir, seed)),
     ),
+  );
+
+  // 5a. A declared dashboard must ship its source: `app.entry` names the subtree
+  // the publish step uploads, so a missing directory is an empty bundle that
+  // reports a dashboard which never starts.
+  errors.push(
+    ...checkAppEntry(t.id, manifest, (entry) => {
+      const entryPath = path.join(dir, entry);
+      return existsSync(entryPath) && statSync(entryPath).isDirectory();
+    }),
   );
 
   // 5b. The manifest's renderable projection (defaultInput / settings) may only

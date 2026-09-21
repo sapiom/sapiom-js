@@ -26,7 +26,7 @@ import type {
   ProjectBootstrapInputReceipt,
   ProjectBootstrapQueuedInput,
   ProjectBootstrapMetadata,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { AnalyticsEvent, HarnessSession } from "../shared/types.js";
 import {
   SessionBackgroundInputPreemptedError,

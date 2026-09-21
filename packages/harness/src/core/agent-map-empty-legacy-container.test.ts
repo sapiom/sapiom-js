@@ -4,9 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyLegacyContainer } from "./test-fixtures/empty-legacy-container.js";
-import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
-import { DurableFileLock } from "./durable-file-lock.js";
+import { createEmptyProjectPlanningAggregate } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 const roots: string[] = [];

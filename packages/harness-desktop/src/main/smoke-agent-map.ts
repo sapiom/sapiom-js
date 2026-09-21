@@ -201,12 +201,28 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     );
   let blockWorker = false;
   const workerUrls = new Set<string>();
-  const filter = { urls: ["*://*/*elk-worker.min-*.js*"] };
-  web.session.webRequest.onBeforeRequest(filter, (_details, callback) =>
-    callback({ cancel: blockWorker }),
-  );
+  const legacyRequests = { read: 0, refresh: 0, navigation: 0 };
+  const filter = {
+    urls: [
+      "*://*/*elk-worker.min-*.js*",
+      "*://*/api/workspaces/*/system-graph*",
+    ],
+  };
+  web.session.webRequest.onBeforeRequest(filter, (details, callback) => {
+    const pathname = new URL(details.url).pathname;
+    if (pathname.includes("/system-graph")) {
+      const kind = pathname.endsWith("/navigation")
+        ? "navigation"
+        : pathname.endsWith("/refresh")
+          ? "refresh"
+          : "read";
+      legacyRequests[kind]++;
+      callback({});
+    } else callback({ cancel: blockWorker });
+  });
   web.session.webRequest.onCompleted(filter, (details) => {
-    if (details.statusCode === 200) workerUrls.add(details.url);
+    if (details.statusCode === 200 && details.url.includes("elk-worker.min-"))
+      workerUrls.add(details.url);
   });
   try {
     await boot.mainWindow.loadURL(boot.url);
@@ -315,6 +331,33 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
       updated,
       "Navigation changed saved map/history",
     );
+    assert.deepEqual(
+      legacyRequests,
+      { read: 0, refresh: 0, navigation: 0 },
+      "Packaged Studio requested legacy project topology",
+    );
+    // Stale tabs cannot reactivate a graph watcher, even by asking directly.
+    const { workspaceScopes } = await api("/state");
+    assert(workspaceScopes.length > 0, "No scope for legacy rejection check");
+    for (const [suffix, method] of [
+      ["", "GET"],
+      ["/refresh", "POST"],
+      ["/navigation", "GET"],
+    ]) {
+      const response = await fetch(
+        `${base}/api/workspaces/${workspaceScopes[0].workspaceKey}/system-graph${suffix}`,
+        {
+          method,
+          headers: { "X-Harness-Token": boot.bootToken },
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      assert.equal(
+        response.status,
+        404,
+        `Legacy graph ${method} ${suffix}: expected 404, received ${response.status}`,
+      );
+    }
     const assets = join(resolveWebDir(), "assets");
     const workerFile = (await readdir(assets)).find((name) =>
       /^elk-worker\.min-.*\.js$/.test(name),
@@ -323,6 +366,7 @@ export async function checkAgentMap(boot: BootResult): Promise<string> {
     const bytes = await readFile(join(assets, workerFile));
     return (
       `Vertical only across origins, ignored old preferences/links, retry/recovery, live update and disposal; ` +
+      `legacy reads/refreshes/navigation 0/0/0; direct legacy requests 404; ` +
       `map/history unchanged by views; worker ${bytes.length}B (${gzipSync(bytes).length}B gzip); UI ready cold ${coldMs}ms, warm ${warmMs}ms`
     );
   } finally {

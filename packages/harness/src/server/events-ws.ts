@@ -5,6 +5,7 @@
  * feeding all of those into the bus from their respective sources.
  */
 
+import type { AssistantStateSnapshot } from "../shared/assistant-state.js";
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 
@@ -12,8 +13,16 @@ import type { EventBus } from "../core/event-bus.js";
 import type { BusMessage } from "../shared/types.js";
 import { timingSafeEqualString } from "./auth.js";
 
-export function createEventsWebSocketHandler(bus: EventBus, bootToken: string) {
-  return (ws: WebSocket, _req: IncomingMessage, params: URLSearchParams): void => {
+export function createEventsWebSocketHandler(
+  bus: EventBus,
+  bootToken: string,
+  getAssistantState?: () => AssistantStateSnapshot,
+) {
+  return (
+    ws: WebSocket,
+    _req: IncomingMessage,
+    params: URLSearchParams,
+  ): void => {
     const token = params.get("token") ?? "";
     if (!timingSafeEqualString(token, bootToken)) {
       ws.close(4001, "unauthorized");
@@ -24,9 +33,19 @@ export function createEventsWebSocketHandler(bus: EventBus, bootToken: string) {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
     };
 
-    const unsubscribe = bus.subscribe(send);
+    const snapshot = (): void => {
+      if (getAssistantState)
+        send({ type: "assistant.state", snapshot: getAssistantState() });
+    };
+    const unsubscribe = bus.subscribe((message) => {
+      send(message);
+      // Failed/cancelled sign-in can leave the same authority valid. Clear the
+      // browser first, then confirm the host's current grant and complete set.
+      if (message.type === "auth.changed") snapshot();
+    });
 
     ws.on("close", unsubscribe);
     ws.on("error", unsubscribe);
+    snapshot();
   };
 }

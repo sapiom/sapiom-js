@@ -37,16 +37,3 @@ export async function selectMockSessionFromPalette(
   await item.click();
 }
 
-/**
- * Open a project row's ⋮ menu.
- *
- * Every action a project row offers now lives behind one control (SAP-2982).
- * `+` and `×` used to sit on the row itself — adjacent, same size, same
- * hover-reveal — while acting on different nouns: `+` created an AGENT in the
- * project, `×` removed the PROJECT. A menu of named items has no adjacency to
- * misread, and the specs open it before acting.
- */
-export async function openProjectMenu(page: Page, label: string): Promise<void> {
-  await page.getByTestId(`project-menu-${label}`).click();
-  await expect(page.getByTestId(`project-menu-card-${label}`)).toBeVisible();
-}

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";
 

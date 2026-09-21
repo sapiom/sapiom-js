@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
-} from "./studio-project-catalog.js";
+} from "@sapiom/agent-map/node/studio-project-catalog";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;

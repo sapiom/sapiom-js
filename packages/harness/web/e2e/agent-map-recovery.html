@@ -6,10 +6,12 @@
       import { createElement as h, useState } from "react";
       import { createRoot } from "react-dom/client";
       import { AgentMapCanvas } from "../src/components/AgentMapCanvas.tsx";
+      import { createGraphViewportStore } from "../src/lib/graph-viewport.ts";
       import { agentMapPackingFixture } from "./agent-map-packing-fixture.ts";
       import "../src/styles.css";
       function Fixture() {
         const [broken, setBroken] = useState(true);
+        const [viewportStore] = useState(createGraphViewportStore);
         const proposal = agentMapPackingFixture();
         // Direct component props exercise recovery beyond the API's codec guard.
         if (broken) proposal.nodes.push(proposal.nodes[0]);
@@ -25,6 +27,7 @@
             "div",
             { id: "map", style: { width: 600, height: 900, display: "flex" } },
             h(AgentMapCanvas, {
+              viewportStore,
               proposal,
               deployments: new Map(),
               selectedNodeId: null,

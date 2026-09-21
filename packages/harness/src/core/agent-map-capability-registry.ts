@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 
 export type AgentMapCapabilityRejection =
   | "invalid_capability"

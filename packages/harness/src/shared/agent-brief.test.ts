@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlanNodeId } from "./agent-map.js";
+import type { PlanNodeId } from "@sapiom/agent-map";
 import {
   canonicalWorkstreamScopes,
   canonicalizeAgentBriefFocusScope,
   computeAgentBriefId,
   computeAgentBriefScopeKey,
-} from "./agent-brief.js";
+} from "@sapiom/agent-map/node/agent-brief";
 
 const projectId = "project_018f0000-0000-7000-8000-000000000001";
 const research = "node_018f0000-0000-7000-8000-000000000010" as PlanNodeId;

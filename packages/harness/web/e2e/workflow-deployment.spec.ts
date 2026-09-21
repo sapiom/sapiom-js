@@ -31,7 +31,10 @@ test("list outages silently retain the cloud badge and background refreshes reco
   await expect(cloud).toHaveAttribute("data-deployment-unavailable", "false");
   await patch(page, { failure: "list" });
   await expect(cloud).toHaveAttribute("data-deployed", "false");
-  await expect(cloud).toHaveAttribute("title", "Draft. Not deployed to Sapiom yet.");
+  // Hover consumes the native title; assert the text the user still sees.
+  await expect(page.locator('.app-tooltip[data-show="true"]')).toHaveText(
+    "Draft. Not deployed to Sapiom yet.",
+  );
 });
 
 test("auth invalidation clears evidence before replacement lookup and rejects an old success", async ({

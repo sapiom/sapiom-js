@@ -1,5 +1,70 @@
 # @sapiom/tools
 
+## 0.38.0
+
+### Minor Changes
+
+- e32eb67: `browserAutomation`: document `BrowserSession.liveViewUrl` and add `liveViewMode`.
+
+  - `liveViewUrl` is an interactive live view of the session's browser that opens on any device.
+    It is meant for handing a step the agent should not do itself — a sign-in, a one-time code, a
+    payment confirmation — to a person, who acts inside the same session so the agent resumes over
+    `cdpUrl` with cookies intact. The link works for as long as the session does and anyone holding
+    it can act in the browser, so treat it like a credential. Absent from Local Run stub sessions.
+  - `BrowserSession.liveViewMode` reports the lifetime of that link; `"persistent"` means it works
+    for as long as the session does.
+
+- ca1580c: Support configurable browser session idle timeout and maximum duration.
+
+## 0.37.0
+
+### Minor Changes
+
+- 6e5e2e1: Add Google and GitHub capabilities to `ctx.sapiom`, with credentials injected by the gateway:
+
+  - `google.token()` — a short-lived Google bearer for the tenant's connected account.
+  - `google.authClient()` — a `google-auth-library` `OAuth2Client` that mints and refreshes its token through the gateway, so it drops straight into `googleapis` and the `@googleapis/*` clients. `google-auth-library` is an optional peer dependency, loaded only when `authClient()` is called; a token-only integration needs no extra dependency.
+  - `google.drive.shareFile()` / `google.drive.uploadFile()` and `google.gmail.sendEmail()` — Drive and Gmail actions execute server-side in the gateway, so the Google token never reaches agent code.
+  - `github.listRepos()` — list repositories for a connected GitHub account.
+
+## 0.36.1
+
+### Patch Changes
+
+- 4c9bafb: Stop restating the platform rules in npm-shipped files; point at the served copy
+  and stamp the pointer (SAP-3181).
+
+  The rules that are true of Sapiom regardless of the installed SDK — one-off call
+  vs agent, the capability catalog, database lifetime, trigger kinds, App Links,
+  which capability calls an LLM, composing deployed agents, platform vocabulary —
+  are served by the Sapiom API at `GET /v1/agents/authoring-rules`. Every copy
+  this repo used to ship of them was frozen at publish or scaffold time and could
+  never be corrected; that is how the 7-day database claim and the two-kind
+  trigger list reached customers.
+
+  - The `sapiom-agent-authoring` skill's platform chapters are now a short
+    summary plus a pointer to the served section, bracketed by
+    `<!-- section: … -->` markers so a Studio session can splice the served text
+    in. The authoring mechanics (step model, directives, `ctx.shared`,
+    pause/resume, stubs) are unchanged.
+  - Every scaffolded `AGENTS.md` (both `@sapiom/agent-core` templates, the
+    `@sapiom/cli` template and all gallery examples) and `examples/AUTHORING.md`
+    carry a one-paragraph pointer and a stamp:
+    `<!-- sapiom-authoring-rules release=… digest=… -->`.
+  - `@sapiom/tools`' JSDoc on the `model` field of `llm.run`, `llm.submit`,
+    `models.run` and `models.coding.run` points at the served rule instead of
+    restating it.
+  - `sapiom_dev_agents_check` reads the stamps in the project's `AGENTS.md` and
+    skill, makes one best-effort anonymous read of the served endpoint's
+    `X-Sapiom-Content-*` headers, and warns when a stamp differs from the served
+    copy. No stamp means no request; unreachable means no warning. The wording is
+    "differs from", never "older than" — digests do not order.
+  - `@sapiom/agent-core` exports the stamp vocabulary
+    (`AUTHORING_RULES_*`, `parseAuthoringRulesStamp`,
+    `renderAuthoringRulesStamp`, `authoringRulesDriftWarning`), and
+    `node scripts/authoring-rules-stamp.mjs --from-served` moves every stamp in
+    the repo to the current release at once.
+
 ## 0.36.0
 
 ### Minor Changes

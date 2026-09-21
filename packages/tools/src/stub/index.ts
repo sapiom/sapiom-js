@@ -115,12 +115,21 @@ import type {
 import type { SpeechResult, VoicesResult } from "../speech/index.js";
 import type {
   BrowserSession,
+  SessionTimeoutOptions,
   SessionSettlement,
   Screenshot,
   Identity,
   ActiveSession,
+  WithSessionOptions,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
+import type {
+  DrivePermission,
+  DriveFile,
+  SendEmailResult,
+} from "../connectors/google/index.js";
+import type { GitHubRepo } from "../connectors/github/index.js";
+import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -642,7 +651,7 @@ function stubRunHandle(
 
 // Default media results for the contentGeneration stub — ONE factory per media type, shared by
 // `create` and `launch` so the two verbs can never drift (the create/launch resolvedModel drift
-// fixed in #664 came from inlined twin literals). SAP-2576: the routed backend always echoes a
+// fixed in #664 came from inlined twin literals). The routed backend always echoes a
 // resolvedModel (a required field), so the factory does too — set here, inside the fallback,
 // never post-mutated onto a resolved override.
 function stubImageResult(input: ImageCreateInput): ImageGenerationResult {
@@ -1967,7 +1976,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           }) as void,
         ),
     },
-    // Read-only vault (SAP-1471). Stubs return empty/absent — a local run must
+    // Read-only vault. Stubs return empty/absent — a local run must
     // never surface real credentials, and "no secret found" is the safe default.
     vault: {
       list: (ref: string) =>
@@ -1985,7 +1994,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           r("vault.getAll", [ref], () => ({})) as Record<string, string>,
         ),
     },
-    // Scoped-key mint (SAP-2300). A local run mints no real credential — it returns a
+    // Scoped-key mint. A local run mints no real credential — it returns a
     // clearly-fake, shape-faithful key so a deploy step can trace the full graph
     // offline. The `key` is an obvious placeholder, never a usable secret.
     keys: {
@@ -2002,6 +2011,118 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 : ["org.transactions.write"],
           })) as ScopedKey,
         ),
+    },
+    // Connection-backed third-party providers (Google, GitHub) — mirrors the
+    // `connectors` grouping on the real client.
+    connectors: {
+      // A live Google credential is fetched server-side in production; the stub returns
+      // a clearly-fake, shape-faithful bearer so an offline run can exercise the call
+      // graph. The `value` is an obvious placeholder, never a usable token.
+      google: {
+        // A REAL google-auth-library OAuth2 client wired to the stub's fake bearer — an
+        // offline `check`/run drives a genuine vendor-SDK client (googleapis, @googleapis/*)
+        // with no network and no Google connector. `google-auth-library` ships with those
+        // SDKs, so it is present whenever an agent references `authClient()`; absent it, the
+        // dynamic import throws the same clear error as production.
+        // The override (when present) wins and is returned — awaited, so a rejected
+        // override propagates. Only when there is no override do we import the optional
+        // peer and build the default client, so an override can both control the result
+        // and avoid requiring `google-auth-library`.
+        authClient: async () =>
+          (await r("connectors.google.authClient", [], async () => {
+            let mod: typeof import("google-auth-library");
+            try {
+              mod = await import("google-auth-library");
+            } catch {
+              throw new Error(
+                "connectors.google.authClient() needs the 'google-auth-library' package, which ships with " +
+                  "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
+                  "`npm i @googleapis/drive`) to use the vendor SDKs. For a raw proxied path that " +
+                  "needs no extra dependency, use connectors.google.fetch() instead.",
+              );
+            }
+            const client = new mod.OAuth2Client();
+            const mint = async () => ({
+              access_token: "ya29.stub-google-token",
+              expiry_date: Date.parse("2099-01-01T00:00:00.000Z"),
+            });
+            client.refreshHandler = mint;
+            client.setCredentials(await mint());
+            // Keep local runs offline: intercept gaxios' transporter (the same hook production
+            // uses for the proxy) so a vendor-SDK call through this client never touches the
+            // network — return an obviously-fake, shape-faithful JSON response instead.
+            (
+              client.transporter as unknown as {
+                defaults: { fetchImplementation?: typeof fetch };
+              }
+            ).defaults.fetchImplementation = (async () =>
+              withNodeStreamBody(
+                new Response(JSON.stringify({ stub: true }), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              )) as typeof fetch;
+            return client;
+          })) as InstanceType<
+            (typeof import("google-auth-library"))["OAuth2Client"]
+          >,
+        // The generic proxied tail's stub — no network, no Google connector. Returns a
+        // shape-faithful, obviously-fake JSON Response so an offline run can exercise the
+        // call graph and read `.json()`/`.status` the same way the real proxy response does.
+        fetch: async (pathOrUrl, init) =>
+          r(
+            "connectors.google.fetch",
+            [pathOrUrl, init],
+            () =>
+              new Response(JSON.stringify({ stub: true }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+          ) as Response,
+        // Drive methods run server-side in the gateway in production; the stub returns
+        // shape-faithful, obviously-fake results so an offline run can exercise the call
+        // graph without a Google connector or network call.
+        drive: {
+          shareFile: async (args) =>
+            r("connectors.google.drive.shareFile", [args], () => ({
+              id: "stub-permission-id",
+              type: "user",
+              role: "reader",
+            })) as DrivePermission,
+          uploadFile: async (args) =>
+            r("connectors.google.drive.uploadFile", [args], () => ({
+              id: "stub-file-id",
+              name: "stub-file.txt",
+              mimeType: "text/plain",
+            })) as DriveFile,
+        },
+        // Gmail methods run server-side in the gateway in production; the stub returns a
+        // shape-faithful, obviously-fake send result so an offline run can exercise the
+        // call graph without a Google connector or network call.
+        gmail: {
+          sendEmail: async (args) =>
+            r("connectors.google.gmail.sendEmail", [args], () => ({
+              id: "stub-message-id",
+              threadId: "stub-thread-id",
+            })) as SendEmailResult,
+        },
+      },
+      // GitHub methods run server-side in the gateway (the PAT is injected there) in
+      // production; the stub returns a shape-faithful, obviously-fake repo list so an
+      // offline run can exercise the call graph without a GitHub connector or network call.
+      github: {
+        listRepos: async (args) =>
+          r("connectors.github.listRepos", [args], () => [
+            {
+              id: 1,
+              name: "stub-repo",
+              fullName: "stub-org/stub-repo",
+              private: false,
+              htmlUrl: "https://github.com/stub-org/stub-repo",
+              description: "stub repository",
+            },
+          ]) as GitHubRepo[],
+      },
     },
     speech: {
       textToSpeech: {
@@ -2033,14 +2154,20 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     },
     browserAutomation: {
       sessions: {
-        create: () =>
+        create: (options?: SessionTimeoutOptions) =>
           Promise.resolve(
-            r("browserAutomation.sessions.create", [], () => ({
-              sessionId: "stub-session",
-              cdpUrl: "ws://stub.local/session/stub-session",
-              expiresAt: "2099-01-01T00:00:00Z",
-              maxDurationSec: 1200,
-            })) as BrowserSession,
+            r(
+              "browserAutomation.sessions.create",
+              options === undefined ? [] : [options],
+              () => ({
+                sessionId: "stub-session",
+                cdpUrl: "ws://stub.local/session/stub-session",
+                expiresAt: "2099-01-01T00:00:00Z",
+                idleTimeoutMinutes: options?.idleTimeoutMinutes ?? 5,
+                maxDurationMinutes: options?.maxDurationMinutes ?? 20,
+                maxDurationSec: (options?.maxDurationMinutes ?? 20) * 60,
+              }),
+            ) as BrowserSession,
           ),
         createWithIdentity: (input) =>
           Promise.resolve(
@@ -2048,7 +2175,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               sessionId: "stub-session",
               cdpUrl: "ws://stub.local/session/stub-session",
               expiresAt: "2099-01-01T00:00:00Z",
-              maxDurationSec: 1200,
+              idleTimeoutMinutes: input.idleTimeoutMinutes ?? 5,
+              maxDurationMinutes: input.maxDurationMinutes ?? 20,
+              maxDurationSec: (input.maxDurationMinutes ?? 20) * 60,
             })) as BrowserSession,
           ),
         close: (sessionId) =>
@@ -2070,7 +2199,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         ),
       withSession: async <T>(
         fn: (session: ActiveSession) => Promise<T>,
-        sessionOpts?: { identityId?: string },
+        sessionOpts?: WithSessionOptions,
       ) => {
         const stubSession = r(
           "browserAutomation.withSession",
@@ -2081,7 +2210,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             sessionId: "stub-session",
             cdpUrl: "ws://stub.local/session/stub-session",
             expiresAt: "2099-01-01T00:00:00Z",
-            maxDurationSec: 1200,
+            idleTimeoutMinutes: sessionOpts?.idleTimeoutMinutes ?? 5,
+            maxDurationMinutes: sessionOpts?.maxDurationMinutes ?? 20,
+            maxDurationSec: (sessionOpts?.maxDurationMinutes ?? 20) * 60,
           }),
         ) as BrowserSession;
         const activeSession: ActiveSession = {

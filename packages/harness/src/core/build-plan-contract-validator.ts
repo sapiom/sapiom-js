@@ -1,9 +1,9 @@
-import type { AgentMapGraph, PlanNodeId, PlanRelationship } from "../shared/agent-map.js";
+import type { AgentMapGraph, PlanNodeId, PlanRelationship } from "@sapiom/agent-map";
 import type {
   BuildPlanDiagnostic,
   BuildPlanDependencyIntent,
   ProjectBuildPlanContent,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 
 export const BUILD_PLAN_DIAGNOSTIC_LIMIT = 64;
 
