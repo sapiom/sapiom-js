@@ -499,11 +499,15 @@ export function WorkflowsRail({
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
 
-  // The ⋮ overflow menu: how the tree is grouped, how it is sorted, and the
-  // sessions that have ended. Grouping and sort are persisted so the explorer
-  // resumes as the user left it (docs/IA.md).
+  // TWO OVERLAYS, TWO SUBJECTS (flow-creation.md §4.7, Q9). The Projects
+  // options menu holds how the tree is grouped and sorted, and only that;
+  // grouping and sort are persisted so the explorer resumes as the user left
+  // it (docs/IA.md). The sessions that have ended are a different subject: an
+  // unbounded list, opened from the history glyph in the brand header as a
+  // side card beside the rail. They used to share one menu, which gave a card
+  // of fixed choices a scrollbar.
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [pastOpen, setPastOpen] = useState(false);
   // `project` (where an agent lives) and `group` (what it is related to).
   // `deployment` is retired — it bucketed a fact every agent row already prints
   // as a glyph — and `workspace` is replaced by `project`.
@@ -516,22 +520,19 @@ export function WorkflowsRail({
   const pickAxis = (next: RailAxis): void => {
     setAxis(next);
     saveUiPrefs({ railAxis: next });
-    // A click that changes the filing also collapses the Past-sessions
-    // sub-card, matching the hover behaviour on the fixed choices.
-    setPastOpen(false);
   };
   const pickSort = (next: RailSort): void => {
     setSort(next);
     saveUiPrefs({ railSort: next });
-    setPastOpen(false);
   };
+  const optionsTriggerRef = useRef<HTMLButtonElement>(null);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
-  // Closing the menu also folds its Past-sessions sub-card, so it never
-  // reopens already flown out.
-  const closeHistory = useCallback(() => {
+  const closeOptions = useCallback(() => setOptionsOpen(false), []);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const closeOverlays = (): void => {
+    setOptionsOpen(false);
     setHistoryOpen(false);
-    setPastOpen(false);
-  }, []);
+  };
 
   // Per-row collapse, restored across reloads. Keys are NAMESPACED
   // (`project:` / `dir:`): a path is not unique across row kinds, and one
@@ -579,10 +580,13 @@ export function WorkflowsRail({
     (session) => session.status === "exited",
   );
 
+  const toggleOptions = (): void => {
+    setHistoryOpen(false);
+    setOptionsOpen((open) => !open);
+  };
   const toggleHistory = (): void => {
     const next = !historyOpen;
-    // Every open lands on the menu, never mid-flyout.
-    setPastOpen(false);
+    setOptionsOpen(false);
     setHistoryOpen(next);
     if (next) {
       const dirs = historyDirs(sessions, recentDirs, activeSessionId);
@@ -840,6 +844,9 @@ export function WorkflowsRail({
         canGoForward={canGoForward}
         onGoBack={onGoBack}
         onGoForward={onGoForward}
+        historyOpen={historyOpen}
+        onToggleHistory={toggleHistory}
+        historyTriggerRef={historyTriggerRef}
       />
 
       {/* The rail's top stack of labelled destinations (flow-creation.md
@@ -863,7 +870,7 @@ export function WorkflowsRail({
           aria-label="New project"
           data-tooltip="Pick a folder, then describe its first agent"
           onClick={() => {
-            setHistoryOpen(false);
+            closeOverlays();
             onNewProject();
           }}
         >
@@ -927,77 +934,64 @@ export function WorkflowsRail({
             aria-label="Add project"
             data-tooltip="Add project"
             onClick={() => {
-              setHistoryOpen(false);
+              closeOverlays();
               onAddProject();
             }}
           >
             <Icon name="FolderPlus" size={14} />
           </button>
-          {/* AN ELLIPSIS, deliberately reversing the design doc's "sliders, not
-              an ellipsis". That rule's reasoning was "an ellipsis has no
-              subject, so it can only mean more stuff; this panel has exactly
-              one". The panel no longer has exactly one: it carries filing
-              (Group by / Sort by) AND past sessions, i.e. the rail's settings.
-              Once a control genuinely holds more than one subject, the ellipsis
-              is the honest glyph and a sliders icon is the misleading one —
-              sliders promise filing and nothing else. */}
+          {/* SLIDERS, as the design says (IA.md, D35): this menu holds exactly
+              one subject, how the tree is filed (Group by, Sort by), and a
+              sliders glyph promises filing and nothing else. It held Past
+              sessions too for a while, which is when it wore an ellipsis; that
+              list has its own glyph in the brand header now (§4.7, Q9). */}
           <button
-            ref={historyTriggerRef}
+            ref={optionsTriggerRef}
             className="theme-toggle rail-header-btn"
-            data-testid="history-trigger"
-            aria-label="Rail settings"
+            data-testid="rail-options"
+            aria-label="Group and sort projects"
             aria-haspopup="menu"
-            aria-expanded={historyOpen}
-            data-tooltip="Filing, sorting and past sessions"
-            onClick={toggleHistory}
+            aria-expanded={optionsOpen}
+            data-tooltip="Group by and sort by"
+            onClick={toggleOptions}
           >
-            <Icon name="EllipsisVertical" size={14} />
+            <Icon name="SlidersHorizontal" size={14} />
           </button>
         </div>
       </div>
       <div className="rail-tree">
-        {/* The ⋮ overflow menu. The popover is the TRACK, not the card: it
-            opens BESIDE the rail (never over the tree it configures), and its
-            one unbounded set — Past sessions — opens as a sub-card beside the
-            options card rather than a scrolling list nailed under four fixed
-            choices. */}
+        {/* THE OPTIONS MENU: how the tree is filed, and only that (§4.7). It
+            opens BESIDE the rail, never over the tree it configures. Past
+            sessions left it (Q9): a card of fixed choices should not also hold
+            an unbounded list. */}
         <AnchoredPopover
-          open={historyOpen}
-          anchorRef={historyTriggerRef}
-          onDismiss={closeHistory}
+          open={optionsOpen}
+          anchorRef={optionsTriggerRef}
+          onDismiss={closeOptions}
           placement="right-start"
           besideRef={railRef}
           noClip
           className="menu-flyer"
-          testid="history-menu"
+          testid="rail-options-menu"
         >
-          <div className="menu-flyer-track">
-            <div className="connect-card history-card">
-              <div className="connect-card-header">
-                <span>Projects</span>
-                <button
-                  className="theme-toggle connect-card-close"
-                  onClick={closeHistory}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  <Icon name="X" size={13} />
-                </button>
-              </div>
-              <div className="connect-card-body" role="menu">
-                {/* Hovering the fixed choices closes the Past-sessions flyout,
-                    so moving off that row collapses its sub-card — the
-                    hover-open's natural inverse. (A plain wrapper would flatten
-                    the row gap; menu-choice-group re-states the column.) */}
-                {/* VISIBLE dropdowns, not a menu of radio rows. Both settings
-                    state their current value on the face of the control, so
-                    "how is this list filed?" is answerable without opening
-                    anything — a radio row only says what is checked once you
-                    are already inside the menu you had to guess to open. */}
-                <div
-                  className="menu-choice-group"
-                  onMouseEnter={() => setPastOpen(false)}
-                >
+          <div className="connect-card history-card">
+            <div className="connect-card-header">
+              <span>Projects</span>
+              <button
+                className="theme-toggle connect-card-close"
+                onClick={closeOptions}
+                aria-label="Close"
+                title="Close"
+              >
+                <Icon name="X" size={13} />
+              </button>
+            </div>
+            <div className="connect-card-body" role="menu">
+              {/* VISIBLE dropdowns, not a menu of radio rows. Both settings
+                  state their current value on the face of the control, so
+                  "how is this list filed?" is answerable without opening
+                  anything. */}
+              <div className="menu-choice-group">
                   <label className="filing-field">
                     <span className="filing-field-label">Group by</span>
                     <select
@@ -1034,62 +1028,37 @@ export function WorkflowsRail({
                       ))}
                     </select>
                   </label>
-                </div>
-
-                {/* One row that opens a sub-card beside the menu — the set is
-                    unbounded (every session this install has finished), so a
-                    list nailed here would give a card of four choices a
-                    scrollbar. The count rides the row, not the ⋮ trigger.
-                    Opens on hover (moving onto it) as well as click. */}
-                <button
-                  type="button"
-                  className={
-                    "session-dropdown-item nested-trigger" +
-                    (pastOpen ? " is-open" : "")
-                  }
-                  data-testid="past-sessions-trigger"
-                  aria-haspopup="menu"
-                  aria-expanded={pastOpen}
-                  onMouseEnter={() => setPastOpen(true)}
-                  onClick={() => setPastOpen((open) => !open)}
-                >
-                  <span className="session-item-icon">
-                    <Icon name="History" size={13} />
-                  </span>
-                  <span className="session-item-copy">
-                    <span className="session-item-title">Past sessions</span>
-                  </span>
-                  {exitedSessions.length > 0 && (
-                    <span
-                      className="session-history-badge"
-                      data-testid="session-history-badge"
-                    >
-                      {exitedSessions.length}
-                    </span>
-                  )}
-                  <Icon name="ChevronRight" size={13} />
-                </button>
               </div>
             </div>
+          </div>
+        </AnchoredPopover>
 
-            {pastOpen && (
-              <>
-                {/* A real, hit-testable 2px bridge, not a margin: crossing it
-                    with the pointer must not drop the hover and close the card
-                    being reached for. */}
-                <div className="menu-flyer-bridge" aria-hidden="true" />
-                <div className="connect-card menu-flyer-nested">
-                  <div className="connect-card-header">
-                    <span>Past sessions</span>
-                    <button
-                      className="theme-toggle connect-card-close"
-                      onClick={() => setPastOpen(false)}
-                      aria-label="Back"
-                      title="Back"
-                    >
-                      <Icon name="X" size={13} />
-                    </button>
-                  </div>
+        {/* PAST SESSIONS: the unbounded list, as a side card beside the rail,
+            opened from the history glyph in the brand header (§4.7, Q9). Exited
+            registry sessions and history entries merge, deduped, newest first;
+            Search (⌘K) lists them too. */}
+        <AnchoredPopover
+          open={historyOpen}
+          anchorRef={historyTriggerRef}
+          onDismiss={closeHistory}
+          placement="right-start"
+          besideRef={railRef}
+          noClip
+          className="menu-flyer"
+          testid="history-menu"
+        >
+          <div className="connect-card history-card">
+            <div className="connect-card-header">
+              <span>Past sessions</span>
+              <button
+                className="theme-toggle connect-card-close"
+                onClick={closeHistory}
+                aria-label="Close"
+                title="Close"
+              >
+                <Icon name="X" size={13} />
+              </button>
+            </div>
                   <div
                     className="connect-card-body past-sessions-list"
                     data-testid="past-sessions-card"
@@ -1170,9 +1139,6 @@ export function WorkflowsRail({
                       </div>
                     )}
                   </div>
-                </div>
-              </>
-            )}
           </div>
         </AnchoredPopover>
 

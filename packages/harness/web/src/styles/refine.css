@@ -21,8 +21,7 @@ body {
 
 /* Tabular, mono metadata everywhere it reads as a machine value. */
 .session-item-meta,
-.palette-trigger-hint,
-.session-history-badge {
+.palette-trigger-hint {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
