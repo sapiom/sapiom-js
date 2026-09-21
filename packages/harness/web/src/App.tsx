@@ -1691,7 +1691,11 @@ export const App = (): JSX.Element => {
       ? null
       : activeSession;
   const showReview = reviewSummary != null;
-  const showDead = !showReview && conversationSession?.status === "exited";
+  // `composing` outranks the dead pane too: every entrance to the new-agent
+  // screen must land on it, and an exited session left on screen is not a
+  // reason to show nothing when the user presses New agent.
+  const showDead =
+    !showReview && !composing && conversationSession?.status === "exited";
   // An agent selected with no session that can WORK on it: honest absence, and
   // opening one lands on the "start a session" state.
   //
