@@ -74,4 +74,23 @@ describe("stub google/github overrides", () => {
     });
     expect(res.data).toEqual({ stub: true });
   });
+
+  it("returns a Node Readable for responseType 'stream' (matches the proxy transport)", async () => {
+    const client = createStubClient();
+    const auth = await client.connectors.google.authClient();
+
+    const res = await auth.request({
+      url: "https://www.googleapis.com/drive/v3/files",
+      method: "GET",
+      responseType: "stream",
+    });
+    const data = res.data as {
+      pipe?: unknown;
+      on?: unknown;
+      getReader?: unknown;
+    };
+    expect(typeof data.pipe).toBe("function");
+    expect(typeof data.on).toBe("function");
+    expect(data.getReader).toBeUndefined(); // Node Readable, not a web ReadableStream
+  });
 });

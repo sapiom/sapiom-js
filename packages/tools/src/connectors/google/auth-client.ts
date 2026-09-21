@@ -20,11 +20,10 @@
  *
  * `google-auth-library` is an OPTIONAL peer, imported DYNAMICALLY only when a client is built.
  */
-import { Readable } from "node:stream";
-
 import type { OAuth2Client } from "google-auth-library";
 
 import type { Transport } from "../../_client/index.js";
+import { withNodeStreamBody } from "../core/node-stream-response.js";
 import {
   CONNECTOR_HOST_HEADER,
   toProxyRequest,
@@ -110,27 +109,10 @@ export async function createProxyAuthClient(
     });
     headers[CONNECTOR_HOST_HEADER] = upstreamHost;
 
-    const res = await transport.fetch(url, { ...init, headers });
-
-    // gaxios' default transport is node-fetch, whose response `.body` is a Node Readable; our
-    // Transport uses undici, whose `.body` is a web ReadableStream. gaxios returns `.body` verbatim
-    // for `responseType: "stream"`, so expose a Node Readable here to preserve googleapis' download
-    // contract (`.pipe()` / `.on()`). Lazy + memoized so the JSON/text paths — which read via
-    // res.json()/res.text(), not `.body` — are untouched and the web stream is never double-read.
-    const webBody = res.body;
-    if (webBody) {
-      let nodeBody: Readable | undefined;
-      Object.defineProperty(res, "body", {
-        configurable: true,
-        get: () =>
-          (nodeBody ??= (
-            Readable as unknown as {
-              fromWeb: (s: ReadableStream<Uint8Array>) => Readable;
-            }
-          ).fromWeb(webBody)),
-      });
-    }
-    return res;
+    // gaxios returns `.body` verbatim for `responseType: "stream"`; our undici-based Transport
+    // yields a web ReadableStream, so hand back a Node Readable to preserve googleapis' download
+    // contract (`.pipe()` / `.on()`). Shared with the offline stub so the two can't drift.
+    return withNodeStreamBody(await transport.fetch(url, { ...init, headers }));
   };
 
   // The transporter is a gaxios instance; swapping its default fetch is the smallest hook that keeps

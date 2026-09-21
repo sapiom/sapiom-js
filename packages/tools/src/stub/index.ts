@@ -127,6 +127,7 @@ import type {
   SendEmailResult,
 } from "../connectors/google/index.js";
 import type { GitHubRepo } from "../connectors/github/index.js";
+import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -1944,10 +1945,12 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 defaults: { fetchImplementation?: typeof fetch };
               }
             ).defaults.fetchImplementation = (async () =>
-              new Response(JSON.stringify({ stub: true }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              })) as typeof fetch;
+              withNodeStreamBody(
+                new Response(JSON.stringify({ stub: true }), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              )) as typeof fetch;
             return client;
           })) as InstanceType<
             (typeof import("google-auth-library"))["OAuth2Client"]
