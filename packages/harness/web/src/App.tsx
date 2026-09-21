@@ -439,6 +439,13 @@ export const App = (): JSX.Element => {
   const [composerProject, setComposerProject] = useState<ComposerProject | null>(
     null,
   );
+  // The stated project lives exactly as long as the scoped screen does. Every
+  // exit (submit, Back, opening a session or a map) ends with `composing`
+  // false, and the automatic home that may show afterwards must not inherit a
+  // project nobody chose for it: its submit would create there.
+  useEffect(() => {
+    if (!composing) setComposerProject(null);
+  }, [composing]);
   /**
    * The web half of the folder step, while it is open. Desktop never sets it:
    * the bridge's `chooseDirectory` answers the question directly (D29). What
@@ -2123,8 +2130,14 @@ export const App = (): JSX.Element => {
    */
   const openProjectIntoRail = async (
     requestedRoot: string,
-  ): Promise<ComposerProject> => {
+  ): Promise<ComposerProject | null> => {
+    // This operation's generation, taken BEFORE the first await: any
+    // navigation while the open is pending bumps the ref, and a stale open
+    // must neither select anything nor land on the screen. Null means stale.
+    const generation = ++studioRestoreGenerationRef.current;
+    const stale = (): boolean => generation !== studioRestoreGenerationRef.current;
     const openedRoot = await harness.openProject(requestedRoot);
+    if (stale()) return null;
     const opened: ComposerProject = {
       root: openedRoot,
       label: basenameOf(openedRoot) || openedRoot,
@@ -2137,6 +2150,7 @@ export const App = (): JSX.Element => {
     } | null = null;
     try {
       const refreshed = await harness.api.getState();
+      if (stale()) return null;
       const scope = refreshed.workspaceScopes?.find((candidate) =>
         samePath(candidate.cwd, openedRoot),
       );
@@ -2151,11 +2165,10 @@ export const App = (): JSX.Element => {
         cwd: scope.cwd,
       };
       restoredStudioProjectsRef.current.add(project.projectId);
-      const generation = ++studioRestoreGenerationRef.current;
       const current = await harness.api.getStudioCurrentWorkspace(
         project.projectId,
       );
-      if (generation !== studioRestoreGenerationRef.current) return opened;
+      if (stale()) return null;
       const restoredSelection = current.selection;
       if (restoredSelection.kind === "agent") {
         const workflow = refreshed.workflows.find((candidate) =>
@@ -2180,12 +2193,12 @@ export const App = (): JSX.Element => {
       setFocusedAgentPath(scope.cwd);
       if (isMobile) setRightCollapsed(true);
     } catch {
+      if (stale()) return null;
       if (restoringProject) {
         // Preference restoration is best-effort. The project itself opened
         // successfully, so fall back to its stable map rather than leaving
-        // the previous workspace selected. Keep the restore guard so later
-        // session frames cannot repeat it.
-        studioRestoreGenerationRef.current += 1;
+        // the previous workspace selected. The generation taken above is the
+        // restore guard, so later session frames cannot repeat it.
         setStudioSelection({
           kind: "agent-map",
           projectId: restoringProject.projectId,
@@ -2232,6 +2245,9 @@ export const App = (): JSX.Element => {
     template: StudioTemplate | null,
   ): Promise<void> => {
     const opened = await openProjectIntoRail(root);
+    // A newer navigation won while the folder opened: it decided where the
+    // user is, and a late folder choice does not replace that.
+    if (!opened) return;
     if (intent === "new-project") composeInProject({ ...opened, template });
   };
 
@@ -2262,6 +2278,7 @@ export const App = (): JSX.Element => {
           },
         );
       },
+      onError: (message) => harness.showToast(message),
     });
   };
   const handleNewProject = (): void => runFolderStep("new-project");

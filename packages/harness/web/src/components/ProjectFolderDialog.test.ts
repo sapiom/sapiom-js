@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { FsListResponse } from "../lib/api";
+import { ApiError, type FsListResponse } from "../lib/api";
 import { folderExists } from "./ProjectFolderDialog";
 
 /**
@@ -12,10 +12,10 @@ const listing = (path: string): FsListResponse =>
   ({ path, parent: null, entries: [] }) as unknown as FsListResponse;
 
 const answering =
-  (answers: Record<string, string>) =>
+  (answers: Record<string, string>, status = 404) =>
   async (path?: string): Promise<FsListResponse> => {
     const hit = path !== undefined ? answers[path] : undefined;
-    if (hit === undefined) throw new Error(`404 ${path}`);
+    if (hit === undefined) throw new ApiError(status, `GET /api/fs → ${status}`, undefined);
     return listing(hit);
   };
 
@@ -50,7 +50,7 @@ describe("folderExists", () => {
     ).resolves.toBe(false);
   });
 
-  it("treats an unreadable target with a readable parent as missing, and neither as an error", async () => {
+  it("treats a 404 target with a readable parent as missing, and neither as an error", async () => {
     await expect(
       folderExists("/Users/demo/missing", answering({ "/Users/demo": "/Users/demo" })),
     ).resolves.toBe(false);
@@ -58,5 +58,21 @@ describe("folderExists", () => {
       "Couldn't read that directory.",
     );
     await expect(folderExists("   ", answering({}))).resolves.toBe(false);
+  });
+
+  it("reports a forbidden or failed target as a read error, not a missing folder", async () => {
+    // The parent lists fine; the target itself is 403. It exists, so saying
+    // "doesn't exist yet" would be false and would hide the actual problem.
+    await expect(
+      folderExists("/srv/private", answering({ "/srv": "/srv" }, 403)),
+    ).rejects.toThrow("Couldn't read that directory.");
+    await expect(
+      folderExists("/srv/private", answering({ "/srv": "/srv" }, 500)),
+    ).rejects.toThrow("Couldn't read that directory.");
+    await expect(
+      folderExists("/srv/private", async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    ).rejects.toThrow("Couldn't read that directory.");
   });
 });

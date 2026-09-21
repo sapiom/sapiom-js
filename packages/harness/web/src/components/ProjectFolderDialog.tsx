@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JSX, RefObject } from "react";
 
-import type { FsListResponse } from "../lib/api";
+import { ApiError, type FsListResponse } from "../lib/api";
 import { parentOf, stripTrailingSep } from "../lib/paths";
 import { Dialog } from "./Dialog";
 import { FolderField } from "./FolderField";
@@ -32,8 +32,8 @@ export type ProjectFolderIntent = "new-project" | "add-project";
  * real server 404s a missing path (unreadable target, readable parent), and
  * the mock resolves to the nearest ancestor (a listing whose `path` is a
  * strict ancestor of the one asked for). Throws only when neither the target
- * nor its parent can be read, which is a real error rather than a missing
- * folder.
+ * nor its parent can be read, or when the target fails for any reason other
+ * than 404, which is a real error rather than a missing folder.
  *
  * The server answers with its canonical spelling (separators, `~`, dot
  * segments resolved), so the two paths are never compared for equality: a
@@ -48,7 +48,12 @@ export async function folderExists(
   try {
     const listed = await listDir(t);
     return !isStrictAncestor(listed.path, t);
-  } catch {
+  } catch (err) {
+    // Only "not found" asks the parent. A 403, a 500 or a network failure is a
+    // read error the user needs to see, not a folder that is not there.
+    if (!(err instanceof ApiError) || err.status !== 404) {
+      throw new Error("Couldn't read that directory.");
+    }
     const parent = parentOf(t);
     if (!parent) throw new Error("Couldn't read that directory.");
     try {

@@ -30,6 +30,13 @@ export interface FolderStepHost {
   openDialog: () => void;
   /** A folder the user settled on. Not called when they cancel. */
   onPicked: (root: string) => void;
+  /**
+   * The native picker failed to open or answer (an IPC or dialog error, not a
+   * cancel). Reported as a sentence, never swallowed: a button that does
+   * nothing reads as broken. The web dialog is not the fallback, because it
+   * never renders while the bridge exists (flow-creation.md §4.1 step 2).
+   */
+  onError?: (message: string) => void;
 }
 
 /**
@@ -37,8 +44,9 @@ export interface FolderStepHost {
  *
  * Resolves once the question has been ASKED, not answered: the dialog path
  * returns as soon as the dialog is open. Only the native path has an answer to
- * wait for, and a cancelled or failed pick is a no-op rather than an error.
- * Dismissing a folder browser is not a failure, and there is nothing to report.
+ * wait for. A cancelled pick is a no-op: dismissing a folder browser is not a
+ * failure, and there is nothing to report. A picker that fails to open is
+ * reported through `onError` and never falls back into our dialog.
  */
 export async function chooseProjectFolder(host: FolderStepHost): Promise<void> {
   if (!host.chooseDirectory) {
@@ -48,7 +56,12 @@ export async function chooseProjectFolder(host: FolderStepHost): Promise<void> {
   let picked: string | null = null;
   try {
     picked = await host.chooseDirectory(host.startingAt ?? undefined);
-  } catch {
+  } catch (err) {
+    host.onError?.(
+      err instanceof Error && err.message
+        ? `Couldn't open the folder picker: ${err.message}`
+        : "Couldn't open the folder picker.",
+    );
     return;
   }
   if (picked) host.onPicked(picked);

@@ -60,19 +60,24 @@ describe("the folder step", () => {
     expect(openDialog).not.toHaveBeenCalled();
   });
 
-  it("swallows a failed native pick without falling back", async () => {
+  it("reports a failed native pick without falling back", async () => {
     const openDialog = vi.fn();
     const onPicked = vi.fn();
+    const onError = vi.fn();
 
     await expect(
       chooseProjectFolder({
         chooseDirectory: vi.fn().mockRejectedValue(new Error("no window")),
         openDialog,
         onPicked,
+        onError,
       }),
     ).resolves.toBeUndefined();
 
     expect(onPicked).not.toHaveBeenCalled();
+    // A broken picker is reported, not hidden behind an inert button; and the
+    // web dialog is still not the fallback while the bridge exists (§4.1).
+    expect(onError).toHaveBeenCalledWith("Couldn't open the folder picker: no window");
     expect(openDialog).not.toHaveBeenCalled();
   });
 
