@@ -5,12 +5,16 @@
  *
  *   node scripts/mcp-instructions-snapshot.mjs
  *   node scripts/mcp-instructions-snapshot.mjs --api-url https://api.sapiom.dev
+ *   node scripts/mcp-instructions-snapshot.mjs --out /tmp/instructions.generated.ts
  *
  * The backend serves the primer at GET /v1/mcp/instructions with a provenance
  * footer appended at serve time and the same stamp in `X-Sapiom-Content-*`
  * headers (SAP-3190). This script fetches it, strips the footer (the digest
  * describes the body without it), checks the body's sha-256 against the served
- * digest, and writes packages/mcp/src/instructions.generated.ts. The generated
+ * digest, and writes packages/mcp/src/instructions.generated.ts. It is the
+ * provenance boundary for the bundled fallback, so a response missing either
+ * stamp header, or whose body does not hash to the served digest, aborts the
+ * regeneration instead of snapshotting an unverified body. The generated
  * file is the third and last source `resolveInstructions` falls back to — live,
  * then the last-known-good cache, then this — so it is regenerated as a release
  * step (see PUBLISHING.md), never at install or publish time.
@@ -33,15 +37,23 @@ export const OUTPUT_PATH = path.join(
 /** The serve-time footer, `_Sapiom teaching content · authoring · release 2.14 · 055076ab6773 · served live._` */
 const STAMP_FOOTER = /\n\n_Sapiom teaching content · [^\n]*\._\s*$/;
 
-function parseArgs(argv) {
-  const args = { apiURL: DEFAULT_API_URL };
+export function parseArgs(argv) {
+  const args = { apiURL: DEFAULT_API_URL, outputPath: OUTPUT_PATH };
+  const takeValue = (flag, i) => {
+    const value = argv[i];
+    if (!value) throw new Error(`${flag} needs a value`);
+    return value;
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--api-url") {
-      args.apiURL = argv[++i];
-      if (!args.apiURL) throw new Error("--api-url needs a value");
+      args.apiURL = takeValue(arg, ++i);
     } else if (arg.startsWith("--api-url=")) {
       args.apiURL = arg.slice("--api-url=".length);
+    } else if (arg === "--out") {
+      args.outputPath = path.resolve(takeValue(arg, ++i));
+    } else if (arg.startsWith("--out=")) {
+      args.outputPath = path.resolve(arg.slice("--out=".length));
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -105,43 +117,45 @@ async function fetchServed(apiURL) {
       `GET ${url} carried no X-Sapiom-Content-Release header; refusing to snapshot an unstamped body`,
     );
   }
+  if (!servedDigest) {
+    throw new Error(
+      `GET ${url} carried no X-Sapiom-Content-Digest header; refusing to snapshot an unstamped body`,
+    );
+  }
   const body = stripStampFooter(served);
   if (body.length === 0) throw new Error(`GET ${url} returned an empty body`);
   const digest = sha256Hex(body);
-  if (servedDigest && !digest.startsWith(servedDigest.toLowerCase())) {
+  if (!digest.startsWith(servedDigest.toLowerCase())) {
     throw new Error(
       `digest mismatch: sha-256 of the served body is ${digest}, but X-Sapiom-Content-Digest says ${servedDigest}. ` +
         "The footer strip may not match what the server appends, or the body changed in flight.",
     );
   }
-  return { body, release, digest, servedDigest, url };
+  return { body, release, digest, url };
 }
 
 async function main() {
-  const { apiURL } = parseArgs(process.argv.slice(2));
-  const { body, release, digest, servedDigest, url } =
-    await fetchServed(apiURL);
+  const { apiURL, outputPath } = parseArgs(process.argv.slice(2));
+  const { body, release, digest, url } = await fetchServed(apiURL);
   const source = renderModule({ body, release, digest, apiURL });
   const formatted = await prettier.format(source, { filepath: OUTPUT_PATH });
+  const shown = path.relative(ROOT, outputPath);
 
   let previous = null;
   try {
-    previous = readFileSync(OUTPUT_PATH, "utf8");
+    previous = readFileSync(outputPath, "utf8");
   } catch {
     // first generation
   }
   if (previous === formatted) {
     console.log(
-      `${path.relative(ROOT, OUTPUT_PATH)} already matches ${url} (release ${release}, digest ${digest.slice(0, 12)})`,
+      `${shown} already matches ${url} (release ${release}, digest ${digest.slice(0, 12)})`,
     );
     return;
   }
-  writeFileSync(OUTPUT_PATH, formatted);
+  writeFileSync(outputPath, formatted);
   console.log(
-    `wrote ${path.relative(ROOT, OUTPUT_PATH)} from ${url}: release ${release}, digest ${digest.slice(0, 12)}` +
-      (servedDigest
-        ? ` (matches X-Sapiom-Content-Digest)`
-        : " (no digest header to verify against)"),
+    `wrote ${shown} from ${url}: release ${release}, digest ${digest.slice(0, 12)} (matches X-Sapiom-Content-Digest)`,
   );
 }
 
