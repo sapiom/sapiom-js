@@ -2929,10 +2929,19 @@ export const App = (): JSX.Element => {
       harness.showToast("Open a project first: New project picks the folder.");
       return;
     }
-    const cwd = joinPath(
-      parentRoot,
-      target.slug?.trim() || `agent-${target.definitionId}`,
+    // A repeated clone of the same definition gets its own folder: the clone
+    // refuses a non-empty target, so the base name takes a numeric suffix
+    // when the parent already holds it.
+    const baseName = target.slug?.trim() || `agent-${target.definitionId}`;
+    const taken = new Set(
+      await harness
+        .listDir(parentRoot)
+        .then((listing) => listing.dirs.map((dir) => dir.name))
+        .catch(() => [] as string[]),
     );
+    let cloneName = baseName;
+    for (let n = 2; taken.has(cloneName); n += 1) cloneName = `${baseName}-${n}`;
+    const cwd = joinPath(parentRoot, cloneName);
     pendingCloneFocusRef.current = target.definitionId;
     setRightCollapsed(true); // terminal-first, like the template flow
     try {
