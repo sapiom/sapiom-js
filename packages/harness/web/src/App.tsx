@@ -90,7 +90,6 @@ import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
 import { HelpOverlay } from "./components/HelpOverlay";
-import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import {
   ProjectFolderDialog,
   type ProjectFolderIntent,
@@ -108,7 +107,6 @@ import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf, createApi, errorMessage } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
-import { resolveProjectRoot } from "./lib/project-dir";
 import { basenameOf, isWithinDir, joinPath, parentOf, samePath } from "./lib/paths";
 import { agentBelongsToProjectRoot } from "./lib/project-tree";
 import {
@@ -148,7 +146,6 @@ import { editorLabel, editorUrl, resolveEditor } from "./lib/editors";
 import { CloneAgentConfirm } from "./components/CloneAgentConfirm";
 import {
   cloneDefinitionPrompt,
-  firstInstructionPrompt,
   type GalleryTemplate,
   type StudioTemplate,
 } from "./lib/templates";
@@ -219,9 +216,9 @@ type RightTab = "canvas" | "steps" | "secrets";
  * matters most. Session cwds are deliberately NOT roots: a session an older
  * build left rooted in an agent's own folder would then be the longest "root"
  * containing that agent, and SAP-2927's bug would resolve itself straight back
- * into place. `projectRoot` is not one either — it is where NEW projects are
- * created (a parent of many projects), so treating it as a root would boot
- * every agent under it in the same shared folder.
+ * into place. There is no default parent for new agents any more (Q8): an
+ * agent is created inside a project the user opened, so nothing here has to
+ * guess at one.
  */
 const knownRootsOf = (
   recentDirs: readonly string[] | undefined,
@@ -695,19 +692,6 @@ export const App = (): JSX.Element => {
   } | null>(null);
   const startingProjectRootsRef = useRef(new Set<string>());
   /**
-   * The project a create-agent dialog is open for (SAP-2981), or null.
-   *
-   * It holds the SUBJECT, not a form: the row that was clicked answers "where",
-   * and the dialog only asks what that row cannot. `sessionId` is set by the
-   * bare-project door, where a live session in the folder is already the
-   * session the new agent should bind to.
-   */
-  const [creatingAgent, setCreatingAgent] = useState<{
-    root: string;
-    label: string;
-    sessionId?: string;
-  } | null>(null);
-  /**
    * Leave map altitude — unless the thing being opened lives INSIDE the
    * selected project.
    *
@@ -1131,38 +1115,6 @@ export const App = (): JSX.Element => {
     templatesOpen,
     overviewOpen,
   ]);
-
-  // Where NEW agent projects are created — ONE value, shared by every surface
-  // that creates one (the template door and the idea door). They used to
-  // disagree: this dialog seeded its destination from the active session's cwd
-  // while the scaffold path used whatever the user typed, so "where did my
-  // project go?" had two answers. Precedence is
-  // setting → host default → launch dir (see resolveProjectRoot).
-  //
-  // NO DEFAULT DESTINATION ON DESKTOP (flow-creation.md Q8). That host no
-  // longer passes `projects/`, so the server reports its launchDir as the host
-  // default, and the desktop's launchDir is the harness's own state store
-  // (`~/.sapiom/harness`). A new agent never lands beside `settings.json`:
-  // with no saved setting and no stated project there is nowhere to create,
-  // and the composer says so.
-  const launchDirIsHostDefault =
-    getDesktopBridge() !== null &&
-    !!harness.state?.launchDir &&
-    samePath(
-      harness.state.defaultProjectRoot ?? harness.state.launchDir,
-      harness.state.launchDir,
-    );
-  const projectRoot = resolveProjectRoot({
-    settingsRoot: harness.settings?.projectRoot,
-    defaultProjectRoot: launchDirIsHostDefault
-      ? null
-      : harness.state?.defaultProjectRoot,
-    launchDir: launchDirIsHostDefault ? null : harness.state?.launchDir,
-  });
-
-  const saveProjectRoot = async (root: string): Promise<void> => {
-    await harness.updateSettings({ projectRoot: root });
-  };
 
   // Opening the palette loads history for the same directories the rail's
   // popover asks for — one shared builder, so whichever opens second
@@ -2205,7 +2157,6 @@ export const App = (): JSX.Element => {
    */
   const composeInProject = (project: ComposerProject): void => {
     studioRestoreGenerationRef.current += 1;
-    setCreatingAgent(null);
     setStudioSelection(null);
     setSelectedProject(null);
     setFocusedAgentPath(project.root);
@@ -2283,92 +2234,6 @@ export const App = (): JSX.Element => {
       workspaceScopes.find((scope) => samePath(scope.cwd, root))?.projectId ??
       null;
     composeInProject({ root, label, projectId, template: null });
-  };
-
-  const createAgentInProject = async (input: {
-    name: string;
-    template: string;
-    instruction: string;
-  }): Promise<void> => {
-    const request = creatingAgent;
-    if (!request) return;
-    // Throws on refusal, and the dialog shows the server's own sentence. It
-    // resolves only once the agent is on disk AND in the registry.
-    const created = await harness.scaffoldAgent(
-      request.root,
-      input.name,
-      input.template,
-    );
-    setCreatingAgent(null);
-    // The rail already has it (the server rescanned before answering); this is
-    // the selection following the thing the user just made.
-    setSelectedProject(null);
-    setFocusedAgentPath(created.path);
-    studioRestoreGenerationRef.current += 1;
-    // Creation is an explicit agent transition, but it does not write an
-    // Agent Map node. Resolve the server-issued project-scoped binding after
-    // the registry rescan and persist only that workspace preference.
-    try {
-      const refreshed = await harness.api.getState();
-      const projectId = refreshed.workspaceScopes?.find((scope) =>
-        samePath(scope.cwd, request.root),
-      )?.projectId;
-      const workflow = refreshed.workflows.find((candidate) =>
-        samePath(candidate.path, created.path),
-      );
-      const binding = workflow?.studioBindings?.find(
-        (candidate) => candidate.projectId === projectId,
-      );
-      if (binding) {
-        const selection: StudioWorkspaceSelection = {
-          kind: "agent",
-          projectId: binding.projectId,
-          agentId: binding.agentId,
-        };
-        setStudioSelection(selection);
-        await harness.api.putStudioCurrentWorkspace(
-          binding.projectId,
-          selection,
-        );
-      }
-    } catch {
-      // The agent and registry update already succeeded. Preference syncing is
-      // best-effort and must not turn that completed create into a failure.
-    }
-
-    // EVERYTHING BELOW IS THE CHAT, and the agent already exists. A session
-    // that fails to start is a session failure, reported as one — it must
-    // never read as "the agent wasn't created", because it was.
-    try {
-      // A LIVE one, or none. The bare-project door names the session that was
-      // sitting in that folder when the dialog opened, and a dialog can stay
-      // open longer than a pty lives — binding the new agent to an exited
-      // session would leave it with nothing to talk to.
-      const existing = request.sessionId
-        ? (state.sessions.find(
-            (s) => s.id === request.sessionId && s.status !== "exited",
-          ) ?? null)
-        : null;
-      const session =
-        existing ??
-        (await createSessionAt(request.root, selectedHarness, {
-          initialUserInputPending: input.instruction.trim().length > 0,
-        }));
-      await harness.bindWorkflow(session.id, created.path);
-      harness.setActiveSessionId(session.id);
-      setFocusedAgentPath(created.path);
-      if (input.instruction) {
-        sendPromptWhenReady(
-          session.id,
-          firstInstructionPrompt(created.path, input.instruction),
-          "Couldn't send your first instruction — the agent is created; type it into the terminal.",
-        );
-      }
-    } catch (err) {
-      harness.showToast(
-        `${created.name} was created, but its session didn't start. ${errorMessage(err, "")}`.trim(),
-      );
-    }
   };
 
   // The workbench tab + starts a fresh coding-agent process beside the active
@@ -2646,31 +2511,6 @@ export const App = (): JSX.Element => {
   const handleComposerUseTemplate = (template: GalleryTemplate): void => {
     if (!composerProject) return;
     composeInProject({ ...composerProject, template, templateSurface: "welcome" });
-  };
-
-  // Bulk discovery from the add dialog.
-  const handleScanWorkflows = async (root: string): Promise<number> => {
-    const { found, repositoryBoundaries } = await harness.scanWorkflows(root);
-    // Finding agents is the win this dialog exists for; an empty sweep is a
-    // neutral fact, not a failure.
-    //
-    // But "found nothing" and "did not look" are different facts, and the walk
-    // stops at every separate checkout — so a folder of clones legitimately
-    // finds nothing while the agents are right there. Reporting that as "no
-    // agent projects found" is false, and it is false in the most misleading
-    // direction: it tells the user their agents do not exist.
-    const skipped = repositoryBoundaries.length;
-    harness.showToast(
-      found.length === 0
-        ? skipped === 0
-          ? "No agent projects found under this folder."
-          : `No agents here — ${skipped === 1 ? "1 separate git checkout was" : `${skipped} separate git checkouts were`} not searched. Open one as its own project.`
-        : found.length === 1
-          ? "Found 1 agent project."
-          : `Found ${found.length} agent projects.`,
-      found.length === 0 ? "info" : "success",
-    );
-    return found.length;
   };
 
   // The canvas pane follows the ACTIVE session's board rather than being toggled
@@ -4189,14 +4029,7 @@ export const App = (): JSX.Element => {
         <OverviewModal
           firstRun={state.firstRun === true}
           appVersion={getDesktopBridge()?.appVersion || __STUDIO_VERSION__}
-          recentDirs={harness.settings?.recentDirs ?? []}
-          projectRoot={projectRoot || null}
-          listDir={harness.listDir}
-          onConnect={async (cwd) => {
-            await harness.connectWorkflow(cwd);
-            setOverviewOpen(false);
-          }}
-          onScan={handleScanWorkflows}
+          onAddProject={handleAddProject}
           onBrowseTemplates={() => {
             studioRestoreGenerationRef.current += 1;
             setStudioSelection(null);
@@ -4225,27 +4058,6 @@ export const App = (): JSX.Element => {
               folderPrompt.template,
             )
           }
-        />
-      )}
-
-      {/* The create-agent dialog (SAP-2981). Mounted here, beside the other
-          cards-on-top, because the create has to outlive the rail popover that
-          opened it — the menu unmounts on click, and a dialog rendered inside
-          it would go with it. */}
-      {creatingAgent && (
-        <CreateAgentDialog
-          projectLabel={creatingAgent.label}
-          projectRoot={creatingAgent.root}
-          onCancel={() => setCreatingAgent(null)}
-          onCreate={createAgentInProject}
-          onBrowseTemplates={() => {
-            studioRestoreGenerationRef.current += 1;
-            setStudioSelection(null);
-            setCreatingAgent(null);
-            setSelectedProject(null);
-            setTemplatesOpen(true);
-            setOverviewOpen(false);
-          }}
         />
       )}
 
