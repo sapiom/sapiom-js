@@ -96,6 +96,8 @@ import {
   type ProjectFolderIntent,
 } from "./components/ProjectFolderDialog";
 import { chooseProjectFolder } from "./lib/folder-step";
+import { templateIdea } from "./lib/creation-entry";
+import { NoProjectHome } from "./components/NoProjectHome";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
 import { boundWorkflowPathOf, createApi, errorMessage } from "./lib/api";
@@ -1897,6 +1899,26 @@ export const App = (): JSX.Element => {
     const studioProjectId = workspaceScopes.find(
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
+    // AN EMPTY PROJECT'S NAME IS THE DOOR (D36, flow-creation.md §4.3). A
+    // project with no agent has no map to draw, so selecting it lands on the
+    // new-agent screen scoped to it rather than on a map with nothing in it.
+    const holdsAgents = state.workflows.some(
+      (workflow) =>
+        (studioProjectId != null &&
+          workflow.studioBindings?.some(
+            (binding) => binding.projectId === studioProjectId,
+          )) ||
+        rootContains(root, workflow.path),
+    );
+    if (!holdsAgents) {
+      composeInProject({
+        root,
+        label,
+        projectId: studioProjectId ?? null,
+        template: null,
+      });
+      return;
+    }
     if (
       studioProjectId &&
       state.studioProjects?.some(
@@ -2624,6 +2646,7 @@ export const App = (): JSX.Element => {
   const handleComposerSubmitIdea = async (
     idea: string,
     attachments: readonly NewSessionAttachment[],
+    _sources: readonly string[],
   ): Promise<void> => {
     const cwd = uniqueProjectDir(
       idea.trim() ? slugifyIdea(idea) : FALLBACK_PROJECT_NAME,
@@ -3412,6 +3435,9 @@ export const App = (): JSX.Element => {
               composing={
                 showComposer && !(projectMapSelected && focusTabs.length > 0)
               }
+              composerProjectLabel={
+                showComposer ? (composerProject?.label ?? null) : null
+              }
               onBack={composerCanCancel ? () => setComposing(false) : null}
               activeSession={sessionBarSession}
               sessionName={
@@ -3675,13 +3701,20 @@ export const App = (): JSX.Element => {
                     </AssistantPane>
                   </div>
                 </div>
-              ) : (
-                /* The composer-first home: no terminal, no canvas yet. Describe
-                   an outcome (or pick a template) and a session starts; this
-                   screen gives way to the terminal (createSessionAt clears
-                   `composing`), and the canvas reveals itself once populated. */
+              ) : composerProject ? (
+                /* THE NEW-AGENT SCREEN, scoped to a project (§4.3): no
+                   terminal, no canvas yet. Describe the agent and submit; the
+                   harness scaffolds it and a normal session opens on it, and
+                   this screen gives way to the terminal. Keyed on the project
+                   and the template so a second entrance starts clean. */
                 <NewSessionComposer
+                  key={`${composerProject.root}::${composerProject.template?.id ?? ""}`}
                   project={composerProject}
+                  initialIdea={
+                    composerProject.template
+                      ? templateIdea(composerProject.template)
+                      : undefined
+                  }
                   harness={selectedHarness}
                   entries={harnessEntries ?? FALLBACK_HARNESSES}
                   onHarnessChange={setSelectedHarness}
@@ -3702,16 +3735,12 @@ export const App = (): JSX.Element => {
                   onToggleTelemetry={async (next) => {
                     await harness.updateSettings({ telemetryOptIn: next });
                   }}
-                  recentDirs={harness.settings?.recentDirs ?? []}
-                  projectRoot={projectRoot || null}
-                  listDir={harness.listDir}
-                  onConnect={async (cwd) => {
-                    await harness.connectWorkflow(cwd);
-                  }}
-                  onScan={handleScanWorkflows}
-                  onScaffold={handleScaffoldSession}
-                  onSaveProjectRoot={saveProjectRoot}
                 />
+              ) : (
+                /* Nothing to show and no project to create in (a fresh
+                   install, every project removed): the honest state before
+                   the screen, with the one move that fills it. */
+                <NoProjectHome onNewProject={handleNewProject} />
               )}
             </div>
           </div>

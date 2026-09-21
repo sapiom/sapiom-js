@@ -10843,3 +10843,72 @@ button.rail-footer-card:hover {
 .create-agent-link:hover {
   color: var(--text);
 }
+
+/* ── The new-agent screen states its project (flow-creation.md §4.3) ──────
+   The project was chosen before the screen opened (the folder step, or the
+   row that was pressed), so it is STATED, above the headline and in the
+   session bar's chip, and never asked for again. Both read from the same
+   tokens as the file chips beneath the box, so the screen carries one
+   vocabulary for "a thing this agent is about". */
+.composer-project {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: var(--type-label);
+  font-weight: 550;
+}
+
+.session-composing {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  min-width: 0;
+}
+
+.session-project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  min-width: 0;
+  max-width: 320px;
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A pasted link is a source: same chip as a file, the globe says which. */
+.composer-source .composer-file-name {
+  max-width: 220px;
+}
+
+/* The server's refusal lands under the field that produced it (D30), and the
+   box says so too. */
+.composer-box.has-error {
+  border-color: var(--red);
+}
+
+.composer-error {
+  width: 100%;
+  max-width: 640px;
+  margin: var(--sp2) 0 0;
+  text-align: left;
+}
+
+/* The no-project home reuses the composer's frame so the switch from it to
+   the screen moves nothing but the content. */
+.no-project-home .empty-state {
+  max-width: 420px;
+}
