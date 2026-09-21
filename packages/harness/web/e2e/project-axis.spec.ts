@@ -474,7 +474,7 @@ test.describe("row chrome", () => {
     ).toHaveAttribute("data-testid", "rail-options");
   });
 
-  test("the header's + sits LEFT OF the settings ellipsis, and adds a PROJECT", async ({
+  test("the header's + sits LEFT OF the options glyph, and adds a PROJECT", async ({
     page,
   }) => {
     await expect(page.getByTestId("rail-add-project")).toHaveAttribute(
@@ -518,16 +518,10 @@ test.describe("row chrome", () => {
     await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
     await page.keyboard.press("Escape");
 
-    // AN ELLIPSIS, reversing the design doc's "sliders, not an ellipsis". That
-    // rule held while the panel had exactly one subject; it now carries filing
-    // AND past sessions, so sliders would promise filing and nothing else.
-    //
-    // VERTICAL, and it is the app's only overflow glyph — the horizontal one is
-    // unregistered, because a horizontal ellipsis is what every truncated name
-    // in this rail already renders. Asserted on the class lucide actually emits
-    // (`lucide-ellipsis-vertical`), not on the component name: the earlier
-    // version of this spec asserted `lucide-more-horizontal` and was wrong,
-    // because a deprecated alias does not name its own output.
+    // SLIDERS, as the design says (IA.md, D35): this menu holds exactly one
+    // subject, how the tree is filed, so a sliders glyph promises filing and
+    // nothing else. It wore an ellipsis while it also held Past sessions; that
+    // list has its own glyph in the brand header now (flow-creation.md §4.7).
     await expect(
       page
         .getByTestId("rail-options")
