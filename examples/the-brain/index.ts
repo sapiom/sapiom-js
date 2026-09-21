@@ -275,7 +275,6 @@ async function connectionString(
     if (!create) return null;
     db = await ctx.sapiom.database.create({
       handle,
-      duration: "7d",
       name: "The Brain",
       description: "Event bus + cursor for the fleet-orchestrator brain",
     });

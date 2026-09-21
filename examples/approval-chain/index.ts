@@ -295,7 +295,7 @@ async function persistTransition(
 ): Promise<void> {
   const db = await ctx.sapiom.database
     .get(handle)
-    .catch(() => ctx.sapiom.database.create({ duration: "7d", handle }));
+    .catch(() => ctx.sapiom.database.create({ handle }));
   const connectionString = db.connection?.connectionString;
   if (!connectionString) {
     ctx.logger.warn("ledger: database has no connection string yet", {
