@@ -95,7 +95,7 @@ test.describe("the header + opens a project", () => {
     // one workspace list, and the whole rail re-derives from it when the axis
     // changes. (A cross-RELOAD assertion belongs against a real server; the
     // mock holds settings in memory for one page load.)
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();

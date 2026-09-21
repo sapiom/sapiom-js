@@ -140,7 +140,7 @@ test.describe("(d) the section is BOUNDED", () => {
       });
 
     const before = await visible();
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     // "Projects" on both axes. Rationale at group-axis.spec.ts's openGroupAxis.
@@ -166,7 +166,7 @@ test.describe("(d) the section is BOUNDED", () => {
   test("group-axis rows disambiguate two agents that share a name", async ({
     page,
   }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
@@ -186,7 +186,7 @@ test.describe("(d) the section is BOUNDED", () => {
 
   /** And the groups are ABOVE the unrooted overflow, never below it. */
   test("the group rows render above the unrooted section", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
@@ -399,7 +399,7 @@ test.describe("(c) there is a way OUT", () => {
       .click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
 
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();

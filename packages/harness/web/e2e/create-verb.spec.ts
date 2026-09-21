@@ -17,6 +17,11 @@
  *  5. Links and long pastes are intake, not text (§4.6 step 1).
  *  6. Template Use routes through the screen (CF-D11).
  *  7. An empty project's name lands on the screen (D36).
+ *  8. A project row's New agent lands on the same screen, scoped to that
+ *     project (§4.2).
+ *  9. The options menu holds Group by and Sort by only; Past sessions opens
+ *     from the history glyph (§4.7, Q9). An empty project's row says it is
+ *     the door to the screen (D36).
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
@@ -528,5 +533,57 @@ test.describe("templates route through the screen", () => {
     const [call] = (await evidence(page)).createSessionCalls;
     expect(call?.req.initialPrompt).toBe("Summarise this spec.");
     expect(call?.req.initialSources).toEqual(["https://a.example/spec"]);
+  });
+});
+
+test.describe("the rail top", () => {
+  test("the options menu files the tree and nothing else; history has its own glyph", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+
+    const options = page.getByTestId("rail-options");
+    await expect(options).toHaveAttribute("aria-label", "Group and sort projects");
+    await expect(options.locator("svg.lucide-sliders-horizontal")).toHaveCount(1);
+    await options.click();
+    const menu = page.getByTestId("rail-options-menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByTestId("filing-group-by")).toBeVisible();
+    await expect(menu.getByTestId("filing-sort-by")).toBeVisible();
+    await expect(menu).not.toContainText("Past sessions");
+    await expect(page.getByTestId("past-sessions-trigger")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+
+    const history = page.getByTestId("rail-history");
+    await expect(history).toHaveAttribute("aria-label", "Past sessions");
+    await expect(history).toHaveAttribute("aria-haspopup", "dialog");
+    await history.click();
+    await expect(page.getByTestId("history-menu")).toBeVisible();
+    await expect(page.getByTestId("past-sessions-card")).toBeVisible();
+    await expect(page.getByTestId("exited-session-sess-leasing")).toBeVisible();
+    // One flyer at a time: opening the options menu retires the card.
+    await options.click();
+    await expect(page.getByTestId("history-menu")).toBeHidden();
+    await expect(menu).toBeVisible();
+  });
+
+  test("an empty project's row says it is the door to the screen (D36)", async ({
+    page,
+  }) => {
+    await page.goto("/?seed=0&mockStudioProjects=present");
+    await expect(page.locator(".rail-workflows")).toBeVisible();
+    await addProject(page, BLANK_PROJECT_ROOT);
+    // No agents, so no map to draw: the row's tooltip names what its name does.
+    await expect(page.getByTestId("project-select-blank-slate")).toHaveAttribute(
+      "data-tooltip",
+      "Create this project's first agent",
+    );
+    // A project that holds agents keeps its map.
+    await expect(page.getByTestId("project-select-acme-app")).toHaveAttribute(
+      "data-tooltip",
+      /Agent Map/,
+    );
   });
 });

@@ -471,7 +471,7 @@ test.describe("row chrome", () => {
     await expect(page.locator(".rail-header .row-disclosure")).toHaveCount(0);
     await expect(
       page.locator(".rail-header button[aria-expanded]"),
-    ).toHaveAttribute("data-testid", "history-trigger");
+    ).toHaveAttribute("data-testid", "rail-options");
   });
 
   test("the header's + sits LEFT OF the settings ellipsis, and adds a PROJECT", async ({
@@ -496,7 +496,7 @@ test.describe("row chrome", () => {
     expect(headerOrder).toEqual([
       "label",
       "rail-add-project",
-      "history-trigger",
+      "rail-options",
     ]);
 
     // And the header's label is NOT indented like a nav row: it aligns to the
@@ -530,23 +530,23 @@ test.describe("row chrome", () => {
     // because a deprecated alias does not name its own output.
     await expect(
       page
-        .getByTestId("history-trigger")
-        .locator("svg.lucide-ellipsis-vertical"),
+        .getByTestId("rail-options")
+        .locator("svg.lucide-sliders-horizontal"),
     ).toHaveCount(1);
     await expect(
       page
-        .getByTestId("history-trigger")
-        .locator("svg.lucide-sliders-horizontal"),
+        .getByTestId("rail-options")
+        .locator("svg.lucide-ellipsis-vertical"),
     ).toHaveCount(0);
     // No HORIZONTAL ellipsis anywhere in the rail.
     await expect(page.locator(".rail-shell svg.lucide-ellipsis")).toHaveCount(
       0,
     );
-    await expect(page.getByTestId("history-trigger")).toHaveAttribute(
+    await expect(page.getByTestId("rail-options")).toHaveAttribute(
       "aria-label",
-      "Rail settings",
+      "Group and sort projects",
     );
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     // VISIBLE dropdowns, not a menu of radio rows: each states its current
     // value on the face of the control.
     await expect(page.getByTestId("filing-group-by")).toBeVisible();
@@ -586,7 +586,7 @@ test.describe("row chrome", () => {
       "scratch",
     ]);
 
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-sort-by").selectOption("name");
     await page.keyboard.press("Escape");
     expect(await labels()).toEqual([
@@ -603,7 +603,7 @@ test.describe("row chrome", () => {
 
     await page.reload();
     await expect(page.getByTestId("workspace-group-polsia")).toBeVisible();
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await expect(page.getByTestId("filing-sort-by")).toHaveValue("name");
   });
 });

@@ -970,8 +970,7 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
 
   // A transcript-only review is another centre-pane owner. Closing it returns
   // to the same live Studio session without making the review adopt/resume.
-  await page.getByTestId("history-trigger").click();
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await page
     .getByTestId("history-2b6d9e10-7711-4c2a-8b0a-9e4f2d1c5a33")
     .click();

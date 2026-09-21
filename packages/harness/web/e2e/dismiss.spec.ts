@@ -11,14 +11,14 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".rail-workflows")).toBeVisible();
 });
 
-test.describe("session history dropdown", () => {
+test.describe("rail options menu", () => {
   test("closes on a click anywhere outside", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
-    const menu = page.getByTestId("history-menu");
+    await page.getByTestId("rail-options").click();
+    const menu = page.getByTestId("rail-options-menu");
     await expect(menu).toBeVisible();
 
     // Clicking inside the menu must NOT dismiss it (section headers are inert).
-    await menu.getByText("Past sessions", { exact: true }).click();
+    await menu.getByText("Projects", { exact: true }).click();
     await expect(menu).toBeVisible();
 
     await page.locator(".brand-lockup").click();
@@ -28,20 +28,20 @@ test.describe("session history dropdown", () => {
   test("closes on Escape and returns focus to the trigger", async ({
     page,
   }) => {
-    await page.getByTestId("history-trigger").click();
-    await expect(page.getByTestId("history-menu")).toBeVisible();
+    await page.getByTestId("rail-options").click();
+    await expect(page.getByTestId("rail-options-menu")).toBeVisible();
 
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("history-menu")).toBeHidden();
-    await expect(page.getByTestId("history-trigger")).toBeFocused();
+    await expect(page.getByTestId("rail-options-menu")).toBeHidden();
+    await expect(page.getByTestId("rail-options")).toBeFocused();
   });
 
   test("the trigger still toggles it closed", async ({ page }) => {
-    const trigger = page.getByTestId("history-trigger");
+    const trigger = page.getByTestId("rail-options");
     await trigger.click();
-    await expect(page.getByTestId("history-menu")).toBeVisible();
+    await expect(page.getByTestId("rail-options-menu")).toBeVisible();
     await trigger.click();
-    await expect(page.getByTestId("history-menu")).toBeHidden();
+    await expect(page.getByTestId("rail-options-menu")).toBeHidden();
   });
 });
 

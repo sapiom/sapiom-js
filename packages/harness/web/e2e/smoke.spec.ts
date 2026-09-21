@@ -643,8 +643,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     // Select an exited session that never had anything bound (from the merged
     // past-sessions list) — it opens as a dead session reviewed under its own
     // transcript title, carrying none of the boot session's binding.
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await expect(page.getByTestId("dead-session-pane")).toBeVisible();
     await expect(page.getByTestId("session-context-title")).toHaveText(
@@ -735,8 +734,7 @@ test("command palette: a failed path read shows an error but still offers the ty
 test("a past-session row opens the dead-session pane first; Resume is the explicit action", async ({
   page,
 }) => {
-  await page.getByTestId("history-trigger").click();
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await page.getByTestId("exited-session-sess-leasing").click();
 
   // One click = review the dead session. Nothing resumes silently.
@@ -759,24 +757,25 @@ test("a past-session row opens the dead-session pane first; Resume is the explic
   );
 });
 
-test("the sessions menu is ONE merged past-sessions list with status tags and rich meta", async ({
+test("Past sessions is ONE merged list beside the rail, opened from the history glyph", async ({
   page,
 }) => {
-  await page.getByTestId("history-trigger").click();
-  const menu = page.getByTestId("history-menu");
+  // The options menu files the tree and holds nothing else (flow-creation.md
+  // §4.7, Q9): no Past sessions row, no count badge.
+  await page.getByTestId("rail-options").click();
+  const menu = page.getByTestId("rail-options-menu");
   await expect(menu).toBeVisible();
+  await expect(menu).not.toContainText("Past sessions");
+  await expect(page.getByTestId("past-sessions-trigger")).toHaveCount(0);
+  await page.keyboard.press("Escape");
 
-  // Past sessions live behind one trigger row (badge count rides it), opening
-  // a sub-card beside the options menu.
-  await expect(page.getByTestId("past-sessions-trigger")).toContainText(
-    "Past sessions",
-  );
-  // One list — the old Exited/History split is gone.
-  await expect(menu.getByText("Exited", { exact: true })).toHaveCount(0);
-  await expect(menu.getByText("History", { exact: true })).toHaveCount(0);
-
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
+  const card = page.getByTestId("history-menu");
+  await expect(card).toBeVisible();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
+  // One list — the old Exited/History split is gone.
+  await expect(card.getByText("Exited", { exact: true })).toHaveCount(0);
+  await expect(card.getByText("History", { exact: true })).toHaveCount(0);
 
   // The registry's exited session renders ONCE (deduped against its own
   // history mirror) and resolves to a real resume.
@@ -785,7 +784,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(
     page.getByTestId("history-8f2b1c6a-4d3e-4a11-9c2f-1a2b3c4d5e6f"),
   ).toHaveCount(0);
-  await expect(menu.getByText("Build the leasing pipeline")).toHaveCount(1);
+  await expect(card.getByText("Build the leasing pipeline")).toHaveCount(1);
   await expect(exited).toHaveAttribute("data-resumable", "true");
   // An ordinary resume carries no state word — only the exceptions speak.
   await expect(exited).not.toContainText("from summary");
@@ -811,7 +810,7 @@ test("the sessions menu is ONE merged past-sessions list with status tags and ri
   await expect(transcript).not.toContainText("12 turns");
   await expect(transcript).toContainText("ago");
 
-  await page.screenshot({ path: "web/e2e/screenshots/past-sessions-menu.png" });
+  await page.screenshot({ path: "web/e2e/screenshots/past-sessions-card.png" });
 
   // Clicking the transcript entry opens the review pane — nothing starts
   // silently; resuming is the pane's explicit, honestly-labeled action.
@@ -842,9 +841,7 @@ test("a phantom past session reads 'nothing recorded' and never offers Resume", 
   // agent wrote no transcript, because the session ended before its first
   // prompt. On one real machine 16 of 49 registry rows measured this shape, and
   // every one rendered "resumable" and failed with exit 1 on click.
-  await page.getByTestId("history-trigger").click();
-  await expect(page.getByTestId("history-menu")).toBeVisible();
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
 
   const phantom = page.getByTestId("exited-session-sess-phantom");
@@ -881,8 +878,7 @@ test.describe("dead sessions never trap the user", () => {
   test("an exited session is reachable from the history menu and shows a dead-session pane, not a stuck terminal", async ({
     page,
   }) => {
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
 
     const pane = page.getByTestId("dead-session-pane");
@@ -900,8 +896,7 @@ test.describe("dead sessions never trap the user", () => {
   test("Resume on a dead session starts it running again and stays active in the header", async ({
     page,
   }) => {
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-resume").click();
 
@@ -917,8 +912,7 @@ test.describe("dead sessions never trap the user", () => {
     page,
   }) => {
     // The boot session is running, so falling back to it is always possible here.
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-close").click();
 
@@ -929,8 +923,7 @@ test.describe("dead sessions never trap the user", () => {
       "sess-boot",
     );
 
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await expect(page.getByTestId("past-sessions-card")).toBeVisible();
     await expect(page.getByTestId("exited-session-sess-leasing")).toHaveCount(
       0,
@@ -947,8 +940,8 @@ test("the rail's filing panel offers Group by / Sort by as visible dropdowns", a
   await expect(page.getByTestId("rail-view-toggle")).toHaveCount(0);
   await expect(page.locator("[data-testid^='custom-group-']")).toHaveCount(0);
 
-  await page.getByTestId("history-trigger").click();
-  await expect(page.getByTestId("history-menu")).toBeVisible();
+  await page.getByTestId("rail-options").click();
+  await expect(page.getByTestId("rail-options-menu")).toBeVisible();
   await expect(page.getByTestId("filing-group-by")).toHaveValue("project");
   await expect(page.getByTestId("filing-sort-by")).toHaveValue("recent");
   // Deployment is RETIRED: it bucketed `definitionId != null`, a fact every
@@ -1079,8 +1072,7 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
   }) => {
     // Resume a different session first so switching back is observable
     // (review pane first, then the explicit Resume).
-    await page.getByTestId("history-trigger").click();
-    await page.getByTestId("past-sessions-trigger").hover();
+    await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-resume").click();
     const header = page.getByTestId("session-context");

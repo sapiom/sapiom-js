@@ -200,8 +200,7 @@ for (const mode of [
     );
     let archivedSession: string | null = null;
     if (mode.startsWith("archived")) {
-      await page.getByTestId("history-trigger").click();
-      await page.getByTestId("past-sessions-trigger").hover();
+      await page.getByTestId("rail-history").click();
       await page
         .getByTestId(
           `exited-session-${mode.endsWith("Codex") ? "sess-leasing-2" : "sess-leasing"}`,

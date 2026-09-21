@@ -55,8 +55,8 @@ async function expectUncropped(page: Page, popover: Locator): Promise<void> {
 }
 
 test("history menu opens uncropped off the rail header", async ({ page }) => {
-  await page.getByTestId("history-trigger").click();
-  await expectUncropped(page, page.getByTestId("history-menu"));
+  await page.getByTestId("rail-options").click();
+  await expectUncropped(page, page.getByTestId("rail-options-menu"));
 });
 
 test("profile menu opens uncropped off the rail footer", async ({ page }) => {

@@ -130,7 +130,7 @@ test("agent rows are untouched: the mark is a fact about a project", async ({
  * parameter, invisible to every other spec that counts sessions on `deep`.
  */
 const openGroupAxis = async (page: Page): Promise<void> => {
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("rail-options").click();
   await page.getByTestId("filing-group-by").selectOption("group");
   await page.keyboard.press("Escape");
   // The create row appears only once the stored arrangement AND the launch

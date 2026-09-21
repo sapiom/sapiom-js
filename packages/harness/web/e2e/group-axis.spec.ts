@@ -25,7 +25,7 @@ const WORKERS = "workspace-group-polsia/services/workers";
 
 /** Switch the rail to the Group axis and wait for it to be editable. */
 async function openGroupAxis(page: Page): Promise<void> {
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("rail-options").click();
   await page.getByTestId("filing-group-by").selectOption("group");
   await page.keyboard.press("Escape");
   // The title stays "Projects" on BOTH axes: the rail lists projects either
@@ -362,7 +362,7 @@ test.describe("persistence", () => {
     await page.reload();
     // "Projects" on both axes. Rationale at openGroupAxis, above.
     await expect(page.locator(".rail-header-label")).toHaveText("Projects");
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await expect(page.getByTestId("filing-group-by")).toHaveValue("group");
   });
 });
