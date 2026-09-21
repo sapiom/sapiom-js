@@ -67,9 +67,18 @@ export interface ResolvedEnvironment {
   credentials: CredentialEntry | null;
 }
 
+/**
+ * The per-user Sapiom state directory (`~/.sapiom`). Holds the credential store
+ * and, beside it, the last-known-good authoring primer cache
+ * (see instructions-fetch.ts).
+ */
+export function sapiomStateDirPath(): string {
+  return path.join(os.homedir(), ".sapiom");
+}
+
 /** Absolute path of the credential store shared by CLI, MCP, and Studio. */
 export function credentialsFilePath(): string {
-  return path.join(os.homedir(), ".sapiom", "credentials.json");
+  return path.join(sapiomStateDirPath(), "credentials.json");
 }
 
 function isMissingCredentialsFile(error: unknown): boolean {
