@@ -49,7 +49,6 @@ import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../share
 import type {
   ProjectBootstrapLifecycleEvent,
   ProjectAgentSession,
-  StudioProjectSummary,
 } from "@sapiom/agent-map";
 import {
   projectRoots,
