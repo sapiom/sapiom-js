@@ -1535,7 +1535,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     database: {
-      create: (input) =>
+      // A Sapiom Postgres is permanent (SAP-3100): `create({})` is the whole call,
+      // and the stub, like the gateway, returns no `duration` and no `expiresAt`.
+      create: (input = {}) =>
         Promise.resolve(
           r("database.create", [input], () => {
             const handle = input.handle ?? null;
@@ -1548,7 +1550,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               status: "active",
               region: input.region ?? "us-east-1",
               pgVersion: input.pgVersion ?? 17,
-              duration: input.duration,
               connection: {
                 connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/${name}`,
                 host: STUB_DB_HOST,
@@ -1557,7 +1558,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 password: "stub_pass",
                 databaseName: name,
               },
-              expiresAt: "2099-01-01T00:00:00Z",
               createdAt: "2099-01-01T00:00:00Z",
             };
           }) as Database,
@@ -1572,7 +1572,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             status: "active",
             region: "us-east-1",
             pgVersion: 17,
-            duration: "1h",
             connection: {
               connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/stub-${idOrHandle}`,
               host: STUB_DB_HOST,
@@ -1581,7 +1580,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               password: "stub_pass",
               databaseName: `stub-${idOrHandle}`,
             },
-            expiresAt: "2099-01-01T00:00:00Z",
             createdAt: "2099-01-01T00:00:00Z",
           })) as Database,
         ),

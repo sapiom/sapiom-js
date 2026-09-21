@@ -67,22 +67,22 @@ If a single process makes calls on behalf of more than one agent or trace, deriv
 
 Each capability is a namespace, importable from the barrel or its own subpath (e.g. `@sapiom/tools/sandboxes`). Every capability has its own README with usage details, preconditions, and gotchas the type signatures can't express — read it before first use.
 
-| Namespace           | What it is                                                                                            | Docs                                                         |
-| ------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `sandboxes`         | Isolated, ephemeral compute                                                                           | [src/sandboxes](./src/sandboxes/README.md)                   |
-| `repositories`      | Private, in-network git repos                                                                         | [src/repositories](./src/repositories/README.md)             |
-| `agent`             | Coding agents (LLM execution)                                                                         | [src/agent](./src/agent/README.md)                           |
-| `fileStorage`       | Tenant-scoped object storage (presigned URLs)                                                         | [src/file-storage](./src/file-storage/README.md)             |
-| `contentGeneration` | Media generation (images + video; audio soon), with optional `storage`                                | [src/content-generation](./src/content-generation/README.md) |
-| `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`) | [src/search](./src/search/README.md)                         |
-| `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                        | [src/orchestrations](./src/orchestrations/README.md)         |
-| `schedules`         | Schedule a deployed orchestration to run on a cron, or once at a set time                             | [src/schedules](./src/schedules/README.md)                   |
-| `database`          | On-demand Postgres databases, returned with direct connection credentials                             | [src/database](./src/database/README.md)                     |
-| `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks               | [src/email](./src/email/README.md)                           |
-| `domains`           | Register domain names and manage their DNS records                                                    | [src/domains](./src/domains/README.md)                       |
-| `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)        | [src/memory](./src/memory/README.md)                         |
-| `google`            | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                             | [src/google](./src/google/README.md)                         |
-| `github`            | List a tenant's GitHub repositories                                                                   | [src/github](./src/github/README.md)                         |
+| Namespace           | What it is                                                                                              | Docs                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `sandboxes`         | Isolated, ephemeral compute                                                                             | [src/sandboxes](./src/sandboxes/README.md)                   |
+| `repositories`      | Private, in-network git repos                                                                           | [src/repositories](./src/repositories/README.md)             |
+| `agent`             | Coding agents (LLM execution)                                                                           | [src/agent](./src/agent/README.md)                           |
+| `fileStorage`       | Tenant-scoped object storage (presigned URLs)                                                           | [src/file-storage](./src/file-storage/README.md)             |
+| `contentGeneration` | Media generation (images + video; audio soon), with optional `storage`                                  | [src/content-generation](./src/content-generation/README.md) |
+| `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`)   | [src/search](./src/search/README.md)                         |
+| `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                          | [src/orchestrations](./src/orchestrations/README.md)         |
+| `schedules`         | Schedule a deployed orchestration to run on a cron, or once at a set time                               | [src/schedules](./src/schedules/README.md)                   |
+| `database`          | Permanent Postgres databases (yours until you delete them), returned with direct connection credentials | [src/database](./src/database/README.md)                     |
+| `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks                 | [src/email](./src/email/README.md)                           |
+| `domains`           | Register domain names and manage their DNS records                                                      | [src/domains](./src/domains/README.md)                       |
+| `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)          | [src/memory](./src/memory/README.md)                         |
+| `google`            | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                               | [src/google](./src/google/README.md)                         |
+| `github`            | List a tenant's GitHub repositories                                                                     | [src/github](./src/github/README.md)                         |
 
 ## Composing capabilities
 
