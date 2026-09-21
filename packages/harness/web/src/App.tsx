@@ -2535,10 +2535,6 @@ export const App = (): JSX.Element => {
     }
     runFolderStep("new-project", template);
   };
-  /** Where the composer creates: the stated project, else the project root. */
-  const composerRoot = (): string | null =>
-    composerProject?.root ?? (projectRoot || null);
-
   /**
    * SUBMIT, in order (flow-creation.md §4.4, D30, D31).
    *
