@@ -5,7 +5,7 @@ import type {
   JSX,
   ReactNode,
 } from "react";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type { WorkspaceKey } from "@shared/workspace-scope";
 
 import { Icon } from "./Icon";
 import { WorkflowRow } from "./WorkflowRow";

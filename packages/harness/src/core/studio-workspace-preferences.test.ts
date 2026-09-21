@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   STUDIO_WORKSPACE_PREFERENCE_SCHEMA_VERSION,
   type StudioWorkspaceSelection,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import { StudioWorkspacePreferenceStore } from "./studio-workspace-preferences.js";
 
 describe("StudioWorkspacePreferenceStore", () => {

@@ -1,10 +1,10 @@
-import type { AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import type { AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentMapWorkspaceResponse,
   AcceptedProposalDelta,
   StudioProjectId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import { ApiError, errorMessage, type HarnessApi } from "./api";
 import { track } from "./track";

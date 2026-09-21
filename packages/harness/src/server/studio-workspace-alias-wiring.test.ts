@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, it } from "vitest";
 
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import type { AppState } from "../shared/types.js";
 import { startServer, type HarnessServer } from "./index.js";
 

@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 import { isAgentProjectScanIgnoredDir } from "./agent-project-discovery.js";
 import { normalizeWatchPath } from "./canvas-watcher.js";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import {
   snapshotWorkflowSourceRootsAsync,
   snapshotWorkspaceWorkflowsAsync,

@@ -1,3 +1,5 @@
+import { AssistantActivity } from "./AssistantActivity";
+import type { AssistantProjection } from "../lib/assistant-state";
 import {
   useCallback,
   useEffect,
@@ -16,11 +18,11 @@ import type {
   SessionSummary,
   WorkflowInfo,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectSummary,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import type { AuthStartResponse, FsListResponse } from "../lib/api";
 import type { ToastTone } from "../lib/toast";
@@ -101,6 +103,7 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 const api = createApi();
 
 interface WorkflowsRailProps {
+  assistant?: AssistantProjection;
   /** Resizable width (px) — the rail can shrink to minWidth under pressure. */
   width: number;
   minWidth: number;
@@ -114,13 +117,12 @@ interface WorkflowsRailProps {
   activeSessionId: string | null;
   /** The focused agent (or bare folder) path — the single filled selection. */
   focusedAgentPath: string | null;
-  /** Opaque server-issued identities that join project roots to the local
-   * system-graph endpoint without exposing paths in URLs. */
+  /** Server-issued scope keys that join visible roots to durable project IDs. */
   workspaceScopes: AppState["workspaceScopes"];
   /** Presence selects the additive plan-first rail; absence preserves legacy. */
   studioProjects: readonly StudioProjectSummary[] | undefined;
   studioSelection: StudioWorkspaceSelection | null;
-  /** The project whose dependency graph currently owns the full main area. */
+  /** The selected project whose durable identity has not resolved yet. */
   selectedWorkspaceKey: WorkspaceKey | null;
   /** Selects an exact project graph without changing the active session or
    * either preserved agent pane. */
@@ -182,8 +184,6 @@ interface WorkflowsRailProps {
   onOpenProject: (root: string) => Promise<unknown>;
   launchDir: string | null;
   listDir: (path?: string) => Promise<FsListResponse>;
-  /** Starts a coding-agent session and owns its failure feedback. */
-  onStartProjectSession: (root: string, label: string) => Promise<void>;
   /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
   listHarnesses: () => Promise<HarnessEntry[]>;
   /**
@@ -268,22 +268,21 @@ const SORT_LABELS: Record<RailSort, string> = {
 };
 
 /**
- * The project row's overflow menu.
+ * The project row's trailing actions: New agent, then Remove.
  *
- * The adjacent `+` has one stable meaning: start a coding-agent session at this
- * project's root. This menu keeps the lower-frequency, explicitly named
- * project actions, including creating or scaffolding a Sapiom agent. Opening
- * the Agent Map never takes ownership of those ordinary build controls.
+ * HOVER ACTIONS, NOT A MENU (design-eng D33: "a project row's verbs are hover
+ * actions on the header ... a per-row menu would be a new idiom"). The overflow
+ * this replaces was a popover, a card and a 248px min-width spent on two rows,
+ * one of them destructive. The `+` is New agent, scoped to this project (IA.md
+ * 219, D34a); a bare project (sessions, no agent yet) offers Scaffold instead,
+ * which grows an agent inside the session already running there.
  *
- * Named items say it instead. Each carries the project's own label, so the
- * subject is read rather than inferred, and the destructive one is last and
- * marked.
- *
- * The trigger keeps its own open state and its own ref: `triggerRef` is what
- * the remove confirmation returns focus to, and the menu item that opened it
- * has unmounted by then.
+ * The X removes the project from the rail; it never touches a file. `onRemove`
+ * is handed the button so the confirmation returns focus to the control that
+ * opened it — the reason the menu needed a ref of its own, and the reason this
+ * still does.
  */
-function ProjectRowMenu({
+function ProjectRowActions({
   label,
   create,
   onRemove,
@@ -291,7 +290,7 @@ function ProjectRowMenu({
   label: string;
   /** The create action this project currently offers, or null while one is
    *  mid-creation. A bare project (sessions, no agent) scaffolds into its
-   *  existing session; every other project starts a new one at the root. */
+   *  existing session; every other project opens New agent scoped to it. */
   create: {
     kind: "create" | "scaffold";
     testid: string;
@@ -300,80 +299,41 @@ function ProjectRowMenu({
   } | null;
   onRemove: (trigger: HTMLButtonElement | null) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const removeRef = useRef<HTMLButtonElement>(null);
   return (
     <>
+      {create && (
+        <button
+          type="button"
+          className="workspace-row-action"
+          data-testid={create.testid}
+          aria-label={create.label}
+          data-tooltip={create.label}
+          onClick={create.run}
+        >
+          <Icon
+            name={create.kind === "scaffold" ? "Sparkles" : "Plus"}
+            size={13}
+          />
+        </button>
+      )}
+      {/* REMOVE. An `X`, not a trash can: this closes a project and ends its
+          sessions, and never touches a file — a bin glyph would say the
+          opposite of the copy in the confirm. The subject the menu item spelled
+          out ("Remove acme-app from the rail") now rides the accessible name and
+          the tooltip, and the confirmation restates it, with the count of
+          sessions it will end, before anything happens. */}
       <button
         type="button"
-        ref={triggerRef}
-        className="workspace-row-action project-row-menu-trigger"
-        data-testid={`project-menu-${label}`}
-        aria-label={`Actions for ${label}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        data-tooltip="Project actions"
-        onClick={() => setOpen((prev) => !prev)}
+        ref={removeRef}
+        className="workspace-row-action project-row-remove"
+        data-testid={`project-remove-${label}`}
+        aria-label={`Remove ${label} from the rail`}
+        data-tooltip="Remove from the rail"
+        onClick={() => onRemove(removeRef.current)}
       >
-        <Icon name="EllipsisVertical" size={13} />
+        <Icon name="X" size={13} />
       </button>
-      <AnchoredPopover
-        open={open}
-        anchorRef={triggerRef}
-        onDismiss={() => setOpen(false)}
-        placement="down-end"
-        className="menu-flyer"
-        testid={`project-menu-card-${label}`}
-      >
-        <div className="connect-card project-row-menu">
-          <div className="connect-card-body" role="menu">
-            {create && (
-              <button
-                type="button"
-                role="menuitem"
-                className="session-dropdown-item"
-                data-testid={create.testid}
-                onClick={() => {
-                  setOpen(false);
-                  create.run();
-                }}
-              >
-                <span className="session-item-icon">
-                  <Icon
-                    name={create.kind === "scaffold" ? "Sparkles" : "Plus"}
-                    size={13}
-                  />
-                </span>
-                <span className="session-item-copy">
-                  <span className="session-item-title">{create.label}</span>
-                </span>
-              </button>
-            )}
-            {/* REMOVE. An `X`, not a trash can: this closes a project and ends
-                its sessions, and never touches a file — a bin glyph would say
-                the opposite of the copy in the confirm. */}
-            <button
-              type="button"
-              role="menuitem"
-              className="session-dropdown-item project-row-menu-danger"
-              data-testid={`project-remove-${label}`}
-              onClick={() => {
-                setOpen(false);
-                onRemove(triggerRef.current);
-              }}
-            >
-              <span className="session-item-icon">
-                <Icon name="X" size={13} />
-              </span>
-              <span className="session-item-copy">
-                <span className="session-item-title">
-                  Remove {label} from the rail
-                </span>
-              </span>
-            </button>
-          </div>
-        </div>
-      </AnchoredPopover>
     </>
   );
 }
@@ -402,6 +362,8 @@ function ProjectRowMenu({
  * `=== "true"` checks that silently miss the unknown state.
  */
 function PastSessionRow({
+  assistant,
+  sessionId,
   testid,
   harness,
   title,
@@ -411,6 +373,8 @@ function PastSessionRow({
   isSelected,
   onOpen,
 }: {
+  assistant?: AssistantProjection;
+  sessionId?: string;
   testid: string;
   harness: HarnessKind;
   title: string;
@@ -444,6 +408,7 @@ function PastSessionRow({
         <span className="session-item-title">{title}</span>
         <span className="session-item-meta">{meta}</span>
       </span>
+      {sessionId && <AssistantActivity assistant={assistant} sessionId={sessionId} />}
     </button>
   );
 }
@@ -455,6 +420,7 @@ function PastSessionRow({
  * keyed to the focused agent.
  */
 export function WorkflowsRail({
+  assistant,
   width,
   minWidth,
   workflows,
@@ -491,7 +457,6 @@ export function WorkflowsRail({
   onOpenProject,
   launchDir,
   listDir,
-  onStartProjectSession,
   listHarnesses,
   onCreateAgent,
   onScaffoldInSession,
@@ -1187,6 +1152,8 @@ export function WorkflowsRail({
                             : summary?.resumeMode;
                         return (
                           <PastSessionRow
+                            assistant={assistant}
+                            sessionId={row.session.id}
                             key={row.session.id}
                             testid={`exited-session-${row.session.id}`}
                             harness={row.session.harness}
@@ -1436,34 +1403,13 @@ export function WorkflowsRail({
                             <Icon name="Waypoints" size={13} />
                           </button>
                         )}
-                      {/* START A SESSION HERE. This is the frequent project-row
-                          action and therefore stays one click away, immediately
-                          before the overflow menu. Its accessible name supplies
-                          the noun the glyph cannot: this starts a coding-agent
-                          SESSION at the project root. It does not scaffold a
-                          Sapiom agent. */}
-                      {!pending && (
-                        <button
-                          type="button"
-                          className="workspace-row-action"
-                          data-testid={`project-start-session-${project.label}`}
-                          aria-label={`Start a session in ${project.label}`}
-                          data-tooltip="Start a session here"
-                          onClick={() =>
-                            void onStartProjectSession(
-                              project.root,
-                              project.label,
-                            )
-                          }
-                        >
-                          <Icon name="Plus" size={13} />
-                        </button>
-                      )}
-                      {/* NAMED PROJECT ACTIONS. The destructive action stays in
-                          this menu instead of masquerading as a peer of the
-                          session shortcut. Legacy-only agent creation also
-                          remains spelled out here rather than sharing the `+`. */}
-                      <ProjectRowMenu
+                      {/* THE ROW'S VERBS, as hover actions rather than an
+                          overflow menu (D33). The `+` is New agent, scoped to
+                          this project (IA.md 219, D34a); the destructive one is
+                          last and marked. A plain session is NOT here: it
+                          starts from the tab strip, or from the Start on the
+                          project's own pane (D34e, D35 item 6). */}
+                      <ProjectRowActions
                         label={project.label}
                         create={
                           creating
@@ -1478,16 +1424,17 @@ export function WorkflowsRail({
                               : {
                                   kind: "create",
                                   testid: `project-create-agent-${project.label}`,
-                                  label: `Create an agent in ${project.label}`,
+                                  label: `New agent in ${project.label}`,
                                   run: () =>
                                     onCreateAgent(project.root, project.label),
                                 }
                         }
                         onRemove={(trigger) => {
-                          // Focus returns to the ⋮, not to the menu item that
-                          // opened the dialog: that item unmounts with the
-                          // popover, and a `triggerRef` pointing at a detached
-                          // node restores focus to <body>.
+                          // Focus returns to the X itself. The menu this
+                          // replaced had to hand back its trigger instead: the
+                          // item that opened the dialog unmounted with the
+                          // popover, and a ref on a detached node restores
+                          // focus to <body>.
                           removeTriggerRef.current = trigger;
                           setRemoving({
                             root: project.root,
@@ -1518,8 +1465,8 @@ export function WorkflowsRail({
                     />
                   )}
                 {/* Preserve the scan boundary explanation for an empty project.
-                    First-agent creation belongs to the project menu; an empty
-                    project never gets a separate inline creation action. */}
+                    First-agent creation is the row's own `+`; an empty project
+                    never gets a separate inline creation action (D36). */}
                 {!collapsed &&
                   empty &&
                   !creating &&
@@ -1578,6 +1525,13 @@ export function WorkflowsRail({
                     focusedAgentPath={focusedAgentPath}
                     onFocusAgent={focusProjectAgent}
                     sessions={projectSessions}
+                    /* D34(c): every group row carries the project row's `+`,
+                       scoped to the project holding the group's members. A
+                       group has no directory, so the project is the only place
+                       a new agent can go. */
+                    onCreateAgent={() =>
+                      onCreateAgent(project.root, project.label)
+                    }
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>

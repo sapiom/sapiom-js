@@ -1,0 +1,171 @@
+{
+  "name": "@sapiom/agent-map",
+  "version": "0.1.0",
+  "description": "Shared Agent Map contracts and local project persistence.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sapiom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sapiom/sapiom-js.git",
+    "directory": "packages/agent-map"
+  },
+  "main": "./dist/shared/agent-map.js",
+  "types": "./dist/shared/agent-map.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/shared/agent-map.d.ts",
+      "import": "./dist/shared/agent-map.js"
+    },
+    "./project-id": {
+      "types": "./dist/shared/project-id.d.ts",
+      "import": "./dist/shared/project-id.js"
+    },
+    "./codec": {
+      "types": "./dist/shared/agent-map-codec.d.ts",
+      "import": "./dist/shared/agent-map-codec.js"
+    },
+    "./canonical": {
+      "types": "./dist/shared/agent-map-canonical-pure.d.ts",
+      "import": "./dist/shared/agent-map-canonical-pure.js"
+    },
+    "./schema": {
+      "types": "./dist/core/agent-map-proposal-schema.d.ts",
+      "import": "./dist/core/agent-map-proposal-schema.js"
+    },
+    "./validation": {
+      "types": "./dist/core/agent-map-proposal-validator.d.ts",
+      "import": "./dist/core/agent-map-proposal-validator.js"
+    },
+    "./node/canonical": {
+      "types": "./dist/shared/agent-map-canonical.d.ts",
+      "import": "./dist/shared/agent-map-canonical.js"
+    },
+    "./node/version-codec": {
+      "types": "./dist/shared/agent-map-version-codec.d.ts",
+      "import": "./dist/shared/agent-map-version-codec.js"
+    },
+    "./node/version": {
+      "types": "./dist/core/agent-map-version.d.ts",
+      "import": "./dist/core/agent-map-version.js"
+    },
+    "./node/version-resolver": {
+      "types": "./dist/core/agent-map-version-resolver.d.ts",
+      "import": "./dist/core/agent-map-version-resolver.js"
+    },
+    "./request-namespace": {
+      "types": "./dist/core/project-request-namespace.d.ts",
+      "import": "./dist/core/project-request-namespace.js"
+    },
+    "./node/agent-map-workspace-store": {
+      "types": "./dist/core/agent-map-workspace-store.d.ts",
+      "import": "./dist/core/agent-map-workspace-store.js"
+    },
+    "./node/agent-map-proposal-service": {
+      "types": "./dist/core/agent-map-proposal-service.d.ts",
+      "import": "./dist/core/agent-map-proposal-service.js"
+    },
+    "./node/agent-map-implementation-bindings": {
+      "types": "./dist/core/agent-map-implementation-bindings.d.ts",
+      "import": "./dist/core/agent-map-implementation-bindings.js"
+    },
+    "./node/agent-map-aggregate-migration": {
+      "types": "./dist/core/agent-map-aggregate-migration.d.ts",
+      "import": "./dist/core/agent-map-aggregate-migration.js"
+    },
+    "./node/agent-map-empty-legacy-container": {
+      "types": "./dist/core/agent-map-empty-legacy-container.d.ts",
+      "import": "./dist/core/agent-map-empty-legacy-container.js"
+    },
+    "./node/durable-file-lock": {
+      "types": "./dist/core/durable-file-lock.d.ts",
+      "import": "./dist/core/durable-file-lock.js"
+    },
+    "./node/agent-map-initialization-record": {
+      "types": "./dist/core/agent-map-initialization-record.d.ts",
+      "import": "./dist/core/agent-map-initialization-record.js"
+    },
+    "./node/build-plan-canonicalization": {
+      "types": "./dist/core/build-plan-canonicalization.d.ts",
+      "import": "./dist/core/build-plan-canonicalization.js"
+    },
+    "./build-plan": {
+      "types": "./dist/shared/build-plan.d.ts",
+      "import": "./dist/shared/build-plan.js"
+    },
+    "./node/agent-brief": {
+      "types": "./dist/shared/agent-brief.d.ts",
+      "import": "./dist/shared/agent-brief.js"
+    },
+    "./node/build-plan-codec": {
+      "types": "./dist/shared/build-plan-codec.d.ts",
+      "import": "./dist/shared/build-plan-codec.js"
+    },
+    "./node/agent-map-legacy-migration": {
+      "types": "./dist/shared/agent-map-legacy-migration.d.ts",
+      "import": "./dist/shared/agent-map-legacy-migration.js"
+    },
+    "./agent-map-initialization": {
+      "types": "./dist/shared/agent-map-initialization.d.ts",
+      "import": "./dist/shared/agent-map-initialization.js"
+    },
+    "./workspace-scope": {
+      "types": "./dist/shared/workspace-scope.d.ts",
+      "import": "./dist/shared/workspace-scope.js"
+    },
+    "./project-roots": {
+      "types": "./dist/shared/project-roots.d.ts",
+      "import": "./dist/shared/project-roots.js"
+    },
+    "./paths": {
+      "types": "./dist/shared/paths.d.ts",
+      "import": "./dist/shared/paths.js"
+    },
+    "./node/canonical-graph-path": {
+      "types": "./dist/core/canonical-graph-path.d.ts",
+      "import": "./dist/core/canonical-graph-path.js"
+    },
+    "./node/studio-project-catalog": {
+      "types": "./dist/core/studio-project-catalog.d.ts",
+      "import": "./dist/core/studio-project-catalog.js"
+    },
+    "./node/project-resolution": {
+      "types": "./dist/core/project-resolution.d.ts",
+      "import": "./dist/core/project-resolution.js"
+    },
+    "./node/state-paths": {
+      "types": "./dist/core/state-paths.d.ts",
+      "import": "./dist/core/state-paths.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm build",
+    "test:package": "node --test scripts/package-boundaries.test.mjs && pnpm build && node scripts/check-package.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "~5.9.3",
+    "vitest": "^3.0.0",
+    "@types/uuid": "^10.0.0",
+    "esbuild": "^0.28.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "zod": "^3.25.0",
+    "uuid": "^10.0.0"
+  }
+}

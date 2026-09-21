@@ -4,7 +4,7 @@ import type {
   ProjectAgentSession,
   ProjectBootstrapErrorCode,
   ProjectBootstrapMetadata,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
 
 export type PersistedIdentityMigration = {

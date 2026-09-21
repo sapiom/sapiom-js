@@ -2,11 +2,11 @@ import type {
   AgentMapWorkspaceState,
   ProjectAgentSession,
   StudioProjectId,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { HarnessSession } from "../shared/types.js";
-import { isWithinDir } from "../shared/paths.js";
-import { canonicalGraphPath } from "./canonical-graph-path.js";
-import type { StudioProjectIdentity } from "./studio-project-catalog.js";
+import { isWithinDir } from "@sapiom/agent-map/paths";
+import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
+import type { StudioProjectIdentity } from "@sapiom/agent-map/node/studio-project-catalog";
 
 export interface FocusedProjectContextDetails {
   confirmedRevision?: {

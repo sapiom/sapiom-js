@@ -24,7 +24,7 @@ decompose ─▶ keyframe ⇄ collectKeyframe ─▶ animate ⇄ collect ─▶ 
 ## Authoring
 
 - An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run, ... })`. Keep exactly one `defineAgent(...)` export.
-- **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. One-shot LLM work uses `ctx.sapiom.llm.run({ request: { system, messages, max_tokens } })` through the gateway.
+- **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. This template's one-shot LLM work is `ctx.sapiom.llm.run({ request: { system, messages, max_tokens } })`; which capability a step should call is the served rule ([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface)).
 - **Async pause/resume.** A launched capability (`images.launch`, `video.launch`) returns a dispatch handle; `return pauseUntilSignal(handle, { resumeStep })` suspends the step until the job's signal arrives. The step must also **declare** the edge: `pause: { signal, resumeStep }`. The resumed step receives an `ImageResultPayload` / `VideoResultPayload` (`{ outputs: [{ fileId?, downloadUrl?, generationError? }] }` — the signal fires on either terminal outcome, so check `generationError` before treating a missing `fileId` as a storage problem).
 - **Why `keyframe`/`animate` are sequential, not one paused step per job at once.** A paused step waits on a single `(signal, correlationId)` pair. Launching every job up front and then draining would risk one finishing before we've paused on it — its resume signal would have nowhere to land. Launching shot `i` only after shot `i-1` resumes keeps a paused step always waiting before its job can complete. This is also why keyframes use `images.launch` rather than a concurrent `Promise.all` of `images.create`: the synchronous routed call holds its request open for the full generate+store, which meets Core's 30s router cap under fan-out — `launch` submits and returns as soon as the job is enqueued, so it never does.
 
@@ -48,3 +48,13 @@ This is the priciest template in the gallery once you go past one shot: a full r
 ## Determinism
 
 A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Capture non-deterministic values once and pass them forward via the `goto(...)` input or `ctx.shared` rather than recomputing them. The `keyframe ⇄ collectKeyframe` loop advances a `keyframeIndex` counter and the `animate ⇄ collect` loop advances a separate `animateIndex` counter, both in `ctx.shared`.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.0 of
+that text; `sapiom_dev_agents_check` warns when the served copy differs.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->

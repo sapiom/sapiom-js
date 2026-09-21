@@ -33,3 +33,13 @@ Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev t
 ## Determinism
 
 A step body runs **once** on the happy path; it re-runs only on retry (after a throw). Every timestamp — contact creation, touch sends, reply time — is captured at the DB boundary via Postgres `now()`, not a per-row JS clock, so retries don't skew the campaign log.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.0 of
+that text; `sapiom_dev_agents_check` warns when the served copy differs.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->

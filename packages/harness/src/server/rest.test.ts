@@ -36,6 +36,8 @@ import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import {
   AdapterNotFoundError,
   ExternalHarnessError,
+  McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SessionAlreadyLiveError,
   SessionNotResumeableError,
   SpawnTargetError,
@@ -61,6 +63,7 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
     ),
     create: vi.fn(),
     resume: vi.fn(),
+    restartForMcpCredentials: vi.fn(),
     kill: vi.fn(() => true),
     write: vi.fn(() => true),
     submitInput: vi.fn(async () => true),
@@ -184,6 +187,22 @@ describe("createRestRouter", () => {
   });
 
   describe("GET /state", () => {
+    it("reads the Assistant projection after asynchronous inventory finishes", async () => {
+      let release!: () => void;
+      const inventory = new Promise<void>(resolve => { release = resolve; });
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      let revision = 1;
+      const getAssistantState = vi.fn(() => ({ hostInstanceId: "host", authorityRevision: "auth", revision, enabled: false, sessions: [] }));
+      start({ getAssistantState, listWorkflows: async () => { entered(); await inventory; return []; } });
+      const response = fetch(`${baseUrl}/state`);
+      await started;
+      expect(getAssistantState).not.toHaveBeenCalled();
+      revision = 2;
+      release();
+      expect((await (await response).json() as { assistant: unknown }).assistant).toEqual(getAssistantState());
+    });
+
     it("reports unauthenticated with empty workflows/macros/sessions by default", async () => {
       start();
       const res = await fetch(`${baseUrl}/state`);
@@ -542,6 +561,25 @@ describe("createRestRouter", () => {
   });
 
   describe("POST /sessions", () => {
+    it("409s when the Sapiom connection changes before process admission", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.create).mockRejectedValue(
+        new McpCredentialGenerationChangedError(),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/tmp/proj", harness: "claude-code" }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+      });
+    });
+
     it("preserves the initial task and scaffold request without an input-route round trip", async () => {
       const sessionManager = fakeSessionManager();
       vi.mocked(sessionManager.create).mockResolvedValue(exitedSession());
@@ -1345,6 +1383,56 @@ describe("createRestRouter", () => {
     });
   });
 
+  describe("POST /sessions/:id/restart-mcp", () => {
+    it("returns the replacement session from the credential-scoped restart", async () => {
+      const stale = exitedSession({
+        id: "stale-session",
+        status: "running",
+        mcpAuthState: "restart-required",
+      });
+      const sessionManager = fakeSessionManager([stale]);
+      (
+        sessionManager.restartForMcpCredentials as ReturnType<typeof vi.fn>
+      ).mockResolvedValue({ ...stale, mcpAuthState: "current" });
+      start({ sessionManager });
+
+      const res = await fetch(
+        `${baseUrl}/sessions/stale-session/restart-mcp`,
+        { method: "POST", headers: TOKEN_HEADER },
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        id: "stale-session",
+        status: "running",
+        mcpAuthState: "current",
+      });
+      expect(
+        sessionManager.restartForMcpCredentials,
+      ).toHaveBeenCalledWith("stale-session");
+    });
+
+    it("maps an ineligible restart to a stable 409", async () => {
+      const sessionManager = fakeSessionManager();
+      (
+        sessionManager.restartForMcpCredentials as ReturnType<typeof vi.fn>
+      ).mockRejectedValue(new McpSessionRestartUnavailableError());
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/current/restart-mcp`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error:
+          "This session is not waiting for a Sapiom connection restart",
+        code: "MCP_SESSION_RESTART_UNAVAILABLE",
+      });
+    });
+  });
+
   describe("POST /sessions/:id/resume — error class → HTTP status mapping", () => {
     it("resumes a project session through the ordinary endpoint without a role-specific 409", async () => {
       const projectSession = exitedSession({
@@ -1425,6 +1513,24 @@ describe("createRestRouter", () => {
       expect(res.status).toBe(409);
       const body = (await res.json()) as { error: string; code: string };
       expect(body.code).toBe("SESSION_ALREADY_LIVE");
+    });
+
+    it("409s when the Sapiom connection changes before resumed process admission", async () => {
+      const sessionManager = fakeSessionManager();
+      vi.mocked(sessionManager.resume).mockRejectedValue(
+        new McpCredentialGenerationChangedError(),
+      );
+      start({ sessionManager });
+
+      const res = await fetch(`${baseUrl}/sessions/sess-stale/resume`, {
+        method: "POST",
+        headers: TOKEN_HEADER,
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        code: "MCP_CREDENTIAL_GENERATION_CHANGED",
+      });
     });
 
     it("409s when resume() throws SessionNotResumeableError (no agentSessionId to resume from)", async () => {

@@ -41,8 +41,13 @@ publish:
 files:
   - "dist/**/*"
   - "package.json"
+  # The directory must match as well: electron-builder's default-extension
+  # override checks the parent directory before consulting onNodeModuleFile.
+  - "node_modules/opencode-ai/bin{,/**/*}"
   - "!**/*.map"
   - "!**/*.ts"
+
+onNodeModuleFile: ./scripts/include-opencode-runtime.mjs
 
 asar: true
 # Unpack ALL node_modules. The harness's Canvas check spawns a subprocess under

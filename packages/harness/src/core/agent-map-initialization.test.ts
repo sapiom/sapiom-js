@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DraftRef } from "../shared/agent-map.js";
-import { AgentMapWorkspaceStore } from "./agent-map-workspace-store.js";
-import { AgentMapProposalService } from "./agent-map-proposal-service.js";
+import type { DraftRef } from "@sapiom/agent-map";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
 import {
   AgentMapInitializationCoordinator,
   AgentMapInitializationFailure,
@@ -15,12 +15,12 @@ import {
   createEmptyProjectPlanningAggregate,
   computeProjectPlanningAggregateDigest,
   parseProjectPlanningAggregate,
-} from "./agent-map-aggregate-migration.js";
+} from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import {
   collectAgentMapEvidence,
   initialMapRequest,
 } from "./agent-map-initialization-evidence.js";
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 import { emptyLegacyContainer } from "./test-fixtures/empty-legacy-container.js";
 
 const projectId = "project_00000000-0000-4000-8000-000000000001";

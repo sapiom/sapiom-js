@@ -9,7 +9,7 @@ import {
   ProjectBootstrapOutbox,
   ProjectBootstrapOutboxError,
 } from "./project-bootstrap-outbox.js";
-import { StudioProjectCatalog } from "./studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 
 describe("ProjectBootstrapOutbox", () => {
   const roots: string[] = [];

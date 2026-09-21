@@ -6,14 +6,14 @@ import {
   RELATIONSHIP_KINDS,
   type DraftRef,
   type ProposalBatchRequest,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   listSourceFilesWithObservations,
   readWorkflowSourceFile,
 } from "./canvas-interconnections.js";
-import { AgentMapInitializationFailure } from "./agent-map-initialization-record.js";
-import { parseProposalBatchRequest } from "./agent-map-proposal-schema.js";
-import { RELATIONSHIP_ENDPOINT_MATRIX } from "./agent-map-proposal-validator.js";
+import { AgentMapInitializationFailure } from "@sapiom/agent-map/node/agent-map-initialization-record";
+import { parseProposalBatchRequest } from "@sapiom/agent-map/schema";
+import { RELATIONSHIP_ENDPOINT_MATRIX } from "@sapiom/agent-map/validation";
 
 export interface InitializationAgent {
   agentId: string;

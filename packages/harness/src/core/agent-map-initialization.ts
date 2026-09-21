@@ -3,31 +3,31 @@ import type { HarnessKind } from "../shared/types.js";
 import type {
   AgentMapInitializationError,
   AgentMapInitializationStatus,
-} from "../shared/agent-map-initialization.js";
+} from "@sapiom/agent-map/agent-map-initialization";
 import {
   AgentMapWorkspaceStore,
   AgentMapWorkspaceStoreError,
-} from "./agent-map-workspace-store.js";
+} from "@sapiom/agent-map/node/agent-map-workspace-store";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
-} from "./agent-map-proposal-service.js";
+} from "@sapiom/agent-map/node/agent-map-proposal-service";
 import {
   AgentMapInitializationFailure,
   hasAuthoredAgentMap,
   initializationStatus,
   type AgentMapInitializationTransaction,
   type AgentMapInitializationRecord,
-} from "./agent-map-initialization-record.js";
+} from "@sapiom/agent-map/node/agent-map-initialization-record";
 import {
   collectAgentMapEvidence,
   initialMapRequest,
   type InitializationAgent,
 } from "./agent-map-initialization-evidence.js";
 
-export { AgentMapInitializationFailure } from "./agent-map-initialization-record.js";
+export { AgentMapInitializationFailure } from "@sapiom/agent-map/node/agent-map-initialization-record";
 export interface InitializationProject {
   userId: string;
   available: boolean;

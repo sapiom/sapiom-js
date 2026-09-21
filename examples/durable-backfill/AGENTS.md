@@ -13,7 +13,7 @@ This project defines exactly one Sapiom agent in `index.ts` — **Durable Backfi
 - **`database.get`** resolves the dataset's connection string, which is injected into the chunk sandbox as `DATABASE_URL`.
 - **`sandboxes.create` / `exec`** run the per-chunk `command` in a fresh, short-TTL sandbox (torn down in a `finally`, so nothing lingers between chunks).
 - **`fileStorage.upload` / `getDownloadUrl` / `list` / `delete`** persist the checkpoint (rotated each chunk), the per-chunk result artifacts, and the final manifest — and read the checkpoint back when resuming.
-- **Capabilities come from the types.** What's on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. The one-shot LLM path (unused here) is `ctx.sapiom.llm.run`.
+- **Capabilities come from the types.** What's on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck. Which capability calls an LLM (unused here) is the served rule ([Calling LLMs from steps](https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface)).
 
 ## Authoring
 
@@ -49,3 +49,13 @@ Drive `check` / `run_local` / `link` / `deploy` / `run` via the Sapiom MCP dev t
 ## Determinism
 
 A step body runs **once** on the happy path; it re-runs only on retry (after a throw). The `correlationId` is `ctx.executionId` (stable across pauses), so every heartbeat lands on the right run. Progress is advanced in `ctx.shared` and checkpointed to file storage after each chunk, so a resumed or restarted run never reprocesses a completed chunk.
+
+## Platform rules (served, not restated here)
+
+The rules that are true of Sapiom regardless of this project's SDK version — which capability
+calls an LLM, database lifetime, trigger kinds, App Link webhooks, composing deployed agents —
+are served live at <https://api.sapiom.ai/v1/agents/authoring-rules> and summarized in the
+`sapiom-agent-authoring` skill's platform chapters. This file was written against release 1.0 of
+that text; `sapiom_dev_agents_check` warns when the served copy differs.
+
+<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->

@@ -44,6 +44,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -51,6 +52,7 @@ import type { JSX } from "react";
 import type {
   AppState,
   CreateSessionRequest,
+  HarnessEntry,
   HarnessKind,
   HarnessSession,
   MacroDef,
@@ -58,19 +60,21 @@ import type {
   WorkflowInfo,
   WorkflowInputContractResponse,
 } from "@shared/types";
-import type { WorkspaceKey } from "@shared/system-graph";
+import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectId,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import { CanvasPane } from "./components/CanvasPane";
 import { AgentMapPane } from "./components/AgentMapPane";
+import { createGraphViewportStore } from "./lib/graph-viewport";
 import { CommandPalette } from "./components/CommandPalette";
 import {
   ConnectivityBanner,
   ConnectivityScreen,
 } from "./components/ConnectivityState";
+import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
 import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
@@ -80,6 +84,8 @@ import { RunSheet } from "./components/RunSheet";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
 import { Terminal } from "./components/Terminal";
+import { AssistantPane } from "./components/AssistantPane";
+import type { ChatDraftStore } from "./components/OpenCodeChat";
 import { Toast } from "./components/Toast";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { NewSessionComposer } from "./components/NewSessionComposer";
@@ -87,7 +93,6 @@ import { HelpOverlay } from "./components/HelpOverlay";
 import { CreateAgentDialog } from "./components/CreateAgentDialog";
 import { OverviewModal } from "./components/OverviewModal";
 import { WorkflowsRail } from "./components/WorkflowsRail";
-import { WorkspaceGraphView } from "./components/WorkspaceGraphView";
 import { boundWorkflowPathOf, createApi, errorMessage } from "./lib/api";
 import { classifyConnectivity, useConnectivity } from "./lib/connectivity";
 import { historyDirs } from "./lib/history-meta";
@@ -157,6 +162,12 @@ import type { PaletteAction } from "./lib/palette";
 import { toggleTheme } from "./lib/theme";
 import { loadUiPrefs, saveUiPrefs } from "./lib/ui-prefs";
 import {
+  DEFAULT_HARNESS,
+  FALLBACK_HARNESSES,
+  isHarnessSelectable,
+  orderHarnesses,
+} from "./lib/harness-registry";
+import {
   useNavigationHistory,
   type NavigationVisit,
 } from "./lib/navigation-history";
@@ -177,7 +188,10 @@ import {
 } from "./lib/use-harness-state";
 import { useAgentMapEntry } from "./lib/use-agent-map-entry";
 import {
+  deploymentStateLabel,
+  deploymentStateTitle,
   isWorkflowRunnable,
+  prodRunBlockedToast,
   workflowDeploymentState,
 } from "./lib/workflow-deployment";
 import { SecretsPanel } from "./components/SecretsPanel";
@@ -207,18 +221,56 @@ const knownRootsOf = (
   launchDir: string | null | undefined,
 ): string[] => [...(recentDirs ?? []), ...(launchDir ? [launchDir] : [])];
 
+/**
+ * A layer the COMMAND PALETTE must not open on top of.
+ *
+ * `.modal-backdrop` leads because it is the one thing every overlay in this app
+ * actually has, and because `CommandPalette` itself carries no `role` — a
+ * role-only selector (the shape the Escape handler below uses) cannot see it,
+ * so a guard written that way looks correct and detects nothing.
+ *
+ * THE OVERVIEW IS CARVED OUT, and it is not an oversight: the palette is
+ * deliberately reachable by shortcut while the Overview is up, and navigating
+ * from it dismisses the Overview rather than stacking behind it. That is a
+ * written contract with a spec behind it — `welcome.spec.ts`'s "the palette's
+ * Browse templates, opened over the Overview, leaves it (never stacks)". The
+ * Overview wears both `role="dialog"` and `aria-modal="true"`, so excluding it
+ * has to be done on each clause rather than by dropping a class from the list.
+ *
+ * THE HELP CARD IS NOT CARVED OUT, although it wears `.overview-modal` too:
+ * that class is `OverviewModal`'s visual recipe, shared by `HelpOverlay`
+ * ("How Studio is organised"), and the help card has no contract with the
+ * palette. Navigating from the palette does not dismiss it, so the palette
+ * would stack over it exactly as it did over a dialog. Its own class leads the
+ * list so the per-clause carve-out below cannot let it through.
+ *
+ * DELIBERATELY NOT the dialog shell's layer selector. That one answers "which
+ * layer owns Tab", where the Overview IS a layer and belongs in the list. This
+ * one answers "may ⌘K open here", where it does not. Same shape, different
+ * question; collapsing them would break the contract above.
+ */
+const PALETTE_BLOCKING_LAYER_SELECTOR = [
+  ".modal-backdrop",
+  ".help-overlay",
+  '[role="dialog"]:not(.overview-modal)',
+  '[role="alertdialog"]:not(.overview-modal)',
+  '[aria-modal="true"]:not(.overview-modal)',
+].join(",");
+
 /** Resolve the one Studio workspace selection every map consumer observes. */
 const effectiveStudioWorkspaceSelection = (
   selection: StudioWorkspaceSelection | null,
   state: Pick<AppState, "studioProjects" | "workflows"> | null | undefined,
 ): StudioWorkspaceSelection | null => {
-  if (!selection || !state) return null;
+  if (!selection || !state || state.studioProjects === undefined) return null;
   if (
-    !state.studioProjects?.some(
+    !state.studioProjects.some(
       (project) => project.projectId === selection.projectId,
     )
   ) {
-    return null;
+    // A selected durable map keeps its exact identity through catalog loss.
+    // Explicit agent/session selection can still use its ordinary Canvas.
+    return selection.kind === "agent-map" ? selection : null;
   }
   if (selection.kind === "agent-map") return selection;
   const agentStillExists = state.workflows.some((workflow) =>
@@ -275,6 +327,62 @@ const shellApi = createApi();
 
 export const App = (): JSX.Element => {
   const harness = useHarnessState();
+  // A project map remounts when browsing another project or agent. Keep its
+  // viewport for this signed-in UI lifetime, without persisting map data.
+  const agentMapViewportStore = useMemo(
+    createGraphViewportStore,
+    [harness.authRevision],
+  );
+  const [assistantAuthorityRevision, setAssistantAuthorityRevision] = useState<
+    string | null
+  >(null);
+  // Draft text belongs to a principal + Studio session, not to whichever
+  // centre-pane branch happens to be mounted. An auth barrier replaces this
+  // whole store; an app reload intentionally drops it rather than persisting
+  // sensitive, unsent text.
+  const assistantDrafts = useMemo<ChatDraftStore>(
+    () => new Map(),
+    [assistantAuthorityRevision, harness.authRevision, harness.bootToken],
+  );
+  // Successful session deletion removes its keyed draft. Exited sessions stay
+  // in state (and keep their draft) until the user actually closes them.
+  useEffect(() => {
+    if (!harness.state) return;
+    const sessionIds = new Set(harness.state.sessions.map(({ id }) => id));
+    for (const id of assistantDrafts.keys()) {
+      if (!sessionIds.has(id)) assistantDrafts.delete(id);
+    }
+  }, [assistantDrafts, harness.state]);
+  const [selectedHarness, setSelectedHarness] = useState<HarnessKind>(
+    () => loadUiPrefs().preferredHarness ?? DEFAULT_HARNESS,
+  );
+  const [harnessEntries, setHarnessEntries] = useState<HarnessEntry[] | null>(
+    null,
+  );
+  // Keep the selection above the composer so every template entry point sees
+  // automatic corrections and choices that could not be saved to preferences.
+  useEffect(() => {
+    let cancelled = false;
+    harness
+      .listHarnesses()
+      .then((registry) => {
+        if (cancelled || registry.length === 0) return;
+        setHarnessEntries(orderHarnesses(registry));
+        const selectable = registry.filter(isHarnessSelectable);
+        setSelectedHarness((current) =>
+          selectable.some((entry) => entry.id === current)
+            ? current
+            : ((selectable[0]?.id as HarnessKind | undefined) ?? current),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [harness.listHarnesses]);
+  useEffect(() => {
+    saveUiPrefs({ preferredHarness: selectedHarness });
+  }, [selectedHarness]);
   // Live browser connectivity (navigator.onLine + online/offline events).
   // Combined with the boot-error kind below to pick the honest shell state.
   const online = useConnectivity();
@@ -301,8 +409,8 @@ export const App = (): JSX.Element => {
     },
     [harness.getWorkflowInputContract],
   );
-  // The composer-first "new session" home. `composing` is explicit rail
-  // Create-new intent; the workbench tab + starts a sibling directly instead.
+  // The composer-first "new session" home. `composing` holds it open for
+  // explicit Create-new intent or a submission from the automatic home.
   // The home also shows whenever nothing else claims the centre pane.
   const [composing, setComposing] = useState(false);
   // The tab + is a one-at-a-time create/bind transaction. State renders the
@@ -313,8 +421,8 @@ export const App = (): JSX.Element => {
   // selection and the Canvas/Steps subject. The active conversation is always
   // harness.activeSessionId; choosing the project map does not rewrite it.
   const [focusedAgentPath, setFocusedAgentPath] = useState<string | null>(null);
-  // The legacy project the canvas is at MAP altitude for. Studio projects use
-  // `studioSelection` below, but retain the same invariant: the chat stays in
+  // A project whose durable identity has not resolved yet.
+  // Studio projects use `studioSelection` below with the same invariant: chat stays in
   // the centre and the map draws beside it, so this selects a SUBJECT rather
   // than replacing the workbench.
   //
@@ -381,7 +489,11 @@ export const App = (): JSX.Element => {
       }
     }
 
-    if (!state?.studioProjects || !active) return;
+    // Explicit navigation owns its destination even if boot could not restore
+    // the active session's project until this catalog refresh.
+    if (
+      !state?.studioProjects || !active || selectedProject || studioSelection
+    ) return;
     const identityProjectId = active.agentMapIdentity?.projectId ?? null;
     const identityProject = identityProjectId
       ? state.studioProjects.find(
@@ -470,7 +582,40 @@ export const App = (): JSX.Element => {
         setFocusedAgentPath(scope.cwd);
         if (isMobile) setRightCollapsed(true);
       });
-  }, [harness.activeSessionId, harness.api, harness.state, isMobile]);
+  }, [
+    harness.activeSessionId,
+    harness.api,
+    harness.state,
+    isMobile,
+    selectedProject,
+    studioSelection,
+  ]);
+
+  // A catalog retry may resolve the exact scope selected earlier. Promote it
+  // without the boot reload's session hydration or a path/name-based guess.
+  // This refreshes identities only; an already selected map keeps its loaded
+  // workspace until the normal map refresh or invalidation path runs.
+  useEffect(() => {
+    if (!selectedProject) return;
+    const state = harness.state;
+    const projectId = state?.workspaceScopes?.find(
+      (scope) => scope.workspaceKey === selectedProject.workspaceKey,
+    )?.projectId;
+    if (
+      !projectId ||
+      !state?.studioProjects?.some((project) => project.projectId === projectId)
+    )
+      return;
+    studioRestoreGenerationRef.current += 1;
+    restoredStudioProjectsRef.current.add(projectId);
+    const selection: StudioWorkspaceSelection = {
+      kind: "agent-map",
+      projectId,
+    };
+    setStudioSelection(selection);
+    setSelectedProject(null);
+    void harness.api.putStudioCurrentWorkspace(projectId, selection).catch(() => {});
+  }, [harness.api, harness.state, selectedProject]);
 
   // A selected agent that disappears falls back to its map in memory. Only
   // the server knows whether the project scan is complete enough to persist a
@@ -596,6 +741,11 @@ export const App = (): JSX.Element => {
   // Lifted so the telemetry chip in the session bar can open the settings
   // popover from outside SessionBar's own gear button.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const signInForAssistant = useCallback(() => {
+    void harness.startAuth().catch((error) => {
+      harness.showToast(errorMessage(error, "Could not start sign-in."));
+    });
+  }, [harness.showToast, harness.startAuth]);
   // Right tab is part of the held arrangement: restored on reload.
   // Guard against a stored value for a tab that no longer exists ("skills",
   // and now "code" — its snippets moved to the deploy surface) — fall back to
@@ -865,6 +1015,22 @@ export const App = (): JSX.Element => {
         return;
       }
       if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "p")) {
+        // A LAYER ON TOP SWALLOWS THE SHORTCUT. Unguarded, ⌘K stacked the
+        // palette over an open dialog and native Tab then walked out of the
+        // palette into the dialog behind it. A surface cannot contain focus for
+        // a surface it does not own, so the fix is here rather than in either.
+        // See the selector for what it excludes and why it is not the dialog
+        // shell's list.
+        //
+        // PREVENTED, THEN DROPPED — never returned unhandled. This handler owns
+        // ⌘P as well as ⌘K, and ⌘P is the browser's PRINT shortcut: returning
+        // early without preventing it opened a native print preview over the
+        // dialog, which is worse than the stacking it was added to stop. The
+        // shortcut does nothing here, exactly as it did nothing before.
+        if (document.querySelector(PALETTE_BLOCKING_LAYER_SELECTOR)) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         setPaletteOpen(true);
         return;
@@ -892,15 +1058,18 @@ export const App = (): JSX.Element => {
           selectedProject?.root ?? null,
           knownRootsOf(harness.settings?.recentDirs, harness.state?.launchDir),
         );
+        const unresolvedProject = selectedProject !== null;
         const studioProjectId =
           effectiveStudioSelection?.projectId ??
-          shortcutActive?.agentMapIdentity?.projectId ??
+          (unresolvedProject ? null : shortcutActive?.agentMapIdentity?.projectId) ??
           null;
         const tabs = studioProjectId
           ? liveSessionsForStudioProject(sessions, studioProjectId)
-          : subject.kind === "project"
-            ? liveSessionsForProject(sessions, subject.root)
-            : liveSessionsForFocus(sessions, subject.path);
+          : unresolvedProject
+            ? liveSessionsForProject(sessions, selectedProject.root)
+            : subject.kind === "project"
+              ? liveSessionsForProject(sessions, subject.root)
+              : liveSessionsForFocus(sessions, subject.path);
         const target = tabs[Number(e.key) - 1];
         if (target) {
           e.preventDefault();
@@ -921,6 +1090,7 @@ export const App = (): JSX.Element => {
     // still addressed the outer one, until the next session event healed it.
   }, [
     harness.state?.sessions,
+    harness.state?.studioProjects,
     harness.activeSessionId,
     harness.settings?.recentDirs,
     focusedAgentPath,
@@ -1162,12 +1332,9 @@ export const App = (): JSX.Element => {
         setStudioSelection(null);
       }
       if (visit.kind === "project") {
-        // Through the SAME door the rail click uses, not the raw setter: a
-        // project selection now hands the conversation to that project (and
-        // starts one where there is none), and a replayed visit that only
-        // re-selected the key would land on the map with somebody else's chat
-        // beside it. The ref exists because the handler closes over `state`,
-        // which is only available past the loading guard.
+        // Replay through the rail's read-only project selection handler.
+        // The ref reaches the handler below the loading guard, where
+        // the hydrated `state` is available.
         selectProjectRef.current?.(visit.workspaceKey, visit.root, visit.label);
       } else if (visit.kind === "agent-map") {
         const state = harness.state;
@@ -1389,9 +1556,10 @@ export const App = (): JSX.Element => {
             [selectedStudioProject],
           )
       : null;
-  const planFirstSelection = selectedStudioScope
-    ? effectiveStudioSelection
-    : null;
+  const planFirstSelection =
+    selectedStudioScope || effectiveStudioSelection?.kind === "agent-map"
+      ? effectiveStudioSelection
+      : null;
   const effectiveFocusedAgentPath =
     planFirstSelection?.kind === "agent" && selectedStudioWorkflow
       ? selectedStudioWorkflow.path
@@ -1405,13 +1573,15 @@ export const App = (): JSX.Element => {
    * ONE selection, at ONE altitude — the contract the rail, the centre pane and
    * the canvas all read, so they cannot disagree about what is on screen (E3.8).
    */
-  const legacyView = canvasView(selectedProject, effectiveFocusedAgentPath);
   const studioView = planFirstSelection
     ? studioCanvasView(planFirstSelection)
     : null;
-  const view = studioView ?? legacyView;
+  const view = studioView ?? canvasView(selectedProject, effectiveFocusedAgentPath);
   const atMapAltitude = view.altitude === "map";
-  const projectMapSelected = studioView?.altitude === "map";
+  // Missing identity always offers recovery, including older server payloads.
+  const unresolvedProjectMap = selectedProject !== null;
+  const projectMapSelected =
+    studioView?.altitude === "map" || unresolvedProjectMap;
 
   /**
    * Whose tabs the strip shows: the ACTIVE session's PROJECT (SAP-2980), never
@@ -1434,13 +1604,15 @@ export const App = (): JSX.Element => {
   );
   const studioConversationProjectId =
     planFirstSelection?.projectId ??
-    activeSession?.agentMapIdentity?.projectId ??
+    (unresolvedProjectMap ? null : activeSession?.agentMapIdentity?.projectId) ??
     null;
   const focusTabs = studioConversationProjectId
     ? liveSessionsForStudioProject(state.sessions, studioConversationProjectId)
-    : conversation.kind === "project"
-      ? liveSessionsForProject(state.sessions, conversation.root)
-      : liveSessionsForFocus(state.sessions, conversation.path);
+    : unresolvedProjectMap
+      ? liveSessionsForProject(state.sessions, selectedProject.root)
+      : conversation.kind === "project"
+        ? liveSessionsForProject(state.sessions, conversation.root)
+        : liveSessionsForFocus(state.sessions, conversation.path);
   // Project-name navigation cannot activate a session. Keep an already-active
   // conversation only when it belongs to that exact project; a foreign CLI is
   // hidden until the user explicitly selects one of this project's tabs.
@@ -1656,7 +1828,6 @@ export const App = (): JSX.Element => {
     const studioProjectId = workspaceScopes.find(
       (scope) => scope.workspaceKey === workspaceKey,
     )?.projectId;
-    let selectedAgentMap = false;
     if (
       studioProjectId &&
       state.studioProjects?.some(
@@ -1670,8 +1841,7 @@ export const App = (): JSX.Element => {
       };
       setStudioSelection(selection);
       setSelectedProject(null);
-      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection);
-      selectedAgentMap = true;
+      void harness.api.putStudioCurrentWorkspace(studioProjectId, selection).catch(() => {});
     } else {
       setStudioSelection(null);
       setSelectedProject({ workspaceKey, root, label });
@@ -1688,33 +1858,17 @@ export const App = (): JSX.Element => {
     closeMobileDrawer();
     // A Studio project-name click is a read-only navigation action. It must not
     // choose, create, resume, focus, or prompt any session.
-    if (selectedAgentMap) {
-      if (isMobile) setRightCollapsed(false);
-      return;
-    }
-    const decision = sessionForFocus({
-      focusPath: root,
-      active: activeSession,
-      sessions: state.sessions,
-      roots: knownProjectRoots(),
-    });
-    if (decision.kind === "keep") return;
-    if (decision.to) {
-      if (decision.to.id !== harness.activeSessionId)
-        harness.setActiveSessionId(decision.to.id);
-      return;
-    }
-    void startProjectSession(root, label, preferredHarness());
+    if (isMobile) setRightCollapsed(false);
   };
   selectProjectRef.current = handleSelectWorkspace;
 
   /**
-   * Open the first session of a project you just selected.
+   * Start an explicitly requested project session.
    *
    * Guarded BY ROOT, not by a boolean: two projects can be starting at once
-   * (select one, select another before the first POST resolves) and a single
-   * flag would drop the second create silently. Re-selecting the SAME project
-   * mid-flight is the double-create this prevents.
+   * (request one, then another before the first POST resolves) and a single
+   * flag would drop the second create silently. Repeating a request for the
+   * same project mid-flight is the double-create this prevents.
    */
   const startProjectSession = async (
     root: string,
@@ -1741,21 +1895,12 @@ export const App = (): JSX.Element => {
   };
 
   const handleStartProjectSession = async (root: string, label: string): Promise<void> => {
-    const started = await startProjectSession(root, label, preferredHarness());
+    const started = await startProjectSession(root, label, selectedHarness);
     if (!started) return;
     studioRestoreGenerationRef.current += 1;
     setStudioSelection(null);
     setSelectedProject(null);
   };
-
-  /**
-   * The provider a create-initiated session boots with — the same stored
-   * preference the rail used to read before it dispatched. It moved here with
-   * the create itself; the rail no longer starts sessions.
-   */
-  function preferredHarness(): HarnessKind {
-    return loadUiPrefs().preferredHarness === "codex" ? "codex" : "claude-code";
-  }
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927).
@@ -1794,7 +1939,9 @@ export const App = (): JSX.Element => {
     agentHarness: HarnessKind,
     options: CreateSessionAtOptions = {},
   ): Promise<HarnessSession> => {
-    if (!options.keepComposerOpen) setComposing(false);
+    // Activate the automatic home before a scaffold update can replace it;
+    // its local draft and files must survive a later preparation failure.
+    setComposing(options.keepComposerOpen === true);
     setReviewSummary(null);
     // Preserve a same-project selection while the create is in flight. The
     // caller owns the final destination: a project-row create can deliberately
@@ -1995,7 +2142,7 @@ export const App = (): JSX.Element => {
         : null;
       const session =
         existing ??
-        (await createSessionAt(request.root, preferredHarness(), {
+        (await createSessionAt(request.root, selectedHarness, {
           initialUserInputPending: input.instruction.trim().length > 0,
         }));
       await harness.bindWorkflow(session.id, created.path);
@@ -2147,6 +2294,21 @@ export const App = (): JSX.Element => {
       | "template_gallery"
       | "template_detail" = "template_gallery",
   ): Promise<void> => {
+    // Capture the current choice for this launch, including async scaffolding.
+    let agentHarness = selectedHarness;
+    // A deep link can open before registry loading finishes. Resolve its
+    // selection before creating a session on an unavailable default adapter.
+    const registry =
+      harnessEntries ??
+      (await harness.listHarnesses().catch(() => FALLBACK_HARNESSES));
+    const selectable = registry.filter(isHarnessSelectable);
+    if (!selectable.some((entry) => entry.id === agentHarness)) {
+      agentHarness =
+        (selectable[0]?.id as HarnessKind | undefined) ?? agentHarness;
+      setSelectedHarness((current) =>
+        current === selectedHarness ? agentHarness : current,
+      );
+    }
     // Product metric — "templates used". Fires at the choke point every
     // template surface funnels through; `agent.created` fires later when the
     // clone produces a real sapiom.json, so built ≥ templates holds.
@@ -2175,12 +2337,12 @@ export const App = (): JSX.Element => {
       trackUse();
       setTemplatesOpen(false);
       setFocusedAgentPath(created.path);
-      const session = await createSessionAt(parent, "claude-code");
+      const session = await createSessionAt(parent, agentHarness);
       await harness.bindWorkflow(session.id, created.path);
       setFocusedAgentPath(created.path);
       return;
     }
-    const session = await createSessionAt(cwd, "claude-code", {
+    const session = await createSessionAt(cwd, agentHarness, {
       initialUserInputPending: true,
     });
     trackUse();
@@ -2213,7 +2375,6 @@ export const App = (): JSX.Element => {
 
   const handleComposerSubmitIdea = async (
     idea: string,
-    agentHarness: HarnessKind,
     attachments: readonly NewSessionAttachment[],
   ): Promise<void> => {
     const cwd = uniqueProjectDir(
@@ -2224,7 +2385,7 @@ export const App = (): JSX.Element => {
     }
     // Terminal-first: the new session's canvas slides in once it paints.
     setRightCollapsed(true);
-    await createSessionAt(cwd, agentHarness, {
+    await createSessionAt(cwd, selectedHarness, {
       keepComposerOpen: true,
       standaloneBuilder: true,
       scaffold: { template: "default" },
@@ -2694,15 +2855,7 @@ export const App = (): JSX.Element => {
             const deploymentState = workflow
               ? workflowDeploymentState(workflow, lastErr)
               : "draft";
-            harness.showToast(
-              deploymentState === "failed"
-                ? "Last deploy failed — retry Deploy."
-                : deploymentState === "building"
-                  ? "The cloud build is still in progress."
-                  : deploymentState === "linked"
-                    ? "No ready deployment yet — deploy it first."
-                    : "This agent isn't deployed yet — deploy it first.",
-            );
+            harness.showToast(prodRunBlockedToast(deploymentState));
           }
         } else if (direct === "run-local") {
           if (!workflow) {
@@ -2799,6 +2952,7 @@ export const App = (): JSX.Element => {
           }
         >
           <WorkflowsRail
+            assistant={harness.assistant}
             projectRoot={projectRoot || null}
             onSaveProjectRoot={saveProjectRoot}
             width={widths.rail}
@@ -2933,7 +3087,6 @@ export const App = (): JSX.Element => {
             }}
             launchDir={state.launchDir ?? null}
             listDir={harness.listDir}
-            onStartProjectSession={handleStartProjectSession}
             listHarnesses={harness.listHarnesses}
             onCreateAgent={handleCreateAgentInProject}
             onScaffoldInSession={handleScaffoldInSession}
@@ -3046,7 +3199,10 @@ export const App = (): JSX.Element => {
                         : "0px"
                       : widths.canvas == null
                         ? "1fr"
-                        : `${widths.canvas}px`
+                        : // Clamp the pinned width to what the shell can hold
+                          // (the terminal keeps its floor), so a width saved on a
+                          // wide monitor doesn't overflow a narrower window.
+                          `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`
                   }`,
           }}
         >
@@ -3070,6 +3226,7 @@ export const App = (): JSX.Element => {
 
           <div className="center-pane">
             <SessionBar
+              assistant={harness.assistant}
               openedAgentName={
                 showAgentEmpty ? (focusedWorkflow?.name ?? null) : null
               }
@@ -3199,6 +3356,19 @@ export const App = (): JSX.Element => {
               }
             />
 
+            {sessionBarSession &&
+              (sessionBarSession.mcpAuthState === "restart-required" ||
+                sessionBarSession.mcpAuthState === "restarting") && (
+                <McpAuthRestartNotice
+                  restarting={
+                    sessionBarSession.mcpAuthState === "restarting"
+                  }
+                  onRestart={async () => {
+                    await harness.restartMcpSession(sessionBarSession.id);
+                  }}
+                />
+              )}
+
             <div className="terminal-slot">
               {showReview && reviewSummary ? (
                 <PastSessionPane
@@ -3212,24 +3382,40 @@ export const App = (): JSX.Element => {
                   onClose={() => setReviewSummary(null)}
                 />
               ) : showDead && conversationSession ? (
-                <DeadSessionPane
-                  session={conversationSession}
-                  resumeMode={deadResumeMode}
-                  loadRecord={harness.sessionRecord}
-                  onResume={() =>
-                    void harness.resumeSession(conversationSession.id)
+                <AssistantPane
+                  sessionId={conversationSession.id}
+                  bootToken={harness.bootToken}
+                  authRevision={harness.authRevision}
+                  drafts={assistantDrafts}
+                  authorityRevision={assistantAuthorityRevision}
+                  onAuthorityRevision={setAssistantAuthorityRevision}
+                  onSignIn={signInForAssistant}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  terminalRevision={
+                    harness.terminalRevealBySession.get(
+                      conversationSession.id,
+                    ) ?? 0
                   }
-                  onContinue={() =>
-                    void harness.rehydrateSession({
-                      cwd: conversationSession.cwd,
-                      harness: conversationSession.harness,
-                      from: conversationSession.id,
-                    })
-                  }
-                  onClose={() =>
-                    void harness.closeSession(conversationSession.id)
-                  }
-                />
+                >
+                  <DeadSessionPane
+                    session={conversationSession}
+                    resumeMode={deadResumeMode}
+                    loadRecord={harness.sessionRecord}
+                    onResume={() =>
+                      void harness.resumeSession(conversationSession.id)
+                    }
+                    onContinue={() =>
+                      void harness.rehydrateSession({
+                        cwd: conversationSession.cwd,
+                        harness: conversationSession.harness,
+                        from: conversationSession.id,
+                      })
+                    }
+                    onClose={() =>
+                      void harness.closeSession(conversationSession.id)
+                    }
+                  />
+                </AssistantPane>
               ) : showAgentEmpty && focusedWorkflow ? (
                 /* Honest absence: no session that can WORK on this agent — its
                    board still draws on the right, from the workflow-keyed route
@@ -3293,11 +3479,27 @@ export const App = (): JSX.Element => {
               ) : showWorkbench && conversationSession ? (
                 <div className="agent-view" data-testid="agent-view">
                   <div className="agent-view-panel" id="agent-panel-terminal">
-                    <Terminal
+                    <AssistantPane
                       sessionId={conversationSession.id}
-                      token={harness.bootToken}
-                      cwd={conversationSession.cwd}
-                    />
+                      bootToken={harness.bootToken}
+                      authRevision={harness.authRevision}
+                      drafts={assistantDrafts}
+                      authorityRevision={assistantAuthorityRevision}
+                      onAuthorityRevision={setAssistantAuthorityRevision}
+                      onSignIn={signInForAssistant}
+                      onOpenSettings={() => setSettingsOpen(true)}
+                      terminalRevision={
+                        harness.terminalRevealBySession.get(
+                          conversationSession.id,
+                        ) ?? 0
+                      }
+                    >
+                      <Terminal
+                        sessionId={conversationSession.id}
+                        token={harness.bootToken}
+                        cwd={conversationSession.cwd}
+                      />
+                    </AssistantPane>
                   </div>
                 </div>
               ) : (
@@ -3306,6 +3508,9 @@ export const App = (): JSX.Element => {
                    screen gives way to the terminal (createSessionAt clears
                    `composing`), and the canvas reveals itself once populated. */
                 <NewSessionComposer
+                  harness={selectedHarness}
+                  entries={harnessEntries ?? FALLBACK_HARNESSES}
+                  onHarnessChange={setSelectedHarness}
                   firstRun={state.firstRun === true}
                   onSubmitIdea={handleComposerSubmitIdea}
                   onAttachmentError={harness.showToast}
@@ -3316,7 +3521,6 @@ export const App = (): JSX.Element => {
                     setSelectedProject(null);
                     setTemplatesOpen(true);
                   }}
-                  listHarnesses={harness.listHarnesses}
                   listTemplates={harness.listTemplates}
                   telemetryOptIn={
                     harness.settings?.telemetryOptIn ?? state.telemetryOptIn
@@ -3345,12 +3549,10 @@ export const App = (): JSX.Element => {
               <div
                 className="pane-resize-handle pane-resize-handle-canvas"
                 // Track the canvas column's ACTUAL edge, not the requested width.
-                // The column is `minmax(CANVAS_MIN, widths.canvas)`, so it clamps
-                // below widths.canvas once the terminal is at its own floor
-                // (100% − CANVAS_MIN). Positioning the handle at the raw
-                // widths.canvas then stranded it in the terminal, a growing gap
-                // to the left of the board it splits. The same clamp keeps them
-                // welded at every width. (null = the 1fr/1fr split, always at 50%.)
+                // The column track is clamped to `100% − CANVAS_MIN` (the
+                // terminal's floor), so the handle uses the same expression to
+                // stay welded to the board's edge at every width. (null = the
+                // 1fr/1fr split, always at 50%.)
                 style={{
                   right:
                     widths.canvas == null
@@ -3405,7 +3607,13 @@ export const App = (): JSX.Element => {
                 data-testid="right-tab-canvas"
               >
                 <Icon name="Workflow" size={14} />
-                {projectMapSelected ? "Agent Map" : "Canvas"}
+                {projectMapSelected ? (
+                  <>
+                    <span className="right-pane-tab-qualifier">Agent </span>Map
+                  </>
+                ) : (
+                  "Canvas"
+                )}
               </button>
               {/* Steps are an AGENT's steps. At map altitude there is no
                   meaningful step list for a whole project, and a tab that
@@ -3455,7 +3663,23 @@ export const App = (): JSX.Element => {
                     so the link/build state lives here in the tab bar. */}
                 {shownTab === "canvas" &&
                   !atMapAltitude &&
-                  rightPaneWorkflow?.definitionId != null && (
+                  rightPaneWorkflow?.definitionId != null &&
+                  rightPaneDeploymentState === "unavailable" && (
+                    /* Not a link: this account can't open that dashboard page. */
+                    <span
+                      className="status-tag right-pane-deployed"
+                      data-testid="agent-unavailable-tag"
+                      data-deployment-state="unavailable"
+                      data-tooltip={deploymentStateTitle("unavailable")}
+                    >
+                      <Icon name="CloudOff" size={12} />
+                      {deploymentStateLabel("unavailable")}
+                    </span>
+                  )}
+                {shownTab === "canvas" &&
+                  !atMapAltitude &&
+                  rightPaneWorkflow?.definitionId != null &&
+                  rightPaneDeploymentState !== "unavailable" && (
                     <a
                       className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
                       data-testid="workflow-dashboard-link"
@@ -3469,13 +3693,9 @@ export const App = (): JSX.Element => {
                       data-tooltip="Open this agent in the Sapiom dashboard"
                     >
                       <Icon name="Cloud" size={12} />
-                      {rightPaneDeploymentState === "ready"
-                        ? "deployed"
-                        : rightPaneDeploymentState === "building"
-                          ? "building"
-                          : rightPaneDeploymentState === "failed"
-                            ? "deploy failed"
-                            : "linked"}
+                      {deploymentStateLabel(
+                        rightPaneDeploymentState ?? "linked",
+                      )}
                     </a>
                   )}
                 {/* Full view belongs to the graph surface currently shown:
@@ -3557,9 +3777,35 @@ export const App = (): JSX.Element => {
                   the subject is a project, so there is no agent board drawn
                   behind the map. Keyed by project, so switching projects is a
                   fresh load rather than a mutation of the one on screen. */}
-              {studioView?.altitude === "map" ? (
+              {unresolvedProjectMap ||
+              (studioView?.altitude === "map" && !selectedStudioProject) ? (
+                <EmptyState
+                  className="canvas-empty"
+                  testId="agent-map-identity-unavailable"
+                  icon="Folder"
+                  title="Agent Map unavailable"
+                  body="Studio couldn't identify this project. Reload projects to try again, or select another project."
+                  cta={
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      data-testid="agent-map-reload-projects"
+                      onClick={() => {
+                        void harness.refreshWorkspaceScopes().catch(() => {
+                          harness.showToast(
+                            "Projects couldn't be reloaded. Try again.",
+                          );
+                        });
+                      }}
+                    >
+                      Reload projects
+                    </button>
+                  }
+                />
+              ) : studioView?.altitude === "map" ? (
                 <AgentMapPane
                   key={`${studioView.projectId}:${harness.authRevision}`}
+                  viewportStore={agentMapViewportStore}
                   visible={!rightCollapsed && shownTab === "canvas"}
                   api={harness.api}
                   workflows={state.workflows}
@@ -3579,21 +3825,6 @@ export const App = (): JSX.Element => {
                   onRetryGeneration={agentMapEntry.retryGeneration}
                   expanded={canvasExpanded}
                   onToggleExpanded={toggleCanvasExpanded}
-                />
-              ) : legacyView.altitude === "map" ? (
-                <WorkspaceGraphView
-                  key={legacyView.project.workspaceKey}
-                  workspaceKey={legacyView.project.workspaceKey}
-                  workspaceName={legacyView.project.label}
-                  api={harness.api}
-                  workflows={state.workflows}
-                  workspaceScopes={workspaceScopes}
-                  latestAnnouncement={
-                    harness.systemGraphAnnouncements.get(
-                      legacyView.project.workspaceKey,
-                    ) ?? null
-                  }
-                  onOpenAgent={handleFocusAgent}
                 />
               ) : null}
               <div
@@ -3704,7 +3935,13 @@ export const App = (): JSX.Element => {
                   }
                   onInjectPrompt={(text) => {
                     if (harness.activeSessionId)
-                      void harness.injectInput(harness.activeSessionId, text);
+                      void harness
+                        .injectInput(harness.activeSessionId, text)
+                        .catch((err) =>
+                          harness.showToast(
+                            errorMessage(err, "Could not send the prompt to Terminal."),
+                          ),
+                        );
                   }}
                   onDescribeWorkflow={handleDescribeWithAI}
                 />

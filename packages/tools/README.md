@@ -81,6 +81,8 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks               | [src/email](./src/email/README.md)                           |
 | `domains`           | Register domain names and manage their DNS records                                                    | [src/domains](./src/domains/README.md)                       |
 | `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)        | [src/memory](./src/memory/README.md)                         |
+| `google`            | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                             | [src/google](./src/google/README.md)                         |
+| `github`            | List a tenant's GitHub repositories                                                                   | [src/github](./src/github/README.md)                         |
 
 ## Composing capabilities
 

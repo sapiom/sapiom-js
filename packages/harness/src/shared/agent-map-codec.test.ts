@@ -4,7 +4,7 @@ import {
   parseAgentMapProposalReceipt,
   parseMapChangeProposal,
   parseProposalActor,
-} from "./agent-map-codec.js";
+} from "@sapiom/agent-map/codec";
 
 const nodeId = "node_00000000-0000-7000-8000-000000000001";
 const proposalId = "proposal_00000000-0000-7000-8000-000000000002";

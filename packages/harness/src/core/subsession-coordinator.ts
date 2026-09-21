@@ -3,13 +3,13 @@ import { randomUUID } from "node:crypto";
 import type {
   ProjectAgentSession,
   StudioProjectId,
-} from "../shared/agent-map.js";
-import { canonicalDigest } from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map";
+import { canonicalDigest } from "@sapiom/agent-map/node/canonical";
 import {
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,
   type AgentBriefVersion,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import {
   parseProjectSubsessionRequest,
   SubsessionDelegationValidationError,

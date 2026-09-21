@@ -8,13 +8,13 @@ export type {
   AgentMapInitializationError,
   AgentMapInitializationState,
   AgentMapInitializationStatus,
-} from "./shared/agent-map-initialization.js";
+} from "@sapiom/agent-map/agent-map-initialization";
 export {
   AGENT_MAP_PROPOSAL_SCHEMA_VERSION,
   EXECUTION_MODES,
   PLAN_NODE_KINDS,
   RELATIONSHIP_KINDS,
-} from "./shared/agent-map.js";
+} from "@sapiom/agent-map";
 export type {
   AcceptedProposalDelta,
   ExecutionMode,
@@ -45,14 +45,14 @@ export type {
   RelationshipChanges,
   RelationshipKind,
   StudioProjectId,
-} from "./shared/agent-map.js";
+} from "@sapiom/agent-map";
 export {
   canonicalJson,
   canonicalizeAgentMapGraph,
   computeAgentMapVersionRecordDigest,
   computeArchitectureGraphDigest,
   computeGraphContentDigest,
-} from "./shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 export {
   AGENT_BRIEF_COMPILER_VERSION,
   AGENT_BRIEF_FINGERPRINT_KINDS,
@@ -61,7 +61,7 @@ export {
   emptyProjectBuildPlanContent,
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,
-} from "./shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 export {
   PROJECT_SUBSESSION_CLAIM_TTL_MS,
   PROJECT_SUBSESSION_DELEGATION_LIMIT,
@@ -107,7 +107,7 @@ export {
   canonicalizeAgentBriefFocusScope,
   computeAgentBriefId,
   computeAgentBriefScopeKey,
-} from "./shared/agent-brief.js";
+} from "@sapiom/agent-map/node/agent-brief";
 export type {
   AgentBriefFocusSelection,
   AgentBriefRefreshRequest,
@@ -117,7 +117,7 @@ export type {
   CompileAgentBriefsResult,
   CompiledAgentBriefCandidate,
   PreviousAgentBrief,
-} from "./shared/agent-brief.js";
+} from "@sapiom/agent-map/node/agent-brief";
 export type {
   AgentBriefContent,
   AgentBriefDependencyFingerprint,
@@ -165,7 +165,7 @@ export type {
   ProjectMutationReceipt,
   ProjectMutationTombstone,
   SequenceGateId,
-} from "./shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 export {
   parseAgentBriefFocusScope,
   parseAgentBriefVersion,
@@ -175,7 +175,7 @@ export {
   parseProjectBuildPlanContent,
   parseProjectBuildPlanVersion,
   parseProjectBuildPlanVersionRef,
-} from "./shared/build-plan-codec.js";
+} from "@sapiom/agent-map/node/build-plan-codec";
 export {
   agentBriefSemanticProjection,
   buildPlanSemanticProjection,
@@ -185,7 +185,7 @@ export {
   computeBuildPlanRecordDigest,
   computeBuildPlanRequestDigest,
   computeBuildPlanSemanticDigest,
-} from "./core/build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 export {
   AGENT_BRIEF_COMPILER_DIAGNOSTIC_LIMIT,
   DeterministicAgentBriefCompiler,
@@ -220,7 +220,7 @@ export {
   PROJECT_AGENT_PROMPT_APPENDIX,
   projectAgentPromptAppendix,
 } from "./profiles/project-agent.js";
-export type { WorkspaceScopeSummary } from "./shared/system-graph.js";
+export type { WorkspaceScopeSummary } from "./shared/workspace-scope.js";
 export { AGENT_STUDIO_PRODUCT_NAME } from "./shared/branding.js";
 export {
   HarnessError,
@@ -228,6 +228,8 @@ export {
   SessionNotReadyError,
   SessionNotResumeableError,
   SessionAlreadyLiveError,
+  McpCredentialGenerationChangedError,
+  McpSessionRestartUnavailableError,
   SubsessionBindingMismatchError,
   SubsessionFreshRestartForbiddenError,
   AdapterNotFoundError,

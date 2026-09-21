@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import type { AnalyticsEvent } from "../shared/types.js";
 import { createEventStore } from "./collector/store.js";
 import {
@@ -197,6 +198,26 @@ describe("created agent registration", () => {
     expect(await f.preferences.createdAgents()).toMatchObject([
       { projectId: f.projectId, path: f.target },
     ]);
+  });
+
+  it.each(["live", "recovery"])("aborts %s registration when ownership is unavailable", async (mode) => {
+    const f = await fixture();
+    const catalog = new StudioProjectCatalog(path.join(f.cwd, "catalog.json"));
+    vi.spyOn(catalog, "lookupIdentityForPath").mockResolvedValue({
+      kind: "unavailable",
+    });
+    f.projectForPath.mockImplementation(async () =>
+      (await catalog.resolveIdentityForPath(f.target))?.projectId ?? null,
+    );
+    const event = completion(f.target);
+    await f.events.append(event);
+    await expect(mode === "live"
+      ? f.registrar.onEventPersisted(event)
+      : f.registrar.recover(["session-a"]),
+    ).rejects.toMatchObject({ code: "storage_unavailable" });
+    expect(await f.preferences.createdAgents()).toEqual([]);
+    expect(f.watch).not.toHaveBeenCalled();
+    expect(f.scan).not.toHaveBeenCalled();
   });
 
   it("registers and recovers native Codex relative scaffold completions exactly once", async () => {

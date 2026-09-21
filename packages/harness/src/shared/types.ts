@@ -1,3 +1,4 @@
+import type { AssistantStateSnapshot } from "./assistant-state.js";
 /**
  * Sapiom Harness — shared interface contract.
  *
@@ -5,11 +6,6 @@
  * the types in this file. Change them only by agreement — this file is the
  * integration boundary.
  */
-
-import type {
-  SystemGraphLifecycleState,
-  WorkspaceKey,
-} from "./system-graph.js";
 
 // ---------------------------------------------------------------------------
 // Constants & well-known paths
@@ -151,6 +147,13 @@ export type HarnessKind = (typeof SPAWNABLE_HARNESS_KINDS)[number];
 
 export type SessionStatus = "starting" | "running" | "exited";
 
+/** Browser-safe projection of a live session's private MCP credential stamp. */
+export type McpAuthState =
+  | "current"
+  | "restart-required"
+  | "restarting"
+  | "not-applicable";
+
 /** A harness session = one pty running one agent process in one directory. */
 export interface HarnessSession {
   /** Our id (uuid). */
@@ -163,6 +166,13 @@ export interface HarnessSession {
   /** Display title (first prompt, or directory basename until known). */
   title: string;
   status: SessionStatus;
+  /**
+   * Whether this live process was launched against the current Sapiom MCP
+   * credential. The underlying generation and key remain server-private.
+   * Absent on records written by older versions and never persisted by the
+   * current SessionManager.
+   */
+  mcpAuthState?: McpAuthState;
   createdAt: string;
   lastActiveAt: string;
   /**
@@ -220,9 +230,9 @@ export interface HarnessSession {
    */
   ready: boolean;
   /** Durable lifecycle state for a new project's one automatic map seed. */
-  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
+  projectBootstrap?: import("@sapiom/agent-map").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
+  agentMapIdentity?: import("@sapiom/agent-map").ProjectAgentSession;
 }
 
 /**
@@ -551,6 +561,7 @@ export type TerminalControlMessage = TerminalResizeMessage;
 // ---------------------------------------------------------------------------
 
 export type BusMessage =
+  | { type: "assistant.state"; snapshot: AssistantStateSnapshot }
   | { type: "session.status"; session: HarnessSession }
   /**
    * A prompt or completed turn is now durable in the local event store.
@@ -579,14 +590,8 @@ export type BusMessage =
     }
   | { type: "workflows.changed" }
   | {
-      type: "system-graph.changed";
-      workspaceKey: WorkspaceKey;
-      revision: number;
-      state: SystemGraphLifecycleState;
-    }
-  | {
       type: "agent-map.proposal.changed";
-      delta: import("./agent-map.js").AcceptedProposalDelta;
+      delta: import("@sapiom/agent-map").AcceptedProposalDelta;
     }
   /**
    * Full snapshot of one background task, re-broadcast on every change
@@ -594,7 +599,7 @@ export type BusMessage =
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
-  | { type: "agent-map.initialization.changed"; status: import("./agent-map-initialization.js").AgentMapInitializationStatus }
+  | { type: "agent-map.initialization.changed"; status: import("@sapiom/agent-map/agent-map-initialization").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
@@ -1080,6 +1085,7 @@ export interface SessionRecord {
 // POST   /api/sessions/adopt            AdoptSessionRequest → HarnessSession (register + resume a transcript-only row)
 // GET    /api/sessions/:id/record       → SessionRecord (reconstructed transcript)
 // POST   /api/sessions/:id/resume       → HarnessSession (new pty, --resume)
+// POST   /api/sessions/:id/restart-mcp  → HarnessSession (replace exact stale resumable runtime)
 // DELETE /api/sessions/:id              → { ok: true }   (kill pty)
 // POST   /api/sessions/:id/input        InjectInputRequest → InjectInputResponse
 // POST   /api/sessions/:id/attachments  AttachFileRequest → AttachFileResponse (materialize only)
@@ -1224,7 +1230,7 @@ export interface InjectInputRequest {
 export interface InjectInputResponse {
   ok: true;
   /** Present only when the durable bootstrap FIFO handled this request. */
-  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+  receipt?: import("@sapiom/agent-map").ProjectBootstrapInputReceipt;
 }
 
 /** Internal server boundary shared by the canonical route and rolling alias. */
@@ -1232,7 +1238,7 @@ export type SessionInputSubmissionResult =
   | { ok: false }
   | {
       ok: true;
-      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+      receipt?: import("@sapiom/agent-map").ProjectBootstrapInputReceipt;
     };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
@@ -1272,6 +1278,7 @@ export interface HarnessWorkspaceContext {
 }
 
 export interface AppState {
+  assistant?: AssistantStateSnapshot;
   version: string;
   authenticated: boolean;
   userId: string | null;
@@ -1316,9 +1323,9 @@ export interface AppState {
   workflows: WorkflowInfo[];
   /** Opaque identities for the workspace folders currently known to Studio.
    * Optional for compatibility with older servers and test fixtures. */
-  workspaceScopes?: import("./system-graph.js").WorkspaceScopeSummary[];
+  workspaceScopes?: import("./workspace-scope.js").WorkspaceScopeSummary[];
   /** Path-free durable project identities for the plan-first Agent Map. */
-  studioProjects?: import("./agent-map.js").StudioProjectSummary[];
+  studioProjects?: import("@sapiom/agent-map").StudioProjectSummary[];
   macros: MacroDef[];
   /** The directory the CLI was launched against — the SPA prefills the
    *  new-session modal with this instead of recentDirs[0]. */
@@ -1704,6 +1711,12 @@ export interface WorkflowInfo {
     unavailable: boolean;
   };
   /**
+   * Visibility of the linked definition for the signed-in account, from the
+   * tenant-scoped list at serve time. "unavailable" = another account or
+   * deleted. Absent = unknown. Never persisted to workflows.json.
+   */
+  definitionAccess?: "visible" | "unavailable";
+  /**
    * Provenance from sapiom.json: the gallery template this project was cloned
    * from. Distinct from `source` below, which records how the REGISTRY learned
    * of the path. Optional for compatibility with older harness servers; null
@@ -1721,7 +1734,7 @@ export interface WorkflowInfo {
    * overlapping opened roots, so this is a list rather than one global id.
    */
   studioBindings?: Array<{
-    projectId: import("./agent-map.js").StudioProjectId;
+    projectId: import("@sapiom/agent-map").StudioProjectId;
     agentId: string;
   }>;
 }

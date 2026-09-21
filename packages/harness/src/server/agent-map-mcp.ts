@@ -12,7 +12,7 @@ import {
   AgentMapCapabilityRegistry,
   type ResolvedAgentMapCapability,
 } from "../core/agent-map-capability-registry.js";
-import type { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import type { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
 import type { BuildPlanService } from "../core/build-plan-service.js";
 import type { AgentBriefService } from "../core/agent-brief-service.js";
 import type { SubsessionCoordinator } from "../core/subsession-coordinator.js";

@@ -5,26 +5,26 @@ import type {
   PlanNode,
   PlanNodeId,
   PlanRelationship,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   canonicalDigest,
   canonicalJson,
   compareCanonicalStrings,
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefFocusSelection,
   CompileAgentBriefsRequest,
   CompileAgentBriefsResult,
   CompiledAgentBriefCandidate,
   PreviousAgentBrief,
-} from "../shared/agent-brief.js";
+} from "@sapiom/agent-map/node/agent-brief";
 import {
   canonicalWorkstreamScopes,
   computeAgentBriefId,
   computeAgentBriefScopeKey,
-} from "../shared/agent-brief.js";
+} from "@sapiom/agent-map/node/agent-brief";
 import type {
   AgentBriefDependencyFingerprint,
   AgentBriefFingerprintKind,
@@ -34,19 +34,19 @@ import type {
   BuildPlanDiagnostic,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionRef,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import {
   AGENT_BRIEF_COMPILER_VERSION,
   BUILD_PLAN_SCHEMA_VERSION,
   agentMapVersionRefsEqual,
   projectBuildPlanVersionRefsEqual,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import {
   computeAgentBriefRecordDigest,
   computeAgentBriefSemanticDigest,
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 import { evaluateAgentBriefImpact } from "./build-plan-impact-evaluator.js";
 
 export const AGENT_BRIEF_COMPILER_DIAGNOSTIC_LIMIT = 64;

@@ -71,6 +71,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check release readiness
+        run: node scripts/assert-release-ready.mjs
+
       - name: Resolve version and update channel
         id: meta
         shell: bash

@@ -15,12 +15,18 @@ with your coding agent (Claude Code or Codex) running in an embedded
 terminal — pre-wired with the Sapiom MCP servers and an agent-authoring
 system prompt, in whatever project directory you choose.
 
+Assistant summaries use the existing `/api/state` seed and `/ws/events` full snapshots. The browser preserves the last known state as uncertain until a validated current socket snapshot arrives; account changes clear it immediately. Summaries contain activity and pending counts only.
+
+Session tabs and retained-session rows show independent Assistant activity. Hover or use the accessible label for Working, Waiting for input, Checking status or Unavailable. Terminal output keeps its existing pulse; an idle Assistant has no success badge. See the [native acceptance record](docs/assistant-background-acceptance.md) for the combined integration checks.
+
 ## What you get
 
 - **Terminal sessions** — your agent, your subscription, your machine; the
   Agent Studio only configures it. The `+` beside a project starts a session at
   that project root; the tab-strip `+` starts a sibling session. Sessions have
   resumable chat history.
+- **Templates** — quick starts, the template gallery, and bundled starters use
+  your selected coding agent.
 - **Agents rail** — agent projects (`sapiom.json`) discovered and
   tracked, with one-click local test run, deploy, production run, and
   open-in-Sapiom actions. How that discovery is rooted and bounded, how a
@@ -33,6 +39,134 @@ system prompt, in whatever project directory you choose.
   your global agent settings are never touched.
 
 Uninstall: `rm -rf ~/.sapiom/harness` (all harness-owned state lives there).
+
+Studio browser sign-in also stores a renewable user credential for internal
+Assistant eligibility checks. Existing organization-only logins keep working for
+Terminal; sign out and sign in again to obtain the user credential. It stays in
+the shared local credential store and is never returned by Studio's browser auth
+API. Sign-out clears it locally and attempts to revoke its token family remotely.
+
+The Studio host refreshes the internal Assistant capability at most every 30
+seconds and expires an enabled decision within 60 seconds. Missing identity,
+offline startup, unsupported backends, and unavailable flags leave it off.
+These access checks are independent of optional telemetry and never prevent
+ordinary Terminal startup. The browser receives only the resolved boolean and a
+random, process-memory `authorityRevision`; it never receives principal fields,
+credentials, identity hashes, or grant diagnostics. The revision stays stable
+through polling, reconnects, transient retention, and renewed leases for the
+same authority. A verified principal crossover or actual revocation, denial,
+expiry, or sign-out rotates it before the new state is observable. Disabled
+responses carry the current retirement barrier, and repeated disabled polls do
+not rotate it. Browser draft stores use this opaque boundary to prevent text
+from crossing authorities without persisting it.
+
+After a successful check, timeout, network, or HTTP 5xx failures from credential
+or capability refresh may retain that exact grant only while its original lease
+and observed user credential remain unexpired. A transient failure never moves
+either expiry. Sign-out, credential expiry, API key/environment/tenant/user
+change, an authentication rejection, an explicit `assistant: false`, or a
+malformed/ambiguous response revokes the grant. Thus an offline first launch
+cannot invent eligibility, while a short outage does not interrupt an unchanged
+verified principal before the server-issued lease ends.
+
+Eligible internal users see a **Terminal | Assistant** switch, with Terminal
+selected initially. Assistant sends prompts and streams Sapiom responses in the
+selected project. Returning to a session reopens its OpenCode conversation;
+switching views detaches the display while execution continues. Connection errors
+offer **Reconnect**, which reloads history without resending accepted prompts.
+Initial attachment and reconnect synchronize status after a real native event
+frame. Newer activity wins over old status snapshots; disconnecting or detaching
+the display invalidates outstanding status/history reads.
+History catch-up uses one active read and bounded follow-ups. Disconnecting the
+display cancels queued reads; failed or malformed reads preserve visible history.
+Native updates and removals received during a history read survive its response.
+Queued stream frames preserve completed content, and history merging preserves
+newer execution status.
+After a stream gap, Assistant retains visible output and shows **Catching up…**
+until native history or a complete stream update repairs its text baseline.
+Disconnecting also cancels outstanding catch-up requests before reconnection.
+Attachment and reconnect also reconcile pending permissions and questions.
+Assistant shows **Waiting for input** for current pending requests; failed request
+reads retain last-known state while the status remains uncertain.
+Event transport scopes each frame to the authorized conversation and cancels
+its reader and status catch-up when the browser connection ends.
+The shared observer module derives activity and pending-request counts without
+storing transcript content or issuing execution commands.
+Host observation starts after an authorized conversation attaches and ends with
+runtime retirement. Reading summaries never launches inactive conversations.
+This first slice includes basic tool status; richer controls arrive separately.
+An unconfirmed response keeps the answer and tool results visible as **Stopped**.
+Studio hides its internal completion markers even if the model supplies an
+incorrect turn ID, including extra markers inside a confirmed answer.
+Literal prose and invalid marker syntax remain visible. Incomplete marker
+candidates are hidden while streaming and restored when the response ends.
+After automatic answer recovery, Studio reconnects the conversation's event
+stream to reconcile history and status while keeping the chat and draft visible.
+Studio actions reveal Terminal after a foreground CLI prompt is accepted; a
+rejected send shows its error and keeps the selected view. Unsent chat text is
+keyed by authenticated principal and Studio session above the centre pane, so it
+survives Terminal/Assistant and session switches, reconnects, exited-session
+views, and temporary New Session or past-session review navigation. It is never
+persisted: actual Assistant-access retirement, authority crossover, sign-out,
+session deletion, and page/app reload clear the applicable in-memory draft.
+Same-authority renewals, polls, and reconnects retain it. Conversation view is
+a separate, unpersisted mount-local preference: Terminal is the initial/reset
+view, while a foreground CLI prompt accepted by Studio explicitly reveals it.
+Background actions keep the selected view. A failed UI access poll retains the
+open draft for at most 60 seconds after the last success; explicit
+revocation/sign-out takes effect immediately when observed. The host continues
+enforcing its own capability expiry independently.
+
+The current `@assistant-ui/react-opencode` integration stays behind
+`OpenCodeChat`, the host-to-UI adapter. The host exposes only the shared,
+strictly parsed transport-error contract; the adapter selects trusted static
+copy and maps its bounded actions to the existing sign-in, Settings, Terminal,
+or reconnect surfaces. Replacing the pinned UI library means replacing that
+adapter, not changing the host association/runtime protocol or adopting native
+events directly. Confirmed missing native history leaves the Studio session and
+record intact and opens Terminal; it never fabricates Continue/Resume or a new
+native conversation.
+
+The Assistant's model and remote MCP requests use a Studio-owned local bridge.
+Its short-lived runtime credential is separate from browser authentication;
+Studio adds the Sapiom key only when forwarding to the configured services.
+Production sends Responses API requests to `https://router.sapiom.ai/v1/responses`
+with the explicit `gpt-luna` model and the signed-in account's `x-api-key`. Luna uses
+low reasoning effort and streams both tool calls and answers. Responses are not
+stored by the provider; encrypted reasoning travels with native conversation
+history. Other environments must explicitly set `services.llm` to a router origin
+that supports `/v1/responses` in the matching credentials-file environment entry;
+Studio never falls back from a custom environment to production.
+
+Studio owns each Assistant runtime for the authorized session and working
+directory. Browser detachment leaves it running; sign-out, access revocation,
+and Studio shutdown stop it. Runtime state is isolated by user, organization,
+session, and directory under `~/.sapiom/harness/opencode`. A process lock prevents
+two Studio hosts from opening the same runtime state concurrently.
+
+Transport failures use fixed, credential-free codes and copy. HTTP responses
+carry a nested typed error; an already-open event stream receives the same error
+as a host-generated `studio.error` before closing when possible. Native events
+cannot claim that host-only type. Ordinary native events require matching
+session IDs, including every nested ID. The only session-less native failure
+converted to a terminal Studio error is a Sapiom provider-auth error received
+from the currently bound runtime and authority with an exact authorized-directory
+envelope; unknown, conflicting, stale-runtime, and differently scoped events are
+dropped. Reconnect reattaches and reloads history; it never replays an accepted
+prompt or tool call.
+
+The Studio session record remains authoritative for session identity, project,
+and working directory. Its authority-scoped runtime directory owns a versioned
+`association.json` sidecar that maps that Studio session to one native
+conversation. The host serializes creation and atomic commit under the same
+lifecycle that owns the native runtime; browser mounts do not own the mapping.
+Retirement, sign-out, missing native history, and transient lookup failures do
+not delete or replace it. A native 404 is reported as confirmed unavailable,
+while network and other transport failures remain retryable; neither path
+creates a second conversation. There is no implicit legacy scan or cleanup in
+this correction: a future migration adapter must validate both identities,
+commit a versioned mapping atomically, preserve the old history until verified,
+and make cleanup an explicit post-migration operation.
 
 The rail's cloud icon marks an agent as deployed once Studio confirms a ready
 hosted build. Failed checks silently retain the last confirmed indicator, and changing
@@ -100,6 +234,27 @@ pnpm --filter @sapiom/harness build      # server (tsc) + SPA (vite) → dist/
 Architecture: a single Node process (Express + ws + node-pty) serves the built
 SPA, a small REST API, terminal WebSocket streams, and the local telemetry
 ingest endpoint. The interface contract lives in `src/shared/types.ts`.
+
+### Codex MCP validation
+
+The ordinary unit and server tests cover launch/resume conversion, login and
+credential refresh, logout, and error reporting. To verify actual tool discovery
+with an installed Codex CLI, build the harness's workspace dependencies, then
+run the opt-in test:
+
+```bash
+pnpm --filter "@sapiom/harness^..." build
+RUN_CODEX_MCP_INTEGRATION=1 pnpm --filter @sapiom/harness exec vitest run src/core/adapters/codex-mcp.integration.test.ts
+```
+
+The test runs the `codex` binary found on `PATH`. Set `CODEX_TEST_BINARY` to the
+path of a different installed version to test that one instead.
+
+This test uses a temporary Codex home, the built `sapiom-dev` server, and local
+HTTP fixtures. It requires no Codex login or model request and checks both a
+fresh home and an existing configuration with conflicting server registrations.
+It also checks that command environments exclude MCP credentials and the Electron
+launch flag while preserving unrelated user shell settings.
 
 ### Project sessions and Agent Map bootstrap
 
@@ -330,9 +485,8 @@ HTTP contracts that need more than a type to use are written up under `docs/`:
 
 - [`docs/agent-canvas-graph.md`](docs/agent-canvas-graph.md) — the session-free
   `GET /api/workflows/:path/graph` Canvas route keyed by an agent's path.
-- [`docs/workspace-system-graph.md`](docs/workspace-system-graph.md) — the
-  Project dependency-graph endpoints, lifecycle states, cache signal, warnings,
-  and `system-graph.changed` event.
+- [`docs/agent-map-api.md`](docs/agent-map-api.md) — durable project identity,
+  map/node navigation, recovery and the removed project graph endpoints.
 
 ## Testing
 
