@@ -37,6 +37,8 @@ import {
   readDisclosure as llmReadDisclosure,
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
+  type DecideQuestion,
+  type LlmDecideResponse,
 } from "../llm/index.js";
 import type {
   AgentRunResult,
@@ -834,6 +836,48 @@ function stubMemoryFilterMatches(
   return true;
 }
 
+/**
+ * A shape-correct, deterministic `llm.decide` reply for `run_local`: every question
+ * answered under its own key, undecided (`noul` 0.5, uniform choice, lowest score
+ * level) so branching code runs both ways without inventing a verdict.
+ */
+function stubDecideResponse(
+  questions: Record<string, DecideQuestion>,
+): LlmDecideResponse {
+  const answers: Record<string, unknown> = {};
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const options = Object.keys(q.criteria);
+      const p = options.length > 0 ? 1 / options.length : 0;
+      answers[id] = {
+        type: "choice",
+        choice: options[0] ?? "",
+        probabilities: Object.fromEntries(options.map((o) => [o, p])),
+        confidence: options.length > 0 ? p : 0,
+      };
+    } else if (q.type === "score") {
+      const levels = q.criteria;
+      answers[id] = {
+        type: "score",
+        score: 0,
+        legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
+        probabilities: Object.fromEntries(
+          levels.map((_, i) => [String(i), i === 0 ? 1 : 0]),
+        ),
+        confidence: 1,
+      };
+    } else {
+      answers[id] = { type: "noul", noul: 0.5 };
+    }
+  }
+  return {
+    model: "jev-stub",
+    answers: answers as LlmDecideResponse["answers"],
+    usage: { inputTokens: 0, outputTokens: 0 },
+    servedBy: "stub",
+  };
+}
+
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   // Record which override keys actually match a call, so the runner can flag
   // supplied-but-unmatched keys (typos / wrong plural-singular form).
@@ -1198,6 +1242,16 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               typeof session === "string" ? session : session.sessionId,
             state: "expired" as const,
           })) as LlmSession,
+        ),
+      decide: <Q extends Record<string, DecideQuestion>>(spec: {
+        state: unknown;
+        questions: Q;
+        model?: string;
+      }) =>
+        Promise.resolve(
+          r("llm.decide", [spec], () =>
+            stubDecideResponse(spec.questions),
+          ) as LlmDecideResponse<Q>,
         ),
       // Pure functions over a result value, not network calls — no stub
       // recording needed; delegate straight to the real implementation.

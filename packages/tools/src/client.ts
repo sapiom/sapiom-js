@@ -54,10 +54,14 @@ import {
   readDisclosure as llmReadDisclosure,
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
+  decide as llmDecide,
 } from "./llm/index.js";
 import type {
   LlmRunSpec,
   LlmSubmitSpec,
+  LlmDecideSpec,
+  LlmDecideResponse,
+  DecideQuestion,
   LlmRouteHandle,
   LlmGrantLink,
   LlmSessionCreateSpec,
@@ -233,6 +237,13 @@ export interface Sapiom {
   readonly llm: {
     /** One routed LLM call, executed immediately and returned inline. */
     run<T = Record<string, unknown>>(spec: LlmRunSpec): Promise<T>;
+    /**
+     * A fixed-answer-set decision with probabilities (yes/no, pick-one, rubric score)
+     * — TypeSafe Jev via the Capability Router. Generated text → `run`.
+     */
+    decide<Q extends Record<string, DecideQuestion>>(
+      spec: LlmDecideSpec<Q>,
+    ): Promise<LlmDecideResponse<Q>>;
     /** Submit a routed call; pass the handle to `pauseUntilSignal` to suspend on it. */
     submit(spec: LlmSubmitSpec): Promise<LlmRouteHandle>;
     /** Spend a granted link: POST the (re-sent) request to /v1/messages with it. */
@@ -646,6 +657,7 @@ function bind(transport: Transport): Sapiom {
     },
     llm: {
       run: (spec) => llmRun(spec, transport),
+      decide: (spec) => llmDecide(spec, transport),
       submit: (spec) => llmSubmit(spec, transport),
       redeem: (link, request) => llmRedeem(link, request, transport),
       createSession: (spec) => llmCreateSession(spec, transport),
