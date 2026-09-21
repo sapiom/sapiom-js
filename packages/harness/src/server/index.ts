@@ -1418,7 +1418,7 @@ export const startServer = async (
     // project before config generation and PTY spawn, never during resume.
     const initialPrompt = context?.resume
       ? undefined
-      : await prepareFirstRequest(req, scaffoldDeps);
+      : await prepareFirstRequest(req);
     if (!context?.agentMapIdentity) {
       return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
     }

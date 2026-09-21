@@ -14,9 +14,7 @@ import {
   formatComplexity,
   groupByCategory,
   matchesQuery,
-  templateDirSuggestion,
   templateGraph,
-  useTemplatePrompt,
   type GalleryTemplate,
 } from "./templates";
 
@@ -235,44 +233,6 @@ describe("matchesQuery", () => {
   });
 });
 
-describe("useTemplatePrompt", () => {
-  it("gallery: names the real clone tool with dir and templateId, plus the auth fallback", () => {
-    const prompt = useTemplatePrompt(summary(), "/tmp/web-research-digest");
-    expect(prompt).toContain("sapiom_dev_agents_clone");
-    expect(prompt).toContain('dir "/tmp/web-research-digest"');
-    expect(prompt).toContain('templateId "web-research-digest"');
-    expect(prompt).toContain("sapiom_authenticate");
-  });
-
-  it("works for any catalog id, not just the two once pinned in this module", () => {
-    // clone's templateId is relayed to core's fork endpoint with no allowlist,
-    // which is why fetching the full catalog needed no other change.
-    const prompt = useTemplatePrompt(
-      summary({ id: "cold-outreach-engine" }),
-      "/tmp/x",
-    );
-    expect(prompt).toContain('templateId "cold-outreach-engine"');
-  });
-
-  // The starter branch is GONE (SAP-2981): a bundled starter is created by
-  // `POST /api/agents/scaffold` before its session opens, so there is no prompt
-  // to write and nothing here to test. The test that used to certify that
-  // branch outlived its own caller — it asserted the exact arguments of a
-  // handoff nothing performed any more.
-
-  it("ends with the no-capability-spend local test continuation", () => {
-    expect(useTemplatePrompt(summary(), "/tmp/x")).toContain(
-      "local test run with no Sapiom capability spend (sapiom_dev_agents_run_local)",
-    );
-  });
-
-  it("says nothing about scaffolding — a clone is a different operation", () => {
-    const prompt = useTemplatePrompt(summary(), "/tmp/x");
-    expect(prompt).not.toContain("sapiom_dev_agents_scaffold");
-    expect(prompt.toLowerCase()).not.toContain("workflow");
-  });
-});
-
 describe("templateGraph", () => {
   /** A detail payload as core serves it: steps plus explicit transitions. */
   function detail(over: Partial<TemplateDetailView> = {}): TemplateDetailView {
@@ -402,35 +362,5 @@ describe("templateGraph", () => {
       "terminal-success",
       "terminal-warn",
     ]);
-  });
-});
-
-describe("templateDirSuggestion", () => {
-  it("joins the launch dir with the template id", () => {
-    expect(
-      templateDirSuggestion(
-        summary({ id: "hello-agent" }),
-        "/Users/demo/acme-app",
-      ),
-    ).toBe("/Users/demo/acme-app/hello-agent");
-  });
-
-  it("joins a Windows launch dir with a backslash", () => {
-    expect(
-      templateDirSuggestion(
-        summary({ id: "hello-agent" }),
-        "C:\\Users\\demo\\acme-app",
-      ),
-    ).toBe("C:\\Users\\demo\\acme-app\\hello-agent");
-  });
-
-  it("gives the 'default' starter a descriptive folder name", () => {
-    expect(
-      templateDirSuggestion(STARTER_TEMPLATES[0], "/Users/demo/acme-app"),
-    ).toBe("/Users/demo/acme-app/sapiom-agent");
-  });
-
-  it("is empty without a launch dir (the field asks instead of guessing)", () => {
-    expect(templateDirSuggestion(summary(), null)).toBe("");
   });
 });

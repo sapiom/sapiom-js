@@ -8,7 +8,7 @@ import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } 
  * touches the network — this is what lets the SPA build ahead of a running
  * server.
  */
-import { buildIdeaWithAttachments } from "@shared/initial-prompt";
+import { buildFirstPrompt } from "@shared/initial-prompt";
 import type {
   AccountPlanView,
   AgentSecret,
@@ -2378,16 +2378,19 @@ export class MockApi implements HarnessApi {
         throw new Error("mock: couldn't create session");
       }
     }
-    if (req.scaffold) {
-      const separator = req.cwd.lastIndexOf("/");
-      await this.scaffoldAgent(req.cwd.slice(0, separator), req.cwd.slice(separator + 1), req.scaffold.template);
-    }
     const id = `sess-mock-${this.sessions.length + 1}`;
     const attachments: { path: string }[] = [];
     for (const attachment of req.initialAttachments ?? []) {
       attachments.push(attachment.kind === "path" ? attachment : await this.materializeMockFile(id, req.cwd, attachment));
     }
-    const initialPrompt = buildIdeaWithAttachments(req.initialPrompt ?? "", attachments);
+    // The same composition the server does (`first-request.ts`): the idea,
+    // the files, the linked sources, the session setup.
+    const initialPrompt = buildFirstPrompt({
+      idea: req.initialPrompt ?? "",
+      attachments,
+      sources: req.initialSources,
+      setup: req.initialSetup,
+    });
     recordCreateStep("session", req.cwd);
     if (typeof window !== "undefined" && initialPrompt) {
       const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
@@ -2871,6 +2874,14 @@ export class MockApi implements HarnessApi {
     template = "default",
   ): Promise<AgentScaffoldResponse> {
     await delay(180);
+    // `?mockError=scaffold` forces the endpoint's refusal so the new-agent
+    // screen's error-under-the-field path is exercisable in a browser.
+    if (mockErrorTargets().has("scaffold"))
+      throw new ApiError(
+        409,
+        "POST /api/agents/scaffold → 409 (mock)",
+        `Can't create an agent in ${basenameOf(root)} right now.`,
+      );
     const refusal = refuseAgentName(name);
     if (refusal)
       throw new ApiError(

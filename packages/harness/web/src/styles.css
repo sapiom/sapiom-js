@@ -10912,3 +10912,50 @@ button.rail-footer-card:hover {
 .no-project-home .empty-state {
   max-width: 420px;
 }
+
+/* ── The setup disclosure (flow-creation.md §4.4 step 3) ───────────────────
+   The planning instructions rode the first prompt as session setup. The pane
+   shows them quietly above the terminal: a closed disclosure the user can
+   open to read what the agent was told, never dressed as the user's turn. */
+.session-setup {
+  flex: 0 0 auto;
+  margin: 0 var(--sp3) var(--sp2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+}
+
+.session-setup-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp1) var(--sp2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.session-setup-summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-setup-title {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.session-setup-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-setup-body {
+  margin: 0;
+  padding: 0 var(--sp2) var(--sp2);
+  white-space: pre-wrap;
+  font: inherit;
+  line-height: 1.5;
+  color: var(--text);
+}
