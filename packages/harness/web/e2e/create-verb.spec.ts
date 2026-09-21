@@ -566,6 +566,15 @@ test.describe("the rail top", () => {
     await expect(history).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId("past-sessions-card")).toBeVisible();
     await expect(page.getByTestId("exited-session-sess-leasing")).toBeVisible();
+    // Focus enters the dialog on open and returns to the glyph on Escape.
+    await expect(
+      page.getByTestId("history-menu").getByRole("button", { name: "Close" }),
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("history-menu")).toBeHidden();
+    await expect(history).toBeFocused();
+    await history.click();
+    await expect(page.getByTestId("history-menu")).toBeVisible();
     // One flyer at a time: opening the options menu retires the card.
     await options.click();
     await expect(page.getByTestId("history-menu")).toBeHidden();

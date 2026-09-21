@@ -1057,8 +1057,12 @@ export function WorkflowsRail({
           >
             <div className="connect-card-header">
               <span id="past-sessions-heading">Past sessions</span>
+              {/* A dialog takes focus when it opens; Close is its first
+                  control, and Escape hands focus back to the glyph
+                  (useDismissable). */}
               <button
                 className="theme-toggle connect-card-close"
+                autoFocus
                 onClick={closeHistory}
                 aria-label="Close"
                 title="Close"
