@@ -306,7 +306,9 @@ function ProjectRowActions({
           className="workspace-row-action"
           data-testid={create.testid}
           aria-label={create.label}
-          data-tooltip={create.label}
+          data-tooltip={
+            create.kind === "create" ? "New agent in this project" : create.label
+          }
           onClick={create.run}
         >
           <Icon
@@ -951,7 +953,7 @@ export function WorkflowsRail({
             aria-label="Group and sort projects"
             aria-haspopup="menu"
             aria-expanded={optionsOpen}
-            data-tooltip="Group by and sort by"
+            data-tooltip="Group and sort projects"
             onClick={toggleOptions}
           >
             <Icon name="SlidersHorizontal" size={14} />
@@ -1273,9 +1275,16 @@ export function WorkflowsRail({
                   tooltip={
                     creating
                       ? "Creating agent…"
-                      : bare
-                        ? "Project with sessions, no agent yet. Focus to work in it."
-                        : undefined
+                      : planFirst &&
+                          project.rootAgent == null &&
+                          project.agents.length === 0
+                        ? /* D36: an empty project has no map to draw, so its
+                             name is the door to the new-agent screen, and the
+                             tooltip says so where the row is. */
+                          "Create this project's first agent"
+                        : bare
+                          ? "Project with sessions, no agent yet. Focus to work in it."
+                          : undefined
                   }
                   trailing={
                     <>
