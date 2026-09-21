@@ -1157,9 +1157,10 @@ export interface CreateSessionRequest {
    */
   initialSetup?: string;
   /**
-   * Content-free lifecycle hint: the UI already owns a real first input that
-   * will be delivered after readiness/attachments. A new-project bootstrap
-   * yields to that input instead of racing it. This never affects authority.
+   * Content-free lifecycle hint, kept for embedders and older clients: the UI
+   * already owns a real first input. New sessions no longer enrol in the
+   * automatic map bootstrap, so this has no effect on them; it still tells a
+   * resumed legacy bootstrap session to yield. This never affects authority.
    */
   initialUserInputPending?: boolean;
   /**

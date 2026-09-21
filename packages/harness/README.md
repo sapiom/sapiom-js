@@ -267,16 +267,19 @@ authority.
 
 Clicking a project name opens its durable Agent Map without creating, resuming,
 focusing, or prompting a session. Every tab represents one real session ID and
-opens that session's ordinary conversation and Canvas/Steps experience. A new
-project's first ordinary session is initially titled **Plan Agents**; the title
-does not confer a role and can be renamed like any other session.
+opens that session's ordinary conversation and Canvas/Steps experience. Sessions
+created before this change may still carry the **Plan Agents** title of the
+retired automatic first session; the title does not confer a role and can be
+renamed like any other session.
 
 Empty projects have no inline first-agent creation button, including after a
 session ends. Use the project's session shortcut or its menu to start work;
 warnings about separate checkouts that were not searched remain visible.
 
-When a new project gains its first active root binding, Studio durably schedules
-one evidence-first map bootstrap for that first session. The model reads the
+Map bootstrap is legacy state. Opening or adding a project never schedules it;
+the coordinator only resumes sessions that already carry bootstrap metadata from
+installs that opened projects before this change, and no new session enrols.
+For those sessions the earlier guarantees still hold. The model reads the
 current map and uses the same structured tools available to every project
 session. It only proposes an initial map while the durable map remains
 meaningfully empty. Attempt IDs, retry ordinals, readiness and model-turn

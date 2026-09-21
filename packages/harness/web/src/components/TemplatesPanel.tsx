@@ -31,7 +31,11 @@ interface TemplatesPanelProps {
    * the project on screen or to the folder the folder step picks next
    * (flow-creation.md §5, CF-D11). No destination is asked for here.
    */
-  onUse: (template: StudioTemplate) => void;
+  /** Use, with the surface it was pressed on: the grid or an opened detail. */
+  onUse: (
+    template: StudioTemplate,
+    surface: "template_gallery" | "template_detail",
+  ) => void;
   /** The live catalog fetchers (the server relays core; the key stays there). */
   listTemplates: () => Promise<TemplateListResponse>;
   getTemplate: (id: string) => Promise<TemplateDetailView>;
@@ -182,7 +186,7 @@ export function TemplatesPanel({
             type="button"
             className="btn-primary templates-bar-use"
             data-testid="template-use-btn"
-            onClick={() => onUse(opened)}
+            onClick={() => onUse(opened, "template_detail")}
           >
             Use template
           </button>
@@ -235,7 +239,7 @@ export function TemplatesPanel({
                           key={template.id}
                           template={template}
                           onOpen={setOpened}
-                          onUse={onUse}
+                          onUse={(template) => onUse(template, "template_gallery")}
                         />
                       ))}
                     </div>
@@ -279,7 +283,7 @@ export function TemplatesPanel({
                             key={template.id}
                             template={template}
                             onOpen={setOpened}
-                            onUse={onUse}
+                            onUse={(template) => onUse(template, "template_gallery")}
                           />
                         ))}
                       </div>

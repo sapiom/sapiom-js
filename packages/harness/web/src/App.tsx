@@ -2487,7 +2487,10 @@ export const App = (): JSX.Element => {
    * point to bring in at build time (the clone is a network operation the
    * coding agent owns, with its own auth failure mode).
    */
-  const handleUseTemplate = (template: StudioTemplate): void => {
+  const handleUseTemplate = (
+    template: StudioTemplate,
+    templateSurface: "template_gallery" | "template_detail" = "template_gallery",
+  ): void => {
     // A deep link can open before registry loading finishes. Resolve the
     // harness choice before the screen opens on an unavailable default.
     const selectable = (harnessEntries ?? FALLBACK_HARNESSES).filter(
@@ -2504,7 +2507,7 @@ export const App = (): JSX.Element => {
       composeInProject({
         ...composerProject,
         template,
-        templateSurface: "template_gallery",
+        templateSurface,
       });
       return;
     }
@@ -2519,7 +2522,7 @@ export const App = (): JSX.Element => {
         label: selectedStudioProject?.displayName ?? basenameOf(scope.cwd),
         projectId: scope.projectId ?? null,
         template,
-        templateSurface: "template_gallery",
+        templateSurface,
       });
       return;
     }
@@ -2529,7 +2532,7 @@ export const App = (): JSX.Element => {
         label: selectedProject.label,
         projectId: null,
         template,
-        templateSurface: "template_gallery",
+        templateSurface,
       });
       return;
     }
