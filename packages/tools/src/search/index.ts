@@ -374,6 +374,13 @@ function mapFindEmail(raw: RawFindEmail | undefined): FindEmailResult {
  * `lastName`. Calling without a valid combination throws {@link SearchHttpError}
  * before any request is made.
  *
+ * Any field you do supply must be a non-empty string once trimmed — a
+ * whitespace-only value (e.g. `company: "  "`) throws {@link SearchHttpError}
+ * rather than being silently treated as if you hadn't provided it, even if
+ * another field would otherwise satisfy that side of the required
+ * combination on its own (e.g. a whitespace-only `company` still throws
+ * even when `domain` alone would have been enough).
+ *
  * Returns the best match, with `email` set to `null` when none was found. Failed
  * requests throw {@link SearchHttpError}.
  */
