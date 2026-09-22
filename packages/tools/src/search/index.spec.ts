@@ -612,25 +612,24 @@ describe("search.emailSearch.findEmail()", () => {
     });
   });
 
-  it("drops a whitespace-only field from the body even when a valid alternative satisfies the guard (regression for #860 review)", async () => {
-    // domain is whitespace-only, but company + fullName are enough to pass
-    // the guard on their own -- the whitespace-only domain must not ride
-    // along in the request body once it does, since the backend could
-    // validate or prioritize it independently of this guard's intent.
+  it("rejects a whitespace-only field even when a valid alternative would otherwise satisfy the guard (design settled via CodeRabbit review)", async () => {
+    // domain is whitespace-only. company + fullName alone would satisfy the
+    // guard, but an explicitly-supplied whitespace field is treated as a
+    // likely caller bug and rejected outright, rather than silently dropped
+    // while the lookup proceeds on a narrower alternative than the caller
+    // asked for.
     const { transport, calls } = makeTransport([
       () => jsonResponse({ email: "ada@example.com" }),
     ]);
 
-    await findEmail(
-      { domain: "   ", company: "Example", fullName: "Ada Lovelace" },
-      transport,
-      BASE,
-    );
-
-    expect(bodyOf(calls[0]!)).toEqual({
-      company: "Example",
-      fullName: "Ada Lovelace",
-    });
+    await expect(
+      findEmail(
+        { domain: "   ", company: "Example", fullName: "Ada Lovelace" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
   });
 
   it("returns email: null (not a thrown error) when the lookup finds nothing", async () => {
@@ -712,6 +711,17 @@ describe("search.emailSearch.findEmail()", () => {
       [
         "valid domain + whitespace-only firstName and lastName",
         { domain: "x.com", firstName: "  ", lastName: "  " },
+      ],
+      // CodeRabbit review: a whitespace-only field must be rejected even
+      // when another supplied field on the SAME side (org or person) would
+      // otherwise satisfy that side's alternative on its own.
+      [
+        "valid domain + whitespace-only company (org side already satisfied by domain)",
+        { domain: "example.com", company: "   ", fullName: "Ada Lovelace" },
+      ],
+      [
+        "valid fullName + whitespace-only lastName (person side already satisfied by fullName)",
+        { domain: "x.com", fullName: "Ada Lovelace", lastName: "   " },
       ],
     ];
 

@@ -382,6 +382,30 @@ export async function findEmail(
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<FindEmailResult> {
+  // Reject any explicitly-supplied field that's whitespace-only, rather than
+  // silently treating it as absent. A caller who threads through a blank
+  // value (e.g. from unclean upstream data) is very likely signalling a bug
+  // on their end -- silently dropping it and proceeding on a different
+  // alternative than they intended (e.g. domain-only instead of the
+  // domain+company scoped search they asked for) would return a
+  // technically-valid but surprising result instead of the clear failure
+  // this guard exists to provide.
+  for (const [name, value] of [
+    ["domain", input.domain],
+    ["company", input.company],
+    ["firstName", input.firstName],
+    ["lastName", input.lastName],
+    ["fullName", input.fullName],
+  ] as const) {
+    if (value !== undefined && !hasText(value)) {
+      throw new SearchHttpError(
+        `findEmail: "${name}" must be a non-empty string when provided`,
+        400,
+        undefined,
+      );
+    }
+  }
+
   // Guard the required combination client-side so an under-specified lookup fails
   // fast and clearly, never as a confusing network round-trip. `hasText` rejects
   // null/undefined/whitespace-only strings for JS callers. (The router validates
