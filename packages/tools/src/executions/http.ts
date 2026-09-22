@@ -12,6 +12,8 @@ import type { ExecutionReference } from "./types.js";
 
 export interface ExecutionRequestOptions {
   baseUrl?: string;
+  /** Workflow resume header forwarding; credentials and attribution stay client-owned. */
+  headers?: Record<string, string>;
   signal?: AbortSignal;
   /** Per-request cap; defaults to 15 seconds, never exceeds 15 seconds. */
   requestTimeoutMs?: number;
@@ -106,10 +108,23 @@ export async function executionRequest(
     reference,
     async (signal) => {
       try {
+        const extra = Object.fromEntries(
+          Object.entries(options.headers ?? {}).filter(
+            ([key]) => key.toLowerCase() === "x-sapiom-workflow-token",
+          ),
+        );
         const response = await transport.fetch(
           url,
-          { ...init, signal, redirect: "error" },
-          { authHeader: "x-api-key" },
+          {
+            ...init,
+            headers: { ...extra, ...init.headers },
+            signal,
+            redirect: "error",
+          },
+          {
+            authHeader: "x-api-key",
+            analyticsEvent: "capability.execution.transport",
+          },
         );
         if (response.redirected)
           throw new ExecutionProtocolError(

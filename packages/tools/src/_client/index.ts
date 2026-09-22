@@ -76,6 +76,8 @@ export interface Attribution {
 }
 
 export interface TransportConfig {
+  /** Opt-in transport selection. Only reviewed eligible capabilities can use executions. */
+  capabilityDelivery?: "legacy" | "executions";
   /** Explicit Core base for routed capabilities and durable executions. Resolved at call time when omitted. */
   coreBaseUrl?: string;
   /** Explicit tenant API key. Omit inside an agent step — the engine injects it ambiently. */
@@ -108,6 +110,8 @@ const DEFAULT_AUTH_HEADER: AuthHeader = "x-sapiom-api-key";
 
 /** Per-request options the Transport understands, layered over a normal `RequestInit`. */
 export interface TransportRequestOptions {
+  /** Job HTTP traffic is distinct from logical capability completion. */
+  analyticsEvent?: "capability.execution.transport";
   /**
    * Which header carries the tenant credential. Defaults to `x-sapiom-api-key`.
    * A capability sets this only when its destination expects a different header.
@@ -159,6 +163,7 @@ export function attributionFromEnv(): Attribution {
 }
 
 export class Transport {
+  readonly capabilityDelivery: "legacy" | "executions";
   readonly coreBaseUrl: string | undefined;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
@@ -177,6 +182,7 @@ export class Transport {
   private analyticsHolder: AnalyticsHolder = {};
 
   constructor(config: TransportConfig = {}) {
+    this.capabilityDelivery = config.capabilityDelivery ?? "legacy";
     this.coreBaseUrl = config.coreBaseUrl;
     this.apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
     this.fetchImpl = config.fetch ?? globalThis.fetch;
@@ -200,6 +206,7 @@ export class Transport {
       attribution: { ...this.attribution, ...attribution },
       resumeToken: this.resumeToken,
       coreBaseUrl: this.coreBaseUrl,
+      capabilityDelivery: this.capabilityDelivery,
     });
     derived.analyticsHolder = this.analyticsHolder;
     return derived;
@@ -256,10 +263,24 @@ export class Transport {
         },
       });
     } catch (error) {
-      this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      this.trackCapabilityCall(
+        url,
+        init,
+        startedAt,
+        undefined,
+        error,
+        options.analyticsEvent,
+      );
       throw error;
     }
-    this.trackCapabilityCall(url, init, startedAt, response);
+    this.trackCapabilityCall(
+      url,
+      init,
+      startedAt,
+      response,
+      undefined,
+      options.analyticsEvent,
+    );
     return response;
   }
 
@@ -276,10 +297,11 @@ export class Transport {
     startedAt: number,
     response?: Response,
     error?: unknown,
+    event = CAPABILITY_CALL_EVENT,
   ): void {
     try {
       analyticsFor(this.analyticsHolder, this.apiKey).track(
-        CAPABILITY_CALL_EVENT,
+        event,
         capabilityCallData({
           url,
           method: init.method,
@@ -287,12 +309,62 @@ export class Transport {
           durationMs: Date.now() - startedAt,
           status: response?.status,
           ok: response?.ok ?? false,
-          error,
+          // Fetch errors may contain URLs, credentials or request data. Job errors are sanitized.
+          error:
+            event === "capability.execution.transport" && error
+              ? new Error("Execution transport failed")
+              : error,
           attribution: this.attribution,
         }),
       );
     } catch {
       // Usage analytics must never affect a capability call.
+    }
+  }
+
+  /** At most one completion per origin/ID in this client's last 1000 IDs / hour. */
+  observeExecution(
+    baseUrl: string,
+    state: import("../executions/types.js").ExecutionState,
+  ): void {
+    if (state.status === "queued" || state.status === "running") return;
+    try {
+      const cache = (this.analyticsHolder.executionCompletions ??= new Map());
+      const now = Date.now();
+      for (const [key, at] of cache)
+        if (at <= now - 3_600_000) cache.delete(key);
+      const key = `${baseUrl}:${state.id}`;
+      if (cache.has(key)) return;
+      cache.set(key, now);
+      if (cache.size > 1000) cache.delete(cache.keys().next().value!);
+      analyticsFor(this.analyticsHolder, this.apiKey).track(
+        CAPABILITY_CALL_EVENT,
+        {
+          ...capabilityCallData({
+            url: `${baseUrl}/v1/capabilities/${encodeURIComponent(state.capabilityId)}`,
+            method: "EXECUTION",
+            requestBody: undefined,
+            durationMs: Math.max(0, now - Date.parse(state.createdAt)),
+            ok: state.status === "succeeded",
+            attribution: this.attribution,
+          }),
+          execution_id: state.id,
+          execution_status: state.status,
+        },
+      );
+    } catch {
+      /* Telemetry cannot alter the result. */
+    }
+  }
+
+  observeExecutionWaitInterrupted(executionId: string): void {
+    try {
+      analyticsFor(this.analyticsHolder, this.apiKey).track(
+        "capability.execution.wait_interrupted",
+        { execution_id: executionId },
+      );
+    } catch {
+      /* Best effort. */
     }
   }
 
