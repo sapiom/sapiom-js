@@ -63,6 +63,8 @@ export function launch(modulePath, options = {}) {
       child.send({ id, type: "control", action, options });
       const message = await wait(
         (message) => message.id === id && message.type === "response",
+        // Core permits a 45-second worker bootstrap before reporting failure.
+        action === "worker" ? 60_000 : 30_000,
       );
       if (message.error)
         throw new Error(`Harness ${action} failed: ${message.error}`);

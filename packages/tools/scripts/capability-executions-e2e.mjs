@@ -36,7 +36,7 @@ const sha = (cwd) =>
   execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
 const dirty = (cwd) =>
   Boolean(
-    execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+    execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
       cwd,
       encoding: "utf8",
     }).trim(),
