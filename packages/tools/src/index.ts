@@ -85,6 +85,7 @@ export type {
   AgentRunErrorCode,
   ExecutionStatus as AgentExecutionStatus,
   RunHandle as AgentRunHandle,
+  WaitRetryOptions as AgentWaitRetryOptions,
 } from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
 export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";

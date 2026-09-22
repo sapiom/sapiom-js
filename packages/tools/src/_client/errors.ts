@@ -22,6 +22,12 @@ export class TransportHttpError extends Error {
   readonly url: string;
   /** Parsed JSON response body, or the raw text when the body isn't JSON. */
   readonly body: unknown;
+  /**
+   * The platform's `Retry-After` header as a delay in milliseconds, when it sent
+   * one (a 429 or 503 usually does); `null` otherwise. A poll loop that backs
+   * off on a transient status uses this over its own schedule when present.
+   */
+  readonly retryAfterMs: number | null;
 
   constructor(args: {
     message: string;
@@ -29,6 +35,7 @@ export class TransportHttpError extends Error {
     method: string;
     url: string;
     body: unknown;
+    retryAfterMs?: number | null;
   }) {
     super(args.message);
     this.name = "TransportHttpError";
@@ -36,7 +43,30 @@ export class TransportHttpError extends Error {
     this.method = args.method;
     this.url = args.url;
     this.body = args.body;
+    this.retryAfterMs = args.retryAfterMs ?? null;
   }
+}
+
+/**
+ * Parse a `Retry-After` header into a delay in milliseconds. Accepts both forms
+ * RFC 9110 allows — a non-negative number of seconds, or an HTTP-date — and
+ * returns `null` for a missing or unparseable value. A date in the past is a
+ * delay of zero, not `null`: the platform did answer, and "now" is its answer.
+ */
+export function parseRetryAfterMs(
+  header: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (header == null) return null;
+  const value = header.trim();
+  if (value === "") return null;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  // Any other bare number (negative, fractional) is malformed, not a date —
+  // `Date.parse("-5")` would otherwise read it as a year.
+  if (/^[-+]?\d*\.?\d+$/.test(value)) return null;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - now);
 }
 
 /**
