@@ -372,6 +372,11 @@ the most common mistake in authored agents. In one line each: `ctx.sapiom.llm.ru
 multi-turn reasoning + tool-calling loop (never for a one-shot — it loops and overthinks);
 `ctx.sapiom.agents.run` dispatches a DEPLOYED agent by slug. You never pick a model: omit
 `model` and let the platform route it — a raw provider model id is never honored on any surface.
+`ctx.sapiom.llm.run` has a sibling, `ctx.sapiom.llm.decide`, for answers drawn from a fixed set
+you name up front (a yes/no gate, a pick-one label, a rubric level): it returns calibrated
+probabilities over those answers (`answers.<key>.noul` / `.choice` + `.probabilities` / `.score`)
+instead of generated text — reach for it before an `output` schema whose only job is to pick one
+of a few values.
 
 The full rule — the worked example (`llm.run` with `output`, read back with `structuredOf`;
 `textOf` for plain text; never `content[0]`), why `max_tokens` must budget for thinking as well
