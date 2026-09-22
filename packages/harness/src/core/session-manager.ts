@@ -34,6 +34,7 @@ import type {
   ProjectAgentSession,
   ProjectBootstrapMetadata,
 } from "@sapiom/agent-map";
+import { samePath } from "@sapiom/agent-map/paths";
 import {
   migratePersistedProjectIdentity,
   removeLegacyProjectSessionMetadata,
@@ -2796,7 +2797,7 @@ export class SessionManager {
     const base = basename(cwd) || cwd;
     let highest = 0;
     for (const session of this.sessions.values()) {
-      if (session.cwd !== cwd) continue;
+      if (!samePath(session.cwd, cwd)) continue;
       if (session.title === base) highest = Math.max(highest, 1);
       else if (session.title.startsWith(`${base} `)) {
         const ordinal = Number(session.title.slice(base.length + 1));
