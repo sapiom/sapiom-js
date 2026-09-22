@@ -8,9 +8,20 @@
  */
 import { runInNewContext } from "node:vm";
 
-import { SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT } from "@sapiom/agent";
+import {
+  SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT,
+  agentManifestSchema,
+  buildManifest,
+  defineAgent,
+  defineStep,
+} from "@sapiom/agent";
+import type { AgentManifest } from "@sapiom/agent";
 import { serializeStepCompletionError } from "@sapiom/agent-runtime";
 import { createClient, readSapiomCall, SearchHttpError } from "@sapiom/tools";
+
+import { AgentRunnerCore, InMemoryExecutionStore } from "@sapiom/agent-runtime";
+
+import { LocalStubDispatcher } from "./dispatcher.js";
 
 function clientAnswering(response: () => Response) {
   return createClient({
@@ -122,5 +133,84 @@ describe("a ctx.sapiom.* call that fails", () => {
       message: authorError.message,
       stack: authorError.stack,
     });
+  });
+});
+
+describe("run_local parity, end to end", () => {
+  /**
+   * The serializer keeping the fields is only half of it: the in-process runner
+   * then rehydrates the payload before the store records it. That path used to
+   * go through the legacy branch, which keeps only name/message/stack, so a
+   * local run recorded strictly less than a deployed one and the parity this
+   * file claims was not actually held.
+   *
+   * Asserted on what reaches `failStep`, because the execution row itself ends
+   * up carrying the cap error: attaching the cause there is the engine half of
+   * SAP-3509.
+   */
+  it("keeps the transient fields on the recorded step failure", async () => {
+    const entry = defineStep({
+      name: "entry",
+      next: [],
+      terminal: true,
+      async run() {
+        throw Object.assign(new Error("Failed to search: 503 upstream down"), {
+          name: "SearchHttpError",
+          status: 503,
+          sapiomCall: {
+            version: 1,
+            capability: "web.search",
+            status: 503,
+            retryAfterMs: 2000,
+          },
+        });
+      },
+    });
+    const definition = defineAgent({
+      name: "transient-local",
+      entry: "entry",
+      steps: { entry },
+    });
+    const manifest = agentManifestSchema.parse(
+      buildManifest(definition, {
+        sdkVersion: "0.0.0-test",
+        artifact: { sha256: "x", entryFile: "def.mjs" },
+      }),
+    ) as AgentManifest;
+
+    const store = new InMemoryExecutionStore();
+    const recorded: unknown[] = [];
+    const failStep = store.failStep.bind(store);
+    store.failStep = async (args) => {
+      recorded.push(args.error);
+      return failStep(args);
+    };
+    const dispatcher = new LocalStubDispatcher(definition, {
+      version: 1,
+      steps: {},
+    });
+    const core = new AgentRunnerCore({ store, dispatcher });
+    dispatcher.setCore(core);
+    dispatcher.setMaxAttempts(1);
+
+    const executionId = await core.createExecution(
+      definition.name,
+      definition.entry,
+      {},
+      { manifest },
+    );
+    await core.advance(executionId);
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      name: "SearchHttpError",
+      message: "Failed to search: 503 upstream down",
+      code: SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT.errorCode,
+      retryable: true,
+      status: 503,
+      capability: "web.search",
+      retryAfterMs: 2000,
+    });
+    expect(recorded[0]).toBeInstanceOf(Error);
   });
 });

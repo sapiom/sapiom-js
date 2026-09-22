@@ -156,21 +156,31 @@ function isNetworkRejection(error: unknown): error is Error {
   );
 }
 
+/** The only schemes `fetch` can actually send. Anything else is a config error. */
+const SENDABLE_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
+
 /**
- * Raise a malformed URL or header before the call instead of letting `fetch`
- * reject with the same `TypeError` it uses for a dead connection. The two
- * constructors run the very validation `fetch` runs internally, so this cannot
- * reject a request that would otherwise have gone out.
+ * Raise a malformed request before the call instead of letting `fetch` reject
+ * with the same `TypeError` it uses for a dead connection. The constructors run
+ * the very validation `fetch` runs internally, so this cannot reject a request
+ * that would otherwise have gone out.
  *
- * Not everything is separable: an unsupported scheme surfaces as a plain
- * `fetch failed` with a cause, identical to a transport failure. The base URL is
- * platform-controlled, so that case does not arise from a step body.
+ * The scheme check is the exception, and it is the reason this is not just two
+ * constructors: `new URL("gopher://x")` parses happily, and `fetch` then rejects
+ * with a plain `fetch failed` carrying a cause, indistinguishable from a real
+ * transport failure. Raising it here keeps a misconfigured base URL from
+ * spending the retry budget.
  */
 function assertRequestable(
   url: string,
   headers: ConstructorParameters<typeof Headers>[0],
 ): void {
-  new URL(url);
+  const parsed = new URL(url);
+  if (!SENDABLE_PROTOCOLS.has(parsed.protocol)) {
+    throw new TypeError(
+      `@sapiom/tools: cannot request '${parsed.protocol}' URLs, expected http or https (got ${url})`,
+    );
+  }
   new Headers(headers);
 }
 
@@ -315,9 +325,15 @@ export class Transport {
       [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,
       ...attributionToHeaders(this.attribution),
-      // Merged as a plain object, as before: callers pass records.
-      ...(init.headers as Record<string, string> | undefined),
     };
+    // The caller's headers are merged through `Headers` rather than spread,
+    // because a spread only works for the plain-object form: it yields `{}` for
+    // a `Headers` instance and `{ "0": [name, value] }` for the tuple-array
+    // form, both of which `fetch` accepts and both of which would silently lose
+    // the caller's headers. Iterating normalizes all three.
+    for (const [name, value] of new Headers(init.headers ?? {})) {
+      headers[name] = value;
+    }
     assertRequestable(url, headers);
     const startedAt = Date.now();
     let response: Response;

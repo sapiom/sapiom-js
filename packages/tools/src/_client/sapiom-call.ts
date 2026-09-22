@@ -187,6 +187,13 @@ export function failIfNotOk(
   );
 }
 
+/**
+ * Longest `Retry-After` delay worth believing, 24 hours. Past this the value is
+ * far more likely to be a parse accident than a real hint: no caller waits a day
+ * for a retry, and the platform clamps its own backoff well below it anyway.
+ */
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
+
 /** Numeric-looking, but not the `1*DIGIT` the grammar allows. */
 const MALFORMED_DELTA_SECONDS = /^[+-]?[\d.]+(?:[eE][+-]?\d+)?$/;
 
@@ -199,6 +206,11 @@ const MALFORMED_DELTA_SECONDS = /^[+-]?[\d.]+(?:[eE][+-]?\d+)?$/;
  * does NOT fall through to the date branch: `Date.parse("1.5")` returns a date
  * in 2001, so a sloppy header would otherwise become a confident wrong answer.
  * The caller falls back to its own backoff, which is the honest outcome.
+ *
+ * The date branch is bounded for the same reason. `Date.parse` accepts far more
+ * than the three formats the grammar allows (`"2050 GMT"` parses, and lands
+ * 23 years out), and a delay past {@link MAX_RETRY_AFTER_MS} is not a retry hint
+ * any caller can use, so it is dropped rather than believed.
  */
 export function parseRetryAfter(header: string | null): number | undefined {
   if (!header) return undefined;
@@ -211,8 +223,9 @@ export function parseRetryAfter(header: string | null): number | undefined {
   }
   if (MALFORMED_DELTA_SECONDS.test(value)) return undefined;
   const date = Date.parse(value);
-  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
-  return undefined;
+  if (Number.isNaN(date)) return undefined;
+  const ms = Math.max(0, date - Date.now());
+  return ms <= MAX_RETRY_AFTER_MS ? ms : undefined;
 }
 
 /**

@@ -183,7 +183,9 @@ catch (err) {
   if (facts && isTransientSapiomCall(facts) && ctx.attempts + 1 < 3) {
     return retry({ delayMs: facts.retryAfterMs ?? 1000 });
   }
-  return fail("search is unavailable");
+  // Everything else is deterministic, so say what actually failed rather than
+  // reporting a validation or auth error as an outage.
+  return fail(`search failed: ${(err as Error).message}`);
 }
 ```
 

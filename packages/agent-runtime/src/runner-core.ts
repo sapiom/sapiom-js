@@ -17,8 +17,14 @@ import {
   isRetry,
   isTerminate,
   parseNonRetryableStepErrorPayload,
+  parseRetryableStepErrorPayload,
 } from '@sapiom/agent';
-import type { NextStepDirective, AgentManifest, NonRetryableStepErrorPayload } from '@sapiom/agent';
+import type {
+  NextStepDirective,
+  AgentManifest,
+  NonRetryableStepErrorPayload,
+  RetryableStepErrorPayload,
+} from '@sapiom/agent';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
 import type { AdvanceResult, CompleteDispatchOutcome, CreateExecutionOptions } from './advance-result.js';
@@ -277,7 +283,15 @@ export class AgentRunnerCore {
         });
         result = { kind: ADVANCE_RESULT_KIND.FAILED, error: terminalError };
       } else {
-        const err = rehydrateRemoteError(payload.error);
+        // Retryable is rehydrated the same way terminal is: the structured
+        // fields (`code`, `status`, `capability`, `retryAfterMs`) are the whole
+        // point of the payload, and `rehydrateRemoteError` alone would drop them
+        // on the way into the store, so a local run would report less than a
+        // deployed one.
+        const retryablePayload = parseRetryableStepErrorPayload(payload.error);
+        const err = retryablePayload
+          ? rehydrateRetryableStepError(retryablePayload)
+          : rehydrateRemoteError(payload.error);
         await this.deps.store.failStep({
           stepRowId: stepRow.id,
           error: err,
@@ -910,5 +924,10 @@ function rehydrateRemoteError(error: { name: string; message: string; stack?: st
 
 /** Preserve Error identity while carrying only registry-normalized platform fields. */
 function rehydrateNonRetryableStepError(payload: NonRetryableStepErrorPayload): Error & NonRetryableStepErrorPayload {
+  return Object.assign(rehydrateRemoteError(payload), payload);
+}
+
+/** The retryable direction of the same registry, rehydrated the same way. */
+function rehydrateRetryableStepError(payload: RetryableStepErrorPayload): Error & RetryableStepErrorPayload {
   return Object.assign(rehydrateRemoteError(payload), payload);
 }

@@ -24,7 +24,7 @@ describe("Transport.request()", () => {
     ).resolves.toEqual({ ok: true });
   });
 
-  it("throws a SapiomCallError on a non-2xx, message byte-for-byte unchanged", async () => {
+  it("throws a TransportHttpError on a non-2xx, message byte-for-byte unchanged", async () => {
     const url = "https://api.sapiom.ai/v2/anthropic/v1/messages";
     const transport = transportWith(
       async () => new Response("upstream down", { status: 502 }),
@@ -212,6 +212,50 @@ describe("Transport.fetch()", () => {
     expect((err as Error).name).toBe("TypeError");
     expect(readSapiomCall(err)).toBeUndefined();
     // Raised before the call, so nothing was ever sent.
+    expect(called).toBe(false);
+  });
+
+  it.each([
+    ["a Headers instance", () => new Headers({ "x-custom": "ok" })],
+    ["a tuple array", () => [["x-custom", "ok"]] as [string, string][]],
+    ["a plain object", () => ({ "x-custom": "ok" })],
+  ])("preserves caller headers given as %s", async (_label, build) => {
+    let sent: Record<string, string> = {};
+    const transport = new Transport({
+      apiKey: "test-key",
+      fetch: ((_input: unknown, init: RequestInit = {}) => {
+        sent = init.headers as Record<string, string>;
+        return Promise.resolve(new Response("{}"));
+      }) as typeof globalThis.fetch,
+    });
+
+    await transport.fetch("https://api.sapiom.ai/v1/memory", {
+      headers: build(),
+    });
+
+    expect(sent["x-custom"]).toBe("ok");
+    expect(sent["x-sapiom-api-key"]).toBe("test-key");
+  });
+
+  it("rejects a scheme fetch cannot send, before the call", async () => {
+    // `new URL("gopher://x")` parses, and fetch then rejects with a plain
+    // `fetch failed` carrying a cause: indistinguishable from a dead connection.
+    let called = false;
+    const transport = new Transport({
+      apiKey: "test-key",
+      fetch: (async () => {
+        called = true;
+        return new Response("{}");
+      }) as typeof globalThis.fetch,
+    });
+
+    const err = await transport
+      .fetch("gopher://api.sapiom.ai/v1/memory")
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect((err as Error).message).toContain("expected http or https");
+    expect(readSapiomCall(err)).toBeUndefined();
     expect(called).toBe(false);
   });
 

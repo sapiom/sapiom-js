@@ -222,6 +222,21 @@ describe("parseRetryAfter()", () => {
     expect(parseRetryAfter(" 7 ")).toBe(7000);
   });
 
+  it("drops a date-form delay no caller could use", () => {
+    // `Date.parse` accepts far more than the grammar: "2050 GMT" parses and
+    // lands decades out, which is a parse accident, not a retry hint.
+    expect(parseRetryAfter("2050 GMT")).toBeUndefined();
+    expect(
+      parseRetryAfter(new Date(Date.now() + 8 * 24 * 3600_000).toUTCString()),
+    ).toBeUndefined();
+  });
+
+  it("keeps a date-form delay within a day", () => {
+    const inAnHour = new Date(Date.now() + 3600_000).toUTCString();
+
+    expect(parseRetryAfter(inAnHour)).toBeGreaterThan(3_500_000);
+  });
+
   it("drops a delay too large to represent", () => {
     expect(parseRetryAfter("9".repeat(20))).toBeUndefined();
   });
