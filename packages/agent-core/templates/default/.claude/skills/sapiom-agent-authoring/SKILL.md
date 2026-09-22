@@ -376,7 +376,8 @@ multi-turn reasoning + tool-calling loop (never for a one-shot — it loops and 
 you name up front (a yes/no gate, a pick-one label, a rubric level): it returns calibrated
 probabilities over those answers (`answers.<key>.noul` / `.choice` + `.probabilities` / `.score`)
 instead of generated text — reach for it before an `output` schema whose only job is to pick one
-of a few values.
+of a few values. It is the one surface that takes an optional vendor `model` id (the default,
+currently `jev-latest`, serves when you omit it — still omit it).
 
 The full rule — the worked example (`llm.run` with `output`, read back with `structuredOf`;
 `textOf` for plain text; never `content[0]`), why `max_tokens` must budget for thinking as well

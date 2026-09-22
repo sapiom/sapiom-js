@@ -87,7 +87,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 
 ### `llm.run` vs `llm.decide`
 
-`llm.run` generates text or a schema-shaped `output`. When the answer is one of a set you can name up front — a yes/no gate, a pick-one label, a rubric level — call `llm.decide` instead. It returns calibrated probabilities over those answers in well under a second, with no schema or reply parsing, and the `answers` map is typed by the questions you pass:
+`llm.run` generates text or a schema-shaped `output`. When the answer is one of a set you can name up front — a yes/no gate, a pick-one label, a rubric level — call `llm.decide` instead. It returns calibrated probabilities over those answers, with no schema or reply parsing, and the `answers` map is typed by the questions you pass:
 
 ```typescript
 const res = await sapiom.llm.decide({
