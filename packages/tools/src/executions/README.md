@@ -56,3 +56,18 @@ with finite positive durations. Each request is bounded by remaining time and 15
 AbortSignal or local timeout throws ExecutionWaitInterruptedError with ID/key. It stops
 only local waiting; the server job continues. Persist handles in caller-owned storage.
 The offline stub supports preparation but rejects durable submission/retrieval explicitly.
+
+`capabilityDelivery: "executions"` opts the common capability helper into job delivery
+only for capabilities on its reviewed allow-list. The production allow-list is currently
+empty; family adoption follows separately. The default is `legacy`. A selected invocation
+keeps its mode, Core base and key through retries; admission rejection never falls back
+to the synchronous path. Existing namespace mappers receive the stored raw result, including
+native media launch handles; generation polling and finalization retain their owners.
+
+Execution HTTP requests emit `capability.execution.transport`, not `capability.call`.
+An observed terminal outcome emits `capability.call` with execution_status and logical ok;
+HTTP 200 failed/indeterminate is not success. Attributed views of one client share a
+completion cache (origin/ID, at most 1000 entries for one hour, oldest entry evicted).
+Independent clients, processes and evicted entries can report the outcome again. Server
+execution/billing records remain authoritative. Interrupted waits have their own observation
+event and are not logical provider failures. Telemetry stays best-effort and respects opt-out.

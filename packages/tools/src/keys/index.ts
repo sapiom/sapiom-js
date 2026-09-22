@@ -123,7 +123,7 @@ export function toTtlSeconds(ttl: number | string): number {
 export async function mintScoped(
   input: MintScopedInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
 ): Promise<ScopedKey> {
   const ttl = toTtlSeconds(input.ttl);
   const scope =
