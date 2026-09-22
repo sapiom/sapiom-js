@@ -123,6 +123,13 @@ jobs:
       - name: Test pull request CI security
         run: pnpm pr-ci-security:check
 
+  # NOTE: the @sapiom/opencode native suite (src/**/*.native.test.ts, which
+  # launches the real pinned OpenCode binary) is excluded from `pnpm test` and
+  # runs in .github/workflows/opencode-native.yml, path-filtered to that
+  # package. Inside this matrix job it shared the runner with every other
+  # package's suite and its cold startups timed out often enough to turn
+  # unrelated PRs red (SAP-3605).
+  #
   # NOTE: the harness web-e2e (playwright-mock) and desktop packaging
   # (desktop-smoke) jobs moved to .github/workflows/harness.yml, which is
   # path-filtered to the harness and its workspace dependencies — they only
