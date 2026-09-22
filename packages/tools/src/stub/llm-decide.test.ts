@@ -41,14 +41,46 @@ describe("stub llm.decide", () => {
       billing: 0.5,
     });
 
+    // Undecided means uniform: the stub must never hand a local branch a certain
+    // verdict it did not earn. Midpoint score, 1/n everywhere, confidence 1/n.
     expect(res.answers.mood.type).toBe("score");
-    expect(res.answers.mood.score).toBe(0);
+    expect(res.answers.mood.score).toBe(1);
     expect(res.answers.mood.legend).toEqual({
       "0": "calm",
       "1": "frustrated",
       "2": "angry",
     });
-    expect(res.answers.mood.probabilities).toEqual({ "0": 1, "1": 0, "2": 0 });
+    expect(Object.keys(res.answers.mood.probabilities)).toEqual([
+      "0",
+      "1",
+      "2",
+    ]);
+    for (const p of Object.values(res.answers.mood.probabilities)) {
+      expect(p).toBeCloseTo(1 / 3);
+    }
+    expect(res.answers.mood.confidence).toBeCloseTo(1 / 3);
+    expect(res.answers.team.confidence).toBe(0.5);
+  });
+
+  it("answers a question keyed `__proto__` as an own property, like the JSON wire does", async () => {
+    const client = createStubClient();
+    // Through JSON.parse `__proto__` is an ordinary own key, exactly as a caller
+    // building questions from parsed input would produce it.
+    const questions = JSON.parse(
+      '{"__proto__":{"type":"noul","instructions":"Is this valid?"},"ok":{"type":"noul","instructions":"Ok?"}}',
+    ) as Record<string, { type: "noul"; instructions: string }>;
+
+    const res = await client.llm.decide({ state: "x", questions });
+
+    expect(Object.keys(res.answers).sort((a, b) => a.localeCompare(b))).toEqual(
+      ["__proto__", "ok"],
+    );
+    expect(
+      Object.getOwnPropertyDescriptor(res.answers, "__proto__")?.value,
+    ).toEqual({
+      type: "noul",
+      noul: 0.5,
+    });
   });
 
   it("records the call under the capability id and lets an override replace the reply", async () => {

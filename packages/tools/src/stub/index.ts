@@ -838,13 +838,16 @@ function stubMemoryFilterMatches(
 
 /**
  * A shape-correct, deterministic `llm.decide` reply for `run_local`: every question
- * answered under its own key, undecided (`noul` 0.5, uniform choice, lowest score
- * level) so branching code runs both ways without inventing a verdict.
+ * answered under its own key, undecided (`noul` 0.5, a uniform distribution for
+ * `choice` and `score`) so branching code runs both ways without inventing a verdict.
  */
 function stubDecideResponse(
   questions: Record<string, DecideQuestion>,
 ): LlmDecideResponse {
-  const answers: Record<string, unknown> = {};
+  // Null prototype: a question keyed `__proto__` must become an ordinary own
+  // property (as it does in the real JSON response), not a prototype swap that
+  // silently drops the answer.
+  const answers: Record<string, unknown> = Object.create(null);
   for (const [id, q] of Object.entries(questions)) {
     if (q.type === "choice") {
       const options = Object.keys(q.criteria);
@@ -856,15 +859,19 @@ function stubDecideResponse(
         confidence: options.length > 0 ? p : 0,
       };
     } else if (q.type === "score") {
+      // Uniform over the levels, like `choice`: the stub must not fabricate
+      // certainty. `score` is the probability-weighted position, which for a
+      // uniform distribution is the midpoint (n-1)/2; `confidence` is the
+      // top probability, 1/n, the lowest a concentration measure can honestly be.
       const levels = q.criteria;
+      const n = levels.length;
+      const p = n > 0 ? 1 / n : 0;
       answers[id] = {
         type: "score",
-        score: 0,
+        score: n > 0 ? (n - 1) / 2 : 0,
         legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
-        probabilities: Object.fromEntries(
-          levels.map((_, i) => [String(i), i === 0 ? 1 : 0]),
-        ),
-        confidence: 1,
+        probabilities: Object.fromEntries(levels.map((_, i) => [String(i), p])),
+        confidence: p,
       };
     } else {
       answers[id] = { type: "noul", noul: 0.5 };
