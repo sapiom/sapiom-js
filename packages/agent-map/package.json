@@ -158,7 +158,7 @@
   "devDependencies": {
     "@types/node": "^20.11.30",
     "typescript": "~5.9.3",
-    "vitest": "^3.0.0",
+    "vitest": "^5.0.1",
     "@types/uuid": "^10.0.0",
     "esbuild": "^0.28.1"
   },
@@ -170,6 +170,6 @@
   },
   "dependencies": {
     "zod": "^3.25.0",
-    "uuid": "^10.0.0"
+    "uuid": "^14.0.2"
   }
 }
