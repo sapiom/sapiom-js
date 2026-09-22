@@ -11,7 +11,6 @@ import type { JSX } from "react";
 import type {
   AppState,
   EditorKind,
-  HarnessEntry,
   HarnessKind,
   HarnessSession,
   SessionResumeMode,
@@ -22,9 +21,9 @@ import type { WorkspaceKey } from "@shared/workspace-scope";
 import type {
   StudioProjectSummary,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
-import type { AuthStartResponse, FsListResponse } from "../lib/api";
+import type { AuthStartResponse } from "../lib/api";
 import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { BrandHeader } from "./BrandHeader";
@@ -32,8 +31,6 @@ import { EmptyState } from "./EmptyState";
 import { HarnessBrandIcon } from "./HarnessBrandIcon";
 import { openHelpOverlay } from "./HelpOverlay";
 import { Icon } from "./Icon";
-import { StartDialog } from "./StartDialog";
-import type { StartMode } from "./StartDialog";
 import { PlanCard } from "./PlanCard";
 import { UpdateCard } from "./UpdateCard";
 import { SettingsPopover } from "./SettingsPopover";
@@ -140,7 +137,6 @@ interface WorkflowsRailProps {
    *  session tab strip to that subject's sessions. */
   onFocusAgent: (path: string) => void;
   onOpenPalette: () => void;
-  onConnect: (path: string) => Promise<void>;
   /** Collapses the rail — the session bar grows an expand affordance. */
   onCollapse: () => void;
   canGoBack: boolean;
@@ -154,8 +150,19 @@ interface WorkflowsRailProps {
    *  agent, or other destination leaves it. */
   overviewSelected: boolean;
   onSelectOverview: () => void;
-  /** The "Create new" CTA opens the composer-first "new session" home. */
-  onNewSession: () => void;
+  /**
+   * NEW PROJECT, the rail's one CTA (flow-creation.md §4.1, D27). Runs the
+   * folder step (the OS picker on desktop, the one-field dialog on the web),
+   * opens the folder as a project, and lands on the new-agent screen scoped
+   * to it. App owns the step because more than one surface runs it.
+   */
+  onNewProject: () => void;
+  /**
+   * ADD PROJECT, the Projects header's folder-plus (§4.5, D28). The same
+   * folder step and nothing after it: the folder joins the rail, agents or
+   * not. No composer, no session.
+   */
+  onAddProject: () => void;
   /** Opens the past-session review pane for a history entry. */
   onReviewSummary: (summary: SessionSummary) => void;
   history: SessionSummary[];
@@ -182,12 +189,6 @@ interface WorkflowsRailProps {
    * no agent in it could not be added at all.
    */
   onOpenProject: (root: string) => Promise<unknown>;
-  launchDir: string | null;
-  listDir: (path?: string) => Promise<FsListResponse>;
-  /** Starts a coding-agent session and owns its failure feedback. */
-  onStartProjectSession: (root: string, label: string) => Promise<void>;
-  /** Adapter registry fetch — the add dialog's picker and MCP setup block. */
-  listHarnesses: () => Promise<HarnessEntry[]>;
   /**
    * Compatibility path for a state payload without a durable Studio project.
    * Opens the create dialog App owns; the harness then does the scaffold and
@@ -200,10 +201,6 @@ interface WorkflowsRailProps {
    * confused model instead of an error.
    */
   onCreateAgent: (root: string, label: string) => void;
-  /** Where NEW projects are created (resolveProjectRoot in App). */
-  projectRoot: string | null;
-  /** Persist a changed project root as the user's default. */
-  onSaveProjectRoot: (root: string) => Promise<void>;
   /** Compatibility-only bare-project affordance: create the folder's first
    *  agent, binding the live session it already has rather than opening a
    *  second one. */
@@ -212,7 +209,6 @@ interface WorkflowsRailProps {
   onBrowseTemplates: () => void;
   /** True while that destination is the visible view, so the nav row can say so. */
   templatesActive: boolean;
-  onScanWorkflows: (root: string) => Promise<number>;
   /** Push a message onto the app's toast rail (copy confirmations etc.).
    *  Defaults to the "error" tone; result announcements opt into "info". */
   onToast: (message: string, tone?: ToastTone) => void;
@@ -270,22 +266,21 @@ const SORT_LABELS: Record<RailSort, string> = {
 };
 
 /**
- * The project row's overflow menu.
+ * The project row's trailing actions: New agent, then Remove.
  *
- * The adjacent `+` has one stable meaning: start a coding-agent session at this
- * project's root. This menu keeps the lower-frequency, explicitly named
- * project actions, including creating or scaffolding a Sapiom agent. Opening
- * the Agent Map never takes ownership of those ordinary build controls.
+ * HOVER ACTIONS, NOT A MENU (design-eng D33: "a project row's verbs are hover
+ * actions on the header ... a per-row menu would be a new idiom"). The overflow
+ * this replaces was a popover, a card and a 248px min-width spent on two rows,
+ * one of them destructive. The `+` is New agent, scoped to this project (IA.md
+ * 219, D34a); a bare project (sessions, no agent yet) offers Scaffold instead,
+ * which grows an agent inside the session already running there.
  *
- * Named items say it instead. Each carries the project's own label, so the
- * subject is read rather than inferred, and the destructive one is last and
- * marked.
- *
- * The trigger keeps its own open state and its own ref: `triggerRef` is what
- * the remove confirmation returns focus to, and the menu item that opened it
- * has unmounted by then.
+ * The X removes the project from the rail; it never touches a file. `onRemove`
+ * is handed the button so the confirmation returns focus to the control that
+ * opened it — the reason the menu needed a ref of its own, and the reason this
+ * still does.
  */
-function ProjectRowMenu({
+function ProjectRowActions({
   label,
   create,
   onRemove,
@@ -293,7 +288,7 @@ function ProjectRowMenu({
   label: string;
   /** The create action this project currently offers, or null while one is
    *  mid-creation. A bare project (sessions, no agent) scaffolds into its
-   *  existing session; every other project starts a new one at the root. */
+   *  existing session; every other project opens New agent scoped to it. */
   create: {
     kind: "create" | "scaffold";
     testid: string;
@@ -302,80 +297,43 @@ function ProjectRowMenu({
   } | null;
   onRemove: (trigger: HTMLButtonElement | null) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const removeRef = useRef<HTMLButtonElement>(null);
   return (
     <>
+      {create && (
+        <button
+          type="button"
+          className="workspace-row-action"
+          data-testid={create.testid}
+          aria-label={create.label}
+          data-tooltip={
+            create.kind === "create" ? "New agent in this project" : create.label
+          }
+          onClick={create.run}
+        >
+          <Icon
+            name={create.kind === "scaffold" ? "Sparkles" : "Plus"}
+            size={13}
+          />
+        </button>
+      )}
+      {/* REMOVE. An `X`, not a trash can: this closes a project and ends its
+          sessions, and never touches a file — a bin glyph would say the
+          opposite of the copy in the confirm. The subject the menu item spelled
+          out ("Remove acme-app from the rail") now rides the accessible name and
+          the tooltip, and the confirmation restates it, with the count of
+          sessions it will end, before anything happens. */}
       <button
         type="button"
-        ref={triggerRef}
-        className="workspace-row-action project-row-menu-trigger"
-        data-testid={`project-menu-${label}`}
-        aria-label={`Actions for ${label}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        data-tooltip="Project actions"
-        onClick={() => setOpen((prev) => !prev)}
+        ref={removeRef}
+        className="workspace-row-action project-row-remove"
+        data-testid={`project-remove-${label}`}
+        aria-label={`Remove ${label} from the rail`}
+        data-tooltip="Remove from the rail"
+        onClick={() => onRemove(removeRef.current)}
       >
-        <Icon name="EllipsisVertical" size={13} />
+        <Icon name="X" size={13} />
       </button>
-      <AnchoredPopover
-        open={open}
-        anchorRef={triggerRef}
-        onDismiss={() => setOpen(false)}
-        placement="down-end"
-        className="menu-flyer"
-        testid={`project-menu-card-${label}`}
-      >
-        <div className="connect-card project-row-menu">
-          <div className="connect-card-body" role="menu">
-            {create && (
-              <button
-                type="button"
-                role="menuitem"
-                className="session-dropdown-item"
-                data-testid={create.testid}
-                onClick={() => {
-                  setOpen(false);
-                  create.run();
-                }}
-              >
-                <span className="session-item-icon">
-                  <Icon
-                    name={create.kind === "scaffold" ? "Sparkles" : "Plus"}
-                    size={13}
-                  />
-                </span>
-                <span className="session-item-copy">
-                  <span className="session-item-title">{create.label}</span>
-                </span>
-              </button>
-            )}
-            {/* REMOVE. An `X`, not a trash can: this closes a project and ends
-                its sessions, and never touches a file — a bin glyph would say
-                the opposite of the copy in the confirm. */}
-            <button
-              type="button"
-              role="menuitem"
-              className="session-dropdown-item project-row-menu-danger"
-              data-testid={`project-remove-${label}`}
-              onClick={() => {
-                setOpen(false);
-                onRemove(triggerRef.current);
-              }}
-            >
-              <span className="session-item-icon">
-                <Icon name="X" size={13} />
-              </span>
-              <span className="session-item-copy">
-                <span className="session-item-title">
-                  Remove {label} from the rail
-                </span>
-              </span>
-            </button>
-          </div>
-        </div>
-      </AnchoredPopover>
     </>
   );
 }
@@ -478,7 +436,6 @@ export function WorkflowsRail({
   onSelectStudioAgent,
   onFocusAgent,
   onOpenPalette,
-  onConnect,
   onCollapse,
   canGoBack,
   canGoForward,
@@ -487,7 +444,8 @@ export function WorkflowsRail({
   onSelectSession,
   overviewSelected,
   onSelectOverview,
-  onNewSession,
+  onNewProject,
+  onAddProject,
   onReviewSummary,
   history,
   historyLoading,
@@ -497,17 +455,10 @@ export function WorkflowsRail({
   unsearchedCheckouts,
   onRemoveProject,
   onOpenProject,
-  launchDir,
-  listDir,
-  onStartProjectSession,
-  listHarnesses,
   onCreateAgent,
   onScaffoldInSession,
-  projectRoot,
-  onSaveProjectRoot,
   onBrowseTemplates,
   templatesActive,
-  onScanWorkflows,
   onToast,
   telemetryOptIn,
   productAnalyticsOptIn,
@@ -546,28 +497,19 @@ export function WorkflowsRail({
       );
     });
   }, []);
-  // "Add existing agents" opens the detection-driven StartDialog (register a
-  // folder that already holds an agent project). "Create new" goes to the
-  // composer home instead. connectTriggerRef anchors Escape focus return.
-  // ONE dialog, TWO questions. "Add a project" (the header `+`) and "find
-  // agents under here" (the nav row) both start from the same folder picker —
-  // that part is one question — but they differ in what they DO with the
-  // answer, so each gets its own control and its own primary action. Round 1
-  // pointed both at the detection flow, which made "add a project" mean "add a
-  // project that already contains an agent".
-  const [startMode, setStartMode] = useState<StartMode | null>(null);
-  const startOpen = startMode !== null;
-  const connectTriggerRef = useRef<HTMLButtonElement>(null);
-  const addProjectTriggerRef = useRef<HTMLButtonElement>(null);
   // The ⋮ menu opens BESIDE the rail (not over it), so it clears the whole
   // rail's right edge rather than just the header glyph's.
   const railRef = useRef<HTMLElement>(null);
 
-  // The ⋮ overflow menu: how the tree is grouped, how it is sorted, and the
-  // sessions that have ended. Grouping and sort are persisted so the explorer
-  // resumes as the user left it (docs/IA.md).
+  // TWO OVERLAYS, TWO SUBJECTS (flow-creation.md §4.7, Q9). The Projects
+  // options menu holds how the tree is grouped and sorted, and only that;
+  // grouping and sort are persisted so the explorer resumes as the user left
+  // it (docs/IA.md). The sessions that have ended are a different subject: an
+  // unbounded list, opened from the history glyph in the brand header as a
+  // side card beside the rail. They used to share one menu, which gave a card
+  // of fixed choices a scrollbar.
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [pastOpen, setPastOpen] = useState(false);
   // `project` (where an agent lives) and `group` (what it is related to).
   // `deployment` is retired — it bucketed a fact every agent row already prints
   // as a glyph — and `workspace` is replaced by `project`.
@@ -580,22 +522,19 @@ export function WorkflowsRail({
   const pickAxis = (next: RailAxis): void => {
     setAxis(next);
     saveUiPrefs({ railAxis: next });
-    // A click that changes the filing also collapses the Past-sessions
-    // sub-card, matching the hover behaviour on the fixed choices.
-    setPastOpen(false);
   };
   const pickSort = (next: RailSort): void => {
     setSort(next);
     saveUiPrefs({ railSort: next });
-    setPastOpen(false);
   };
+  const optionsTriggerRef = useRef<HTMLButtonElement>(null);
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
-  // Closing the menu also folds its Past-sessions sub-card, so it never
-  // reopens already flown out.
-  const closeHistory = useCallback(() => {
+  const closeOptions = useCallback(() => setOptionsOpen(false), []);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const closeOverlays = (): void => {
+    setOptionsOpen(false);
     setHistoryOpen(false);
-    setPastOpen(false);
-  }, []);
+  };
 
   // Per-row collapse, restored across reloads. Keys are NAMESPACED
   // (`project:` / `dir:`): a path is not unique across row kinds, and one
@@ -643,10 +582,13 @@ export function WorkflowsRail({
     (session) => session.status === "exited",
   );
 
+  const toggleOptions = (): void => {
+    setHistoryOpen(false);
+    setOptionsOpen((open) => !open);
+  };
   const toggleHistory = (): void => {
     const next = !historyOpen;
-    // Every open lands on the menu, never mid-flyout.
-    setPastOpen(false);
+    setOptionsOpen(false);
     setHistoryOpen(next);
     if (next) {
       const dirs = historyDirs(sessions, recentDirs, activeSessionId);
@@ -904,41 +846,37 @@ export function WorkflowsRail({
         canGoForward={canGoForward}
         onGoBack={onGoBack}
         onGoForward={onGoForward}
+        historyOpen={historyOpen}
+        onToggleHistory={toggleHistory}
+        historyTriggerRef={historyTriggerRef}
       />
 
-      {/* The rail's top stack of labelled destinations. "Create new" leads as
-          the primary affirmative action (a solid ink button — the app's primary
-          CTA, like Deploy); Search opens the command palette (carrying the
-          unboxed ⌘K / Ctrl+K shortcut) and Templates opens the catalog. Search
-          and Templates read as rows, not a boxed field or a bare magnifier — a
-          destination is not chrome. */}
+      {/* The rail's top stack of labelled destinations (flow-creation.md
+          §4.7, Q10): New project, Search, Templates, then the Projects header.
+          New project leads as the one CTA (a filled button, no menu); Search
+          opens the command palette (carrying the unboxed ⌘K / Ctrl+K
+          shortcut) and Templates opens the catalog. Search and Templates read
+          as rows, not a boxed field or a bare magnifier: a destination is not
+          chrome. */}
       <nav className="rail-nav" aria-label="Primary">
-        {/* The primary creative action, promoted out of the header + ABOVE
-            Search: the fastest path to a new agent. It opens the composer-first
-            "new session" home. A standing ink-button CTA; when the rail has
-            nothing yet it gains a soft brand halo so an empty workspace has an
-            obvious next step. */}
+        {/* NEW PROJECT (D27). A new agent lives in a project, so the rail's
+            creation verb is the project first and the agent inside it: pick
+            the folder, then land on the new-agent screen scoped to it. It
+            opens no menu; a menu of ways to create is more doors, not fewer.
+            When the rail has nothing yet it gains a soft brand halo so an
+            empty install has one obvious next step. */}
         <button
           type="button"
           className={"rail-nav-cta" + (isEmpty ? " is-empty" : "")}
-          data-testid="rail-create-new"
-          aria-label="Create a new agent"
-          data-tooltip="Describe an agent and this scaffolds it"
+          data-testid="rail-new-project"
+          aria-label="New project"
           onClick={() => {
-            setHistoryOpen(false);
-            onNewSession();
+            closeOverlays();
+            onNewProject();
           }}
         >
           <Icon name="Plus" size={14} />
-          {/* "Create new AGENT", not "Create new" and not "Create new project".
-              Bare "Create new" never said what it made. "Project" would be
-              false: this opens the composer, which scaffolds an AGENT — and
-              adding a project is already the header's folder-plus, so calling
-              this one "project" would give two controls the same name for
-              different jobs. The related complaint, that it drops the agent
-              somewhere arbitrary, is not a naming problem: the fix is a create
-              affordance on each project row, which this does not replace. */}
-          <span>Create new agent</span>
+          <span>New project</span>
         </button>
 
         <button
@@ -960,27 +898,11 @@ export function WorkflowsRail({
           aria-current={templatesActive ? "page" : undefined}
           onClick={onBrowseTemplates}
         >
-          <Icon name="LayoutTemplate" size={14} />
+          <Icon name="LayoutGrid" size={14} />
           <span>Templates</span>
         </button>
-
-        {/* Add EXISTING agents — a folder that already holds an agent project.
-            Creating a new one is "Create new" (the composer). */}
-        <button
-          type="button"
-          ref={connectTriggerRef}
-          className="rail-nav-row"
-          data-testid="add-existing-agents"
-          aria-haspopup="dialog"
-          aria-expanded={startOpen}
-          onClick={() => {
-            setHistoryOpen(false);
-            setStartMode("detect");
-          }}
-        >
-          <Icon name="FolderPlus" size={14} />
-          <span>Add existing agents</span>
-        </button>
+        {/* No "Add existing agents" row (D28): a folder full of agents is
+            added the same way as any other, through the header's Add project. */}
       </nav>
 
       {/* A TITLE, not a control. Folding this header hid the only thing the
@@ -998,92 +920,79 @@ export function WorkflowsRail({
             of the Group-by control that set it. */}
         <span className="rail-header-label">Projects</span>
         <div className="rail-header-actions">
-          {/* ADD sits to the LEFT OF THE ELLIPSIS, both in the trailing group.
-              The label owns the leading edge: putting a control there made the
-              header read as one more nav button in the stack above it — same
-              icon slot, same indent — rather than as the title of the tree
-              below. FOLDER-with-plus, because what it adds is a folder. The
-              project-row `+` starts a session at that root; the tab-strip `+`
-              starts a sibling of the session already in view. */}
+          {/* ADD PROJECT sits to the LEFT OF THE OPTIONS glyph, both in the
+              trailing group. The label owns the leading edge: putting a
+              control there made the header read as one more nav button in the
+              stack above it (same icon slot, same indent) rather than as the
+              title of the tree below. FOLDER-with-plus, because what it adds
+              is a folder. It runs the folder step and stops (§4.5): the OS
+              picker on desktop, the one-field dialog on the web, then the
+              folder is in the rail. Nothing follows. */}
           <button
             type="button"
             className="theme-toggle rail-header-btn"
-            ref={addProjectTriggerRef}
             data-testid="rail-add-project"
-            aria-label="Add a project"
-            data-tooltip="Add a project"
+            aria-label="Add project"
+            data-tooltip="Add project: open a folder that already has agents"
             onClick={() => {
-              setHistoryOpen(false);
-              setStartMode("open");
+              closeOverlays();
+              onAddProject();
             }}
           >
             <Icon name="FolderPlus" size={14} />
           </button>
-          {/* AN ELLIPSIS, deliberately reversing the design doc's "sliders, not
-              an ellipsis". That rule's reasoning was "an ellipsis has no
-              subject, so it can only mean more stuff; this panel has exactly
-              one". The panel no longer has exactly one: it carries filing
-              (Group by / Sort by) AND past sessions, i.e. the rail's settings.
-              Once a control genuinely holds more than one subject, the ellipsis
-              is the honest glyph and a sliders icon is the misleading one —
-              sliders promise filing and nothing else. */}
+          {/* SLIDERS, as the design says (IA.md, D35): this menu holds exactly
+              one subject, how the tree is filed (Group by, Sort by), and a
+              sliders glyph promises filing and nothing else. It held Past
+              sessions too for a while, which is when it wore an ellipsis; that
+              list has its own glyph in the brand header now (§4.7, Q9). */}
           <button
-            ref={historyTriggerRef}
+            ref={optionsTriggerRef}
             className="theme-toggle rail-header-btn"
-            data-testid="history-trigger"
-            aria-label="Rail settings"
+            data-testid="rail-options"
+            aria-label="Group and sort projects"
             aria-haspopup="menu"
-            aria-expanded={historyOpen}
-            data-tooltip="Filing, sorting and past sessions"
-            onClick={toggleHistory}
+            aria-expanded={optionsOpen}
+            data-tooltip="Group and sort projects"
+            onClick={toggleOptions}
           >
-            <Icon name="EllipsisVertical" size={14} />
+            <Icon name="SlidersHorizontal" size={14} />
           </button>
         </div>
       </div>
       <div className="rail-tree">
-        {/* The ⋮ overflow menu. The popover is the TRACK, not the card: it
-            opens BESIDE the rail (never over the tree it configures), and its
-            one unbounded set — Past sessions — opens as a sub-card beside the
-            options card rather than a scrolling list nailed under four fixed
-            choices. */}
+        {/* THE OPTIONS MENU: how the tree is filed, and only that (§4.7). It
+            opens BESIDE the rail, never over the tree it configures. Past
+            sessions left it (Q9): a card of fixed choices should not also hold
+            an unbounded list. */}
         <AnchoredPopover
-          open={historyOpen}
-          anchorRef={historyTriggerRef}
-          onDismiss={closeHistory}
+          open={optionsOpen}
+          anchorRef={optionsTriggerRef}
+          onDismiss={closeOptions}
           placement="right-start"
           besideRef={railRef}
           noClip
           className="menu-flyer"
-          testid="history-menu"
+          testid="rail-options-menu"
         >
-          <div className="menu-flyer-track">
-            <div className="connect-card history-card">
-              <div className="connect-card-header">
-                <span>Projects</span>
-                <button
-                  className="theme-toggle connect-card-close"
-                  onClick={closeHistory}
-                  aria-label="Close"
-                  title="Close"
-                >
-                  <Icon name="X" size={13} />
-                </button>
-              </div>
-              <div className="connect-card-body" role="menu">
-                {/* Hovering the fixed choices closes the Past-sessions flyout,
-                    so moving off that row collapses its sub-card — the
-                    hover-open's natural inverse. (A plain wrapper would flatten
-                    the row gap; menu-choice-group re-states the column.) */}
-                {/* VISIBLE dropdowns, not a menu of radio rows. Both settings
-                    state their current value on the face of the control, so
-                    "how is this list filed?" is answerable without opening
-                    anything — a radio row only says what is checked once you
-                    are already inside the menu you had to guess to open. */}
-                <div
-                  className="menu-choice-group"
-                  onMouseEnter={() => setPastOpen(false)}
-                >
+          <div className="connect-card history-card">
+            <div className="connect-card-header">
+              <span>Projects</span>
+              <button
+                className="theme-toggle connect-card-close"
+                onClick={closeOptions}
+                aria-label="Close"
+                title="Close"
+              >
+                <Icon name="X" size={13} />
+              </button>
+            </div>
+            <div className="connect-card-body" role="menu">
+              {/* VISIBLE dropdowns, not a menu of radio rows. Both settings
+                  state their current value on the face of the control, so
+                  "how is this list filed?" is answerable without opening
+                  anything. */}
+              <div className="menu-choice-group">
                   <label className="filing-field">
                     <span className="filing-field-label">Group by</span>
                     <select
@@ -1120,62 +1029,51 @@ export function WorkflowsRail({
                       ))}
                     </select>
                   </label>
-                </div>
-
-                {/* One row that opens a sub-card beside the menu — the set is
-                    unbounded (every session this install has finished), so a
-                    list nailed here would give a card of four choices a
-                    scrollbar. The count rides the row, not the ⋮ trigger.
-                    Opens on hover (moving onto it) as well as click. */}
-                <button
-                  type="button"
-                  className={
-                    "session-dropdown-item nested-trigger" +
-                    (pastOpen ? " is-open" : "")
-                  }
-                  data-testid="past-sessions-trigger"
-                  aria-haspopup="menu"
-                  aria-expanded={pastOpen}
-                  onMouseEnter={() => setPastOpen(true)}
-                  onClick={() => setPastOpen((open) => !open)}
-                >
-                  <span className="session-item-icon">
-                    <Icon name="History" size={13} />
-                  </span>
-                  <span className="session-item-copy">
-                    <span className="session-item-title">Past sessions</span>
-                  </span>
-                  {exitedSessions.length > 0 && (
-                    <span
-                      className="session-history-badge"
-                      data-testid="session-history-badge"
-                    >
-                      {exitedSessions.length}
-                    </span>
-                  )}
-                  <Icon name="ChevronRight" size={13} />
-                </button>
               </div>
             </div>
+          </div>
+        </AnchoredPopover>
 
-            {pastOpen && (
-              <>
-                {/* A real, hit-testable 2px bridge, not a margin: crossing it
-                    with the pointer must not drop the hover and close the card
-                    being reached for. */}
-                <div className="menu-flyer-bridge" aria-hidden="true" />
-                <div className="connect-card menu-flyer-nested">
-                  <div className="connect-card-header">
-                    <span>Past sessions</span>
-                    <button
-                      className="theme-toggle connect-card-close"
-                      onClick={() => setPastOpen(false)}
-                      aria-label="Back"
-                      title="Back"
-                    >
-                      <Icon name="X" size={13} />
-                    </button>
-                  </div>
+        {/* PAST SESSIONS: the unbounded list, as a side card beside the rail,
+            opened from the history glyph in the brand header (§4.7, Q9). Exited
+            registry sessions and history entries merge, deduped, newest first;
+            Search (⌘K) lists them too. */}
+        <AnchoredPopover
+          open={historyOpen}
+          anchorRef={historyTriggerRef}
+          onDismiss={closeHistory}
+          placement="right-start"
+          besideRef={railRef}
+          noClip
+          className="menu-flyer"
+          testid="history-menu"
+        >
+          {/* The glyph promises a dialog (`aria-haspopup`), so the card is one,
+              named by its visible heading. */}
+          <div
+            className="connect-card history-card"
+            role="dialog"
+            aria-labelledby="past-sessions-heading"
+          >
+            <div className="connect-card-header">
+              <span id="past-sessions-heading">Past sessions</span>
+              {/* A dialog takes focus when it opens; Close is its first
+                  control. Escape hands focus back to the glyph
+                  (useDismissable), and Close does the same by hand, since
+                  activating it unmounts the focused element. */}
+              <button
+                className="theme-toggle connect-card-close"
+                autoFocus
+                onClick={() => {
+                  closeHistory();
+                  historyTriggerRef.current?.focus();
+                }}
+                aria-label="Close"
+                title="Close"
+              >
+                <Icon name="X" size={13} />
+              </button>
+            </div>
                   <div
                     className="connect-card-body past-sessions-list"
                     data-testid="past-sessions-card"
@@ -1256,9 +1154,6 @@ export function WorkflowsRail({
                       </div>
                     )}
                   </div>
-                </div>
-              </>
-            )}
           </div>
         </AnchoredPopover>
 
@@ -1267,8 +1162,8 @@ export function WorkflowsRail({
             <EmptyState
               className="rail-empty"
               icon="Folder"
-              title="No agents yet"
-              body="Add a project folder to start a session in it. Agents (sapiom.json) anywhere inside it appear here automatically."
+              title="No projects yet"
+              body="New project above creates a project and its first agent. Agents (sapiom.json) anywhere inside a project appear here."
             />
           )}
 
@@ -1394,9 +1289,17 @@ export function WorkflowsRail({
                   tooltip={
                     creating
                       ? "Creating agent…"
-                      : bare
-                        ? "Project with sessions, no agent yet. Focus to work in it."
-                        : undefined
+                      : planFirst && empty
+                        ? /* D36: an empty project has no map to draw, so its
+                             name is the door to the new-agent screen, and the
+                             tooltip says so where the row is. `empty` is
+                             `projectIsEmpty`, the one emptiness answer, so a
+                             project whose agents all sit under directory rows
+                             keeps its map tooltip. */
+                          "Create this project's first agent"
+                        : bare
+                          ? "Project with sessions, no agent yet. Focus to work in it."
+                          : undefined
                   }
                   trailing={
                     <>
@@ -1446,34 +1349,13 @@ export function WorkflowsRail({
                             <Icon name="Waypoints" size={13} />
                           </button>
                         )}
-                      {/* START A SESSION HERE. This is the frequent project-row
-                          action and therefore stays one click away, immediately
-                          before the overflow menu. Its accessible name supplies
-                          the noun the glyph cannot: this starts a coding-agent
-                          SESSION at the project root. It does not scaffold a
-                          Sapiom agent. */}
-                      {!pending && (
-                        <button
-                          type="button"
-                          className="workspace-row-action"
-                          data-testid={`project-start-session-${project.label}`}
-                          aria-label={`Start a session in ${project.label}`}
-                          data-tooltip="Start a session here"
-                          onClick={() =>
-                            void onStartProjectSession(
-                              project.root,
-                              project.label,
-                            )
-                          }
-                        >
-                          <Icon name="Plus" size={13} />
-                        </button>
-                      )}
-                      {/* NAMED PROJECT ACTIONS. The destructive action stays in
-                          this menu instead of masquerading as a peer of the
-                          session shortcut. Legacy-only agent creation also
-                          remains spelled out here rather than sharing the `+`. */}
-                      <ProjectRowMenu
+                      {/* THE ROW'S VERBS, as hover actions rather than an
+                          overflow menu (D33). The `+` is New agent, scoped to
+                          this project (IA.md 219, D34a); the destructive one is
+                          last and marked. A plain session is NOT here: it
+                          starts from the tab strip, or from the Start on the
+                          project's own pane (D34e, D35 item 6). */}
+                      <ProjectRowActions
                         label={project.label}
                         create={
                           creating
@@ -1488,16 +1370,17 @@ export function WorkflowsRail({
                               : {
                                   kind: "create",
                                   testid: `project-create-agent-${project.label}`,
-                                  label: `Create an agent in ${project.label}`,
+                                  label: `New agent in ${project.label}`,
                                   run: () =>
                                     onCreateAgent(project.root, project.label),
                                 }
                         }
                         onRemove={(trigger) => {
-                          // Focus returns to the ⋮, not to the menu item that
-                          // opened the dialog: that item unmounts with the
-                          // popover, and a `triggerRef` pointing at a detached
-                          // node restores focus to <body>.
+                          // Focus returns to the X itself. The menu this
+                          // replaced had to hand back its trigger instead: the
+                          // item that opened the dialog unmounted with the
+                          // popover, and a ref on a detached node restores
+                          // focus to <body>.
                           removeTriggerRef.current = trigger;
                           setRemoving({
                             root: project.root,
@@ -1528,8 +1411,8 @@ export function WorkflowsRail({
                     />
                   )}
                 {/* Preserve the scan boundary explanation for an empty project.
-                    First-agent creation belongs to the project menu; an empty
-                    project never gets a separate inline creation action. */}
+                    First-agent creation is the row's own `+`; an empty project
+                    never gets a separate inline creation action (D36). */}
                 {!collapsed &&
                   empty &&
                   !creating &&
@@ -1588,6 +1471,13 @@ export function WorkflowsRail({
                     focusedAgentPath={focusedAgentPath}
                     onFocusAgent={focusProjectAgent}
                     sessions={projectSessions}
+                    /* D34(c): every group row carries the project row's `+`,
+                       scoped to the project holding the group's members. A
+                       group has no directory, so the project is the only place
+                       a new agent can go. */
+                    onCreateAgent={() =>
+                      onCreateAgent(project.root, project.label)
+                    }
                     onCreate={() => {
                       const label = nextGroupLabel(groupNodes);
                       railGroups.edit(project.root, groupAgents, (state) =>
@@ -1714,28 +1604,6 @@ export function WorkflowsRail({
           onSelectOverview={onSelectOverview}
         />
       </div>
-
-      {/* Add EXISTING agents: one detection-driven dialog that registers a
-          folder holding an agent project (or a folder of them). Creating a NEW
-          agent is "Create new" → the composer home (onNewSession). */}
-      {startMode && (
-        <StartDialog
-          mode={startMode}
-          recentDirs={recentDirs}
-          launchDir={launchDir}
-          projectRoot={projectRoot}
-          listDir={listDir}
-          onClose={() => setStartMode(null)}
-          onConnect={onConnect}
-          onOpenProject={async (root) => {
-            await onOpenProject(root);
-          }}
-          onScan={onScanWorkflows}
-          triggerRef={
-            startMode === "open" ? addProjectTriggerRef : connectTriggerRef
-          }
-        />
-      )}
 
       {removing && (
         <RemoveProjectConfirm

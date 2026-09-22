@@ -17,7 +17,6 @@
     {
       "kind": "postgres",
       "handle": "cold-outreach-engine",
-      "duration": "7d",
       "ephemeral": false,
       "reuse": { "key": "dbHandle" }
     }

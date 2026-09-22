@@ -17,7 +17,6 @@
     {
       "kind": "postgres",
       "handle": "the-brain",
-      "duration": "7d",
       "ephemeral": false
     }
   ],

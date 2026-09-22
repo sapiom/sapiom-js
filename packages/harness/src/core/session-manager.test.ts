@@ -3788,22 +3788,27 @@ describe("SessionManager", () => {
    * `Cannot start service: Host version "0.25.12" does not match binary version
    * "0.28.1"` on a project that builds fine outside the app.
    */
-  it("never leaks the host's ESBUILD_BINARY_PATH pin into the agent's environment", async () => {
-    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
-    const capturedEnvs: Record<string, string | undefined>[] = [];
-    const spawnPty: PtySpawnFn = (_file, _args, options) => {
-      capturedEnvs.push(options.env ?? {});
-      const fake = createFakePty();
-      return fake.pty as unknown as ReturnType<PtySpawnFn>;
-    };
-    const { manager } = makeManager({ spawnPty });
-    await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+  it.each(["ESBUILD_BINARY_PATH", "SAPIOM_STUDIO_HOST_CONTEXT"])("never leaks ambient %s into the agent environment", async (key) => {
+    const previous = process.env[key];
+    process.env[key] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+    try {
+      const capturedEnvs: Record<string, string | undefined>[] = [];
+      const spawnPty: PtySpawnFn = (_file, _args, options) => {
+        capturedEnvs.push(options.env ?? {});
+        const fake = createFakePty();
+        return fake.pty as unknown as ReturnType<PtySpawnFn>;
+      };
+      const { manager } = makeManager({ spawnPty });
+      await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
 
-    expect(capturedEnvs[0]?.["ESBUILD_BINARY_PATH"]).toBeUndefined();
-    // Everything else still comes through — this is a targeted strip, not a
-    // switch to a clean environment (the agent needs PATH, HOME, the lot).
-    expect(capturedEnvs[0]?.["PATH"]).toBe(process.env["PATH"]);
-    delete process.env["ESBUILD_BINARY_PATH"];
+      expect(capturedEnvs[0]?.[key]).toBeUndefined();
+      // Everything else still comes through — this is a targeted strip, not a
+      // switch to a clean environment (the agent needs PATH, HOME, the lot).
+      expect(capturedEnvs[0]?.["PATH"]).toBe(process.env["PATH"]);
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
   });
 
   describe("awaitable kill — liveness-fallback resolution", () => {

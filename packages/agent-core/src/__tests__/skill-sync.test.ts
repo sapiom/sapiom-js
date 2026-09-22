@@ -58,6 +58,36 @@ describe("sapiom-agent-authoring content guards", () => {
     expect(canonical.toLowerCase()).not.toContain("if you must pin");
   });
 
+  it("keeps the token-cap rule in the LLM pointer, not just in the served text", () => {
+    // SAP-3280: both facts sat on this page for months — a `thinking` block precedes the
+    // output, and here is a `max_tokens` — and nothing connected them, so every agent that
+    // copied the example inherited a truncation bug that fires only on the hardest inputs.
+    // SAP-3181 moved the worked example to the served rules, and the summary that stayed
+    // behind is what an author reads first; losing the rule from it puts them back where
+    // they started, one endpoint further from the correction.
+    expect(canonical).toContain("must budget for thinking");
+  });
+
+  it("shows no token cap small enough for thinking to exhaust", () => {
+    // Vacuous while the examples live in the served text, and deliberately kept: the guard
+    // costs nothing and catches the day an example comes back into this file with the
+    // starved cap that caused SAP-3280. A cap named by an in-file const (`max_tokens: CAP`
+    // with `const CAP = 1200;` above it) is resolved before the floor is applied, the same
+    // way `checkStructuredOutputCap` in scripts/lib/examples-llm-surface.mjs reads one —
+    // mirrored here rather than imported because this Jest suite compiles to CommonJS and
+    // cannot load that ES module.
+    const consts = new Map<string, number>();
+    for (const [, name, value] of canonical.matchAll(
+      /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(\d[\d_]*)\s*;/g,
+    )) {
+      consts.set(name, Number(value.replace(/_/g, "")));
+    }
+    const caps = [...canonical.matchAll(/max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/g)]
+      .map(([, cap]) => (/^\d/.test(cap) ? Number(cap.replace(/_/g, "")) : consts.get(cap)))
+      .filter((cap): cap is number => cap !== undefined);
+    expect(caps.filter((cap) => cap < 2048)).toEqual([]);
+  });
+
   it("teaches composition for multi-stage systems, with failure branching", () => {
     expect(canonical).toContain("Composing Deployed Agents");
     // agents.run resolves on any terminal status and does not throw — the

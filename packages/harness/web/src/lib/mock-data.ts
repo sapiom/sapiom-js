@@ -665,9 +665,10 @@ export const MOCK_FS_TREE: Record<string, string[]> = {
   ],
   ...(isFloodRailFixture() ? floodFsTree() : {}),
   "/Users/demo/acme-app": ["projects", "leasing", "src", "docs"],
-  // The project root (`<launchDir>/projects`, mirroring the Electron host — see
-  // MockApi.state's defaultProjectRoot). Present so the "Add existing agents"
-  // picker, which now opens on the project root, lands on a real directory.
+  // `<launchDir>/projects`, mirroring the Electron host's legacy default
+  // parent (see MockApi.state's defaultProjectRoot). Kept as a real directory
+  // so an existing install's folder still lists; it is no longer a destination
+  // for new agents (flow-creation.md Q8).
   "/Users/demo/acme-app/projects": ["leasing", "src", "docs"],
   "/Users/demo/acme-app/projects/leasing": [],
   "/Users/demo/acme-app/projects/src": [],

@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   StudioCurrentWorkspaceResponse,
   StudioProjectSummary,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import type { AppState, HarnessAdapter } from "../shared/types.js";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { startServer, type HarnessServer } from "./index.js";
 
 describe("real Studio workspace wiring", () => {

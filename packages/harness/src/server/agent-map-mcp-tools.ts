@@ -1,17 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
 import {
   AgentMapProposalConflictError,
   AgentMapProposalProjectError,
   AgentMapProposalQuotaError,
   AgentMapProposalService,
   AgentMapProposalValidationError,
-} from "../core/agent-map-proposal-service.js";
-import { proposalBatchRequestSchema } from "../core/agent-map-proposal-schema.js";
-import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "../core/agent-map-workspace-store.js";
-import { AgentMapAggregateError } from "../core/agent-map-aggregate-migration.js";
+} from "@sapiom/agent-map/node/agent-map-proposal-service";
+import { proposalBatchRequestSchema } from "@sapiom/agent-map/schema";
+import { AgentBriefAppendQuotaError, AgentMapWorkspaceStoreError } from "@sapiom/agent-map/node/agent-map-workspace-store";
+import { AgentMapAggregateError } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import { AgentBriefService, AgentBriefServiceError } from "../core/agent-brief-service.js";
 import { BuildPlanService, BuildPlanServiceError } from "../core/build-plan-service.js";
 import {

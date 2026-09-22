@@ -3,7 +3,7 @@ import type {
   AgentMapImplementation,
   AgentMapImplementationsResponse,
   AgentMapVersionId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 import type { WorkflowInfo } from "@shared/types";
 import { createApi } from "./api";
 import {

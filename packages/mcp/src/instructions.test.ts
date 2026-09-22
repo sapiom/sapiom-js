@@ -3,7 +3,11 @@ import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { AUTHORING_INSTRUCTIONS } from "./instructions.js";
+import {
+  AUTHORING_INSTRUCTIONS,
+  AUTHORING_INSTRUCTIONS_DIGEST,
+  AUTHORING_INSTRUCTIONS_RELEASE,
+} from "./instructions.js";
 
 describe("server instructions", () => {
   it("are delivered to a client over the initialize handshake", async () => {
@@ -22,6 +26,18 @@ describe("server instructions", () => {
 
     // This is the channel a capable client injects into the agent's context.
     expect(client.getInstructions()).toBe(AUTHORING_INSTRUCTIONS);
+  });
+
+  it("bundled snapshot is self-consistent: sha-256(body) equals the stamped digest", () => {
+    // instructions.generated.ts is written by scripts/mcp-instructions-snapshot.mjs
+    // from the served endpoint, body and digest together. Editing the body by hand
+    // fails this; the fix is to re-run the script, never to re-point the digest.
+    expect(AUTHORING_INSTRUCTIONS_DIGEST).toMatch(/^[0-9a-f]{64}$/);
+    expect(AUTHORING_INSTRUCTIONS_RELEASE).toMatch(/^\d+\.\d+$/);
+    const sha256 = createHash("sha256")
+      .update(AUTHORING_INSTRUCTIONS, "utf8")
+      .digest("hex");
+    expect(sha256).toBe(AUTHORING_INSTRUCTIONS_DIGEST);
   });
 
   it("primer covers the lifecycle, canonical rules, and points to the docs", () => {
@@ -43,11 +59,9 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom-agent-authoring");
   });
 
-  // SKIPPED, deliberately, like the SAP-3178 and SAP-3180 blocks: #814 moved this fallback to
-  // a body whose server-side release (sapiom/Sapiom#4884) has not merged. Sapiom `main` serves
-  // 2.10 (digest 47a4e3a3…), which is what this copy tracks. Un-skip when #4884 lands and this
-  // copy is re-synced to that body.
-  it.skip("names the two servers by role and keeps distinct aliases in the registration commands", () => {
+  it("names the two servers by role and keeps distinct aliases in the registration commands (SAP-3179)", () => {
+    // Served since the 2.12 release (sapiom/Sapiom#5026, which folded the closed #4884 in);
+    // #814 parked this block while that wording was unserved, and this copy carries it from 2.14 on.
     // Two-MCP frame: this server authors agents; the hosted capability server answers
     // one-off calls. Under SAP-3179 both are named by ROLE — "the local authoring
     // server", "the hosted capability server" — with the same phrases the Agent Studio
@@ -104,14 +118,13 @@ describe("server instructions", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("`@sapiom/mcp` >= 0.13");
   });
 
-  // SKIPPED, deliberately, for the same reason as the SAP-3180 block below: #816 moved this
-  // fallback to a body whose server-side release (sapiom/Sapiom#4886) has not merged. Sapiom
-  // `main` serves 2.10 (digest 47a4e3a3…). Un-skip when #4886 lands and this copy is re-synced.
-  it.skip("teaches App Link management from this server, version-gated (SAP-3178)", () => {
+  it("teaches App Link management from this server, version-gated (SAP-3178)", () => {
     // 2.8 taught publishing and nothing else about a link, so an offline session
     // could not learn that webhooks are off by default, how to turn them on, or
-    // that `/hook/*` is the receiver. The three management tools ship in 0.15;
-    // the gate is the same one `_publish` carries, for the same reason.
+    // that `/hook/*` is the receiver. The three management tools shipped in 0.15;
+    // the gate is the same one `_publish` carries, for the same reason. Served since
+    // the 2.12 release (sapiom/Sapiom#5026), which folded them into 2.11's webhook
+    // paragraph and retired its "no `sapiom_dev_*` tool sets it yet" clause.
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_list");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_settings");
     expect(AUTHORING_INSTRUCTIONS).toContain("sapiom_dev_app_delete");
@@ -121,17 +134,20 @@ describe("server instructions", () => {
       "https://apps.sapiom.ai/{org}/{slug}/hook/<path>",
     );
     expect(AUTHORING_INSTRUCTIONS).toContain("settings need `org.write`");
+    expect(AUTHORING_INSTRUCTIONS).not.toContain(
+      "no `sapiom_dev_*` tool sets it yet",
+    );
   });
 
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
     // The primer is the only always-in-context surface, so authors learn the entry
-    // contract here. Kept byte-identical to the backend DEFAULT_MCP_INSTRUCTIONS copy.
+    // contract here. Matches the served text.
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "entry step's `inputSchema` is the agent's public API",
     );
   });
 
-  it("teaches the LLM call-surface rule (SAP-2775) — kept byte-identical to the backend copy", () => {
+  it("teaches the LLM call-surface rule (SAP-2775) — matches the served text", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.llm.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.models.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
@@ -174,11 +190,11 @@ describe("server instructions", () => {
     // was in THIS fallback and not in the served primer, so online sessions — the vast
     // majority — never saw it. Syncing to the served text drops it here too.
     //
-    // That is a consequence of the sync, not an oversight, and it is the direction the
-    // rule requires: the two copies are one canonical text, and the digest below cannot
-    // hold if they differ by a paragraph. The contract still reaches authors through
-    // packages/agent/README.md and the scaffold-shipped `sapiom-agent-authoring` skill.
-    // Putting it back in the primer is a server-side content release, not an edit here.
+    // That is a consequence of the sync, not an oversight: the snapshot is generated
+    // from the served text, so it cannot carry a paragraph the server does not. The
+    // contract still reaches authors through packages/agent/README.md and the
+    // scaffold-shipped `sapiom-agent-authoring` skill. Putting it back in the primer is
+    // a server-side content release, not an edit here.
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "Cross-step state: `ctx.shared` — the entry input reaches only the entry step.",
     );
@@ -214,48 +230,10 @@ describe("server instructions", () => {
     );
   });
 
-  it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
-    // THE SYNC RULE, which lives here rather than in instructions.ts because that
-    // file's JSDoc is emitted into dist/instructions.d.ts and published to npm, where
-    // none of this is actionable for a consumer: AUTHORING_INSTRUCTIONS is duplicated
-    // verbatim from the server's canonical primer (a private companion repo). The
-    // package must work offline, so it cannot import it. The two are one canonical
-    // text — KEEP THEM IDENTICAL whenever either changes.
-    //
-    // The `contain` assertions above are what let this copy fall two content
-    // releases behind the server without anything going red: each one still
-    // passed against the older text. This digest is what actually binds the two
-    // copies, and it works from both ends: the server-side spec pins this same
-    // value against ITS current primer, so a content release there reddens that
-    // spec and forces its author onto this pin, while an in-place edit here
-    // reddens this one. Neither suite makes a network call.
-    //
-    // Be honest about the limit: neither pin can block a merge in the other
-    // repository, and an author can still move one side alone. What the pair
-    // removes is the silent path — drifting now takes a deliberate edit to a line
-    // that says what it is for.
-    //
-    // To change the primer: ship the server-side content release, copy its new
-    // body here verbatim, and update both pins to the new digest in the same pair
-    // of PRs. Never re-point this digest on its own — that just re-blesses the
-    // drift the guard exists to catch.
-    //
-    // Current release: 2.10 (trigger kinds: `event` + `webhook`, webhook signing, `sapiom_dev_agents_schedule_secret`).
-    const sha256 = createHash("sha256")
-      .update(AUTHORING_INSTRUCTIONS, "utf8")
-      .digest("hex");
-    expect(sha256).toBe(
-      "47a4e3a355584f40345e4a6dc9d695663aa24fc613e93eaf4559465b02b8b457",
-    );
-  });
-
-  // SKIPPED, deliberately: #815 moved this fallback to a 2.9 body whose server-side release
-  // (sapiom/Sapiom#4885) has not merged — Sapiom `main` serves 2.10 (SAP-3174, digest
-  // 47a4e3a3…), which is what this copy tracks. Un-skip when #4885 lands (rebased onto 2.10 it
-  // becomes 2.11 and carries both sections) and this copy is re-synced to that body.
-  it.skip("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+  it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
+    // Served since 2.11 (sapiom/Sapiom#4885); this copy carries it from 2.14 on.
     // Each of these shipped without any served text teaching it, so an agent could only
-    // guess at it. Byte-identical to the backend copy, so asserted here too.
+    // guess at it. Matches the served text, so asserted here too.
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
     expect(AUTHORING_INSTRUCTIONS).toContain("agent code cannot write");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.launch");
@@ -273,5 +251,33 @@ describe("server instructions", () => {
     // one-shot caller. Scoped to that clause, not the identifier: `LlmSubmitSpec` has a
     // real `deadlineMinutes`, and a later primer may document the deferred lane's knob.
     expect(AUTHORING_INSTRUCTIONS).not.toContain("Say how long you can wait");
+  });
+
+  it("says a Sapiom Postgres is permanent, with no lifetime to pick (2.13)", () => {
+    // 2.13 (sapiom/Sapiom#4972) retired the 7-day database claim: a database lives until
+    // deleted and holds a plan slot while held, so an author must not look for a `duration`.
+    expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.database.create");
+    expect(AUTHORING_INSTRUCTIONS).toContain("is permanent");
+    expect(AUTHORING_INSTRUCTIONS).toContain("no `duration` to pass");
+  });
+
+  it("says an App Link is a redirector, not a reverse proxy, and how to reach the app (SAP-3217)", () => {
+    // 2.14 (sapiom/Sapiom#4926), from Studio feedback: an agent treated the durable URL as a
+    // stable base and pointed the app's own fetches at sub-paths of it, which the host 404s.
+    // The primer must name the redirect-then-`__status` discovery loop, its ordering trap, and
+    // the token expiry that makes storing the address wrong too.
+    const flat = AUTHORING_INSTRUCTIONS.replace(/\s+/g, " ");
+    expect(flat).toContain("**redirector, not a reverse proxy**");
+    expect(flat).toContain("request the root WITHOUT following redirects");
+    expect(flat).toContain("Do NOT make `__status` your FIRST call");
+    expect(flat).toContain(
+      "Re-read the address per use rather than storing it",
+    );
+    expect(flat).toContain("an org-scoped app's API is browser-only");
+    // The `/hook/*` exposure caveats 2.11 omitted: any method on any sub-path, no caller auth.
+    expect(flat).toContain(
+      "the hook accepts ANY method on ANY path under `/hook/`",
+    );
+    expect(flat).toContain("treat the URL as a secret");
   });
 });

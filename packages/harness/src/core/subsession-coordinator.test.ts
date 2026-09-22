@@ -3,18 +3,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectAgentSession } from "../shared/agent-map.js";
-import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "../shared/agent-map.js";
+import type { ProjectAgentSession } from "@sapiom/agent-map";
+import type { AgentMapGraph, AgentMapVersion, AgentMapVersionId, PlanNodeId } from "@sapiom/agent-map";
 import {
   computeAgentMapVersionRecordDigest,
   computeGraphContentDigest,
-} from "../shared/agent-map-canonical.js";
+} from "@sapiom/agent-map/node/canonical";
 import type {
   BuildPlanAssignmentIntent,
   ProjectBuildPlanId,
   ProjectBuildPlanVersion,
   ProjectBuildPlanVersionId,
-} from "../shared/build-plan.js";
+} from "@sapiom/agent-map/build-plan";
 import type {
   AnalyticsEvent,
   HarnessAdapter,
@@ -24,9 +24,9 @@ import type { BuildPlanStore } from "./build-plan-store.js";
 import {
   computeBuildPlanRecordDigest,
   computeBuildPlanSemanticDigest,
-} from "./build-plan-canonicalization.js";
+} from "@sapiom/agent-map/node/build-plan-canonicalization";
 import { compileCanonicalWorkstreamBriefs } from "./agent-brief-compiler.js";
-import { createEmptyProjectPlanningAggregate } from "./agent-map-aggregate-migration.js";
+import { createEmptyProjectPlanningAggregate } from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 import type { EventReader } from "./collector/store.js";
 import { SubsessionBindingMismatchError } from "./errors.js";
 import { IngestCredentialRegistry } from "./ingest-credentials.js";

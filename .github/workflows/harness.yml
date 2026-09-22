@@ -9,13 +9,14 @@ name: Harness
 # run for it — no wasted CI, and nothing is blocked (main has no required
 # status checks). Keep the paths list in sync if the harness gains a new
 # workspace dependency; the current closure is:
-#   harness -> agent, agent-core, agent-runtime, analytics-core, mcp,
+#   harness -> agent-map, agent, agent-core, agent-runtime, analytics-core, mcp,
 #              sandbox-preview, tools, opencode
 on:
   pull_request:
     types: [opened, synchronize, reopened, stacked]
     branches: [main]
     paths:
+      - "packages/agent-map/**"
       - "packages/harness/**"
       - "packages/harness-desktop/**"
       - "packages/agent/**"
@@ -34,6 +35,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "packages/agent-map/**"
       - "packages/harness/**"
       - "packages/harness-desktop/**"
       - "packages/agent/**"

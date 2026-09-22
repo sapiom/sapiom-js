@@ -3,7 +3,7 @@ import type {
   AcceptedProposalDelta,
   PlanNodeId,
   ProposalOperationId,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 import {
   applyAcceptedProposalDelta,
   latestNodeAttribution,

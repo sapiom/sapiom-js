@@ -1,10 +1,11 @@
 /**
- * The first-run home is the composer-first "new session" screen
- * (NewSessionComposer), which replaced the WelcomePanel overlay. `/?mockState=fresh`
- * renders MockApi as a brand-new install: no sessions, no recent dirs, no
- * workflows, AppState.firstRun set — the state the real CLI produces on a machine
- * that has never run the harness. The default fixtures (a lived-in install)
- * double as the returning-user case, which boots straight into its session.
+ * The first-run home is the no-project home (NoProjectHome): an install with
+ * no project has nothing to create an agent in, so its one move is New
+ * project, which runs the folder step and lands on the new-agent screen
+ * (flow-creation.md §4.1, §4.3). `/?mockState=fresh` renders MockApi as a
+ * brand-new install: no sessions, no recent dirs, no workflows,
+ * AppState.firstRun set. The default fixtures (a lived-in install) double as
+ * the returning-user case, which boots straight into its session.
  *
  * The account menu's "Overview" no longer aliases the composer: it opens the
  * Overview modal (OverviewModal), a standalone introduction to the app that
@@ -15,6 +16,8 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+
+import { openNewAgentScreen } from "./mock-navigation";
 
 /** Open the Overview modal from the account menu. */
 async function openOverview(page: Page): Promise<void> {
@@ -39,16 +42,21 @@ test.describe("first run", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
   });
 
-  test("opens on the composer: the question, quick ideas, and templates", async ({ page }) => {
-    const composer = page.getByTestId("new-session-composer");
-    await expect(composer).toBeVisible();
-    // No terminal, no canvas yet — the composer stands in the centre pane.
-    await expect(page.locator(".terminal-empty")).toHaveCount(0);
+  test("opens on the no-project home; New project leads to the screen with its question, chips and templates", async ({ page }) => {
+    const home = page.getByTestId("no-project-home");
+    await expect(home).toBeVisible();
+    // No terminal, no canvas, and no screen yet: there is no project to
+    // create in, so the screen is not shown with the project left blank.
+    await expect(page.locator(".terminal-empty")).toHaveCount(1);
     await expect(page.getByTestId("agent-view")).toHaveCount(0);
+    await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
+    await expect(home).toContainText("No project yet");
 
+    await openNewAgentScreen(page);
+    const composer = page.getByTestId("new-session-composer");
     await expect(composer).toContainText("What should your agent do?");
-    // The first-run greeting is the one thing that marks a first run.
-    await expect(page.getByTestId("composer-greeting")).toContainText("first agent");
+    // The screen states the project it is creating in.
+    await expect(page.getByTestId("new-agent-project")).toHaveText("New agent in blank-slate");
 
     // The four quick-idea chips, the box, and the send.
     await expect(page.getByTestId("composer-chip-sales-outreach")).toBeVisible();
@@ -68,22 +76,6 @@ test.describe("first run", () => {
     await page.screenshot({ path: "web/e2e/screenshots/composer-home.png", fullPage: true });
   });
 
-  test("the + opens the Add existing agents dialog, and the workspace joins the rail", async ({ page }) => {
-    // The composer's leading + reaches the same "add existing agents" dialog the
-    // rail's button does — one detection-driven picker, no doors.
-    await page.getByTestId("composer-open-folder").click();
-    await expect(page.locator(".modal-start")).toBeVisible();
-    await expect(page.getByTestId("aw-doors")).toHaveCount(0);
-
-    // Pick a fixture folder that holds an agent project — detection is reactive.
-    await page.getByTestId("folder-field-input").fill("/Users/demo/rfq-agent");
-    await expect(page.getByTestId("start-hint")).toHaveText("This folder is an agent project.");
-    await page.getByTestId("aw-add").click();
-
-    // The workspace joins the rail.
-    await expect(page.locator(".modal-start")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-rfq-agent")).toBeVisible();
-  });
 });
 
 test.describe("returning user", () => {
@@ -116,14 +108,17 @@ test.describe("returning user", () => {
     await expect(page.getByTestId("session-context")).toHaveAttribute("data-session-id", "sess-boot");
   });
 
-  test("Overview's Open-folder CTA opens the folder dialog", async ({ page }) => {
+  test("Overview's Open-folder CTA runs the folder step and closes the card", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     await openOverview(page);
     await page.getByTestId("overview-open-folder").click();
 
-    await expect(page.locator(".modal-start")).toBeVisible();
+    // Add project (flow-creation.md §4.5): the one-field dialog on the web,
+    // never a dialog behind the card's scrim.
+    await expect(page.getByTestId("overview-modal")).toHaveCount(0);
+    await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
   });
 
   test("the palette's Browse templates, opened over the Overview, leaves it (never stacks)", async ({

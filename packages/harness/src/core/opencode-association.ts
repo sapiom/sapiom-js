@@ -6,7 +6,7 @@ import {
   type HostedOpenCode,
 } from "./opencode-host.js";
 import { openCodeTransportFailure } from "../shared/opencode-errors.js";
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 
 import { isConversationId } from "../shared/assistant-state.js";
 export { isConversationId } from "../shared/assistant-state.js";

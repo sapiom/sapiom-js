@@ -503,10 +503,19 @@ input {
   padding-left: calc(var(--mac-lights-inset) - var(--pane-pad-x));
 }
 
-:root[data-window-frame="macos"] .brand-header .session-nav {
+:root[data-window-frame="macos"] .brand-header .brand-header-tools {
   grid-column: 3;
   grid-row: 1;
   align-self: end;
+}
+
+/* The chrome line's right anchor: the history glyph, then back/forward. One
+   cluster at the same --sp0 rhythm as the nav pair, so the three glyphs read
+   as one tool group. */
+.brand-header-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp0);
 }
 
 /* The lockup drops in full to the line below the lights, reading inline as
@@ -1137,59 +1146,14 @@ input {
   z-index: 40;
 }
 
-.menu-flyer-track {
-  display: flex;
-  align-items: flex-start;
-  gap: 0;
-  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.22));
-}
-
-.menu-flyer-track .connect-card {
-  box-shadow: none;
-}
-
-.menu-flyer-bridge {
-  align-self: stretch;
-  flex: 0 0 2px;
-  width: 2px;
-  pointer-events: auto;
-}
-
-/* The sub-card is .connect-card plus the two things that make it nested: it
-   aligns to the top of the track (the row that opened it) and slides in from
-   the left as it appears. */
-.menu-flyer-nested {
-  align-self: flex-start;
-  width: min(320px, calc(100vw - var(--sp4)));
-  animation: menu-nested-in 0.1s var(--ease) both;
-}
-
-@keyframes menu-nested-in {
-  from {
-    opacity: 0;
-    transform: translateX(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .menu-flyer-nested {
-    animation: none;
-  }
-}
-
 /* The scroller lives HERE, on the unbounded set — never on the options card. */
 .past-sessions-list {
   max-height: min(360px, 60vh);
   overflow-y: auto;
 }
 
-/* The fixed-choices region (Group by + Sort). A hover target that closes the
-   Past-sessions flyout, so it must be a real box — but it re-states the body's
-   column + gap so wrapping the choices doesn't flatten their rhythm. */
+/* The fixed-choices region (Group by + Sort by): re-states the body's column
+   + gap so wrapping the choices doesn't flatten their rhythm. */
 .menu-choice-group {
   display: flex;
   flex-direction: column;
@@ -1207,27 +1171,6 @@ input {
   flex: 0 0 auto;
   width: var(--line-box, 20px);
   color: var(--text);
-}
-
-/* The Past-sessions trigger: a normal menu row whose trailing chevron and
-   count sit at the far edge, marking it as a row that opens another surface. */
-.nested-trigger > .session-history-badge {
-  margin-left: auto;
-}
-
-.nested-trigger > svg:last-child {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-}
-
-/* When a badge already pushed itself to the edge, the chevron follows it
-   rather than the copy column. */
-.nested-trigger > .session-history-badge + svg:last-child {
-  margin-left: var(--sp1);
-}
-
-.nested-trigger.is-open {
-  background: var(--active-shade);
 }
 
 .rail-list {
@@ -2048,13 +1991,13 @@ button.rail-footer-card:hover {
 /* A collapsed merged group keeps its caret button visible, matching the
    inline caret's "there's more here" cue on plain headers.
 
-   NOT the project row's ⋮. This selector tests only that `aria-expanded` is
-   PRESENT, and the row menu's trigger always carries it — so without the
-   exclusion every collapsed project row grew a standing ⋮, which is the
-   "loudest thing in the rail" the trailing actions are hover-revealed to
-   avoid. An open menu keeps its own trigger visible through the rule below. */
-.workspace-row.is-collapsed
-  .workspace-row-action[aria-expanded]:not(.project-row-menu-trigger) {
+   The selector tests only that `aria-expanded` is PRESENT, so it catches any
+   row action that can open something. It used to need an exclusion for the
+   project row's ⋮, whose trigger always carried the attribute and therefore
+   stood permanently visible on every collapsed row — "the loudest thing in the
+   rail", which hover-revealing the trailing actions exists to avoid. That menu
+   is gone; the exclusion went with it. */
+.workspace-row.is-collapsed .workspace-row-action[aria-expanded] {
   opacity: 1;
 }
 
@@ -2136,24 +2079,16 @@ button.rail-footer-card:hover {
   color: var(--text);
 }
 
-/* ---- Project row ⋮ menu ---------------------------------------------- */
-/* Wide enough for the longest item to state its subject on one line — the
-   whole point of the menu is that "Remove acme-app from the rail" is read,
-   not inferred from a glyph, and a wrapped or ellipsed label gives that back. */
-.project-row-menu {
-  min-width: 248px;
-}
+/* ---- Project row remove ------------------------------------------------ */
+/* The destructive row action, marked on hover with a wash (`color-mix`), never
+   a full-strength surface — the same weight the menu item it replaced carried.
 
-/* The destructive item, marked on hover the way the session menu's is. A wash
-   (`color-mix`), never a full-strength surface.
-
-   The `.session-dropdown-item` qualifier is load-bearing, not decoration: the
-   menu items wear that class for their anatomy, its own `:hover` rule ties
-   this one on specificity, and it is declared LATER in this file — so the
-   neutral hover won and the destructive item marked itself in text colour
-   alone. Measured, not guessed: the computed background came back
-   `rgba(17, 17, 20, 0.04)`. */
-.session-dropdown-item.project-row-menu-danger:hover {
+   The `.workspace-row-action` qualifier is load-bearing, not decoration: row
+   actions wear that class for their anatomy, its own `:hover` rule ties this
+   one on specificity, and it is declared EARLIER in this file, so the neutral
+   hover would otherwise win on source order and the destructive action would
+   mark itself in text colour alone. */
+.workspace-row-action.project-row-remove:hover {
   color: var(--red-text);
   background: color-mix(in srgb, var(--red) 12%, transparent);
 }
@@ -2739,22 +2674,6 @@ button.rail-footer-card:hover {
     opacity: 1;
     transform: scale(1.15);
   }
-}
-
-.session-history-badge {
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--surface-inset);
-  color: var(--text-dim);
-  font-size: var(--type-micro);
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
 }
 
 /* Right-anchored status slot, pushed past the flexible title/cwd/chip run —
@@ -9689,6 +9608,12 @@ button.rail-footer-card:hover {
   white-space: nowrap;
   font-size: var(--type-label);
 }
+.composer-file-detail {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  white-space: nowrap;
+}
 .composer-file-remove {
   display: inline-flex;
   align-items: center;
@@ -10849,5 +10774,121 @@ button.rail-footer-card:hover {
 }
 
 .create-agent-link:hover {
+  color: var(--text);
+}
+
+/* ── The new-agent screen states its project (flow-creation.md §4.3) ──────
+   The project was chosen before the screen opened (the folder step, or the
+   row that was pressed), so it is STATED, above the headline and in the
+   session bar's chip, and never asked for again. Both read from the same
+   tokens as the file chips beneath the box, so the screen carries one
+   vocabulary for "a thing this agent is about". */
+.composer-project {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  height: var(--control-h-xs);
+  padding: 0 var(--sp3);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: var(--type-label);
+  font-weight: 550;
+}
+
+.session-composing {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  min-width: 0;
+}
+
+.session-project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp1);
+  min-width: 0;
+  max-width: 320px;
+  height: var(--control-h-xs);
+  padding: 0 var(--sp2);
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A pasted link is a source: same chip as a file, the globe says which. */
+.composer-source .composer-file-name {
+  max-width: 220px;
+}
+
+/* The server's refusal lands under the field that produced it (D30), and the
+   box says so too. */
+.composer-box.has-error {
+  border-color: var(--red);
+}
+
+.composer-error {
+  width: 100%;
+  max-width: 640px;
+  margin: var(--sp2) 0 0;
+  text-align: left;
+}
+
+/* The no-project home reuses the composer's frame so the switch from it to
+   the screen moves nothing but the content. */
+.no-project-home .empty-state {
+  max-width: 420px;
+}
+
+/* ── The setup disclosure (flow-creation.md §4.4 step 3) ───────────────────
+   The planning instructions rode the first prompt as session setup. The pane
+   shows them quietly above the terminal: a closed disclosure the user can
+   open to read what the agent was told, never dressed as the user's turn. */
+.session-setup {
+  flex: 0 0 auto;
+  margin: 0 var(--sp3) var(--sp2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: var(--type-label);
+}
+
+.session-setup-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2);
+  padding: var(--sp1) var(--sp2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.session-setup-summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-setup-title {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.session-setup-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-setup-body {
+  margin: 0;
+  padding: 0 var(--sp2) var(--sp2);
+  white-space: pre-wrap;
+  font: inherit;
+  line-height: 1.5;
   color: var(--text);
 }

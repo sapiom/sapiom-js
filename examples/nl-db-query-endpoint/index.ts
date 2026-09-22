@@ -571,7 +571,6 @@ const resolve = defineStep({
         });
         const created = await ctx.sapiom.database.create({
           handle: config.dbHandle,
-          duration: "7d",
           name: "NL DB Query demo",
           description:
             "Read-only demo dataset the endpoint answers questions over",

@@ -3,7 +3,6 @@ import type { JSX } from "react";
 
 import type { TemplateDetailView, TemplateListResponse } from "@shared/types";
 
-import type { FsListResponse } from "../lib/api";
 import {
   NO_FILTER,
   filterTemplates,
@@ -13,7 +12,6 @@ import {
 import {
   STARTER_TEMPLATES,
   matchesQuery,
-  templateDirSuggestion,
   type GalleryTemplate,
   type StudioTemplate,
 } from "../lib/templates";
@@ -22,22 +20,18 @@ import { Icon } from "./Icon";
 import { TemplateCard } from "./TemplateCard";
 import { TemplateDetail } from "./TemplateDetail";
 import { TemplateFilters } from "./TemplateFilters";
-import { TemplateUseDialog } from "./TemplateUseDialog";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { TrackScope } from "./analytics/TrackScope";
 
 interface TemplatesPanelProps {
-  /** Seeds the destination suggestion — the resolved project root, shared with
-   *  the add-workspace doors so the two can never disagree about where new
-   *  projects land. */
-  projectRoot: string | null;
-  /** Forwarded to the confirm dialog's directory picker. */
-  recentDirs: string[];
-  listDir: (path?: string) => Promise<FsListResponse>;
   /** Leave the browser and return to the session workbench. */
   onExit: () => void;
-  /** Starts a session in the destination folder and hands over the prompt. */
-  onUse: (dir: string, template: StudioTemplate) => Promise<void>;
+  /**
+   * Use a template: it becomes the idea on the new-agent screen, scoped to
+   * the project on screen or to the folder the folder step picks next
+   * (flow-creation.md §5, CF-D11). No destination is asked for here.
+   */
+  onUse: (template: StudioTemplate) => void;
   /** The live catalog fetchers (the server relays core; the key stays there). */
   listTemplates: () => Promise<TemplateListResponse>;
   getTemplate: (id: string) => Promise<TemplateDetailView>;
@@ -75,9 +69,6 @@ interface TemplatesPanelProps {
  * its own count, and the hero states the total.
  */
 export function TemplatesPanel({
-  projectRoot,
-  recentDirs,
-  listDir,
   onExit,
   onUse,
   listTemplates,
@@ -87,11 +78,9 @@ export function TemplatesPanel({
   const [catalog, setCatalog] = useState<TemplateListResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<TemplateFilter>(NO_FILTER);
-  // Reading a template and committing to one are separate states: the detail
-  // view is somewhere you browse, the dialog is the one question it can ask.
+  // The detail view is somewhere you browse; Use leaves for the new-agent
+  // screen, which asks nothing this panel would have to.
   const [opened, setOpened] = useState<StudioTemplate | null>(null);
-  const [confirming, setConfirming] = useState<StudioTemplate | null>(null);
-  const useTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,11 +179,10 @@ export function TemplatesPanel({
         </span>
         {opened && (
           <button
-            ref={useTriggerRef}
             type="button"
             className="btn-primary templates-bar-use"
             data-testid="template-use-btn"
-            onClick={() => setConfirming(opened)}
+            onClick={() => onUse(opened)}
           >
             Use template
           </button>
@@ -247,7 +235,7 @@ export function TemplatesPanel({
                           key={template.id}
                           template={template}
                           onOpen={setOpened}
-                          onUse={setConfirming}
+                          onUse={onUse}
                         />
                       ))}
                     </div>
@@ -291,7 +279,7 @@ export function TemplatesPanel({
                             key={template.id}
                             template={template}
                             onOpen={setOpened}
-                            onUse={setConfirming}
+                            onUse={onUse}
                           />
                         ))}
                       </div>
@@ -304,22 +292,6 @@ export function TemplatesPanel({
         </div>
       </div>
 
-      {confirming && (
-        <TemplateUseDialog
-          template={confirming}
-          initialDest={templateDirSuggestion(confirming, projectRoot)}
-          recentDirs={recentDirs}
-          listDir={listDir}
-          onCancel={() => setConfirming(null)}
-          triggerRef={useTriggerRef}
-          onConfirm={async (destination) => {
-            await onUse(destination, confirming);
-            // The session that just started IS the destination — leaving the
-            // browser mounted over it would bury the thing you asked for.
-            onExit();
-          }}
-        />
-      )}
     </section>
   );
 }

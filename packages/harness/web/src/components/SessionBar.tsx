@@ -31,6 +31,9 @@ interface SessionBarProps {
   reviewTitle?: string | null;
   /** Set while the composer-first "new session" home is up — no session yet. */
   composing?: boolean;
+  /** The project the new-agent screen is creating in, stated in the header
+   *  chip (flow-creation.md §4.3): "New agent in {label}". */
+  composerProjectLabel?: string | null;
   /** Leaves the composer for the session it was opened over. Set only when such
    *  a session exists — the bar then reads as the Back affordance itself. */
   onBack?: (() => void) | null;
@@ -91,6 +94,7 @@ export function SessionBar({
   openedAgentName = null,
   reviewTitle = null,
   composing = false,
+  composerProjectLabel = null,
   onBack = null,
   activeSession,
   sessionName,
@@ -199,26 +203,38 @@ export function SessionBar({
             </span>
           </div>
         ) : composing ? (
-          /* Composer-first "new session": there is no session to name here, so
-             the slot carries the one thing it can do — go back to the session
-             the composer was opened over. Nothing when there is none (first
-             run, every session closed): the bar keeps only the + . */
-          onBack ? (
-            <button
-              type="button"
-              className="session-current session-back"
-              data-testid="composer-back"
-              onClick={onBack}
-            >
-              <Icon name="ArrowLeft" size={13} />
-              <span
-                className="session-context-title"
-                data-testid="session-context-title"
+          /* The new-agent screen: there is no session to name here. The slot
+             STATES the project the agent is being created in (§4.3, the
+             header chip) and, when the screen was opened over a live session,
+             carries the way back to it. */
+          <div className="session-current session-composing">
+            {onBack && (
+              <button
+                type="button"
+                className="session-current session-back"
+                data-testid="composer-back"
+                onClick={onBack}
               >
-                Back
+                <Icon name="ArrowLeft" size={13} />
+                <span
+                  className="session-context-title"
+                  data-testid="session-context-title"
+                >
+                  Back
+                </span>
+              </button>
+            )}
+            {composerProjectLabel && (
+              <span
+                className="session-project-chip"
+                data-testid="session-project-chip"
+                title={composerProjectLabel}
+              >
+                <Icon name="Folder" size={12} />
+                New agent in {composerProjectLabel}
               </span>
-            </button>
-          ) : null
+            )}
+          </div>
         ) : sessions.length > 0 &&
           onSelectSession &&
           onNewSession &&

@@ -33,11 +33,7 @@ test.beforeEach(async ({ page }) => {
 async function openPastRow(page: Page, testid: string): Promise<void> {
   // Past-session rows moved out of the ⋯ menu into a sub-card that opens off
   // the "Past sessions" row: ⋯ → Past sessions → the row.
-  await page.getByTestId("history-trigger").click();
-  await expect(page.getByTestId("history-menu")).toBeVisible();
-  // The flyout opens on hover onto its row (a click would toggle the
-  // hover-open straight back shut).
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId(testid).click();
   await expect(page.getByTestId("dead-session-pane")).toBeVisible();

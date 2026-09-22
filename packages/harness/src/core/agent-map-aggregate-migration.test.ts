@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlanNode, PlanNodeId } from "../shared/agent-map.js";
+import type { PlanNode, PlanNodeId } from "@sapiom/agent-map";
 import {
   computeProjectPlanningAggregateDigest,
   migrateProjectPlanningAggregate,
   parseProjectPlanningAggregate,
-} from "./agent-map-aggregate-migration.js";
+} from "@sapiom/agent-map/node/agent-map-aggregate-migration";
 
 const projectId = "project_018f0000-0000-4000-8000-000000000001";
 const proposalId = "proposal_018f0000-0000-7000-8000-000000000002";

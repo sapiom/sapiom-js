@@ -22,9 +22,9 @@ The platform rules a template must respect — which capability calls an LLM, da
 trigger kinds, App Link webhooks — are served live at
 <https://api.sapiom.ai/v1/agents/authoring-rules> and are not restated in this guide; where a
 step below touches one, it points at the served section. This guide was
-written against release 1.0 of that text.
+written against release 1.1 of that text.
 
-<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->
 
 ---
 
@@ -359,7 +359,7 @@ result. Steps, capabilities and fan-out are a **tiebreak**, never the reason for
 To pick a band, count the template's **judgment points** — the places where something
 non-deterministic is produced:
 
-- a step with `kind: "llm"` (a model call — `llm.run`, `models.run`, `models.coding`),
+- a step with `kind: "llm"` (a model call — `llm.run`, `llm.decide`, `models.run`, `models.coding`),
 - a generated image or video (`content.generation.*`),
 - a capability that synthesizes prose for you, e.g. `web.search`'s `answer` field. It counts
   even with no `llm` step in the graph, because the user still reads model-written output.
@@ -392,12 +392,12 @@ and the scorer legitimately disagree — the scorer can't see a synthesizing cap
 
 Set `kind` on every step:
 
-| `kind`       | Use when                                                     |
-| ------------ | ------------------------------------------------------------ |
-| `capability` | It calls a priced catalog capability.                        |
-| `llm`        | It calls a model (`llm.run`, `models.run`, `models.coding`). |
-| `compute`    | In-process logic, a branch, or a terminal.                   |
-| `pause`      | It suspends the run at $0 until something wakes it.          |
+| `kind`       | Use when                                                                   |
+| ------------ | -------------------------------------------------------------------------- |
+| `capability` | It calls a priced catalog capability.                                      |
+| `llm`        | It calls a model (`llm.run`, `llm.decide`, `models.run`, `models.coding`). |
+| `compute`    | In-process logic, a branch, or a terminal.                                 |
+| `pause`      | It suspends the run at $0 until something wakes it.                        |
 
 A step that calls a capability _and then_ suspends is `pause` — suspending is what defines it.
 
@@ -718,7 +718,8 @@ const res = await ctx.sapiom.llm.run({
   request: {
     system,
     messages: [{ role: "user", content: prompt }],
-    max_tokens: 500,
+    // Thinking is spent from this budget too — size it for thinking + output.
+    max_tokens: 4096,
   },
   output: { name: REVIEW_TOOL, schema: REVIEW_SCHEMA },
 });
@@ -728,7 +729,21 @@ const review = readReview(ctx.sapiom.llm.structuredOf(res, REVIEW_TOOL));
 `output` appends that tool to the request and forces `tool_choice` onto it, so the
 reply comes back as a typed `tool_use` block. `structuredOf` reads it, and returns
 `undefined` rather than guessing when there is no such block. For a plain text reply,
-`textOf` — never `content[0]`, which can be a `thinking` block.
+`textOf` — never `content[0]`, which can be a `thinking` block. When the answer is one of
+a fixed set you can name up front — a yes/no gate, a pick-one label, a rubric level — call
+`ctx.sapiom.llm.decide` instead of an `output` schema: it returns calibrated probabilities
+over those answers (`res.answers.<key>.noul` / `.choice` + `.probabilities` / `.score`) with
+no tool, schema, or `structuredOf` step.
+
+**`max_tokens` covers thinking, not just output.** A routed label may emit a `thinking`
+block before the forced tool call, out of the same budget. If it runs out mid-deliberation
+the turn ends before the tool call is emitted and there is nothing to read — on the hardest
+inputs only, so a starved cap passes every easy case first. `llm.run` throws
+`LlmStructuredOutputTruncatedError` when that happens rather than handing back an
+unreadable response, and `pnpm examples:check` rejects a structured call capped under 2048.
+Catch it in a step with `canFail: true` and `fail()`: retrying the same request bills the
+thinking again and fails the same way. Billing settles on the tokens actually produced, but
+the cap is not free either — admission weight scales with it, so size it for the work.
 
 - **Don't ask for "ONLY minified JSON" and parse the reply.** The pattern this replaced
   took `output.indexOf("{")` to `output.lastIndexOf("}")` and `JSON.parse`'d it. Any

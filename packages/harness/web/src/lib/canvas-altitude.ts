@@ -20,7 +20,7 @@
  * module exists to make impossible.
  */
 import type { WorkspaceKey, WorkspaceScopeSummary } from "@shared/workspace-scope";
-import type { StudioWorkspaceSelection } from "@shared/agent-map";
+import type { StudioWorkspaceSelection } from "@sapiom/agent-map";
 
 import { basenameOf, samePath } from "./paths";
 

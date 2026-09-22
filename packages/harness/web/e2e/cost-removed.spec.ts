@@ -195,7 +195,7 @@ test.describe("cost-removed guard", () => {
     await page.keyboard.press("Escape");
 
     // History menu
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.keyboard.press("Escape");
 
     // Allow any pending async calls to settle
@@ -387,18 +387,19 @@ test.describe("cost-removed guard", () => {
   // -------------------------------------------------------------------------
   // Surface 7: History menu + dead-session pane
   // -------------------------------------------------------------------------
-  test("history menu and dead-session pane have no cost affordances", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
+  test("options menu, history card and dead-session pane have no cost affordances", async ({ page }) => {
+    await page.getByTestId("rail-options").click();
 
-    const historyMenu = page.getByTestId("history-menu");
-    await expect(historyMenu).toBeVisible();
-    await assertNoDollarInChrome(historyMenu, "history menu");
-    await assertNoCostAffordance(historyMenu, "history menu");
+    const optionsMenu = page.getByTestId("rail-options-menu");
+    await expect(optionsMenu).toBeVisible();
+    await assertNoDollarInChrome(optionsMenu, "options menu");
+    await assertNoCostAffordance(optionsMenu, "options menu");
+    await page.keyboard.press("Escape");
 
-    // Past sessions moved into a flyout sub-card: it opens on hover (a click
-    // would hover-open then toggle it shut in the same gesture). Assert its
-    // chrome — the rows a dead session is reached through — carries no cost terms.
-    await page.getByTestId("past-sessions-trigger").hover();
+    // Past sessions opens from the history glyph in the rail's top bar
+    // (flow-creation.md §4.7). Assert its chrome — the rows a dead session is
+    // reached through — carries no cost terms.
+    await page.getByTestId("rail-history").click();
     const pastCard = page.getByTestId("past-sessions-card");
     await expect(pastCard).toBeVisible();
     await assertNoDollarInChrome(pastCard, "past sessions card");

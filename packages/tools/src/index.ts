@@ -72,8 +72,25 @@ export * as schedules from "./schedules/index.js";
 // The shape a step resumed from `pauseUntilSignal(agentHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { AgentRunResultPayload } from "./agents/index.js";
+// The dispatch + result vocabulary, top-level like the `models` equivalents:
+// `AgentRunStatus` is what `status` can be, `AgentRunError` is the structured
+// `error` a non-completed result carries (`"rejected"`, `"unknown"`,
+// `"timed_out"`). `RunHandle` is spelled `AgentRunHandle` here — `models` has
+// its own `RunHandle`.
+export type {
+  AgentRunSpec,
+  AgentRunResult,
+  AgentRunStatus,
+  AgentRunError,
+  AgentRunErrorCode,
+  ExecutionStatus as AgentExecutionStatus,
+  RunHandle as AgentRunHandle,
+} from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
 export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
+// Thrown by `agents.launch` when the dispatch is refused (`agents.run` returns
+// the same rejection as data instead). Catch it to `fail()` a step cleanly.
+export { AgentDispatchError } from "./agents/index.js";
 
 // llm — routed LLM calls through the gateway's /v2 routing front-end: `run`
 // (synchronous direct), `submit` (deferred-start; pausable handle), `redeem`,
@@ -113,6 +130,11 @@ export {
 // raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
 export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
+// Thrown by `llm.run` when a forced structured-output tool call never arrived
+// because the turn hit `max_tokens` first — top-level so a step can catch it by
+// name without reaching into the `llm` namespace.
+export { LlmStructuredOutputTruncatedError } from "./llm/index.js";
+export type { LlmTruncationReason } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";
@@ -193,3 +215,17 @@ export { VaultHttpError } from "./vault/index.js";
 export * as keys from "./keys/index.js";
 export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
+
+// connectors — connection-backed third-party providers (Google, GitHub), grouped
+// under one namespace: `import { connectors } from "@sapiom/tools"; connectors.google.fetch(...)`.
+export * as connectors from "./connectors/index.js";
+export type {
+  DriveFile,
+  DrivePermission,
+  DriveShareFileArgs,
+  DriveUploadFileArgs,
+  GmailAttachment,
+  SendEmailArgs,
+  SendEmailResult,
+} from "./connectors/google/index.js";
+export type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";

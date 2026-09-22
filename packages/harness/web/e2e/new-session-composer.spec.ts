@@ -1,15 +1,16 @@
 /**
- * The composer-first "new session" home (NewSessionComposer): describe an
- * outcome (or pick a template) and a session starts, seeded with that outcome —
- * the same create+inject path the "start from an idea" door uses. The screen
- * then gives way to the terminal, and the canvas stays hidden until it has
- * content. All in mock mode; the injected prompt is recorded on
- * window.__HARNESS_TEST__.lastInjectInput.
+ * The new-agent screen (NewSessionComposer), reached through New project on
+ * the browser host (flow-creation.md §4.1, §4.3): describe the agent, attach
+ * files, and submit. The harness scaffolds the agent in the project first and
+ * one ordinary session opens on it, seeded with the idea, the resources and
+ * the planning instructions as setup. The screen then gives way to the
+ * terminal, and the canvas stays hidden until it has content. All in mock
+ * mode; the first turn is recorded on window.__HARNESS_TEST__.lastInitialInput.
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { selectMockSessionFromPalette } from "./mock-navigation";
+import { BLANK_PROJECT_ROOT, openNewAgentScreen } from "./mock-navigation";
 
 const initialTaskText = (page: Page): Promise<string> =>
   page.evaluate(
@@ -31,47 +32,43 @@ const injectCallCount = (page: Page): Promise<number> =>
       ).__HARNESS_TEST__?.injectInputCalls?.length ?? 0,
   );
 
-const sessionEvidence = (
+const createOrder = (page: Page): Promise<string[]> =>
+  page.evaluate(
+    () =>
+      ((window as unknown as { __HARNESS_TEST__?: { createOrder?: string[] } })
+        .__HARNESS_TEST__?.createOrder ?? []) as string[],
+  );
+
+const lastCreateRequest = (
   page: Page,
-): Promise<{
-  activeSessionId: string | null;
-  createSessionCalls: number;
-  injectInputCalls: number;
-  initialSessionId: string | null;
-  initialText: string;
-}> =>
-  page.evaluate(() => {
-    const testState = (
-      window as unknown as {
-        __HARNESS_TEST__?: {
-          createSessionCalls?: unknown[];
-          injectInputCalls?: unknown[];
-          lastInitialInput?: { id?: string; text?: string };
-        };
-      }
-    ).__HARNESS_TEST__;
-    return {
-      activeSessionId:
-        document
-          .querySelector('[data-testid="session-context"]')
-          ?.getAttribute("data-session-id") || null,
-      createSessionCalls: testState?.createSessionCalls?.length ?? 0,
-      injectInputCalls: testState?.injectInputCalls?.length ?? 0,
-      initialSessionId: testState?.lastInitialInput?.id ?? null,
-      initialText: testState?.lastInitialInput?.text ?? "",
-    };
-  });
+): Promise<Record<string, unknown> | undefined> =>
+  page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __HARNESS_TEST__?: {
+            lastCreateSession?: { req?: Record<string, unknown> };
+          };
+        }
+      ).__HARNESS_TEST__?.lastCreateSession?.req,
+  );
+
+const escapeRegExp = (text: string): string =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
+  await openNewAgentScreen(page);
 });
 
-test("Create new opens the composer with no terminal or canvas, and a chip prefills the box", async ({
+test("New project opens the screen with no terminal or canvas, and a chip prefills the box", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("new-agent-project")).toHaveText(
+    "New agent in blank-slate",
+  );
 
   // No terminal, no canvas while composing.
   await expect(page.getByTestId("agent-view")).toHaveCount(0);
@@ -83,194 +80,44 @@ test("Create new opens the composer with no terminal or canvas, and a chip prefi
   await page.getByTestId("composer-chip-research-digest").click();
   await expect(input).toHaveValue(/digest/i);
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  expect(await createOrder(page)).toEqual([]);
 });
 
-test("describing an outcome starts a session and hands the agent that outcome", async ({
+test("describing the agent creates it in the project, then one session opens on it", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
-  await page
-    .getByTestId("composer-input")
-    .fill("Diff our competitors' pricing pages every morning.");
+  const idea = "Diff our competitors' pricing pages every morning.";
+  await page.getByTestId("composer-input").fill(idea);
   await page.getByTestId("composer-send").click();
 
-  // The composer gives way to the live workbench (a new session).
+  // The screen gives way to the live workbench (a new session).
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("agent-view")).toBeVisible();
 
-  // The exact user task is a launch argument, without a scaffold wrapper.
+  // Created first, then talked to, both in the project (flow-creation.md §4.4).
+  await expect
+    .poll(() => createOrder(page))
+    .toEqual([
+      `scaffold:${BLANK_PROJECT_ROOT}/diff-competitors`,
+      `session:${BLANK_PROJECT_ROOT}`,
+    ]);
+  // The exact user task leads the launch argument; the planning instructions
+  // follow it as setup; nothing is injected afterwards.
   await expect
     .poll(() => initialTaskText(page))
-    .toBe("Diff our competitors' pricing pages every morning.");
+    .toMatch(new RegExp(`^${escapeRegExp(idea)}\n\n`));
+  expect(await initialTaskText(page)).toContain("already scaffolded");
+  expect(await initialTaskText(page)).not.toContain("sapiom_dev_agents_scaffold");
   expect(await injectCallCount(page)).toBe(0);
+  const req = await lastCreateRequest(page);
+  expect(req?.cwd).toBe(BLANK_PROJECT_ROOT);
+  expect(req?.initialUserInputPending).toBe(true);
+  expect(req).not.toHaveProperty("scaffold");
 });
 
-test("Enter keeps a new-agent prompt in its exact session while the project map is inspected", async ({
+test("a picked file reaches the first request, and the session is rooted at the project", async ({
   page,
 }) => {
-  await page.goto("/?seed=0&mockNoLiveSessions=1&mockStudioProjects=present");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  // The parent project exists, but has no live session or restored workspace.
-  // Creating beneath it must not give preference restoration a head start over
-  // the explicit standalone-session intent.
-  await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
-  const before = await sessionEvidence(page);
-  expect(before.activeSessionId).toBeNull();
-  expect(before.createSessionCalls).toBe(0);
-
-  await page.getByTestId("rail-create-new").click();
-  const idea = "Build a sales outreach agent.";
-  await page.getByTestId("composer-input").fill(idea);
-  await page.evaluate(() => {
-    // Hold the explicit create open long enough for the project's automatic
-    // first session to arrive and become active first.
-    (
-      window as unknown as { __MOCK_CREATE_SESSION_DELAY_MS__?: number }
-    ).__MOCK_CREATE_SESSION_DELAY_MS__ = 2_000;
-  });
-  await page.getByTestId("composer-input").press("Enter");
-
-  await page.evaluate(() => {
-    const publish = (
-      window as unknown as {
-        __HARNESS_TEST__?: { publish?: (message: unknown) => void };
-      }
-    ).__HARNESS_TEST__?.publish;
-    publish?.({
-      type: "session.status",
-      session: {
-        id: "sess-competing-plan-agents",
-        agentSessionId: null,
-        boundWorkflowPath: null,
-        harness: "claude-code",
-        cwd: "/Users/demo/acme-app/projects/build-sales-outreach",
-        title: "Plan Agents",
-        status: "running",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        lastActiveAt: "2026-01-01T00:00:00.000Z",
-        ready: true,
-        agentMapIdentity: {
-          projectId: "project_ffffffff-ffff-4fff-8fff-ffffffffffff",
-          userId: "user_mock",
-          sessionId: "sess-competing-plan-agents",
-        },
-      },
-    });
-  });
-  await selectMockSessionFromPalette(page, "Plan Agents");
-  await expect(page.getByTestId("session-context")).toHaveAttribute(
-    "data-session-id",
-    "sess-competing-plan-agents",
-  );
-
-  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
-  await expect
-    .poll(async () => (await sessionEvidence(page)).initialText)
-    .toContain(idea);
-
-  const evidence = await sessionEvidence(page);
-  expect(evidence.createSessionCalls).toBe(before.createSessionCalls + 1);
-  expect(evidence.initialSessionId).not.toBeNull();
-  expect(evidence.initialSessionId).not.toBe("sess-competing-plan-agents");
-  expect(evidence.activeSessionId).toBe(evidence.initialSessionId);
-  expect(evidence.activeSessionId).not.toBe(before.activeSessionId);
-  expect(evidence.injectInputCalls).toBe(before.injectInputCalls);
-  expect(
-    await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __HARNESS_TEST__?: {
-              lastCreateSession?: {
-                req?: { initialUserInputPending?: boolean };
-              };
-            };
-          }
-        ).__HARNESS_TEST__?.lastCreateSession?.req?.initialUserInputPending,
-    ),
-  ).toBe(true);
-
-  const project = page.getByTestId(
-    "workspace-group-acme-app/projects/build-sales-outreach",
-  );
-  const projectMap = project.getByTestId(
-    "project-select-acme-app/projects/build-sales-outreach",
-  );
-  await expect(projectMap).toHaveAttribute("aria-pressed", "false");
-  await expect(project.getByTestId("agent-map-row")).toHaveCount(0);
-
-  const beforeMap = await sessionEvidence(page);
-  await projectMap.click();
-  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
-  await expect(projectMap).toHaveAttribute("aria-pressed", "true");
-  expect(await sessionEvidence(page)).toEqual(beforeMap);
-
-  await page
-    .getByTestId(`session-tab-main-${evidence.activeSessionId}`)
-    .click();
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  expect((await sessionEvidence(page)).activeSessionId).toBe(
-    evidence.activeSessionId,
-  );
-});
-
-test("returning to an in-progress standalone session does not restore the project map", async ({
-  page,
-}) => {
-  await page.goto("/?seed=0&mockStudioProjects=present");
-  await expect(page.locator(".rail-workflows")).toBeVisible();
-  const before = await sessionEvidence(page);
-  expect(before.createSessionCalls).toBe(0);
-
-  await page.getByTestId("rail-create-new").click();
-  const idea = "Build a revisit guard agent.";
-  await page.getByTestId("composer-input").fill(idea);
-  await page.getByTestId("composer-input").press("Enter");
-
-  const pendingBuilder = page.locator('[data-testid^="workspace-pending-"]');
-  await expect(pendingBuilder).toBeVisible();
-  await expect
-    .poll(async () => (await sessionEvidence(page)).createSessionCalls)
-    .toBe(before.createSessionCalls + 1);
-  await expect(pendingBuilder).toHaveCount(0);
-  // createSession() has selected the builder but has not finished the catalog
-  // refresh yet, so moving now exercises the intent's bounded lifetime.
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
-  await selectMockSessionFromPalette(page, "scratch");
-  await expect(page.getByTestId("session-context")).toHaveAttribute(
-    "data-session-id",
-    /.+/,
-  );
-  const awaySessionId = (await sessionEvidence(page)).activeSessionId!;
-  await expect
-    .poll(async () => (await sessionEvidence(page)).initialText)
-    .toContain(idea);
-  // Let the session we deliberately visited finish its own normal restore;
-  // only map restoration caused by returning to the explicit session is under
-  // test.
-  await page.waitForTimeout(500);
-  const beforeReturn = await sessionEvidence(page);
-
-  await selectMockSessionFromPalette(page, "build-revisit-guard");
-  await expect(page.getByTestId("session-context")).toHaveAttribute(
-    "data-session-id",
-    /.+/,
-  );
-  expect((await sessionEvidence(page)).activeSessionId).not.toBe(awaySessionId);
-  await page.waitForTimeout(500);
-  const afterReturn = await sessionEvidence(page);
-  await expect(
-    page
-      .getByTestId("workspace-group-acme-app/projects/build-revisit-guard")
-      .getByTestId("project-select-acme-app/projects/build-revisit-guard"),
-  ).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-});
-
-test("a picked file reaches the first request without naming the project", async ({
-  page,
-}) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -294,22 +141,16 @@ test("a picked file reaches the first request without naming the project", async
     .poll(() => initialTaskText(page))
     .toContain('"/Users/test/My Files/requirements.pdf"');
 
-  const createRequest = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __HARNESS_TEST__?: { lastCreateSession?: { req?: { cwd?: string } } };
-        }
-      ).__HARNESS_TEST__?.lastCreateSession?.req,
-  );
-  expect(createRequest?.cwd).toMatch(/\/build-onboarding-flow$/);
-  expect(createRequest?.cwd).not.toContain("requirements");
+  const createRequest = await lastCreateRequest(page);
+  expect(createRequest?.cwd).toBe(BLANK_PROJECT_ROOT);
+  await expect(
+    page.getByTestId("workspace-group-blank-slate").getByTestId("workflow-onboarding-flow"),
+  ).toBeVisible();
 });
 
 test("picker, drop, and pathless clipboard files reach one ordered first request", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -409,7 +250,7 @@ test("picker, drop, and pathless clipboard files reach one ordered first request
     };
   });
   expect(proof.calls).toHaveLength(1);
-  expect(proof.cwd).toMatch(/\/build-mixed-context$/);
+  expect(proof.cwd).toBe(BLANK_PROJECT_ROOT);
   expect(proof.text.indexOf("requirements.pdf")).toBeLessThan(
     proof.text.indexOf("brief.txt"),
   );
@@ -423,7 +264,6 @@ test("ordinary clipboard text pastes natively without creating an attachment", a
   page,
 }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => navigator.clipboard.writeText("pasted plain text"));
 
   const input = page.getByTestId("composer-input");
@@ -437,7 +277,6 @@ test("ordinary clipboard text pastes natively without creating an attachment", a
 test("attachment controls expose names, live status, and keyboard removal", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -446,11 +285,11 @@ test("attachment controls expose names, live status, and keyboard removal", asyn
     };
   });
 
-  await expect(page.getByTestId("composer-attach-files")).toHaveAccessibleName(
+  await expect(page.getByTestId("composer-attach-file")).toHaveAccessibleName(
     "Attach files",
   );
   await expect(page.getByTestId("composer-send")).toHaveAccessibleName(
-    "Start session",
+    "Create agent",
   );
   await expect(page.getByRole("status")).toHaveText("No files attached.");
 
@@ -475,7 +314,6 @@ test("attachment controls expose names, live status, and keyboard removal", asyn
 test("attachment rows stay contained with touch-sized removal at a narrow viewport", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.setViewportSize({ width: 360, height: 800 });
   await page.evaluate(() => {
     window.sapiomDesktop = {
@@ -523,7 +361,6 @@ test("attachment rows stay contained with touch-sized removal at a narrow viewpo
 test("re-adding and removing files keeps only the intended first-request paths", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -560,10 +397,12 @@ test("re-adding and removing files keeps only the intended first-request paths",
   expect(await initialTaskText(page)).not.toContain("remove.txt");
 });
 
-test("an attachment-only start uses the fallback project and sends the file", async ({
+test("an attachment-only submit is refused: the idea is what names the agent", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
+  // The screen has ONE field, and the agent's name comes from it (D31). With
+  // nothing typed there is no name to derive, and the server, the judge,
+  // refuses under the field. Nothing starts; the file stays queued.
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -578,24 +417,16 @@ test("an attachment-only start uses the fallback project and sends the file", as
   });
 
   await page.getByTestId("composer-send").click();
-  await expect
-    .poll(() => initialTaskText(page))
-    .toContain("/Users/test/brief.pdf");
-  const cwd = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __HARNESS_TEST__?: { lastCreateSession?: { req?: { cwd?: string } } };
-        }
-      ).__HARNESS_TEST__?.lastCreateSession?.req?.cwd ?? "",
+  await expect(page.getByTestId("new-agent-error")).toHaveText(
+    "Give the agent a name.",
   );
-  expect(cwd).toMatch(/\/sapiom-agent$/);
+  await expect(page.locator(".composer-file-name")).toHaveText(["brief.pdf"]);
+  expect(await createOrder(page)).toEqual([]);
 });
 
-test("an upload failure rolls back, retains the queue, sends nothing, and retries once", async ({
+test("an upload failure keeps the screen and its queue; the retry reuses the created agent", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.evaluate(() => {
     window.sapiomDesktop = {
       appVersion: "test",
@@ -636,16 +467,22 @@ test("an upload failure rolls back, retains the queue, sends nothing, and retrie
 
   await expect(page.getByTestId("composer-send")).toBeDisabled();
   await expect(page.getByRole("status")).toHaveText(
-    "Starting session with 1 file attached.",
+    "Creating the agent with 1 file attached.",
   );
+  // The agent exists (creation completed first); the SESSION did not start,
+  // and the screen says exactly that under the field, keeping the queue.
   await expect(page.getByTestId("composer-send")).toBeEnabled();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("new-agent-error")).toContainText(
+    "screenshot was created, but its session didn't start",
+  );
+  await expect(page.getByTestId("new-agent-error")).toContainText(
+    /materialization failed/i,
+  );
   await expect(page.getByTestId("composer-files")).toContainText(
     "retry-screenshot.png",
   );
-  await expect(page.getByTestId("toast")).toContainText(
-    /retry-screenshot\.png.*materialization failed/i,
-  );
+  await expect(page.getByTestId("workflow-screenshot")).toBeVisible();
 
   const failedProof = await page.evaluate(() => {
     const state = (
@@ -654,6 +491,7 @@ test("an upload failure rolls back, retains the queue, sends nothing, and retrie
           createSessionCalls?: unknown[];
           killSessionCalls?: unknown[];
           lastInjectInput?: unknown;
+          createOrder?: string[];
         };
       }
     ).__HARNESS_TEST__;
@@ -661,43 +499,45 @@ test("an upload failure rolls back, retains the queue, sends nothing, and retrie
       creates: state?.createSessionCalls?.length ?? 0,
       kills: state?.killSessionCalls?.length ?? 0,
       injected: state?.lastInjectInput != null,
+      order: state?.createOrder ?? [],
     };
   });
-  expect(failedProof).toEqual({ creates: 1, kills: 0, injected: false });
+  expect(failedProof).toEqual({
+    creates: 1,
+    kills: 0,
+    injected: false,
+    order: [`scaffold:${BLANK_PROJECT_ROOT}/screenshot`],
+  });
 
+  // The retry does not scaffold a duplicate of the agent it already made.
   await page.getByTestId("composer-send").click();
   await expect
     .poll(() => initialTaskText(page))
     .toContain("mock-retry-screenshot.png");
-  const createCount = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __HARNESS_TEST__?: { createSessionCalls?: unknown[] };
-        }
-      ).__HARNESS_TEST__?.createSessionCalls?.length ?? 0,
-  );
-  expect(createCount).toBe(2);
+  await expect
+    .poll(() => createOrder(page))
+    .toEqual([
+      `scaffold:${BLANK_PROJECT_ROOT}/screenshot`,
+      `session:${BLANK_PROJECT_ROOT}`,
+    ]);
+  await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
 });
 
 for (const agent of [
-  { id: "claude-code", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
+  { id: "claude-code", label: "Claude Code", name: "claude-code" },
+  { id: "codex", label: "Codex", name: "codex-inbox" },
 ] as const) {
   test(`passes the first task at ${agent.label} launch without pasting before or after readiness`, async ({
     page,
   }) => {
     // Make the next session never reach ready on its own — the stand-in for a
     // user still on an agent's login, trust, or onboarding screen.
-    await page.addInitScript(() => {
+    await page.evaluate(() => {
       (
         window as unknown as { __MOCK_WITHHOLD_READY__?: boolean }
       ).__MOCK_WITHHOLD_READY__ = true;
     });
-    await page.goto("/?seed=0");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    await page.getByTestId("rail-create-new").click();
     if (agent.id === "codex") {
       await page.getByTestId("composer-harness-select").click();
       await page.getByTestId("composer-harness-option-codex").click();
@@ -712,7 +552,10 @@ for (const agent of [
     // The session exists (workbench shown) but the prompt is HELD, not
     // injected, because the session never became ready.
     await expect(page.getByTestId("agent-view")).toBeVisible();
-    expect(await initialTaskText(page)).toBe(prompt);
+    await expect(page.getByTestId(`workflow-${agent.name}`)).toBeVisible();
+    expect(await initialTaskText(page)).toMatch(
+      new RegExp(`^${escapeRegExp(prompt)}\n\n`),
+    );
     expect(await injectCallCount(page)).toBe(0);
     const createdHarness = await page.evaluate(
       () =>
@@ -753,7 +596,6 @@ for (const agent of [
 test("a new session opens terminal-only; the canvas stays hidden until it has content", async ({
   page,
 }) => {
-  await page.getByTestId("rail-create-new").click();
   await page.getByTestId("composer-input").fill("Build a small thing.");
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("agent-view")).toBeVisible();
@@ -782,39 +624,25 @@ test("a new session opens terminal-only; the canvas stays hidden until it has co
   }).toPass({ timeout: 10_000 });
 });
 
-test("the new agent's folder appears in the rail at once and is never lost mid-creation", async ({
+test("the new agent appears in the rail under its project before the workbench settles", async ({
   page,
 }) => {
-  const groups = page.locator(".rail-list .workspace-group");
-  const before = await groups.count();
-
-  await page.getByTestId("rail-create-new").click();
   await page
     .getByTestId("composer-input")
     .fill("Diff competitor pricing pages every morning.");
   await page.getByTestId("composer-send").click();
 
-  // It shows up immediately — before the session POST resolves and the workbench
-  // settles — as a focusable "creating agent" placeholder, so switching away
-  // mid-creation can never strand the in-progress agent.
-  const pending = page.locator('[data-testid^="workspace-pending-"]').first();
-  await expect(pending).toBeVisible();
-  await expect(pending).toHaveAttribute("aria-busy", "true");
-
-  // And it stays: as the session lands the placeholder becomes a real folder
-  // row — one more group than before, continuously present (no vanish/flicker).
+  // The server rescanned before answering the scaffold, so the row is there
+  // before the session POST resolves and the workbench settles.
+  const group = page.getByTestId("workspace-group-blank-slate");
+  await expect(group.getByTestId("workflow-diff-competitor")).toBeVisible();
   await expect(page.getByTestId("agent-view")).toBeVisible();
-  await expect(groups).toHaveCount(before + 1);
+  await expect(group.getByTestId("workflow-diff-competitor")).toBeVisible();
 });
 
-test("Back returns to the session the composer was opened over", async ({
+test("Back returns to the session the screen was opened over", async ({
   page,
 }) => {
-  await expect(page.getByTestId("session-context")).toHaveAttribute(
-    "data-session-id",
-    "sess-boot",
-  );
-  await page.getByTestId("rail-create-new").click();
   await expect(page.getByTestId("new-session-composer")).toBeVisible();
 
   await page.getByTestId("composer-back").click();
@@ -826,7 +654,6 @@ test("Back returns to the session the composer was opened over", async ({
 });
 
 test("the agent selector lists the coding agents", async ({ page }) => {
-  await page.getByTestId("rail-create-new").click();
   const select = page.getByTestId("composer-harness-select");
   await expect(select).toContainText("Claude Code");
 

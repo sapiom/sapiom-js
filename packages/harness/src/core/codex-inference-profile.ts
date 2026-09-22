@@ -1,4 +1,4 @@
-import { DurableFileLock } from "./durable-file-lock.js";
+import { DurableFileLock } from "@sapiom/agent-map/node/durable-file-lock";
 import { spawn, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";

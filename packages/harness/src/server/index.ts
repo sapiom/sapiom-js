@@ -1,9 +1,11 @@
+import { STUDIO_HOST_CONTEXT_PATH } from "@sapiom/agent-map/host-protocol";
+import type { McpPreflightResult } from "../core/mcp-compatibility.js";
 import { LocalWorkspaceScopeCatalog } from "../core/workspace-scope-catalog.js";
-import { canonicalGraphPath } from "../core/canonical-graph-path.js";
+import { canonicalGraphPath, refreshCanonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
-import { hasAuthoredAgentMap } from "../core/agent-map-initialization-record.js";
+import { hasAuthoredAgentMap } from "@sapiom/agent-map/node/agent-map-initialization-record";
 /**
  * Harness server — integration point for every workstream.
  *
@@ -49,23 +51,17 @@ import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../share
 import type {
   ProjectBootstrapLifecycleEvent,
   ProjectAgentSession,
-  StudioProjectSummary,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
-  preferredProjectRoot,
   projectRoots,
   projectSessionRoot,
 } from "../shared/project-roots.js";
-import { samePath } from "../shared/paths.js";
+import { samePath } from "@sapiom/agent-map/paths";
 import { unhandledRequestErrorHandler } from "./error-handler.js";
 import { expandHome, resolveStatePaths } from "../core/paths.js";
 import {
-  AdapterNotFoundError,
-  ExternalHarnessError,
-  ProjectBootstrapClaimUnavailableError,
   ProjectSessionScopeUnavailableError,
   SessionManager,
-  SessionManagerClosingError,
   type LaunchOptsBuilder,
 } from "../core/session-manager.js";
 import { TaskManager } from "../core/task-manager.js";
@@ -168,8 +164,8 @@ import {
 import { createRestRouter } from "./rest.js";
 import { createAgentMapRouter } from "./agent-map.js";
 import { createAgentMapImplementations, readProjectImplementations } from "./agent-map-implementations.js";
-import { AgentMapWorkspaceStore } from "../core/agent-map-workspace-store.js";
-import { AgentMapProposalService } from "../core/agent-map-proposal-service.js";
+import { AgentMapWorkspaceStore } from "@sapiom/agent-map/node/agent-map-workspace-store";
+import { AgentMapProposalService } from "@sapiom/agent-map/node/agent-map-proposal-service";
 import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
@@ -177,8 +173,7 @@ import {
 import {
   StudioProjectCatalog,
   type ReconciledStudioProjects,
-} from "../core/studio-project-catalog.js";
-import { ProjectBootstrapOutbox } from "../core/project-bootstrap-outbox.js";
+} from "@sapiom/agent-map/node/studio-project-catalog";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouter,
@@ -190,10 +185,7 @@ import {
   localProjectPrincipal,
 } from "../core/project-session.js";
 import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-migration.js";
-import {
-  ProjectBootstrapCoordinator,
-  ProjectBootstrapCoordinatorClosedError,
-} from "../core/project-bootstrap.js";
+import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
 import { AssistantAccess } from "../core/assistant-access.js";
 import { OpenCodeHost } from "../core/opencode-host.js";
@@ -297,6 +289,8 @@ export interface HarnessServerOptions {
    *  server) plus the entry script it installed into the per-user npm prefix.
    *  See core/inject/mcp-config.ts. */
   sapiomDevMcp?: McpDevServerCommand;
+  /** Per-create/resume local preflight. Hosts own executable selection/installation. */
+  prepareSapiomDevMcp?: () => Promise<McpPreflightResult | undefined>;
   /** Root directory per-session generated agent configs are written under —
    *  and cleaned up from (exit-time delete + boot-time sweep, see
    *  core/inject/retention.ts). Defaults to `<stateRoot>/generated`. */
@@ -385,10 +379,8 @@ export interface HarnessServerOptions {
       workflowPath: string,
     ) => void | Promise<void>;
   };
-  /** Internal deterministic seam for project/bootstrap crash-window tests. */
+  /** Internal deterministic seam for post-listen startup-failure tests. */
   projectBootstrapTestHooks?: {
-    beforeSchedule?: (projectId: string) => void | Promise<void>;
-    afterProjectSessionNeeded?: (projectId: string) => void | Promise<void>;
     afterListenBeforeRecovery?: (port: number) => void | Promise<void>;
   };
 }
@@ -552,8 +544,24 @@ function createDefaultBuildLaunchOpts(
    * DEFAULT_SYSTEM_PROMPT offline — injectable so tests never touch the network.
    */
   loadSystemPrompt: () => Promise<string> = fetchSystemPromptForActiveEnvironment,
+  prepareSapiomDevMcp?: () => Promise<McpPreflightResult | undefined>,
 ): LaunchOptsBuilder {
   return async (harnessSessionId, req, context) => {
+    const prepared = await prepareSapiomDevMcp?.().catch(() => undefined);
+    if (prepareSapiomDevMcp) {
+      console.error(`[harness] MCP compatibility: ${prepared?.kind ?? "unverified"}; shared map activation off`);
+    }
+    // A rejected preflight must not revive the host's unchecked static command.
+    const devServer = prepareSapiomDevMcp
+      ? prepared?.kind === "unavailable" ? undefined : prepared?.launch
+      : sapiomDevMcp;
+    // Shared map activation is deliberately off. The private tools and their
+    // matching prompt appendix remain the session's only map surface.
+    const studioHost = prepared?.kind === "verified" && context?.agentMapIdentity && context.agentMapMcp
+      ? { contextUrl: new URL(STUDIO_HOST_CONTEXT_PATH, context.agentMapMcp.url).href,
+          bearerToken: context.agentMapMcp.bearerToken, expectedMcp: prepared.descriptor }
+      : undefined;
+
     // Portable continue (SAP-2059). Resolved before the prompt file is
     // written, because for a `launch-flag` harness the brief IS part of that
     // file. Best-effort throughout: a brief that can't be assembled leaves
@@ -620,7 +628,8 @@ function createDefaultBuildLaunchOpts(
         apiKey,
         generatedRoot,
         harnessVersion: readVersion(),
-        ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
+        ...(devServer ? { devServer } : {}),
+        ...(studioHost ? { studioHost } : {}),
         ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
       }),
       promptPromise,
@@ -722,25 +731,12 @@ export const startServer = async (
   });
   const statePaths = resolveStatePaths(options.stateRoot);
   const codexRolloutBroker = new CodexRolloutBroker(options.codexHomeDir);
-  const projectBootstrapOutbox = new ProjectBootstrapOutbox(
-    join(statePaths.projectBootstrap, "project-outbox"),
-  );
-  let afterStudioProjectsCreatedCommit = async (
-    _projects: readonly StudioProjectSummary[],
-  ): Promise<void> => {};
-  let convergeReconciledProjectLifecycle = async (
-    _reconciled: ReconciledStudioProjects,
-  ): Promise<void> => {};
+  // A NEW PROJECT IS ONLY A PROJECT (flow-creation.md §4.1 step 3, Q5). Minting
+  // one in the catalog schedules nothing: no bootstrap intent, no outbox
+  // marker, no automatic first session. The user types first. This reverses
+  // the automatic "Plan Agents" bootstrap from #824 to #826 and #834.
   const studioProjectCatalog = new StudioProjectCatalog(
     statePaths.studioProjects,
-    undefined,
-    undefined,
-    {
-      beforeProjectsCreatedCommit: (projects) =>
-        projectBootstrapOutbox.stage(projects),
-      afterProjectsCreatedCommit: (projects) =>
-        afterStudioProjectsCreatedCommit(projects),
-    },
   );
   let emitAgentMapCapabilityEvent = (
     _event: AgentMapCapabilityEvent,
@@ -1020,22 +1016,34 @@ export const startServer = async (
             cwd: binding.localRootRef,
           })),
       );
-      const retainedProjectSessionRoots = new Set<string>();
-      // Pending launches contribute their trusted PROJECT root just like live
-      // sessions, not a descendant cwd that would mint a competing project.
-      const pendingCwds = [
-        ...pendingProjectCwds,
-        ...(sessionManager ? sessionManager.listPendingCreates() : []).flatMap((session) => {
-          if (!session.agentMapIdentity) return [session.cwd];
-          const root = projectSessionRoot(
-            { cwd: session.cwd, projectId: session.agentMapIdentity.projectId },
+      const readableSessionRoot = async (cwd: string, projectId: string) => {
+        try {
+          return projectSessionRoot(
+            { cwd: await refreshCanonicalGraphPath(cwd), projectId },
             durableRootCandidates,
           );
+        } catch {
+          // One unreadable session must not hide healthy workspace roots.
+          return null;
+        }
+      };
+      const retainedProjectSessionRoots = new Set<string>();
+      // Pending launches contribute their trusted PROJECT root just like live
+      // sessions. Resolve filesystem aliases before comparing with the catalog's
+      // canonical bindings, including during an awaited MCP preflight.
+      const pendingCwds = [
+        ...pendingProjectCwds,
+        ...(await Promise.all((sessionManager ? sessionManager.listPendingCreates() : []).map(async (session) => {
+          if (!session.agentMapIdentity) return [session.cwd];
+          const root = await readableSessionRoot(
+            session.cwd,
+            session.agentMapIdentity.projectId,
+          );
           return root ? [root] : [];
-        }),
+        }))).flat(),
       ];
       const sessions = sessionManager
-        ? sessionManager.list().flatMap((session) => {
+        ? (await Promise.all(sessionManager.list().map(async (session) => {
             if (!session.agentMapIdentity) {
               return [
                 {
@@ -1045,12 +1053,9 @@ export const startServer = async (
                 },
               ];
             }
-            const root = projectSessionRoot(
-              {
-                cwd: session.cwd,
-                projectId: session.agentMapIdentity.projectId,
-              },
-              durableRootCandidates,
+            const root = await readableSessionRoot(
+              session.cwd,
+              session.agentMapIdentity.projectId,
             );
             // A neutral project session contributes its trusted project root,
             // never its descendant cwd. If its binding is stale, omit it from
@@ -1067,7 +1072,7 @@ export const startServer = async (
               ];
             }
             return [];
-          })
+          }))).flat()
         : [];
       const candidates = [
         ...pendingCwds,
@@ -1433,6 +1438,7 @@ export const startServer = async (
       },
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
+      options.prepareSapiomDevMcp,
     );
   /** Waits for prior cleanup before preparing this run's files and capabilities. */
   const buildLaunchOpts: LaunchOptsBuilder = async (
@@ -1446,7 +1452,7 @@ export const startServer = async (
     // project before config generation and PTY spawn, never during resume.
     const initialPrompt = context?.resume
       ? undefined
-      : await prepareFirstRequest(req, scaffoldDeps);
+      : await prepareFirstRequest(req);
     if (!context?.agentMapIdentity) {
       return { ...(await innerBuildLaunchOpts(harnessSessionId, req, context)), ...(initialPrompt ? { initialPrompt } : {}) };
     }
@@ -1488,10 +1494,6 @@ export const startServer = async (
     );
     return result;
   };
-  // A catalog mutation is durable before its lifecycle callback runs. Retain
-  // any not-yet-scheduled project IDs in memory so a retry can converge on the
-  // same project instead of creating another one after a transient failure.
-  const projectsAwaitingBootstrapSchedule = new Set<string>();
   const closeCoordinatorOwnedSubsession: {
     current?: (marker: {
       projectId: string;
@@ -1500,32 +1502,6 @@ export const startServer = async (
       sessionId: string;
     }) => Promise<void>;
   } = {};
-  const scheduleBootstrapProjects = async (
-    projectIds: Iterable<string>,
-    userId: string,
-    scopeSessionId: string,
-  ): Promise<void> => {
-    const ids = [...new Set(projectIds)].sort();
-    for (const projectId of ids) {
-      projectsAwaitingBootstrapSchedule.add(projectId);
-    }
-    for (const projectId of ids) {
-      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-        throw new ProjectSessionScopeUnavailableError(scopeSessionId);
-      }
-      if (!projectBootstrap) {
-        throw new Error("project bootstrap coordinator is unavailable");
-      }
-      await options.projectBootstrapTestHooks?.beforeSchedule?.(projectId);
-      await projectBootstrap.scheduleProject(projectId, userId);
-      await projectBootstrapOutbox.complete(projectId);
-      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-        throw new ProjectSessionScopeUnavailableError(scopeSessionId);
-      }
-      projectsAwaitingBootstrapSchedule.delete(projectId);
-    }
-  };
-
   sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
@@ -1571,24 +1547,10 @@ export const startServer = async (
           return identityFor(project.projectId);
         }
 
-        if (project) {
-          if (projectsAwaitingBootstrapSchedule.has(project.projectId)) {
-            await scheduleBootstrapProjects(
-              [project.projectId],
-              userId,
-              sessionId,
-            );
-          }
-          return identityFor(project.projectId);
-        }
+        if (project) return identityFor(project.projectId);
 
-        const before = new Set(
-          (await studioProjectCatalog.list()).map(
-            (candidate) => candidate.projectId,
-          ),
-        );
         assertPrincipal();
-        let reconciled = await studioProjectCatalog.reconcile(
+        await studioProjectCatalog.reconcile(
           await studioWorkspaceScopeCatalog.list(),
         );
         assertPrincipal();
@@ -1597,7 +1559,7 @@ export const startServer = async (
         if (!project) {
           pendingProjectCwds.add(cwd);
           try {
-            reconciled = await studioProjectCatalog.reconcile(
+            await studioProjectCatalog.reconcile(
               await studioWorkspaceScopeCatalog.list(),
             );
             assertPrincipal();
@@ -1607,30 +1569,19 @@ export const startServer = async (
           }
         }
         assertPrincipal();
-        const createdProjectIds = reconciled.projects
-          .map((candidate) => candidate.projectId)
-          .filter((projectId) => !before.has(projectId));
-        await scheduleBootstrapProjects(createdProjectIds, userId, sessionId);
         if (!project) return undefined;
         return identityFor(project.projectId);
       });
     },
-    prepareProjectSession: async (identity, request) => {
+    // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
+    // session is an ordinary session: no bootstrap claim, no "Plan Agents"
+    // title, no metadata that would make its first turn the coordinator's.
+    // The principal check stays: it is the scope guard, not the bootstrap.
+    prepareProjectSession: async (identity) => {
       if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
         throw new ProjectSessionScopeUnavailableError(identity.sessionId);
       }
-      const metadata = await projectBootstrap?.claimProject(
-        identity,
-        Boolean(request.initialPrompt || request.initialAttachments?.length) ||
-        request.initialUserInputPending === true ||
-          Boolean(request.rehydrateFrom),
-      );
-      if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
-        throw new ProjectSessionScopeUnavailableError(identity.sessionId);
-      }
-      return metadata
-        ? { initialTitle: "Plan Agents", projectBootstrap: metadata }
-        : {};
+      return {};
     },
     onTerminalInput: (sessionId, context) =>
       projectBootstrap?.onTerminalInput(sessionId, context),
@@ -2583,7 +2534,6 @@ export const startServer = async (
     try {
       const studioScopes = await studioWorkspaceScopeCatalog.list();
       const reconciliation = await studioProjectCatalog.reconcile(studioScopes);
-      await convergeReconciledProjectLifecycle(reconciliation);
       const reconciled = reconciliation.workspaceScopes;
       // Both catalogs key canonical filesystem roots. Cwd retains its display
       // spelling and can be a symlink alias; prefer reconciled project metadata.
@@ -3130,6 +3080,24 @@ export const startServer = async (
     buildPlanService,
     agentBriefService,
     subsessionCoordinator,
+    hostContextFor: async (scope) => {
+      const assertScope = () => {
+        const session = sessionManager.get(scope.sessionId);
+        const current = session?.agentMapIdentity;
+        if (!session || session.status === "exited" ||
+          current?.projectId !== scope.projectId || current.userId !== scope.userId ||
+          current.sessionId !== scope.sessionId ||
+          localProjectPrincipal(projectUserId, machineId) !== scope.userId) {
+          throw new AgentMapMcpProjectUnavailableError();
+        }
+        return session;
+      };
+      const session = assertScope();
+      const project = await studioProjectCatalog.resolveIdentityForPath(session.cwd);
+      assertScope();
+      if (project?.projectId !== scope.projectId) throw new AgentMapMcpProjectUnavailableError();
+      return { stateRoot: statePaths.root };
+    },
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
@@ -3174,7 +3142,6 @@ export const startServer = async (
   ): Promise<RegistryWorkflowInfo[]> => {
     const scopes = await studioWorkspaceScopeCatalog.list();
     const reconciled = await studioProjectCatalog.reconcile(scopes);
-    await convergeReconciledProjectLifecycle(reconciled);
     const projects = reconciled.projects;
     const annotations = new Map<
       string,
@@ -3284,42 +3251,10 @@ export const startServer = async (
     claimMapGeneration: (projectId) => agentMapInitialization!.reserveForBootstrap(projectId),
     onEvent: emitProjectBootstrapLifecycle,
   });
-  afterStudioProjectsCreatedCommit = async (projects) => {
-    try {
-      await scheduleBootstrapProjects(
-        projects.map((project) => project.projectId),
-        localProjectPrincipal(projectUserId, machineId),
-        "unclaimed",
-      );
-    } catch {
-      // The catalog and its write-ahead markers are already durable. Do not
-      // turn a successfully allocated project into an apparent create failure;
-      // every reconciliation boundary retries the project-keyed schedule.
-      console.error("[harness] project bootstrap scheduling deferred");
-    }
-  };
-  try {
-    const pending = await projectBootstrapOutbox.pending();
-    const recoverableProjectIds: string[] = [];
-    for (const entry of pending) {
-      if (await studioProjectCatalog.resolve(entry.projectId)) {
-        recoverableProjectIds.push(entry.projectId);
-      } else {
-        // A write-ahead marker whose catalog transaction never committed is
-        // an expected crash artifact, not a project to recreate implicitly.
-        await projectBootstrapOutbox.complete(entry.projectId);
-      }
-    }
-    await scheduleBootstrapProjects(
-      recoverableProjectIds,
-      localProjectPrincipal(projectUserId, machineId),
-      "unclaimed",
-    );
-  } catch {
-    // Leave every unresolved marker durable for the next boot. Logging uses a
-    // fixed classification because entries and storage paths are private.
-    console.error("[harness] project bootstrap outbox recovery failed");
-  }
+  // The coordinator stays for the sessions that ALREADY carry bootstrap
+  // metadata (installs that opened projects before this change): they resume
+  // as ordinary sessions, their queued input is still owned, their events are
+  // still redacted. No new project ever enrols.
   for (const session of sessionManager.list()) {
     if (!session.projectBootstrap) continue;
     let emptyProject = true;
@@ -3344,155 +3279,31 @@ export const startServer = async (
       console.error("[harness] project bootstrap status transition failed");
     });
   });
-  const projectFirstSessionStarts = new Map<string, Promise<void>>();
-  const ensureProjectFirstSession = (
-    projectId: string,
-    root: string,
-  ): Promise<void> => {
-    const existing = projectFirstSessionStarts.get(projectId);
-    if (existing) return existing;
-    const operation = (async () => {
-      const userId = localProjectPrincipal(projectUserId, machineId);
-      if (!(await projectBootstrap!.needsProjectSession(projectId, userId))) {
-        return;
-      }
-      await options.projectBootstrapTestHooks?.afterProjectSessionNeeded?.(
-        projectId,
-      );
-      try {
-        await sessionManager.create(
-          {
-            cwd: root,
-            harness: options.defaultHarnessKind ?? "claude-code",
-          },
-          { requireProjectBootstrapClaim: true },
-        );
-      } catch (error) {
-        // An explicit ordinary create may have claimed and published the first
-        // session after needsProjectSession() returned. That is successful
-        // convergence, not a reason to spawn an unrequested second session.
-        if (error instanceof ProjectBootstrapClaimUnavailableError) return;
-        // Embedded/test hosts may intentionally register no local adapter, and
-        // an external-only adapter cannot own a Studio PTY. Keep the durable
-        // project bootstrap intent unclaimed so a later boot with an available
-        // ordinary adapter can converge it. Generic user-created sessions still
-        // surface these errors through their existing request path.
-        if (
-          error instanceof AdapterNotFoundError ||
-          error instanceof ExternalHarnessError
-        ) {
-          console.error(
-            "[harness] project bootstrap session start deferred: adapter_unavailable",
-          );
-          return;
-        }
-        // Shutdown can race a queued reconciliation callback. The coordinator
-        // and outbox are already durable, so there is no work to resurrect in
-        // a server that is closing.
-        if (error instanceof SessionManagerClosingError) return;
-        throw error;
-      }
-      if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-        throw new ProjectSessionScopeUnavailableError("unclaimed");
-      }
-    })();
-    projectFirstSessionStarts.set(projectId, operation);
-    void operation.then(
-      () => {
-        if (projectFirstSessionStarts.get(projectId) === operation) {
-          projectFirstSessionStarts.delete(projectId);
-        }
-      },
-      () => {
-        if (projectFirstSessionStarts.get(projectId) === operation) {
-          projectFirstSessionStarts.delete(projectId);
-        }
-      },
-    );
-    return operation;
-  };
-
-  convergeReconciledProjectLifecycle = async (reconciled) => {
-    const userId = localProjectPrincipal(projectUserId, machineId);
-    // A prior post-commit attempt may have failed after its marker was
-    // durable. Reconciliation is an idempotent opportunity to finish those
-    // exact new-project lifecycles; projects without an intent remain inert.
-    await scheduleBootstrapProjects(
-      projectsAwaitingBootstrapSchedule,
-      userId,
-      "unclaimed",
-    );
-    if (!agentMapMcpUrl) return;
-    for (const project of reconciled.projects) {
-      const launchRoot = preferredProjectRoot(
-        reconciled.workspaceScopes
-          .filter((scope) => scope.projectId === project.projectId)
-          .map((scope) => scope.cwd),
-      );
-      if (launchRoot) {
-        await ensureProjectFirstSession(project.projectId, launchRoot);
-      }
-    }
-  };
-
+  /**
+   * OPENING A FOLDER MINTS ITS PROJECT AND STOPS (flow-creation.md §4.1 step
+   * 3, §4.5). The catalog is reconciled so the durable Studio project exists
+   * before the client re-reads state; no session is created and no seeding
+   * turn is scheduled. The user types first.
+   */
   const initializeOpenedProject = async (
     requestedRoot: string,
   ): Promise<void> => {
     const userId = localProjectPrincipal(projectUserId, machineId);
     pendingProjectCwds.add(requestedRoot);
-    let starts: Array<{ projectId: string; launchRoot: string }> = [];
     try {
-      starts = await serializeProjectScopeResolution(async () => {
-        const before = new Set(
-          (await studioProjectCatalog.list()).map(
-            (project) => project.projectId,
-          ),
-        );
+      await serializeProjectScopeResolution(async () => {
         if (localProjectPrincipal(projectUserId, machineId) !== userId) {
           throw new ProjectSessionScopeUnavailableError("unclaimed");
         }
-        const reconciled = await studioProjectCatalog.reconcile(
+        await studioProjectCatalog.reconcile(
           await studioWorkspaceScopeCatalog.list(),
         );
-        const requestedProject =
-          await studioProjectCatalog.resolveIdentityForPath(requestedRoot);
         if (localProjectPrincipal(projectUserId, machineId) !== userId) {
           throw new ProjectSessionScopeUnavailableError("unclaimed");
         }
-        const createdProjectIds = reconciled.projects
-          .map((project) => project.projectId)
-          .filter((projectId) => !before.has(projectId));
-        const scheduledProjectIds = [
-          ...new Set([
-            ...createdProjectIds,
-            ...projectsAwaitingBootstrapSchedule,
-          ]),
-        ];
-        await scheduleBootstrapProjects(
-          scheduledProjectIds,
-          userId,
-          "unclaimed",
-        );
-
-        const projectsToStart = new Set(createdProjectIds);
-        if (requestedProject) projectsToStart.add(requestedProject.projectId);
-        for (const projectId of scheduledProjectIds) {
-          projectsToStart.add(projectId);
-        }
-        return [...projectsToStart].sort().flatMap((projectId) => {
-          const launchRoot = preferredProjectRoot(
-            reconciled.workspaceScopes
-              .filter((scope) => scope.projectId === projectId)
-              .map((scope) => scope.cwd),
-          );
-          return launchRoot ? [{ projectId, launchRoot }] : [];
-        });
       });
     } finally {
       pendingProjectCwds.delete(requestedRoot);
-    }
-    for (const start of starts) {
-      await ensureProjectFirstSession(start.projectId, start.launchRoot);
     }
   };
 
@@ -3661,38 +3472,6 @@ export const startServer = async (
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
-      onProjectCreated: async (project) => {
-        const userId = localProjectPrincipal(projectUserId, machineId);
-        await scheduleBootstrapProjects(
-          [project.projectId],
-          userId,
-          "unclaimed",
-        );
-      },
-      onRootBound: async (project, root) => {
-        const userId = localProjectPrincipal(projectUserId, machineId);
-        // Recover a project whose durable create committed just before its
-        // lifecycle callback failed, without enrolling an older project merely
-        // because one of its bindings changed.
-        if (projectsAwaitingBootstrapSchedule.has(project.projectId)) {
-          await scheduleBootstrapProjects(
-            [project.projectId],
-            userId,
-            "unclaimed",
-          );
-        }
-        const identity = await studioProjectCatalog.resolveIdentity(
-          project.projectId,
-        );
-        const launchRoot = identity
-          ? preferredProjectRoot(
-              identity.rootBindings
-                .filter((binding) => binding.status === "active")
-                .map((binding) => binding.localRootRef),
-            )
-          : null;
-        await ensureProjectFirstSession(project.projectId, launchRoot ?? root);
-      },
     }),
   );
   app.use(
@@ -4432,37 +4211,6 @@ export const startServer = async (
         await scheduleExistingMaps();
       }
     }).catch(() => {});
-
-    // A project intent is persisted before its first PTY is created. Reconcile
-    // that crash window only after the MCP endpoint is bound: every ordinary
-    // project session receives its capability during launch preparation, so an
-    // earlier recovery attempt would fail before spawning and leave a tombstone.
-    for (const summary of await studioProjectCatalog.list()) {
-      const project = await studioProjectCatalog.resolveIdentity(
-        summary.projectId,
-      );
-      const root = project
-        ? preferredProjectRoot(
-            project.rootBindings
-              .filter((binding) => binding.status === "active")
-              .map((binding) => binding.localRootRef),
-          )
-        : null;
-      if (!project || !root) continue;
-      await ensureProjectFirstSession(summary.projectId, root).catch(
-        (error: unknown) => {
-          console.error(
-            `[harness] project bootstrap session recovery failed: ${
-              error instanceof ProjectBootstrapCoordinatorClosedError
-                ? "coordinator_closed"
-                : error instanceof ProjectSessionScopeUnavailableError
-                  ? "scope_unavailable"
-                  : "session_start_failed"
-            }`,
-          );
-        },
-      );
-    }
 
     // The app otherwise opens to an empty terminal pane — not fire-and-forget
     // because a spawn failure here (e.g. claude not on PATH) is worth

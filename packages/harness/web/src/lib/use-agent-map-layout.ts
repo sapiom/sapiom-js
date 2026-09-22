@@ -5,7 +5,7 @@ import {
   useState,
   type RefObject,
 } from "react";
-import type { MapChangeProposal } from "@shared/agent-map";
+import type { MapChangeProposal } from "@sapiom/agent-map";
 import {
   NODE_HEIGHT,
   NODE_WIDTH,

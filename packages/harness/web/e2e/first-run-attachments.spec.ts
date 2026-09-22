@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { CreateSessionRequest } from "../../src/shared/types";
 
+import { BLANK_PROJECT_ROOT, openNewAgentScreen } from "./mock-navigation";
+
 interface CreationEvidence {
   createSessionCalls?: { req: CreateSessionRequest }[];
   createOrder?: string[];
@@ -50,6 +52,14 @@ async function queueFiles(page: Page, desktop: boolean): Promise<void> {
   ]);
 }
 
+/**
+ * A FRESH INSTALL has no project, so the first thing is New project (the
+ * folder step), and the new-agent screen it lands on is where these files are
+ * queued. Creation completes before the chat starts: the agent is scaffolded
+ * first, and a failure materializing the files is a SESSION failure that
+ * leaves the agent in the rail, the screen mounted, and the queue intact for
+ * the retry, which reuses the agent instead of scaffolding a second one.
+ */
 for (const scenario of [
   {
     name: "browser uploads",
@@ -63,21 +73,14 @@ for (const scenario of [
     idea: "Build from these files.",
     harness: "codex",
   },
-  {
-    name: "an attachment-only request",
-    desktop: false,
-    idea: "",
-    harness: "claude-code",
-  },
 ] as const) {
-  test(`the automatic home retains ${scenario.name} after failure and retries once`, async ({
+  test(`the screen retains ${scenario.name} after failure and retries once`, async ({
     page,
   }) => {
-    // Do not click Create new: that explicitly activates the composer and
-    // would hide the automatic-home state bug this test must exercise.
     await page.goto("/?mockState=fresh");
+    await expect(page.getByTestId("no-project-home")).toBeVisible();
+    await openNewAgentScreen(page);
     const composer = page.getByTestId("new-session-composer");
-    await expect(composer).toBeVisible();
     await composer.evaluate((node) => {
       node.setAttribute("data-original-draft", "true");
     });
@@ -98,10 +101,15 @@ for (const scenario of [
       send.click();
     });
 
-    await expect(page.getByTestId("toast")).toContainText(
+    // The refusal lands under the field and names both facts: the agent was
+    // created, its session did not start.
+    await expect(page.getByTestId("new-agent-error")).toContainText(
       /materialization failed/i,
     );
-    // Reopening an empty composer after the error is not recovery: its local
+    await expect(page.getByTestId("new-agent-error")).toContainText(
+      "files was created, but its session didn't start",
+    );
+    // Reopening an empty screen after the error is not recovery: its local
     // text and queue must survive on the original mounted instance.
     await expect(composer).toHaveAttribute("data-original-draft", "true");
     await expect(page.getByTestId("composer-input")).toHaveValue(scenario.idea);
@@ -123,41 +131,42 @@ for (const scenario of [
     expect(failed.lastInitialInput).toBeUndefined();
     expect(failed.injectInputCalls ?? []).toHaveLength(0);
     const firstRequest = failed.createSessionCalls![0]!.req;
-    expect(failed.createOrder).toEqual([`scaffold:${firstRequest.cwd}`]);
-    // Discovery has reached the UI even though the unrooted section is
-    // collapsed by default on a fresh install.
-    await expect(page.getByTestId("unrooted-count")).toHaveText("1");
+    expect(firstRequest.cwd).toBe(BLANK_PROJECT_ROOT);
+    expect(failed.createOrder).toEqual([`scaffold:${BLANK_PROJECT_ROOT}/files`]);
+    // The agent is a row under its project already.
+    await expect(
+      page.getByTestId("workspace-group-blank-slate").getByTestId("workflow-files"),
+    ).toBeVisible();
 
     await page.getByTestId("composer-send").click();
     await expect(composer).toHaveCount(0);
     const completed = await creationEvidence(page);
     expect(completed.createSessionCalls).toHaveLength(2);
     const retry = completed.createSessionCalls![1]!.req;
-    // The first scaffold stays registered. Retry uses the existing next-name
-    // rule rather than overwriting the completed folder from the failed try.
-    expect(retry.cwd).toBe(`${firstRequest.cwd}-2`);
+    // The retry reuses the agent the first attempt created: one scaffold,
+    // then the session, in the same project folder.
+    expect(retry.cwd).toBe(BLANK_PROJECT_ROOT);
     expect(retry.harness).toBe(scenario.harness);
     expect(retry.initialPrompt ?? "").toBe(scenario.idea);
     expect(retry.initialAttachments).toEqual(firstRequest.initialAttachments);
     expect(completed.createOrder).toEqual([
-      `scaffold:${firstRequest.cwd}`,
-      `scaffold:${retry.cwd}`,
-      `session:${retry.cwd}`,
+      `scaffold:${BLANK_PROJECT_ROOT}/files`,
+      `session:${BLANK_PROJECT_ROOT}`,
     ]);
     const paths = [
       scenario.desktop
         ? "/Users/test/input/notes.txt"
-        : `${retry.cwd}/.sapiom/uploads/mock-notes.txt`,
-      `${retry.cwd}/.sapiom/uploads/mock-screenshot.png`,
+        : `${BLANK_PROJECT_ROOT}/.sapiom/uploads/mock-notes.txt`,
+      `${BLANK_PROJECT_ROOT}/.sapiom/uploads/mock-screenshot.png`,
     ];
-    expect(completed.lastInitialInput?.text).toBe(
+    // Idea, then files, then the planning instructions as setup.
+    expect(completed.lastInitialInput?.text.startsWith(
       [
         scenario.idea,
         `Attached files (read each as context):\n${paths.join("\n")}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
+      ].join("\n\n"),
+    )).toBe(true);
+    expect(completed.lastInitialInput?.text).toContain("already scaffolded");
     expect(completed.injectInputCalls ?? []).toHaveLength(0);
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
@@ -166,11 +175,11 @@ for (const scenario of [
   });
 }
 
-test("the automatic home stays mounted until a delayed first request is prepared", async ({
+test("the screen stays mounted until a delayed first request is prepared", async ({
   page,
 }) => {
   await page.goto("/?mockState=fresh");
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await openNewAgentScreen(page);
   await page.getByTestId("composer-input").fill("Use both files.");
   await queueFiles(page, false);
   await page.evaluate(() => {

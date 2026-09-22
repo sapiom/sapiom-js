@@ -1,16 +1,14 @@
 import * as fs from "node:fs/promises";
-import { basename, dirname } from "node:path";
 import {
   MAX_INLINE_ATTACHMENTS_TOTAL_BYTES,
   type CreateSessionRequest,
 } from "../shared/types.js";
-import { buildIdeaWithAttachments } from "../shared/initial-prompt.js";
+import { buildFirstPrompt } from "../shared/initial-prompt.js";
 import {
   AttachmentError,
   validateAttachment,
   writeAttachment,
 } from "./attachments.js";
-import { scaffoldAgentProject, type AgentScaffoldDeps } from "./scaffold.js";
 
 export function validateInitialAttachments(
   attachments: CreateSessionRequest["initialAttachments"],
@@ -28,19 +26,21 @@ export function validateInitialAttachments(
   }
 }
 
-/** Prepare files before the CLI exists; there is no synthetic PTY Enter. */
+/**
+ * Prepare the first turn before the CLI exists; there is no synthetic PTY
+ * Enter. Files are materialized into the session's cwd, then the prompt is
+ * composed in one order (`buildFirstPrompt`): the idea, the files, the
+ * linked sources, the session setup.
+ *
+ * Creating the agent is NOT this function's job any more: the session-side
+ * `scaffold` option is gone (flow-creation.md §4.4 step 4). The harness
+ * scaffolds through `POST /api/agents/scaffold` before any session opens, so
+ * a session request always names a folder that already exists.
+ */
 export async function prepareFirstRequest(
   request: CreateSessionRequest,
-  scaffoldDeps: AgentScaffoldDeps,
 ): Promise<string | undefined> {
   validateInitialAttachments(request.initialAttachments);
-  if (request.scaffold) {
-    await scaffoldAgentProject(scaffoldDeps, {
-      root: dirname(request.cwd),
-      name: basename(request.cwd),
-      template: request.scaffold.template,
-    });
-  }
   const resolved: { path: string }[] = [];
   const uploaded: string[] = [];
   try {
@@ -60,10 +60,15 @@ export async function prepareFirstRequest(
         }
       }
     }
-    return buildIdeaWithAttachments(request.initialPrompt ?? "", resolved);
+    return buildFirstPrompt({
+      idea: request.initialPrompt ?? "",
+      attachments: resolved,
+      sources: request.initialSources,
+      setup: request.initialSetup,
+    });
   } catch (error) {
-    // Only our UUID-named uploads are disposable. Keep a completed scaffold
-    // (and all pre-existing files); no coding session has started yet.
+    // Only our UUID-named uploads are disposable; pre-existing files stay.
+    // No coding session has started yet.
     await Promise.all(uploaded.map((file) => fs.unlink(file).catch(() => {})));
     throw error;
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentMapGraph, PlanNodeId, PlanRelationshipId } from "./agent-map.js";
-import { canonicalizeAgentMapGraph, computeGraphContentDigest } from "./agent-map-canonical.js";
+import type { AgentMapGraph, PlanNodeId, PlanRelationshipId } from "@sapiom/agent-map";
+import { canonicalizeAgentMapGraph, computeGraphContentDigest } from "@sapiom/agent-map/node/canonical";
 
 const first = "node_018f0000-0000-7000-8000-000000000001" as PlanNodeId;
 const second = "node_018f0000-0000-7000-8000-000000000002" as PlanNodeId;

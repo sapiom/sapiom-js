@@ -30,16 +30,21 @@ import type {
   RunHandle,
   RunStatus,
 } from "../models/index.js";
-import { AGENTS_RESULT_SIGNAL } from "../agents/index.js";
+import { AGENTS_RESULT_SIGNAL, AgentDispatchError } from "../agents/index.js";
+import type { ExecutionStatus } from "../agents/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
   readDisclosure as llmReadDisclosure,
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
+  type DecideQuestion,
+  type LlmDecideResponse,
+  LlmDecideHttpError,
 } from "../llm/index.js";
 import type {
   AgentRunResult,
+  AgentRunError,
   RunHandle as AgentRunHandle,
 } from "../agents/index.js";
 import type {
@@ -113,12 +118,21 @@ import type {
 import type { SpeechResult, VoicesResult } from "../speech/index.js";
 import type {
   BrowserSession,
+  SessionTimeoutOptions,
   SessionSettlement,
   Screenshot,
   Identity,
   ActiveSession,
+  WithSessionOptions,
 } from "../browser-automation/index.js";
 import type { ScopedKey } from "../keys/index.js";
+import type {
+  DrivePermission,
+  DriveFile,
+  SendEmailResult,
+} from "../connectors/google/index.js";
+import type { GitHubRepo } from "../connectors/github/index.js";
+import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
 
 /**
  * Host used in the stub Postgres DSN.
@@ -564,6 +578,57 @@ function stubCodingResult(
   };
 }
 
+/**
+ * Merge an `agents` override over a full default `AgentRunResult`, so a partial
+ * stub (`{ status: "rejected", error }`) still yields every field — the handle
+ * and the schema-validated resume payload both need a complete result.
+ *
+ * `executionId` follows the real client's guarantee rather than the override's
+ * omission: `null` exactly when the dispatch was rejected (no run exists), a
+ * real id on every other status. `output` defaults to `{}` on a completed run
+ * (what a local run has always seen) and `null` otherwise.
+ */
+/** The statuses a live run can report from a status read (see `status()` below). */
+const LIFECYCLE_STATUSES = new Set<string>([
+  "running",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+/** The rejection a partial `{ status: "rejected" }` stub stands in for. */
+const STUB_DISPATCH_REJECTION: AgentRunError = {
+  code: "transport",
+  message: "stubbed dispatch rejection",
+  status: null,
+  details: null,
+};
+
+function stubAgentRunResult(
+  resolved: unknown,
+  generatedId: string,
+): AgentRunResult {
+  const base = (resolved ?? {}) as Partial<AgentRunResult>;
+  const status = base.status ?? "completed";
+  const namesNoRun = status === "rejected" || status === "unknown";
+  return {
+    executionId: base.executionId ?? (namesNoRun ? null : generatedId),
+    status,
+    output:
+      base.output !== undefined
+        ? base.output
+        : status === "completed"
+          ? {}
+          : null,
+    // The public contract says a rejected result carries an AgentRunError, so a
+    // partial stub must too — otherwise `result.error.code` reads fine against
+    // production and throws under the stub.
+    error:
+      base.error ?? (status === "rejected" ? STUB_DISPATCH_REJECTION : null),
+  };
+}
+
 function stubRunHandle(
   overrides: StubOverrides,
   correlationId: string,
@@ -589,7 +654,7 @@ function stubRunHandle(
 
 // Default media results for the contentGeneration stub — ONE factory per media type, shared by
 // `create` and `launch` so the two verbs can never drift (the create/launch resolvedModel drift
-// fixed in #664 came from inlined twin literals). SAP-2576: the routed backend always echoes a
+// fixed in #664 came from inlined twin literals). The routed backend always echoes a
 // resolvedModel (a required field), so the factory does too — set here, inside the fallback,
 // never post-mutated onto a resolved override.
 function stubImageResult(input: ImageCreateInput): ImageGenerationResult {
@@ -825,6 +890,104 @@ function stubMemoryFilterMatches(
   return true;
 }
 
+/**
+ * The Capability Router's `llm.decide` request bounds (Sapiom
+ * `llm-decide.validator.ts`), which the stub mirrors so a rubric the router would
+ * refuse fails under `run_local` too, instead of only once the agent is deployed.
+ * The router answers 400 via Nest's `BadRequestException(reason)`; the SDK maps
+ * that to {@link LlmDecideHttpError}, so the stub throws the same class, status,
+ * body shape, and message prefix (`capabilityCall`'s `Failed to decide: <status> <body>`).
+ */
+function stubDecideValidate(questions: Record<string, DecideQuestion>): void {
+  const fail = (reason: string): never => {
+    const body = { statusCode: 400, message: reason, error: "Bad Request" };
+    throw new LlmDecideHttpError(
+      `Failed to decide: 400 ${JSON.stringify(body)}`,
+      400,
+      body,
+    );
+  };
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const n = Object.keys(q.criteria).length;
+      if (n < 2)
+        fail(`question '${id}' choice criteria must have at least two options`);
+      if (n > 32)
+        fail(`question '${id}' choice criteria must have at most 32 options`);
+    } else if (q.type === "score") {
+      const n = q.criteria.length;
+      if (n < 2)
+        fail(`question '${id}' score criteria must have at least two levels`);
+      if (n > 10)
+        fail(`question '${id}' score criteria must have at most 10 levels`);
+    }
+  }
+}
+
+/**
+ * A shape-correct, deterministic `llm.decide` reply for `run_local`: every question
+ * answered under its own key, undecided (`noul` 0.5, a uniform distribution for
+ * `choice` and `score`) so branching code runs both ways without inventing a verdict.
+ * Rejects what the router would reject ({@link stubDecideValidate}) before answering.
+ */
+function stubDecideResponse(
+  questions: Record<string, DecideQuestion>,
+): LlmDecideResponse {
+  stubDecideValidate(questions);
+  // Built on a null prototype so a question keyed `__proto__` becomes an
+  // ordinary own property instead of a prototype swap that drops the answer;
+  // copied onto a plain object below so the result also inherits
+  // `Object.prototype` (`hasOwnProperty` etc.) exactly like the parsed JSON the
+  // router returns.
+  const answers: Record<string, unknown> = Object.create(null);
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const options = Object.keys(q.criteria);
+      const p = options.length > 0 ? 1 / options.length : 0;
+      answers[id] = {
+        type: "choice",
+        choice: options[0] ?? "",
+        probabilities: Object.fromEntries(options.map((o) => [o, p])),
+        confidence: options.length > 0 ? p : 0,
+      };
+    } else if (q.type === "score") {
+      // Uniform over the levels, like `choice`: the stub must not fabricate
+      // certainty. `score` is the probability-weighted position, which for a
+      // uniform distribution is the midpoint (n-1)/2; `confidence` is the
+      // top probability, 1/n, the lowest a concentration measure can honestly be.
+      const levels = q.criteria;
+      const n = levels.length;
+      const p = n > 0 ? 1 / n : 0;
+      answers[id] = {
+        type: "score",
+        score: n > 0 ? (n - 1) / 2 : 0,
+        legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
+        probabilities: Object.fromEntries(levels.map((_, i) => [String(i), p])),
+        confidence: p,
+      };
+    } else {
+      answers[id] = { type: "noul", noul: 0.5 };
+    }
+  }
+  // `Object.assign({}, answers)` would hit the `__proto__` setter again, so
+  // define each key as an own data property, as JSON.parse does on the wire.
+  const plain: Record<string, unknown> = {};
+  for (const key of Object.keys(answers)) {
+    Object.defineProperty(plain, key, {
+      value: answers[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return {
+    model: "jev-stub",
+    answers: plain as LlmDecideResponse["answers"],
+    usage: { inputTokens: 0, outputTokens: 0 },
+    servedBy: "stub",
+  };
+}
+
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   // Record which override keys actually match a call, so the runner can flag
   // supplied-but-unmatched keys (typos / wrong plural-singular form).
@@ -1011,43 +1174,101 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     agents: {
-      run: (spec) =>
-        Promise.resolve(
-          r("agents.run", [spec], () => ({
-            executionId: `stub-exec-${++launchSeq}`,
-            status: "completed" as const,
-            output: {},
-            error: null,
-          })) as AgentRunResult,
+      // An override may be a function returning a PROMISE (every other
+      // capability supports that, since they hand `r()`'s value straight back).
+      // Await it before normalizing, or a promise reads as `{}` — no `status` —
+      // and silently becomes the completed default.
+      run: async (spec) =>
+        stubAgentRunResult(
+          await Promise.resolve(
+            r("agents.run", [spec], () => ({ status: "completed" as const })),
+          ),
+          `stub-exec-${++launchSeq}`,
         ),
-      launch: (spec) => {
-        const executionId = `stub-exec-${++launchSeq}`;
-        const result: AgentRunResult = {
-          executionId,
-          status: "completed",
-          output: {},
-          error: null,
-        };
+      launch: async (spec) => {
+        const generatedId = `stub-exec-${++launchSeq}`;
+        // `launch()` honors the key matching the call the author wrote
+        // (`agents.launch`) first, then the shared `agents.run` that controls
+        // both paths — the same precedence as `models.coding`. Before this the
+        // handle was built unconditionally as a success, so the
+        // try/catch the README and the authoring skill both require was
+        // impossible to cover in a local run.
+        const result = stubAgentRunResult(
+          await Promise.resolve(
+            r(dispatchedKeys("agents"), [spec], () => ({
+              status: "completed" as const,
+            })),
+          ),
+          generatedId,
+        );
+
+        // A rejected dispatch created no child, so there is no pausable handle
+        // to hand back. Mirror the real client and THROW, so a local run
+        // exercises the same try/catch the author writes against production.
+        if (result.status === "rejected") {
+          throw new AgentDispatchError(
+            (result.error ?? STUB_DISPATCH_REJECTION) as AgentRunError,
+          );
+        }
+
+        // A DELAYED dispatch (`spec.at`) has no child until the scheduled time,
+        // so production returns `executionId: null` and correlates on the
+        // trigger id, not a run id. Mirror both, or a local run of a scheduled
+        // child takes a different branch than the deployed one.
+        const delayed = spec.at !== undefined;
+        const executionId = delayed
+          ? null
+          : (result.executionId ?? generatedId);
+        const correlationId = delayed
+          ? `trigger-stub-${generatedId}`
+          : (result.executionId ?? generatedId);
         const handle: AgentRunHandle = {
           executionId,
           dispatch: {
-            correlationId: executionId,
+            correlationId,
             resultSignal: AGENTS_RESULT_SIGNAL,
           },
-          status: () => Promise.resolve("completed" as const),
+          // `status()` reports a LIFECYCLE status. `"unknown"`/`"timed_out"` are
+          // `wait()` outcomes, not lifecycle states, and both describe a run
+          // that exists and isn't known-terminal — so they read as "running"
+          // here while `wait()` still resolves them verbatim.
+          status: () =>
+            Promise.resolve(
+              LIFECYCLE_STATUSES.has(result.status)
+                ? (result.status as ExecutionStatus)
+                : "running",
+            ),
           wait: () => Promise.resolve(result),
         };
-        // Register the resume payload so a local `pauseUntilSignal` on this handle
-        // resolves with an AgentRunResultPayload.
-        return dispatchable(handle, opts.signals, () => ({
-          status: "completed" as const,
-          executionId,
-          definition: spec.definition,
-          version: "stub",
-          output: {},
-          startedAt: "2099-01-01T00:00:00.000Z",
-          finishedAt: "2099-01-01T00:00:00.000Z",
-        }));
+        // Register the resume payload so a local `pauseUntilSignal` on this
+        // handle resolves with an AgentRunResultPayload. That union is
+        // completed|failed only, so a stub of any OTHER non-completed status
+        // resumes as `failed` — the branch an author writes for a bad child.
+        const at = "2099-01-01T00:00:00.000Z";
+        // The payload's executionId is required, and a delayed child's real id
+        // isn't knowable at launch — use the correlation key the resume lands on.
+        const payloadExecutionId = executionId ?? correlationId;
+        return dispatchable(handle, opts.signals, () =>
+          result.status === "completed"
+            ? {
+                status: "completed" as const,
+                executionId: payloadExecutionId,
+                definition: spec.definition,
+                version: "stub",
+                output: result.output,
+                startedAt: at,
+                finishedAt: at,
+              }
+            : {
+                status: "failed" as const,
+                executionId: payloadExecutionId,
+                definition: spec.definition,
+                version: "stub",
+                error: result.error,
+                startedAt: at,
+                finishedAt: at,
+              },
+        );
       },
     },
     llm: {
@@ -1190,6 +1411,16 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             state: "expired" as const,
           })) as LlmSession,
         ),
+      decide: <Q extends Record<string, DecideQuestion>>(spec: {
+        state: unknown;
+        questions: Q;
+        model?: string;
+      }) =>
+        // async so a validation throw surfaces as a rejection, like the router's 400.
+        (async () =>
+          r("llm.decide", [spec], () =>
+            stubDecideResponse(spec.questions),
+          ) as LlmDecideResponse<Q>)(),
       // Pure functions over a result value, not network calls — no stub
       // recording needed; delegate straight to the real implementation.
       readDisclosure: (result) => llmReadDisclosure(result),
@@ -1415,9 +1646,14 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     database: {
-      create: (input) =>
+      // A Sapiom Postgres is permanent (SAP-3100): `create({})` is the whole call,
+      // and the stub, like the gateway, returns no `duration` and no `expiresAt`.
+      create: (...args) =>
         Promise.resolve(
-          r("database.create", [input], () => {
+          // Record what the caller actually passed (`[]` for a bare `create()`);
+          // the default applies only when building the fallback result.
+          r("database.create", args, () => {
+            const input = args[0] ?? {};
             const handle = input.handle ?? null;
             const name = `stub-${handle ?? "db"}`;
             return {
@@ -1428,7 +1664,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               status: "active",
               region: input.region ?? "us-east-1",
               pgVersion: input.pgVersion ?? 17,
-              duration: input.duration,
               connection: {
                 connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/${name}`,
                 host: STUB_DB_HOST,
@@ -1437,7 +1672,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 password: "stub_pass",
                 databaseName: name,
               },
-              expiresAt: "2099-01-01T00:00:00Z",
               createdAt: "2099-01-01T00:00:00Z",
             };
           }) as Database,
@@ -1452,7 +1686,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             status: "active",
             region: "us-east-1",
             pgVersion: 17,
-            duration: "1h",
             connection: {
               connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/stub-${idOrHandle}`,
               host: STUB_DB_HOST,
@@ -1461,7 +1694,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               password: "stub_pass",
               databaseName: `stub-${idOrHandle}`,
             },
-            expiresAt: "2099-01-01T00:00:00Z",
             createdAt: "2099-01-01T00:00:00Z",
           })) as Database,
         ),
@@ -1856,7 +2088,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           }) as void,
         ),
     },
-    // Read-only vault (SAP-1471). Stubs return empty/absent — a local run must
+    // Read-only vault. Stubs return empty/absent — a local run must
     // never surface real credentials, and "no secret found" is the safe default.
     vault: {
       list: (ref: string) =>
@@ -1874,7 +2106,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           r("vault.getAll", [ref], () => ({})) as Record<string, string>,
         ),
     },
-    // Scoped-key mint (SAP-2300). A local run mints no real credential — it returns a
+    // Scoped-key mint. A local run mints no real credential — it returns a
     // clearly-fake, shape-faithful key so a deploy step can trace the full graph
     // offline. The `key` is an obvious placeholder, never a usable secret.
     keys: {
@@ -1891,6 +2123,118 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 : ["org.transactions.write"],
           })) as ScopedKey,
         ),
+    },
+    // Connection-backed third-party providers (Google, GitHub) — mirrors the
+    // `connectors` grouping on the real client.
+    connectors: {
+      // A live Google credential is fetched server-side in production; the stub returns
+      // a clearly-fake, shape-faithful bearer so an offline run can exercise the call
+      // graph. The `value` is an obvious placeholder, never a usable token.
+      google: {
+        // A REAL google-auth-library OAuth2 client wired to the stub's fake bearer — an
+        // offline `check`/run drives a genuine vendor-SDK client (googleapis, @googleapis/*)
+        // with no network and no Google connector. `google-auth-library` ships with those
+        // SDKs, so it is present whenever an agent references `authClient()`; absent it, the
+        // dynamic import throws the same clear error as production.
+        // The override (when present) wins and is returned — awaited, so a rejected
+        // override propagates. Only when there is no override do we import the optional
+        // peer and build the default client, so an override can both control the result
+        // and avoid requiring `google-auth-library`.
+        authClient: async () =>
+          (await r("connectors.google.authClient", [], async () => {
+            let mod: typeof import("google-auth-library");
+            try {
+              mod = await import("google-auth-library");
+            } catch {
+              throw new Error(
+                "connectors.google.authClient() needs the 'google-auth-library' package, which ships with " +
+                  "'googleapis' and the '@googleapis/*' clients — install one of those (e.g. " +
+                  "`npm i @googleapis/drive`) to use the vendor SDKs. For a raw proxied path that " +
+                  "needs no extra dependency, use connectors.google.fetch() instead.",
+              );
+            }
+            const client = new mod.OAuth2Client();
+            const mint = async () => ({
+              access_token: "ya29.stub-google-token",
+              expiry_date: Date.parse("2099-01-01T00:00:00.000Z"),
+            });
+            client.refreshHandler = mint;
+            client.setCredentials(await mint());
+            // Keep local runs offline: intercept gaxios' transporter (the same hook production
+            // uses for the proxy) so a vendor-SDK call through this client never touches the
+            // network — return an obviously-fake, shape-faithful JSON response instead.
+            (
+              client.transporter as unknown as {
+                defaults: { fetchImplementation?: typeof fetch };
+              }
+            ).defaults.fetchImplementation = (async () =>
+              withNodeStreamBody(
+                new Response(JSON.stringify({ stub: true }), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              )) as typeof fetch;
+            return client;
+          })) as InstanceType<
+            (typeof import("google-auth-library"))["OAuth2Client"]
+          >,
+        // The generic proxied tail's stub — no network, no Google connector. Returns a
+        // shape-faithful, obviously-fake JSON Response so an offline run can exercise the
+        // call graph and read `.json()`/`.status` the same way the real proxy response does.
+        fetch: async (pathOrUrl, init) =>
+          r(
+            "connectors.google.fetch",
+            [pathOrUrl, init],
+            () =>
+              new Response(JSON.stringify({ stub: true }), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+          ) as Response,
+        // Drive methods run server-side in the gateway in production; the stub returns
+        // shape-faithful, obviously-fake results so an offline run can exercise the call
+        // graph without a Google connector or network call.
+        drive: {
+          shareFile: async (args) =>
+            r("connectors.google.drive.shareFile", [args], () => ({
+              id: "stub-permission-id",
+              type: "user",
+              role: "reader",
+            })) as DrivePermission,
+          uploadFile: async (args) =>
+            r("connectors.google.drive.uploadFile", [args], () => ({
+              id: "stub-file-id",
+              name: "stub-file.txt",
+              mimeType: "text/plain",
+            })) as DriveFile,
+        },
+        // Gmail methods run server-side in the gateway in production; the stub returns a
+        // shape-faithful, obviously-fake send result so an offline run can exercise the
+        // call graph without a Google connector or network call.
+        gmail: {
+          sendEmail: async (args) =>
+            r("connectors.google.gmail.sendEmail", [args], () => ({
+              id: "stub-message-id",
+              threadId: "stub-thread-id",
+            })) as SendEmailResult,
+        },
+      },
+      // GitHub methods run server-side in the gateway (the PAT is injected there) in
+      // production; the stub returns a shape-faithful, obviously-fake repo list so an
+      // offline run can exercise the call graph without a GitHub connector or network call.
+      github: {
+        listRepos: async (args) =>
+          r("connectors.github.listRepos", [args], () => [
+            {
+              id: 1,
+              name: "stub-repo",
+              fullName: "stub-org/stub-repo",
+              private: false,
+              htmlUrl: "https://github.com/stub-org/stub-repo",
+              description: "stub repository",
+            },
+          ]) as GitHubRepo[],
+      },
     },
     speech: {
       textToSpeech: {
@@ -1922,14 +2266,20 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     },
     browserAutomation: {
       sessions: {
-        create: () =>
+        create: (options?: SessionTimeoutOptions) =>
           Promise.resolve(
-            r("browserAutomation.sessions.create", [], () => ({
-              sessionId: "stub-session",
-              cdpUrl: "ws://stub.local/session/stub-session",
-              expiresAt: "2099-01-01T00:00:00Z",
-              maxDurationSec: 1200,
-            })) as BrowserSession,
+            r(
+              "browserAutomation.sessions.create",
+              options === undefined ? [] : [options],
+              () => ({
+                sessionId: "stub-session",
+                cdpUrl: "ws://stub.local/session/stub-session",
+                expiresAt: "2099-01-01T00:00:00Z",
+                idleTimeoutMinutes: options?.idleTimeoutMinutes ?? 5,
+                maxDurationMinutes: options?.maxDurationMinutes ?? 20,
+                maxDurationSec: (options?.maxDurationMinutes ?? 20) * 60,
+              }),
+            ) as BrowserSession,
           ),
         createWithIdentity: (input) =>
           Promise.resolve(
@@ -1937,7 +2287,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               sessionId: "stub-session",
               cdpUrl: "ws://stub.local/session/stub-session",
               expiresAt: "2099-01-01T00:00:00Z",
-              maxDurationSec: 1200,
+              idleTimeoutMinutes: input.idleTimeoutMinutes ?? 5,
+              maxDurationMinutes: input.maxDurationMinutes ?? 20,
+              maxDurationSec: (input.maxDurationMinutes ?? 20) * 60,
             })) as BrowserSession,
           ),
         close: (sessionId) =>
@@ -1959,7 +2311,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         ),
       withSession: async <T>(
         fn: (session: ActiveSession) => Promise<T>,
-        sessionOpts?: { identityId?: string },
+        sessionOpts?: WithSessionOptions,
       ) => {
         const stubSession = r(
           "browserAutomation.withSession",
@@ -1970,7 +2322,9 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             sessionId: "stub-session",
             cdpUrl: "ws://stub.local/session/stub-session",
             expiresAt: "2099-01-01T00:00:00Z",
-            maxDurationSec: 1200,
+            idleTimeoutMinutes: sessionOpts?.idleTimeoutMinutes ?? 5,
+            maxDurationMinutes: sessionOpts?.maxDurationMinutes ?? 20,
+            maxDurationSec: (sessionOpts?.maxDurationMinutes ?? 20) * 60,
           }),
         ) as BrowserSession;
         const activeSession: ActiveSession = {

@@ -3,7 +3,7 @@ import ELK from "elkjs/lib/elk.bundled.js";
 import {
   parseAgentMapGraph,
   parseMapChangeProposal,
-} from "@shared/agent-map-codec";
+} from "@sapiom/agent-map/codec";
 import { agentMapPackingFixture } from "../../e2e/agent-map-packing-fixture";
 import { agentMapGeometry, quantizedMapAspect } from "./use-agent-map-layout";
 import {

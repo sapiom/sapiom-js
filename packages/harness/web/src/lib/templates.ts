@@ -29,7 +29,6 @@ import type {
 } from "@shared/types";
 
 import type { CanvasGraph } from "./canvas-graph";
-import { FALLBACK_PROJECT_NAME, projectDirSuggestion } from "./project-dir";
 
 /** A live catalog entry. `kind` discriminates it from a bundled starter. */
 export type GalleryTemplate = TemplateSummary & { kind: "gallery" };
@@ -227,42 +226,11 @@ export function matchesQuery(template: StudioTemplate, query: string): boolean {
 }
 
 /**
- * The prompt handed to the session's agent after "Use template" starts a session
- * in the destination folder — for a GALLERY template only.
- *
- * It had a second branch for the bundled starters, handing them to the local
- * scaffold MCP tool by name. SAP-2981 moved starters onto
- * `POST /api/agents/scaffold`, where the folder exists before the session opens
- * and a failure is an error message; the branch survived, unreachable, with a
- * test certifying it. Deleted rather than left as a second answer to a question
- * that now has one.
- *
- * A clone is not a scaffold and stays here: it forks a published agent into a
- * repo the user owns, over the network, with an auth failure path — none of
- * which the harness has a route for. It names the real tool and ends with the
- * next move (a local test with no Sapiom capability spend), so use → edit → run
- * is one continuous path rather than a journey that stops at the clone.
- */
-export function useTemplatePrompt(
-  template: GalleryTemplate,
-  dir: string,
-): string {
-  return (
-    `Clone the Sapiom gallery template "${template.id}" into this directory: ` +
-    `call the sapiom_dev_agents_clone tool with dir "${dir}" and templateId "${template.id}". ` +
-    "If it reports you are not authenticated, run sapiom_authenticate first and retry. " +
-    "After the clone, read the project's AGENTS.md and run npm install. " +
-    "When the project is ready, offer a local test run with no Sapiom capability spend (sapiom_dev_agents_run_local) as the next step."
-  );
-}
-
-/**
  * Prompt handed to a session's agent to clone a DEPLOYED agent by its Sapiom
  * definition id — the deep-link ("Open in Studio") fallback when the agent isn't
- * on this machine yet. Mirrors the gallery branch of `useTemplatePrompt` but names
- * `definitionId`: the clone tool writes that id into the checkout's `sapiom.json`,
- * so the folder lands pre-linked and the server's workspace rescan surfaces it as
- * a workflow the SPA can focus.
+ * on this machine yet. It names `definitionId`: the clone tool writes that id into
+ * the checkout's `sapiom.json`, so the folder lands pre-linked and the server's
+ * workspace rescan surfaces it as a workflow the SPA can focus.
  */
 export function cloneDefinitionPrompt(definitionId: string, dir: string): string {
   return (
@@ -271,62 +239,6 @@ export function cloneDefinitionPrompt(definitionId: string, dir: string): string
     "If it reports you are not authenticated, run sapiom_authenticate first and retry. " +
     "After the clone, read the project's AGENTS.md and run npm install. " +
     "When the project is ready, offer a local test run with no Sapiom capability spend (sapiom_dev_agents_run_local) as the next step."
-  );
-}
-
-/** Exact local MCP handoff for the one door that still asks for a scaffold in
- *  English — see {@link composerScaffoldPrompt}. */
-export function starterScaffoldInstruction(
-  dir: string,
-  template: string,
-): string {
-  return (
-    "call the sapiom_dev_agents_scaffold tool with " +
-    JSON.stringify({ dir, template })
-  );
-}
-
-/**
- * The composer's scaffold prompt — the LAST prompt-driven create (SAP-2981).
- *
- * There were three near-identical copies of this sentence: the project `+`, the
- * bare-project affordance, and the composer. The first two now go through
- * `POST /api/agents/scaffold`, where a failure is an error message instead of a
- * confused model. The composer keeps a prompt because it is the home screen —
- * no project, no name, and a folder that does not exist yet — so there is no
- * row to create in and nothing for a dialog to state.
- *
- * `idea` rides along verbatim: the agent needs the user's intent, not our
- * paraphrase of it.
- */
-export function composerScaffoldPrompt(dir: string, idea?: string): string {
-  const base =
-    `Scaffold a new Sapiom agent project in this directory: ${starterScaffoldInstruction(dir, "default")}, ` +
-    "then run npm install, read AGENTS.md, and use the sapiom-agent-authoring skill to";
-  const trimmed = idea?.trim();
-  return trimmed
-    ? `${base} build this:\n\n${trimmed}`
-    : `${base} define the first agent.`;
-}
-
-/**
- * What a session opens on after the HARNESS created the agent.
- *
- * It is not a scaffold prompt and must never read like one: the project is
- * already on disk, installed and committed, and an agent told to "scaffold a
- * new project in this directory" would find a non-empty folder and either
- * refuse or start over. So it says the scaffold is done, names the directory,
- * and hands over the only thing left — the user's instruction.
- */
-export function firstInstructionPrompt(
-  agentDir: string,
-  instruction: string,
-): string {
-  return (
-    `A new Sapiom agent project has just been created at ${agentDir} — the scaffold is done, ` +
-    "so do not scaffold or clone anything. Read its AGENTS.md, then use the sapiom-agent-authoring " +
-    `skill to build this:\n\n${instruction.trim()}\n\n` +
-    "When the agent is ready, offer a local test run with no Sapiom capability spend (sapiom_dev_agents_run_local) as the next step."
   );
 }
 
@@ -390,24 +302,4 @@ export function templateGraph(detail: TemplateDetailView): CanvasGraph {
     groups: [],
     warnings: [],
   };
-}
-
-/** Default destination: a new folder named after the template, under the project
- *  root. "default" would make a meaningless folder name, so it gets a
- *  descriptive one instead.
- *
- *  Delegates the join to `projectDirSuggestion` so this door and the
- *  "start from an idea" door can never disagree about where new projects land
- *  or how a root is combined with a name. `root` is what
- *  `resolveProjectRoot()` returned — historically the launch dir, which is
- *  still what that resolves to on the CLI host. */
-export function templateDirSuggestion(
-  template: StudioTemplate,
-  root: string | null,
-): string {
-  const folder =
-    template.kind === "starter" && template.id === "default"
-      ? FALLBACK_PROJECT_NAME
-      : template.id;
-  return projectDirSuggestion(folder, root);
 }

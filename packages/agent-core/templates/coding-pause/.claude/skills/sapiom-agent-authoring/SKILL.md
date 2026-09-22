@@ -34,10 +34,10 @@ only summarized here; each such chapter is bracketed by `section:` markers namin
 section it points at. A pointer's `#name` fragment names that section's marker (an HTML
 comment, `section: name`) in the served text — the endpoint serves raw Markdown, so search for
 the marker rather than expecting a browser to jump to it. When a summary below and the served text disagree, the served text wins.
-This copy was written against release 1.0 of it; `sapiom_dev_agents_check` warns when the
+This copy was written against release 1.1 of it; `sapiom_dev_agents_check` warns when the
 served copy differs.
 
-<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->
 
 <!-- section: one-off-vs-agent -->
 
@@ -372,6 +372,12 @@ the most common mistake in authored agents. In one line each: `ctx.sapiom.llm.ru
 multi-turn reasoning + tool-calling loop (never for a one-shot — it loops and overthinks);
 `ctx.sapiom.agents.run` dispatches a DEPLOYED agent by slug. You never pick a model: omit
 `model` and let the platform route it — a raw provider model id is never honored on any surface.
+`ctx.sapiom.llm.run` has a sibling, `ctx.sapiom.llm.decide`, for answers drawn from a fixed set
+you name up front (a yes/no gate, a pick-one label, a rubric level): it returns calibrated
+probabilities over those answers (`answers.<key>.noul` / `.choice` + `.probabilities` / `.score`)
+instead of generated text — reach for it before an `output` schema whose only job is to pick one
+of a few values. It is the one surface that takes an optional vendor `model` id (the default,
+currently `jev-latest`, serves when you omit it — still omit it).
 
 The full rule — the worked example (`llm.run` with `output`, read back with `structuredOf`;
 `textOf` for plain text; never `content[0]`), why `max_tokens` must budget for thinking as well
@@ -391,10 +397,14 @@ Read it before the first `llm.*` / `models.run` / `agents.run` call. Customer gu
 `defineAgent(...)` export" rule is a statement about a PROJECT, not about your system: a
 multi-stage system is several small agents, each its own project, deployed separately, composed
 by a thin coordinator that dispatches them by slug with `ctx.sapiom.agents.run`. `agents.run`
-resolves on ANY terminal status and does NOT throw — branch on
-`research.status !== "completed"` or a failed stage silently feeds `null` downstream. For a
+reports failure as DATA and never throws — one branch on `research.status !== "completed"`
+covers a failed child, a refused dispatch (`"rejected"`) and a wait timeout alike, and skipping
+it lets a bad stage silently feed `null` downstream. Only `"rejected"` proves nothing is
+running, so it is the only status you may re-dispatch on without an `idempotencyKey`. For a
 long-running child use `ctx.sapiom.agents.launch` and pause the calling step on the handle
-(`pauseUntilSignal`, below) so the coordinator's step doesn't time out. Deploy bottom-up —
+(`pauseUntilSignal`, below) so the coordinator's step doesn't time out — `launch` is the one
+that THROWS: it owes you a pausable handle and a refused dispatch has none, so catch
+`AgentDispatchError` and `fail()` the step. Deploy bottom-up —
 children first, the coordinator last, since it dispatches them by their slugs. The worked
 example is the served section
 [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
@@ -649,6 +659,12 @@ Stub naming rules:
   `models.launch()`'s inline result and its resume payload. A partial value (e.g.
   `{ "output": "..." }`) is merged over the built-in defaults, so the result stays a full
   `ModelRunResult`.
+- Child dispatch works the same: `agents.run` (or `agents.launch`) controls both the inline
+  result and the resume payload, merged over the defaults. This is how you cover the branches
+  a coordinator must have — `{ "status": "failed" }` for a child that ran and failed, and
+  `{ "status": "rejected", "error": { "code": "not_found", "message": "…" } }` for a dispatch
+  that was refused. A stubbed rejection follows the real split: `agents.run` returns it as
+  data, `agents.launch` throws `AgentDispatchError`, so your try/catch runs locally too.
 - `run_local` reports `unusedStubs` (key matched nothing — usually a typo or plural/singular
   slip) and `stubWarnings` (key matched but wrong shape). A green run with either non-empty
   means the stub silently didn't apply.
@@ -694,7 +710,7 @@ Write each step the way it should run in production — never weaken logic to sh
 
 | Resource                                                                     | What it covers                                                                                                 |
 | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.0 |
+| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.1 |
 | [Authoring guide](https://docs.sapiom.ai/agents/authoring)                   | Full step model, failure patterns, pause/resume, determinism                                                   |
 | [Quickstart](https://docs.sapiom.ai/agents/quick-start)                      | Scaffold → write → test → deploy walkthrough                                                                   |
 | [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |

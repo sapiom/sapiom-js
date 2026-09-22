@@ -44,20 +44,23 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/capabilities.test.mjs",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build",
+    "test:capabilities": "pnpm build && node --test scripts/capabilities.test.mjs",
+    "test:package": "pnpm --filter \"@sapiom/mcp...\" build && node scripts/check-package.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@sapiom/agent-core": "workspace:^",
     "@sapiom/analytics-core": "workspace:^",
     "@sapiom/sandbox-preview": "workspace:^",
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "@sapiom/agent-map": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
@@ -73,5 +76,6 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "sapiomCapabilities": 1
 }

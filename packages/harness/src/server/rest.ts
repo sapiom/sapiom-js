@@ -32,7 +32,7 @@ import type {
   SessionInputSubmissionResult,
 } from "../shared/types.js";
 import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
-import type { StudioProjectSummary } from "../shared/agent-map.js";
+import type { StudioProjectSummary } from "@sapiom/agent-map";
 import {
   CREATE_SESSION_JSON_LIMIT_BYTES,
   JSON_BODY_LIMIT_BYTES,
@@ -83,7 +83,12 @@ const createSessionSchema = z
       z.object({ kind: z.literal("path"), path: z.string().min(1).max(4096).refine((text) => !text.includes("\0")) }).strict(),
       z.object({ kind: z.literal("inline"), dataUrl: z.string().min(1), filename: z.string().trim().min(1).max(255) }).strict(),
     ])).max(100).optional(),
-    scaffold: z.object({ template: z.string().regex(/^[a-z0-9][a-z0-9-]*$/i) }).strict().optional(),
+    // Links ride the first prompt as text the agent reads; the harness never
+    // fetches them, so the only guards are shape and size.
+    initialSources: z.array(
+      z.string().trim().min(1).max(2048).url().refine((text) => /^https?:\/\//i.test(text)),
+    ).max(50).optional(),
+    initialSetup: z.string().max(16_000).refine((text) => !text.includes("\0")).optional(),
     initialUserInputPending: z.boolean().optional(),
     rehydrateFrom: z.string().min(1).optional(),
     theme: z.enum(["light", "dark"]).optional(),

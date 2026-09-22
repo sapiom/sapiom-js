@@ -1,13 +1,13 @@
-import type { AgentMapGraph, PlanNodeId } from "../shared/agent-map.js";
-import { canonicalDigest, canonicalJson, compareCanonicalStrings } from "../shared/agent-map-canonical.js";
+import type { AgentMapGraph, PlanNodeId } from "@sapiom/agent-map";
+import { canonicalDigest, canonicalJson, compareCanonicalStrings } from "@sapiom/agent-map/node/canonical";
 import type {
   AgentBriefDependencyFingerprint,
   AgentBriefFingerprintKind,
   AgentBriefImpact,
   AgentBriefImpactEntry,
   AgentBriefStaleReason,
-} from "../shared/build-plan.js";
-import type { CompiledAgentBriefCandidate, PreviousAgentBrief } from "../shared/agent-brief.js";
+} from "@sapiom/agent-map/build-plan";
+import type { CompiledAgentBriefCandidate, PreviousAgentBrief } from "@sapiom/agent-map/node/agent-brief";
 
 export const AGENT_BRIEF_IMPACT_ENTRY_LIMIT = 256;
 export const AGENT_BRIEF_IMPACT_EVIDENCE_LIMIT = 32;

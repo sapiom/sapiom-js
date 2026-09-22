@@ -230,9 +230,9 @@ export interface HarnessSession {
    */
   ready: boolean;
   /** Durable lifecycle state for a new project's one automatic map seed. */
-  projectBootstrap?: import("./agent-map.js").ProjectBootstrapMetadata;
+  projectBootstrap?: import("@sapiom/agent-map").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("./agent-map.js").ProjectAgentSession;
+  agentMapIdentity?: import("@sapiom/agent-map").ProjectAgentSession;
 }
 
 /**
@@ -591,7 +591,7 @@ export type BusMessage =
   | { type: "workflows.changed" }
   | {
       type: "agent-map.proposal.changed";
-      delta: import("./agent-map.js").AcceptedProposalDelta;
+      delta: import("@sapiom/agent-map").AcceptedProposalDelta;
     }
   /**
    * Full snapshot of one background task, re-broadcast on every change
@@ -599,7 +599,7 @@ export type BusMessage =
    * their records small, so snapshot-per-change beats a separate delta
    * protocol the SPA would have to stitch together after a mid-run mount.
    */
-  | { type: "agent-map.initialization.changed"; status: import("./agent-map-initialization.js").AgentMapInitializationStatus }
+  | { type: "agent-map.initialization.changed"; status: import("@sapiom/agent-map/agent-map-initialization").AgentMapInitializationStatus }
   | { type: "task.status"; task: BackgroundTask }
   /**
    * Best-effort "this session's pty just produced output" signal, throttled
@@ -1143,13 +1143,24 @@ export interface CreateSessionRequest {
     | { kind: "path"; path: string }
     | ({ kind: "inline" } & AttachFileRequest)
   >;
-  /** Create a new project at cwd using the same guarded scaffold as agent +.
-   * Omitted for sessions in existing projects. */
-  scaffold?: { template: string };
   /**
-   * Content-free lifecycle hint: the UI already owns a real first input that
-   * will be delivered after readiness/attachments. A new-project bootstrap
-   * yields to that input instead of racing it. This never affects authority.
+   * Links the user listed as sources on the new-agent screen (flow-creation.md
+   * §4.6 step 1). Handed to the first prompt by URL, never fetched by the
+   * harness: the agent reads them as context.
+   */
+  initialSources?: string[];
+  /**
+   * Session setup that rides the first prompt after the idea and the
+   * resources: the planning instructions (§4.6 step 2). It is not the user's
+   * words, and the client shows it as a quiet setup disclosure rather than as
+   * the user's turn. Never a request to scaffold; the harness already did.
+   */
+  initialSetup?: string;
+  /**
+   * Content-free lifecycle hint, kept for embedders and older clients: the UI
+   * already owns a real first input. New sessions no longer enrol in the
+   * automatic map bootstrap, so this has no effect on them; it still tells a
+   * resumed legacy bootstrap session to yield. This never affects authority.
    */
   initialUserInputPending?: boolean;
   /**
@@ -1230,7 +1241,7 @@ export interface InjectInputRequest {
 export interface InjectInputResponse {
   ok: true;
   /** Present only when the durable bootstrap FIFO handled this request. */
-  receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+  receipt?: import("@sapiom/agent-map").ProjectBootstrapInputReceipt;
 }
 
 /** Internal server boundary shared by the canonical route and rolling alias. */
@@ -1238,7 +1249,7 @@ export type SessionInputSubmissionResult =
   | { ok: false }
   | {
       ok: true;
-      receipt?: import("./agent-map.js").ProjectBootstrapInputReceipt;
+      receipt?: import("@sapiom/agent-map").ProjectBootstrapInputReceipt;
     };
 
 /** `PATCH /api/sessions/:id/workflow` body. `null` unbinds. `workflowPath`
@@ -1325,7 +1336,7 @@ export interface AppState {
    * Optional for compatibility with older servers and test fixtures. */
   workspaceScopes?: import("./workspace-scope.js").WorkspaceScopeSummary[];
   /** Path-free durable project identities for the plan-first Agent Map. */
-  studioProjects?: import("./agent-map.js").StudioProjectSummary[];
+  studioProjects?: import("@sapiom/agent-map").StudioProjectSummary[];
   macros: MacroDef[];
   /** The directory the CLI was launched against — the SPA prefills the
    *  new-session modal with this instead of recentDirs[0]. */
@@ -1734,7 +1745,7 @@ export interface WorkflowInfo {
    * overlapping opened roots, so this is a list rather than one global id.
    */
   studioBindings?: Array<{
-    projectId: import("./agent-map.js").StudioProjectId;
+    projectId: import("@sapiom/agent-map").StudioProjectId;
     agentId: string;
   }>;
 }

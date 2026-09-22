@@ -1,3 +1,4 @@
+import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
 /**
  * SessionManager — node-pty registry implementing the session lifecycle from
  * the shared contract: create, resume, kill, list. Persists HarnessSession[]
@@ -33,7 +34,7 @@ import {
 import type {
   ProjectAgentSession,
   ProjectBootstrapMetadata,
-} from "../shared/agent-map.js";
+} from "@sapiom/agent-map";
 import {
   migratePersistedProjectIdentity,
   removeLegacyProjectSessionMetadata,
@@ -2814,6 +2815,7 @@ export class SessionManager {
       if (value !== undefined) env[key] = value;
     }
     delete env[HOST_ESBUILD_PIN];
+    delete env[STUDIO_HOST_CONTEXT_ENV];
     for (const [key, value] of Object.entries(spec.env)) {
       if (value === null) delete env[key];
       else env[key] = value;

@@ -1,5 +1,23 @@
 # @sapiom/orchestration-core
 
+## 0.14.2
+
+### Patch Changes
+
+- Updated dependencies [e32eb67]
+- Updated dependencies [ca1580c]
+  - @sapiom/tools@0.38.0
+  - @sapiom/agent@0.14.2
+
+## 0.14.1
+
+### Patch Changes
+
+- f1ec121: Local `check` and runs now bundle with a `createRequire` banner, so dependencies that call `require()` at runtime (for example `googleapis` / `google-auth-library`) resolve at runtime instead of failing with esbuild's "Dynamic require not supported".
+- Updated dependencies [6e5e2e1]
+  - @sapiom/tools@0.37.0
+  - @sapiom/agent@0.14.1
+
 ## 0.14.0
 
 ### Minor Changes

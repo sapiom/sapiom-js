@@ -1,5 +1,32 @@
 # @sapiom/tools
 
+## 0.38.0
+
+### Minor Changes
+
+- e32eb67: `browserAutomation`: document `BrowserSession.liveViewUrl` and add `liveViewMode`.
+
+  - `liveViewUrl` is an interactive live view of the session's browser that opens on any device.
+    It is meant for handing a step the agent should not do itself — a sign-in, a one-time code, a
+    payment confirmation — to a person, who acts inside the same session so the agent resumes over
+    `cdpUrl` with cookies intact. The link works for as long as the session does and anyone holding
+    it can act in the browser, so treat it like a credential. Absent from Local Run stub sessions.
+  - `BrowserSession.liveViewMode` reports the lifetime of that link; `"persistent"` means it works
+    for as long as the session does.
+
+- ca1580c: Support configurable browser session idle timeout and maximum duration.
+
+## 0.37.0
+
+### Minor Changes
+
+- 6e5e2e1: Add Google and GitHub capabilities to `ctx.sapiom`, with credentials injected by the gateway:
+
+  - `google.token()` — a short-lived Google bearer for the tenant's connected account.
+  - `google.authClient()` — a `google-auth-library` `OAuth2Client` that mints and refreshes its token through the gateway, so it drops straight into `googleapis` and the `@googleapis/*` clients. `google-auth-library` is an optional peer dependency, loaded only when `authClient()` is called; a token-only integration needs no extra dependency.
+  - `google.drive.shareFile()` / `google.drive.uploadFile()` and `google.gmail.sendEmail()` — Drive and Gmail actions execute server-side in the gateway, so the Google token never reaches agent code.
+  - `github.listRepos()` — list repositories for a connected GitHub account.
+
 ## 0.36.1
 
 ### Patch Changes

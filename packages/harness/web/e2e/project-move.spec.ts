@@ -331,7 +331,7 @@ test.describe("the Group axis", () => {
   test("moves nothing on disk — its drag carries no move payload at all", async ({
     page,
   }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     // "Projects" on both axes. Rationale at group-axis.spec.ts's openGroupAxis.

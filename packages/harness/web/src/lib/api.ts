@@ -1,6 +1,6 @@
-import type { AgentMapImplementationsResponse } from "@shared/agent-map";
+import type { AgentMapImplementationsResponse } from "@sapiom/agent-map";
 import { parseAgentMapImplementations } from "./agent-map-deployment";
-import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@shared/agent-map-initialization";
+import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } from "@sapiom/agent-map/agent-map-initialization";
 /**
  * Typed REST client for the harness server (see the "REST API surface"
  * section of ../../../src/shared/types.ts). Gated at this layer: with
@@ -8,7 +8,7 @@ import { parseAgentMapInitializationStatus, type AgentMapInitializationStatus } 
  * touches the network — this is what lets the SPA build ahead of a running
  * server.
  */
-import { buildIdeaWithAttachments } from "@shared/initial-prompt";
+import { buildFirstPrompt } from "@shared/initial-prompt";
 import type {
   AccountPlanView,
   AgentSecret,
@@ -55,7 +55,7 @@ import type {
   StudioProjectId,
   StudioProjectSummary,
   StudioWorkspaceSelection,
-} from "@shared/agent-map";
+} from "@sapiom/agent-map";
 
 import type { LocalStepTrace, LocalRunOutcome } from "@sapiom/agent-core";
 
@@ -2378,16 +2378,19 @@ export class MockApi implements HarnessApi {
         throw new Error("mock: couldn't create session");
       }
     }
-    if (req.scaffold) {
-      const separator = req.cwd.lastIndexOf("/");
-      await this.scaffoldAgent(req.cwd.slice(0, separator), req.cwd.slice(separator + 1), req.scaffold.template);
-    }
     const id = `sess-mock-${this.sessions.length + 1}`;
     const attachments: { path: string }[] = [];
     for (const attachment of req.initialAttachments ?? []) {
       attachments.push(attachment.kind === "path" ? attachment : await this.materializeMockFile(id, req.cwd, attachment));
     }
-    const initialPrompt = buildIdeaWithAttachments(req.initialPrompt ?? "", attachments);
+    // The same composition the server does (`first-request.ts`): the idea,
+    // the files, the linked sources, the session setup.
+    const initialPrompt = buildFirstPrompt({
+      idea: req.initialPrompt ?? "",
+      attachments,
+      sources: req.initialSources,
+      setup: req.initialSetup,
+    });
     recordCreateStep("session", req.cwd);
     if (typeof window !== "undefined" && initialPrompt) {
       const win = window as unknown as { __HARNESS_TEST__?: Record<string, unknown> };
@@ -2871,6 +2874,14 @@ export class MockApi implements HarnessApi {
     template = "default",
   ): Promise<AgentScaffoldResponse> {
     await delay(180);
+    // `?mockError=scaffold` forces the endpoint's refusal so the new-agent
+    // screen's error-under-the-field path is exercisable in a browser.
+    if (mockErrorTargets().has("scaffold"))
+      throw new ApiError(
+        409,
+        "POST /api/agents/scaffold → 409 (mock)",
+        `Can't create an agent in ${basenameOf(root)} right now.`,
+      );
     const refusal = refuseAgentName(name);
     if (refusal)
       throw new ApiError(
@@ -3084,51 +3095,11 @@ export class MockApi implements HarnessApi {
     // reload can (and in the spec does) start before this delay resolves. A
     // write behind the delay would lose the dismiss to its own fixture.
     if (patch.helpSeen !== undefined) writeMockHelpSeen(patch.helpSeen);
-    const previousRecentDirs = new Set(this.settings.recentDirs);
     await delay();
+    // Opening a project (a new `recentDirs` entry) mints the project and
+    // nothing else, like the server (flow-creation.md Q5): no automatic
+    // session, no seeding turn. The user types first.
     this.settings = { ...this.settings, ...patch };
-    // Opt-in parity fixture for the production project-open lifecycle: a newly
-    // durable project gets one ordinary first session titled Plan Agents. This
-    // is intentionally not routed through the mock create-session endpoint;
-    // the server owns it, so a project-name click still makes zero client
-    // session requests.
-    const autoPlanAgents =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("mockAutoPlanAgents") ===
-        "1";
-    const addedRoots = (patch.recentDirs ?? []).filter(
-      (root) => !previousRecentDirs.has(root),
-    );
-    if (autoPlanAgents && addedRoots.length > 0) {
-      const { publishMockBusMessage } = await import("./events");
-      for (const root of addedRoots) {
-        if (this.sessions.some((session) => samePath(session.cwd, root))) {
-          continue;
-        }
-        const projectId = this.studioProjectId(root);
-        const id = `sess-plan-agents-${this.sessions.length + 1}`;
-        const now = new Date().toISOString();
-        const session: HarnessSession = {
-          id,
-          agentSessionId: null,
-          boundWorkflowPath: null,
-          harness: "claude-code",
-          cwd: root,
-          title: "Plan Agents",
-          status: "running",
-          createdAt: now,
-          lastActiveAt: now,
-          ready: true,
-          agentMapIdentity: {
-            projectId,
-            userId: "user_mock",
-            sessionId: id,
-          },
-        };
-        this.sessions = [...this.sessions, session];
-        publishMockBusMessage({ type: "session.status", session });
-      }
-    }
     return this.settings;
   }
 

@@ -13,7 +13,7 @@ import type {
   SpawnSpec,
 } from "../shared/types.js";
 import { PROJECT_AGENT_PROMPT_APPENDIX } from "../profiles/project-agent.js";
-import { StudioProjectCatalog } from "../core/studio-project-catalog.js";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import { startServer, type HarnessServer } from "./index.js";
 
 let root: string;
@@ -44,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await server?.close();
   await fs.rm(root, { recursive: true, force: true, maxRetries: 5 });
 });
@@ -99,6 +100,16 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     `Bearer ${metadata!.bearerToken}`,
   );
   expect((await fs.stat(launchOpts!.mcpConfigFile!)).mode & 0o777).toBe(0o600);
+
+  const hostResponse = await fetch(`${metadata!.url}/host-context`, {
+    headers: { Authorization: `Bearer ${metadata!.bearerToken}` },
+  });
+  expect(hostResponse.status).toBe(200);
+  expect(await hostResponse.json()).toEqual({
+    protocolVersion: 1, host: "sapiom-studio", stateRoot: root,
+    projectId, sessionId: session.id, userId: "user-1", generation: 1,
+    capabilities: ["session-context"],
+  });
 
   const client = new Client({ name: "full-server-wiring-test", version: "1" });
   const transport = new StreamableHTTPClientTransport(new URL(metadata!.url), {
@@ -245,6 +256,9 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     }),
   });
   expect(rejected.status).toBe(401);
+  expect((await fetch(`${metadata!.url}/host-context`, {
+    headers: { Authorization: `Bearer ${metadata!.bearerToken}` },
+  })).status).toBe(401);
 });
 
 it("keeps an evicted descendant session resumable in its durable canonical project after restart", async () => {
@@ -371,6 +385,17 @@ it("keeps an evicted descendant session resumable in its durable canonical proje
     status: "running",
     agentMapIdentity: { projectId },
   });
+  const beforeFailure = await restartedCatalog.list();
+  const sessionsBeforeFailure = server.sessionManager.list();
+  const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
+  vi.spyOn(StudioProjectCatalog.prototype, "lookupIdentityForPath")
+    .mockResolvedValue({ kind: "unavailable" });
+  await expect(server.sessionManager.create({
+    cwd: descendant, harness: "claude-code",
+  })).rejects.toMatchObject({ code: "storage_unavailable" });
+  expect(reconcile).not.toHaveBeenCalled();
+  expect(await restartedCatalog.list()).toEqual(beforeFailure);
+  expect(server.sessionManager.list()).toEqual(sessionsBeforeFailure);
 });
 
 it("gives every signed-out project session the same coding prompt and Agent Map tools", async () => {
@@ -416,6 +441,13 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
     projectId,
     sessionId: created.id,
     userId: "local:machine-1",
+  });
+  const host = await fetch(`${launches[0]!.agentMapMcp!.url}/host-context`, {
+    headers: { Authorization: `Bearer ${launches[0]!.agentMapMcp!.bearerToken}` },
+  });
+  expect(host.status).toBe(200);
+  expect(await host.json()).toMatchObject({
+    ...created.agentMapIdentity, stateRoot: root, generation: 1,
   });
   expect(created.projectBootstrap).toBeUndefined();
 
@@ -554,7 +586,12 @@ it("gives every signed-out project session the same coding prompt and Agent Map 
   );
 });
 
-it("creates one ordinary Plan Agents session for a newly opened project and never from a map read", async () => {
+it("opening a new project mints it and starts no session (flow-creation.md Q5)", async () => {
+  // The user types first. A newly durable project used to get an automatic
+  // "Plan Agents" session (#824 to #826, #834); under the agreed flow, New
+  // project and Add project open the folder as a project and nothing follows.
+  // The project must still exist in the catalog before the client re-reads
+  // state, or the new-agent screen has nothing to scope to.
   const launches: LaunchOpts[] = [];
   const launch = (opts: LaunchOpts): SpawnSpec => {
     launches.push(opts);
@@ -597,70 +634,52 @@ it("creates one ordinary Plan Agents session for a newly opened project and neve
   const freshRoot = path.join(root, "fresh-project");
   await fs.mkdir(freshRoot);
   expect(server.sessionManager.list()).toEqual([]);
-  expect(launches).toEqual([]);
 
-  const firstOpen = await request("/settings", {
+  const opened = await request("/settings", {
     method: "PATCH",
     body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
   });
-  expect(firstOpen.status).toBe(200);
-  // Settings schedules creation asynchronously. Read the published state, as
-  // the app does, rather than observing the private row before its PTY exists.
+  expect(opened.status).toBe(200);
+
+  // The project is minted (the screen can scope to it) ...
   await vi.waitFor(async () => {
     const visibleState = await request("/state");
     expect(visibleState.status).toBe(200);
     const state = await visibleState.json();
-    expect(state.sessions).toHaveLength(1);
-    expect(state.sessions[0].status).toBe("running");
+    const scope = state.workspaceScopes.find(
+      (candidate: { cwd: string }) => candidate.cwd === freshRoot,
+    );
+    expect(scope?.projectId).toEqual(expect.any(String));
+    expect(
+      state.studioProjects.some(
+        (project: { projectId: string }) => project.projectId === scope.projectId,
+      ),
+    ).toBe(true);
   });
-  expect(launches).toHaveLength(1);
-  const [firstSession] = server.sessionManager.list();
-  const freshProjectId = firstSession!.agentMapIdentity!.projectId;
-  expect(firstSession).toMatchObject({
-    status: "running",
-    ready: false,
-    title: "Plan Agents",
-    cwd: freshRoot,
-    agentMapIdentity: {
-      projectId: freshProjectId,
-      sessionId: firstSession!.id,
-      userId: "local:machine-1",
-    },
-    projectBootstrap: {
-      projectId: freshProjectId,
-      targetSessionId: firstSession!.id,
-      userId: "local:machine-1",
-    },
-  });
-  expect(firstSession).not.toHaveProperty("planning");
+  // ... and nothing was started for it, then or later.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  expect(server.sessionManager.list()).toEqual([]);
+  expect(launches).toEqual([]);
+  const state = await (await request("/state")).json();
+  expect(state.sessions).toEqual([]);
 
-  const queuedUserInput = await request(`/sessions/${firstSession!.id}/input`, {
+  // A session the USER opens in the project is an ordinary one: no bootstrap
+  // metadata, no "Plan Agents" title, the ordinary system prompt.
+  const created = await request("/sessions", {
     method: "POST",
     body: JSON.stringify({
-      text: "Implement the requested feature directly",
-      submit: true,
+      cwd: freshRoot,
+      harness: "claude-code",
+      initialPrompt: "Build a ticket triage agent.",
     }),
   });
-  expect(queuedUserInput.status).toBe(200);
-  expect(firstSession!.projectBootstrap).toMatchObject({
-    bootstrap: { status: "skipped", reason: "user-proceeded" },
-    queuedInputIds: [expect.any(String)],
-  });
-
-  const repeatedOpen = await request("/settings", {
-    method: "PATCH",
-    body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
-  });
-  expect(repeatedOpen.status).toBe(200);
-  expect(server.sessionManager.list()).toHaveLength(1);
+  expect(created.status).toBe(201);
+  const [session] = server.sessionManager.list();
+  expect(session).toMatchObject({ cwd: freshRoot, title: expect.any(String) });
+  expect(session!.title).not.toBe("Plan Agents");
+  expect(session).not.toHaveProperty("projectBootstrap");
   expect(launches).toHaveLength(1);
-
-  const mapRead = await request(
-    `/projects/${freshProjectId}/agent-map/workspace`,
-  );
-  expect(mapRead.status).toBe(200);
-  expect(server.sessionManager.list()).toHaveLength(1);
-  expect(launches).toHaveLength(1);
+  expect(launches[0]?.initialPrompt).toBe("Build a ticket triage agent.");
 });
 
 it.each([false, true])("retains a first project's scope during preparation and refresh (fresh catalog: %s)", async (fresh) => {
@@ -708,570 +727,3 @@ it.each([false, true])("retains a first project's scope during preparation and r
   expect(server.sessionManager.listPendingCreates()).toEqual([]);
 });
 
-it("does not spawn an automatic duplicate when an explicit first session wins the bootstrap claim", async () => {
-  const launches: LaunchOpts[] = [];
-  const adapter: HarnessAdapter = {
-    id: "claude-code",
-    eventSource: "hooks",
-    doctor: async () => [],
-    launch: (opts) => {
-      launches.push(opts);
-      return { command: "bash", args: [], env: {}, cwd: opts.cwd };
-    },
-    resume: (_id, opts) => ({
-      command: "bash",
-      args: [],
-      env: {},
-      cwd: opts.cwd,
-    }),
-    listPastSessions: async () => [],
-    canResume: async () => true,
-  };
-  const webDir = path.join(root, "web");
-  const freshRoot = path.join(root, "explicit-first-project");
-  await Promise.all([fs.mkdir(webDir), fs.mkdir(freshRoot)]);
-  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
-  const needed = deferred();
-  const releaseAutomaticCreate = deferred();
-  server = await startServer({
-    port: 0,
-    bootToken: "boot-token",
-    telemetryOptIn: false,
-    identity: null,
-    machineId: "machine-1",
-    adapters: { "claude-code": adapter },
-    stateRoot: root,
-    launchDir: projectRoot,
-    webDir,
-    autoCreateSession: false,
-    loadSystemPrompt: async () => "ordinary coding prompt",
-    projectBootstrapTestHooks: {
-      afterProjectSessionNeeded: async () => {
-        needed.resolve();
-        await releaseAutomaticCreate.promise;
-      },
-    },
-  });
-  const request = (pathname: string, init?: RequestInit) =>
-    fetch(`http://127.0.0.1:${server!.port}/api${pathname}`, {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        "x-harness-token": "boot-token",
-        ...init?.headers,
-      },
-    });
-
-  const opening = request("/settings", {
-    method: "PATCH",
-    body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
-  });
-  await needed.promise;
-  const explicitResponse = await request("/sessions", {
-    method: "POST",
-    body: JSON.stringify({
-      cwd: freshRoot,
-      harness: "claude-code",
-      initialPrompt: "Build a ticket triage agent.",
-    }),
-  });
-  expect(explicitResponse.status).toBe(201);
-  const explicit = (await explicitResponse.json()) as {
-    id: string;
-    title: string;
-    projectBootstrap?: { bootstrap: { status: string; reason?: string } };
-  };
-  releaseAutomaticCreate.resolve();
-  expect((await opening).status).toBe(200);
-
-  expect(server.sessionManager.list()).toHaveLength(1);
-  expect(server.sessionManager.list()[0]).toMatchObject({
-    id: explicit.id,
-    title: "Plan Agents",
-    projectBootstrap: {
-      bootstrap: { status: "skipped", reason: "user-proceeded" },
-    },
-  });
-  expect(explicit.title).toBe("Plan Agents");
-  expect(launches).toHaveLength(1);
-  expect(launches[0]?.initialPrompt).toBe("Build a ticket triage agent.");
-});
-
-it("automatically seeds one durable map through the real E2 tools without replaying after duplicate readiness or restart", async () => {
-  const launches: LaunchOpts[] = [];
-  const tokenPathFor = (sessionId: string) =>
-    path.join(root, `${sessionId}.ingest.json`);
-  const inputPathFor = (sessionId: string) =>
-    path.join(root, `${sessionId}.pty-input`);
-  const launch = (opts: LaunchOpts): SpawnSpec => {
-    launches.push(opts);
-    return {
-      command: "bash",
-      args: [
-        "-c",
-        'printf \'{"ingestToken":"%s"}\' "$SAPIOM_HARNESS_INGEST_TOKEN" > "$SAPIOM_TEST_INGEST_TOKEN_PATH"; while IFS= read -r line; do printf "%s\\n" "$line" >> "$SAPIOM_TEST_INPUT_PATH"; done',
-      ],
-      env: {
-        SAPIOM_TEST_INGEST_TOKEN_PATH: tokenPathFor(opts.harnessSessionId),
-        SAPIOM_TEST_INPUT_PATH: inputPathFor(opts.harnessSessionId),
-      },
-      cwd: opts.cwd,
-    };
-  };
-  const adapter: HarnessAdapter = {
-    id: "claude-code",
-    eventSource: "hooks",
-    doctor: async () => [],
-    launch,
-    resume: (_id, opts) => launch(opts),
-    listPastSessions: async () => [],
-    canResume: async () => true,
-  };
-  const webDir = path.join(root, "web");
-  const freshRoot = path.join(root, "automatic-bootstrap-project");
-  await Promise.all([fs.mkdir(webDir), fs.mkdir(freshRoot)]);
-  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
-
-  const boot = () =>
-    startServer({
-      port: 0,
-      bootToken: "boot-token",
-      telemetryOptIn: false,
-      identity: null,
-      machineId: "machine-1",
-      adapters: { "claude-code": adapter },
-      stateRoot: root,
-      launchDir: projectRoot,
-      webDir,
-      autoCreateSession: false,
-      loadSystemPrompt: async () => "ordinary coding prompt",
-    });
-  const request = (pathname: string, init?: RequestInit) =>
-    fetch(`http://127.0.0.1:${server!.port}/api${pathname}`, {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        "x-harness-token": "boot-token",
-        ...init?.headers,
-      },
-    });
-  const readIngestToken = async (sessionId: string): Promise<string> => {
-    let token = "";
-    await vi.waitFor(async () => {
-      const parsed = JSON.parse(
-        await fs.readFile(tokenPathFor(sessionId), "utf8"),
-      ) as { ingestToken?: string };
-      token = parsed.ingestToken ?? "";
-      expect(token).not.toBe("");
-    });
-    return token;
-  };
-  const postHook = async (
-    sessionId: string,
-    token: string,
-    hookEvent: "SessionStart" | "UserPromptSubmit" | "Stop",
-    payload: Record<string, unknown>,
-  ): Promise<void> => {
-    const response = await fetch(`http://127.0.0.1:${server!.port}/ingest`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ hookEvent, harnessSessionId: sessionId, payload }),
-    });
-    expect(response.status).toBe(200);
-  };
-  const capturedInputs = async (sessionId: string): Promise<string[]> => {
-    const text = await fs.readFile(inputPathFor(sessionId), "utf8");
-    return text.trimEnd().split("\n");
-  };
-  const connect = async (opts: LaunchOpts): Promise<Client> => {
-    const metadata = opts.agentMapMcp!;
-    const client = new Client({
-      name: "automatic-bootstrap-script",
-      version: "1",
-    });
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(metadata.url), {
-        requestInit: {
-          headers: { Authorization: `Bearer ${metadata.bearerToken}` },
-        },
-      }),
-    );
-    return client;
-  };
-
-  server = await boot();
-  const opened = await request("/settings", {
-    method: "PATCH",
-    body: JSON.stringify({ recentDirs: [freshRoot, projectRoot] }),
-  });
-  expect(opened.status).toBe(200);
-  await vi.waitFor(() => expect(server!.sessionManager.list()).toHaveLength(1));
-  const [session] = server.sessionManager.list();
-  expect(session).toMatchObject({
-    cwd: freshRoot,
-    title: "Plan Agents",
-    projectBootstrap: {
-      bootstrap: { status: "pending" },
-    },
-  });
-  const automaticProjectId = session!.agentMapIdentity!.projectId;
-  const providerSessionId = "provider-automatic-bootstrap";
-  const firstIngestToken = await readIngestToken(session!.id);
-
-  await postHook(session!.id, firstIngestToken, "SessionStart", {
-    session_id: providerSessionId,
-    source: "startup",
-    cwd: freshRoot,
-  });
-  await postHook(session!.id, firstIngestToken, "SessionStart", {
-    session_id: providerSessionId,
-    source: "startup",
-    cwd: freshRoot,
-  });
-  let bootstrapPrompt = "";
-  await vi.waitFor(async () => {
-    const inputs = await capturedInputs(session!.id);
-    expect(inputs).toHaveLength(1);
-    bootstrapPrompt = inputs[0]!;
-    expect(bootstrapPrompt).toContain("Agent Studio project bootstrap");
-    expect(bootstrapPrompt).toContain("Read the current Agent Map first");
-  });
-  await postHook(session!.id, firstIngestToken, "UserPromptSubmit", {
-    session_id: providerSessionId,
-    prompt: bootstrapPrompt,
-  });
-
-  const batch = {
-    schemaVersion: 1,
-    proposalId: null,
-    expectedVersion: 0,
-    requestId: "automatic-bootstrap-seed-v1",
-    operations: [
-      {
-        kind: "add-node",
-        draftRef: "market-research",
-        node: {
-          kind: "agent",
-          name: "Market Research",
-          purpose: "Research the top ten stocks trading today",
-          ownerAgent: null,
-          contractRefs: ["ResearchReport"],
-        },
-      },
-    ],
-  };
-  const firstClient = await connect(launches[0]!);
-  let firstProposal: Awaited<ReturnType<Client["callTool"]>>;
-  try {
-    const initial = await firstClient.callTool({
-      name: "agent_map_read",
-      arguments: {},
-    });
-    expect(initial.isError).not.toBe(true);
-    expect(initial.structuredContent).toMatchObject({ proposal: null });
-    const validated = await firstClient.callTool({
-      name: "agent_map_validate",
-      arguments: batch,
-    });
-    expect(validated.isError).not.toBe(true);
-    expect(validated.structuredContent).toMatchObject({ currentVersion: 0 });
-    firstProposal = await firstClient.callTool({
-      name: "agent_map_propose",
-      arguments: batch,
-    });
-    expect(firstProposal.isError).not.toBe(true);
-    expect(firstProposal.structuredContent).toMatchObject({ version: 1 });
-  } finally {
-    await firstClient.close();
-  }
-
-  await postHook(session!.id, firstIngestToken, "Stop", {
-    session_id: providerSessionId,
-    last_assistant_message: "Seeded the evidence-supported initial Agent Map.",
-  });
-  await postHook(session!.id, firstIngestToken, "Stop", {
-    session_id: providerSessionId,
-    last_assistant_message: "Duplicate lifecycle signal.",
-  });
-  await vi.waitFor(() => {
-    expect(
-      server!.sessionManager.get(session!.id)?.projectBootstrap,
-    ).toMatchObject({ bootstrap: { status: "delivered" } });
-  });
-
-  const durableFile = path.join(
-    root,
-    "agent-map",
-    "projects",
-    automaticProjectId,
-    "workspace.json",
-  );
-  const durableBeforeRestart = JSON.parse(
-    await fs.readFile(durableFile, "utf8"),
-  ) as {
-    storageSchemaVersion: number;
-    mapVersions: Array<{ version: number; graph: { nodes: unknown[] } }>;
-    mapOperationHistory: unknown[];
-  };
-  expect(durableBeforeRestart.storageSchemaVersion).toBe(2);
-  expect(durableBeforeRestart.mapVersions).toHaveLength(1);
-  expect(durableBeforeRestart.mapVersions[0]).toMatchObject({
-    version: 1,
-    graph: { nodes: [expect.any(Object)] },
-  });
-  expect(durableBeforeRestart.mapOperationHistory).toHaveLength(1);
-  expect(await capturedInputs(session!.id)).toHaveLength(1);
-
-  await server.close();
-  server = undefined;
-  server = await boot();
-  expect(launches).toHaveLength(1);
-  expect(server.sessionManager.get(session!.id)).toMatchObject({
-    id: session!.id,
-    agentSessionId: providerSessionId,
-    status: "exited",
-    projectBootstrap: { bootstrap: { status: "delivered" } },
-  });
-
-  await fs.rm(tokenPathFor(session!.id), { force: true });
-  await server.sessionManager.resume(session!.id);
-  expect(launches).toHaveLength(2);
-  const resumedIngestToken = await readIngestToken(session!.id);
-  expect(resumedIngestToken).not.toBe(firstIngestToken);
-  await postHook(session!.id, resumedIngestToken, "SessionStart", {
-    session_id: providerSessionId,
-    source: "resume",
-    cwd: freshRoot,
-  });
-  await postHook(session!.id, resumedIngestToken, "SessionStart", {
-    session_id: providerSessionId,
-    source: "resume",
-    cwd: freshRoot,
-  });
-  await vi.waitFor(() => {
-    expect(server!.sessionManager.get(session!.id)?.ready).toBe(true);
-  });
-
-  const resumedClient = await connect(launches[1]!);
-  try {
-    const restored = await resumedClient.callTool({
-      name: "agent_map_read",
-      arguments: {},
-    });
-    expect(restored.structuredContent).toMatchObject({
-      proposal: {
-        version: 1,
-        nodes: [expect.objectContaining({ name: "Market Research" })],
-        history: [expect.objectContaining({ requestId: batch.requestId })],
-      },
-    });
-    const replayed = await resumedClient.callTool({
-      name: "agent_map_propose",
-      arguments: batch,
-    });
-    expect(replayed.structuredContent).toEqual(
-      firstProposal!.structuredContent,
-    );
-  } finally {
-    await resumedClient.close();
-  }
-  expect(await capturedInputs(session!.id)).toHaveLength(1);
-  const durableAfterRestart = JSON.parse(
-    await fs.readFile(durableFile, "utf8"),
-  ) as {
-    mapVersions: Array<{ version: number; graph: { nodes: unknown[] } }>;
-    mapOperationHistory: unknown[];
-  };
-  expect(durableAfterRestart.mapVersions).toHaveLength(1);
-  expect(durableAfterRestart.mapVersions[0]).toMatchObject({ version: 1 });
-  expect(durableAfterRestart.mapVersions[0]!.graph.nodes).toHaveLength(1);
-  expect(durableAfterRestart.mapOperationHistory).toHaveLength(1);
-});
-
-it("initializes every newly opened root once when one settings update creates multiple projects", async () => {
-  const launches: LaunchOpts[] = [];
-  const adapter: HarnessAdapter = {
-    id: "claude-code",
-    eventSource: "hooks",
-    doctor: async () => [],
-    launch: (opts) => {
-      launches.push(opts);
-      return { command: "bash", args: [], env: {}, cwd: opts.cwd };
-    },
-    resume: (_id, opts) => ({
-      command: "bash",
-      args: [],
-      env: {},
-      cwd: opts.cwd,
-    }),
-    listPastSessions: async () => [],
-    canResume: async () => true,
-  };
-  const webDir = path.join(root, "web");
-  const firstRoot = path.join(root, "first-project");
-  const secondRoot = path.join(root, "second-project");
-  await Promise.all([
-    fs.mkdir(webDir),
-    fs.mkdir(firstRoot),
-    fs.mkdir(secondRoot),
-  ]);
-  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
-  server = await startServer({
-    port: 0,
-    bootToken: "boot-token",
-    telemetryOptIn: false,
-    identity: null,
-    machineId: "machine-1",
-    adapters: { "claude-code": adapter },
-    stateRoot: root,
-    launchDir: projectRoot,
-    webDir,
-    autoCreateSession: false,
-    loadSystemPrompt: async () => "ordinary coding prompt",
-  });
-
-  const response = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-    method: "PATCH",
-    headers: {
-      "content-type": "application/json",
-      "x-harness-token": "boot-token",
-    },
-    body: JSON.stringify({
-      recentDirs: [firstRoot, secondRoot, projectRoot],
-    }),
-  });
-
-  expect(response.status).toBe(200);
-  await vi.waitFor(() => expect(server!.sessionManager.list()).toHaveLength(2));
-  const sessions = server.sessionManager.list();
-  expect(sessions).toHaveLength(2);
-  expect(
-    sessions
-      .map((session) => ({
-        cwd: session.cwd,
-        title: session.title,
-        projectId: session.agentMapIdentity?.projectId,
-      }))
-      .sort((left, right) => left.cwd.localeCompare(right.cwd)),
-  ).toEqual([
-    { cwd: firstRoot, title: "Plan Agents", projectId: expect.any(String) },
-    { cwd: secondRoot, title: "Plan Agents", projectId: expect.any(String) },
-  ]);
-  expect(
-    new Set(sessions.map((session) => session.agentMapIdentity?.projectId))
-      .size,
-  ).toBe(2);
-  expect(launches).toHaveLength(2);
-
-  const repeated = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-    method: "PATCH",
-    headers: {
-      "content-type": "application/json",
-      "x-harness-token": "boot-token",
-    },
-    body: JSON.stringify({
-      recentDirs: [firstRoot, secondRoot, projectRoot],
-    }),
-  });
-  expect(repeated.status).toBe(200);
-  expect(server.sessionManager.list()).toHaveLength(2);
-  expect(launches).toHaveLength(2);
-});
-
-it("recovers a durable scheduled project intent at server boot", async () => {
-  const nestedRoot = path.join(projectRoot, "nested-binding");
-  await fs.mkdir(nestedRoot);
-  const catalog = new StudioProjectCatalog(
-    path.join(root, "studio-projects.json"),
-  );
-  const identity = await catalog.resolveIdentity(projectId);
-  await catalog.moveRootBinding(
-    projectId,
-    identity!.rootBindings[0]!.id,
-    nestedRoot,
-  );
-  // Keep the narrower binding first in persisted array order. Recovery must
-  // still choose the canonical outermost root rather than UUID/array order.
-  await catalog.addRootBinding(projectId, projectRoot);
-  await fs.writeFile(
-    path.join(root, "settings.json"),
-    JSON.stringify({ recentDirs: [nestedRoot, projectRoot] }),
-  );
-  const intentDirectory = path.join(
-    root,
-    "agent-map",
-    "project-bootstrap",
-    "projects",
-  );
-  await fs.mkdir(intentDirectory, { recursive: true });
-  await fs.writeFile(
-    path.join(intentDirectory, `${projectId}.json`),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      projectId,
-      userId: "local:machine-1",
-      targetSessionId: null,
-      status: "scheduled",
-      createdAt: "2026-09-01T00:00:00.000Z",
-      updatedAt: "2026-09-01T00:00:00.000Z",
-    })}\n`,
-  );
-  const launches: LaunchOpts[] = [];
-  const launch = (opts: LaunchOpts): SpawnSpec => {
-    launches.push(opts);
-    return { command: "bash", args: [], env: {}, cwd: opts.cwd };
-  };
-  const adapter: HarnessAdapter = {
-    id: "claude-code",
-    eventSource: "hooks",
-    doctor: async () => [],
-    launch,
-    resume: (_id, opts) => launch(opts),
-    listPastSessions: async () => [],
-    canResume: async () => true,
-  };
-  const webDir = path.join(root, "web");
-  await fs.mkdir(webDir);
-  await fs.writeFile(path.join(webDir, "index.html"), "<html></html>");
-
-  server = await startServer({
-    port: 0,
-    bootToken: "boot-token",
-    telemetryOptIn: false,
-    identity: null,
-    machineId: "machine-1",
-    adapters: { "claude-code": adapter },
-    stateRoot: root,
-    launchDir: projectRoot,
-    webDir,
-    loadSystemPrompt: async () => "ordinary coding prompt",
-  });
-
-  // Default auto-create is intentionally enabled. Give its detached create
-  // path enough time to expose a duplicate if recovery failed to suppress it.
-  await new Promise<void>((resolve) => setTimeout(resolve, 100));
-  expect(launches).toHaveLength(1);
-  expect(server.sessionManager.list()).toEqual([
-    expect.objectContaining({
-      title: "Plan Agents",
-      cwd: projectRoot,
-      agentMapIdentity: expect.objectContaining({ projectId }),
-      projectBootstrap: expect.objectContaining({
-        projectId,
-        userId: "local:machine-1",
-      }),
-    }),
-  ]);
-  const recovered = JSON.parse(
-    await fs.readFile(path.join(intentDirectory, `${projectId}.json`), "utf8"),
-  ) as { status: string; targetSessionId: string | null };
-  expect(recovered).toEqual(
-    expect.objectContaining({
-      status: "claimed",
-      targetSessionId: server.sessionManager.list()[0]!.id,
-    }),
-  );
-});

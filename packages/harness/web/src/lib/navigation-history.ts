@@ -2,7 +2,17 @@ import { useCallback, useRef, useState } from "react";
 
 import type { SessionSummary } from "@shared/types";
 import type { WorkspaceKey } from "@shared/workspace-scope";
-import type { StudioProjectId } from "@shared/agent-map";
+import type { StudioProjectId } from "@sapiom/agent-map";
+
+import type { StudioTemplate } from "./templates";
+
+/** The project a composer visit was scoped to, enough to put the screen back. */
+export interface ComposerVisitProject {
+  root: string;
+  label: string;
+  projectId: StudioProjectId | null;
+  template: StudioTemplate | null;
+}
 
 /**
  * One place the user was working. Distinct from past-session "history" (ended
@@ -22,7 +32,7 @@ export type NavigationVisit =
       label: string;
     }
   | { kind: "review"; summary: SessionSummary }
-  | { kind: "composer" }
+  | { kind: "composer"; project: ComposerVisitProject | null }
   | { kind: "templates" };
 
 export interface NavigationHistoryState {
@@ -53,6 +63,9 @@ export function sameNavigationVisit(
   }
   if (a.kind === "review" && b.kind === "review") {
     return a.summary.agentSessionId === b.summary.agentSessionId;
+  }
+  if (a.kind === "composer" && b.kind === "composer") {
+    return (a.project?.root ?? null) === (b.project?.root ?? null);
   }
   return a.kind === b.kind;
 }

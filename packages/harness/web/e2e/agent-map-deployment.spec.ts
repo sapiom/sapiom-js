@@ -10,7 +10,7 @@ import {
   type DeploymentWindow,
 } from "./workflow-deployment.fixture";
 import type { HarnessApi } from "../src/lib/api";
-import type { AgentMapImplementationsResponse } from "../../src/shared/agent-map";
+import type { AgentMapImplementationsResponse } from "@sapiom/agent-map";
 
 type Probe = DeploymentProbe & {
   resolution: "bound" | "missing" | "unbound";
