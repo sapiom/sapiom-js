@@ -399,14 +399,18 @@ export async function findEmail(
     );
   }
 
-  // Forward only the provided fields (camelCase router DTO). `!= null` keeps a
-  // JS-caller's explicit null off the wire.
+  // Forward only genuinely-provided fields (camelCase router DTO). `hasText`
+  // (not just `!= null`) keeps a whitespace-only field off the wire too --
+  // otherwise a valid alternative (e.g. company) could satisfy the guard
+  // above while a whitespace-only sibling (e.g. domain: " ") still reached
+  // the backend, which could validate or prioritize it independently of
+  // this guard's intent.
   const body: Record<string, unknown> = {};
-  if (input.domain != null) body.domain = input.domain;
-  if (input.company != null) body.company = input.company;
-  if (input.firstName != null) body.firstName = input.firstName;
-  if (input.lastName != null) body.lastName = input.lastName;
-  if (input.fullName != null) body.fullName = input.fullName;
+  if (hasText(input.domain)) body.domain = input.domain;
+  if (hasText(input.company)) body.company = input.company;
+  if (hasText(input.firstName)) body.firstName = input.firstName;
+  if (hasText(input.lastName)) body.lastName = input.lastName;
+  if (hasText(input.fullName)) body.fullName = input.fullName;
 
   const raw = await capabilityCall<RawFindEmail>("email.find", body, {
     transport,

@@ -612,6 +612,27 @@ describe("search.emailSearch.findEmail()", () => {
     });
   });
 
+  it("drops a whitespace-only field from the body even when a valid alternative satisfies the guard (regression for #860 review)", async () => {
+    // domain is whitespace-only, but company + fullName are enough to pass
+    // the guard on their own -- the whitespace-only domain must not ride
+    // along in the request body once it does, since the backend could
+    // validate or prioritize it independently of this guard's intent.
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ email: "ada@example.com" }),
+    ]);
+
+    await findEmail(
+      { domain: "   ", company: "Example", fullName: "Ada Lovelace" },
+      transport,
+      BASE,
+    );
+
+    expect(bodyOf(calls[0]!)).toEqual({
+      company: "Example",
+      fullName: "Ada Lovelace",
+    });
+  });
+
   it("returns email: null (not a thrown error) when the lookup finds nothing", async () => {
     const { transport } = makeTransport([
       () => jsonResponse({ email: null, score: 0 }),
