@@ -580,15 +580,16 @@ describe("createRestRouter", () => {
       });
     });
 
-    it("preserves the initial task and scaffold request without an input-route round trip", async () => {
+    it("preserves the initial task, its sources and its setup without an input-route round trip", async () => {
       const sessionManager = fakeSessionManager();
       vi.mocked(sessionManager.create).mockResolvedValue(exitedSession());
       start({ sessionManager });
       const request = {
         cwd: "/tmp/proj", harness: "claude-code",
         initialPrompt: "Build ticket triage.\nUse my files.",
-        scaffold: { template: "default" },
         initialAttachments: [{ kind: "path", path: "/tmp/brief.pdf" }],
+        initialSources: ["https://example.com/spec"],
+        initialSetup: "Session setup. Plan before you build.",
       };
       const res = await fetch(`${baseUrl}/sessions`, {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request),
@@ -603,7 +604,12 @@ describe("createRestRouter", () => {
       { initialPrompt: "x".repeat(32_001) },
       { initialAttachments: [{ kind: "path", path: "bad\0path" }] },
       { initialAttachments: [{ kind: "inline", filename: "bad.png", dataUrl: "data:image/png;base64,invalid!" }] },
-      { scaffold: { template: "../../escape" } },
+      { initialSources: ["ftp://not-a-web-link"] },
+      { initialSources: ["javascript:alert(1)"] },
+      { initialSetup: "bad\0setup" },
+      // The session-side scaffold option is gone (flow-creation.md §4.4 step
+      // 4); a request that still sends it is malformed, not a create.
+      { scaffold: { template: "default" } },
     ])("rejects malformed first-turn input before session creation", async (input) => {
       const sessionManager = fakeSessionManager();
       start({ sessionManager });

@@ -194,8 +194,7 @@ test("retains Assistant activity in the exited-session header and history row", 
       .locator(".session-current")
       .getByRole("img", { name: "Assistant: Waiting for input" }),
   ).toBeVisible();
-  await page.getByTestId("history-trigger").click();
-  await page.getByTestId("past-sessions-trigger").hover();
+  await page.getByTestId("rail-history").click();
   await expect(
     page
       .getByTestId("exited-session-sess-boot")

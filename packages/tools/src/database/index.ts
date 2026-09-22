@@ -1,15 +1,19 @@
 /**
- * `database` capability — provision an on-demand Postgres database, retrieve it,
- * and delete it. You get back direct connection credentials, so you can connect
- * with any standard Postgres client or driver.
+ * `database` capability — provision a Postgres database, retrieve it, and delete
+ * it. You get back direct connection credentials, so you can connect with any
+ * standard Postgres client or driver.
+ *
+ * A Sapiom Postgres is permanent: it lives until you delete it. There is no
+ * lifetime to pick. What it costs is a slot of your plan's database limit
+ * (`database.count`), held from `create` until `delete`.
  *
  *   import { database } from "@sapiom/tools";              // ambient auth
- *   const db = await database.create({ duration: "1h", handle: "analytics" });
+ *   const db = await database.create({ handle: "analytics" });
  *   db.connection?.connectionString;                      // a ready-to-use Postgres URI
  *
  *   const again = await database.get(db.id);              // or get("analytics") by handle
  *   const all = await database.list();                    // every database you own (read-only)
- *   await database.delete(db.id);                         // or delete("analytics")
+ *   await database.delete(db.id);                         // or delete("analytics") — frees the slot
  *
  * Or via an explicit client: `createClient({ apiKey }).database.create(...)`.
  *
@@ -26,13 +30,22 @@ const DEFAULT_BASE_URL =
 
 // ----- Types -----
 
-/** The set of valid database lifetimes, in ascending order. */
+/**
+ * The values `create` used to require as `duration`, kept so existing callers
+ * still compile. The platform stopped reading them in SAP-3100.
+ *
+ * @deprecated A Sapiom Postgres has no lifetime. Omit `duration`.
+ */
 export const DATABASE_DURATIONS = ["15m", "1h", "4h", "24h", "7d"] as const;
 
-/** How long the database lives before it is automatically removed. */
+/** @deprecated See {@link DATABASE_DURATIONS}. */
 export type DatabaseDuration = (typeof DATABASE_DURATIONS)[number];
 
-/** Lifecycle state of a database. */
+/**
+ * Lifecycle state of a database. `"active"` ends only through `delete`.
+ * `"expired"` is kept for databases created before SAP-3100 and is never
+ * emitted for a new database: a Sapiom Postgres does not expire.
+ */
 export type DatabaseStatus =
   | "provisioning"
   | "active"
@@ -41,8 +54,13 @@ export type DatabaseStatus =
   | "deleted";
 
 export interface CreateDatabaseInput {
-  /** How long the database lives before it is automatically removed (required). */
-  duration: DatabaseDuration;
+  /**
+   * Ignored. A Sapiom Postgres lives until you delete it; the platform no longer
+   * reads a lifetime and this client does not send one.
+   *
+   * @deprecated A Sapiom Postgres has no lifetime. Omit `duration`.
+   */
+  duration?: DatabaseDuration;
   /**
    * Optional stable, human-friendly key you can use to look the database up later
    * (`get(handle)` / `delete(handle)`). 3–63 chars, `^[a-z0-9][a-z0-9-]*[a-z0-9]$`.
@@ -95,12 +113,23 @@ export interface Database {
   region: string;
   /** Postgres major version. */
   pgVersion: number;
-  /** The lifetime the database was created with. */
-  duration: DatabaseDuration | string;
+  /**
+   * The lifetime tier a database was created with, only for databases created
+   * before SAP-3100. Absent for newer databases: a Sapiom Postgres has no lifetime.
+   *
+   * @deprecated Never set for databases created after SAP-3100.
+   */
+  duration?: DatabaseDuration | string;
   /** Connection credentials — `null` while the database is still being provisioned. */
   connection: DatabaseConnection | null;
-  /** ISO-8601 timestamp when the database expires, or `null`. */
-  expiresAt: string | null;
+  /**
+   * Absent (or `null`) for every database created after SAP-3100: a Sapiom
+   * Postgres lives until you delete it. Older databases may still carry the
+   * ISO-8601 timestamp they were created with; nothing enforces it.
+   *
+   * @deprecated Never set for databases created after SAP-3100.
+   */
+  expiresAt?: string | null;
   /** ISO-8601 timestamp when the database was created. */
   createdAt: string;
 }
@@ -108,7 +137,6 @@ export interface Database {
 // ----- Internal request/response shapes -----
 
 interface RawCreateDatabaseRequest {
-  duration: string;
   handle?: string;
   name?: string;
   description?: string;
@@ -124,9 +152,11 @@ interface RawDatabaseResponse {
   status: string;
   region: string;
   pgVersion: number;
-  duration: string;
+  /** Legacy; absent for databases created after SAP-3100. */
+  duration?: string;
   connectionUri: string | null;
-  expiresAt: string | null;
+  /** Legacy; absent for databases created after SAP-3100. */
+  expiresAt?: string | null;
   createdAt: string;
 }
 
@@ -161,10 +191,12 @@ function mapDatabase(raw: RawDatabaseResponse): Database {
     status: raw.status as DatabaseStatus,
     region: raw.region,
     pgVersion: raw.pgVersion,
-    duration: raw.duration,
+    // Legacy fields: only echoed when the gateway still returns them (databases
+    // created before SAP-3100). A new database has neither.
+    ...(raw.duration !== undefined ? { duration: raw.duration } : {}),
     connection:
       raw.connectionUri == null ? null : parseConnectionUri(raw.connectionUri),
-    expiresAt: raw.expiresAt,
+    ...(raw.expiresAt !== undefined ? { expiresAt: raw.expiresAt } : {}),
     createdAt: raw.createdAt,
   };
 }
@@ -172,27 +204,22 @@ function mapDatabase(raw: RawDatabaseResponse): Database {
 // ----- Capability operations -----
 
 /**
- * Provision a new Postgres database. `duration` is required. Returns the database
- * with connection credentials in `connection`. Failed requests throw
- * {@link DatabaseHttpError}.
+ * Provision a new Postgres database. Every field is optional:
+ * `database.create({})` works. Returns the database with connection credentials
+ * in `connection`. Failed requests throw {@link DatabaseHttpError}.
+ *
+ * The database is permanent. It holds one slot of your plan's database limit
+ * from this call until `delete`, so reuse a `handle` you already own
+ * (`get(handle)` first, or `list()`) rather than creating a fresh database per
+ * run. A legacy `duration` is accepted for source compatibility and dropped
+ * rather than forwarded: the platform ignores it.
  */
 export async function create(
-  input: CreateDatabaseInput,
+  input: CreateDatabaseInput = {},
   transport: Transport = defaultTransport(),
   baseUrl = DEFAULT_BASE_URL,
 ): Promise<Database> {
-  if (
-    !input?.duration ||
-    !(DATABASE_DURATIONS as readonly string[]).includes(input.duration)
-  ) {
-    throw new DatabaseHttpError(
-      "duration must be one of: 15m, 1h, 4h, 24h, 7d",
-      400,
-      { duration: input?.duration },
-    );
-  }
-
-  const body: RawCreateDatabaseRequest = { duration: input.duration };
+  const body: RawCreateDatabaseRequest = {};
   if (input.handle !== undefined) body.handle = input.handle;
   if (input.name !== undefined) body.name = input.name;
   if (input.description !== undefined) body.description = input.description;

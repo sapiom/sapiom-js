@@ -218,7 +218,6 @@ async function openSql(ctx: Ctx, handle: string): Promise<Sql | null> {
   } catch {
     db = await ctx.sapiom.database.create({
       handle,
-      duration: "7d",
       name: "Error Triage Digest",
       description: "Seen-error fingerprints + running counts for the digest",
     });

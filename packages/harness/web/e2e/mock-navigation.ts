@@ -37,16 +37,53 @@ export async function selectMockSessionFromPalette(
   await item.click();
 }
 
+
+/** A folder that is NOTHING yet in the mock filesystem: no agent, no session,
+ *  no `recentDirs` entry. The browser host's folder step lands on it. */
+export const BLANK_PROJECT_ROOT = "/Users/demo/blank-slate";
+
 /**
- * Open a project row's ⋮ menu.
- *
- * Every action a project row offers now lives behind one control (SAP-2982).
- * `+` and `×` used to sit on the row itself — adjacent, same size, same
- * hover-reveal — while acting on different nouns: `+` created an AGENT in the
- * project, `×` removed the PROJECT. A menu of named items has no adjacency to
- * misread, and the specs open it before acting.
+ * ADD PROJECT on the browser host (flow-creation.md §4.5): the header's
+ * folder-plus opens the one-field folder dialog (there is no OS picker in
+ * Playwright), the folder is typed, and the dialog's one action opens it as a
+ * project. Nothing follows: no screen, no session.
  */
-export async function openProjectMenu(page: Page, label: string): Promise<void> {
-  await page.getByTestId(`project-menu-${label}`).click();
-  await expect(page.getByTestId(`project-menu-card-${label}`)).toBeVisible();
+export async function addProject(page: Page, root: string): Promise<void> {
+  await page.getByTestId("rail-add-project").click();
+  await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
+  await page.getByTestId("folder-field-input").fill(root);
+  await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
+  await page.getByTestId("project-folder-continue").click();
+  await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
+}
+
+/**
+ * NEW PROJECT on the browser host (flow-creation.md §4.1): the rail's one CTA
+ * runs the folder step, the folder opens as a project, and the new-agent
+ * screen opens scoped to it. On desktop the OS picker replaces the dialog;
+ * `folder-step.test.ts` proves that half.
+ */
+export async function openNewAgentScreen(
+  page: Page,
+  root: string = BLANK_PROJECT_ROOT,
+): Promise<void> {
+  await page.getByTestId("rail-new-project").click();
+  await expect(page.getByTestId("project-folder-dialog")).toBeVisible();
+  await page.getByTestId("folder-field-input").fill(root);
+  await expect(page.getByTestId("project-folder-continue")).toBeEnabled();
+  await page.getByTestId("project-folder-continue").click();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+}
+
+/**
+ * NEW AGENT in a project you already have (§4.2, D33, D34): the row's
+ * hover-revealed `+` lands on the same screen, scoped to that project.
+ */
+export async function openNewAgentInProject(
+  page: Page,
+  label: string,
+): Promise<void> {
+  await page.getByTestId(`project-create-agent-${label}`).click();
+  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await expect(page.getByTestId("new-agent-project")).toContainText(label);
 }

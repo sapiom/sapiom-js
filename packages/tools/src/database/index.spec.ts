@@ -56,6 +56,8 @@ const headerOf = (c: FetchCall, k: string) =>
 const CONNECTION_URI =
   "postgresql://db_user:s3cr3t@db.example.com:5433/appdb?sslmode=require";
 
+// The gateway's current response shape: a Sapiom Postgres is permanent
+// (SAP-3100), so there is no `duration` tier and no `expiresAt`.
 const rawDatabase = (overrides: Record<string, unknown> = {}) => ({
   id: "db_abc123",
   handle: "analytics",
@@ -64,9 +66,7 @@ const rawDatabase = (overrides: Record<string, unknown> = {}) => ({
   status: "active",
   region: "us-east-1",
   pgVersion: 17,
-  duration: "1h",
   connectionUri: CONNECTION_URI,
-  expiresAt: "2026-06-25T13:00:00Z",
   createdAt: "2026-06-25T12:00:00Z",
   ...overrides,
 });
@@ -83,7 +83,6 @@ describe("database.create()", () => {
 
     const db = await database.create(
       {
-        duration: "1h",
         handle: "analytics",
         name: "Analytics",
         description: "events",
@@ -99,7 +98,6 @@ describe("database.create()", () => {
     expect(headerOf(calls[0]!, "x-sapiom-api-key")).toBe("test-key");
     expect(headerOf(calls[0]!, "content-type")).toBe("application/json");
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
-      duration: "1h",
       handle: "analytics",
       name: "Analytics",
       description: "events",
@@ -108,6 +106,7 @@ describe("database.create()", () => {
     });
 
     // Top-level fields copied 1:1; the connection URI is parsed into components.
+    // No `duration` and no `expiresAt`: a new database has no lifetime.
     expect(db).toEqual({
       id: "db_abc123",
       handle: "analytics",
@@ -116,7 +115,6 @@ describe("database.create()", () => {
       status: "active",
       region: "us-east-1",
       pgVersion: 17,
-      duration: "1h",
       connection: {
         connectionString: CONNECTION_URI,
         host: "db.example.com",
@@ -126,9 +124,25 @@ describe("database.create()", () => {
         databaseName: "appdb",
         sslmode: "require",
       },
-      expiresAt: "2026-06-25T13:00:00Z",
       createdAt: "2026-06-25T12:00:00Z",
     });
+    expect(db).not.toHaveProperty("duration");
+    expect(db).not.toHaveProperty("expiresAt");
+  });
+
+  it("creates without duration: `create({})` and `create()` both POST an empty body", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(rawDatabase({ handle: null }), { status: 201 }),
+    ]);
+
+    const a = await database.create({}, transport, BASE);
+    const b = await database.create(undefined, transport, BASE);
+
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({});
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({});
+    expect(a.id).toBe("db_abc123");
+    expect(b.id).toBe("db_abc123");
   });
 
   it("omits undefined optional fields from the body", async () => {
@@ -136,14 +150,53 @@ describe("database.create()", () => {
       () => jsonResponse(rawDatabase({ handle: null }), { status: 201 }),
     ]);
 
-    await database.create({ duration: "15m" }, transport, BASE);
+    await database.create({ region: "us-east-1" }, transport, BASE);
 
     const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).toEqual({ duration: "15m" });
+    expect(body).toEqual({ region: "us-east-1" });
     expect(body).not.toHaveProperty("handle");
     expect(body).not.toHaveProperty("name");
-    expect(body).not.toHaveProperty("region");
+    expect(body).not.toHaveProperty("duration");
     expect(body).not.toHaveProperty("pgVersion");
+  });
+
+  it("does not forward a legacy duration (the platform ignores it; SAP-3100)", async () => {
+    const { transport, calls } = makeTransport([
+      () => jsonResponse(rawDatabase(), { status: 201 }),
+    ]);
+
+    // Callers written against the old contract keep working unchanged...
+    const db = await database.create(
+      { duration: "7d", handle: "analytics" },
+      transport,
+      BASE,
+    );
+
+    // ...but the lifetime never reaches the wire, and nothing else moves.
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      handle: "analytics",
+    });
+    expect(db.handle).toBe("analytics");
+    expect(db).not.toHaveProperty("expiresAt");
+  });
+
+  it("echoes legacy duration/expiresAt only when the gateway still returns them", async () => {
+    const { transport } = makeTransport([
+      () =>
+        jsonResponse(
+          rawDatabase({
+            duration: "7d",
+            expiresAt: "2026-03-04T00:00:00Z",
+          }),
+        ),
+    ]);
+
+    // A database created before SAP-3100 may still carry the tier it was sold
+    // under; the mapper passes it through rather than inventing a value.
+    const db = await database.get("db_abc123", transport, BASE);
+    expect(db.duration).toBe("7d");
+    expect(db.expiresAt).toBe("2026-03-04T00:00:00Z");
   });
 
   it("defaults a missing port to 5432", async () => {
@@ -157,7 +210,7 @@ describe("database.create()", () => {
         ),
     ]);
 
-    const db = await database.create({ duration: "1h" }, transport, BASE);
+    const db = await database.create({}, transport, BASE);
     expect(db.connection?.port).toBe(5432);
     expect(db.connection?.sslmode).toBeUndefined();
   });
@@ -174,7 +227,7 @@ describe("database.create()", () => {
         ),
     ]);
 
-    const db = await database.create({ duration: "1h" }, transport, BASE);
+    const db = await database.create({}, transport, BASE);
     expect(db.connection?.username).toBe("us@r");
     expect(db.connection?.password).toBe("p@ss/word");
   });
@@ -190,7 +243,7 @@ describe("database.create()", () => {
         ),
     ]);
 
-    const db = await database.create({ duration: "1h" }, transport, BASE);
+    const db = await database.create({}, transport, BASE);
     expect(db.status).toBe("provisioning");
     expect(db.connection).toBeNull();
   });
@@ -205,7 +258,7 @@ describe("database.create()", () => {
 
     // Does not throw out of the mapper; connectionString is always preserved and
     // the best-effort component fields are simply absent.
-    const db = await database.create({ duration: "1h" }, transport, BASE);
+    const db = await database.create({}, transport, BASE);
     expect(db.connection).toEqual({ connectionString: "not-a-valid-uri" });
     expect(db.connection?.connectionString).toBe("not-a-valid-uri");
     expect(db.connection?.host).toBeUndefined();
@@ -214,40 +267,6 @@ describe("database.create()", () => {
     expect(db.connection?.password).toBeUndefined();
     expect(db.connection?.databaseName).toBeUndefined();
     expect(db.connection?.sslmode).toBeUndefined();
-  });
-
-  it("throws a clean error (before any fetch) when duration is missing", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      database.create(
-        { duration: undefined as unknown as "1h" },
-        transport,
-        BASE,
-      ),
-    ).rejects.toMatchObject({ name: "DatabaseHttpError", status: 400 });
-    expect(calls.length).toBe(0);
-  });
-
-  it("throws a clean error (before any fetch) when duration is invalid", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      database.create({ duration: "bogus" } as never, transport, BASE),
-    ).rejects.toMatchObject({ name: "DatabaseHttpError", status: 400 });
-    await expect(
-      database.create({ duration: "bogus" } as never, transport, BASE),
-    ).rejects.toBeInstanceOf(DatabaseHttpError);
-    expect(calls.length).toBe(0);
-  });
-
-  it("throws a clean error (before any fetch) when no input is given", async () => {
-    const { transport, calls } = makeTransport([() => jsonResponse({})]);
-
-    await expect(
-      database.create(undefined as never, transport, BASE),
-    ).rejects.toMatchObject({ name: "DatabaseHttpError", status: 400 });
-    expect(calls.length).toBe(0);
   });
 
   it("throws DatabaseHttpError (with status + body) on a non-2xx", async () => {
@@ -259,15 +278,15 @@ describe("database.create()", () => {
     ]);
 
     await expect(
-      database.create({ duration: "1h", handle: "taken" }, transport, BASE),
+      database.create({ handle: "taken" }, transport, BASE),
     ).rejects.toMatchObject({
       name: "DatabaseHttpError",
       status: 409,
       body: { message: "duplicate handle" },
     });
-    await expect(
-      database.create({ duration: "1h" }, transport, BASE),
-    ).rejects.toBeInstanceOf(DatabaseHttpError);
+    await expect(database.create({}, transport, BASE)).rejects.toBeInstanceOf(
+      DatabaseHttpError,
+    );
   });
 });
 
@@ -418,7 +437,7 @@ describe("database — client wiring + credential", () => {
     }) as typeof globalThis.fetch;
 
     const sapiom = createClient({ apiKey: "my-key", fetch: fetchMock });
-    await sapiom.database.create({ duration: "1h" });
+    await sapiom.database.create({});
     await sapiom.database.get("db_abc123");
     await sapiom.database.list();
     await sapiom.database.delete("db_abc123");

@@ -77,7 +77,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`)                | [src/search](./src/search/README.md)                          |
 | `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                                       | [src/orchestrations](./src/orchestrations/README.md)          |
 | `schedules`         | Schedule a deployed orchestration to run on a cron, or once at a set time                                            | [src/schedules](./src/schedules/README.md)                    |
-| `database`          | On-demand Postgres databases, returned with direct connection credentials                                            | [src/database](./src/database/README.md)                      |
+| `database`          | Permanent Postgres databases (yours until you delete them), returned with direct connection credentials              | [src/database](./src/database/README.md)                      |
 | `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks                              | [src/email](./src/email/README.md)                            |
 | `domains`           | Register domain names and manage their DNS records                                                                   | [src/domains](./src/domains/README.md)                        |
 | `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)                       | [src/memory](./src/memory/README.md)                          |

@@ -343,10 +343,17 @@ export interface Sapiom {
       domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
     };
   };
-  /** On-demand Postgres databases, returned with direct connection credentials. */
+  /**
+   * Postgres databases, returned with direct connection credentials. A Sapiom
+   * Postgres is permanent: it lives until you delete it and holds one slot of
+   * your plan's database limit while held. There is no lifetime to pick.
+   */
   readonly database: {
-    /** Provision a database (returns connection credentials). `duration` is required. */
-    create(input: CreateDatabaseInput): Promise<Database>;
+    /**
+     * Provision a database (returns connection credentials). Every field is
+     * optional; `create({})` works. A legacy `duration` is ignored.
+     */
+    create(input?: CreateDatabaseInput): Promise<Database>;
     /** Retrieve a database by its id or handle. */
     get(idOrHandle: string): Promise<Database>;
     /** List every database you own, each with connection credentials (read-only). */

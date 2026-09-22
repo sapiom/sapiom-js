@@ -21,7 +21,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
 
 const ORCHESTRATION = "/Users/demo/design-eng/ari/orchestration";
 const FIX_ORCHESTRATION = "/Users/demo/design-eng-fix/ari/orchestration";
@@ -141,7 +140,7 @@ test.describe("(d) the section is BOUNDED", () => {
       });
 
     const before = await visible();
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     // "Projects" on both axes. Rationale at group-axis.spec.ts's openGroupAxis.
@@ -167,7 +166,7 @@ test.describe("(d) the section is BOUNDED", () => {
   test("group-axis rows disambiguate two agents that share a name", async ({
     page,
   }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
@@ -187,7 +186,7 @@ test.describe("(d) the section is BOUNDED", () => {
 
   /** And the groups are ABOVE the unrooted overflow, never below it. */
   test("the group rows render above the unrooted section", async ({ page }) => {
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("group-create-polsia")).toBeVisible();
@@ -400,7 +399,7 @@ test.describe("(c) there is a way OUT", () => {
       .click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
 
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
@@ -427,7 +426,6 @@ test.describe("(c) there is a way OUT", () => {
     // removal whose rows merely move somewhere else has renamed the project,
     // not removed it — `accumulation-guard.spec.ts` pins that), so the count
     // does NOT climb here.
-    await openProjectMenu(page, "design-eng");
     await page.getByTestId("project-remove-design-eng").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(page.getByTestId("project-row-design-eng")).toHaveCount(0);
@@ -442,7 +440,7 @@ test.describe("(c) there is a way OUT", () => {
     // reopen path the project could never come back at all.
     await page.getByTestId("rail-add-project").click();
     await page.getByTestId("folder-field-input").fill("/Users/demo/design-eng");
-    await page.getByTestId("open-project").click();
+    await page.getByTestId("project-folder-continue").click();
     await expect(page.getByTestId("project-row-design-eng")).toBeVisible();
     // The TOMBSTONE is cleared, not merely out-voted by this render — it is the
     // one part of a removal that outlives the page, so a stale entry would

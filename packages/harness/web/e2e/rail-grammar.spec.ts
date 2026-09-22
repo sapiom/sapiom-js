@@ -19,8 +19,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { openProjectMenu } from "./mock-navigation";
-
 const ROW = (page: Page, label: string) =>
   page
     .getByTestId(`workspace-group-${label}`)
@@ -34,61 +32,56 @@ test.describe("legacy-server project row grammar", () => {
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
   });
 
-  test("a session shortcut sits immediately before the named project menu", async ({
+  test("the row's verbs are hover actions, each naming its own subject", async ({
     page,
   }) => {
     const row = ROW(page, "acme-app");
-    // The frequent session action is one click away. Destructive project
-    // management remains behind the named overflow menu instead of returning
-    // as an adjacent `×`.
+    // Hover actions, not an overflow menu (design-eng D33). The `+` is New
+    // agent (IA.md 219, D34a); the destructive one is last. The adjacency
+    // SAP-2982 worried about is answered by the accessible name and the
+    // confirmation, not by hiding one verb behind a popover. A plain session is
+    // not a row verb at all — the tab strip owns it (D34e).
     const actions = row.locator(".workspace-row-action");
     await expect(actions).toHaveCount(2);
     await expect(actions.nth(0)).toHaveAttribute(
       "data-testid",
-      "project-start-session-acme-app",
-    );
-    await expect(actions.nth(0)).toHaveAttribute(
-      "aria-label",
-      "Start a session in acme-app",
+      "project-create-agent-acme-app",
     );
     await expect(actions.nth(1)).toHaveAttribute(
       "data-testid",
-      "project-menu-acme-app",
+      "project-remove-acme-app",
     );
 
-    // And the actions themselves state their subject in words.
-    await openProjectMenu(page, "acme-app");
-    await expect(page.getByTestId("project-create-agent-acme-app")).toHaveText(
-      "Create an agent in acme-app",
-    );
-    await expect(page.getByTestId("project-remove-acme-app")).toHaveText(
+    // Each states its subject where a glyph cannot: the accessible name.
+    await expect(
+      page.getByTestId("project-create-agent-acme-app"),
+    ).toHaveAttribute("aria-label", "New agent in acme-app");
+    await expect(page.getByTestId("project-remove-acme-app")).toHaveAttribute(
+      "aria-label",
       "Remove acme-app from the rail",
     );
   });
 
-  test("a bare project's session shortcut stays distinct from scaffolding", async ({
+  test("a bare project's create verb is scaffold, and says so", async ({
     page,
   }) => {
-    // `scratch` has live sessions and no Sapiom agent. The row `+` can start
-    // another coding session; the legacy scaffold operation remains named in
-    // the menu so the two operations do not masquerade as one another.
+    // `scratch` has live sessions and no Sapiom agent, so its create verb is
+    // SCAFFOLD — it grows an agent inside the session already running there
+    // rather than starting a new one. The distinct glyph and the distinct name
+    // are what keep it from reading as the ordinary create.
     const row = ROW(page, "scratch");
     await expect(row.locator(".workspace-row-action")).toHaveCount(2);
     await expect(
-      page.getByTestId("project-start-session-scratch"),
-    ).toBeVisible();
-    await openProjectMenu(page, "scratch");
-    await expect(page.getByTestId("workspace-scaffold-scratch")).toHaveText(
-      "Scaffold an agent in scratch",
-    );
+      page.getByTestId("workspace-scaffold-scratch"),
+    ).toHaveAttribute("aria-label", "Scaffold an agent in scratch");
     await expect(page.getByTestId("project-remove-scratch")).toBeVisible();
   });
 
-  test("creating from the menu creates IN that project, and only then talks", async ({
+  test("creating from the row creates IN that project, and only then talks", async ({
     page,
   }) => {
     // The menu changed what the control SAYS; SAP-2981 changed what it does —
-    // it opens the create dialog instead of starting a pty and asking the
+    // it opens the new-agent screen instead of starting a pty and asking the
     // coding agent, in English, to scaffold. What must not change is the
     // SUBJECT: the project named on the row is the project it creates in, and
     // the session that follows is rooted there.
@@ -108,17 +101,16 @@ test.describe("legacy-server project row grammar", () => {
           ).__HARNESS_TEST__?.createOrder ?? []) as string[],
       );
 
-    await openProjectMenu(page, "acme-app");
     await page.getByTestId("project-create-agent-acme-app").click();
-    await expect(page.getByTestId("project-menu-card-acme-app")).toHaveCount(0);
-    await expect(page.getByTestId("create-agent-project")).toHaveText(
-      "acme-app",
+    // The screen STATES the project the row named (flow-creation.md §4.3).
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
+      "New agent in acme-app",
     );
     // Nothing has started yet — the old handler started a pty on this click.
     expect(await order()).toEqual([]);
 
-    await page.getByTestId("create-agent-name").fill("menu-made");
-    await page.getByTestId("create-agent-submit").click();
+    await page.getByTestId("composer-input").fill("Build a menu made agent");
+    await page.getByTestId("composer-send").click();
     await expect
       .poll(order)
       .toEqual([

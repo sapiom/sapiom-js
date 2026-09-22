@@ -52,6 +52,14 @@ export interface GroupRowProps {
   /** True while this row is the drop target. Owned by the section, not the row:
    *  rows that each track their own hover disagree mid-drag. */
   isDropTarget?: boolean;
+  /** The project holding this group's members, for the New agent action's
+   *  accessible name: a group has no directory, so the project is the subject
+   *  a new agent is created in. */
+  projectLabel?: string;
+  /** New agent, scoped to the project (design-eng D34c, IA.md 219). The same
+   *  `+` the project row carries, here so the Group axis is not a rail with no
+   *  create verb on it. Absent = no `+`. */
+  onCreateAgent?: () => void;
   /** Absent = this group cannot be renamed (no pencil, no double-click). */
   onRename?: (label: string) => void;
   /** Absent = this group cannot be deleted. */
@@ -93,6 +101,8 @@ export function GroupRow({
   isUngrouped = false,
   liveCount = 0,
   isDropTarget = false,
+  projectLabel,
+  onCreateAgent,
   onRename,
   onDelete,
   startRenaming = false,
@@ -237,6 +247,22 @@ export function GroupRow({
 
       {/* Hidden while editing: the input owns the row's width, and clicking an
           action would blur-commit and act in one gesture. */}
+      {/* NEW AGENT, first, as on the project row (D34c): the `+` creates into
+          the PROJECT that holds this group's members, and its accessible name
+          says which one, because the glyph cannot and the group's own label
+          would name a relationship rather than a place. */}
+      {onCreateAgent && !editing && (
+        <button
+          type="button"
+          className="workspace-row-action"
+          data-testid={`group-create-agent-${label}`}
+          aria-label={`New agent in ${projectLabel ?? label}`}
+          data-tooltip={`New agent in ${projectLabel ?? label}`}
+          onClick={onCreateAgent}
+        >
+          <Icon name="Plus" size={13} />
+        </button>
+      )}
       {canRename && !editing && (
         <button
           type="button"
@@ -367,6 +393,7 @@ export function GroupSections({
   focusedAgentPath,
   onFocusAgent,
   sessions,
+  onCreateAgent,
   onCreate,
   onRename,
   onDelete,
@@ -401,6 +428,8 @@ export function GroupSections({
    *  membership to its own agents; a shared agent path cannot bring in another
    *  project's sessions. */
   sessions: readonly ScopedSession[];
+  /** New agent in this project, from any group row (D34c). */
+  onCreateAgent: () => void;
   onCreate: () => void;
   onRename: (groupId: string, label: string) => void;
   onDelete: (groupId: string) => void;
@@ -469,6 +498,8 @@ export function GroupSections({
               collapsed={collapsed}
               onToggleCollapsed={() => onToggleCollapsed(group.id)}
               isUngrouped={group.isUngrouped}
+              projectLabel={sectionLabel}
+              onCreateAgent={onCreateAgent}
               liveCount={
                 liveSessionsOnAgents(
                   sessions,

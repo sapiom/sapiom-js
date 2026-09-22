@@ -36,10 +36,10 @@ export const AUTHORING_RULES_URL =
 export const AUTHORING_RULES_PATH = "/v1/agents/authoring-rules";
 
 /** The content release the shipped summaries and pointers were written against. */
-export const AUTHORING_RULES_RELEASE = "1.0";
+export const AUTHORING_RULES_RELEASE = "1.1";
 
 /** First 12 hex of sha-256 over that release's body — what the server reports in `X-Sapiom-Content-Digest`. */
-export const AUTHORING_RULES_DIGEST = "1f3e5cd9648f";
+export const AUTHORING_RULES_DIGEST = "8ed17f08af11";
 
 /**
  * The section anchors the served body carries (`<!-- section: NAME -->`), in

@@ -83,7 +83,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     await sibling.click();
     await expect(page.locator(".harness-terminal .xterm")).toBeVisible();
     expect(await navigationEvidence(page)).toEqual(before);
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
     await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
@@ -98,8 +98,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     test(`a scaffolded sibling keeps its restored ${harness} conversation after restart`, async ({
       page,
     }) => {
-      await page.getByTestId("history-trigger").click();
-      await page.getByTestId("past-sessions-trigger").hover();
+      await page.getByTestId("rail-history").click();
       await page.getByTestId(`exited-session-${sessionId}`).click();
       await expect(page.getByTestId("session-context")).toHaveAttribute(
         "data-session-id",
@@ -195,7 +194,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
   }) => {
     const project = page.getByTestId("workspace-group-acme-app");
     await expect(project.getByTestId("workflow-report-reviewer")).toBeVisible();
-    await project.getByTestId("project-menu-acme-app").click();
     await page.getByTestId("project-remove-acme-app").click();
     await page.getByTestId("remove-project-confirm-btn").click();
     await expect(project).toHaveCount(0);
@@ -284,7 +282,7 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     page,
   }) => {
     const before = await navigationEvidence(page);
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await page.getByTestId("filing-group-by").selectOption("group");
     await page.keyboard.press("Escape");
 

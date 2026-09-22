@@ -25,7 +25,7 @@ const WORKERS = "workspace-group-polsia/services/workers";
 
 /** Switch the rail to the Group axis and wait for it to be editable. */
 async function openGroupAxis(page: Page): Promise<void> {
-  await page.getByTestId("history-trigger").click();
+  await page.getByTestId("rail-options").click();
   await page.getByTestId("filing-group-by").selectOption("group");
   await page.keyboard.press("Escape");
   // The title stays "Projects" on BOTH axes: the rail lists projects either
@@ -362,7 +362,7 @@ test.describe("persistence", () => {
     await page.reload();
     // "Projects" on both axes. Rationale at openGroupAxis, above.
     await expect(page.locator(".rail-header-label")).toHaveText("Projects");
-    await page.getByTestId("history-trigger").click();
+    await page.getByTestId("rail-options").click();
     await expect(page.getByTestId("filing-group-by")).toHaveValue("group");
   });
 });
@@ -781,4 +781,38 @@ test("the group rail renders", async ({ page }) => {
   await page
     .locator(".rail-workflows")
     .screenshot({ path: "web/e2e/screenshots/group-axis-list-end.png" });
+});
+
+test.describe("New agent on the Group axis (D34c)", () => {
+  test("every group row carries the project's `+`, scoped to the project", async ({
+    page,
+  }) => {
+    // A group is a label over agents, not a directory, so the `+` on its row
+    // creates into the PROJECT that holds its members (design-eng D34c, IA.md
+    // 219) and its accessible name says so. Ungrouped carries it too: the axis
+    // would otherwise be the one arrangement of the rail with no create verb.
+    const project = page.getByTestId(POLSIA);
+    for (const group of ["gateway", "mailer", "Ungrouped"]) {
+      await expect(
+        project.getByTestId(`group-create-agent-${group}`),
+      ).toHaveAttribute("aria-label", "New agent in polsia");
+    }
+    // Create first, destructive last, as on the project row.
+    const rows = await project
+      .getByTestId("group-row-gateway")
+      .locator(".workspace-row-action")
+      .evaluateAll((actions) =>
+        actions.map((action) => action.getAttribute("data-testid")),
+      );
+    expect(rows[0]).toBe("group-create-agent-gateway");
+    expect(rows[rows.length - 1]).toBe("group-delete-gateway");
+
+    await project.getByTestId("group-create-agent-mailer").click();
+    // The same screen every entrance lands on, scoped to the holding project
+    // (flow-creation.md §4.2, §4.3).
+    await expect(page.getByTestId("new-session-composer")).toBeVisible();
+    await expect(page.getByTestId("new-agent-project")).toHaveText(
+      "New agent in polsia",
+    );
+  });
 });
