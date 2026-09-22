@@ -1,4 +1,4 @@
-# agent
+# models
 
 Coding agents — give one a task in natural language and it edits a checkout inside a sandbox.
 
