@@ -90,6 +90,24 @@ describe("Header Utilities", () => {
       expect(result["X-Custom"]).toBe("final");
       expect(result["Other"]).toBe("keep");
     });
+
+    it("should omit unrelated headers with undefined values", () => {
+      const headers = {
+        Authorization: undefined,
+        "Content-Type": "text/plain",
+      };
+
+      const result = setHeader(
+        headers,
+        "X-Sapiom-Transaction-Id",
+        "tx_123",
+      );
+
+      expect(result["Authorization"]).toBeUndefined();
+      expect(Object.keys(result)).not.toContain("Authorization");
+      expect(result["Content-Type"]).toBe("text/plain");
+      expect(result["X-Sapiom-Transaction-Id"]).toBe("tx_123");
+    });
   });
 
   describe("removeHeader", () => {
@@ -116,6 +134,19 @@ describe("Header Utilities", () => {
       expect(result["x-custom"]).toBeUndefined();
       expect(result["X-Custom"]).toBeUndefined();
       expect(result["Other-Header"]).toBe("keep");
+    });
+
+    it("should omit unrelated headers with undefined values", () => {
+      const headers = {
+        Authorization: undefined,
+        "Content-Type": "application/json",
+      };
+
+      const result = removeHeader(headers, "Content-Type");
+
+      expect(result["Authorization"]).toBeUndefined();
+      expect(Object.keys(result)).not.toContain("Authorization");
+      expect(result["Content-Type"]).toBeUndefined();
     });
   });
 
