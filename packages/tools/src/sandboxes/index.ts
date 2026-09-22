@@ -551,9 +551,11 @@ export class Sandbox {
       // If the process hasn't finished yet (e.g. stream disconnected before
       // the process finished), poll until it does — bounded by the same exec
       // timeout pollProcess applies, so a process that never reports a
-      // terminal status fails loudly instead of polling forever.
-      let status = await readStatus();
+      // terminal status fails loudly instead of polling forever. The deadline
+      // starts before the initial status read too, so a slow first poll
+      // counts against the budget instead of granting a fresh window.
       const deadline = Date.now() + DEFAULT_EXEC_TIMEOUT;
+      let status = await readStatus();
       while (!isProcessTerminal(status.status)) {
         if (Date.now() >= deadline) {
           throw new Error(`Process ${proc.pid} timed out after ${DEFAULT_EXEC_TIMEOUT}ms`);

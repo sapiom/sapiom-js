@@ -52,6 +52,17 @@ function sandboxWith(
   return Sandbox.attach("box", {}, transport);
 }
 
+/** Same as {@link sandboxWith}, but `route` may itself take simulated time
+ * to resolve (e.g. via `setTimeout`) instead of responding instantly. */
+function sandboxWithAsync(
+  route: (url: string, init: RequestInit) => Promise<FakeResponse>,
+): Sandbox {
+  const fetchFn = (async (url: string, init: RequestInit = {}) =>
+    (await route(url, init)) as unknown as Response) as unknown as typeof globalThis.fetch;
+  const transport = new Transport({ apiKey: "k", fetch: fetchFn });
+  return Sandbox.attach("box", {}, transport);
+}
+
 describe("Sandbox.exec — terminal status handling", () => {
   it("returns the real exit code when the process polls to status 'failed' (regression: exec-7 hang)", async () => {
     let polls = 0;
@@ -190,6 +201,52 @@ describe("Sandbox.execStream — post-stream status reconciliation", () => {
       );
 
       await jest.advanceTimersByTimeAsync(60_000);
+      await rejection;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("counts a slow initial status read against the timeout budget", async () => {
+    // Regression for a review finding on this fix: the deadline used to be
+    // computed *after* the initial post-stream status read, so a slow first
+    // read granted a fresh 60s window on top of however long it took --
+    // e.g. a 30s-slow first read plus a stuck process could take ~90s to
+    // time out instead of the advertised 60s. The deadline must start
+    // before that first read, so the slow read eats into the same budget.
+    jest.useFakeTimers();
+    try {
+      const initialReadDelayMs = 45_000;
+      let statusCalls = 0;
+      const box = sandboxWithAsync(async (url, init) => {
+        if ((init.method ?? "GET") === "POST" && url.endsWith("/process")) {
+          return ok({ pid: "p7", status: "running" });
+        }
+        if (url.endsWith("/logs/stream")) {
+          return streamOk("");
+        }
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          // Simulate a slow first status read after the stream ends.
+          await new Promise((r) => setTimeout(r, initialReadDelayMs));
+        }
+        return ok({ pid: "p7", status: "running" });
+      });
+
+      const stream = await box.execStream("sleep 999");
+      const drained = (async () => {
+        for await (const line of stream.output) void line;
+      })();
+      const rejection = expect(drained).rejects.toThrow(
+        "Process p7 timed out after 60000ms",
+      );
+
+      // Let the slow first read resolve, then advance only up to the
+      // *remaining* budget (60s total, minus the 45s already spent on the
+      // first read). The buggy ordering would need another full 60s here
+      // (90s total) before throwing.
+      await jest.advanceTimersByTimeAsync(initialReadDelayMs);
+      await jest.advanceTimersByTimeAsync(60_000 - initialReadDelayMs);
       await rejection;
     } finally {
       jest.useRealTimers();
