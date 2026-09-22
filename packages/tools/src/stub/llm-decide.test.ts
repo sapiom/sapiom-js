@@ -4,6 +4,7 @@
  * step code that branches on `noul` / `choice` / `score` runs unchanged, and a
  * step stub can still override the whole reply.
  */
+import { LlmDecideHttpError } from "../llm/index.js";
 import { createStubClient, type StubCallRecord } from "./index.js";
 
 describe("stub llm.decide", () => {
@@ -81,6 +82,69 @@ describe("stub llm.decide", () => {
       type: "noul",
       noul: 0.5,
     });
+    // ...and the map is still a normal object, as parsed JSON is: local code
+    // calling inherited methods must not hit a null prototype.
+    expect(Object.getPrototypeOf(res.answers)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(res.answers, "ok")).toBe(true);
+    // The direct call is the finding under test (inherited methods must work),
+    // so the lint rule that would route it through Object.prototype is off here.
+    // eslint-disable-next-line no-prototype-builtins
+    expect(res.answers.hasOwnProperty("ok")).toBe(true);
+  });
+
+  describe("rejects what the router rejects, as the same LlmDecideHttpError 400", () => {
+    const cases: Array<{
+      name: string;
+      questions: Record<string, unknown>;
+      message: string;
+    }> = [
+      {
+        name: "an empty score rubric",
+        questions: { mood: { type: "score", instructions: "?", criteria: [] } },
+        message: "question 'mood' score criteria must have at least two levels",
+      },
+      {
+        name: "a single-level score rubric",
+        questions: {
+          mood: { type: "score", instructions: "?", criteria: ["only"] },
+        },
+        message: "question 'mood' score criteria must have at least two levels",
+      },
+      {
+        name: "a score rubric with more than 10 levels",
+        questions: {
+          mood: {
+            type: "score",
+            instructions: "?",
+            criteria: Array.from({ length: 11 }, (_, i) => `level-${i}`),
+          },
+        },
+        message: "question 'mood' score criteria must have at most 10 levels",
+      },
+      {
+        name: "a single-option choice",
+        questions: {
+          team: { type: "choice", instructions: "?", criteria: { only: null } },
+        },
+        message:
+          "question 'team' choice criteria must have at least two options",
+      },
+    ];
+
+    for (const { name, questions, message } of cases) {
+      it(name, async () => {
+        const client = createStubClient();
+        const call = client.llm.decide({
+          state: "x",
+          questions: questions as never,
+        });
+        await expect(call).rejects.toThrow(LlmDecideHttpError);
+        await expect(call).rejects.toMatchObject({
+          status: 400,
+          body: { statusCode: 400, message },
+        });
+      });
+    }
   });
 
   it("records the call under the capability id and lets an override replace the reply", async () => {

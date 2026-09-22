@@ -40,6 +40,7 @@ import {
   structuredOf as llmStructuredOf,
   type DecideQuestion,
   type LlmDecideResponse,
+  LlmDecideHttpError,
 } from "../llm/index.js";
 import type {
   AgentRunResult,
@@ -890,16 +891,54 @@ function stubMemoryFilterMatches(
 }
 
 /**
+ * The Capability Router's `llm.decide` request bounds (Sapiom
+ * `llm-decide.validator.ts`), which the stub mirrors so a rubric the router would
+ * refuse fails under `run_local` too, instead of only once the agent is deployed.
+ * The router answers 400 via Nest's `BadRequestException(reason)`; the SDK maps
+ * that to {@link LlmDecideHttpError}, so the stub throws the same class, status,
+ * body shape, and message prefix (`capabilityCall`'s `Failed to decide: <status> <body>`).
+ */
+function stubDecideValidate(questions: Record<string, DecideQuestion>): void {
+  const fail = (reason: string): never => {
+    const body = { statusCode: 400, message: reason, error: "Bad Request" };
+    throw new LlmDecideHttpError(
+      `Failed to decide: 400 ${JSON.stringify(body)}`,
+      400,
+      body,
+    );
+  };
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const n = Object.keys(q.criteria).length;
+      if (n < 2)
+        fail(`question '${id}' choice criteria must have at least two options`);
+      if (n > 32)
+        fail(`question '${id}' choice criteria must have at most 32 options`);
+    } else if (q.type === "score") {
+      const n = q.criteria.length;
+      if (n < 2)
+        fail(`question '${id}' score criteria must have at least two levels`);
+      if (n > 10)
+        fail(`question '${id}' score criteria must have at most 10 levels`);
+    }
+  }
+}
+
+/**
  * A shape-correct, deterministic `llm.decide` reply for `run_local`: every question
  * answered under its own key, undecided (`noul` 0.5, a uniform distribution for
  * `choice` and `score`) so branching code runs both ways without inventing a verdict.
+ * Rejects what the router would reject ({@link stubDecideValidate}) before answering.
  */
 function stubDecideResponse(
   questions: Record<string, DecideQuestion>,
 ): LlmDecideResponse {
-  // Null prototype: a question keyed `__proto__` must become an ordinary own
-  // property (as it does in the real JSON response), not a prototype swap that
-  // silently drops the answer.
+  stubDecideValidate(questions);
+  // Built on a null prototype so a question keyed `__proto__` becomes an
+  // ordinary own property instead of a prototype swap that drops the answer;
+  // copied onto a plain object below so the result also inherits
+  // `Object.prototype` (`hasOwnProperty` etc.) exactly like the parsed JSON the
+  // router returns.
   const answers: Record<string, unknown> = Object.create(null);
   for (const [id, q] of Object.entries(questions)) {
     if (q.type === "choice") {
@@ -930,9 +969,20 @@ function stubDecideResponse(
       answers[id] = { type: "noul", noul: 0.5 };
     }
   }
+  // `Object.assign({}, answers)` would hit the `__proto__` setter again, so
+  // define each key as an own data property, as JSON.parse does on the wire.
+  const plain: Record<string, unknown> = {};
+  for (const key of Object.keys(answers)) {
+    Object.defineProperty(plain, key, {
+      value: answers[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   return {
     model: "jev-stub",
-    answers: answers as LlmDecideResponse["answers"],
+    answers: plain as LlmDecideResponse["answers"],
     usage: { inputTokens: 0, outputTokens: 0 },
     servedBy: "stub",
   };
@@ -1366,11 +1416,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         questions: Q;
         model?: string;
       }) =>
-        Promise.resolve(
+        // async so a validation throw surfaces as a rejection, like the router's 400.
+        (async () =>
           r("llm.decide", [spec], () =>
             stubDecideResponse(spec.questions),
-          ) as LlmDecideResponse<Q>,
-        ),
+          ) as LlmDecideResponse<Q>)(),
       // Pure functions over a result value, not network calls — no stub
       // recording needed; delegate straight to the real implementation.
       readDisclosure: (result) => llmReadDisclosure(result),
