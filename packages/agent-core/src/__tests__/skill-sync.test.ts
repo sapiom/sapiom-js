@@ -69,10 +69,20 @@ describe("sapiom-agent-authoring content guards", () => {
   it("shows no token cap small enough for thinking to exhaust", () => {
     // Vacuous while the examples live in the served text, and deliberately kept: the guard
     // costs nothing and catches the day an example comes back into this file with the
-    // starved cap that caused SAP-3280.
-    const caps = [...canonical.matchAll(/max_tokens:\s*(\d[\d_]*)/g)].map((match) =>
-      Number(match[1].replace(/_/g, "")),
-    );
+    // starved cap that caused SAP-3280. A cap named by an in-file const (`max_tokens: CAP`
+    // with `const CAP = 1200;` above it) is resolved before the floor is applied, the same
+    // way `checkStructuredOutputCap` in scripts/lib/examples-llm-surface.mjs reads one —
+    // mirrored here rather than imported because this Jest suite compiles to CommonJS and
+    // cannot load that ES module.
+    const consts = new Map<string, number>();
+    for (const [, name, value] of canonical.matchAll(
+      /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(\d[\d_]*)\s*;/g,
+    )) {
+      consts.set(name, Number(value.replace(/_/g, "")));
+    }
+    const caps = [...canonical.matchAll(/max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/g)]
+      .map(([, cap]) => (/^\d/.test(cap) ? Number(cap.replace(/_/g, "")) : consts.get(cap)))
+      .filter((cap): cap is number => cap !== undefined);
     expect(caps.filter((cap) => cap < 2048)).toEqual([]);
   });
 

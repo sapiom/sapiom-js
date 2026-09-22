@@ -5,6 +5,7 @@ import {
   checkLlmCopySurface,
   checkNoSliceParse,
   checkStructuredOutputCap,
+  resolvedCapsOf,
   checkOneShotLlmTemplate,
   checkStubStructuredOutput,
   structuredOutputStepsOf,
@@ -390,6 +391,95 @@ test("skips a cap it cannot resolve rather than guessing", () => {
       ].join("\n"),
     }),
     [],
+  );
+});
+
+test("judges a generic call, with or without a space before the parenthesis", () => {
+  // `llm.run<Verdict>({` is the valid TypeScript form and was invisible to a literal match.
+  for (const open of [
+    "const res = await ctx.sapiom.llm.run<Verdict>({",
+    "const res = await ctx.sapiom.llm.run<Array<Verdict>>({",
+    "const res = await ctx.sapiom.llm.run ({",
+  ]) {
+    const errors = checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        open,
+        "  request: { messages, max_tokens: 256 },",
+        "  output: { name: JUDGE, schema: JUDGE_SCHEMA },",
+        "});",
+      ].join("\n"),
+    });
+    assert.equal(errors.length, 1, open);
+    assert.ok(errors[0].includes("at 256 tokens"), open);
+  }
+});
+
+test("judges a call whose spec opens on the line after the parenthesis", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const res = await ctx.sapiom.llm.run(",
+      "  {",
+      "    request: { messages, max_tokens: 300 },",
+      "    output: { name: JUDGE, schema: JUDGE_SCHEMA },",
+      "  },",
+      ");",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:3"), "names the cap's line");
+});
+
+test("resolves a named cap on a generic call", () => {
+  // The two bypasses combined: the generic form and the starved number one line higher.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const CAP = 1200;",
+      "const res = await ctx.sapiom.llm.run<Verdict>({",
+      "  request: { messages, max_tokens: CAP },",
+      "  output: { name: JUDGE, schema: JUDGE_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("at 1200 tokens"), "reports the resolved value");
+});
+
+test("reads a one-line call as one call, not as the start of the next", () => {
+  // `llm.run(spec)` closes on its own line; a scan that ran on to the next `});` would
+  // attribute the following structured call's cap to it and report it twice.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const a = await ctx.sapiom.llm.run(textSpec);",
+      "const b = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: 256 },",
+      "  output: { name: RANK, schema: RANK_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:3"));
+});
+
+test("resolvedCapsOf reads every cap in a document, literal or named", () => {
+  // The floor guard in agent-core's skill-sync test reads caps this way, so a canonical
+  // example cannot hide a starved cap behind a const.
+  assert.deepEqual(
+    resolvedCapsOf(
+      [
+        "const CAP = 1200;",
+        "  request: { messages, max_tokens: CAP },",
+        "  request: { messages, max_tokens: 4096 },",
+        "  request: { messages, max_tokens: IMPORTED },",
+      ].join("\n"),
+    ),
+    [
+      { line: 2, value: 1200 },
+      { line: 3, value: 4096 },
+    ],
   );
 });
 

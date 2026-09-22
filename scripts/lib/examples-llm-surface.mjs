@@ -108,20 +108,69 @@ export function checkNoSliceParse({ path, source }) {
  */
 export const STRUCTURED_CAP_FLOOR = 2048;
 
-const LLM_RUN_OPEN = /llm\.run\(\{/;
-const CALL_CLOSE = /^\s*\}\);/;
+/**
+ * The opening of an `llm.run` call: optional type arguments (`llm.run<Verdict>(`), optional
+ * whitespace before the parenthesis, and whatever follows it — the spec may open on the same
+ * line or the next. The type-argument class is anything but parentheses, so `<Array<T>>` is
+ * covered without a real parser.
+ */
+const LLM_RUN_OPEN = /\bllm\.run\s*(?:<[^()]*>)?\s*\(/;
 /** A literal cap, or the identifier holding one — `max_tokens: LEAF_MAX_TOKENS` is the idiom here. */
 const CAP_ASSIGNMENT = /max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/;
 const NUMERIC_CONST =
   /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(\d[\d_]*)\s*;/g;
 
 /** In-file `const NAME = 700;` declarations, so a named cap is read as the number it is. */
-function numericConstsOf(source) {
+export function numericConstsOf(source) {
   const consts = new Map();
   for (const [, name, value] of source.matchAll(NUMERIC_CONST)) {
     consts.set(name, Number(value.replaceAll("_", "")));
   }
   return consts;
+}
+
+/**
+ * The number a `max_tokens:` value stands for — the literal itself, or the in-file const it
+ * names — or `undefined` when it is neither (imported, computed).
+ */
+export function resolveCap(cap, consts) {
+  return /^\d/.test(cap) ? Number(cap.replaceAll("_", "")) : consts.get(cap);
+}
+
+/**
+ * Every `max_tokens:` in `source` resolved to a number, with the line it sits on. A value that
+ * cannot be resolved is left out, the same way {@link checkStructuredOutputCap} skips it.
+ */
+export function resolvedCapsOf(source) {
+  const consts = numericConstsOf(source);
+  const caps = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const hit = CAP_ASSIGNMENT.exec(lines[i]);
+    if (!hit) continue;
+    const value = resolveCap(hit[1], consts);
+    if (value !== undefined) caps.push({ line: i + 1, value });
+  }
+  return caps;
+}
+
+/**
+ * The index of the line on which the parenthesis opened at `lines[start]` (from `column`) is
+ * closed again — the extent of one call. Counts parentheses only: braces and brackets are
+ * balanced inside a well-formed argument list anyway, and a string containing a parenthesis
+ * is rare enough in a template's `llm.run` call to be the accepted edge. Runs to the end of
+ * the file when the call never closes.
+ */
+function callEndOf(lines, start, column) {
+  let depth = 0;
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    for (let c = i === start ? column : 0; c < line.length; c += 1) {
+      if (line[c] === "(") depth += 1;
+      else if (line[c] === ")" && (depth -= 1) === 0) return i;
+    }
+  }
+  return lines.length - 1;
 }
 
 /**
@@ -134,9 +183,12 @@ function numericConstsOf(source) {
  *
  * A named cap is resolved against the file's own `const NAME = <number>` declarations —
  * `max_tokens: LEAF_MAX_TOKENS` is already the idiom in `fan-out-and-combine`, and a check that
- * only read digits would have been bypassed by writing the starved number one line higher. What
- * it still cannot see is a cap imported from another module or computed at runtime; that is the
- * known edge, and the templates do not do it.
+ * only read digits would have been bypassed by writing the starved number one line higher. The
+ * call is found by its opening parenthesis and read to the matching close, so a generic call
+ * (`llm.run<Verdict>(`), a spec that opens on the next line, and a one-line call are all one
+ * call each. What it still cannot see is a cap imported from another module or computed at
+ * runtime, or a call made through an alias (`const ask = ctx.sapiom.llm.run`); those are the
+ * known edges, and the templates do not do them.
  *
  * @param path    repository-relative path, for the message
  * @param source  the file's contents
@@ -148,21 +200,21 @@ export function checkStructuredOutputCap({ path, source }) {
   const consts = numericConstsOf(source);
 
   for (let i = 0; i < lines.length; i += 1) {
-    if (!LLM_RUN_OPEN.test(lines[i])) continue;
+    const open = LLM_RUN_OPEN.exec(lines[i]);
+    if (!open) continue;
 
+    const end = callEndOf(lines, i, open.index + open[0].length - 1);
     let capLine = -1;
     let declaresOutput = false;
-    for (let j = i; j < lines.length; j += 1) {
+    for (let j = i; j <= end; j += 1) {
       if (/\boutput\s*:/.test(lines[j])) declaresOutput = true;
       if (capLine === -1 && CAP_ASSIGNMENT.test(lines[j])) capLine = j;
-      if (j > i && CALL_CLOSE.test(lines[j])) break;
     }
+    // The next call starts after this one; a line may hold at most one `llm.run(`.
+    i = end;
     if (!declaresOutput || capLine === -1) continue;
 
-    const cap = CAP_ASSIGNMENT.exec(lines[capLine])[1];
-    const value = /^\d/.test(cap)
-      ? Number(cap.replaceAll("_", ""))
-      : consts.get(cap);
+    const value = resolveCap(CAP_ASSIGNMENT.exec(lines[capLine])[1], consts);
     if (value === undefined || value >= STRUCTURED_CAP_FLOOR) continue;
 
     errors.push(
