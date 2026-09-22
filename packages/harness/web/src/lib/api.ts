@@ -1833,15 +1833,20 @@ export class MockApi implements HarnessApi {
    *  has no choice, and a session pointing at a directory that no longer exists
    *  is the bug this remap prevents. Its binding travels the same way. */
   private get sessions(): HarnessSession[] {
-    if (mockMoves.length === 0) return this.sessionsStore;
-    return this.sessionsStore.map((session) => ({
-      ...session,
-      cwd: replayMockMoves(session.cwd),
-      boundWorkflowPath:
-        session.boundWorkflowPath == null
-          ? session.boundWorkflowPath
-          : replayMockMoves(session.boundWorkflowPath),
-    }));
+    return this.sessionsStore.map((session) => {
+      const moved: HarnessSession =
+        mockMoves.length === 0
+          ? session
+          : {
+              ...session,
+              cwd: replayMockMoves(session.cwd),
+              boundWorkflowPath:
+                session.boundWorkflowPath == null
+                  ? session.boundWorkflowPath
+                  : replayMockMoves(session.boundWorkflowPath),
+            };
+      return { ...moved, agentMapIdentity: this.ownedIdentity(moved) };
+    });
   }
 
   private set sessions(next: HarnessSession[]) {
@@ -1879,18 +1884,55 @@ export class MockApi implements HarnessApi {
     return projectId;
   }
 
-  private workspaceScopes(): WorkspaceScopeSummary[] {
+  /** Mirrors `SessionManager.defaultTitle`: the folder name, counting up past
+   *  every sibling ever created there, assigned once and never recomputed. */
+  private defaultSessionTitle(cwd: string): string {
+    const base = basenameOf(cwd) || cwd;
+    let highest = 0;
+    for (const session of this.sessions) {
+      if (session.cwd !== cwd) continue;
+      if (session.title === base) highest = Math.max(highest, 1);
+      else if (session.title.startsWith(`${base} `)) {
+        const ordinal = Number(session.title.slice(base.length + 1));
+        if (Number.isInteger(ordinal) && ordinal > 0)
+          highest = Math.max(highest, ordinal);
+      }
+    }
+    return highest === 0 ? base : `${base} ${highest + 1}`;
+  }
+
+  private scopeRoots(): string[] {
     const roots = new Set([
       ...this.settings.recentDirs,
-      ...this.sessions.map((session) => session.cwd),
+      ...this.sessionsStore.map((session) => replayMockMoves(session.cwd)),
     ]);
-    return [...roots]
-      .sort((left, right) => left.localeCompare(right))
-      .map((cwd) => ({
-        cwd,
-        workspaceKey: this.workspaceKey(cwd),
-        projectId: this.studioProjectId(cwd),
-      }));
+    return [...roots].sort((left, right) => left.localeCompare(right));
+  }
+
+  private workspaceScopes(): WorkspaceScopeSummary[] {
+    return this.scopeRoots().map((cwd) => ({
+      cwd,
+      workspaceKey: this.workspaceKey(cwd),
+      projectId: this.studioProjectId(cwd),
+    }));
+  }
+
+  /** Mirrors the server's project principal: the deepest published root
+   *  containing the session's cwd owns it. */
+  private ownedIdentity(
+    session: HarnessSession,
+  ): HarnessSession["agentMapIdentity"] {
+    const owner = this.scopeRoots()
+      .filter((root) => isWithinDir(root, session.cwd))
+      .sort(
+        (left, right) =>
+          right.length - left.length || left.localeCompare(right),
+      )[0];
+    return {
+      projectId: this.studioProjectId(owner ?? session.cwd),
+      userId: "user_mock",
+      sessionId: session.id,
+    };
   }
 
   private studioProjects(): StudioProjectSummary[] | undefined {
@@ -1906,7 +1948,7 @@ export class MockApi implements HarnessApi {
     }
     const timestamp = "2026-01-01T00:00:00.000Z";
     return this.workspaceScopes().map((scope, index) => ({
-      projectId: scope.projectId!,
+      projectId: scope.projectId,
       identityVersion: 1,
       displayName: basenameOf(scope.cwd) || "Project",
       bindings: [
@@ -1920,34 +1962,8 @@ export class MockApi implements HarnessApi {
     }));
   }
 
-  /** Mirror the server's neutral project principal in opt-in Studio fixtures. */
-  private studioSession(
-    session: HarnessSession,
-    projects: readonly StudioProjectSummary[] | undefined,
-  ): HarnessSession {
-    if (!projects) return session;
-    const projectIds = new Set(projects.map((project) => project.projectId));
-    const matches = this.workspaceScopes()
-      .filter(
-        (scope) =>
-          scope.projectId &&
-          projectIds.has(scope.projectId) &&
-          isWithinDir(scope.cwd, session.cwd),
-      )
-      .sort(
-        (left, right) =>
-          right.cwd.length - left.cwd.length ||
-          left.cwd.localeCompare(right.cwd),
-      );
-    const nearestDepth = matches[0]?.cwd.length;
-    const nearestProjectIds = new Set(
-      matches
-        .filter((scope) => scope.cwd.length === nearestDepth)
-        .map((scope) => scope.projectId),
-    );
-    const projectId =
-      nearestProjectIds.size === 1 ? matches[0]?.projectId : undefined;
-    if (!projectId || !projectIds.has(projectId)) return session;
+  /** Applies the opt-in Studio fixture tweaks to a session in `/api/state`. */
+  private studioSession(session: HarnessSession): HarnessSession {
     const usePlanAgentsFixture =
       typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get(
@@ -1966,11 +1982,6 @@ export class MockApi implements HarnessApi {
       ...(useRestoreBindingConflictFixture
         ? { boundWorkflowPath: "/Users/demo/polsia/services/workers" }
         : {}),
-      agentMapIdentity: {
-        projectId,
-        userId: "user_mock",
-        sessionId: session.id,
-      },
     };
   }
 
@@ -1980,11 +1991,10 @@ export class MockApi implements HarnessApi {
       if (workflow.studioBindings?.length) return workflow;
       const bindings = scopes
         .filter(
-          (candidate) =>
-            candidate.projectId && isWithinDir(candidate.cwd, workflow.path),
+          (candidate) => isWithinDir(candidate.cwd, workflow.path),
         )
         .map((scope, bindingIndex) => ({
-          projectId: scope.projectId!,
+          projectId: scope.projectId,
           agentId: `agent_00000000-0000-4000-${(0x8000 + bindingIndex).toString(16)}-${String(index + 1).padStart(12, "0")}`,
         }));
       return bindings.length > 0
@@ -2088,9 +2098,7 @@ export class MockApi implements HarnessApi {
         ) === "off"
           ? false
           : true,
-      sessions: this.sessions.map((session) =>
-        this.studioSession(session, studioProjects),
-      ),
+      sessions: this.sessions.map((session) => this.studioSession(session)),
       workflows: this.studioWorkflows(),
       workspaceScopes: this.workspaceScopes(),
       ...(studioProjects ? { studioProjects } : {}),
@@ -2402,7 +2410,12 @@ export class MockApi implements HarnessApi {
       boundWorkflowPath: null,
       harness: req.harness,
       cwd: req.cwd,
-      title: req.cwd.split("/").filter(Boolean).pop() ?? req.cwd,
+      title: this.defaultSessionTitle(req.cwd),
+      agentMapIdentity: {
+        projectId: this.studioProjectId(req.cwd),
+        userId: "user_mock",
+        sessionId: id,
+      },
       status: "starting",
       createdAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
@@ -2416,7 +2429,7 @@ export class MockApi implements HarnessApi {
       ready: false,
     };
     this.sessions = [...this.sessions, session];
-    session = this.studioSession(session, this.studioProjects());
+    session = this.studioSession(session);
     this.sessions = this.sessions.map((candidate) =>
       candidate.id === session.id ? session : candidate,
     );
@@ -2623,6 +2636,11 @@ export class MockApi implements HarnessApi {
         harness: req.harness,
         cwd: req.cwd,
         title: req.title,
+        agentMapIdentity: {
+          projectId: this.studioProjectId(req.cwd),
+          userId: "user_mock",
+          sessionId: `sess-adopted-${req.agentSessionId.slice(0, 8)}`,
+        },
         createdAt: req.lastActiveAt,
         exitCode: null,
       }),

@@ -85,6 +85,11 @@ function fakeSessionManager(initial: HarnessSession[] = []) {
           harness: input.harness,
           cwd: input.cwd,
           title: input.title,
+          agentMapIdentity: {
+            projectId: "project_00000000-0000-4000-8000-000000000001",
+            userId: "user-test",
+            sessionId: `adopted-${input.agentSessionId}`,
+          },
           status: "exited",
           createdAt: input.lastActiveAt,
           lastActiveAt: input.lastActiveAt,
@@ -109,6 +114,11 @@ function exitedSession(
     harness: "claude-code",
     cwd: "/tmp/proj",
     title: "proj",
+    agentMapIdentity: {
+      projectId: "project_00000000-0000-4000-8000-000000000001",
+      userId: "user-test",
+      sessionId: "sess-1",
+    },
     status: "exited",
     createdAt: "2026-01-01T00:00:00.000Z",
     lastActiveAt: "2026-01-01T01:00:00.000Z",
@@ -232,13 +242,21 @@ describe("createRestRouter", () => {
     it("surfaces opaque workspace identities when the server supplies them", async () => {
       start({
         listWorkspaceScopes: () => [
-          { workspaceKey: "workspace-app", cwd: "/Users/demo/acme-app" },
+          {
+            workspaceKey: "workspace-app",
+            cwd: "/Users/demo/acme-app",
+            projectId: "project_00000000-0000-4000-8000-000000000001",
+          },
         ],
       });
       const res = await fetch(`${baseUrl}/state`);
       const body = (await res.json()) as { workspaceScopes: unknown[] };
       expect(body.workspaceScopes).toEqual([
-        { workspaceKey: "workspace-app", cwd: "/Users/demo/acme-app" },
+        {
+          workspaceKey: "workspace-app",
+          cwd: "/Users/demo/acme-app",
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+        },
       ]);
     });
 
@@ -291,6 +309,11 @@ describe("createRestRouter", () => {
         harness: "claude-code",
         cwd: "/tmp/proj",
         title: "proj",
+        agentMapIdentity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          userId: "user-test",
+          sessionId: "s1",
+        },
         status: "running",
         createdAt: "2026-01-01T00:00:00.000Z",
         lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -1270,6 +1293,11 @@ describe("createRestRouter", () => {
       harness: "claude-code",
       cwd: "/tmp/proj",
       title: "proj",
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-test",
+        sessionId: "sess-1",
+      },
       status: "running",
       createdAt: "2026-01-01T00:00:00.000Z",
       lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -2222,6 +2250,8 @@ describe("createRestRouter", () => {
         adapters: { "claude-code": makeMinimalAdapter() },
         ingestUrl: "http://127.0.0.1:4100",
         ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
+        resolveAgentMapIdentity: async (sessionId, _cwd, persisted) =>
+          persisted ?? { projectId: "project-test", userId: "user-test", sessionId },
         sessionsPath: path.join(smDir, "sessions.json"),
         // spawnPty not provided — tests only call resume/submitInput which
         // throw before reaching spawn for external-harness sessions.
@@ -2371,6 +2401,11 @@ describe("createRestRouter", () => {
         harness: "claude-code",
         cwd: "/repo",
         title: "repo",
+        agentMapIdentity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          userId: "user-test",
+          sessionId: "sess-1",
+        },
         status: "exited",
         createdAt: "2026-07-01T10:00:00.000Z",
         lastActiveAt: "2026-07-01T10:00:05.000Z",
@@ -2401,6 +2436,11 @@ describe("createRestRouter", () => {
         harness: "claude-code",
         cwd: "/repo",
         title: "repo",
+        agentMapIdentity: {
+          projectId: "project_00000000-0000-4000-8000-000000000001",
+          userId: "user-test",
+          sessionId: "sess-1",
+        },
         status: "exited",
         createdAt: "2026-07-01T10:00:00.000Z",
         lastActiveAt: "2026-07-01T10:00:05.000Z",

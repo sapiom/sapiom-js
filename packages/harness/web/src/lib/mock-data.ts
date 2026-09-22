@@ -49,6 +49,22 @@ export const MOCK_CANVAS_OVERVIEWS: Record<string, CanvasOverviewContent> = {
 
 export const MOCK_LAUNCH_DIR = "/Users/demo/acme-app";
 
+/** Placeholder principal for static fixtures. `MockApi.studioSession` always
+ * replaces it with the identity of the scope that owns the session's cwd. */
+export const mockAgentMapIdentity = (
+  sessionId: string,
+  cwd: string,
+): HarnessSession["agentMapIdentity"] => {
+  let hash = 0;
+  for (const char of cwd) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return {
+    projectId: `project_00000000-0000-4000-8000-ffff${hash.toString(16).padStart(8, "0")}`,
+    userId: "user_mock",
+    sessionId,
+  };
+};
+
+
 /** The rail's plan card in demo mode: the limit readout ("$12.40 / $50"), the
  *  same pair the dashboard's balance card renders, so the demo shows the
  *  card's fullest honest state. */
@@ -465,6 +481,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     boundWorkflowPath: "/Users/demo/acme-app/leasing",
     harness: "claude-code",
     cwd: MOCK_LAUNCH_DIR,
+    agentMapIdentity: mockAgentMapIdentity("sess-boot", MOCK_LAUNCH_DIR),
     // The server auto-creates and starts one session in launchDir at boot, so
     // the app never opens to an empty terminal pane.
     title: "acme-app",
@@ -479,6 +496,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     boundWorkflowPath: null,
     harness: "claude-code",
     cwd: "/Users/demo/acme-app",
+    agentMapIdentity: mockAgentMapIdentity("sess-leasing", "/Users/demo/acme-app"),
     title: "Build the leasing pipeline",
     status: "exited",
     createdAt: minutesAgo(42),
@@ -492,6 +510,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     boundWorkflowPath: null,
     harness: "codex",
     cwd: "/Users/demo/rfq-agent",
+    agentMapIdentity: mockAgentMapIdentity("sess-rfq", "/Users/demo/rfq-agent"),
     title: "rfq-agent",
     status: "exited",
     createdAt: daysAgo(2),
@@ -510,6 +529,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     boundWorkflowPath: null,
     harness: "claude-code",
     cwd: "/Users/demo/acme-app",
+    agentMapIdentity: mockAgentMapIdentity("sess-phantom", "/Users/demo/acme-app"),
     title: "acme-app",
     status: "exited",
     createdAt: daysAgo(1),
@@ -527,6 +547,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     boundWorkflowPath: null,
     harness: "claude-code",
     cwd: "/Users/demo/acme-app",
+    agentMapIdentity: mockAgentMapIdentity("sess-pricing", "/Users/demo/acme-app"),
     title: "Rework the pricing tiers",
     status: "exited",
     createdAt: daysAgo(3),
@@ -547,7 +568,9 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     // adapter rather than defaulting every new conversation to Claude Code.
     harness: "codex",
     cwd: MOCK_LAUNCH_DIR,
-    title: "acme-app",
+    agentMapIdentity: mockAgentMapIdentity("sess-leasing-2", MOCK_LAUNCH_DIR),
+    // The server's second default in this folder, assigned at creation.
+    title: "acme-app 2",
     status: "running",
     // Later than sess-boot's createdAt (minutesAgo(1)) — tabs sort oldest-first,
     // so this keeps boot as tab 1 and this one as tab 2 (see smoke.spec.ts's
@@ -567,6 +590,7 @@ export const MOCK_SESSIONS: HarnessSession[] = [
     // own bare-folder group and never moves "onboarding-flow" out of the
     // unrooted section.
     cwd: "/Users/demo/scratch",
+    agentMapIdentity: mockAgentMapIdentity("sess-bg", "/Users/demo/scratch"),
     title: "scratch",
     status: "running",
     createdAt: minutesAgo(3),
@@ -1261,6 +1285,7 @@ export const MOCK_BOUND_SESSION: HarnessSession = {
   // At the PROJECT root, like every session since SAP-2927. The binding, not
   // the cwd, is what puts it in a group.
   cwd: DEEP_ROOT,
+  agentMapIdentity: mockAgentMapIdentity("sess-gateway", DEEP_ROOT),
   title: "polsia",
   status: "running",
   createdAt: minutesAgo(2),

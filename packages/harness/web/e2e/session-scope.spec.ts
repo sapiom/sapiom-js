@@ -75,13 +75,17 @@ test("the new session's tab is named for the project, not the agent", async ({
 
   await page.getByTestId("open-agent-start-session").click();
 
-  // The tab label is the cwd's basename (session-name.ts), so this reads the
-  // booted folder back out of the rendered UI rather than out of the request:
-  // "leasing" here would mean the session came up inside the agent's folder.
+  // The tab label is the server's default title: the cwd's basename plus the
+  // next unused ordinal in that folder (the two exited fixtures keep "acme-app"
+  // and "acme-app 2"). This reads the booted folder back out of the rendered
+  // UI rather than out of the request: "leasing" here would mean the session
+  // came up inside the agent's folder.
   const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
   await expect(tabs).toHaveCount(1);
-  await expect(tabs.nth(0)).toHaveText("acme-app");
-  await expect(page.getByTestId("session-context-title")).toHaveText("acme-app");
+  await expect(tabs.nth(0)).toHaveText("acme-app 3");
+  await expect(page.getByTestId("session-context-title")).toHaveText(
+    "acme-app 3",
+  );
   // ...and it is genuinely THIS AGENT's tab strip, so the two names are being
   // compared on the same row: the strip is about `leasing` while its only tab
   // is named for the project that owns it.

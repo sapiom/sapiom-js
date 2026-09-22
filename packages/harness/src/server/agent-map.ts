@@ -9,7 +9,7 @@ import {
   type StudioWorkspaceSelection,
 } from "@sapiom/agent-map";
 import type { WorkflowInfo } from "../shared/types.js";
-import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
+import type { WorkspaceScopeInput } from "../shared/workspace-scope.js";
 import { samePath } from "@sapiom/agent-map/paths";
 import {
   AgentMapWorkspaceStore,
@@ -43,8 +43,8 @@ export interface AgentMapRouterOptions {
   ) => boolean | Promise<boolean>;
   /** Existing allow-listed roots only; this callback must not scan source. */
   listWorkspaceScopes: () =>
-    | readonly WorkspaceScopeSummary[]
-    | Promise<readonly WorkspaceScopeSummary[]>;
+    | readonly WorkspaceScopeInput[]
+    | Promise<readonly WorkspaceScopeInput[]>;
   /** New-project lifecycle hooks; never called by Agent Map reads. */
   onProjectCreated?: (project: StudioProjectSummary) => Promise<void> | void;
   onRootBound?: (
@@ -101,7 +101,7 @@ const putCurrentWorkspaceSchema = z
 async function allowlistedScope(
   options: AgentMapRouterOptions,
   requestedRoot: string,
-): Promise<WorkspaceScopeSummary | null> {
+): Promise<WorkspaceScopeInput | null> {
   let requested: string;
   try {
     requested = canonicalGraphPath(requestedRoot);

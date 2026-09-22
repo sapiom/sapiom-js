@@ -1,4 +1,3 @@
-import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,7 +175,10 @@ describe("SessionManager", () => {
       loadSpawnPty: opts.loadSpawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
       currentCredentialGeneration: opts.currentCredentialGeneration,
-      resolveAgentMapIdentity: opts.resolveAgentMapIdentity,
+      resolveAgentMapIdentity:
+        opts.resolveAgentMapIdentity ??
+        (async (sessionId, _cwd, persisted) =>
+          persisted ?? { projectId: "project-test", userId: "user-test", sessionId }),
       prepareProjectSession: opts.prepareProjectSession,
       onAgentMapSessionExit: opts.onAgentMapSessionExit,
       onTerminalInput: opts.onTerminalInput,
@@ -908,6 +910,108 @@ describe("SessionManager", () => {
       await readFile(sessionsPath, "utf8"),
     ) as unknown[];
     expect(persisted).toEqual([malformed, conflicting]);
+  });
+
+  it("migrates identity-less legacy sessions to the deepest open root, drops ones no project can own, and persists the result", async () => {
+    const legacy = (id: string, cwd: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code" as const,
+      cwd,
+      title: id,
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    const outer = legacy("outer-session", "/tmp/monorepo/docs");
+    const inner = legacy("inner-session", "/tmp/monorepo/packages/app/src");
+    const orphan = legacy("orphan-session", "/tmp/nowhere");
+    await writeFile(sessionsPath, JSON.stringify([outer, inner, orphan]), "utf8");
+
+    // Two open roots, one nested in the other. The deeper root owns every cwd
+    // beneath it, exactly as the server resolver does for a live cwd.
+    const roots: Array<[string, string]> = [
+      ["/tmp/monorepo/packages/app", "project-app"],
+      ["/tmp/monorepo", "project-monorepo"],
+    ];
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string, cwd: string) => {
+      const owner = roots.find(([root]) => cwd === root || cwd.startsWith(`${root}/`));
+      if (!owner) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: owner[1], userId: "user-1", sessionId };
+    });
+    const migrations = vi.fn();
+    const { manager } = makeManager({
+      resolveAgentMapIdentity,
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.list().map(({ id }) => id).sort()).toEqual([inner.id, outer.id]);
+    expect(manager.get(outer.id)?.agentMapIdentity).toEqual({
+      projectId: "project-monorepo",
+      userId: "user-1",
+      sessionId: outer.id,
+    });
+    expect(manager.get(inner.id)?.agentMapIdentity).toEqual({
+      projectId: "project-app",
+      userId: "user-1",
+      sessionId: inner.id,
+    });
+    expect(migrations.mock.calls).toEqual([
+      [{ sessionId: outer.id, outcome: "migrated" }],
+      [{ sessionId: inner.id, outcome: "migrated" }],
+      [{ sessionId: orphan.id, outcome: "dropped" }],
+    ]);
+
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map(({ id }) => id)).toEqual([outer.id, inner.id]);
+    expect(persisted.every((session) => session.agentMapIdentity !== undefined)).toBe(true);
+
+    // A restart finds nothing left to migrate.
+    resolveAgentMapIdentity.mockClear();
+    const { manager: restarted } = makeManager({ resolveAgentMapIdentity });
+    await restarted.init();
+    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
+    expect(restarted.list()).toHaveLength(2);
+  });
+
+  it("assigns each session in a folder a default title once, and never renumbers it", async () => {
+    const { manager, spawns } = makeManager();
+    const first = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const second = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const elsewhere = await manager.create({ cwd: "/tmp/other", harness: "claude-code" });
+    expect([first.title, second.title, elsewhere.title]).toEqual([
+      "proj",
+      "proj 2",
+      "other",
+    ]);
+
+    await manager.setAgentSessionId(first.id, "provider-first");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(manager.get(second.id)?.title).toBe("proj 2");
+
+    const third = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    expect(third.title).toBe("proj 3");
+
+    await manager.resume(first.id);
+    expect(manager.get(first.id)?.title).toBe("proj");
+    expect(manager.get(second.id)?.title).toBe("proj 2");
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map(({ title }) => title)).toEqual([
+      "proj",
+      "proj 2",
+      "other",
+      "proj 3",
+    ]);
   });
 
   it("preserves present-but-malformed legacy planner and bootstrap records", async () => {
@@ -2810,6 +2914,11 @@ describe("SessionManager", () => {
       harness: "claude-code" as const,
       cwd: "/tmp/first",
       title: "first",
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-test",
+        sessionId: "z-first-in-file",
+      },
       status: "exited" as const,
       createdAt: "2026-01-01T00:00:00.000Z",
       lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -2822,6 +2931,7 @@ describe("SessionManager", () => {
       id: "a-later-in-file",
       cwd: "/tmp/later",
       title: "later",
+      agentMapIdentity: { ...first.agentMapIdentity, sessionId: "a-later-in-file" },
     } satisfies HarnessSession;
     await writeFile(sessionsPath, JSON.stringify([first, later], null, 2));
 
@@ -2962,6 +3072,9 @@ describe("SessionManager", () => {
     expect(buildLaunchOpts).toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ cwd: "/tmp/proj", harness: "claude-code" }),
+      expect.objectContaining({
+        agentMapIdentity: expect.objectContaining({ sessionId: session.id }),
+      }),
     );
     expect(adapter.launch).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2991,6 +3104,9 @@ describe("SessionManager", () => {
       session.id,
       expect.objectContaining({
         rehydrateFrom: "recorded-history-ancestor",
+      }),
+      expect.objectContaining({
+        agentMapIdentity: expect.objectContaining({ sessionId: session.id }),
       }),
     );
     expect(session.rehydratedFrom).toBe("queue-owning-predecessor");
@@ -3026,7 +3142,9 @@ describe("SessionManager", () => {
         userId: "user-1",
         sessionId,
       }))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const onAgentMapSessionExit = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
@@ -4188,13 +4306,11 @@ describe("SessionManager", () => {
 
     await expect(creating).rejects.toBeInstanceOf(SessionManagerClosingError);
     expect(spawnPty).not.toHaveBeenCalled();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited" }),
-    ]);
+    expect(manager.list()).toEqual([]);
     await expect(
       manager.create({ cwd: "/tmp/second", harness: "claude-code" }),
     ).rejects.toBeInstanceOf(SessionManagerClosingError);
-    await expect(manager.resume(manager.list()[0]!.id)).rejects.toBeInstanceOf(
+    await expect(manager.resume("never-created")).rejects.toBeInstanceOf(
       SessionManagerClosingError,
     );
   });
@@ -4275,11 +4391,10 @@ describe("SessionManager", () => {
       () => createFakePty().pty as unknown as ReturnType<PtySpawnFn>,
     );
     let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: "project-1", userId: "user-1", sessionId };
+    });
     const onAgentMapSessionExit = vi.fn();
     const { manager, adapter } = makeManager({
       loadSpawnPty,
@@ -4602,11 +4717,10 @@ describe("SessionManager", () => {
       return loadCount === 1 ? spawnPty : resumeLoader.promise;
     });
     let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: "project-1", userId: "user-1", sessionId };
+    });
     const onAgentMapSessionExit = vi.fn();
     const { manager, adapter } = makeManager({
       loadSpawnPty,
@@ -5328,34 +5442,6 @@ describe("SessionManager", () => {
   );
 
 
-  it("rejects a focused overlay when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-
-    await expect(manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
-    )).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.launch).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
-    expect(manager.list()).toEqual([]);
-  });
-
-  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-    await manager.setAgentSessionId(session.id, "provider-session");
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resume(session.id, {
-      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
-    })).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(manager.get(session.id)?.status).toBe("exited");
-  });
-
   it.each(["buildLaunchOpts", "adapter.resume"] as const)(
     "releases project launch authority when resume setup fails in $stage",
     async (stage) => {
@@ -5653,7 +5739,9 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
     });
@@ -5691,7 +5779,9 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
     });

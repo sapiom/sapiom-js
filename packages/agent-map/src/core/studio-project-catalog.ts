@@ -11,7 +11,10 @@ import {
   type StudioProjectId,
   type StudioProjectSummary,
 } from "../shared/agent-map.js";
-import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
+import type {
+  WorkspaceScopeInput,
+  WorkspaceScopeSummary,
+} from "../shared/workspace-scope.js";
 import { matchProjectRootForPath } from "../shared/project-roots.js";
 import { pathComparisonKey } from "../shared/paths.js";
 import {
@@ -591,40 +594,32 @@ export class StudioProjectCatalog {
    * roots not already known by private binding or migration alias.
    */
   async reconcile(
-    scopes: readonly WorkspaceScopeSummary[],
+    scopes: readonly WorkspaceScopeInput[],
   ): Promise<ReconciledStudioProjects> {
     return this.enqueue(async () => {
       await this.load();
       const next = cloneProjects(this.projects!);
       const dedupedScopes = new Map<
         string,
-        { scope: WorkspaceScopeSummary; canonical: string }
+        { scope: WorkspaceScopeInput; canonical: string; aliasTrusted: boolean }
       >();
-      const unassignedScopes: WorkspaceScopeSummary[] = [];
       const canonicalScopes: Array<{
-        scope: WorkspaceScopeSummary;
+        scope: WorkspaceScopeInput;
         canonical: string;
       }> = [];
       const rootsByLegacyKey = new Map<string, Set<string>>();
       for (const scope of scopes) {
         // Workspace scopes are live operational input, not persisted catalog
-        // state. One unsafe/unrepresentable path must not poison every valid
-        // project read. Spaces at either end remain valid path characters.
+        // state. A path the catalog cannot represent can never own a project,
+        // so it is dropped rather than published without an identity. Spaces
+        // at either end remain valid path characters.
         if (!isSafeText(scope.workspaceKey) || !isSafePathText(scope.cwd)) {
-          unassignedScopes.push({
-            workspaceKey: scope.workspaceKey,
-            cwd: scope.cwd,
-          });
           continue;
         }
         let canonical: string;
         try {
           canonical = canonicalGraphPath(scope.cwd);
         } catch {
-          unassignedScopes.push({
-            workspaceKey: scope.workspaceKey,
-            cwd: scope.cwd,
-          });
           continue;
         }
         canonicalScopes.push({ scope, canonical });
@@ -639,16 +634,10 @@ export class StudioProjectCatalog {
           .map(([workspaceKey]) => workspaceKey),
       );
       for (const { scope, canonical } of canonicalScopes) {
-        // Decide alias conflicts as a group before assigning anything. Input
-        // order must not let the first member mint a durable identity while
-        // later members with the same legacy key remain ambiguous.
-        if (conflictingLegacyKeys.has(scope.workspaceKey)) {
-          unassignedScopes.push({
-            workspaceKey: scope.workspaceKey,
-            cwd: scope.cwd,
-          });
-          continue;
-        }
+        // A legacy key naming several roots is not evidence of shared identity.
+        // Each such root is matched and minted by canonical path alone, and the
+        // ambiguous alias is never recorded on any project.
+        const aliasTrusted = !conflictingLegacyKeys.has(scope.workspaceKey);
         const comparisonKey = pathComparisonKey(canonical);
         if (!dedupedScopes.has(comparisonKey)) {
           // Canonical form is private matching evidence only. Preserve the
@@ -657,6 +646,7 @@ export class StudioProjectCatalog {
           dedupedScopes.set(comparisonKey, {
             scope: { ...scope },
             canonical,
+            aliasTrusted,
           });
         }
       }
@@ -685,21 +675,29 @@ export class StudioProjectCatalog {
 
       const reconciledScopes: WorkspaceScopeSummary[] = [];
       const createdProjects: StudioProjectIdentity[] = [];
-      for (const { canonical, scope } of dedupedScopes.values()) {
+      for (const { canonical, scope, aliasTrusted } of dedupedScopes.values()) {
+        const bindsRoot = (candidate: StudioProjectIdentity): boolean =>
+          candidate.rootBindings.some(
+            (binding) =>
+              pathComparisonKey(binding.localRootRef) ===
+              pathComparisonKey(canonical),
+          );
         const matchingProjects = next.filter(
           (candidate) =>
-            candidate.legacyWorkspaceKeys.includes(scope.workspaceKey) ||
-            candidate.rootBindings.some(
-              (binding) =>
-                pathComparisonKey(binding.localRootRef) ===
-                pathComparisonKey(canonical),
-            ),
+            (aliasTrusted &&
+              candidate.legacyWorkspaceKeys.includes(scope.workspaceKey)) ||
+            bindsRoot(candidate),
         );
-        if (matchingProjects.length > 1) {
-          unassignedScopes.push({ workspaceKey: scope.workspaceKey, cwd: scope.cwd });
-          continue;
-        }
-        let project = matchingProjects[0];
+        // Several projects claiming one root is a durable-state conflict; the
+        // root still needs exactly one owner. A project bound to the root by
+        // path outranks one that knows it only through a legacy alias, then
+        // the oldest project wins so the choice is stable across restarts.
+        let project = [...matchingProjects].sort(
+          (left, right) =>
+            Number(bindsRoot(right)) - Number(bindsRoot(left)) ||
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.projectId.localeCompare(right.projectId),
+        )[0];
         if (!project) {
           const timestamp = this.timestamp();
           project = {
@@ -714,7 +712,7 @@ export class StudioProjectCatalog {
                 status: "active",
               },
             ],
-            legacyWorkspaceKeys: [scope.workspaceKey],
+            legacyWorkspaceKeys: aliasTrusted ? [scope.workspaceKey] : [],
             createdAt: timestamp,
             updatedAt: timestamp,
           };
@@ -723,7 +721,10 @@ export class StudioProjectCatalog {
           changed = true;
         } else {
           let projectChanged = false;
-          if (!project.legacyWorkspaceKeys.includes(scope.workspaceKey)) {
+          if (
+            aliasTrusted &&
+            !project.legacyWorkspaceKeys.includes(scope.workspaceKey)
+          ) {
             project.legacyWorkspaceKeys.push(scope.workspaceKey);
             projectChanged = true;
           }
@@ -770,7 +771,7 @@ export class StudioProjectCatalog {
       }
       return {
         projects: (changed ? next : this.projects!).map(publicSummary),
-        workspaceScopes: [...unassignedScopes, ...reconciledScopes].sort(
+        workspaceScopes: reconciledScopes.sort(
           (left, right) => left.cwd.localeCompare(right.cwd),
         ),
       };

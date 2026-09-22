@@ -46,6 +46,7 @@ import type {
   WorkflowInfo,
 } from "../shared/types.js";
 import { CREATE_SESSION_JSON_LIMIT_BYTES, JSON_BODY_LIMIT_BYTES } from "../shared/types.js";
+import type { WorkspaceScopeSummary } from "../shared/workspace-scope.js";
 import type {
   ProjectBootstrapLifecycleEvent,
   ProjectAgentSession,
@@ -168,10 +169,7 @@ import {
   AgentMapCapabilityRegistry,
   type AgentMapCapabilityEvent,
 } from "../core/agent-map-capability-registry.js";
-import {
-  StudioProjectCatalog,
-  type ReconciledStudioProjects,
-} from "@sapiom/agent-map/node/studio-project-catalog";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 import {
   createAgentMapMcpRouter,
   type AgentMapMcpRouter,
@@ -959,20 +957,6 @@ export const startServer = async (
   let agentMapInitialization: AgentMapInitializationCoordinator | null = null;
   let scheduleMapInitializations: (() => Promise<void>) | null = null;
   const pendingProjectCwds = new Set<string>();
-  const rawProjectRoots = async (): Promise<string[]> => {
-    const settings = await loadSettings(statePaths.settings);
-    return [
-      ...pendingProjectCwds,
-      ...(sessionManager ? sessionManager.listPendingCreates().map((session) => session.cwd) : []),
-      ...settings.recentDirs,
-      ...(sessionManager
-        ? sessionManager.list().map((session) => session.cwd)
-        : []),
-    ];
-  };
-  // Keep all known folders visible during catalog recovery. Durable projects
-  // use the canonical derivation below, including explicit root associations.
-  const workspaceScopeCatalog = new LocalWorkspaceScopeCatalog(rawProjectRoots);
   const studioWorkspaceScopeCatalog = new LocalWorkspaceScopeCatalog(
     async () => {
       const settings = await loadSettings(statePaths.settings);
@@ -1450,7 +1434,7 @@ export const startServer = async (
 
   const projectIdentityMigrationEvents: Array<{
     sessionId: string;
-    outcome: "migrated" | "rejected";
+    outcome: "migrated" | "rejected" | "dropped";
   }> = [];
   let projectScopeResolutionQueue: Promise<void> = Promise.resolve();
   const serializeProjectScopeResolution = <T>(
@@ -1538,7 +1522,7 @@ export const startServer = async (
           }
         }
         assertPrincipal();
-        if (!project) return undefined;
+        if (!project) throw new ProjectSessionScopeUnavailableError(sessionId);
         return identityFor(project.projectId);
       });
     },
@@ -2498,30 +2482,21 @@ export const startServer = async (
     return flight.promise;
   };
 
-  const listReconciledWorkspaceScopes = async () => {
-    let scopes = await workspaceScopeCatalog.list();
+  // A scope the client sees always names its owning project. When identity
+  // storage is unavailable no scope can be published; folders and sessions
+  // stay reachable through the rail's own root projection.
+  const listReconciledWorkspaceScopes = async (): Promise<
+    WorkspaceScopeSummary[]
+  > => {
     try {
-      const studioScopes = await studioWorkspaceScopeCatalog.list();
-      const reconciliation = await studioProjectCatalog.reconcile(studioScopes);
-      const reconciled = reconciliation.workspaceScopes;
-      // Both catalogs key canonical filesystem roots. Cwd retains its display
-      // spelling and can be a symlink alias; prefer reconciled project metadata.
-      const byWorkspaceKey = new Map(
-        reconciled.map((scope) => [scope.workspaceKey, scope]),
+      const reconciliation = await studioProjectCatalog.reconcile(
+        await studioWorkspaceScopeCatalog.list(),
       );
-      for (const scope of scopes) {
-        if (!byWorkspaceKey.has(scope.workspaceKey)) {
-          byWorkspaceKey.set(scope.workspaceKey, scope);
-        }
-      }
-      scopes = [...byWorkspaceKey.values()].sort((left, right) =>
-        left.cwd.localeCompare(right.cwd),
-      );
+      return reconciliation.workspaceScopes;
     } catch {
-      // Keep folders/sessions reachable when identity storage is unavailable.
       console.error("[harness] Studio project catalog is unavailable");
+      return [];
     }
-    return scopes;
   };
 
   /** Enrich only the bound workflow before a Canvas render. Canvas extraction
@@ -3134,7 +3109,7 @@ export const startServer = async (
     const { roots, inventory } = implementations;
     const agents = inventory.candidates.map(({ agentId, path, name }) => ({ agentId, path, name }));
     const available = options.availableHarnesses ?? Object.keys(adapters);
-    const recent = sessionManager.list().filter((session) => session.agentMapIdentity?.projectId === projectId &&
+    const recent = sessionManager.list().filter((session) => session.agentMapIdentity.projectId === projectId &&
       available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
       .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
     const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
@@ -4176,7 +4151,7 @@ export const startServer = async (
         .some(
           (session) =>
             session.status !== "exited" &&
-            session.agentMapIdentity?.projectId === launchProject.projectId,
+            session.agentMapIdentity.projectId === launchProject.projectId,
         ),
     );
     if ((options.autoCreateSession ?? true) && !recoveredLaunchProjectSession) {

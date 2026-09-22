@@ -538,36 +538,20 @@ export const App = (): JSX.Element => {
     // restore it and bump the generation, making that open reject its own
     // result and skip the new-agent screen. The open restores its own project.
     if (projectOpensInFlightRef.current > 0) return;
-    const identityProjectId = active.agentMapIdentity?.projectId ?? null;
-    const identityProject = identityProjectId
-      ? state.studioProjects.find(
-          (candidate) => candidate.projectId === identityProjectId,
-        )
-      : null;
-    // A neutral principal is the exact server-derived authority. Never let a
-    // bound Canvas subject reclassify that session under a nested project. The
-    // path-only branch exists solely for rolling compatibility with sessions
-    // persisted before project principals were recorded.
-    if (identityProjectId && !identityProject) return;
-    const eligibleProjects = identityProject
-      ? [identityProject]
-      : state.studioProjects;
-    const eligibleScopes = identityProject
-      ? (state.workspaceScopes ?? []).filter(
-          (candidate) => candidate.projectId === identityProject.projectId,
-        )
-      : (state.workspaceScopes ?? []);
+    // The session's principal is the exact server-derived authority. Never let
+    // a bound Canvas subject reclassify that session under a nested project.
+    const project = state.studioProjects.find(
+      (candidate) => candidate.projectId === active.agentMapIdentity.projectId,
+    );
+    if (!project) return;
     const scope = mostSpecificStudioScope(
       active.cwd,
-      eligibleScopes,
-      eligibleProjects,
+      (state.workspaceScopes ?? []).filter(
+        (candidate) => candidate.projectId === project.projectId,
+      ),
+      [project],
     );
-    const project =
-      identityProject ??
-      state.studioProjects.find(
-        (candidate) => candidate.projectId === scope?.projectId,
-      );
-    if (!scope?.projectId || !project) return;
+    if (!scope) return;
     if (restoredStudioProjectsRef.current.has(project.projectId)) return;
     restoredStudioProjectsRef.current.add(project.projectId);
     const generation = ++studioRestoreGenerationRef.current;
@@ -1073,7 +1057,7 @@ export const App = (): JSX.Element => {
         const unresolvedProject = selectedProject !== null;
         const studioProjectId =
           effectiveStudioSelection?.projectId ??
-          (unresolvedProject ? null : shortcutActive?.agentMapIdentity?.projectId) ??
+          (unresolvedProject ? null : shortcutActive?.agentMapIdentity.projectId) ??
           null;
         const tabs = studioProjectId
           ? liveSessionsForStudioProject(sessions, studioProjectId)
@@ -1614,7 +1598,7 @@ export const App = (): JSX.Element => {
   );
   const studioConversationProjectId =
     planFirstSelection?.projectId ??
-    (unresolvedProjectMap ? null : activeSession?.agentMapIdentity?.projectId) ??
+    (unresolvedProjectMap ? null : activeSession?.agentMapIdentity.projectId) ??
     null;
   const focusTabs = studioConversationProjectId
     ? liveSessionsForStudioProject(state.sessions, studioConversationProjectId)
@@ -2382,7 +2366,7 @@ export const App = (): JSX.Element => {
       composeInProject({
         root: scope.cwd,
         label: selectedStudioProject?.displayName ?? basenameOf(scope.cwd),
-        projectId: scope.projectId ?? null,
+        projectId: scope.projectId,
         template,
         templateSurface: "template_gallery",
       });
@@ -2532,14 +2516,10 @@ export const App = (): JSX.Element => {
     setStudioSelection(null);
     closeMobileDrawer();
     if (session) {
-      if (session.agentMapIdentity?.projectId) {
-        // An explicit session selection owns its destination. Mark its neutral
-        // project visited even when the session has no agent binding, so a
-        // late preference read cannot replace this exact ordinary tab.
-        restoredStudioProjectsRef.current.add(
-          session.agentMapIdentity.projectId,
-        );
-      }
+      // An explicit session selection owns its destination. Mark its neutral
+      // project visited even when the session has no agent binding, so a
+      // late preference read cannot replace this exact ordinary tab.
+      restoredStudioProjectsRef.current.add(session.agentMapIdentity.projectId);
       const focusPath = boundWorkflowPathOf(session) ?? session.cwd;
       setFocusedAgentPath(focusPath);
       const workflow = state.workflows.find((candidate) =>
@@ -2547,7 +2527,7 @@ export const App = (): JSX.Element => {
       );
       const binding = workflow?.studioBindings?.find(
         (candidate) =>
-          candidate.projectId === session.agentMapIdentity?.projectId,
+          candidate.projectId === session.agentMapIdentity.projectId,
       );
       if (binding) {
         const selection: StudioWorkspaceSelection = {
@@ -3269,11 +3249,7 @@ export const App = (): JSX.Element => {
               activeSession={sessionBarSession}
               sessionName={
                 sessionBarSession
-                  ? sessionDisplayName(
-                      sessionBarSession,
-                      state.sessions,
-                      sessionNames,
-                    )
+                  ? sessionDisplayName(sessionBarSession, sessionNames)
                   : null
               }
               onRenameSession={renameSession}
@@ -3282,7 +3258,7 @@ export const App = (): JSX.Element => {
               busySessionIds={harness.busySessionIds}
               onSelectSession={selectTab}
               labelOf={(session) =>
-                sessionDisplayName(session, state.sessions, sessionNames)
+                sessionDisplayName(session, sessionNames)
               }
               busy={
                 sessionBarSession != null &&

@@ -464,12 +464,17 @@ export interface SessionManagerOptions {
   buildLaunchOpts?: LaunchOptsBuilder;
   /** Live credential generation checked synchronously immediately before spawn. */
   currentCredentialGeneration?: () => number;
-  /** Revalidates cwd containment and current principal before every spawn. */
-  resolveAgentMapIdentity?: (
+  /**
+   * Issues the one project identity a session belongs to. Called before every
+   * spawn to revalidate cwd containment and the current principal, and once
+   * on load for persisted sessions that predate project identity. Throws
+   * `ProjectSessionScopeUnavailableError` when no project can own `cwd`.
+   */
+  resolveAgentMapIdentity: (
     sessionId: string,
     cwd: string,
     persisted?: ProjectAgentSession,
-  ) => Promise<ProjectAgentSession | undefined>;
+  ) => Promise<ProjectAgentSession>;
   /** Claims new-project lifecycle metadata after trusted scope resolution. */
   prepareProjectSession?: (
     identity: ProjectAgentSession,
@@ -483,7 +488,7 @@ export interface SessionManagerOptions {
   /** Content-free observability for persisted identity normalization. */
   onProjectAgentIdentityMigration?: (event: {
     sessionId: string;
-    outcome: "migrated" | "rejected";
+    outcome: "migrated" | "rejected" | "dropped";
   }) => void;
   /** Registers only sessions that carry a durable bootstrap lifecycle. */
   onProjectBootstrapSession?: (
@@ -1161,8 +1166,6 @@ export class SessionManager {
       if (migration.outcome === "migrated") {
         if (migration.identity) {
           session.agentMapIdentity = structuredClone(migration.identity);
-        } else {
-          delete session.agentMapIdentity;
         }
         if (migration.bootstrap) {
           session.projectBootstrap = structuredClone(migration.bootstrap);
@@ -1174,16 +1177,34 @@ export class SessionManager {
         removeLegacyProjectSessionMetadata(session);
         dirty = true;
       }
-      if (migration.outcome !== "unchanged") {
+      let outcome: "unchanged" | "migrated" | "rejected" | "dropped" =
+        migration.outcome;
+      if (migration.identity === undefined && outcome !== "rejected") {
+        // A session written before project identity existed joins the deepest
+        // open root containing its cwd, or a project minted for that cwd. A
+        // cwd no project can own is not a session this build can represent.
+        try {
+          session.agentMapIdentity = structuredClone(
+            await this.resolveAgentMapIdentity(session.id, session.cwd),
+          );
+          outcome = "migrated";
+        } catch (error) {
+          if (!(error instanceof ProjectSessionScopeUnavailableError)) throw error;
+          outcome = "dropped";
+        }
+        dirty = true;
+      }
+      if (outcome !== "unchanged") {
         try {
           this.onProjectAgentIdentityMigration?.({
             sessionId: session.id,
-            outcome: migration.outcome,
+            outcome,
           });
         } catch {
           // Observability is best effort and cannot affect session recovery.
         }
       }
+      if (outcome === "dropped") continue;
       if (session.status !== "exited") {
         session.status = "exited";
         session.exitCode = session.exitCode ?? null;
@@ -1349,15 +1370,14 @@ export class SessionManager {
   private async revalidateAgentMapIdentity(
     sessionId: string,
     cwd: string,
-    expected: ProjectAgentSession | undefined,
+    expected: ProjectAgentSession,
   ): Promise<void> {
-    if (!expected || !this.resolveAgentMapIdentity) return;
     const current = await this.resolveAgentMapIdentity(
       sessionId,
       cwd,
       expected,
     );
-    if (!current || !sameProjectAgent(current, expected)) {
+    if (!sameProjectAgent(current, expected)) {
       throw new ProjectSessionScopeUnavailableError(sessionId);
     }
   }
@@ -1398,12 +1418,16 @@ export class SessionManager {
         if (existing?.agentSessionId === input.agentSessionId) return existing;
         throw new AgentSessionIdentityReservedError();
       }
+      const agentMapIdentity = structuredClone(
+        await this.resolveAgentMapIdentity(id, input.cwd),
+      );
       const session: HarnessSession = {
         id,
         agentSessionId: input.agentSessionId,
         harness: input.harness,
         cwd: input.cwd,
         title: input.title,
+        agentMapIdentity,
         status: "exited",
         mcpAuthState: "not-applicable",
         createdAt: input.lastActiveAt,
@@ -1510,15 +1534,12 @@ export class SessionManager {
         }
       }
     }
-    const trustedIdentity = session.agentMapIdentity;
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
-      : trustedIdentity;
-    if (agentMapIdentity)
-      session.agentMapIdentity = structuredClone(agentMapIdentity);
-    else if (trustedIdentity) throw new ProjectSessionScopeUnavailableError(id);
-    if (trusted.focusedContext && !agentMapIdentity)
-      throw new TypeError("Focused project context requires a project-agent identity");
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      session.cwd,
+      session.agentMapIdentity,
+    );
+    session.agentMapIdentity = structuredClone(agentMapIdentity);
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against
@@ -1533,22 +1554,16 @@ export class SessionManager {
       await this.persist();
       this.emitStatus(session);
       // Preparation belongs to this lifetime so failure runs normal exit cleanup.
-      const launchContext =
-        trusted.promptAppendix || trusted.focusedContext || agentMapIdentity
-          ? {
-              ...(trusted.promptAppendix
-                ? { promptAppendix: trusted.promptAppendix }
-                : {}),
-              ...(trusted.focusedContext
-                ? { focusedContext: trusted.focusedContext }
-                : {}),
-              ...(agentMapIdentity ? { agentMapIdentity } : {}),
-              resume: true as const,
-            }
-          : undefined;
-      const built = await (launchContext
-        ? this.buildLaunchOpts(id, session, launchContext)
-        : this.buildLaunchOpts(id, session));
+      const built = await this.buildLaunchOpts(id, session, {
+        ...(trusted.promptAppendix
+          ? { promptAppendix: trusted.promptAppendix }
+          : {}),
+        ...(trusted.focusedContext
+          ? { focusedContext: trusted.focusedContext }
+          : {}),
+        agentMapIdentity,
+        resume: true,
+      });
       const { mcpCredentialLaunch, ...opts } = {
         harnessSessionId: id,
         cwd: session.cwd,
@@ -2772,6 +2787,26 @@ export class SessionManager {
     await this.writeQueue;
   }
 
+  /**
+   * A session's default name is owned by the record, assigned once at
+   * creation: the folder basename, counting up past every sibling ever
+   * created in that folder so an exit or resume never relabels a neighbour.
+   */
+  private defaultTitle(cwd: string): string {
+    const base = basename(cwd) || cwd;
+    let highest = 0;
+    for (const session of this.sessions.values()) {
+      if (session.cwd !== cwd) continue;
+      if (session.title === base) highest = Math.max(highest, 1);
+      else if (session.title.startsWith(`${base} `)) {
+        const ordinal = Number(session.title.slice(base.length + 1));
+        if (Number.isInteger(ordinal) && ordinal > 0)
+          highest = Math.max(highest, ordinal);
+      }
+    }
+    return highest === 0 ? base : `${base} ${highest + 1}`;
+  }
+
   setTitle(id: string, title: string): void {
     const session = this.sessions.get(id);
     if (!session || !title || session.title === title) return;
@@ -3576,10 +3611,11 @@ export class SessionManager {
     }
     if (this.sessions.has(id)) throw new SubsessionBindingMismatchError();
     const adapter = this.getAdapter(req.harness);
-    const trustedIdentity = trusted.agentMapIdentity?.(id);
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, req.cwd, trustedIdentity)
-      : trustedIdentity;
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      req.cwd,
+      trusted.agentMapIdentity?.(id),
+    );
     const createResolved = async (): Promise<HarnessSession> => {
       // A project create may have been waiting behind another publication
       // when shutdown closed admission. Refuse it before claiming bootstrap,
@@ -3596,10 +3632,9 @@ export class SessionManager {
       let spec: SpawnSpec;
       let mcpCredentialLaunch: McpCredentialLaunch | undefined;
       try {
-        preparedProjectSession =
-          agentMapIdentity && this.prepareProjectSession
-            ? await this.prepareProjectSession(agentMapIdentity, req)
-            : undefined;
+        preparedProjectSession = this.prepareProjectSession
+          ? await this.prepareProjectSession(agentMapIdentity, req)
+          : undefined;
         if (
           trusted.requireProjectBootstrapClaim &&
           !preparedProjectSession?.projectBootstrap
@@ -3611,24 +3646,14 @@ export class SessionManager {
         this.pendingCreates.set(id, { cwd: req.cwd, agentMapIdentity });
         const promptAppendix = trusted.promptAppendix?.(id);
         const focusedContext = trusted.focusedContext?.(id);
-        if (focusedContext && !agentMapIdentity)
-          throw new TypeError("Focused project context requires a project-agent identity");
         const sessionStartSystemMessage =
           trusted.sessionStartSystemMessage?.(id);
-        const launchContext =
-          promptAppendix || focusedContext || sessionStartSystemMessage || agentMapIdentity
-            ? {
-                ...(promptAppendix ? { promptAppendix } : {}),
-                ...(focusedContext ? { focusedContext } : {}),
-                ...(sessionStartSystemMessage
-                  ? { sessionStartSystemMessage }
-                  : {}),
-                ...(agentMapIdentity ? { agentMapIdentity } : {}),
-              }
-            : undefined;
-        const built = await (launchContext
-          ? this.buildLaunchOpts(id, req, launchContext)
-          : this.buildLaunchOpts(id, req));
+        const built = await this.buildLaunchOpts(id, req, {
+          ...(promptAppendix ? { promptAppendix } : {}),
+          ...(focusedContext ? { focusedContext } : {}),
+          ...(sessionStartSystemMessage ? { sessionStartSystemMessage } : {}),
+          agentMapIdentity,
+        });
         ({ mcpCredentialLaunch, ...opts } = {
           harnessSessionId: id,
           cwd: req.cwd,
@@ -3653,7 +3678,7 @@ export class SessionManager {
         title:
           trusted.initialTitle ??
           preparedProjectSession?.initialTitle ??
-          (basename(req.cwd) || req.cwd),
+          this.defaultTitle(req.cwd),
         status: "starting",
         mcpAuthState: "not-applicable",
         createdAt: this.now(),
@@ -3673,9 +3698,7 @@ export class SessionManager {
         ...(projectBootstrap
           ? { projectBootstrap: structuredClone(projectBootstrap) }
           : {}),
-        ...(agentMapIdentity
-          ? { agentMapIdentity: structuredClone(agentMapIdentity) }
-          : {}),
+        agentMapIdentity: structuredClone(agentMapIdentity),
       };
       this.sessions.set(id, session);
       try {
@@ -3717,9 +3740,10 @@ export class SessionManager {
       return session;
     };
     try {
-      return await (agentMapIdentity
-        ? this.serializeProjectCreate(agentMapIdentity.projectId, createResolved)
-        : createResolved());
+      return await this.serializeProjectCreate(
+        agentMapIdentity.projectId,
+        createResolved,
+      );
     } finally {
       this.pendingCreates.delete(id);
     }
@@ -3791,12 +3815,12 @@ export class SessionManager {
       }
     }
 
-    const trustedIdentity = trusted.agentMapIdentity?.(id);
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
-      : trustedIdentity;
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      session.cwd,
+      trusted.agentMapIdentity?.(id),
+    );
     if (
-      !agentMapIdentity ||
       agentMapIdentity.projectId !== next.projectId ||
       agentMapIdentity.sessionId !== id
     ) {

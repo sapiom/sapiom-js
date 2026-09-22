@@ -69,6 +69,11 @@ describe("historyDirs", () => {
       harness: "claude-code",
       cwd,
       title: id,
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user_test",
+        sessionId: id,
+      },
       status: "running",
       ready: true,
       createdAt: "2026-01-01T00:00:00.000Z",
