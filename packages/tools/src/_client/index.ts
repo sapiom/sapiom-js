@@ -76,6 +76,8 @@ export interface Attribution {
 }
 
 export interface TransportConfig {
+  /** Explicit Core base for routed capabilities and durable executions. Resolved at call time when omitted. */
+  coreBaseUrl?: string;
   /** Explicit tenant API key. Omit inside an agent step — the engine injects it ambiently. */
   apiKey?: string;
   /** Inject a fetch (tests / non-standard runtimes). Defaults to global fetch. */
@@ -157,6 +159,7 @@ export function attributionFromEnv(): Attribution {
 }
 
 export class Transport {
+  readonly coreBaseUrl: string | undefined;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly attribution: Attribution;
@@ -174,6 +177,7 @@ export class Transport {
   private analyticsHolder: AnalyticsHolder = {};
 
   constructor(config: TransportConfig = {}) {
+    this.coreBaseUrl = config.coreBaseUrl;
     this.apiKey = config.apiKey ?? process.env.SAPIOM_API_KEY ?? undefined;
     this.fetchImpl = config.fetch ?? globalThis.fetch;
     this.attribution = config.attribution ?? {};
@@ -195,6 +199,7 @@ export class Transport {
       fetch: this.fetchImpl,
       attribution: { ...this.attribution, ...attribution },
       resumeToken: this.resumeToken,
+      coreBaseUrl: this.coreBaseUrl,
     });
     derived.analyticsHolder = this.analyticsHolder;
     return derived;
