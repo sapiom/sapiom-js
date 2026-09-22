@@ -1,3 +1,4 @@
+import { waitForExecution, type ExecutionWaitOptions } from "./wait.js";
 import { randomUUID } from "node:crypto";
 import { Transport, resolveCoreBaseUrl } from "../_client/index.js";
 import {
@@ -168,5 +169,37 @@ export class ExecutionClient {
       { executionId },
     );
     return parseExecution<T>(raw, true, { executionId }) as ExecutionState<T>;
+  }
+
+  async wait<T = unknown>(
+    execution: string | ExecutionHandle,
+    options: ExecutionWaitOptions = {},
+  ): Promise<T> {
+    const baseUrl = this.base(options);
+    const reference =
+      typeof execution === "string"
+        ? { executionId: execution }
+        : {
+            executionId: execution.receipt.id,
+            submissionKey: execution.submissionKey,
+          };
+    if (typeof execution !== "string") {
+      validateKey(execution.submissionKey);
+      parseExecution(execution.receipt, false, reference);
+      if (normalizeBaseUrl(execution.coreBaseUrl) !== baseUrl)
+        throw new ExecutionProtocolError(
+          "Saved handle and configured Core base URL do not match.",
+          reference,
+        );
+    }
+    validateId(reference.executionId);
+    return waitForExecution<T>(
+      (request) => this.get<T>(reference.executionId, { ...request, baseUrl }),
+      reference,
+      options,
+      typeof execution === "string"
+        ? undefined
+        : execution.receipt.capabilityId,
+    );
   }
 }
