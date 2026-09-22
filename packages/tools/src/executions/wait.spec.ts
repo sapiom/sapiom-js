@@ -43,6 +43,20 @@ afterEach(() => {
 });
 
 describe("execution wait and resumption", () => {
+  it("keeps bounded backoff when a rate-limit response asks for immediate retry", async () => {
+    let attempts = 0;
+    const { client, fetch } = setup(async () =>
+      ++attempts === 1
+        ? json({}, 429, { "Retry-After": "0" })
+        : json({ ...receipt, status: "succeeded", result: null }),
+    );
+    const pending = client.executions.wait(handle);
+    await jest.advanceTimersByTimeAsync(499);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(await pending).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
   it("backs off pending GETs and resumes a serialized handle on a fresh client without POST", async () => {
     let n = 0;
     const { client, fetch } = setup(async () =>

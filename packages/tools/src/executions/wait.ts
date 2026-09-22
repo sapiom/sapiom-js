@@ -80,8 +80,10 @@ export async function waitForExecution<T>(
       }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw stopped();
-      const delay =
-        retryAfter ?? Math.min(cap, interval * (0.8 + Math.random() * 0.4));
+      const delay = Math.max(
+        retryAfter ?? 0,
+        Math.min(cap, interval * (0.8 + Math.random() * 0.4)),
+      );
       await pause(Math.min(remaining, delay), options.signal, reference);
       interval = Math.min(cap, interval * 2);
     }
