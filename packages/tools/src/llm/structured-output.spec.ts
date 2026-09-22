@@ -423,6 +423,97 @@ describe("llm.run — a structured call truncated before its tool call", () => {
       expect(halfAllOf.missingPath).toBe("meta.at");
     });
 
+    it("follows a local $ref into $defs and definitions, at a property and inside array items", async () => {
+      // The gateway validates the referenced schema as part of input_schema, so the walk
+      // has to see the same requirements the model was held to.
+      const schema = {
+        $defs: {
+          result: { type: "object", properties: { priority: { type: "string" } }, required: ["priority"] },
+        },
+        definitions: {
+          item: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+        },
+        type: "object",
+        properties: {
+          result: { $ref: "#/$defs/result" },
+          items: { type: "array", items: { $ref: "#/definitions/item" } },
+        },
+        required: ["result"],
+      };
+      const run = (input: Record<string, unknown>) => {
+        const completion = {
+          stop_reason: "max_tokens",
+          content: [{ type: "tool_use", name: "classify_ticket", input }],
+        };
+        return createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) }).llm.run({
+          request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
+          output: { name: "classify_ticket", schema },
+        });
+      };
+
+      const viaDefs = await run({ result: {} }).catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+      expect(viaDefs).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+      expect(viaDefs.missingPath).toBe("result.priority");
+
+      const viaDefinitions = await run({ result: { priority: "high" }, items: [{ name: "a" }, {}] }).catch(
+        (err: unknown) => err as LlmStructuredOutputTruncatedError,
+      );
+      expect(viaDefinitions).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+      expect(viaDefinitions.missingPath).toBe("items[1].name");
+
+      const complete = { result: { priority: "high" }, items: [{ name: "a" }] };
+      expect(structuredOf(await run(complete), "classify_ticket")).toEqual(complete);
+    });
+
+    it("stops on a $ref cycle instead of recursing forever, and still judges the input", async () => {
+      // `a` → `b` → `a` consumes no input between hops; the walk follows each reference once
+      // per position and then reads the requirements it found.
+      const schema = {
+        $defs: {
+          a: { $ref: "#/$defs/b" },
+          b: { $ref: "#/$defs/a", type: "object", properties: { child: { $ref: "#/$defs/a" } }, required: ["value"] },
+        },
+        $ref: "#/$defs/a",
+      };
+      const run = (input: Record<string, unknown>) => {
+        const completion = {
+          stop_reason: "max_tokens",
+          content: [{ type: "tool_use", name: "classify_ticket", input }],
+        };
+        return createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) }).llm.run({
+          request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
+          output: { name: "classify_ticket", schema },
+        });
+      };
+
+      const deep = await run({ value: 1, child: { value: 2, child: {} } }).catch(
+        (err: unknown) => err as LlmStructuredOutputTruncatedError,
+      );
+      expect(deep).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+      expect(deep.missingPath).toBe("child.child.value");
+
+      const complete = { value: 1, child: { value: 2 } };
+      expect(structuredOf(await run(complete), "classify_ticket")).toEqual(complete);
+    });
+
+    it("leaves an external $ref unresolved: no network, so no requirements are read from it", async () => {
+      const schema = {
+        type: "object",
+        properties: { result: { $ref: "https://example.com/schemas/result.json#/definitions/result" } },
+        required: ["result"],
+      };
+      const completion = {
+        stop_reason: "max_tokens",
+        content: [{ type: "tool_use", name: "classify_ticket", input: { result: {} } }],
+      };
+      const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+      const res = await sapiom.llm.run({
+        request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
+        output: { name: "classify_ticket", schema },
+      });
+      expect(structuredOf(res, "classify_ticket")).toEqual({ result: {} });
+    });
+
     it("leaves a nested gap alone when the turn did not end at the cap", async () => {
       // The compatibility boundary: this is a truncation detector, not a schema validator.
       const completion = {

@@ -548,6 +548,29 @@ function formatPath(path: string[]): string {
 }
 
 /**
+ * The subschema a local `$ref` points at — `#` for the root, `#/$defs/x` or
+ * `#/definitions/x` (any JSON Pointer under the root) for a definition — or `undefined`
+ * when the reference cannot be followed. A remote or external reference (`other.json#/x`,
+ * a URL) is deliberately not fetched: nothing here should reach the network, so such a
+ * target is read as declaring no requirements. Plain-name anchors (`#foo`) are likewise
+ * left alone.
+ */
+function resolveLocalRef(root: unknown, ref: string): unknown {
+  if (!ref.startsWith("#")) return undefined;
+  const pointer = ref.slice(1);
+  if (pointer === "") return root;
+  if (!pointer.startsWith("/")) return undefined;
+  let node: unknown = root;
+  for (const raw of pointer.slice(1).split("/")) {
+    const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(node)) node = node[Number(segment)];
+    else if (isRecord(node)) node = node[segment];
+    else return undefined;
+  }
+  return node;
+}
+
+/**
  * The first field `schema` requires that `value` lacks, at any depth, as a path from the
  * root — or `undefined` when every required field is present.
  *
@@ -556,24 +579,42 @@ function formatPath(path: string[]): string {
  * JSON prefix, and a prefix is missing whatever came after the cut. Wrong types, failed
  * patterns and unknown keys are the model's answer, not the cap's doing, and are left to
  * the caller as before. It follows `properties` into nested objects, `items` /
- * `prefixItems` into array elements, `allOf` as every branch, and `anyOf` / `oneOf` as at
- * least one branch (reporting the first branch's gap when none is satisfied). A subschema
- * whose value is absent, or present with a different type, is not descended — there is
- * nothing there to be a prefix of.
+ * `prefixItems` into array elements, local `$ref`s into their definitions, `allOf` as every branch, and `anyOf` / `oneOf` as at
+ * least one branch (reporting the first branch's gap when none is satisfied). A local
+ * `$ref` is resolved against `root` (see {@link resolveLocalRef}) and its target walked at
+ * the same position, alongside any sibling keywords; `seen` holds the references already
+ * followed at this position so a reference cycle that consumes no input (`a` → `b` → `a`)
+ * stops rather than recursing forever — it is reset on every descent into the value, which
+ * is finite. A subschema whose value is absent, or present with a different type, is not
+ * descended — there is nothing there to be a prefix of.
  */
-function firstMissingRequiredPath(schema: unknown, value: unknown, path: string[] = []): string[] | undefined {
+function firstMissingRequiredPath(
+  schema: unknown,
+  value: unknown,
+  root: unknown,
+  path: string[] = [],
+  seen: ReadonlySet<string> = new Set(),
+): string[] | undefined {
   if (!isRecord(schema)) return undefined;
+
+  if (typeof schema.$ref === "string" && !seen.has(schema.$ref)) {
+    const target = resolveLocalRef(root, schema.$ref);
+    if (target !== undefined) {
+      const missing = firstMissingRequiredPath(target, value, root, path, new Set([...seen, schema.$ref]));
+      if (missing) return missing;
+    }
+  }
 
   if (Array.isArray(schema.allOf)) {
     for (const branch of schema.allOf) {
-      const missing = firstMissingRequiredPath(branch, value, path);
+      const missing = firstMissingRequiredPath(branch, value, root, path, seen);
       if (missing) return missing;
     }
   }
   for (const combinator of ["anyOf", "oneOf"] as const) {
     const branches = schema[combinator];
     if (!Array.isArray(branches) || branches.length === 0) continue;
-    const gaps = branches.map((branch) => firstMissingRequiredPath(branch, value, path));
+    const gaps = branches.map((branch) => firstMissingRequiredPath(branch, value, root, path, seen));
     if (gaps.every((gap) => gap !== undefined)) return gaps[0];
   }
 
@@ -584,7 +625,7 @@ function firstMissingRequiredPath(schema: unknown, value: unknown, path: string[
     if (isRecord(schema.properties)) {
       for (const [key, subschema] of Object.entries(schema.properties)) {
         if (!(key in value)) continue;
-        const missing = firstMissingRequiredPath(subschema, value[key], [...path, key]);
+        const missing = firstMissingRequiredPath(subschema, value[key], root, [...path, key]);
         if (missing) return missing;
       }
     }
@@ -602,7 +643,7 @@ function firstMissingRequiredPath(schema: unknown, value: unknown, path: string[
     for (let i = 0; i < value.length; i += 1) {
       const subschema = tuple && i < tuple.length ? tuple[i] : rest;
       if (subschema === undefined) continue;
-      const missing = firstMissingRequiredPath(subschema, value[i], [...path, String(i)]);
+      const missing = firstMissingRequiredPath(subschema, value[i], root, [...path, String(i)]);
       if (missing) return missing;
     }
   }
@@ -643,7 +684,7 @@ function truncationOf(
   if (structured === undefined) return { reason: "no-tool-call" };
   if (!isRecord(structured)) return { reason: "incomplete-input" };
 
-  const missing = firstMissingRequiredPath(output.schema, structured);
+  const missing = firstMissingRequiredPath(output.schema, structured, output.schema);
   return missing ? { reason: "incomplete-input", missingPath: formatPath(missing) } : undefined;
 }
 

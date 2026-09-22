@@ -464,6 +464,83 @@ test("reads a one-line call as one call, not as the start of the next", () => {
   assert.ok(errors[0].includes("index.ts:3"));
 });
 
+test("does not let a parenthesis inside the prompt end the call early", () => {
+  // A prompt reads "(1-5)" or ":)" often enough; a scan that counted those would close the
+  // call before `max_tokens` and `output` and the starved cap would pass.
+  for (const prompt of [
+    'content: "Rate this ticket (1-5) and smile :)",',
+    "content: 'Close paren first ) then open (',",
+    'content: "Escaped quote \\" then ) inside",',
+  ]) {
+    const errors = checkStructuredOutputCap({
+      path: "examples/example/index.ts",
+      source: [
+        "const res = await ctx.sapiom.llm.run({",
+        "  request: {",
+        `    messages: [{ role: "user", ${prompt} }],`,
+        "    max_tokens: 256,",
+        "  },",
+        "  output: { name: RATE, schema: RATE_SCHEMA },",
+        "});",
+      ].join("\n"),
+    });
+    assert.equal(errors.length, 1, prompt);
+    assert.ok(errors[0].includes("index.ts:4"), prompt);
+  }
+});
+
+test("reads through a template-literal prompt, including a nested ${fn(x)} expression", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: {",
+      '    messages: [{ role: "user", content: `Summarize ${title(item)} (briefly) :) ${JSON.stringify({ a: ")" })}',
+      "as a list)` }],",
+      "    max_tokens: 256,",
+      "  },",
+      "  output: { name: SUMMARY, schema: SUMMARY_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:5"), "names the cap's line");
+});
+
+test("ignores parentheses in line and block comments inside the call", () => {
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      "const res = await ctx.sapiom.llm.run({",
+      "  request: { messages }, // one turn (see README)",
+      "  /* the cap ) below is",
+      "     starved */",
+      "  max_tokens: 256,",
+      "  output: { name: RATE, schema: RATE_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:5"), "names the cap's line");
+});
+
+test("still ends the call at its real close after a string", () => {
+  // The string handling must not swallow the closing parenthesis that follows it, or the
+  // next call's cap would be attributed to this one.
+  const errors = checkStructuredOutputCap({
+    path: "examples/example/index.ts",
+    source: [
+      'const a = await ctx.sapiom.llm.run({ request: { messages: [{ role: "user", content: "hi )" }], max_tokens: 64 } });',
+      "const b = await ctx.sapiom.llm.run({",
+      "  request: { messages, max_tokens: 256 },",
+      "  output: { name: RANK, schema: RANK_SCHEMA },",
+      "});",
+    ].join("\n"),
+  });
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].includes("index.ts:3"));
+});
+
 test("resolvedCapsOf reads every cap in a document, literal or named", () => {
   // The floor guard in agent-core's skill-sync test reads caps this way, so a canonical
   // example cannot hide a starved cap behind a const.

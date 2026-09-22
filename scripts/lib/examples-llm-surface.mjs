@@ -156,19 +156,78 @@ export function resolvedCapsOf(source) {
 
 /**
  * The index of the line on which the parenthesis opened at `lines[start]` (from `column`) is
- * closed again — the extent of one call. Counts parentheses only: braces and brackets are
- * balanced inside a well-formed argument list anyway, and a string containing a parenthesis
- * is rare enough in a template's `llm.run` call to be the accepted edge. Runs to the end of
- * the file when the call never closes.
+ * closed again — the extent of one call. Parentheses inside a `'…'` / `"…"` string, a
+ * template literal (including nested `${…}` expressions and their own strings), a `//`
+ * comment or a `/* … *\/` comment are not counted, because a prompt reads "(1-5)" or ":)"
+ * often enough that an early false close would hide `output` and `max_tokens` from the check.
+ * Braces and brackets are balanced inside a well-formed argument list, so only parentheses
+ * are tracked. A regex literal containing a parenthesis is the accepted edge — telling `/`
+ * the operator from `/` the delimiter needs a parser, and no template writes a regex inside
+ * its `llm.run` call. Runs to the end of the file when the call never closes.
  */
 function callEndOf(lines, start, column) {
   let depth = 0;
+  // Lexical context stack: a quote character for a string, "${" for a template
+  // expression, "{" for a brace nested inside one, "//" or "/*" for a comment.
+  const modes = [];
+  const top = () => modes[modes.length - 1];
+
   for (let i = start; i < lines.length; i += 1) {
     const line = lines[i];
+    if (top() === "//") modes.pop();
     for (let c = i === start ? column : 0; c < line.length; c += 1) {
-      if (line[c] === "(") depth += 1;
-      else if (line[c] === ")" && (depth -= 1) === 0) return i;
+      const ch = line[c];
+      const next = line[c + 1];
+      const mode = top();
+
+      if (mode === "/*") {
+        if (ch === "*" && next === "/") {
+          modes.pop();
+          c += 1;
+        }
+        continue;
+      }
+      if (mode === "'" || mode === '"') {
+        if (ch === "\\") c += 1;
+        else if (ch === mode) modes.pop();
+        continue;
+      }
+      if (mode === "`") {
+        if (ch === "\\") c += 1;
+        else if (ch === "`") modes.pop();
+        else if (ch === "$" && next === "{") {
+          modes.push("${");
+          c += 1;
+        }
+        continue;
+      }
+
+      // Code: the call itself, or an expression inside a template literal.
+      if (ch === "/" && next === "/") {
+        modes.push("//");
+        break;
+      }
+      if (ch === "/" && next === "*") {
+        modes.push("/*");
+        c += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") {
+        modes.push(ch);
+        continue;
+      }
+      if (mode === "${" || mode === "{") {
+        // Inside a template expression its parentheses are balanced and belong to it,
+        // so only the braces that lead back out to the template are tracked.
+        if (ch === "{") modes.push("{");
+        else if (ch === "}") modes.pop();
+        continue;
+      }
+      if (ch === "(") depth += 1;
+      else if (ch === ")" && (depth -= 1) === 0) return i;
     }
+    // A quoted string cannot span lines; an unterminated one is a typo, not a context.
+    if (top() === "'" || top() === '"') modes.pop();
   }
   return lines.length - 1;
 }
