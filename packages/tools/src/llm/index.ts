@@ -463,9 +463,9 @@ export type LlmTruncationReason = "no-tool-call" | "incomplete-input";
 /**
  * {@link run} asked for structured output, and the model ran out of `max_tokens` before it
  * finished the forced tool call — either it never emitted one (`"no-tool-call"`) or the cap
- * landed partway through its input, leaving a block whose `input` is empty or missing fields
- * the schema requires (`"incomplete-input"`). Either way there is no structured result to
- * read and there never will be.
+ * landed partway through its input, leaving a block whose `input` is missing a field the
+ * schema requires, at any depth (`"incomplete-input"`; {@link missingPath} names it). Either
+ * way there is no structured result to read and there never will be.
  *
  * This exists because the two failures are indistinguishable downstream: a truncated
  * turn and a genuinely empty structured result both leave {@link structuredOf}
@@ -486,6 +486,13 @@ export class LlmStructuredOutputTruncatedError extends Error {
    * so branch on it only if you want to tell them apart.
    */
   readonly reason: LlmTruncationReason;
+  /**
+   * For `"incomplete-input"`: the first required field the returned `input` lacks, as a
+   * dotted path from the root (`priority`, `result.priority`, `items[1].name`). The schema
+   * is walked in declaration order, so this is where the cut is first visible, not
+   * necessarily the only field missing. `undefined` for `"no-tool-call"`.
+   */
+  readonly missingPath: string | undefined;
   /** The verbatim response, for programmatic inspection (it still carries usage/disclosure). */
   readonly response: unknown;
 
@@ -494,12 +501,14 @@ export class LlmStructuredOutputTruncatedError extends Error {
     maxTokens: number | undefined,
     reason: LlmTruncationReason,
     response: unknown,
+    missingPath?: string,
   ) {
     const cap = maxTokens === undefined ? "" : ` (${maxTokens})`;
+    const missing = missingPath === undefined ? "required fields" : `the required field "${missingPath}"`;
     super(
       (reason === "no-tool-call"
         ? `Structured output "${outputName}" was never emitted: the model hit max_tokens${cap} before the forced tool call. `
-        : `Structured output "${outputName}" is incomplete: the model hit max_tokens${cap} partway through the forced tool call, so its input is missing required fields. `) +
+        : `Structured output "${outputName}" is incomplete: the model hit max_tokens${cap} partway through the forced tool call, so its input is missing ${missing}. `) +
         `Thinking tokens count against max_tokens, so raise the cap to cover thinking plus output ` +
         `— a few thousand tokens, not a few hundred; billing settles on the tokens actually produced. ` +
         `Retrying the same request cannot succeed: catch this and fail() the step rather than letting ` +
@@ -509,6 +518,7 @@ export class LlmStructuredOutputTruncatedError extends Error {
     this.outputName = outputName;
     this.maxTokens = maxTokens;
     this.reason = reason;
+    this.missingPath = missingPath;
     this.response = response;
   }
 }
@@ -519,10 +529,90 @@ function declaredMaxTokens(request: Record<string, unknown>): number | undefined
   return typeof value === "number" ? value : undefined;
 }
 
-/** The `required` field names an `output.schema` declares, when it declares any. */
+/** The `required` field names a schema node declares, when it declares any. */
 function requiredKeysOf(schema: Record<string, unknown>): string[] {
   const required = schema.required;
   return Array.isArray(required) ? required.filter((key): key is string => typeof key === "string") : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** `["result", "0", "name"]` → `result[0].name`. */
+function formatPath(path: string[]): string {
+  return path.reduce((acc, segment) => {
+    if (/^\d+$/.test(segment)) return `${acc}[${segment}]`;
+    return acc === "" ? segment : `${acc}.${segment}`;
+  }, "");
+}
+
+/**
+ * The first field `schema` requires that `value` lacks, at any depth, as a path from the
+ * root — or `undefined` when every required field is present.
+ *
+ * This is a presence walk, not a validator: the only thing it judges is whether a required
+ * key exists, because that is the one shape truncation leaves behind — the model writes a
+ * JSON prefix, and a prefix is missing whatever came after the cut. Wrong types, failed
+ * patterns and unknown keys are the model's answer, not the cap's doing, and are left to
+ * the caller as before. It follows `properties` into nested objects, `items` /
+ * `prefixItems` into array elements, `allOf` as every branch, and `anyOf` / `oneOf` as at
+ * least one branch (reporting the first branch's gap when none is satisfied). A subschema
+ * whose value is absent, or present with a different type, is not descended — there is
+ * nothing there to be a prefix of.
+ */
+function firstMissingRequiredPath(schema: unknown, value: unknown, path: string[] = []): string[] | undefined {
+  if (!isRecord(schema)) return undefined;
+
+  if (Array.isArray(schema.allOf)) {
+    for (const branch of schema.allOf) {
+      const missing = firstMissingRequiredPath(branch, value, path);
+      if (missing) return missing;
+    }
+  }
+  for (const combinator of ["anyOf", "oneOf"] as const) {
+    const branches = schema[combinator];
+    if (!Array.isArray(branches) || branches.length === 0) continue;
+    const gaps = branches.map((branch) => firstMissingRequiredPath(branch, value, path));
+    if (gaps.every((gap) => gap !== undefined)) return gaps[0];
+  }
+
+  if (isRecord(value)) {
+    for (const key of requiredKeysOf(schema)) {
+      if (!(key in value)) return [...path, key];
+    }
+    if (isRecord(schema.properties)) {
+      for (const [key, subschema] of Object.entries(schema.properties)) {
+        if (!(key in value)) continue;
+        const missing = firstMissingRequiredPath(subschema, value[key], [...path, key]);
+        if (missing) return missing;
+      }
+    }
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    // Draft 2020-12 spells a tuple `prefixItems`; older drafts put the array on `items`.
+    const tuple = Array.isArray(schema.prefixItems)
+      ? schema.prefixItems
+      : Array.isArray(schema.items)
+        ? schema.items
+        : undefined;
+    const rest = isRecord(schema.items) ? schema.items : undefined;
+    for (let i = 0; i < value.length; i += 1) {
+      const subschema = tuple && i < tuple.length ? tuple[i] : rest;
+      if (subschema === undefined) continue;
+      const missing = firstMissingRequiredPath(subschema, value[i], [...path, String(i)]);
+      if (missing) return missing;
+    }
+  }
+  return undefined;
+}
+
+interface Truncation {
+  reason: LlmTruncationReason;
+  /** Set for `"incomplete-input"`: the first required field the input lacks. */
+  missingPath?: string;
 }
 
 /**
@@ -533,29 +623,28 @@ function requiredKeysOf(schema: Record<string, unknown>): string[] {
  * and a caller's own partial-result handling are all left exactly as they were.
  *
  * Two shapes, because the cap can land on either side of the tool call. No block at all is the
- * common one. A block whose `input` came back empty, or missing a field the schema requires, is
- * the same failure one token later — the model was cut off mid-input, `structuredOf` hands back
- * `{}` or a partial object, and the caller destructures `undefined` out of it. An empty `input`
- * counts on its own because a schema listing no `required` fields would otherwise have no
- * evidence at all. Fields the schema does not require are the model's to omit and, alongside
- * others that did arrive, are not read as truncation.
+ * common one. A block whose `input` is missing a field the schema requires — at the root, inside
+ * a nested object, or inside an array element — is the same failure one token later: the model
+ * was cut off mid-input, `structuredOf` hands back a prefix of the object, and the caller
+ * destructures `undefined` out of it. The whole schema is walked because a cut lands wherever
+ * the model happened to be writing, and `{ result: {} }` satisfies a root-only check while
+ * carrying nothing. Fields the schema does not require are the model's to omit, so an input
+ * that satisfies every `required` at every depth — including `{}` against a schema that
+ * requires nothing — is a complete result that happened to end at the ceiling.
  */
 function truncationOf(
   response: unknown,
   output: LlmStructuredOutputSpec,
-): LlmTruncationReason | undefined {
+): Truncation | undefined {
   const stopReason = (response as { stop_reason?: unknown } | null | undefined)?.stop_reason;
   if (stopReason !== "max_tokens") return undefined;
 
   const structured = structuredOf(response, output.name);
-  if (structured === undefined) return "no-tool-call";
-  if (typeof structured !== "object" || structured === null) return "incomplete-input";
+  if (structured === undefined) return { reason: "no-tool-call" };
+  if (!isRecord(structured)) return { reason: "incomplete-input" };
 
-  const present = structured as Record<string, unknown>;
-  if (Object.keys(present).length === 0) return "incomplete-input";
-
-  const missing = requiredKeysOf(output.schema).some((key) => !(key in present));
-  return missing ? "incomplete-input" : undefined;
+  const missing = firstMissingRequiredPath(output.schema, structured);
+  return missing ? { reason: "incomplete-input", missingPath: formatPath(missing) } : undefined;
 }
 
 /**
@@ -625,8 +714,9 @@ export async function run<T = Record<string, unknown>>(
     throw new LlmStructuredOutputTruncatedError(
       spec.output.name,
       declaredMaxTokens(spec.request),
-      truncation,
+      truncation.reason,
       response,
+      truncation.missingPath,
     );
   }
   return response;

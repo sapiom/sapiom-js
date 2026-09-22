@@ -235,9 +235,7 @@ describe("llm.run — a structured call truncated before its tool call", () => {
 
   it("throws when the cap landed mid-input, leaving a required field unwritten", async () => {
     // The same failure one token later: the block is there, so a presence check reads it as
-    // success, and the caller destructures `undefined` out of a partial object. The input is
-    // deliberately NON-empty — an empty one short-circuits on the emptiness check above and
-    // would leave the `required` branch this test is named for unexercised.
+    // success, and the caller destructures `undefined` out of a partial object.
     const cutMidInput = {
       stop_reason: "max_tokens",
       content: [{ type: "tool_use", name: "classify_ticket", input: { note: "partial" } }],
@@ -252,7 +250,9 @@ describe("llm.run — a structured call truncated before its tool call", () => {
 
     expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
     expect(error.reason).toBe("incomplete-input");
+    expect(error.missingPath).toBe("priority");
     expect(error.message).toContain("is incomplete");
+    expect(error.message).toContain('missing the required field "priority"');
   });
 
   it("does not read an omitted OPTIONAL field as truncation", async () => {
@@ -273,9 +273,9 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     expect(structuredOf(res, "classify_ticket")).toEqual({ priority: "high" });
   });
 
-  it("reads an empty input at the cap as truncation even with nothing required", async () => {
-    // Without this, a schema that lists no `required` fields has no evidence to fail on, and
-    // the mid-input cut goes back to being silent — the exact hole the error exists to close.
+  it("throws for an empty input at the cap when the schema requires anything", async () => {
+    // The cut landed before the first key was written. The path is the first required key,
+    // because that is the first thing the walk finds absent.
     const cutMidInput = {
       stop_reason: "max_tokens",
       content: [{ type: "tool_use", name: "classify_ticket", input: {} }],
@@ -284,12 +284,158 @@ describe("llm.run — a structured call truncated before its tool call", () => {
     const error = await sapiom.llm
       .run({
         request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
-        output: { name: "classify_ticket", schema: { type: "object", properties: {} } },
+        output: { name: "classify_ticket", schema: SCHEMA },
       })
       .catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
 
     expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
     expect(error.reason).toBe("incomplete-input");
+    expect(error.missingPath).toBe("priority");
+  });
+
+  it("returns an empty input at the cap when the schema requires nothing", async () => {
+    // `{}` is a complete result for a schema with no required properties, and a tool call
+    // can finish exactly at the ceiling. Incompleteness is decided by the schema, not by
+    // how many keys came back.
+    const completion = {
+      stop_reason: "max_tokens",
+      content: [{ type: "tool_use", name: "classify_ticket", input: {} }],
+    };
+    const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+    const res = await sapiom.llm.run({
+      request: { messages: [{ role: "user", content: "classify" }], max_tokens: 256 },
+      output: {
+        name: "classify_ticket",
+        schema: { type: "object", properties: { note: { type: "string" } }, additionalProperties: false },
+      },
+    });
+
+    expect(structuredOf(res, "classify_ticket")).toEqual({});
+  });
+
+  describe("a cut inside a nested field", () => {
+    // A root-only check reads `{ result: {} }` as complete. The schema is walked to every
+    // depth because the cap lands wherever the model happened to be writing.
+    const NESTED_SCHEMA = {
+      type: "object",
+      properties: {
+        result: {
+          type: "object",
+          properties: { priority: { type: "string" }, note: { type: "string" } },
+          required: ["priority"],
+        },
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { name: { type: "string" }, score: { type: "number" } },
+            required: ["name", "score"],
+          },
+        },
+      },
+      required: ["result"],
+    };
+
+    const runNested = (input: Record<string, unknown>, max_tokens = 256) => {
+      const completion = {
+        stop_reason: "max_tokens",
+        content: [{ type: "tool_use", name: "classify_ticket", input }],
+      };
+      const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+      return sapiom.llm.run({
+        request: { messages: [{ role: "user", content: "classify" }], max_tokens },
+        output: { name: "classify_ticket", schema: NESTED_SCHEMA },
+      });
+    };
+
+    it("throws when a nested object is missing a required field, naming the nested path", async () => {
+      const error = await runNested({ result: {} }).catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+      expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+      expect(error.reason).toBe("incomplete-input");
+      expect(error.missingPath).toBe("result.priority");
+      expect(error.message).toContain('missing the required field "result.priority"');
+    });
+
+    it("throws when an array element is missing a required field, naming the element", async () => {
+      const error = await runNested({
+        result: { priority: "high" },
+        items: [{ name: "a", score: 1 }, { name: "b" }],
+      }).catch((err: unknown) => err as LlmStructuredOutputTruncatedError);
+      expect(error).toBeInstanceOf(LlmStructuredOutputTruncatedError);
+      expect(error.reason).toBe("incomplete-input");
+      expect(error.missingPath).toBe("items[1].score");
+    });
+
+    it("returns a complete nested input that happened to end at the cap", async () => {
+      const input = { result: { priority: "high" }, items: [{ name: "a", score: 1 }] };
+      const res = await runNested(input, 4096);
+      expect(structuredOf(res, "classify_ticket")).toEqual(input);
+    });
+
+    it("does not read an omitted OPTIONAL nested field, or an omitted optional array, as truncation", async () => {
+      const input = { result: { priority: "high" } };
+      const res = await runNested(input);
+      expect(structuredOf(res, "classify_ticket")).toEqual(input);
+    });
+
+    it("judges anyOf by the branch the input satisfies, and allOf by every branch", async () => {
+      const completion = (input: Record<string, unknown>) => ({
+        stop_reason: "max_tokens",
+        content: [{ type: "tool_use", name: "classify_ticket", input }],
+      });
+      const schema = {
+        type: "object",
+        properties: {
+          verdict: {
+            anyOf: [
+              { type: "object", properties: { pass: { type: "boolean" } }, required: ["pass"] },
+              { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
+            ],
+          },
+          meta: {
+            allOf: [
+              { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+              { type: "object", properties: { at: { type: "string" } }, required: ["at"] },
+            ],
+          },
+        },
+        required: ["verdict", "meta"],
+      };
+      const run = (input: Record<string, unknown>) =>
+        createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion(input)) }).llm.run({
+          request: { messages: [{ role: "user", content: "judge" }], max_tokens: 256 },
+          output: { name: "classify_ticket", schema },
+        });
+
+      const ok = { verdict: { reason: "too long" }, meta: { id: "1", at: "now" } };
+      expect(structuredOf(await run(ok), "classify_ticket")).toEqual(ok);
+
+      const noBranch = await run({ verdict: {}, meta: { id: "1", at: "now" } }).catch(
+        (err: unknown) => err as LlmStructuredOutputTruncatedError,
+      );
+      expect(noBranch.reason).toBe("incomplete-input");
+      expect(noBranch.missingPath).toBe("verdict.pass");
+
+      const halfAllOf = await run({ verdict: { pass: true }, meta: { id: "1" } }).catch(
+        (err: unknown) => err as LlmStructuredOutputTruncatedError,
+      );
+      expect(halfAllOf.reason).toBe("incomplete-input");
+      expect(halfAllOf.missingPath).toBe("meta.at");
+    });
+
+    it("leaves a nested gap alone when the turn did not end at the cap", async () => {
+      // The compatibility boundary: this is a truncation detector, not a schema validator.
+      const completion = {
+        stop_reason: "end_turn",
+        content: [{ type: "tool_use", name: "classify_ticket", input: { result: {} } }],
+      };
+      const sapiom = createClient({ apiKey: "k", fetch: fakeDirectFetch({}, completion) });
+      const res = await sapiom.llm.run({
+        request: { messages: [{ role: "user", content: "classify" }], max_tokens: 4096 },
+        output: { name: "classify_ticket", schema: NESTED_SCHEMA },
+      });
+      expect(structuredOf(res, "classify_ticket")).toEqual({ result: {} });
+    });
   });
 
   it("leaves a partial result alone when the turn did not end at the cap", async () => {
