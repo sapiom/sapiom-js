@@ -25,12 +25,13 @@ only external provider effects and test admission/capability settings are contro
 
 The runner takes several minutes, including a real 90+ second operation. Scenarios cover
 lost receipts, caller process death/resumption, duplicate delivery, outbox recovery,
-worker death at five checkpoints, terminal replay, and admission-off accepted-job
+worker death at six checkpoints, terminal replay, and admission-off accepted-job
 continuity. No direct repository completion or fake clock is used. Each scenario records
 SDK transport history (body hash only), ID/key, state/epoch/checkpoint, provider attempt
 history and actual billing rows. Successful cases require one provider attempt, one
-authorization/usage identity and `finalization: "settled"`; uncertain dispatch must not
-add provider attempts. The command exits nonzero on missing/incorrect evidence.
+authorization/usage identity with a settled authorization and one exact settlement
+event. The provider-received crash must retain one attempt and an allowed authorization
+owned by capability execution recovery; uncertain dispatch must not add provider attempts. The command exits nonzero on missing/incorrect evidence.
 
 `capability-executions-evidence.json` records both Git SHAs and dirty state, SDK version,
 API fixture version, runtime settings, exact command, scenario durations and exit code.
