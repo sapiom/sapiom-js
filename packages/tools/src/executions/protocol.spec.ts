@@ -48,8 +48,11 @@ describe("execution API v1", () => {
     { id: "../secret" },
     { capabilityId: "../secret" },
     { status: "cancelled" },
+    { status: ["queued"] },
     { createdAt: "yesterday" },
     { expiresAt: "2026-99-99T00:00:00Z" },
+    { createdAt: "2026-02-30T00:00:00Z" },
+    { expiresAt: "2026-01-01T00:00:00Z" },
     { result: {} },
     { error: {} },
     { status: "succeeded" },
@@ -69,6 +72,15 @@ describe("execution API v1", () => {
     );
   });
   it("checks the requested identity and strips untrusted URLs", () => {
+    expect(() =>
+      parseExecution({ ...receipt, status: ["failed"] }, false),
+    ).toThrow(ExecutionProtocolError);
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    expect(
+      parseExecution({ ...receipt, id: id.toUpperCase() }, true, {
+        executionId: id,
+      }).id,
+    ).toBe(id);
     expect(() =>
       parseExecution(receipt, true, {
         executionId: "other",
@@ -102,6 +114,8 @@ describe("execution API v1", () => {
     "https://u:p@api.test",
     "https://api.test/?secret=x",
     "https://api.test/#secret",
+    "https://api.test/?",
+    "https://api.test/#",
   ])("rejects unsafe configured base %s", (url) => {
     expect(() => normalizeBaseUrl(url)).toThrow(ExecutionProtocolError);
   });

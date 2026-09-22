@@ -12,7 +12,8 @@ const own = (value: object, key: string) =>
 const validDate = (value: unknown) =>
   typeof value === "string" &&
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value) &&
-  Number.isFinite(Date.parse(value));
+  Number.isFinite(Date.parse(value)) &&
+  new Date(value).toISOString().slice(0, 19) === value.slice(0, 19);
 const statuses = ["queued", "running", "succeeded", "failed", "indeterminate"];
 
 export function validateId(id: string): void {
@@ -39,8 +40,8 @@ export function normalizeBaseUrl(base: string): string {
       !["http:", "https:"].includes(url.protocol) ||
       url.username ||
       url.password ||
-      url.search ||
-      url.hash
+      url.href.includes("?") ||
+      url.href.includes("#")
     )
       throw new Error();
     return url.href.replace(/\/+$/, "");
@@ -68,9 +69,12 @@ export function parseExecution<T>(
     value.version !== 1 ||
     typeof value.id !== "string" ||
     typeof value.capabilityId !== "string" ||
-    !statuses.includes(String(value.status)) ||
+    typeof value.status !== "string" ||
+    !statuses.includes(value.status) ||
     !validDate(value.createdAt) ||
-    !validDate(value.expiresAt)
+    !validDate(value.expiresAt) ||
+    Date.parse(value.expiresAt as string) <
+      Date.parse(value.createdAt as string)
   )
     throw bad();
   try {
@@ -80,13 +84,14 @@ export function parseExecution<T>(
     throw bad();
   }
   if (
-    (reference.executionId && value.id !== reference.executionId) ||
+    (reference.executionId &&
+      value.id.toLowerCase() !== reference.executionId.toLowerCase()) ||
     (capabilityId && value.capabilityId !== capabilityId)
   )
     throw bad();
   const receipt: ExecutionReceipt = {
     version: 1,
-    id: value.id,
+    id: value.id.toLowerCase(),
     capabilityId: value.capabilityId,
     status: value.status as ExecutionReceipt["status"],
     createdAt: value.createdAt as string,
