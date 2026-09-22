@@ -676,6 +676,22 @@ describe("search.emailSearch.findEmail()", () => {
         "org + lastName but no firstName",
         { domain: "x.com", lastName: "Lovelace" },
       ],
+      // Regression for #860: whitespace-only strings looked "present" under
+      // a truthiness check. Each of these has the right *shape* to pass the
+      // old guard but must still be rejected once trimmed.
+      ["whitespace-only domain, no person", { domain: "   " }],
+      [
+        "whitespace-only domain + valid fullName",
+        { domain: "   ", fullName: "Ada Lovelace" },
+      ],
+      [
+        "valid domain + whitespace-only fullName",
+        { domain: "x.com", fullName: "   " },
+      ],
+      [
+        "valid domain + whitespace-only firstName and lastName",
+        { domain: "x.com", firstName: "  ", lastName: "  " },
+      ],
     ];
 
     for (const [label, input] of invalid) {
@@ -807,6 +823,15 @@ describe("search.emailSearch.verifyEmail()", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("throws SearchHttpError before fetching when email is whitespace-only (regression for #860)", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      verifyEmail({ email: "   " }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
   it("throws SearchHttpError (status + body) on a non-2xx", async () => {
     const { transport } = makeTransport([
       () => new Response(JSON.stringify({ error: "nope" }), { status: 422 }),
@@ -927,6 +952,15 @@ describe("search.emailSearch.domainSearch()", () => {
 
     await expect(
       domainSearch({ domain: "" } as { domain: string }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws SearchHttpError before fetching when domain is whitespace-only (regression for #860)", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      domainSearch({ domain: "   " }, transport, BASE),
     ).rejects.toBeInstanceOf(SearchHttpError);
     expect(calls).toHaveLength(0);
   });
