@@ -532,6 +532,48 @@ describe("emitEvent", () => {
         }
       });
 
+      // A Proxy around an array is still an array to `Array.isArray`, and its
+      // get trap answers `length`. Rejecting on a value that can change
+      // between this read and the serializer's would refuse a payload that
+      // goes out fine — and rejecting is the one verdict this walk never
+      // reaches through caller code.
+      it("declines to judge a length that changes between reads", async () => {
+        let reads = 0;
+        const items = new Proxy([] as unknown[], {
+          get(target, key, receiver) {
+            if (key === "length") {
+              reads += 1;
+              return reads === 1 ? 200_000 : 0;
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        });
+        const bodies: string[] = [];
+        const client = {
+          post: async (_path: string, body: { payload: unknown }) => {
+            bodies.push(JSON.stringify(body.payload));
+            return RECEIPT;
+          },
+        } as unknown as GatewayClient;
+
+        await emitEvent({ type: "lead.created", payload: { items } }, client);
+        expect(bodies).toEqual(['{"items":[]}']);
+      });
+
+      it("still rejects a length a trap reports consistently", async () => {
+        const { client, calls } = fakeClient();
+        // The serializer is told the same number, so the rejection is right.
+        const items = new Proxy([] as unknown[], {
+          get: (target, key, receiver) =>
+            key === "length" ? 900_000 : Reflect.get(target, key, receiver),
+        });
+
+        await expect(
+          emitEvent({ type: "lead.created", payload: { items } }, client),
+        ).rejects.toMatchObject({ code: "BAD_PAYLOAD" });
+        expect(calls).toEqual([]);
+      });
+
       it("still checks the indices a mostly-sparse array does hold", async () => {
         const { client } = fakeClient();
         const items: unknown[] = [];

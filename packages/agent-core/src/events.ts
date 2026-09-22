@@ -309,14 +309,28 @@ const MAX_EVENT_BODY_BYTES = 256 * 1024;
  * FLOOR already exceeds the cap are rejected, which means nothing the server
  * would have accepted is refused here; everything borderline still goes and
  * still gets the server's own verdict.
+ *
+ * `length` is read twice ON PURPOSE, and the direction is the opposite of the
+ * double reads removed elsewhere in this file. Those were removed because a
+ * value read twice could DIVERGE and the second reading is what shipped. This
+ * one exists to detect that divergence and then decline: a `Proxy` around an
+ * array is still an array to `Array.isArray`, and its get trap can answer
+ * 200000 now and 0 to the serializer, which would refuse a payload that goes
+ * out as `[]`. Rejecting is the one verdict this walk never reaches through
+ * caller code, so an unstable length simply is not judged. A trap that lies
+ * CONSISTENTLY is another matter: the serializer is told the same thing, so
+ * the rejection is right.
  */
 function arrayCannotFit(value: object, at: string): Unserializable | null {
   let length: number;
+  let confirm: number;
   try {
     length = (value as unknown[]).length;
+    confirm = (value as unknown[]).length;
   } catch {
     return null;
   }
+  if (typeof length !== "number" || length !== confirm) return null;
   if (2 * length + 1 <= MAX_EVENT_BODY_BYTES) return null;
   return {
     path: at,
