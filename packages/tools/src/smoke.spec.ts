@@ -10,6 +10,7 @@
  */
 import {
   createClient,
+  executions,
   sandboxes,
   repositories,
   models,
@@ -51,6 +52,9 @@ describe("@sapiom/tools public surface", () => {
     const sapiom = createClient({ apiKey: "test-key" });
 
     expect(typeof sapiom.sandboxes.create).toBe("function");
+    expect(typeof sapiom.executions.prepare).toBe("function");
+    expect(typeof sapiom.executions.submit).toBe("function");
+    expect(typeof sapiom.executions.get).toBe("function");
     expect(typeof sapiom.sandboxes.attach).toBe("function");
 
     expect(typeof sapiom.repositories.create).toBe("function");
@@ -113,12 +117,14 @@ describe("@sapiom/tools public surface", () => {
   it("withAttribution derives a client of the same shape", () => {
     const derived = createClient({ apiKey: "test-key" }).withAttribution({});
     expect(typeof derived.sandboxes.create).toBe("function");
+    expect(typeof derived.executions.submit).toBe("function");
     expect(typeof derived.models.coding.run).toBe("function");
     expect(typeof derived.withAttribution).toBe("function");
   });
 
   it("barrel re-exports the capability namespaces and resource classes", () => {
     expect(typeof sandboxes).toBe("object");
+    expect(typeof executions.prepare).toBe("function");
     expect(typeof repositories).toBe("object");
     expect(typeof models).toBe("object");
     expect(typeof search).toBe("object");
