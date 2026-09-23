@@ -602,8 +602,12 @@ export interface Sapiom {
    * `screenshot` + `identities` for direct control.
    */
   readonly browserAutomation: {
+    /** Run and control managed tasks with secret resource IDs. */
+    tasks: ReturnType<typeof browserAutomation.bindManagedBrowser>["tasks"];
     /** Open and close browser sessions. */
-    sessions: {
+    sessions: ReturnType<
+      typeof browserAutomation.bindManagedBrowser
+    >["sessions"] & {
       /** Open a new browser session. */
       create(options?: SessionTimeoutOptions): Promise<BrowserSession>;
       /** Open a new browser session pre-authenticated with an identity. */
@@ -826,7 +830,9 @@ function bind(transport: Transport): Sapiom {
       evaluate: (spec) => decisions.evaluate(spec, transport),
     },
     browserAutomation: {
+      tasks: browserAutomation.bindManagedBrowser(transport).tasks,
       sessions: {
+        ...browserAutomation.bindManagedBrowser(transport).sessions,
         create: (options) =>
           browserAutomation.createSession(options, transport),
         createWithIdentity: (input) =>
