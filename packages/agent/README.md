@@ -188,3 +188,113 @@ list grows as capabilities land:
 | Capability   | Launch                              | Pause signal                             |
 | ------------ | ----------------------------------- | ---------------------------------------- |
 | Coding agent | `ctx.sapiom.models.coding.launch(…)` | `CODING_RESULT_SIGNAL` (`@sapiom/tools`) |
+
+## Waiting on a signal from outside
+
+The same pause works without a capability handle. Pass the object form and name
+the signal yourself — any string you choose — and the run parks until something
+delivers it. This is the human-gate and third-party-callback shape:
+
+```ts
+const present = defineStep({
+  name: "present",
+  next: ["finalize"],
+  pause: { signal: "approval.decision", resumeStep: "finalize" },
+  async run(input, ctx) {
+    await notifyReviewer(input.draft);
+    return pauseUntilSignal({
+      signal: "approval.decision",
+      resumeStep: "finalize",
+      correlationId: ctx.executionId,
+      timeoutMs: 7 * 24 * 60 * 60 * 1000,
+    });
+  },
+});
+```
+
+The `correlationId` is what the delivery is matched on, and choosing it is the
+whole design decision:
+
+- **`ctx.executionId`** (the default when you omit it) makes the waiter unique to
+  this run. One delivery, one resume. Use this for a per-run approval.
+- **A shared business key** — an order id, a customer id — makes every run
+  waiting on that key resume together from one delivery. This is "wait for any
+  signal matching X": the fanout is 0..N runs, deliberately, and the count you
+  get back is how many actually resumed.
+
+Give any gate a human might never answer an explicit `timeoutMs`: when the
+deadline lapses the run ends as a pause timeout instead of resuming, so the
+failure is recorded rather than sat on.
+
+Under `run_local` a manual gate auto-resumes with `{}` — there is no way to
+inject a payload — so type the resumed step's input with optional fields.
+
+## Events vs signals
+
+Two namespaces, two verbs, and they do not reach into each other:
+
+| You want                          | Verb        | Reaches                                  |
+| --------------------------------- | ----------- | ---------------------------------------- |
+| Start runs because something happened | `emitEvent` | every active `event` trigger on that type (0..N new runs) |
+| Resume a run that is already paused   | `signal`    | every run waiting on `(name, correlationId)` (0..N resumes) |
+
+**Events start, signals resume.** An event never wakes a paused run, and a
+signal never starts one.
+
+The namespaces differ too. An event `type` is machine-routed, so its grammar is
+enforced: lowercase `[a-z0-9_]` segments joined by dots (`lead.created`), with
+`sapiom.*` reserved. A signal `name` is author-chosen and arbitrary — it only
+has to match what the `pause` declaration said.
+
+Both verbs live on every surface:
+
+| Surface | Start                           | Resume                      |
+| ------- | ------------------------------- | --------------------------- |
+| SDK     | `emitEvent` (`@sapiom/agent-core`) | `signal`                    |
+| CLI     | `sapiom agents emit`            | `sapiom agents signal`      |
+| MCP     | `sapiom_dev_agents_emit_event`  | `sapiom_dev_agents_signal`  |
+
+```ts
+import { createClient, emitEvent, signal } from "@sapiom/agent-core";
+
+const client = createClient({ apiKey: process.env.SAPIOM_API_KEY! });
+
+// Start: fans out to every active `event` trigger on `lead.created`.
+// `eventId` is your id for the delivery — reposting it starts nothing new.
+const receipt = await emitEvent(
+  { type: "lead.created", payload: { leadId: "l_42" }, eventId: "crm-evt-8f2a" },
+  client,
+);
+// receipt.outcome === "unmatched" is a success: nothing subscribes to that type.
+
+// Resume: wakes the run(s) paused on this exact (name, correlationId) pair.
+const { matched, message } = await signal(
+  {
+    executionId,
+    name: "approval.decision",
+    correlationId: executionId,
+    payload: { approved: true },
+  },
+  client,
+);
+```
+
+Three things worth knowing rather than assuming:
+
+- **Extra payload keys reach the run, and the entry schema decides their fate.**
+  The engine can drop keys an entry step did not declare, but only when the
+  stored manifest literally closes the object (`additionalProperties: false`) —
+  and `buildManifest` strips that marker at every depth, deliberately and even
+  for `z.strictObject()`, so a stored schema stays forward-compatible with
+  inputs that gain fields. So for an agent authored with this SDK the extra key
+  is not dropped: it lands in the run input and the author's own parse rules.
+  `z.object()` ignores it; `z.strictObject()` rejects it and the step fails.
+  Either way the emit itself succeeds, so match the entry schema when you can.
+- `emitEvent` returns `fireIds` — trigger fires, not execution ids. To see what
+  actually started, read the receipt back (`GET /v1/workflows/receipts/:id`).
+- `signal` takes an `executionId` to address the run, but delivery is matched on
+  the pair, so that id need not be the only run that resumes. `matched` counts
+  the runs that actually resumed, which under-reports a partial fanout — read
+  `message` whenever it is present.
+
+Full guide: [Using signals](https://docs.sapiom.ai/guides/use-signals).
