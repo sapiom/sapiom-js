@@ -191,8 +191,10 @@ import type {
 import type { OAuth2Client } from "google-auth-library";
 import * as github from "./connectors/github/index.js";
 import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
+import { ExecutionClient } from "./executions/client.js";
 
 export interface Sapiom {
+  readonly executions: ExecutionClient;
   readonly sandboxes: {
     create(opts: SandboxCreateOptions): Promise<Sandbox>;
     attach(
@@ -656,6 +658,7 @@ export interface Sapiom {
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
 function bind(transport: Transport): Sapiom {
   return {
+    executions: new ExecutionClient(transport),
     sandboxes: {
       create: (opts) => Sandbox.create(opts, transport),
       attach: (name, opts) => Sandbox.attach(name, opts, transport),

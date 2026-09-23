@@ -14,6 +14,9 @@
 export { createClient, createClientFromEnv } from "./client.js";
 export type { Sapiom } from "./client.js";
 export type { TransportConfig, Attribution } from "./_client/index.js";
+export * as executions from "./executions/index.js";
+export * from "./executions/types.js";
+export * from "./executions/errors.js";
 
 // The generic dispatch contract: any capability handle that carries a `dispatch`
 // member is pausable via `pauseUntilSignal` in @sapiom/agent.
