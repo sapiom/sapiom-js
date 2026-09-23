@@ -133,6 +133,11 @@ export {
 // raw wire shape (`LlmDisclosure`) stays on the `llm` namespace / subpath.
 export type { RoutingLabel, LlmDisclosureResult } from "./llm/index.js";
 export { readDisclosure } from "./llm/index.js";
+// Thrown by `llm.run` when a forced structured-output tool call never arrived
+// because the turn hit `max_tokens` first — top-level so a step can catch it by
+// name without reaching into the `llm` namespace.
+export { LlmStructuredOutputTruncatedError } from "./llm/index.js";
+export type { LlmTruncationReason } from "./llm/index.js";
 
 export * as fileStorage from "./file-storage/index.js";
 export { FileStorageHttpError } from "./file-storage/index.js";
@@ -203,6 +208,18 @@ export { MemoryHttpError } from "./memory/index.js";
 
 export * as speech from "./speech/index.js";
 export { SpeechHttpError } from "./speech/index.js";
+
+// decisions — System One judgments via the Capability Router:
+// `evaluate` returns calibrated probabilities over a fixed answer set.
+export * as decisions from "./decisions/index.js";
+export { DecisionsHttpError } from "./decisions/index.js";
+export type {
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+  DecisionQuestion,
+  DecisionAnswer,
+  DecisionAnswerFor,
+} from "./decisions/index.js";
 
 export * as browserAutomation from "./browser-automation/index.js";
 export { BrowserAutomationHttpError } from "./browser-automation/index.js";

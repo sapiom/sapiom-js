@@ -153,6 +153,12 @@ import type {
   SoundEffectInput,
   VoicesResult,
 } from "./speech/index.js";
+import * as decisions from "./decisions/index.js";
+import type {
+  DecisionQuestion,
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+} from "./decisions/index.js";
 import * as browserAutomation from "./browser-automation/index.js";
 import type {
   BrowserSession,
@@ -580,6 +586,19 @@ export interface Sapiom {
     };
   };
   /**
+   * System One decisions — fixed-answer-set judgments with probabilities
+   * (a System One decision model via the Capability Router). Generated text → `llm.run`.
+   */
+  readonly decisions: {
+    /**
+     * Evaluate yes/no (`noul`), pick-one (`choice`), and rubric (`score`)
+     * questions over one state; the answers map is typed by the questions.
+     */
+    evaluate<Q extends Record<string, DecisionQuestion>>(
+      spec: DecisionsEvaluateSpec<Q>,
+    ): Promise<DecisionsEvaluateResponse<Q>>;
+  };
+  /**
    * Browser automation — sessions, screenshots, and identity management.
    * Use `withSession` for the safe auto-close pattern; use `sessions` +
    * `screenshot` + `identities` for direct control.
@@ -805,6 +824,9 @@ function bind(transport: Transport): Sapiom {
       voices: {
         list: () => speech.listVoices(transport),
       },
+    },
+    decisions: {
+      evaluate: (spec) => decisions.evaluate(spec, transport),
     },
     browserAutomation: {
       sessions: {

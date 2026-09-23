@@ -46,6 +46,9 @@ jobs:
       - name: Verify installed Agent Map package
         run: pnpm --filter @sapiom/agent-map test:package
 
+      - name: Verify installed MCP host contract
+        run: pnpm --filter @sapiom/mcp test:package
+
       - name: Type check
         run: pnpm typecheck
 
@@ -67,10 +70,12 @@ jobs:
         with:
           node-version: "18.x"
           cache: "pnpm"
-      - run: pnpm install --frozen-lockfile --filter "@sapiom/agent-map..."
-      - run: pnpm --filter @sapiom/agent-map build
+      - run: pnpm install --frozen-lockfile --filter "@sapiom/mcp..."
+      - run: pnpm --filter "@sapiom/mcp..." build
       - run: pnpm --filter @sapiom/agent-map test
       - run: pnpm --filter @sapiom/agent-map test:package
+      - run: pnpm --filter @sapiom/mcp test:capabilities
+      - run: pnpm --filter @sapiom/mcp test:package
 
   # Template gallery gate. The `examples/` tree lives outside the pnpm workspace,
   # so the matrix job above never touches it — this is the only check that
@@ -123,6 +128,13 @@ jobs:
       - name: Test pull request CI security
         run: pnpm pr-ci-security:check
 
+  # NOTE: the @sapiom/opencode native suite (src/**/*.native.test.ts, which
+  # launches the real pinned OpenCode binary) is excluded from `pnpm test` and
+  # runs in .github/workflows/opencode-native.yml, path-filtered to that
+  # package. Inside this matrix job it shared the runner with every other
+  # package's suite and its cold startups timed out often enough to turn
+  # unrelated PRs red (SAP-3605).
+  #
   # NOTE: the harness web-e2e (playwright-mock) and desktop packaging
   # (desktop-smoke) jobs moved to .github/workflows/harness.yml, which is
   # path-filtered to the harness and its workspace dependencies — they only

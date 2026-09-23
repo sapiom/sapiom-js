@@ -1,0 +1,88 @@
+#!/usr/bin/env node
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { configureAnalytics } from "./analytics.js";
+import { resolveEnvironment } from "./credentials.js";
+import { register as registerAuthenticate } from "./tools/authenticate.js";
+import { register as registerStatus } from "./tools/status.js";
+import { register as registerAgents } from "./tools/agents.js";
+import { register as registerSandbox } from "./tools/sandbox.js";
+import { register as registerAppPublish } from "./tools/app-publish.js";
+import { register as registerAppManage } from "./tools/app-manage.js";
+import { register as registerFeedback } from "./tools/feedback.js";
+import { studioHostContext } from "./studio-host-context.js";
+import { resolveInstructions } from "./instructions-fetch.js";
+
+async function main(): Promise<void> {
+  const host = await studioHostContext.resolve();
+  if (host.kind === "unavailable-studio") {
+    console.error(
+      `Studio map context unavailable (${host.reason}); existing tools remain available.`,
+    );
+  }
+
+  // Resolve environment: SAPIOM_ENVIRONMENT env var > file > "production"
+  const env = await resolveEnvironment(process.env.SAPIOM_ENVIRONMENT);
+
+  if (env.name !== "production") {
+    console.error(
+      `\u26a0 Using environment "${env.name}": app=${env.appURL} api=${env.apiURL}`,
+    );
+  }
+
+  // Construct the process-wide usage-analytics emitter once, keyed with the
+  // cached credential when one exists. Live by default; honors the standard
+  // telemetry opt-outs (SAPIOM_TELEMETRY_DISABLED=1, DO_NOT_TRACK=1).
+  configureAnalytics({ apiKey: env.credentials?.apiKey });
+
+  // Pull the latest authoring instructions from the backend, then the
+  // last-known-good cache, then the bundled snapshot — so guidance can change
+  // without a release. One provenance line on stderr (stdout is the transport).
+  const primer = await resolveInstructions(env);
+  console.error(
+    `sapiom-dev: authoring primer source=${primer.source} release=${primer.release ?? "unknown"} digest=${primer.digest ?? "unknown"}`,
+  );
+
+  const server = new McpServer(
+    {
+      // The local developer surface — distinct from the remote Sapiom
+      // capabilities MCP. This is the `sapiom_dev_*` namespace for building
+      // and operating on Sapiom (today: agent authoring &
+      // lifecycle; room for more dev tooling later). The `name` is the stable
+      // wire identifier; `title` and `description` are what MCP clients show, so
+      // they spell out which Sapiom this is to keep it from reading as a
+      // duplicate of the capability server.
+      name: "sapiom-dev",
+      title: "Sapiom Dev — local developer tools",
+      description:
+        "The local Sapiom developer MCP (sapiom_dev_*). Scaffold, check, and run with stubbed capabilities locally; authenticated deploys and production runs use Sapiom cloud. It is not the hosted direct-capability MCP.",
+      version: "0.1.0",
+    },
+    {
+      // Returned in the MCP `initialize` handshake; capable clients surface it to the
+      // model on connect, so an agent that adds this server gets the authoring primer
+      // automatically. Resolved above: live, last-known-good, or bundled snapshot.
+      instructions: primer.body,
+    },
+  );
+
+  // Register all tools
+  registerAuthenticate(server, env);
+  registerStatus(server, env);
+  registerAgents(server, env);
+  registerSandbox(server, env);
+  registerAppPublish(server, env);
+  registerAppManage(server, env);
+  registerFeedback(server, env);
+
+  // Connect via stdio transport
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Sapiom dev MCP server running on stdio");
+}
+
+main().catch((err) => {
+  console.error("Fatal error:", err);
+  process.exit(1);
+});

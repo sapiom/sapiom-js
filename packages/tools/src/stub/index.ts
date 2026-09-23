@@ -39,6 +39,12 @@ import {
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
 } from "../llm/index.js";
+import {
+  type DecisionQuestion,
+  type DecisionsEvaluateSpec,
+  type DecisionsEvaluateResponse,
+  DecisionsHttpError,
+} from "../decisions/index.js";
 import type {
   AgentRunResult,
   AgentRunError,
@@ -888,6 +894,104 @@ function stubMemoryFilterMatches(
     }
   }
   return true;
+}
+
+/**
+ * The Capability Router's `decisions.evaluate` request bounds (Sapiom
+ * `decisions-evaluate.validator.ts`), which the stub mirrors so a rubric the router would
+ * refuse fails under `run_local` too, instead of only once the agent is deployed.
+ * The router answers 400 via Nest's `BadRequestException(reason)`; the SDK maps
+ * that to {@link DecisionsHttpError}, so the stub throws the same class, status,
+ * body shape, and message prefix (`capabilityCall`'s `Failed to evaluate: <status> <body>`).
+ */
+function stubEvaluateValidate(
+  questions: Record<string, DecisionQuestion>,
+): void {
+  const fail = (reason: string): never => {
+    const body = { statusCode: 400, message: reason, error: "Bad Request" };
+    throw new DecisionsHttpError(
+      `Failed to evaluate: 400 ${JSON.stringify(body)}`,
+      400,
+      body,
+    );
+  };
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const n = Object.keys(q.criteria).length;
+      if (n < 2)
+        fail(`question '${id}' choice criteria must have at least two options`);
+      if (n > 32)
+        fail(`question '${id}' choice criteria must have at most 32 options`);
+    } else if (q.type === "score") {
+      const n = q.criteria.length;
+      if (n < 2)
+        fail(`question '${id}' score criteria must have at least two levels`);
+      if (n > 10)
+        fail(`question '${id}' score criteria must have at most 10 levels`);
+    }
+  }
+}
+
+/**
+ * A shape-correct, deterministic `decisions.evaluate` reply for `run_local`: every question
+ * answered under its own key, undecided (`noul` 0.5, a uniform distribution for
+ * `choice` and `score`) so branching code runs both ways without inventing a verdict.
+ * Rejects what the router would reject ({@link stubEvaluateValidate}) before answering.
+ */
+function stubEvaluateResponse(
+  questions: Record<string, DecisionQuestion>,
+): DecisionsEvaluateResponse {
+  stubEvaluateValidate(questions);
+  // Built on a null prototype so a question keyed `__proto__` becomes an
+  // ordinary own property instead of a prototype swap that drops the answer;
+  // copied onto a plain object below so the result also inherits
+  // `Object.prototype` (`hasOwnProperty` etc.) exactly like the parsed JSON the
+  // router returns.
+  const answers: Record<string, unknown> = Object.create(null);
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const options = Object.keys(q.criteria);
+      const p = options.length > 0 ? 1 / options.length : 0;
+      answers[id] = {
+        type: "choice",
+        choice: options[0] ?? "",
+        probabilities: Object.fromEntries(options.map((o) => [o, p])),
+        confidence: options.length > 0 ? p : 0,
+      };
+    } else if (q.type === "score") {
+      // Uniform over the levels, like `choice`: the stub must not fabricate
+      // certainty. `score` is the probability-weighted position, which for a
+      // uniform distribution is the midpoint (n-1)/2; `confidence` is the
+      // top probability, 1/n, the lowest a concentration measure can honestly be.
+      const levels = q.criteria;
+      const n = levels.length;
+      const p = n > 0 ? 1 / n : 0;
+      answers[id] = {
+        type: "score",
+        score: n > 0 ? (n - 1) / 2 : 0,
+        legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
+        probabilities: Object.fromEntries(levels.map((_, i) => [String(i), p])),
+        confidence: p,
+      };
+    } else {
+      answers[id] = { type: "noul", noul: 0.5 };
+    }
+  }
+  // `Object.assign({}, answers)` would hit the `__proto__` setter again, so
+  // define each key as an own data property, as JSON.parse does on the wire.
+  const plain: Record<string, unknown> = {};
+  for (const key of Object.keys(answers)) {
+    Object.defineProperty(plain, key, {
+      value: answers[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return {
+    answers: plain as DecisionsEvaluateResponse["answers"],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  };
 }
 
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
@@ -2166,6 +2270,15 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as VoicesResult,
           ),
       },
+    },
+    decisions: {
+      // async so a validation throw surfaces as a rejection, like the router's 400.
+      evaluate: async <Q extends Record<string, DecisionQuestion>>(
+        spec: DecisionsEvaluateSpec<Q>,
+      ) =>
+        r("decisions.evaluate", [spec], () =>
+          stubEvaluateResponse(spec.questions),
+        ) as DecisionsEvaluateResponse<Q>,
     },
     browserAutomation: {
       sessions: {

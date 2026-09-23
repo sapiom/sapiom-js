@@ -11,7 +11,7 @@
  * caller's Sapiom API key (identity mode — no x402 payment handshake needed).
  *
  *   const reply = await ctx.sapiom.llm.run({
- *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 512 },
+ *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 4096 },
  *     model: "large", // a label (smart | small | medium | large); omit → default label
  *   });
  *
@@ -25,7 +25,7 @@
  * plane; payment happens at redemption.
  *
  *   const handle = await ctx.sapiom.llm.submit({
- *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 512 },
+ *     request: { messages: [{ role: "user", content: "…" }], max_tokens: 4096 },
  *     model: "large", // a label; omit → default label
  *     deadlineMinutes: 30,
  *   });
@@ -51,8 +51,18 @@
  *     budget: { maxTokens: 2_000_000, ttlMinutes: 120 },
  *   });
  *   const ready = await s.wait();                       // or pauseUntilSignal(s, …)
- *   const reply = await ctx.sapiom.llm.callSession(s, { max_tokens: 512, messages: […] });
+ *   const reply = await ctx.sapiom.llm.callSession(s, { max_tokens: 4096, messages: […] });
  *   await ctx.sapiom.llm.releaseSession(s);             // or let TTL/budget end it
+ *
+ * `max_tokens` on every one of these covers THINKING as well as output. A routed
+ * label may emit a `thinking` block before its answer, and those tokens are spent
+ * out of the same budget — so a cap sized for the answer alone can be exhausted
+ * mid-deliberation, ending the turn before the answer (or, with `output`, before
+ * the forced tool call) is ever emitted. Size it for thinking plus output: a few
+ * thousand tokens, not a few hundred. Billing settles on the tokens actually
+ * produced, so a cap with headroom does not bill for tokens the model never
+ * emitted — but it is not free either: the gateway's admission weight scales with
+ * `max_tokens`, so size the cap for the work rather than padding it (SAP-3280).
  */
 import { Transport, defaultTransport } from "../_client/index.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
@@ -100,6 +110,12 @@ export interface LlmRunSpec {
    * The verbatim LLM request (Anthropic messages shape) — forwarded as-is and
    * executed immediately on the routed deployment. Any `model` inside the body
    * is superseded by the routing decision (set the route label via `model` below).
+   *
+   * `request.max_tokens` budgets THINKING plus output, not output alone — see this
+   * module's header. Under-size it and the turn ends mid-thinking; with
+   * {@link LlmRunSpec.output} set, {@link run} throws
+   * {@link LlmStructuredOutputTruncatedError} rather than returning a response no
+   * structured reader can make sense of.
    */
   request: Record<string, unknown>;
   /**
@@ -130,6 +146,11 @@ export interface LlmRunSpec {
    * parsed value with {@link structuredOf}. Omit and build `request.tools` /
    * `tool_choice` yourself for anything this convenience doesn't cover (e.g.
    * more than one candidate tool).
+   *
+   * Because the tool call is forced, the model has to reach it — and finish it — inside
+   * `request.max_tokens`, thinking included. When the cap cuts it off, {@link run} throws
+   * {@link LlmStructuredOutputTruncatedError} instead of handing back a response whose
+   * `tool_use` block never arrived or stopped mid-input.
    */
   output?: LlmStructuredOutputSpec;
 }
@@ -434,6 +455,240 @@ export function structuredOf<TSchema = unknown>(response: unknown, name?: string
 }
 
 /**
+ * Where the cap cut a forced tool call short. Exported so a consumer branching on
+ * {@link LlmStructuredOutputTruncatedError.reason} need not re-declare the union.
+ */
+export type LlmTruncationReason = "no-tool-call" | "incomplete-input";
+
+/**
+ * {@link run} asked for structured output, and the model ran out of `max_tokens` before it
+ * finished the forced tool call — either it never emitted one (`"no-tool-call"`) or the cap
+ * landed partway through its input, leaving a block whose `input` is missing a field the
+ * schema requires, at any depth (`"incomplete-input"`; {@link missingPath} names it). Either
+ * way there is no structured result to read and there never will be.
+ *
+ * This exists because the two failures are indistinguishable downstream: a truncated
+ * turn and a genuinely empty structured result both leave {@link structuredOf}
+ * returning `undefined`, and what an author actually saw was a `TypeError` from
+ * destructuring it. Thinking tokens are spent out of the same budget, and a routed
+ * label thinks longest on the hardest, most ambiguous inputs — so an under-sized cap
+ * passes every test and every easy case, then fails on exactly the item that was
+ * worth the most (SAP-3280). The fix is always to raise the cap; saying so at the
+ * moment it happens is the difference between a five-minute fix and a lost run.
+ */
+export class LlmStructuredOutputTruncatedError extends Error {
+  /** The tool name the request forced (`output.name`). */
+  readonly outputName: string;
+  /** The cap the request carried, when it declared one. */
+  readonly maxTokens: number | undefined;
+  /**
+   * Which of the two shapes this was. Same cause and same fix either way — raise the cap —
+   * so branch on it only if you want to tell them apart.
+   */
+  readonly reason: LlmTruncationReason;
+  /**
+   * For `"incomplete-input"`: the first required field the returned `input` lacks, as a
+   * dotted path from the root (`priority`, `result.priority`, `items[1].name`). The schema
+   * is walked in declaration order, so this is where the cut is first visible, not
+   * necessarily the only field missing. `undefined` for `"no-tool-call"`.
+   */
+  readonly missingPath: string | undefined;
+  /** The verbatim response, for programmatic inspection (it still carries usage/disclosure). */
+  readonly response: unknown;
+
+  constructor(
+    outputName: string,
+    maxTokens: number | undefined,
+    reason: LlmTruncationReason,
+    response: unknown,
+    missingPath?: string,
+  ) {
+    const cap = maxTokens === undefined ? "" : ` (${maxTokens})`;
+    const missing = missingPath === undefined ? "required fields" : `the required field "${missingPath}"`;
+    super(
+      (reason === "no-tool-call"
+        ? `Structured output "${outputName}" was never emitted: the model hit max_tokens${cap} before the forced tool call. `
+        : `Structured output "${outputName}" is incomplete: the model hit max_tokens${cap} partway through the forced tool call, so its input is missing ${missing}. `) +
+        `Thinking tokens count against max_tokens, so raise the cap to cover thinking plus output ` +
+        `— a few thousand tokens, not a few hundred; billing settles on the tokens actually produced. ` +
+        `Retrying the same request cannot succeed: catch this and fail() the step rather than letting ` +
+        `the engine re-run it.`,
+    );
+    this.name = "LlmStructuredOutputTruncatedError";
+    this.outputName = outputName;
+    this.maxTokens = maxTokens;
+    this.reason = reason;
+    this.missingPath = missingPath;
+    this.response = response;
+  }
+}
+
+/** `max_tokens` off a caller's verbatim request body, when it declared a numeric one. */
+function declaredMaxTokens(request: Record<string, unknown>): number | undefined {
+  const value = request.max_tokens;
+  return typeof value === "number" ? value : undefined;
+}
+
+/** The `required` field names a schema node declares, when it declares any. */
+function requiredKeysOf(schema: Record<string, unknown>): string[] {
+  const required = schema.required;
+  return Array.isArray(required) ? required.filter((key): key is string => typeof key === "string") : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** `["result", "0", "name"]` → `result[0].name`. */
+function formatPath(path: string[]): string {
+  return path.reduce((acc, segment) => {
+    if (/^\d+$/.test(segment)) return `${acc}[${segment}]`;
+    return acc === "" ? segment : `${acc}.${segment}`;
+  }, "");
+}
+
+/**
+ * The subschema a local `$ref` points at — `#` for the root, `#/$defs/x` or
+ * `#/definitions/x` (any JSON Pointer under the root) for a definition — or `undefined`
+ * when the reference cannot be followed. A remote or external reference (`other.json#/x`,
+ * a URL) is deliberately not fetched: nothing here should reach the network, so such a
+ * target is read as declaring no requirements. Plain-name anchors (`#foo`) are likewise
+ * left alone.
+ */
+function resolveLocalRef(root: unknown, ref: string): unknown {
+  if (!ref.startsWith("#")) return undefined;
+  const pointer = ref.slice(1);
+  if (pointer === "") return root;
+  if (!pointer.startsWith("/")) return undefined;
+  let node: unknown = root;
+  for (const raw of pointer.slice(1).split("/")) {
+    const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(node)) node = node[Number(segment)];
+    else if (isRecord(node)) node = node[segment];
+    else return undefined;
+  }
+  return node;
+}
+
+/**
+ * The first field `schema` requires that `value` lacks, at any depth, as a path from the
+ * root — or `undefined` when every required field is present.
+ *
+ * This is a presence walk, not a validator: the only thing it judges is whether a required
+ * key exists, because that is the one shape truncation leaves behind — the model writes a
+ * JSON prefix, and a prefix is missing whatever came after the cut. Wrong types, failed
+ * patterns and unknown keys are the model's answer, not the cap's doing, and are left to
+ * the caller as before. It follows `properties` into nested objects, `items` /
+ * `prefixItems` into array elements, local `$ref`s into their definitions, `allOf` as every branch, and `anyOf` / `oneOf` as at
+ * least one branch (reporting the first branch's gap when none is satisfied). A local
+ * `$ref` is resolved against `root` (see {@link resolveLocalRef}) and its target walked at
+ * the same position, alongside any sibling keywords; `seen` holds the references already
+ * followed at this position so a reference cycle that consumes no input (`a` → `b` → `a`)
+ * stops rather than recursing forever — it is reset on every descent into the value, which
+ * is finite. A subschema whose value is absent, or present with a different type, is not
+ * descended — there is nothing there to be a prefix of.
+ */
+function firstMissingRequiredPath(
+  schema: unknown,
+  value: unknown,
+  root: unknown,
+  path: string[] = [],
+  seen: ReadonlySet<string> = new Set(),
+): string[] | undefined {
+  if (!isRecord(schema)) return undefined;
+
+  if (typeof schema.$ref === "string" && !seen.has(schema.$ref)) {
+    const target = resolveLocalRef(root, schema.$ref);
+    if (target !== undefined) {
+      const missing = firstMissingRequiredPath(target, value, root, path, new Set([...seen, schema.$ref]));
+      if (missing) return missing;
+    }
+  }
+
+  if (Array.isArray(schema.allOf)) {
+    for (const branch of schema.allOf) {
+      const missing = firstMissingRequiredPath(branch, value, root, path, seen);
+      if (missing) return missing;
+    }
+  }
+  for (const combinator of ["anyOf", "oneOf"] as const) {
+    const branches = schema[combinator];
+    if (!Array.isArray(branches) || branches.length === 0) continue;
+    const gaps = branches.map((branch) => firstMissingRequiredPath(branch, value, root, path, seen));
+    if (gaps.every((gap) => gap !== undefined)) return gaps[0];
+  }
+
+  if (isRecord(value)) {
+    for (const key of requiredKeysOf(schema)) {
+      if (!(key in value)) return [...path, key];
+    }
+    if (isRecord(schema.properties)) {
+      for (const [key, subschema] of Object.entries(schema.properties)) {
+        if (!(key in value)) continue;
+        const missing = firstMissingRequiredPath(subschema, value[key], root, [...path, key]);
+        if (missing) return missing;
+      }
+    }
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    // Draft 2020-12 spells a tuple `prefixItems`; older drafts put the array on `items`.
+    const tuple = Array.isArray(schema.prefixItems)
+      ? schema.prefixItems
+      : Array.isArray(schema.items)
+        ? schema.items
+        : undefined;
+    const rest = isRecord(schema.items) ? schema.items : undefined;
+    for (let i = 0; i < value.length; i += 1) {
+      const subschema = tuple && i < tuple.length ? tuple[i] : rest;
+      if (subschema === undefined) continue;
+      const missing = firstMissingRequiredPath(subschema, value[i], root, [...path, String(i)]);
+      if (missing) return missing;
+    }
+  }
+  return undefined;
+}
+
+interface Truncation {
+  reason: LlmTruncationReason;
+  /** Set for `"incomplete-input"`: the first required field the input lacks. */
+  missingPath?: string;
+}
+
+/**
+ * How the cap cut a forced tool call short, or `undefined` when it did not.
+ *
+ * Gated on `stop_reason === "max_tokens"` throughout: only a turn that ended AT the ceiling
+ * can be judged this way, so a complete result, an empty one that ended for any other reason,
+ * and a caller's own partial-result handling are all left exactly as they were.
+ *
+ * Two shapes, because the cap can land on either side of the tool call. No block at all is the
+ * common one. A block whose `input` is missing a field the schema requires — at the root, inside
+ * a nested object, or inside an array element — is the same failure one token later: the model
+ * was cut off mid-input, `structuredOf` hands back a prefix of the object, and the caller
+ * destructures `undefined` out of it. The whole schema is walked because a cut lands wherever
+ * the model happened to be writing, and `{ result: {} }` satisfies a root-only check while
+ * carrying nothing. Fields the schema does not require are the model's to omit, so an input
+ * that satisfies every `required` at every depth — including `{}` against a schema that
+ * requires nothing — is a complete result that happened to end at the ceiling.
+ */
+function truncationOf(
+  response: unknown,
+  output: LlmStructuredOutputSpec,
+): Truncation | undefined {
+  const stopReason = (response as { stop_reason?: unknown } | null | undefined)?.stop_reason;
+  if (stopReason !== "max_tokens") return undefined;
+
+  const structured = structuredOf(response, output.name);
+  if (structured === undefined) return { reason: "no-tool-call" };
+  if (!isRecord(structured)) return { reason: "incomplete-input" };
+
+  const missing = firstMissingRequiredPath(output.schema, structured, output.schema);
+  return missing ? { reason: "incomplete-input", missingPath: formatPath(missing) } : undefined;
+}
+
+/**
  * Build the wire request `run` sends when {@link LlmRunSpec.output} is set:
  * appends a tool named `output.name` (schema `output.schema`) to any
  * caller-declared tools, and forces `tool_choice` onto it — the blessed
@@ -463,6 +718,17 @@ function withStructuredOutput(request: Record<string, unknown>, output: LlmStruc
  * it with {@link textOf} rather than indexing `content[0]` (a `thinking`
  * block can precede the text). For structured output, set `spec.output`
  * (forces a tool call) and read the result with {@link structuredOf}.
+ *
+ * @throws {LlmStructuredOutputTruncatedError} when `spec.output` was set and the
+ * turn hit `max_tokens` before the forced tool call was emitted, or partway through
+ * its input — the cap has to cover thinking as well as output.
+ *
+ * This one is not worth retrying, and the engine does not know that: it is not a member
+ * of the platform's non-retryable set, so left to escape a step it is re-run with the
+ * identical under-capped request (up to the runner's per-step attempt limit), billing the
+ * thinking each time and failing the same way. Catch it in a step declared `canFail: true`
+ * and return `fail(error.message)` — the shape `CodingRunHttpError` already uses. Raising
+ * the cap is the actual fix.
  */
 export async function run<T = Record<string, unknown>>(
   spec: LlmRunSpec,
@@ -477,11 +743,24 @@ export async function run<T = Record<string, unknown>>(
   if (spec.complexity !== undefined)
     headers["x-sapiom-complexity"] = String(spec.complexity);
   const request = spec.output ? withStructuredOutput(spec.request, spec.output) : spec.request;
-  return transport.request<T>(`${baseUrl}/v2/anthropic/v1/messages`, {
+  const response = await transport.request<T>(`${baseUrl}/v2/anthropic/v1/messages`, {
     method: "POST",
     body: JSON.stringify(request),
     headers,
   });
+  // Only when the caller forced a tool call: a plain-text turn that hit the cap is
+  // truncated but still readable, and it is the caller's to judge.
+  const truncation = spec.output ? truncationOf(response, spec.output) : undefined;
+  if (spec.output && truncation !== undefined) {
+    throw new LlmStructuredOutputTruncatedError(
+      spec.output.name,
+      declaredMaxTokens(spec.request),
+      truncation.reason,
+      response,
+      truncation.missingPath,
+    );
+  }
+  return response;
 }
 
 export async function submit(

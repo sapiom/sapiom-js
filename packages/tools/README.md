@@ -83,6 +83,35 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)          | [src/memory](./src/memory/README.md)                         |
 | `google`            | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                               | [src/google](./src/google/README.md)                         |
 | `github`            | List a tenant's GitHub repositories                                                                     | [src/github](./src/github/README.md)                         |
+| `llm`               | Routed LLM calls: one-shot `run` and deferred `submit` / sessions                                       | [src/llm](./src/llm/index.ts)                                |
+| `decisions`         | System One decisions: `evaluate` returns calibrated probabilities over a fixed answer set               | [src/decisions](./src/decisions/index.ts)                    |
+
+### `llm.run` vs `decisions.evaluate`
+
+`llm.run` generates text or a schema-shaped `output`. When the answer is one of a set you can name up front — a yes/no gate, a pick-one label, a rubric level — call `decisions.evaluate` instead. It returns calibrated probabilities over those answers, with no schema or reply parsing, and the `answers` map is typed by the questions you pass:
+
+```typescript
+const res = await sapiom.decisions.evaluate({
+  state: { message: ticket.body },
+  questions: {
+    urgent: { type: "noul", instructions: "Is this urgent?" },
+    team: {
+      type: "choice",
+      instructions: "Which team should handle `message`?",
+      criteria: {
+        shipping: "Delivery issues",
+        billing: "Charges and refunds",
+        other: null,
+      },
+    },
+  },
+});
+if (res.answers.urgent.noul > 0.8) escalate(res.answers.team.choice);
+```
+
+Ask every independent question over the same `state` in one call; they are evaluated in parallel. Keep arithmetic and date math in code — `decisions.evaluate` judges, it does not compute.
+
+The result contains `answers`, token `usage`, and optional `cost` quote metadata (`estimateUsd`, `currency`, `reference`, `isEstimate`, `source`). The estimate is not the settled charge. Results omit model and provider identity. The optional request `model` still selects a platform model; omit it to use the platform default.
 
 ## Composing capabilities
 

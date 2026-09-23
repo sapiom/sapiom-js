@@ -286,3 +286,11 @@ export {
   recordRecentDir,
   hasStoredSettings,
 } from "./cli/settings.js";
+
+export {
+  bundledMcpCommand,
+  prepareBundledMcpCommand,
+  mcpCommandForEntry,
+  qualifyMcpCommand,
+  type McpPreflightResult,
+} from "./core/mcp-compatibility.js";

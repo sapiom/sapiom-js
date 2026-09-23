@@ -1,6 +1,6 @@
 {
   "name": "@sapiom/agent-map",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared Agent Map contracts and local project persistence.",
   "type": "module",
   "license": "MIT",
@@ -136,6 +136,10 @@
     "./node/state-paths": {
       "types": "./dist/core/state-paths.d.ts",
       "import": "./dist/core/state-paths.js"
+    },
+    "./host-protocol": {
+      "types": "./dist/shared/host-protocol.d.ts",
+      "import": "./dist/shared/host-protocol.js"
     }
   },
   "files": [

@@ -246,6 +246,9 @@ jobs:
         # (@sapiom/harness → its dist/web SPA) in dependency order.
         run: pnpm --filter "@sapiom/harness-desktop..." build
 
+      - name: Verify MCP preflight process cleanup
+        run: pnpm --filter @sapiom/harness exec vitest run src/core/mcp-compatibility.test.ts
+
       - name: Package installers
         # Packaging alone takes ~1 minute (unsigned macOS runs: 31s–64s) and
         # signing adds seconds; everything beyond that is Apple's notary service,

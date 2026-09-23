@@ -1,5 +1,7 @@
+import { STUDIO_HOST_CONTEXT_PATH } from "@sapiom/agent-map/host-protocol";
+import type { McpPreflightResult } from "../core/mcp-compatibility.js";
 import { LocalWorkspaceScopeCatalog } from "../core/workspace-scope-catalog.js";
-import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
+import { canonicalGraphPath, refreshCanonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 import { isWithinWorkspacePath, sourceRootsWithinScope } from "../core/workspace-path.js";
 import { AgentMapInitializationCoordinator } from "../core/agent-map-initialization.js";
 import { INITIAL_MAP_OUTPUT_SCHEMA } from "../core/agent-map-initialization-evidence.js";
@@ -287,6 +289,8 @@ export interface HarnessServerOptions {
    *  server) plus the entry script it installed into the per-user npm prefix.
    *  See core/inject/mcp-config.ts. */
   sapiomDevMcp?: McpDevServerCommand;
+  /** Per-create/resume local preflight. Hosts own executable selection/installation. */
+  prepareSapiomDevMcp?: () => Promise<McpPreflightResult | undefined>;
   /** Root directory per-session generated agent configs are written under —
    *  and cleaned up from (exit-time delete + boot-time sweep, see
    *  core/inject/retention.ts). Defaults to `<stateRoot>/generated`. */
@@ -540,8 +544,24 @@ function createDefaultBuildLaunchOpts(
    * DEFAULT_SYSTEM_PROMPT offline — injectable so tests never touch the network.
    */
   loadSystemPrompt: () => Promise<string> = fetchSystemPromptForActiveEnvironment,
+  prepareSapiomDevMcp?: () => Promise<McpPreflightResult | undefined>,
 ): LaunchOptsBuilder {
   return async (harnessSessionId, req, context) => {
+    const prepared = await prepareSapiomDevMcp?.().catch(() => undefined);
+    if (prepareSapiomDevMcp) {
+      console.error(`[harness] MCP compatibility: ${prepared?.kind ?? "unverified"}; shared map activation off`);
+    }
+    // A rejected preflight must not revive the host's unchecked static command.
+    const devServer = prepareSapiomDevMcp
+      ? prepared?.kind === "unavailable" ? undefined : prepared?.launch
+      : sapiomDevMcp;
+    // Shared map activation is deliberately off. The private tools and their
+    // matching prompt appendix remain the session's only map surface.
+    const studioHost = prepared?.kind === "verified" && context?.agentMapIdentity && context.agentMapMcp
+      ? { contextUrl: new URL(STUDIO_HOST_CONTEXT_PATH, context.agentMapMcp.url).href,
+          bearerToken: context.agentMapMcp.bearerToken, expectedMcp: prepared.descriptor }
+      : undefined;
+
     // Portable continue (SAP-2059). Resolved before the prompt file is
     // written, because for a `launch-flag` harness the brief IS part of that
     // file. Best-effort throughout: a brief that can't be assembled leaves
@@ -608,7 +628,8 @@ function createDefaultBuildLaunchOpts(
         apiKey,
         generatedRoot,
         harnessVersion: readVersion(),
-        ...(sapiomDevMcp ? { devServer: sapiomDevMcp } : {}),
+        ...(devServer ? { devServer } : {}),
+        ...(studioHost ? { studioHost } : {}),
         ...(context?.agentMapMcp ? { agentMap: context.agentMapMcp } : {}),
       }),
       promptPromise,
@@ -995,22 +1016,34 @@ export const startServer = async (
             cwd: binding.localRootRef,
           })),
       );
-      const retainedProjectSessionRoots = new Set<string>();
-      // Pending launches contribute their trusted PROJECT root just like live
-      // sessions, not a descendant cwd that would mint a competing project.
-      const pendingCwds = [
-        ...pendingProjectCwds,
-        ...(sessionManager ? sessionManager.listPendingCreates() : []).flatMap((session) => {
-          if (!session.agentMapIdentity) return [session.cwd];
-          const root = projectSessionRoot(
-            { cwd: session.cwd, projectId: session.agentMapIdentity.projectId },
+      const readableSessionRoot = async (cwd: string, projectId: string) => {
+        try {
+          return projectSessionRoot(
+            { cwd: await refreshCanonicalGraphPath(cwd), projectId },
             durableRootCandidates,
           );
+        } catch {
+          // One unreadable session must not hide healthy workspace roots.
+          return null;
+        }
+      };
+      const retainedProjectSessionRoots = new Set<string>();
+      // Pending launches contribute their trusted PROJECT root just like live
+      // sessions. Resolve filesystem aliases before comparing with the catalog's
+      // canonical bindings, including during an awaited MCP preflight.
+      const pendingCwds = [
+        ...pendingProjectCwds,
+        ...(await Promise.all((sessionManager ? sessionManager.listPendingCreates() : []).map(async (session) => {
+          if (!session.agentMapIdentity) return [session.cwd];
+          const root = await readableSessionRoot(
+            session.cwd,
+            session.agentMapIdentity.projectId,
+          );
           return root ? [root] : [];
-        }),
+        }))).flat(),
       ];
       const sessions = sessionManager
-        ? sessionManager.list().flatMap((session) => {
+        ? (await Promise.all(sessionManager.list().map(async (session) => {
             if (!session.agentMapIdentity) {
               return [
                 {
@@ -1020,12 +1053,9 @@ export const startServer = async (
                 },
               ];
             }
-            const root = projectSessionRoot(
-              {
-                cwd: session.cwd,
-                projectId: session.agentMapIdentity.projectId,
-              },
-              durableRootCandidates,
+            const root = await readableSessionRoot(
+              session.cwd,
+              session.agentMapIdentity.projectId,
             );
             // A neutral project session contributes its trusted project root,
             // never its descendant cwd. If its binding is stale, omit it from
@@ -1042,7 +1072,7 @@ export const startServer = async (
               ];
             }
             return [];
-          })
+          }))).flat()
         : [];
       const candidates = [
         ...pendingCwds,
@@ -1408,6 +1438,7 @@ export const startServer = async (
       },
       options.sapiomDevMcp,
       options.loadSystemPrompt ?? fetchSystemPromptForActiveEnvironment,
+      options.prepareSapiomDevMcp,
     );
   /** Waits for prior cleanup before preparing this run's files and capabilities. */
   const buildLaunchOpts: LaunchOptsBuilder = async (
@@ -3049,6 +3080,24 @@ export const startServer = async (
     buildPlanService,
     agentBriefService,
     subsessionCoordinator,
+    hostContextFor: async (scope) => {
+      const assertScope = () => {
+        const session = sessionManager.get(scope.sessionId);
+        const current = session?.agentMapIdentity;
+        if (!session || session.status === "exited" ||
+          current?.projectId !== scope.projectId || current.userId !== scope.userId ||
+          current.sessionId !== scope.sessionId ||
+          localProjectPrincipal(projectUserId, machineId) !== scope.userId) {
+          throw new AgentMapMcpProjectUnavailableError();
+        }
+        return session;
+      };
+      const session = assertScope();
+      const project = await studioProjectCatalog.resolveIdentityForPath(session.cwd);
+      assertScope();
+      if (project?.projectId !== scope.projectId) throw new AgentMapMcpProjectUnavailableError();
+      return { stateRoot: statePaths.root };
+    },
     readSnapshotFor: async ({ projectId }) => {
       const project = await studioProjectCatalog.resolve(projectId);
       if (!project) throw new AgentMapMcpProjectUnavailableError();
