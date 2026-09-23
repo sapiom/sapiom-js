@@ -156,31 +156,19 @@ function isNetworkRejection(error: unknown): error is Error {
   );
 }
 
-/** The only schemes `fetch` can actually send. Anything else is a config error. */
-const SENDABLE_PROTOCOLS: ReadonlySet<string> = new Set(["http:", "https:"]);
-
 /**
- * Raise a malformed request before the call instead of letting `fetch` reject
- * with the same `TypeError` it uses for a dead connection. The constructors run
- * the very validation `fetch` runs internally, so this cannot reject a request
- * that would otherwise have gone out.
+ * Raise a malformed header before the call instead of letting `fetch` reject
+ * with the same bare `TypeError` it uses for a dead connection. The constructor
+ * runs the very validation `fetch` runs internally, so this cannot reject a
+ * request that would otherwise have gone out.
  *
- * The scheme check is the exception, and it is the reason this is not just two
- * constructors: `new URL("gopher://x")` parses happily, and `fetch` then rejects
- * with a plain `fetch failed` carrying a cause, indistinguishable from a real
- * transport failure. Raising it here keeps a misconfigured base URL from
- * spending the retry budget.
+ * The URL half is `assertCredentialMayTravel`'s job (SAP-3624): it already
+ * rejects any scheme that is not http or https, and more besides, so there is
+ * nothing left to check here.
  */
 function assertRequestable(
-  url: string,
   headers: ConstructorParameters<typeof Headers>[0],
 ): void {
-  const parsed = new URL(url);
-  if (!SENDABLE_PROTOCOLS.has(parsed.protocol)) {
-    throw new TypeError(
-      `@sapiom/tools: cannot request '${parsed.protocol}' URLs, expected http or https (got ${url})`,
-    );
-  }
   new Headers(headers);
 }
 
@@ -334,7 +322,7 @@ export class Transport {
     for (const [name, value] of new Headers(init.headers ?? {})) {
       headers[name] = value;
     }
-    assertRequestable(url, headers);
+    assertRequestable(headers);
     const startedAt = Date.now();
     let response: Response;
     try {
