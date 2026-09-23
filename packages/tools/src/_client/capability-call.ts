@@ -44,7 +44,9 @@ export function resolveCoreBaseUrl(): string {
 }
 
 /** Options for {@link capabilityCall}. */
-export interface CapabilityCallOptions {
+export interface CapabilityCallOptions<Res = unknown> {
+  /** Existing gateway call, selected only before I/O in legacy mode. Never an error fallback. */
+  legacyCall?: () => Promise<Res>;
   /** Transport carrying the tenant credential. Defaults to the ambient transport. */
   transport?: Transport;
   /**
@@ -79,7 +81,7 @@ export interface CapabilityCallOptions {
 export async function capabilityCall<Res>(
   id: string,
   req: Record<string, unknown>,
-  opts: CapabilityCallOptions,
+  opts: CapabilityCallOptions<Res>,
 ): Promise<Res> {
   const transport = opts.transport ?? defaultTransport();
   const baseUrl = opts.baseUrl ?? transport.coreBaseUrl ?? resolveCoreBaseUrl();
@@ -116,6 +118,8 @@ export async function capabilityCall<Res>(
       throw error;
     }
   }
+
+  if (opts.legacyCall) return opts.legacyCall();
 
   const res = await transport.fetch(
     `${baseUrl}/v1/capabilities/${id}`,
