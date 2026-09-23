@@ -47,6 +47,14 @@ There are two ways to authenticate, both exposing the identical capability surfa
   await sandboxes.create({ name: "demo" });
   ```
 
+### Transport security
+
+Every request carries your API key, so the client only sends it over a safe channel:
+
+- **HTTPS**, or plain `http://` to a loopback host (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`). The local stack (`http://localhost:3000`, `http://services.localhost:3100`) works as is. Any other `http://` URL fails before anything is sent, including a redirect hop.
+- **Trusted private network** (a Docker or CI service name such as `http://api:3000`): opt in with `createClient({ allowInsecureHttp: true })` or `SAPIOM_ALLOW_INSECURE_HTTP=1`.
+- **Redirects** are followed, but the first hop to another origin drops the key and every `x-sapiom-*` header, for the rest of the chain.
+
 ## Attribution
 
 Calls can be attributed to an agent and trace so they show up correctly in your transaction history. Attribution is set **once, on the client** — not per call:
