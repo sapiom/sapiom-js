@@ -478,9 +478,10 @@ catch (err) {
   if (facts && isTransientSapiomCall(facts) && ctx.attempts + 1 < 3) {
     return retry({ delayMs: facts.retryAfterMs ?? 1000 });
   }
-  // Deterministic: say what actually failed instead of reporting a validation
-  // or auth error as an outage.
-  return fail(`search failed: ${(err as Error).message}`);  // requires canFail: true
+  // Not retried, either because the failure is deterministic or because the
+  // attempts ran out. Say what actually failed rather than reporting a
+  // validation or auth error as an outage.
+  return fail(`sandbox creation failed: ${(err as Error).message}`);  // requires canFail: true
 }
 ```
 
