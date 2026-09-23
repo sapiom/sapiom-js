@@ -20,6 +20,7 @@
  * regular `number`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { capabilityCall } from "../_client/capability-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import { ensureOk, FileStorageHttpError } from "./errors.js";
 
@@ -179,21 +180,40 @@ export async function upload(
   if (input.fileName !== undefined) body.file_name = input.fileName;
   if (input.visibility !== undefined) body.visibility = input.visibility;
 
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/upload`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to initiate file upload",
+  return capabilityCall<UploadResponse>(
+    "storage.put",
+    {
+      contentType: input.contentType,
+      fileSize: input.fileSize,
+      ...(input.fileName !== undefined ? { fileName: input.fileName } : {}),
+      ...(input.visibility !== undefined
+        ? { visibility: input.visibility }
+        : {}),
+    },
+    {
+      transport,
+      makeError: (message, status, body) =>
+        new FileStorageHttpError(message, status, body),
+      errorPrefix: "Failed to initiate file upload",
+      legacyCall: async () => {
+        const res = await ensureOk(
+          await transport.fetch(`${baseUrl}/upload`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+          "Failed to initiate file upload",
+        );
+        const raw = (await res.json()) as RawUploadResponse;
+        return {
+          fileId: raw.file_id,
+          uploadUrl: raw.upload_url,
+          expiresAt: raw.expires_at,
+          requiredHeaders: raw.required_headers,
+        };
+      },
+    },
   );
-  const raw = (await res.json()) as RawUploadResponse;
-  return {
-    fileId: raw.file_id,
-    uploadUrl: raw.upload_url,
-    expiresAt: raw.expires_at,
-    requiredHeaders: raw.required_headers,
-  };
 }
 
 /** Generate a presigned download URL for a file. */
@@ -222,7 +242,10 @@ export async function getDownloadUrl(
  *
  *   const link = fileStorage.getPublicUrl(fileId); // https://file-storage.…/public/<id>
  */
-export function getPublicUrl(fileId: string, baseUrl = DEFAULT_BASE_URL): string {
+export function getPublicUrl(
+  fileId: string,
+  baseUrl = DEFAULT_BASE_URL,
+): string {
   return `${baseUrl}/public/${encodeURIComponent(fileId)}`;
 }
 
