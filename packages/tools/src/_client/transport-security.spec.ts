@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { Transport, type TransportConfig } from "./index.js";
 import { capabilityCall } from "./capability-call.js";
 import { ALLOW_INSECURE_HTTP_ENV, MAX_REDIRECTS } from "./credential-policy.js";
@@ -7,6 +9,7 @@ interface Hop {
   method: string | undefined;
   body: unknown;
   redirect: RequestInit["redirect"];
+  integrity: string | undefined;
   headers: Record<string, string>;
 }
 
@@ -25,6 +28,7 @@ function transportWith(
       method: init.method,
       body: init.body,
       redirect: init.redirect,
+      integrity: init.integrity,
       headers: { ...(init.headers as Record<string, string>) },
     });
     return route(new URL(String(input)), hops.length - 1);
@@ -43,6 +47,9 @@ const onceTo =
   (location: string, status = 302) =>
   (_url: URL, hop: number) =>
     hop === 0 ? redirectTo(location, status) : new Response("{}");
+
+const sri = (body: string) =>
+  `sha256-${createHash("sha256").update(body).digest("base64")}`;
 
 const ORIGINAL_ENV = process.env[ALLOW_INSECURE_HTTP_ENV];
 beforeEach(() => {
@@ -415,6 +422,87 @@ describe("Transport: redirects", () => {
     );
     await transport.fetch("https://api.sapiom.ai/v1/start").catch(() => {});
     expect(cancelled).toBe(true);
+  });
+
+  it("a same-origin request refuses a redirect to another origin, before sending it", async () => {
+    const { transport, hops } = transportWith(
+      onceTo("https://cdn.example.com/object", 307),
+    );
+    await expect(
+      transport.fetch("https://api.sapiom.ai/v1/start", {
+        method: "POST",
+        body: '{"a":1}',
+        mode: "same-origin",
+      }),
+    ).rejects.toThrow(
+      'a "same-origin" request to https://api.sapiom.ai was redirected to https://cdn.example.com',
+    );
+    expect(hops).toHaveLength(1);
+  });
+
+  it("a same-origin request still follows a same-origin redirect", async () => {
+    const { transport, hops } = transportWith(onceTo("/v1/landed"));
+    await transport.fetch("https://api.sapiom.ai/v1/start", {
+      mode: "same-origin",
+    });
+    expect(hops.map((h) => h.url)).toEqual([
+      "https://api.sapiom.ai/v1/start",
+      "https://api.sapiom.ai/v1/landed",
+    ]);
+  });
+
+  it("checks integrity on the final response only, and hands it back whole", async () => {
+    const { transport, hops } = transportWith((_url, hop) =>
+      hop === 0
+        ? redirectTo("https://cdn.example.com/object")
+        : new Response('{"done":true}'),
+    );
+    const res = await transport.fetch("https://api.sapiom.ai/v1/start", {
+      integrity: sri('{"done":true}'),
+    });
+    expect(await res.json()).toEqual({ done: true });
+    expect(hops.map((h) => h.integrity)).toEqual([undefined, undefined]);
+  });
+
+  it.each([
+    [
+      "after a redirect",
+      onceTo("https://cdn.example.com/object"),
+      "https://cdn.example.com",
+    ],
+    ["without a redirect", () => new Response("{}"), "https://api.sapiom.ai"],
+  ])(
+    "refuses a final response that fails the integrity check (%s)",
+    async (_label, route, origin) => {
+      const { transport } = transportWith(route);
+      const error: unknown = await transport
+        .fetch("https://api.sapiom.ai/v1/start", { integrity: sri("other") })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe(
+        `@sapiom/tools: the response from ${origin} does not match the request's integrity metadata`,
+      );
+      expect((error as { cause?: unknown }).cause).toBeUndefined();
+    },
+  );
+
+  it("refuses a bodiless final response when integrity is set", async () => {
+    const { transport } = transportWith(() => new Response(null));
+    await expect(
+      transport.fetch("https://api.sapiom.ai/v1/start", {
+        method: "HEAD",
+        integrity: sri(""),
+      }),
+    ).rejects.toThrow(/does not match the request's integrity metadata/);
+  });
+
+  it("leaves integrity to fetch under redirect: manual", async () => {
+    const { transport, hops } = transportWith(onceTo("/v1/landed"));
+    await transport.fetch("https://api.sapiom.ai/v1/start", {
+      redirect: "manual",
+      integrity: sri("{}"),
+    });
+    expect(hops[0]!.integrity).toBe(sri("{}"));
   });
 
   it("request() parses the final response of a redirected call", async () => {

@@ -1,7 +1,10 @@
+import { createHash, type BinaryToTextEncoding } from "node:crypto";
+
 import {
   ALLOW_INSECURE_HTTP_ENV,
   assertCredentialMayTravel,
   isLoopbackHostname,
+  matchesIntegrity,
   resolveCredentialPolicy,
   withoutBodyHeaders,
   withoutCrossOriginHeaders,
@@ -165,5 +168,48 @@ describe("withoutBodyHeaders", () => {
         "x-sapiom-api-key": "k",
       }),
     ).toEqual({ accept: "application/json", "x-sapiom-api-key": "k" });
+  });
+});
+
+describe("matchesIntegrity", () => {
+  const BODY = new TextEncoder().encode('{"ok":true}');
+  const digest = (
+    algorithm: string,
+    encoding: BinaryToTextEncoding = "base64",
+    body: Uint8Array = BODY,
+  ) => createHash(algorithm).update(body).digest(encoding);
+  const OTHER = new TextEncoder().encode("other");
+
+  it.each([
+    ["sha256", `sha256-${digest("sha256")}`],
+    ["sha384", `sha384-${digest("sha384")}`],
+    ["sha512", `sha512-${digest("sha512")}`],
+    ["an uppercase algorithm", `SHA256-${digest("sha256")}`],
+    ["a base64url digest", `sha256-${digest("sha256", "base64url")}`],
+    [
+      "a digest without its = padding",
+      `sha256-${digest("sha256").replace(/=+$/, "")}`,
+    ],
+    ["a token with ?options", `sha256-${digest("sha256")}?ct=application/json`],
+    [
+      "any one digest of the strongest algorithm",
+      `sha512-${digest("sha512", "base64", OTHER)}\tsha512-${digest("sha512")}`,
+    ],
+    ["metadata naming only unknown algorithms", "md5-abc sha1-def"],
+    ["blank metadata", "  "],
+  ])("matches %s", (_label, metadata) => {
+    expect(matchesIntegrity(BODY, metadata)).toBe(true);
+  });
+
+  it.each([
+    ["a wrong digest", `sha256-${digest("sha256", "base64", OTHER)}`],
+    [
+      "a weaker match next to a wrong stronger digest",
+      `sha256-${digest("sha256")} sha384-${digest("sha384", "base64", OTHER)}`,
+    ],
+    ["an empty digest for a known algorithm", "sha256-"],
+    ["a malformed digest for a known algorithm", "sha256-!!!"],
+  ])("rejects %s", (_label, metadata) => {
+    expect(matchesIntegrity(BODY, metadata)).toBe(false);
   });
 });
