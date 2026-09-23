@@ -215,7 +215,8 @@ describe("SubsessionCoordinator", () => {
       onSubsessionUserClosed: async (marker) => {
         await closeStore.current?.closeOwnedBinding(marker);
       },
-      resolveAgentMapIdentity: async (_sessionId, _cwd, persisted) => persisted,
+      resolveAgentMapIdentity: async (sessionId, _cwd, persisted) =>
+        persisted ?? { projectId: "project-test", userId: "user-test", sessionId },
       ...managerOptions,
     });
     managers.push(manager);

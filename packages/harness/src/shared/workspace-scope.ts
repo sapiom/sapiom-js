@@ -1,4 +1,8 @@
-export type { WorkspaceKey, WorkspaceScopeSummary } from "@sapiom/agent-map/workspace-scope";
+export type {
+  WorkspaceKey,
+  WorkspaceScopeInput,
+  WorkspaceScopeSummary,
+} from "@sapiom/agent-map/workspace-scope";
 
 interface ParsedWorkspacePath {
   caseInsensitive: boolean;

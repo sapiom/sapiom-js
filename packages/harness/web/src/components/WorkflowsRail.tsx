@@ -665,11 +665,11 @@ export function WorkflowsRail({
       ? owners.some((scope) => shown(scope.cwd))
       : shown(workflow.path);
   });
-  const durableRootCandidates = (workspaceScopes ?? []).flatMap((scope) =>
-    scope.projectId ? [{ projectId: scope.projectId, cwd: scope.cwd }] : [],
-  );
+  const durableRootCandidates = (workspaceScopes ?? []).map((scope) => ({
+    projectId: scope.projectId,
+    cwd: scope.cwd,
+  }));
   const rootedSessions = sessions.flatMap((session) => {
-    if (!session.agentMapIdentity) return [session];
     const root = projectSessionRoot(
       {
         cwd: session.cwd,
@@ -685,9 +685,7 @@ export function WorkflowsRail({
     recentDirs,
     sessions: rootedSessions,
     pendingCwds,
-    pinnedRoots: (workspaceScopes ?? [])
-      .filter((scope) => scope.projectId != null)
-      .map((scope) => scope.cwd),
+    pinnedRoots: (workspaceScopes ?? []).map((scope) => scope.cwd),
     // Hidden agents are deliberately NOT passed. A removed project's agents are
     // not on screen, so they cannot be the reason a folder is filed away.
     agentPaths: visibleWorkflows.map((workflow) => workflow.path),

@@ -232,7 +232,7 @@ export interface HarnessSession {
   /** Durable lifecycle state for a new project's one automatic map seed. */
   projectBootstrap?: import("@sapiom/agent-map").ProjectBootstrapMetadata;
   /** Server-authored, path-free identity used only to revalidate MCP scope. */
-  agentMapIdentity?: import("@sapiom/agent-map").ProjectAgentSession;
+  agentMapIdentity: import("@sapiom/agent-map").ProjectAgentSession;
 }
 
 /**

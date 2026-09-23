@@ -1777,13 +1777,13 @@ export function useHarnessState(): HarnessStateHook {
       setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
       if (activeSessionId === id) {
         const closed = state?.sessions.find((session) => session.id === id);
-        const projectId = closed?.agentMapIdentity?.projectId;
+        const projectId = closed?.agentMapIdentity.projectId;
         const nextRunning =
           remaining.find(
             (session) =>
               session.status !== "exited" &&
-              projectId != null &&
-              session.agentMapIdentity?.projectId === projectId,
+              projectId !== undefined &&
+              session.agentMapIdentity.projectId === projectId,
           ) ?? remaining.find((session) => session.status !== "exited");
         selectSession(nextRunning ? nextRunning.id : null);
       }
