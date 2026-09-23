@@ -1,5 +1,67 @@
 # @sapiom/harness
 
+## 0.18.0
+
+### Minor Changes
+
+- bf4a404: Expose authenticated Studio project/session context using the existing map
+  capability lifecycle. Context requests recheck generation after scope lookup;
+  existing private map tools and shared-map activation remain unchanged.
+- 79a52f9: Export deterministic MCP command resolution and bounded offline capability
+  preflight for both Studio hosts. Unmarked legacy packages are never executed as
+  probes. Host launch behavior is unchanged until the integration lands.
+- 4bbea8d: Qualify local MCP commands on each Studio create/resume in both CLI and Desktop.
+  CLI selects its built runtime dependency only when verified, retaining the
+  unverified npx @latest fallback. Desktop qualifies its app-managed installation.
+  Forward private host context only to project sessions; preserve the existing
+  private map tools/prompts and keep shared map activation off.
+
+### Patch Changes
+
+- afa4569: Sync the offline fallback system prompt with the backend 1.7 content release (decisions.evaluate guidance, provider-neutral wording).
+- fe5b74d: Agent Studio: the new-agent screen takes a project and takes links and documents. `NewSessionComposer` is mounted only with a project and states it ("New agent in {project}") above the headline and in the session bar chip; New project, a project row's New agent, and an empty project's name all land on it. A paste that is only links is listed as sources and handed to the session by URL; a long paste becomes an attached document instead of a wall of text. An install with no project sees the no-project home, whose one move is New project (flow-creation.md rev 4 §4.3, §4.6 step 1, D36).
+- d80b6c7: Agent Studio: New project and Add project run the folder step first. The rail's top control is one filled `New project` button with no menu: on desktop it opens the OS folder picker directly, on the web a one-field folder dialog on the shared dialog shell; the chosen folder opens as a project and the new-agent screen opens scoped to it. `Add project` (the Projects header's folder-plus) runs the same step and stops. The `Create new agent` CTA and the `Add existing agents` row are gone, and the desktop host no longer sends new agents to `~/.sapiom/harness/projects` (flow-creation.md rev 4 §4.1, §4.5, §4.7, Q8).
+- c71bc50: The command palette no longer opens on top of an open dialog. Pressing its shortcut while a dialog is up used to stack the palette over it, and pressing Tab then walked out of the palette into the dialog behind. The shortcut now does nothing while a dialog is open, and is not handed to the browser (so Ctrl+P over a dialog no longer opens the print preview). It still opens the palette over the Overview, which is unchanged.
+- 969caef: Agent Studio: Past sessions moves to a history glyph in the rail's top bar. The glyph beside back/forward opens the existing Past sessions side card beside the rail; the Projects options menu keeps Group by and Sort by only, and wears the sliders glyph. Search (⌘K) keeps listing past sessions too. An empty project's row tooltip reads "Create this project's first agent" (D36). (flow-creation.md rev 4 §4.7, Q9)
+- 54c6362: Agent Studio: opening or adding a project creates no session. A newly created durable project no longer gets an automatic first session titled "Plan Agents" with a bootstrap prompt typed into it; the project is minted, its agents scan in, and the user's own first session is an ordinary one. Reverses the automatic bootstrap first session from #824 to #826 and #834 (flow-creation.md rev 4 §4.1 step 3, Q5). Sessions that already carry bootstrap metadata still resume as ordinary sessions.
+- c71bc50: A project row's `+` is **New agent**, scoped to that project, and a plain session is no longer a row verb.
+
+  The row's hover `+` (`project-create-agent-{label}`, accessible name "New agent in {project}") creates into the project named on the row. A bare project (sessions, no agent yet) keeps its distinct scaffold verb (`workspace-scaffold-{label}`). `project-start-session-{label}` is removed: a plain session starts from the tab strip, or from the **Start session** on the project's own pane. The empty project still gets no create row of its own; its Agent Map row is the CTA.
+
+  On the Group axis every group row carries the same `+` (`group-create-agent-{label}`), scoped to the project that holds the group's members, since a group has no directory.
+
+  Follows design-eng `IA.md` 219 and D34(a), D34(c); D34(e) and D35 item 6 for sessions belonging to the tab strip.
+
+- c71bc50: A project row's remove verb is a hover action, not an overflow menu. The `⋮` on every project row opened a 248px card to hold a single item — on plan-first projects its create item is suppressed, because the Agent Map owns creation, so the popover existed to carry one `Remove … from the rail`. That verb is now an `X` beside the row's New agent `+`, hover-revealed like every other row action, and it opens the same confirmation as before: the project named, the count of running sessions it will end, and the statement that nothing on disk is touched.
+
+  Row actions state their subject in the accessible name and the tooltip rather than in visible menu text. The `project-remove-{label}` testid is unchanged and now belongs to the button itself; `project-menu-{label}` and `project-menu-card-{label}` are gone, as is the `openProjectMenu` e2e helper.
+
+  Follows design-eng D33: a project row's verbs are hover actions on the header, and a per-row menu would be a new idiom.
+
+- 5f3f25b: Agent Studio: the retired creation surfaces are gone. `CreateAgentDialog`, `TemplateUseDialog`, `StartDialog` with its detect flow, `project-dir` (`slugifyIdea`, `uniqueProjectDir`, `resolveProjectRoot`) and `firstInstructionPrompt` are deleted; the Overview card's "Open folder" runs the folder step; the web fallback for the folder step is the one-field `ProjectFolderDialog` on the shared dialog shell. Every entrance lands on one screen and every create goes through `POST /api/agents/scaffold` (flow-creation.md rev 4 §5, Q4).
+- d9d6b13: Share Agent Map contracts without changing Studio behavior or saved state.
+- 8a77b06: Share project identity, catalog locking, and canonical path matching while Studio retains discovery orchestration.
+
+  Resolve paths asynchronously with briefly cached root probes, isolate unrelated filesystem failures, and preserve ownership errors before Studio registration or session creation.
+
+- 5e9aacd: Share atomic map authoring and persistence, preserving the complete planning aggregate and Studio callbacks.
+- 5b61bac: Share map schemas, graph validation, and immutable version helpers.
+- c87678c: Agent Studio: submit scaffolds first, then one ordinary session that plans first. The new-agent screen calls `POST /api/agents/scaffold` in its project and only then opens an ordinary session bound to the agent; a refusal lands under the field and nothing starts. `CreateSessionRequest` loses `scaffold` (the harness never scaffolds inside a session any more; embedders call the scaffold endpoint, then create the session) and gains `initialSources` (links handed to the first prompt by URL) and `initialSetup` (session setup shown as a collapsed "Planning instructions" disclosure, never as the user's words). Template Use routes through the same screen; `TemplateUseDialog` is unreachable (flow-creation.md rev 4 §4.4, §4.6 steps 2 and 3, D30, D31, D37).
+- Updated dependencies [d532e49]
+- Updated dependencies [0c6e945]
+- Updated dependencies [c8c706e]
+- Updated dependencies [b052979]
+- Updated dependencies [1a3db42]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [85610db]
+  - @sapiom/mcp@0.17.0
+  - @sapiom/agent-core@0.14.3
+  - @sapiom/agent-map@0.2.0
+  - @sapiom/agent@0.14.3
+
 ## 0.17.1
 
 ### Patch Changes

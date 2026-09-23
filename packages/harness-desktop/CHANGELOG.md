@@ -1,5 +1,30 @@
 # @sapiom/harness-desktop
 
+## 0.4.10
+
+### Patch Changes
+
+- d80b6c7: Agent Studio: New project and Add project run the folder step first. The rail's top control is one filled `New project` button with no menu: on desktop it opens the OS folder picker directly, on the web a one-field folder dialog on the shared dialog shell; the chosen folder opens as a project and the new-agent screen opens scoped to it. `Add project` (the Projects header's folder-plus) runs the same step and stops. The `Create new agent` CTA and the `Add existing agents` row are gone, and the desktop host no longer sends new agents to `~/.sapiom/harness/projects` (flow-creation.md rev 4 §4.1, §4.5, §4.7, Q8).
+- 61b969f: Update checks now say when github.com is not reachable from the current network (a proxy or sign-on page answered instead of GitHub) and what to check, instead of reporting a GitHub rate limit, a bare "403 Forbidden", or "no release published yet". The updater log records the response status, server and content-type for support.
+- Updated dependencies [bf4a404]
+- Updated dependencies [afa4569]
+- Updated dependencies [fe5b74d]
+- Updated dependencies [d80b6c7]
+- Updated dependencies [c71bc50]
+- Updated dependencies [969caef]
+- Updated dependencies [54c6362]
+- Updated dependencies [c71bc50]
+- Updated dependencies [c71bc50]
+- Updated dependencies [79a52f9]
+- Updated dependencies [4bbea8d]
+- Updated dependencies [5f3f25b]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [c87678c]
+  - @sapiom/harness@0.18.0
+
 ## 0.4.9
 
 ### Patch Changes
