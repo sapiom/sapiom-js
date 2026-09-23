@@ -89,10 +89,7 @@ export async function capabilityCall<Res>(
     { authHeader: "x-api-key" },
   );
 
-  // One non-2xx path for every routed capability: it builds the namespace's own
-  // typed error AND records what the call saw (status, Retry-After, which
-  // capability) on it. The routed `id` is the capability label, so a metric
-  // attribute derived from it can never carry a resource id.
+  // The routed `id` is the capability label.
   await ensureOk(
     res,
     opts.errorPrefix,

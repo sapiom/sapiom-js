@@ -133,19 +133,10 @@ export interface TransportRequestOptions {
 /**
  * Did `fetch` reject because the connection never happened?
  *
- * Structural on `name` rather than `instanceof TypeError`: this package is
- * bundled into agent artifacts and is handed an injected `fetch`, so the error
- * can be minted in another realm, where `instanceof` against our own globals is
- * false and the fact would silently never be recorded. Same reason
- * `readSapiomCall` recognizes the marker structurally.
- *
- * A `TypeError` alone is not enough: `fetch` uses one for every deterministic
- * request-construction failure too (a GET with a body, an invalid method, an
- * abort whose reason happens to be a TypeError). Those carry no `cause`, while a
- * connection that never happened always hangs the underlying socket error there.
- * Requiring a cause keeps a deterministic mistake out of the transient bucket,
- * and erring the other way is safe: a rejection without one records no fact and
- * simply behaves as it did before this contract existed.
+ * Checks `name`, not `instanceof`: an injected `fetch` can throw from another
+ * realm. Requires a `cause`: `fetch` also throws a bare `TypeError` for a
+ * malformed request (GET with a body, bad method), and only a real connection
+ * failure carries one. A miss just records no fact.
  */
 function isNetworkRejection(error: unknown): error is Error {
   return (
@@ -157,14 +148,8 @@ function isNetworkRejection(error: unknown): error is Error {
 }
 
 /**
- * Raise a malformed header before the call instead of letting `fetch` reject
- * with the same bare `TypeError` it uses for a dead connection. The constructor
- * runs the very validation `fetch` runs internally, so this cannot reject a
- * request that would otherwise have gone out.
- *
- * The URL half is `assertCredentialMayTravel`'s job (SAP-3624): it already
- * rejects any scheme that is not http or https, and more besides, so there is
- * nothing left to check here.
+ * Raise a malformed header before the call, so it is not mistaken for a dead
+ * connection. Runs the same validation `fetch` would.
  */
 function assertRequestable(
   headers: ConstructorParameters<typeof Headers>[0],
@@ -300,25 +285,16 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
-    // Everything that can fail while BUILDING the request happens before the try:
-    // refusing an unsafe channel for the credential, serializing caller metadata
-    // (circular, BigInt), parsing the URL, validating the headers. `fetch`
-    // rejects with a bare TypeError for all of those AND for a connection that
-    // never happened, with nothing on the error to tell them apart, so raising
-    // them here is the only way to keep a deterministic local failure out of the
-    // transient bucket. Marking one transient would buy the caller three
-    // attempts at something that cannot succeed.
+    // Build and validate before the `try`: a failure here is deterministic and
+    // must not be recorded as a network failure.
     assertCredentialMayTravel(new URL(url), this.policy);
     const headers: Record<string, string> = {
       [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,
       ...attributionToHeaders(this.attribution),
     };
-    // The caller's headers are merged through `Headers` rather than spread,
-    // because a spread only works for the plain-object form: it yields `{}` for
-    // a `Headers` instance and `{ "0": [name, value] }` for the tuple-array
-    // form, both of which `fetch` accepts and both of which would silently lose
-    // the caller's headers. Iterating normalizes all three.
+    // Iterate rather than spread: a spread drops a `Headers` instance or a
+    // tuple array.
     for (const [name, value] of new Headers(init.headers ?? {})) {
       headers[name] = value;
     }
@@ -335,9 +311,7 @@ export class Transport {
       );
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
-      // No response ever existed, so there is no status to record. An aborted
-      // signal means the caller stopped waiting on purpose, whatever shape the
-      // rejection took.
+      // An aborted signal is a deliberate cancellation, not a network failure.
       if (init.signal?.aborted !== true && isNetworkRejection(error)) {
         markSapiomCall(error, { network: true, capability: capabilityOf(url) });
       }
@@ -401,11 +375,7 @@ export class Transport {
       },
       options,
     );
-    // Through the shared non-2xx path so the call's facts are recorded here like
-    // everywhere else, but still throwing `TransportHttpError`: `agents` branches
-    // on that class. The `→` separator stands in for the `<prefix>: <status>`
-    // form the capability namespaces use, so the factory formats the message
-    // rather than taking the default, and it stays byte-identical.
+    // Keeps `TransportHttpError` (`agents` branches on it) and its `→` message.
     await ensureOk(
       res,
       `${init.method ?? "GET"} ${url} →`,

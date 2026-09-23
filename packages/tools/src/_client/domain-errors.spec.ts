@@ -1,9 +1,4 @@
-/**
- * One table over every capability namespace's non-2xx path. It is the guard on
- * the sweep: each namespace still throws its OWN public error class (so an
- * author's `instanceof` check is untouched) and every one of them now records
- * the same facts, deterministic statuses included.
- */
+/** Every namespace keeps its own error class and records the same facts. */
 import { readSapiomCall } from "./sapiom-call.js";
 
 import { ensureOk as browserAutomation } from "../browser-automation/errors.js";
@@ -167,12 +162,7 @@ describe("message and body shapes are unchanged by the sweep", () => {
 });
 
 describe("a capability's own input check", () => {
-  /**
-   * Some capabilities reuse their error class with a synthetic 400 to reject an
-   * input before sending anything. No response existed, so there are no facts to
-   * record, and inventing `status: 400` would put a fact on the wire that the
-   * wire never produced. The absence is also what keeps these deterministic.
-   */
+  // Rejected before sending: no response, so no facts.
   it.each([
     [
       "search.verifyEmail without an email",

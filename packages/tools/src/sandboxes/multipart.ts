@@ -5,9 +5,7 @@
  * status + `Retry-After`. Ported verbatim from the legacy `@sapiom/sandbox`;
  * the `Sandbox` methods that use these call through the `_client` transport.
  *
- * `parseRetryAfter` moved to `_client/sapiom-call.ts` (every Sapiom-surface
- * call now reads `Retry-After`, not just this one) and is re-exported here so
- * the legacy import path keeps working.
+ * `parseRetryAfter` lives in `_client/sapiom-call.ts`, re-exported here.
  */
 import {
   ensureOk as sharedEnsureOk,
@@ -49,10 +47,7 @@ export class SandboxHttpError extends Error {
  * Wrap a `fetch` response: if non-2xx, throw a `SandboxHttpError` carrying
  * the status + Retry-After, otherwise return the response for the caller to
  * parse.
- *
- * A wrapper over the shared non-2xx path: `SandboxHttpError` and the local
- * retry loop below are unchanged, and the facts about the call are recorded in
- * exactly one place.
+
  */
 export function ensureOk(
   response: Response,

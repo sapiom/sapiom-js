@@ -1,11 +1,4 @@
-/**
- * Cross-package proof: the facts `@sapiom/tools` records and the rule
- * `@sapiom/agent` applies agree, and the in-process runtime composes them the
- * same way the sandbox step-runner does.
- *
- * Neither package imports the other's half, so nothing but a test that runs a
- * real capability call through a real serializer catches a drift between them.
- */
+/** A real `@sapiom/tools` call through the real serializer: catches drift between the two halves. */
 import { runInNewContext } from "node:vm";
 
 import {
@@ -45,8 +38,6 @@ describe("a ctx.sapiom.* call that fails", () => {
 
     const error = await caught(sapiom.search.webSearch({ query: "anything" }));
 
-    // The author's own `catch (e) { if (e instanceof SearchHttpError) ... }`
-    // still works: nothing was wrapped.
     expect(error).toBeInstanceOf(SearchHttpError);
     expect(serializeStepCompletionError(error, readSapiomCall(error))).toEqual({
       name: "SearchHttpError",
@@ -101,9 +92,6 @@ describe("a ctx.sapiom.* call that fails", () => {
   });
 
   it("reads the facts off the thrown value, not a replacement", async () => {
-    // A cross-realm error fails `instanceof Error`, so any host that normalizes
-    // with `err instanceof Error ? err : new Error(String(err))` must still read
-    // the marker off the original value. The replacement carries nothing.
     const thrown = runInNewContext(
       'Object.assign(new Error("Failed to search: 503"), { name: "SearchHttpError", sapiomCall: { version: 1, capability: "web.search", status: 503 } })',
     ) as Error;
@@ -137,17 +125,7 @@ describe("a ctx.sapiom.* call that fails", () => {
 });
 
 describe("run_local parity, end to end", () => {
-  /**
-   * The serializer keeping the fields is only half of it: the in-process runner
-   * then rehydrates the payload before the store records it. That path used to
-   * go through the legacy branch, which keeps only name/message/stack, so a
-   * local run recorded strictly less than a deployed one and the parity this
-   * file claims was not actually held.
-   *
-   * Asserted on what reaches `failStep`, because the execution row itself ends
-   * up carrying the cap error: attaching the cause there is the engine half of
-   * SAP-3509.
-   */
+  // Asserted on `failStep`: the execution row carries the retry-cap error instead.
   it("keeps the transient fields on the recorded step failure", async () => {
     const entry = defineStep({
       name: "entry",

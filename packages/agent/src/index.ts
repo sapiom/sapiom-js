@@ -98,8 +98,7 @@ export type {
 export { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from './non-retryable-step-error.js';
 export type { NonRetryableStepErrorPayload } from './non-retryable-step-error.js';
 
-// ... and its retryable direction: the one rule turning a Sapiom-surface call's
-// recorded facts into the payload a host may keep on the retry path.
+// Retryable side: a transient Sapiom call.
 export {
   SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT,
   isRetryableStepErrorPayload,

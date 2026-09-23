@@ -1,8 +1,4 @@
-/**
- * The streaming exec path polls the process status AFTER the log stream closes,
- * through a nested helper that a sweep over `if (!res.ok)` sites is easy to miss.
- * A failure there has to carry the same facts as every other Sapiom call.
- */
+/** The status poll after the log stream closes is its own non-2xx site. */
 import { Transport } from "../_client/index.js";
 import { readSapiomCall } from "../_client/sapiom-call.js";
 import { Sandbox } from "./index.js";

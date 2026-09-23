@@ -35,7 +35,6 @@ describe("Transport.request()", () => {
       .then(() => null)
       .catch((e: unknown) => e);
 
-    // Still `TransportHttpError`: `agents` branches on that class.
     expect(err).toBeInstanceOf(TransportHttpError);
     expect((err as TransportHttpError).message).toBe(
       `POST ${url} → 502 upstream down`,
@@ -83,8 +82,6 @@ describe("Transport.fetch()", () => {
       .then(() => null)
       .catch((e: unknown) => e);
 
-    // The same instance propagates: nothing is wrapped, so an author's
-    // `catch` sees exactly what fetch threw.
     expect(err).toBe(thrown);
     expect(readSapiomCall(err)).toEqual({
       version: 1,
@@ -95,9 +92,6 @@ describe("Transport.fetch()", () => {
   });
 
   it("leaves a local serialization failure unmarked", async () => {
-    // `attributionToHeaders` JSON-stringifies caller metadata. A circular value
-    // throws a TypeError before fetch is ever called: deterministic, so marking
-    // it transient would buy three attempts at something that cannot succeed.
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     const transport = new Transport({
@@ -119,9 +113,7 @@ describe("Transport.fetch()", () => {
     ["a GET with a body", { method: "GET", body: "x" }],
     ["an invalid method", { method: "BAD METHOD" }],
   ])("leaves %s unmarked", async (_label, init) => {
-    // `fetch` rejects these while CONSTRUCTING the request, with the same bare
-    // TypeError a dead connection gives. They carry no `cause`; a transport
-    // failure always does.
+    // Construction errors carry no `cause`; a transport failure always does.
     const transport = transportWith(async () => {
       throw Object.assign(
         new TypeError("Request with GET/HEAD method cannot have body."),
@@ -155,9 +147,6 @@ describe("Transport.fetch()", () => {
   });
 
   it("records a network rejection minted in another realm", async () => {
-    // The artifact bundle is handed an injected fetch, so the rejection can come
-    // from a different realm, where `instanceof TypeError` is false. Recognition
-    // has to be structural or the fact is silently never recorded.
     const foreign = runInNewContext(
       'Object.assign(new TypeError("fetch failed"), { cause: new Error("ECONNREFUSED") })',
     ) as Error;
@@ -179,9 +168,6 @@ describe("Transport.fetch()", () => {
     });
   });
 
-  // `fetch` rejects with a bare TypeError for a malformed request AND for a dead
-  // connection. Anything deterministic has to be raised before the call, or it
-  // ships as SAPIOM_CALL_TRANSIENT and buys three attempts at the impossible.
   it.each([
     ["a malformed URL", "not a url", {}],
     [
@@ -211,7 +197,6 @@ describe("Transport.fetch()", () => {
 
     expect((err as Error).name).toBe("TypeError");
     expect(readSapiomCall(err)).toBeUndefined();
-    // Raised before the call, so nothing was ever sent.
     expect(called).toBe(false);
   });
 
@@ -238,8 +223,6 @@ describe("Transport.fetch()", () => {
   });
 
   it("rejects a scheme fetch cannot send, before the call", async () => {
-    // `new URL("gopher://x")` parses, and fetch then rejects with a plain
-    // `fetch failed` carrying a cause: indistinguishable from a dead connection.
     let called = false;
     const transport = new Transport({
       apiKey: "test-key",

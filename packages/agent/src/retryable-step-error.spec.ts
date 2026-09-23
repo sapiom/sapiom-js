@@ -28,11 +28,8 @@ describe('isTransientSapiomCall()', () => {
     { status: 529 },
     { status: 429 },
     { status: 408 },
-    // 425 Too Early: `sandboxes/multipart.ts` already retries it locally, so it
-    // must not read as deterministic once it escapes the step.
     { status: 425 },
     { network: true },
-    // A network failure has no status to read; the connection never happened.
     { network: true, capability: 'web.search' },
   ];
   const deterministic: SapiomCallFacts[] = [
@@ -43,7 +40,6 @@ describe('isTransientSapiomCall()', () => {
     { status: 409 },
     { status: 422 },
     { status: 200 },
-    // Facts recorded for a call that failed some other way carry no verdict.
     {},
     { capability: 'web.search' },
     { network: false, status: 404 },
@@ -113,8 +109,6 @@ describe('toRetryableStepErrorPayload()', () => {
     expect(payload?.retryAfterMs).toBe(1501);
   });
 
-  // This runs on the failure path. If it can throw, it replaces the error the step
-  // actually hit with a validation error, and the run reports the wrong cause.
   it('is total: never throws, whatever the error and facts carry', () => {
     const hostile = new Error('boom');
     (hostile as unknown as { name: unknown }).name = 42;
@@ -122,7 +116,6 @@ describe('toRetryableStepErrorPayload()', () => {
 
     const payload = toRetryableStepErrorPayload(hostile, {
       status: 503,
-      // `Retry-After: 99999999999999999` seconds: past the safe-integer range.
       retryAfterMs: 1e20,
     });
 
@@ -132,8 +125,6 @@ describe('toRetryableStepErrorPayload()', () => {
   });
 
   it('does not throw on facts built with hostile accessors', () => {
-    // `readSapiomCall` returns whatever duck-typed object it found, which may be
-    // a step body's own, so the rule and the normalizer must survive it.
     const hostileFacts = {
       get status(): number {
         throw new Error('hostile getter');

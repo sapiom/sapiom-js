@@ -167,9 +167,6 @@ describe("capabilityCall()", () => {
     ).rejects.toMatchObject({ status: 502, body: "upstream exploded" });
   });
 
-  // The facts ride on the capability's OWN error class, so an author's
-  // `catch (e) { if (e instanceof SearchHttpError) return fail(); }` is
-  // unaffected. Nothing here decides a retry.
   it.each([503, 429, 408, 404, 400])(
     "records what the call saw on a %s, keeping the capability's own error class",
     async (status) => {

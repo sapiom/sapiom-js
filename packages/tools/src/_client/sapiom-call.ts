@@ -1,77 +1,44 @@
 /**
- * The facts a failed Sapiom-surface call records about itself, and the one
- * non-2xx path every capability namespace funnels through.
+ * Facts a failed Sapiom call records about itself, and the shared non-2xx path.
  *
- * This module holds NO opinion about retrying. It stamps what happened (which
- * capability, what status, any `Retry-After`, whether a response ever existed)
- * onto the error the SDK already throws. The single rule that turns those facts
- * into a retry disposition lives in `@sapiom/agent`, and the retry policy itself
- * lives in the engine. Keeping the judgement out of the SDK means changing it
- * later is a platform deploy, not a release plus a rebuild of every agent
- * artifact (each bundles its own copy of this package).
- *
- * The marker is a plain enumerable property rather than a new error class on
- * purpose: author code that does `catch (e) { if (e instanceof SearchHttpError)
- * return fail(); }` must keep working, and recognition has to survive the
- * artifact bundle inlining its own copy of `@sapiom/tools`, where `instanceof`
- * across copies is false.
+ * Facts only: nothing here decides whether a call is retried. The marker is a
+ * plain property, not an error class, so `instanceof` checks keep working and
+ * recognition survives an artifact bundling its own copy of this package.
  */
 
 import { readErrorBody } from "./errors.js";
 
-/** Where the facts live on a thrown error. Public: authors may read them. */
+/** Where the facts live on a thrown error. */
 export const SAPIOM_CALL_MARKER_KEY = "sapiomCall" as const;
 
-/** Version this copy stamps. See {@link SapiomCallMarker.version}. */
 export const SAPIOM_CALL_FACTS_VERSION = 1;
 
-/** Longest capability label kept; the engine reports this as a metric attribute. */
 const MAX_CAPABILITY_LENGTH = 200;
 
 /**
- * Facts about the Sapiom-surface call that failed. Present on every error from a
- * call that was actually sent, deterministic ones included: `err.sapiomCall.status`
- * is the uniform way to read the status an author used to have to remember per
- * error class.
- *
- * Absent, on purpose, when a capability's own input check throws before sending
- * (`search.verifyEmail` without an email, an empty `speech` text). Those reuse
- * the capability's error class with a synthetic 400, but no response existed,
- * and stamping `status: 400` would record a fact the wire never produced. Their
- * absence is also what keeps them deterministic: no facts, no transient verdict.
+ * Facts about a call that was sent and failed. Absent when a capability rejects
+ * its input before sending: no response existed, so no status is invented.
  */
 export interface SapiomCallMarker {
-  /**
-   * Version of the fact contract, `1` today. Read as a number, not a literal:
-   * a newer bundle copy in the same process may stamp a later version whose
-   * common fields are still readable.
-   */
+  /** Read as a number: another bundle copy may stamp a later version. */
   readonly version: number;
   /**
-   * Routed capability id (`web.search`), or the namespace the call belonged to.
-   *
-   * Exact on a response failure, where the capability names itself. Best-effort
-   * on a network failure, where it is derived from the URL and can be coarser
-   * than the namespace label (`files` rather than `fileStorage`), so treat the
-   * two as the same namespace when grouping.
+   * Routed capability id, or the call's namespace. Derived from the URL on a
+   * network failure, so it can be coarser than on a response failure.
    */
   readonly capability?: string;
-  /** HTTP status of the response. Absent when no response ever existed. */
+  /** Absent when no response existed. */
   readonly status?: number;
-  /** Parsed `Retry-After`, in milliseconds. */
   readonly retryAfterMs?: number;
   /** `fetch` rejected before any response existed. */
   readonly network?: boolean;
 }
 
-/** The facts a caller supplies; the contract version is stamped here. */
 export type SapiomCallFactsInput = Omit<SapiomCallMarker, "version">;
 
 /**
- * Attach the facts to `err` and return it. Idempotent (the innermost call that
- * saw the response wins), additive (never touches `code`, `status`, `body`, or
- * any other field the error class owns), and total: an error on the failure
- * path must never be made worse by the act of describing it.
+ * Attach the facts to `err`. Idempotent (the innermost call wins), additive, and
+ * never throws: describing a failure must not replace it.
  */
 export function markSapiomCall<E extends Error>(
   err: E,
@@ -86,16 +53,12 @@ export function markSapiomCall<E extends Error>(
       configurable: false,
     });
   } catch {
-    // A frozen or exotic error simply carries no facts.
+    // A frozen error carries no facts.
   }
   return err;
 }
 
-/**
- * Read the facts back. Structural, so it works across bundle copies and on a
- * duck-typed error that never touched this package. Never throws: a throwing
- * property accessor or a null prototype just means "no facts".
- */
+/** Structural, so it works across bundle copies. Never throws. */
 export function readSapiomCall(err: unknown): SapiomCallMarker | undefined {
   try {
     if (err === null || typeof err !== "object") return undefined;
@@ -106,11 +69,7 @@ export function readSapiomCall(err: unknown): SapiomCallMarker | undefined {
   }
 }
 
-/**
- * Typed replacement for the bare `Error` that non-2xx responses used to throw
- * from `Transport.request` and a handful of capability methods. Same message,
- * now with `status` and `body` like every other Sapiom error class.
- */
+/** Thrown on a non-2xx by call sites that have no error class of their own. */
 export class SapiomCallError extends Error {
   readonly status: number;
   readonly body: unknown;
@@ -123,30 +82,22 @@ export class SapiomCallError extends Error {
   }
 }
 
-/** Everything the shared helper learned about a non-2xx response. */
 export interface SapiomCallFailure {
-  /** The standard message: `${errorPrefix}: ${status} ${text}`. */
+  /** `${errorPrefix}: ${status} ${text}`. */
   readonly message: string;
   readonly status: number;
-  /** Parsed JSON body when the response was JSON, otherwise the raw text. */
+  /** Parsed JSON, or the raw text. */
   readonly body: unknown;
-  /** Raw response text, for the one capability that formats its own message. */
   readonly text: string;
-  /** Parsed `Retry-After`, in milliseconds. */
   readonly retryAfterMs: number | undefined;
   readonly errorPrefix: string;
 }
 
-/**
- * Build the capability-specific error to throw. Each namespace passes its own
- * so its public error class (`SearchHttpError`, …) is unchanged.
- */
 export type SapiomCallErrorFactory = (failure: SapiomCallFailure) => Error;
 
 /**
- * Return the response when 2xx, otherwise throw the capability's own error with
- * the call's facts stamped on it. The single place a non-2xx becomes an error,
- * so the single place the facts are recorded.
+ * Return a 2xx response, otherwise throw the capability's own error with the
+ * call's facts stamped on it.
  */
 export async function ensureOk(
   response: Response,
@@ -156,8 +107,7 @@ export async function ensureOk(
 ): Promise<Response> {
   if (response.ok) return response;
   const { text, body } = await readErrorBody(response);
-  // Optional-chained on purpose: this runs on the failure path, where the
-  // "response" may be a hand-rolled test double with no `headers`.
+  // A test double may have no `headers`.
   const retryAfterMs = parseRetryAfter(
     response.headers?.get?.("Retry-After") ?? null,
   );
@@ -176,11 +126,7 @@ export async function ensureOk(
   });
 }
 
-/**
- * {@link ensureOk} for the call sites that had no typed error of their own and
- * threw a bare `Error`. Message shape preserved; the class is now
- * {@link SapiomCallError}.
- */
+/** {@link ensureOk}, throwing a {@link SapiomCallError}. */
 export function failIfNotOk(
   response: Response,
   errorPrefix: string,
@@ -194,38 +140,23 @@ export function failIfNotOk(
   );
 }
 
-/**
- * Longest `Retry-After` delay worth believing, 24 hours. Past this the value is
- * far more likely to be a parse accident than a real hint: no caller waits a day
- * for a retry, and the platform clamps its own backoff well below it anyway.
- */
+/** Past a day, a `Retry-After` is a parse accident, not a hint. */
 const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 
-/** Numeric-looking, but not the `1*DIGIT` the grammar allows. */
+/** Numeric-looking, but not `1*DIGIT`. */
 const MALFORMED_DELTA_SECONDS = /^[+-]?[\d.]+(?:[eE][+-]?\d+)?$/;
 
 /**
- * Parse a `Retry-After` header value. RFC 9110 allows two forms:
- *  - delta-seconds, strictly `1*DIGIT` (e.g. `"30"`)
- *  - HTTP-date (e.g. `"Wed, 21 Oct 2015 07:28:00 GMT"`)
- *
- * A malformed numeric value is rejected rather than coerced, and deliberately
- * does NOT fall through to the date branch: `Date.parse("1.5")` returns a date
- * in 2001, so a sloppy header would otherwise become a confident wrong answer.
- * The caller falls back to its own backoff, which is the honest outcome.
- *
- * The date branch is bounded for the same reason. `Date.parse` accepts far more
- * than the three formats the grammar allows (`"2050 GMT"` parses, and lands
- * 23 years out), and a delay past {@link MAX_RETRY_AFTER_MS} is not a retry hint
- * any caller can use, so it is dropped rather than believed.
+ * Parse `Retry-After` (RFC 9110): delta-seconds (`1*DIGIT`) or an HTTP-date.
+ * A malformed number is rejected, not passed to `Date.parse`, which accepts
+ * `"1.5"` as a date. Returns `undefined` rather than guess, so the caller falls
+ * back to its own backoff.
  */
 export function parseRetryAfter(header: string | null): number | undefined {
   if (!header) return undefined;
   const value = header.trim();
   if (/^\d+$/.test(value)) {
     const ms = Number(value) * 1000;
-    // A delay we cannot represent is no delay: the schema that carries this
-    // fact rejects an unsafe integer, and the caller has its own backoff.
     return Number.isSafeInteger(ms) ? ms : undefined;
   }
   if (MALFORMED_DELTA_SECONDS.test(value)) return undefined;
@@ -236,11 +167,9 @@ export function parseRetryAfter(header: string | null): number | undefined {
 }
 
 /**
- * Best-effort capability label for a URL, used where no routed id was passed
- * (a network failure, a non-routed namespace). Deliberately bounded: the engine
- * reports this as a metric attribute, so a resource id must never reach it.
- * Returns the routed capability id for `/v1/capabilities/<id>`, otherwise the
- * single path segment naming the namespace.
+ * Capability label for a URL: the routed id under `/v1/capabilities/<id>`,
+ * otherwise the namespace segment. Never a resource id, since it ends up as a
+ * metric attribute.
  */
 export function capabilityOf(url: string): string | undefined {
   try {
@@ -258,7 +187,7 @@ export function capabilityOf(url: string): string | undefined {
   }
 }
 
-/** Accept only a short, static-looking path token, never an id. */
+/** A short static token, never an id. */
 function staticSegment(segment: string | undefined): string | undefined {
   if (segment === undefined) return undefined;
   return /^[a-z][a-z0-9._-]{0,39}$/i.test(segment) ? segment : undefined;

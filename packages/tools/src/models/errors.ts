@@ -19,10 +19,7 @@ export class CodingRunHttpError extends Error {
 
 /**
  * Return the response when 2xx, otherwise throw a {@link CodingRunHttpError}.
- *
- * Wraps the shared non-2xx path so the facts about the call are recorded in one
- * place, but formats its own message: this capability prefers the API body's
- * `message` and omits the trailing space when the response had no text.
+ * Prefers the body's `message`, and omits the trailing space on an empty body.
  */
 export function ensureCodingRunOk(
   response: Response,

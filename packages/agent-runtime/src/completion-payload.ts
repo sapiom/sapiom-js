@@ -86,12 +86,7 @@ const nonRetryableStepCompletionErrorSchema = z
   })
   .transform((value) => parseNonRetryableStepErrorPayload(value) as NonRetryableStepErrorPayload);
 
-/**
- * The other direction of the same registry: a Sapiom-surface call that failed
- * transiently. Recognized structurally, for the same reason, and parsed before
- * the legacy branch so its fields survive rather than being stripped to
- * `name`/`message`/`stack`.
- */
+/** Transient Sapiom call. Parsed before legacy so its fields are not stripped. */
 const retryableStepCompletionErrorSchema = z
   .custom<RetryableStepErrorPayload>(isRetryableStepErrorPayload, {
     message: 'Invalid retryable platform step error payload',
@@ -152,11 +147,8 @@ export type StepCompletionError = z.infer<typeof stepCompletionErrorSchema>;
  * closed set of platform errors that the runner may settle without retrying.
  * Ordinary and unrecognized throws retain the legacy error shape.
  *
- * `facts` is what the Sapiom-surface call recorded about its own failure, read
- * by the host from the thrown error (`readSapiomCall` in `@sapiom/tools`). It is
- * passed in rather than read here so this package keeps its single dependency:
- * the SDK owns the marker, this contract owns the rule, and the host composes
- * the two. Omit it and the error serializes exactly as it did before.
+ * `facts` comes from `readSapiomCall` in `@sapiom/tools`. Without it, the error
+ * serializes as legacy.
  */
 export function serializeStepCompletionError(error: unknown, facts?: SapiomCallFacts): StepCompletionError {
   const platformError = parseNonRetryableStepErrorPayload(error);
@@ -164,8 +156,7 @@ export function serializeStepCompletionError(error: unknown, facts?: SapiomCallF
 
   const normalized = error instanceof Error ? error : new Error(String(error));
 
-  // Only a transient failure gets a disposition. A deterministic one (4xx)
-  // deliberately ships as a legacy error carrying no disposition field at all.
+  // A deterministic failure ships as legacy, with no disposition field.
   const transient = toRetryableStepErrorPayload(normalized, facts);
   if (transient) return transient;
 

@@ -23,10 +23,6 @@ export class VaultHttpError extends Error {
 /**
  * Return the response when 2xx, otherwise throw a {@link VaultHttpError}.
  * Parses the error body as JSON when possible; falls back to raw text.
- *
- * A two-line wrapper over the shared non-2xx path: the public error class is
- * unchanged, and the facts about the call (status, `Retry-After`, which
- * capability) are recorded in exactly one place.
  */
 export function ensureOk(
   response: Response,

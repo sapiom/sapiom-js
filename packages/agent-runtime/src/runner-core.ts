@@ -283,11 +283,7 @@ export class AgentRunnerCore {
         });
         result = { kind: ADVANCE_RESULT_KIND.FAILED, error: terminalError };
       } else {
-        // Retryable is rehydrated the same way terminal is: the structured
-        // fields (`code`, `status`, `capability`, `retryAfterMs`) are the whole
-        // point of the payload, and `rehydrateRemoteError` alone would drop them
-        // on the way into the store, so a local run would report less than a
-        // deployed one.
+        // `rehydrateRemoteError` alone would drop the payload's fields.
         const retryablePayload = parseRetryableStepErrorPayload(payload.error);
         const err = retryablePayload
           ? rehydrateRetryableStepError(retryablePayload)
@@ -927,7 +923,7 @@ function rehydrateNonRetryableStepError(payload: NonRetryableStepErrorPayload): 
   return Object.assign(rehydrateRemoteError(payload), payload);
 }
 
-/** The retryable direction of the same registry, rehydrated the same way. */
+/** Preserve Error identity while carrying the retryable payload's fields. */
 function rehydrateRetryableStepError(payload: RetryableStepErrorPayload): Error & RetryableStepErrorPayload {
   return Object.assign(rehydrateRemoteError(payload), payload);
 }
