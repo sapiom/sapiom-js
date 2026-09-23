@@ -1,17 +1,17 @@
 /**
- * The local `llm.decide` stub: `run_local` must return an answer of the right
+ * The local `decisions.evaluate` stub: `run_local` must return an answer of the right
  * shape for every question type (keys preserved, probabilities well-formed) so
  * step code that branches on `noul` / `choice` / `score` runs unchanged, and a
  * step stub can still override the whole reply.
  */
-import { LlmDecideHttpError } from "../llm/index.js";
+import { DecisionsHttpError } from "../decisions/index.js";
 import { createStubClient, type StubCallRecord } from "./index.js";
 
-describe("stub llm.decide", () => {
+describe("stub decisions.evaluate", () => {
   it("answers every question under its own key, in its type's shape", async () => {
     const client = createStubClient();
 
-    const res = await client.llm.decide({
+    const res = await client.decisions.evaluate({
       state: "x",
       questions: {
         urgent: { type: "noul", instructions: "Is it urgent?" },
@@ -28,7 +28,9 @@ describe("stub llm.decide", () => {
       },
     });
 
-    expect(res.servedBy).toBe("stub");
+    expect(res).not.toHaveProperty("model");
+    expect(res).not.toHaveProperty("servedBy");
+    expect(res).not.toHaveProperty("cost");
     expect(Object.keys(res.answers).sort((a, b) => a.localeCompare(b))).toEqual(
       ["mood", "team", "urgent"],
     );
@@ -71,7 +73,7 @@ describe("stub llm.decide", () => {
       '{"__proto__":{"type":"noul","instructions":"Is this valid?"},"ok":{"type":"noul","instructions":"Ok?"}}',
     ) as Record<string, { type: "noul"; instructions: string }>;
 
-    const res = await client.llm.decide({ state: "x", questions });
+    const res = await client.decisions.evaluate({ state: "x", questions });
 
     expect(Object.keys(res.answers).sort((a, b) => a.localeCompare(b))).toEqual(
       ["__proto__", "ok"],
@@ -92,7 +94,7 @@ describe("stub llm.decide", () => {
     expect(res.answers.hasOwnProperty("ok")).toBe(true);
   });
 
-  describe("rejects what the router rejects, as the same LlmDecideHttpError 400", () => {
+  describe("rejects what the router rejects, as the same DecisionsHttpError 400", () => {
     const cases: Array<{
       name: string;
       questions: Record<string, unknown>;
@@ -134,11 +136,11 @@ describe("stub llm.decide", () => {
     for (const { name, questions, message } of cases) {
       it(name, async () => {
         const client = createStubClient();
-        const call = client.llm.decide({
+        const call = client.decisions.evaluate({
           state: "x",
           questions: questions as never,
         });
-        await expect(call).rejects.toThrow(LlmDecideHttpError);
+        await expect(call).rejects.toThrow(DecisionsHttpError);
         await expect(call).rejects.toMatchObject({
           status: 400,
           body: { statusCode: 400, message },
@@ -152,24 +154,29 @@ describe("stub llm.decide", () => {
     const client = createStubClient({
       calls,
       overrides: {
-        "llm.decide": {
-          model: "jev-override",
+        "decisions.evaluate": {
           answers: { urgent: { type: "noul", noul: 0.99 } },
           usage: { inputTokens: 1, outputTokens: 1 },
-          servedBy: "override",
+          cost: {
+            estimateUsd: 0,
+            currency: "USD",
+            isEstimate: true,
+            source: "quote",
+          },
         },
       },
     });
 
-    const res = await client.llm.decide({
+    const res = await client.decisions.evaluate({
       state: "x",
       questions: { urgent: { type: "noul", instructions: "Is it urgent?" } },
     });
 
     expect(res.answers.urgent.noul).toBe(0.99);
+    expect(res.cost?.estimateUsd).toBe(0);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
-      capability: "llm.decide",
+      capability: "decisions.evaluate",
       stubUsed: true,
     });
   });

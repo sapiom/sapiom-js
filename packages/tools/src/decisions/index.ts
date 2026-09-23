@@ -1,16 +1,16 @@
 /**
- * `llm.decide` — a fixed-answer-set decision with probabilities, backed by
- * TypeSafe AI's Jev "System One" model through the Capability Router
- * (`POST /v1/capabilities/llm.decide`, SAP-3569). It is the routed sibling of
- * `llm.run`: `run` generates text or JSON, `decide` returns calibrated
- * probabilities over answers the caller defines up front, in well under a second.
+ * `decisions.evaluate` — a fixed-answer-set decision with probabilities, backed by
+ * a System One decision model through the Capability Router
+ * (`POST /v1/capabilities/decisions.evaluate`, SAP-3569). Where `llm.run`
+ * generates text or JSON, `decisions.evaluate` returns calibrated probabilities
+ * over answers the caller defines up front.
  *
  * Pick it by the shape of the work: a yes/no gate, a pick-one classification, or a
- * rubric score you want a probability for → `decide`. Generated content → `run`.
- * Jev is not a security boundary and is weak at arithmetic and date math — keep
- * those in code.
+ * rubric score you want a probability for → `decisions.evaluate`. Generated
+ * content → `llm.run`. System One decisions are not a security boundary and are
+ * weak at arithmetic and date math — keep those in code.
  *
- *   const res = await ctx.sapiom.llm.decide({
+ *   const res = await ctx.sapiom.decisions.evaluate({
  *     state: { message: ticket.body },
  *     questions: {
  *       urgent: { type: "noul", instructions: "Is this urgent?" },
@@ -34,12 +34,12 @@ import {
 } from "../_client/capability-call.js";
 
 /** `state` and `instructions` accept prose or structured JSON; prefer named fields when the context has several parts. */
-export type DecideContent = string | Record<string, unknown> | unknown[];
+export type DecisionContent = string | Record<string, unknown> | unknown[];
 
 /** Whether a condition holds. The answer is the probability of "yes". */
 export interface NoulQuestion {
   type: "noul";
-  instructions: DecideContent;
+  instructions: DecisionContent;
   /** Optional descriptions of what a `true` / `false` answer means. */
   criteria?: { true?: string; false?: string };
 }
@@ -47,7 +47,7 @@ export interface NoulQuestion {
 /** One option out of a defined set. The answer carries the full distribution. */
 export interface ChoiceQuestion {
   type: "choice";
-  instructions: DecideContent;
+  instructions: DecisionContent;
   /** Option name → description (or `null` when the name is self-explanatory). Include a no-match option when nothing may fit. */
   criteria: Record<string, string | null>;
 }
@@ -55,12 +55,12 @@ export interface ChoiceQuestion {
 /** Degree along an ordered rubric. The answer is a probability-weighted level. */
 export interface ScoreQuestion {
   type: "score";
-  instructions: DecideContent;
+  instructions: DecisionContent;
   /** Ordered level descriptions, lowest first; each must describe a concrete situation. */
   criteria: string[];
 }
 
-export type DecideQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
+export type DecisionQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 
 export interface NoulAnswer {
   type: "noul";
@@ -90,63 +90,69 @@ export interface ScoreAnswer {
   confidence: number;
 }
 
-export type DecideAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
+export type DecisionAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
 
 /** The answer type a given question produces — this is what types `answers` per key. */
-export type DecideAnswerFor<Q extends DecideQuestion> = Q extends ChoiceQuestion
-  ? ChoiceAnswer<Extract<keyof Q["criteria"], string>>
-  : Q extends ScoreQuestion
-    ? ScoreAnswer
-    : NoulAnswer;
+export type DecisionAnswerFor<Q extends DecisionQuestion> =
+  Q extends ChoiceQuestion
+    ? ChoiceAnswer<Extract<keyof Q["criteria"], string>>
+    : Q extends ScoreQuestion
+      ? ScoreAnswer
+      : NoulAnswer;
 
-export interface LlmDecideSpec<
-  Q extends Record<string, DecideQuestion> = Record<string, DecideQuestion>,
+export interface DecisionsEvaluateSpec<
+  Q extends Record<string, DecisionQuestion> = Record<string, DecisionQuestion>,
 > {
   /** What every question is evaluated against. */
-  state: DecideContent;
+  state: DecisionContent;
   /** Named questions, all evaluated in parallel over `state`. Names are for your code; the model never sees them. */
   questions: Q;
   /**
-   * Vendor model id. Omit (recommended) for the platform default, currently
-   * `jev-latest`; the response's `model` reports the exact version that served.
+   * Optional platform model id. Omit it and the platform picks the current
+   * default System One model.
    */
   model?: string;
 }
 
-export interface LlmDecideResponse<
-  Q extends Record<string, DecideQuestion> = Record<string, DecideQuestion>,
+export interface DecisionsEvaluateResponse<
+  Q extends Record<string, DecisionQuestion> = Record<string, DecisionQuestion>,
 > {
-  /** The exact model version that answered (e.g. `jev-1.13.0`). */
-  model: string;
   /** One answer per question, under the same keys. */
-  answers: { [K in keyof Q]: DecideAnswerFor<Q[K]> };
+  answers: { [K in keyof Q]: DecisionAnswerFor<Q[K]> };
   usage: { inputTokens: number; outputTokens: number };
-  /** The provider that served the call. */
-  servedBy: string;
+  /** Optional quote metadata. The estimate is not the settled charge. */
+  cost?: {
+    estimateUsd?: number;
+    currency?: string;
+    /** Transaction id for looking up the settled cost. */
+    reference?: string;
+    isEstimate?: true;
+    source?: "quote";
+  };
 }
 
 /** Thrown when the router answers a non-2xx (validation, metering, or provider failure). */
-export class LlmDecideHttpError extends Error {
+export class DecisionsHttpError extends Error {
   constructor(
     message: string,
     public readonly status: number,
     public readonly body: unknown,
   ) {
     super(message);
-    this.name = "LlmDecideHttpError";
+    this.name = "DecisionsHttpError";
   }
 }
 
 /**
  * Evaluate fixed-answer-set questions over a state. Routed and metered per call;
  * the router validates the questions before any spend. Failed requests throw
- * {@link LlmDecideHttpError}.
+ * {@link DecisionsHttpError}.
  */
-export async function decide<Q extends Record<string, DecideQuestion>>(
-  spec: LlmDecideSpec<Q>,
+export async function evaluate<Q extends Record<string, DecisionQuestion>>(
+  spec: DecisionsEvaluateSpec<Q>,
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
-): Promise<LlmDecideResponse<Q>> {
+): Promise<DecisionsEvaluateResponse<Q>> {
   // `!= null` so a JS caller passing `model: null` gets the default rather than
   // forwarding a null the router would reject.
   const body: Record<string, unknown> = {
@@ -155,11 +161,21 @@ export async function decide<Q extends Record<string, DecideQuestion>>(
   };
   if (spec.model != null) body.model = spec.model;
 
-  return capabilityCall<LlmDecideResponse<Q>>("llm.decide", body, {
-    transport,
-    baseUrl,
-    makeError: (message, status, errorBody) =>
-      new LlmDecideHttpError(message, status, errorBody),
-    errorPrefix: "Failed to decide",
-  });
+  const response = await capabilityCall<DecisionsEvaluateResponse<Q>>(
+    "decisions.evaluate",
+    body,
+    {
+      transport,
+      baseUrl,
+      makeError: (message, status, errorBody) =>
+        new DecisionsHttpError(message, status, errorBody),
+      errorPrefix: "Failed to evaluate",
+    },
+  );
+  // Return only public decision data.
+  return {
+    answers: response.answers,
+    usage: response.usage,
+    ...(response.cost === undefined ? {} : { cost: response.cost }),
+  };
 }

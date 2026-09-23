@@ -83,6 +83,11 @@
       "import": "./dist/esm/speech/index.js",
       "require": "./dist/cjs/speech/index.js"
     },
+    "./decisions": {
+      "types": "./dist/cjs/decisions/index.d.ts",
+      "import": "./dist/esm/decisions/index.js",
+      "require": "./dist/cjs/decisions/index.js"
+    },
     "./browser-automation": {
       "types": "./dist/cjs/browser-automation/index.d.ts",
       "import": "./dist/esm/browser-automation/index.js",

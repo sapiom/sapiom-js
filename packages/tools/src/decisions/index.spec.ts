@@ -1,12 +1,17 @@
 /**
- * llm.decide() — routed wire shape (`POST /v1/capabilities/llm.decide` on the Core
+ * decisions.evaluate() — routed wire shape (`POST /v1/capabilities/decisions.evaluate` on the Core
  * base URL, `x-api-key` credential), verbatim pass-through of state/questions,
- * `model` forwarded only when set, the router's response returned as-is, and a
- * non-2xx mapped to LlmDecideHttpError. Real Transport, scripted fetch — no network.
+ * `model` forwarded only when set, public response data preserved, and a
+ * non-2xx mapped to DecisionsHttpError. Real Transport, scripted fetch — no network.
  */
 import { createClient } from "../index.js";
 import { Transport } from "../_client/index.js";
-import { decide, LlmDecideHttpError, type LlmDecideSpec } from "./index.js";
+import {
+  evaluate,
+  DecisionsHttpError,
+  type DecisionsEvaluateResponse,
+  type DecisionsEvaluateSpec,
+} from "./index.js";
 
 interface FetchCall {
   url: string;
@@ -50,9 +55,7 @@ function makeTransport(
   };
 }
 
-// The exact request the gateway API spec records against api.typesafe.ai, and the
-// router's normalized answer for it (jev-1.13.0, 2026-09-20) — one fixture shared
-// across the SDK, the backend adapter spec, and the gateway snapshot.
+// Public decision data returned by the HTTP API, without routing identity.
 const SPEC = {
   state: {
     message:
@@ -82,10 +85,9 @@ const SPEC = {
       criteria: ["calm", "concerned", "frustrated", "angry"],
     },
   },
-} satisfies LlmDecideSpec;
+} satisfies DecisionsEvaluateSpec;
 
-const ROUTER_RESPONSE = {
-  model: "jev-1.13.0",
+const PUBLIC_RESPONSE = {
   answers: {
     isUrgent: { type: "noul", noul: 0.95 },
     route: {
@@ -108,32 +110,85 @@ const ROUTER_RESPONSE = {
     },
   },
   usage: { inputTokens: 433, outputTokens: 71 },
-  servedBy: "typesafe",
-};
+} satisfies DecisionsEvaluateResponse<typeof SPEC.questions>;
 
-describe("llm.decide", () => {
+describe("decisions.evaluate", () => {
   it("POSTs the routed capability on the Core base URL with the tenant credential", async () => {
     const { transport, calls } = makeTransport(() =>
-      jsonResponse(ROUTER_RESPONSE),
+      jsonResponse(PUBLIC_RESPONSE),
     );
 
-    const res = await decide(SPEC, transport, "https://core.test");
+    const res = await evaluate(SPEC, transport, "https://core.test");
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("https://core.test/v1/capabilities/llm.decide");
+    expect(calls[0].url).toBe(
+      "https://core.test/v1/capabilities/decisions.evaluate",
+    );
     expect(calls[0].init.method).toBe("POST");
     const headers = new Headers(calls[0].init.headers);
     expect(headers.get("x-api-key")).toBe("test-key");
     expect(headers.get("content-type")).toBe("application/json");
-    expect(res).toEqual(ROUTER_RESPONSE);
+    expect(res).toEqual(PUBLIC_RESPONSE);
+    // @ts-expect-error Routing identity is not part of the public response type.
+    expect(res.model).toBeUndefined();
+    // @ts-expect-error Routing identity is not part of the public response type.
+    expect(res.servedBy).toBeUndefined();
+    expect(res).not.toHaveProperty("model");
+    expect(res).not.toHaveProperty("servedBy");
+    expect(res).not.toHaveProperty("cost");
+  });
+
+  it.each([0, 0.000035112])(
+    "preserves a cost estimate of %s and its metadata",
+    async (estimateUsd) => {
+      const cost = {
+        estimateUsd,
+        currency: "USD",
+        reference: "transaction-test",
+        isEstimate: true,
+        source: "quote",
+      };
+      const response = { ...PUBLIC_RESPONSE, cost };
+      const { transport } = makeTransport(() => jsonResponse(response));
+
+      const res = await evaluate(SPEC, transport, "https://core.test");
+
+      expect(res).toEqual(response);
+      const estimate: number | undefined = res.cost?.estimateUsd;
+      const source: "quote" | undefined = res.cost?.source;
+      expect(estimate).toBe(estimateUsd);
+      expect(source).toBe("quote");
+    },
+  );
+
+  it("keeps answer keys named model and servedBy", async () => {
+    const spec = {
+      state: "test",
+      questions: {
+        model: { type: "noul", instructions: "Is this a model?" },
+        servedBy: { type: "noul", instructions: "Was this served?" },
+      },
+    } satisfies DecisionsEvaluateSpec;
+    const response = {
+      answers: {
+        model: { type: "noul", noul: 0 },
+        servedBy: { type: "noul", noul: 1 },
+      },
+      usage: { inputTokens: 0, outputTokens: 0 },
+    };
+    const { transport } = makeTransport(() => jsonResponse(response));
+
+    expect(await evaluate(spec, transport, "https://core.test")).toEqual(
+      response,
+    );
   });
 
   it("forwards state and questions verbatim and omits model when unset", async () => {
     const { transport, calls } = makeTransport(() =>
-      jsonResponse(ROUTER_RESPONSE),
+      jsonResponse(PUBLIC_RESPONSE),
     );
 
-    await decide(SPEC, transport, "https://core.test");
+    await evaluate(SPEC, transport, "https://core.test");
 
     expect(JSON.parse(calls[0].init.body as string)).toEqual({
       state: SPEC.state,
@@ -143,24 +198,24 @@ describe("llm.decide", () => {
 
   it("forwards an explicit model", async () => {
     const { transport, calls } = makeTransport(() =>
-      jsonResponse(ROUTER_RESPONSE),
+      jsonResponse(PUBLIC_RESPONSE),
     );
 
-    await decide(
-      { ...SPEC, model: "jev-1.13.0" },
+    await evaluate(
+      { ...SPEC, model: "systemone-1.0.0" },
       transport,
       "https://core.test",
     );
 
     expect(JSON.parse(calls[0].init.body as string)).toMatchObject({
-      model: "jev-1.13.0",
+      model: "systemone-1.0.0",
     });
   });
 
   it("types answers by the questions passed", async () => {
-    const { transport } = makeTransport(() => jsonResponse(ROUTER_RESPONSE));
+    const { transport } = makeTransport(() => jsonResponse(PUBLIC_RESPONSE));
 
-    const res = await decide(SPEC, transport, "https://core.test");
+    const res = await evaluate(SPEC, transport, "https://core.test");
 
     // Compile-time: `choice` narrows to the criteria keys; `noul`/`score` are numbers.
     const team: "shipping" | "billing" | "other" = res.answers.route.choice;
@@ -169,7 +224,7 @@ describe("llm.decide", () => {
     expect([team, urgent, upset]).toEqual(["shipping", 0.95, 1.28]);
   });
 
-  it("throws LlmDecideHttpError with status and parsed body on a non-2xx", async () => {
+  it("throws DecisionsHttpError with status and parsed body on a non-2xx", async () => {
     const { transport } = makeTransport(() =>
       jsonResponse(
         {
@@ -180,24 +235,24 @@ describe("llm.decide", () => {
       ),
     );
 
-    await expect(decide(SPEC, transport, "https://core.test")).rejects.toThrow(
-      LlmDecideHttpError,
-    );
     await expect(
-      decide(SPEC, transport, "https://core.test"),
+      evaluate(SPEC, transport, "https://core.test"),
+    ).rejects.toThrow(DecisionsHttpError);
+    await expect(
+      evaluate(SPEC, transport, "https://core.test"),
     ).rejects.toMatchObject({
       status: 400,
       body: { statusCode: 400 },
     });
   });
 
-  it("is reachable as client.llm.decide", async () => {
-    const { calls, fetch } = makeTransport(() => jsonResponse(ROUTER_RESPONSE));
+  it("is reachable as client.decisions.evaluate", async () => {
+    const { calls, fetch } = makeTransport(() => jsonResponse(PUBLIC_RESPONSE));
     const client = createClient({ apiKey: "test-key", fetch });
 
-    const res = await client.llm.decide(SPEC);
+    const res = await client.decisions.evaluate(SPEC);
 
-    expect(calls[0].url).toMatch(/\/v1\/capabilities\/llm\.decide$/);
+    expect(calls[0].url).toMatch(/\/v1\/capabilities\/decisions\.evaluate$/);
     expect(res.answers.route.choice).toBe("shipping");
   });
 });

@@ -372,12 +372,12 @@ the most common mistake in authored agents. In one line each: `ctx.sapiom.llm.ru
 multi-turn reasoning + tool-calling loop (never for a one-shot — it loops and overthinks);
 `ctx.sapiom.agents.run` dispatches a DEPLOYED agent by slug. You never pick a model: omit
 `model` and let the platform route it — a raw provider model id is never honored on any surface.
-`ctx.sapiom.llm.run` has a sibling, `ctx.sapiom.llm.decide`, for answers drawn from a fixed set
-you name up front (a yes/no gate, a pick-one label, a rubric level): it returns calibrated
-probabilities over those answers (`answers.<key>.noul` / `.choice` + `.probabilities` / `.score`)
-instead of generated text — reach for it before an `output` schema whose only job is to pick one
-of a few values. It is the one surface that takes an optional vendor `model` id (the default,
-currently `jev-latest`, serves when you omit it — still omit it).
+For answers drawn from a fixed set you name up front (a yes/no gate, a pick-one label, a rubric
+level), use `ctx.sapiom.decisions.evaluate` — a System One decision model, not an LLM: it returns
+calibrated probabilities over those answers (`answers.<key>.noul` / `.choice` + `.probabilities` /
+`.score`) instead of generated text — reach for it before an `output` schema whose only job is to
+pick one of a few values. It is the one surface that takes an optional `model` id (the platform picks
+the current default System One model when you omit it — still omit it).
 
 The full rule — the worked example (`llm.run` with `output`, read back with `structuredOf`;
 `textOf` for plain text; never `content[0]`), why `max_tokens` must budget for thinking as well
