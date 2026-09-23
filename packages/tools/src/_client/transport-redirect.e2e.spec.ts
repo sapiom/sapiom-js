@@ -3,6 +3,7 @@
  * `redirect: "manual"` semantics the unit specs mock (a readable 3xx with its
  * `Location`). Two loopback origins, so no opt-in is needed.
  */
+import { createHash } from "node:crypto";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -111,5 +112,22 @@ describe("Transport redirects (e2e, two loopback origins)", () => {
     expect(landed.method).toBe("POST");
     expect(landed.body).toBe('{"a":1}');
     expect(landed.headers["x-sapiom-api-key"]).toBeUndefined();
+  });
+
+  it("a same-origin request stops at a cross-origin 307: the other origin never sees the body", async () => {
+    await expect(
+      transport().fetch(`${originA}/cross-307`, {
+        method: "POST",
+        body: '{"a":1}',
+        mode: "same-origin",
+      }),
+    ).rejects.toThrow(/"same-origin" request/);
+    expect(seen.map((s) => `${s.server}${s.path}`)).toEqual(["a/cross-307"]);
+  });
+
+  it("checks integrity against the final response, not the redirect", async () => {
+    const integrity = `sha256-${createHash("sha256").update('{"from":"b"}').digest("base64")}`;
+    const res = await transport().fetch(`${originA}/cross`, { integrity });
+    expect(await res.json()).toEqual({ from: "b" });
   });
 });
