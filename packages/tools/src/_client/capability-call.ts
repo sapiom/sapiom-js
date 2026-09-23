@@ -11,11 +11,18 @@
  *     errorPrefix: "Failed to scrape",
  *   });
  *
- * Two patterns coexist by design (SAP-1112): routed caps come here; the deferred
- * async/stateful caps (SAP-1117) keep their `resolveServiceUrl` → provider-gateway
- * path. Do not consolidate the two until the async/resource primitives exist.
+ * Delivery is selected here before I/O. Adopted memory/resource verbs supply
+ * their existing gateway call as `legacyCall`; execution mode submits and waits
+ * through Core. Native lifecycle methods keep their existing gateway protocols.
+ * The eligibility inventory and authoring steps are in ../executions/README.md.
  */
 import { Transport, defaultTransport } from "./index.js";
+import { ExecutionClient } from "../executions/client.js";
+import {
+  ExecutionFailedError,
+  ExecutionHttpError,
+} from "../executions/errors.js";
+import { executionDeliveryEligible } from "./execution-delivery.js";
 
 /**
  * The single Core base URL, resolved at CALL TIME — never frozen in a module-level
@@ -38,7 +45,9 @@ export function resolveCoreBaseUrl(): string {
 }
 
 /** Options for {@link capabilityCall}. */
-export interface CapabilityCallOptions {
+export interface CapabilityCallOptions<Res = unknown> {
+  /** Existing gateway call, selected only before I/O in legacy mode. Never an error fallback. */
+  legacyCall?: () => Promise<Res>;
   /** Transport carrying the tenant credential. Defaults to the ambient transport. */
   transport?: Transport;
   /**
@@ -73,10 +82,45 @@ export interface CapabilityCallOptions {
 export async function capabilityCall<Res>(
   id: string,
   req: Record<string, unknown>,
-  opts: CapabilityCallOptions,
+  opts: CapabilityCallOptions<Res>,
 ): Promise<Res> {
   const transport = opts.transport ?? defaultTransport();
-  const baseUrl = opts.baseUrl ?? resolveCoreBaseUrl();
+  const baseUrl = opts.baseUrl ?? transport.coreBaseUrl ?? resolveCoreBaseUrl();
+  // Snapshot mode/origin/key once. No error path switches transport after acceptance ambiguity.
+  if (
+    transport.capabilityDelivery === "executions" &&
+    executionDeliveryEligible(id)
+  ) {
+    const executions = new ExecutionClient(transport);
+    const submission = executions.prepare(id, req, { baseUrl });
+    try {
+      const handle = await executions.submit(submission, {
+        baseUrl,
+        headers: opts.headers,
+      });
+      return await executions.wait<Res>(handle, { baseUrl });
+    } catch (error) {
+      if (
+        error instanceof ExecutionFailedError ||
+        error instanceof ExecutionHttpError
+      ) {
+        throw Object.assign(
+          opts.makeError(
+            `${opts.errorPrefix}: ${error.message}`,
+            error.status,
+            error.body,
+          ),
+          {
+            executionId: error.executionId,
+            submissionKey: error.submissionKey,
+          },
+        );
+      }
+      throw error;
+    }
+  }
+
+  if (opts.legacyCall) return opts.legacyCall();
 
   const res = await transport.fetch(
     `${baseUrl}/v1/capabilities/${id}`,
