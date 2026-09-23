@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe("controlled execution delivery", () => {
-  it("leaves production eligibility empty, including with an opted-in client", async () => {
+  it("keeps an unadopted capability inline even with an opted-in client", async () => {
     const calls: string[] = [];
     const transport = new Transport({
       apiKey: "k",
@@ -36,11 +36,15 @@ describe("controlled execution delivery", () => {
         return json({ markdown: "legacy" });
       },
     });
-    expect(eligibility.executionDeliveryEligible("web.scrape")).toBe(false);
+    expect(eligibility.executionDeliveryEligible("decisions.evaluate")).toBe(
+      false,
+    );
     expect(
-      await capabilityCall("web.scrape", {}, { ...options, transport }),
+      await capabilityCall("decisions.evaluate", {}, { ...options, transport }),
     ).toEqual({ markdown: "legacy" });
-    expect(calls).toEqual(["https://core.test/v1/capabilities/web.scrape"]);
+    expect(calls).toEqual([
+      "https://core.test/v1/capabilities/decisions.evaluate",
+    ]);
   });
   it("keeps legacy mode when fixture eligibility is enabled", async () => {
     jest.spyOn(eligibility, "executionDeliveryEligible").mockReturnValue(true);

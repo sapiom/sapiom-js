@@ -29,7 +29,6 @@ import {
   Transport,
   capabilityCall,
   defaultTransport,
-  resolveCoreBaseUrl,
 } from "../_client/index.js";
 import { SearchHttpError } from "./errors.js";
 
@@ -166,7 +165,7 @@ function mapScrape(url: string, raw: RawScrapeResponse): ScrapeResult {
 export async function scrape(
   input: ScrapeInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<ScrapeResult> {
   // `!= null` so an optional explicitly passed as null (a JS caller bypassing the
   // types) is treated as absent rather than forwarded as a null field.
@@ -266,7 +265,7 @@ function mapWebSearch(
 export async function webSearch(
   input: WebSearchInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<WebSearchResponse> {
   // `!= null` so an optional explicitly passed as null (a JS caller bypassing the
   // types) is treated as absent rather than forwarded as a null field.
@@ -370,7 +369,7 @@ function mapFindEmail(raw: RawFindEmail | undefined): FindEmailResult {
 export async function findEmail(
   input: FindEmailInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<FindEmailResult> {
   // Guard the required combination client-side so an under-specified lookup fails
   // fast and clearly, never as a confusing network round-trip. `!= null` plus a
@@ -472,7 +471,7 @@ function mapVerifyEmail(
 export async function verifyEmail(
   input: VerifyEmailInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<VerifyEmailResult> {
   if (!input.email) {
     throw new SearchHttpError("verifyEmail requires an email", 400, undefined);
@@ -596,7 +595,7 @@ function mapDomainSearch(
 export async function domainSearch(
   input: DomainSearchInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<DomainSearchResult> {
   if (!input.domain) {
     throw new SearchHttpError("domainSearch requires a domain", 400, undefined);
