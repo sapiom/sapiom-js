@@ -28,6 +28,7 @@ import { ensureOk as sandboxes } from "../sandboxes/multipart.js";
 import { SandboxHttpError } from "../sandboxes/multipart.js";
 import { ensureOk as search } from "../search/errors.js";
 import { SearchHttpError } from "../search/errors.js";
+import { findEmail, verifyEmail } from "../search/index.js";
 import { ensureOk as speech } from "../speech/errors.js";
 import { SpeechHttpError } from "../speech/errors.js";
 import { ensureOk as vault } from "../vault/errors.js";
@@ -162,5 +163,30 @@ describe("message and body shapes are unchanged by the sweep", () => {
     expect(err).toBeInstanceOf(SandboxHttpError);
     expect(err.message).toBe("Failed to upload part: 429 slow down");
     expect(err.retryAfterMs).toBe(2000);
+  });
+});
+
+describe("a capability's own input check", () => {
+  /**
+   * Some capabilities reuse their error class with a synthetic 400 to reject an
+   * input before sending anything. No response existed, so there are no facts to
+   * record, and inventing `status: 400` would put a fact on the wire that the
+   * wire never produced. The absence is also what keeps these deterministic.
+   */
+  it.each([
+    [
+      "search.verifyEmail without an email",
+      () => verifyEmail({ email: "" } as never),
+    ],
+    [
+      "search.findEmail without an organisation",
+      () => findEmail({ fullName: "Ada Lovelace" } as never),
+    ],
+  ])("carries no facts for %s", async (_label, call) => {
+    const err = await rejection(call());
+
+    expect(err).toBeInstanceOf(SearchHttpError);
+    expect((err as SearchHttpError).status).toBe(400);
+    expect(readSapiomCall(err)).toBeUndefined();
   });
 });

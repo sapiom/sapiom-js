@@ -2,8 +2,10 @@
 "@sapiom/tools": minor
 ---
 
-Every error thrown by a Sapiom call now carries `err.sapiomCall`: the facts
-about the call that failed (`capability`, `status`, `retryAfterMs`, `network`).
+Every error from a Sapiom call that was actually sent now carries
+`err.sapiomCall`: the facts about the call that failed (`capability`, `status`,
+`retryAfterMs`, `network`). A capability's own input check throws before
+anything is sent and carries none.
 Read it with the new `readSapiomCall(err)`. These are facts only: nothing in
 the SDK decides whether a call is worth retrying, so the rule can change
 platform-side without an SDK release or an agent rebuild.

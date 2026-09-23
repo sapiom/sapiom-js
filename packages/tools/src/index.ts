@@ -15,9 +15,10 @@ export { createClient, createClientFromEnv } from "./client.js";
 export type { Sapiom } from "./client.js";
 export type { TransportConfig, Attribution } from "./_client/index.js";
 
-// What a failed Sapiom-surface call records about itself. Every error thrown by
-// a `ctx.sapiom.*` call carries `err.sapiomCall`: the uniform way to read the
-// status without remembering which error class this capability uses. Facts
+// What a failed Sapiom-surface call records about itself. Every error from a
+// `ctx.sapiom.*` call that was actually sent carries `err.sapiomCall`: the
+// uniform way to read the status without remembering which error class this
+// capability uses. A local input check throws before sending and carries none. Facts
 // only: nothing here decides whether the call is worth retrying. That rule
 // lives in @sapiom/agent, and the policy lives in the platform.
 export {

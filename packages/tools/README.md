@@ -150,9 +150,11 @@ A call that gets a response and fails throws that capability's error class when
 it has one (`SearchHttpError`, `DatabaseHttpError`, …) and `SapiomCallError`
 otherwise, both carrying `status` and the parsed `body`. A call that never
 reaches the server rejects with whatever `fetch` threw, which has neither. On top
-of both, every error from a Sapiom call carries the same facts about the call
+of both, every error from a call that was actually sent carries the same facts
 under `sapiomCall`, so you can read what happened without remembering which class
-you are holding:
+you are holding. A capability's own input check (a missing email, an empty text)
+throws before anything is sent and carries none: it is deterministic, and no fact
+is invented to describe a request that never happened.
 
 ```typescript
 import { readSapiomCall } from "@sapiom/tools";

@@ -29,9 +29,16 @@ export const SAPIOM_CALL_FACTS_VERSION = 1;
 const MAX_CAPABILITY_LENGTH = 200;
 
 /**
- * Facts about the Sapiom-surface call that failed. Present on every surface
- * error, deterministic ones included: `err.sapiomCall.status` is the uniform
- * way to read the status an author used to have to remember per error class.
+ * Facts about the Sapiom-surface call that failed. Present on every error from a
+ * call that was actually sent, deterministic ones included: `err.sapiomCall.status`
+ * is the uniform way to read the status an author used to have to remember per
+ * error class.
+ *
+ * Absent, on purpose, when a capability's own input check throws before sending
+ * (`search.verifyEmail` without an email, an empty `speech` text). Those reuse
+ * the capability's error class with a synthetic 400, but no response existed,
+ * and stamping `status: 400` would record a fact the wire never produced. Their
+ * absence is also what keeps them deterministic: no facts, no transient verdict.
  */
 export interface SapiomCallMarker {
   /**
