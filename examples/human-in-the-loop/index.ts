@@ -398,7 +398,7 @@ const notifyApprover = defineStep({
     const approver = ctx.shared.get("approver") ?? null;
 
     // Nobody is assigned to approve, so nothing will ever fire the decision
-    // signal and pausing here would suspend the run forever. Stop holding the
+    // signal, so pausing here only burns the deadline. Stop holding the
     // ranked shortlist instead. Never as approved — fabricating a human yes is
     // the worst output this template could produce — and never auto-rejected
     // either, which reads as breakage when nobody actually said no.

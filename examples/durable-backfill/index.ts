@@ -503,7 +503,7 @@ const processStep = defineStep({
     if (nextCursor >= total) return goto("finalize", {});
 
     // Offline, nothing is wired to fire the heartbeat — no cron trigger, no
-    // external scheduler — so pausing here would suspend the run forever after
+    // external scheduler, so pausing here only burns the deadline after
     // one chunk of real work. Loop directly instead and finish the backfill. The
     // durable-pause path is what a live run takes; this one still exercises the
     // same chunk-and-checkpoint loop, just without waiting for a clock.
