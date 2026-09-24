@@ -216,6 +216,10 @@ export async function fetchKeepingCredential(
       : null;
     if (location === null) {
       if (integrity) await assertIntegrity(response, integrity, current);
+      // Each hop is its own fetch: report what `follow` would.
+      if (redirects > 0) {
+        Object.defineProperty(response, "redirected", { value: true });
+      }
       return response;
     }
     // Never handed to the caller: free the connection, even if we refuse the hop.

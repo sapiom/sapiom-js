@@ -177,6 +177,21 @@ describe("Transport: redirects", () => {
     expect(hops[1]!.headers["x-sapiom-api-key"]).toBe("k");
   });
 
+  it("marks the final response redirected, as fetch does, only after a redirect", async () => {
+    const redirected = transportWith(onceTo("/v1/landed"));
+    const res = await redirected.transport.fetch(
+      "https://api.sapiom.ai/v1/start",
+    );
+    expect(res.redirected).toBe(true);
+    expect(await res.json()).toEqual({});
+
+    const direct = transportWith();
+    expect(
+      (await direct.transport.fetch("https://api.sapiom.ai/v1/start"))
+        .redirected,
+    ).toBe(false);
+  });
+
   it("keeps the x-api-key credential on a same-origin redirect", async () => {
     const { transport, hops } = transportWith(onceTo("/v1/landed"));
     await transport.fetch(
