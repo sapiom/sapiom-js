@@ -296,6 +296,16 @@ export async function webSearch(
 
 // ----- emailSearch.findEmail -----
 
+/**
+ * True when `value` is a non-empty string once trimmed — matches the
+ * presence contract other capabilities already use (e.g. speech's
+ * `assertText`, domains' `assertString`). A whitespace-only string does not
+ * count as "provided".
+ */
+function hasText(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
 export interface FindEmailInput {
   /** Company domain to search at, e.g. `"example.com"`. Provide this or `company`. */
   domain?: string;
@@ -364,6 +374,13 @@ function mapFindEmail(raw: RawFindEmail | undefined): FindEmailResult {
  * `lastName`. Calling without a valid combination throws {@link SearchHttpError}
  * before any request is made.
  *
+ * Any field you do supply must be a non-empty string once trimmed — a
+ * whitespace-only value (e.g. `company: "  "`) throws {@link SearchHttpError}
+ * rather than being silently treated as if you hadn't provided it, even if
+ * another field would otherwise satisfy that side of the required
+ * combination on its own (e.g. a whitespace-only `company` still throws
+ * even when `domain` alone would have been enough).
+ *
  * Returns the best match, with `email` set to `null` when none was found. Failed
  * requests throw {@link SearchHttpError}.
  */
@@ -372,15 +389,39 @@ export async function findEmail(
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<FindEmailResult> {
+  // Reject any explicitly-supplied field that's whitespace-only, rather than
+  // silently treating it as absent. A caller who threads through a blank
+  // value (e.g. from unclean upstream data) is very likely signalling a bug
+  // on their end -- silently dropping it and proceeding on a different
+  // alternative than they intended (e.g. domain-only instead of the
+  // domain+company scoped search they asked for) would return a
+  // technically-valid but surprising result instead of the clear failure
+  // this guard exists to provide.
+  for (const [name, value] of [
+    ["domain", input.domain],
+    ["company", input.company],
+    ["firstName", input.firstName],
+    ["lastName", input.lastName],
+    ["fullName", input.fullName],
+  ] as const) {
+    if (value !== undefined && !hasText(value)) {
+      throw new SearchHttpError(
+        `findEmail: "${name}" must be a non-empty string when provided`,
+        400,
+        undefined,
+      );
+    }
+  }
+
   // Guard the required combination client-side so an under-specified lookup fails
-  // fast and clearly, never as a confusing network round-trip. `!= null` plus a
-  // truthiness check rejects null/undefined/empty-string for JS callers. (The
-  // router validates the same combination, but the client guard keeps the
-  // no-network-on-invalid contract the SDK has always offered.)
-  const hasOrg = Boolean(input.domain) || Boolean(input.company);
+  // fast and clearly, never as a confusing network round-trip. `hasText` rejects
+  // null/undefined/whitespace-only strings for JS callers. (The router validates
+  // the same combination, but the client guard keeps the no-network-on-invalid
+  // contract the SDK has always offered.)
+  const hasOrg = hasText(input.domain) || hasText(input.company);
   const hasPerson =
-    Boolean(input.fullName) ||
-    (Boolean(input.firstName) && Boolean(input.lastName));
+    hasText(input.fullName) ||
+    (hasText(input.firstName) && hasText(input.lastName));
   if (!hasOrg || !hasPerson) {
     throw new SearchHttpError(
       "findEmail requires (domain or company) and (fullName or firstName + lastName)",
@@ -389,14 +430,18 @@ export async function findEmail(
     );
   }
 
-  // Forward only the provided fields (camelCase router DTO). `!= null` keeps a
-  // JS-caller's explicit null off the wire.
+  // Forward only genuinely-provided fields (camelCase router DTO). `hasText`
+  // (not just `!= null`) keeps a whitespace-only field off the wire too --
+  // otherwise a valid alternative (e.g. company) could satisfy the guard
+  // above while a whitespace-only sibling (e.g. domain: " ") still reached
+  // the backend, which could validate or prioritize it independently of
+  // this guard's intent.
   const body: Record<string, unknown> = {};
-  if (input.domain != null) body.domain = input.domain;
-  if (input.company != null) body.company = input.company;
-  if (input.firstName != null) body.firstName = input.firstName;
-  if (input.lastName != null) body.lastName = input.lastName;
-  if (input.fullName != null) body.fullName = input.fullName;
+  if (hasText(input.domain)) body.domain = input.domain;
+  if (hasText(input.company)) body.company = input.company;
+  if (hasText(input.firstName)) body.firstName = input.firstName;
+  if (hasText(input.lastName)) body.lastName = input.lastName;
+  if (hasText(input.fullName)) body.fullName = input.fullName;
 
   const raw = await capabilityCall<RawFindEmail>("email.find", body, {
     transport,
@@ -474,7 +519,7 @@ export async function verifyEmail(
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<VerifyEmailResult> {
-  if (!input.email) {
+  if (!hasText(input.email)) {
     throw new SearchHttpError("verifyEmail requires an email", 400, undefined);
   }
   const raw = await capabilityCall<RawVerifyEmail>(
@@ -598,7 +643,7 @@ export async function domainSearch(
   transport: Transport = defaultTransport(),
   baseUrl: string = resolveCoreBaseUrl(),
 ): Promise<DomainSearchResult> {
-  if (!input.domain) {
+  if (!hasText(input.domain)) {
     throw new SearchHttpError("domainSearch requires a domain", 400, undefined);
   }
   // Forward only the provided fields. Array filters travel as arrays in the router

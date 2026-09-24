@@ -612,6 +612,26 @@ describe("search.emailSearch.findEmail()", () => {
     });
   });
 
+  it("rejects a whitespace-only field even when a valid alternative would otherwise satisfy the guard (design settled via CodeRabbit review)", async () => {
+    // domain is whitespace-only. company + fullName alone would satisfy the
+    // guard, but an explicitly-supplied whitespace field is treated as a
+    // likely caller bug and rejected outright, rather than silently dropped
+    // while the lookup proceeds on a narrower alternative than the caller
+    // asked for.
+    const { transport, calls } = makeTransport([
+      () => jsonResponse({ email: "ada@example.com" }),
+    ]);
+
+    await expect(
+      findEmail(
+        { domain: "   ", company: "Example", fullName: "Ada Lovelace" },
+        transport,
+        BASE,
+      ),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
   it("returns email: null (not a thrown error) when the lookup finds nothing", async () => {
     const { transport } = makeTransport([
       () => jsonResponse({ email: null, score: 0 }),
@@ -675,6 +695,33 @@ describe("search.emailSearch.findEmail()", () => {
       [
         "org + lastName but no firstName",
         { domain: "x.com", lastName: "Lovelace" },
+      ],
+      // Regression for #860: whitespace-only strings looked "present" under
+      // a truthiness check. Each of these has the right *shape* to pass the
+      // old guard but must still be rejected once trimmed.
+      ["whitespace-only domain, no person", { domain: "   " }],
+      [
+        "whitespace-only domain + valid fullName",
+        { domain: "   ", fullName: "Ada Lovelace" },
+      ],
+      [
+        "valid domain + whitespace-only fullName",
+        { domain: "x.com", fullName: "   " },
+      ],
+      [
+        "valid domain + whitespace-only firstName and lastName",
+        { domain: "x.com", firstName: "  ", lastName: "  " },
+      ],
+      // CodeRabbit review: a whitespace-only field must be rejected even
+      // when another supplied field on the SAME side (org or person) would
+      // otherwise satisfy that side's alternative on its own.
+      [
+        "valid domain + whitespace-only company (org side already satisfied by domain)",
+        { domain: "example.com", company: "   ", fullName: "Ada Lovelace" },
+      ],
+      [
+        "valid fullName + whitespace-only lastName (person side already satisfied by fullName)",
+        { domain: "x.com", fullName: "Ada Lovelace", lastName: "   " },
       ],
     ];
 
@@ -807,6 +854,15 @@ describe("search.emailSearch.verifyEmail()", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("throws SearchHttpError before fetching when email is whitespace-only (regression for #860)", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      verifyEmail({ email: "   " }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
   it("throws SearchHttpError (status + body) on a non-2xx", async () => {
     const { transport } = makeTransport([
       () => new Response(JSON.stringify({ error: "nope" }), { status: 422 }),
@@ -927,6 +983,15 @@ describe("search.emailSearch.domainSearch()", () => {
 
     await expect(
       domainSearch({ domain: "" } as { domain: string }, transport, BASE),
+    ).rejects.toBeInstanceOf(SearchHttpError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws SearchHttpError before fetching when domain is whitespace-only (regression for #860)", async () => {
+    const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+    await expect(
+      domainSearch({ domain: "   " }, transport, BASE),
     ).rejects.toBeInstanceOf(SearchHttpError);
     expect(calls).toHaveLength(0);
   });
