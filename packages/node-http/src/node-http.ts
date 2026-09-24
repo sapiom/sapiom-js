@@ -262,15 +262,26 @@ export function createClient(
       } catch (err) {
         error = err as Error | HttpError;
         if ((error as HttpError).response?.status === 402) {
-          response = await handlePayment(
-            modifiedRequest,
-            error as HttpError,
-            paymentConfig,
-            makeRequest,
-            defaultMetadata,
-          );
-          error = null; // Clear error since payment succeeded
-          return response;
+          try {
+            response = await handlePayment(
+              modifiedRequest,
+              error as HttpError,
+              paymentConfig,
+              makeRequest,
+              defaultMetadata,
+            );
+            error = null; // Clear error since payment succeeded
+            return response;
+          } catch (paymentErr) {
+            // handlePayment itself failed (denied, timed out, or the retry
+            // request errored) -- report *that* failure to completion, not
+            // the original 402 `error` set above. Matches fetch.ts, where
+            // handlePayment is called inside the same try/catch as the
+            // initial request, so a throw from either one is captured by
+            // the same catch as one unambiguous `error`.
+            error = paymentErr as Error | HttpError;
+            throw paymentErr;
+          }
         }
         throw err;
       } finally {
