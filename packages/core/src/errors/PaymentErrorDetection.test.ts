@@ -1,4 +1,5 @@
 import {
+  HttpErrorDetector,
   PaymentRequiredError,
   X402PaymentResponse,
 } from "./PaymentErrorDetection";
@@ -133,5 +134,29 @@ describe("PaymentRequiredError", () => {
       );
       expect(error.x402Response).toBe(v2Response);
     });
+  });
+});
+
+describe("HttpErrorDetector with a malformed V2 body", () => {
+  // A resource server can send anything. `typeof null === "object"`, so a null
+  // `resource` used to pass the V2 shape check and then throw on the `.url`
+  // read, turning a 402 into a TypeError from inside a type guard.
+  const nullResource402 = {
+    status: 402,
+    message: "Payment Required",
+    data: { x402Version: 2, accepts: [], resource: null },
+    request: { url: "https://api.example.com/resource" },
+  };
+
+  it("extractX402 reports no x402 payload instead of throwing", () => {
+    const detector = new HttpErrorDetector();
+    expect(detector.extractX402(nullResource402)).toBeUndefined();
+  });
+
+  it("extractResource falls back to the request URL instead of throwing", () => {
+    const detector = new HttpErrorDetector();
+    expect(detector.extractResource(nullResource402)).toBe(
+      "https://api.example.com/resource",
+    );
   });
 });
