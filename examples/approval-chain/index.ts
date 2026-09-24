@@ -53,7 +53,7 @@ import { z } from "zod/v4";
  * The gates carry a deliberately long `GATE_PAUSE_TIMEOUT_MS` (one year), and the
  * value is load-bearing. The engine has a paused-run reaper: `timeoutMs` sets
  * `pausedUntil`, and a background sweep *terminates* the run with a
- * a pause-timeout failure once it lapses. It does NOT resume the step, so a lapsed
+ * pause-timeout failure once it lapses. It does NOT resume the step, so a lapsed
  * gate never reaches `decide`/`remind`/`escalate`. Handing a signal pause a
  * `reminderMs`-sized `timeoutMs` (as an earlier version did) would hard-fail any
  * approval slower than the reminder interval, bypassing the graceful `escalate`
