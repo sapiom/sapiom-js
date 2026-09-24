@@ -261,6 +261,16 @@ describe("buildResumeBrief", () => {
     it("returns null for a tool call with no recorded input at all", () => {
       expect(describeToolTarget(toolCall("Bash", null as unknown as string, { input: null }), null)).toBeNull();
     });
+
+    it("bounds a clamped target to MAX_TOOL_TARGET_CHARS total, not content alone", () => {
+      // A command longer than the 80-char cap forces describeToolTarget's
+      // internal clamp() to truncate. The returned string (content + marker)
+      // must not exceed the cap -- the marker's own length has to come out
+      // of the budget too.
+      const target = describeToolTarget(toolCall("Bash", { command: "x".repeat(200) }), "/Users/dev/project");
+      expect(target?.length).toBeLessThanOrEqual(80);
+      expect(target).toContain("…[truncated]");
+    });
   });
 
   describe("token budget", () => {
