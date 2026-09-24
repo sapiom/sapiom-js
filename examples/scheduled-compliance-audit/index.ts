@@ -376,7 +376,7 @@ const review = defineStep({
     const signOffBy = ctx.shared.get("signOffBy") ?? null;
 
     // Nobody is assigned to sign off, so nothing will ever fire the sign-off
-    // signal and pausing here would suspend the run forever. Stop holding the
+    // signal, so pausing here only burns the deadline. Stop holding the
     // DRAFT attestation instead.
     //
     // What this must never do: resuming with an empty payload fabricates no

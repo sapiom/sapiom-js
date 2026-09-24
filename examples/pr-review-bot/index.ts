@@ -363,7 +363,7 @@ const watch = defineStep({
 
     if (dryRun) {
       // No webhook source registered, so no PR event will ever arrive and the
-      // pause below would suspend the run forever. Review the sample PR instead —
+      // pause below would only burn the deadline. Review the sample PR instead —
       // a real model review of a real diff — and say whose PR it was.
       ctx.shared.set(
         "note",

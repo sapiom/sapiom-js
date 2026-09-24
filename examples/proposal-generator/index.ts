@@ -583,7 +583,7 @@ const review = defineStep({
     const downloadUrl = ctx.shared.get("downloadUrl") ?? null;
 
     // Nobody is assigned to approve, so nothing will ever fire the decision
-    // signal: pausing here would suspend the run forever. Stop holding the draft
+    // signal: pausing here would only burn the deadline. Stop holding the draft
     // instead — never as approved, and never auto-rejected either.
     if (!approver) {
       ctx.logger.info("no approver configured — terminating at the gate", {

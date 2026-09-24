@@ -79,8 +79,9 @@ export interface PauseUntilSignalDirective {
    * A pause that receives no signal by its deadline is finalized as failed
    * rather than parking forever, with the engine's pause-timeout error on the
    * run (not an export of this package). Pass an explicit value for a wait
-   * that must run longer or give up sooner; a pause on a dispatched child
-   * agent needs none (see `pauseUntilSignal`).
+   * that must run longer or give up sooner. A pause on a dispatched child agent
+   * needs none, and setting one there opts out of the engine following the child
+   * (see `pauseUntilSignal`).
    *
    * `run_local` neither applies nor enforces this: it auto-resumes every pause
    * immediately, so the deadline is only observable against the hosted engine.
@@ -258,21 +259,22 @@ export function fail(reason?: string, opts?: { output?: unknown }): Fail {
  * error. The failure carries the engine's pause-timeout error; it is an engine
  * state on the run, not a symbol this package exports.
  *
- * A pause on a **child agent launched now** needs no `timeoutMs`. Its result comes
+ * A pause on a **dispatched child agent** needs no `timeoutMs`. Its result comes
  * back through stored parent linkage rather than a resume token, so it is not
- * bounded by the TTL the default rests on, and the engine waives the deadline for
- * as long as the child is alive. That waiver is narrow: it covers a dispatch that
- * is still pending or waiting on the parent, and stops the moment the child
+ * bounded by the TTL the default rests on, and the engine keeps pushing the
+ * parent's deadline for as long as the child is alive. That holds for a child
+ * launched now and for one scheduled with `at`, and it lapses once the child
  * reaches a terminal state or its run no longer exists, at which point the
  * ordinary deadline applies again.
  *
- * A **child scheduled with `at`** does not get that waiver. Its parent's deadline
- * runs from the scheduled time instead of the pause, which covers the wait until
- * the child starts but not the child's own run, so pass an explicit `timeoutMs`
- * when a scheduled child can take more than a week once it begins.
+ * Passing `timeoutMs` on a child pause **opts out** of that. A deadline the author
+ * set is taken literally and never extended, so an explicit value replaces a
+ * deadline that would have followed the child with one that can expire while the
+ * child is still working. Leave it off unless the parent should give up on a
+ * schedule of your own.
  *
- * Otherwise set `timeoutMs` for what the default does not fit: a human gate
- * expected to outlive a week, or any wait that should give up sooner. `run_local` neither
+ * Set `timeoutMs` for what the default does not fit: a human gate expected to
+ * outlive a week, or any wait that should give up sooner. `run_local` neither
  * applies nor enforces any of this: it auto-resumes every pause immediately, with
  * the registered capability result or an empty payload, so a local run never sits
  * at a gate and never times out.

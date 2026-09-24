@@ -112,9 +112,10 @@ function isDryRun(config: Config): boolean {
  * directive without a `timeoutMs` and so inherits the engine's 7-day default.
  * A positive integer sizes the wait instead: with no callback inside it, the
  * engine's deadline sweep terminates the run with a pause-timeout failure
- * rather than parking it. A non-positive or unparseable value is rejected —
- * silently ignoring a cap would reintroduce the forever-park bug it's meant to
- * prevent, so a misconfigured deadline fails loudly at `kickoff`.
+ * rather than parking it. A non-positive or unparseable value is rejected: a
+ * silently dropped cap would leave the run on the 7-day default while the operator
+ * believes their own window applies, so a misconfigured deadline fails loudly at
+ * `kickoff` instead.
  */
 function parseTimeoutMs(config: Config): number | undefined {
   const raw = (config.CALLBACK_TIMEOUT_MS ?? "").trim();
@@ -202,7 +203,7 @@ const kickoff = defineStep({
 
     if (isDryRun(config)) {
       // No live endpoint, so no external job was registered and nothing will ever
-      // fire the callback. Pausing here would suspend the run forever. Take the
+      // fire the callback, so pausing here only burns the deadline. Take the
       // decide branch on an empty payload instead — a real model call over a
       // callback that says, honestly, that no callback arrived.
       ctx.shared.set("jobId", "not-registered");

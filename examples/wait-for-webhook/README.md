@@ -44,9 +44,9 @@ If no callback fires within that window, the engine's deadline sweep ends the ru
 with a pause-timeout failure — an honest terminal state ("no callback within N")
 instead of a run parked forever. Leave `CALLBACK_TIMEOUT_MS` unset to fall back on
 the engine's 7-day default, which produces the same terminal state on a slower
-horizon. A non-numeric or non-positive value is rejected at `kickoff` (a
-silently-ignored cap would just reintroduce the forever-park it's meant to
-prevent).
+horizon. A non-numeric or non-positive value is rejected at `kickoff`: a silently
+dropped cap would leave the run on that default while you believe your own window
+applies.
 
 ## Run it with Claude + the Sapiom MCP
 
