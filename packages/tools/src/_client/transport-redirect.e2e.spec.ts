@@ -81,6 +81,7 @@ describe("Transport redirects (e2e, two loopback origins)", () => {
 
   it("keeps the credential on a same-origin redirect", async () => {
     const res = await transport().fetch(`${originA}/same`);
+    expect(res.redirected).toBe(true);
     expect(await res.json()).toEqual({ from: "a" });
     expect(seen.map((s) => `${s.server}${s.path}`)).toEqual([
       "a/same",
