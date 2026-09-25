@@ -654,9 +654,16 @@ const fanOut = defineStep({
 const fanIn = defineStep({
   name: "fanIn",
   next: ["fanIn", "combine"],
+  canFail: true,
   pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "fanIn" },
   async run(input: unknown, ctx: Ctx) {
-    const result = agentResultSchema.parse(input);
+    let result: AgentRunResultPayload;
+    try {
+      result = agentResultSchema.parse(input);
+    } catch {
+      // not a child result (run_local resumes a manual-form pause with {}): stop, don't wait on nothing
+      return fail("resumed without a child result");
+    }
     const pending = (ctx.shared.get("pending") ?? []).filter(
       (p) => p.executionId !== result.executionId,
     );
