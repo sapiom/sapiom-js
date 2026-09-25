@@ -5,8 +5,8 @@
     "name": "Sapiom",
     "url": "https://sapiom.ai/"
   },
-  "whatItDoes": "Split a goal into parts, run each part as its own child agent run in parallel, then merge the results into one answer. Each child is a real, separately-metered run reached through `ctx.sapiom.agents.run` — fan out, join, reduce. It composes itself by default, or fans out any agent whose slug you pass.",
-  "longDescription": "Give it a goal and the parts to break it into. It launches one child run per part at once, waits for all to finish, and merges their outputs into a single answer. Each child is its own metered run via `ctx.sapiom.agents.run`. By default it fans out to its own slug, so a deployed copy dispatches children of itself; point `childDefinition` at another agent to fan that out instead. A failed child drops from the merge, and `dryRun` returns the plan without dispatching anything.",
+  "whatItDoes": "Split a goal into parts, run each part as its own child agent run in parallel, then merge the results into one answer. Each child is a real, separately-metered run launched with `ctx.sapiom.agents.launch`, and the coordinator pauses on each child instead of polling — fan out, fan in, reduce. It composes itself by default, or fans out any agent whose slug you pass.",
+  "longDescription": "Give it a goal and the parts to break it into. It launches one child run per part at once, pauses until each has answered, and merges their outputs into a single answer. Each child is its own metered run via `ctx.sapiom.agents.launch`. By default it fans out to its own slug, so a deployed copy dispatches children of itself; point `childDefinition` at another agent to fan that out instead. A failed child drops from the merge, and `dryRun` returns the plan without dispatching anything.",
   "useCases": [
     "Fan a job across parallel child runs",
     "Map-reduce over sub-agents",
