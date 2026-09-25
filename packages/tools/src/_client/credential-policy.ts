@@ -179,6 +179,18 @@ async function assertIntegrity(
 }
 
 /**
+ * Each hop is its own fetch, so none can report what `follow` would: set it on
+ * the final response and on every clone of it.
+ */
+function markRedirected(response: Response): Response {
+  const clone = response.clone.bind(response);
+  return Object.defineProperties(response, {
+    redirected: { value: true },
+    clone: { value: () => markRedirected(clone()) },
+  });
+}
+
+/**
  * `fetch` with its `redirect: "follow"` behavior (the Fetch spec's HTTP-redirect
  * steps), plus the channel check on every hop and the credential dropped on an
  * origin change. What `fetch` applies to the request as a whole still does: a
@@ -216,11 +228,7 @@ export async function fetchKeepingCredential(
       : null;
     if (location === null) {
       if (integrity) await assertIntegrity(response, integrity, current);
-      // Each hop is its own fetch: report what `follow` would.
-      if (redirects > 0) {
-        Object.defineProperty(response, "redirected", { value: true });
-      }
-      return response;
+      return redirects > 0 ? markRedirected(response) : response;
     }
     // Never handed to the caller: free the connection, even if we refuse the hop.
     await response.body?.cancel().catch(() => undefined);
