@@ -622,5 +622,19 @@
     "pattern": "^/v1/workflows/executions/$",
     "occurrences": 1,
     "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "scene-to-video-dashboard-runs-list-route",
+    "path": "examples/scene-to-video/app/server.mjs",
+    "pattern": "^/v1/workflows/executions\\?$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that lists an agent's runs. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "scene-to-video-dashboard-run-detail-route",
+    "path": "examples/scene-to-video/app/server.mjs",
+    "pattern": "^/v1/workflows/executions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
   }
 ]
