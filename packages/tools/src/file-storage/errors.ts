@@ -1,3 +1,5 @@
+import { ensureOk as sharedEnsureOk } from "../_client/sapiom-call.js";
+
 /**
  * Error thrown by the file-storage capability when a request fails (non-2xx
  * response). Exposes `status` (HTTP status code) and `body` (parsed JSON body, or
@@ -19,21 +21,15 @@ export class FileStorageHttpError extends Error {
  * Return the response when 2xx, otherwise throw a {@link FileStorageHttpError}.
  * Parses the error body as JSON when possible; falls back to raw text.
  */
-export async function ensureOk(
+export function ensureOk(
   response: Response,
   errorPrefix: string,
 ): Promise<Response> {
-  if (response.ok) return response;
-  let body: unknown;
-  const text = await response.text().catch(() => "");
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  throw new FileStorageHttpError(
-    `${errorPrefix}: ${response.status} ${text}`,
-    response.status,
-    body,
+  return sharedEnsureOk(
+    response,
+    errorPrefix,
+    ({ message, status, body }) =>
+      new FileStorageHttpError(message, status, body),
+    "fileStorage",
   );
 }

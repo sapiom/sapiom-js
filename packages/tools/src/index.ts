@@ -15,6 +15,14 @@ export { createClient, createClientFromEnv } from "./client.js";
 export type { Sapiom } from "./client.js";
 export type { TransportConfig, Attribution } from "./_client/index.js";
 
+// Facts a failed `ctx.sapiom.*` call records about itself, on `err.sapiomCall`.
+export {
+  SAPIOM_CALL_MARKER_KEY,
+  SapiomCallError,
+  readSapiomCall,
+} from "./_client/sapiom-call.js";
+export type { SapiomCallMarker } from "./_client/sapiom-call.js";
+
 // The generic dispatch contract: any capability handle that carries a `dispatch`
 // member is pausable via `pauseUntilSignal` in @sapiom/agent.
 export type { DispatchHandle } from "./dispatch.js";

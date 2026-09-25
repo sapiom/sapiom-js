@@ -460,6 +460,34 @@ async run(input, ctx) {
 `timeoutMs` caps one attempt of a step's `run`. The engine allows three attempts per step by
 default, counting the initial attempt; keep author-controlled retry logic inside that ceiling.
 
+When an error from a `ctx.sapiom.*` call escapes your step instead of being caught, it carries facts
+the platform can read: our own code made the call, so it knows whether the failure was transient or
+deterministic, and it keeps the status and message on the run's failure reason instead of a generic
+one. How many attempts that earns is platform policy, not a guarantee of this SDK.
+
+The `try`/`catch` above is not enough on its own: it retries **every** error, including a bad
+payload that will fail the same way three times. Branch on the facts first. `isTransientSapiomCall`
+is the same rule the platform applies, so you never have to keep your own status list in sync:
+
+```typescript
+import { isTransientSapiomCall } from "@sapiom/agent";
+import { readSapiomCall } from "@sapiom/tools";
+
+catch (err) {
+  const facts = readSapiomCall(err);          // undefined for a raw `fetch` to a third party
+  if (facts && isTransientSapiomCall(facts) && ctx.attempts + 1 < 3) {
+    return retry({ delayMs: facts.retryAfterMs ?? 1000 });
+  }
+  // Not retried, either because the failure is deterministic or because the
+  // attempts ran out. Say what actually failed rather than reporting a
+  // validation or auth error as an outage.
+  return fail(`sandbox creation failed: ${(err as Error).message}`);  // requires canFail: true
+}
+```
+
+`readSapiomCall(err)?.status` reads the status of any Sapiom call uniformly, alongside the error
+class's own `err.status`. Both are absent when the call never reached a server.
+
 ## Pause & Resume (Long-Running Dispatched Steps)
 
 A step's `run` completes in one synchronous dispatch. For long-running capabilities (a

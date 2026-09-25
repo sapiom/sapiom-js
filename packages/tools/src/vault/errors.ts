@@ -1,3 +1,5 @@
+import { ensureOk as sharedEnsureOk } from "../_client/sapiom-call.js";
+
 /**
  * Error thrown by the vault capability when the gateway returns a non-2xx
  * response. Exposes `status` (HTTP status code) and `body` (parsed JSON body, or
@@ -22,21 +24,14 @@ export class VaultHttpError extends Error {
  * Return the response when 2xx, otherwise throw a {@link VaultHttpError}.
  * Parses the error body as JSON when possible; falls back to raw text.
  */
-export async function ensureOk(
+export function ensureOk(
   response: Response,
   errorPrefix: string,
 ): Promise<Response> {
-  if (response.ok) return response;
-  let body: unknown;
-  const text = await response.text().catch(() => "");
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-  throw new VaultHttpError(
-    `${errorPrefix}: ${response.status} ${text}`,
-    response.status,
-    body,
+  return sharedEnsureOk(
+    response,
+    errorPrefix,
+    ({ message, status, body }) => new VaultHttpError(message, status, body),
+    "vault",
   );
 }

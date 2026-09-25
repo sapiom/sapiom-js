@@ -16,6 +16,7 @@
  * path. Do not consolidate the two until the async/resource primitives exist.
  */
 import { Transport, defaultTransport } from "./index.js";
+import { ensureOk } from "./sapiom-call.js";
 
 /**
  * The single Core base URL, resolved at CALL TIME — never frozen in a module-level
@@ -88,20 +89,13 @@ export async function capabilityCall<Res>(
     { authHeader: "x-api-key" },
   );
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = text;
-    }
-    throw opts.makeError(
-      `${opts.errorPrefix}: ${res.status} ${text}`,
-      res.status,
-      body,
-    );
-  }
+  // The routed `id` is the capability label.
+  await ensureOk(
+    res,
+    opts.errorPrefix,
+    ({ message, status, body }) => opts.makeError(message, status, body),
+    id,
+  );
 
   return (await res.json()) as Res;
 }

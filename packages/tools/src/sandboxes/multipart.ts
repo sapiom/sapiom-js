@@ -4,7 +4,15 @@
  * `SandboxHttpError` carried out of HTTP calls so the retry loop can read the
  * status + `Retry-After`. Ported verbatim from the legacy `@sapiom/sandbox`;
  * the `Sandbox` methods that use these call through the `_client` transport.
+ *
+ * `parseRetryAfter` lives in `_client/sapiom-call.ts`, re-exported here.
  */
+import {
+  ensureOk as sharedEnsureOk,
+  parseRetryAfter,
+} from "../_client/sapiom-call.js";
+
+export { parseRetryAfter };
 
 /** Maximum parts allowed per multipart upload. */
 export const MAX_PARTS = 10_000;
@@ -36,35 +44,21 @@ export class SandboxHttpError extends Error {
 }
 
 /**
- * Parse a `Retry-After` header value. Supports both forms:
- *  - delta-seconds integer (e.g. `"30"`)
- *  - HTTP-date (e.g. `"Wed, 21 Oct 2015 07:28:00 GMT"`)
- */
-export function parseRetryAfter(header: string | null): number | undefined {
-  if (!header) return undefined;
-  const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const date = Date.parse(header);
-  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
-  return undefined;
-}
-
-/**
  * Wrap a `fetch` response: if non-2xx, throw a `SandboxHttpError` carrying
  * the status + Retry-After, otherwise return the response for the caller to
  * parse.
+
  */
-export async function ensureOk(
+export function ensureOk(
   response: Response,
   errorPrefix: string,
 ): Promise<Response> {
-  if (response.ok) return response;
-  const text = await response.text().catch(() => "");
-  const retryAfterMs = parseRetryAfter(response.headers.get("Retry-After"));
-  throw new SandboxHttpError(
-    `${errorPrefix}: ${response.status} ${text}`,
-    response.status,
-    retryAfterMs,
+  return sharedEnsureOk(
+    response,
+    errorPrefix,
+    ({ message, status, retryAfterMs }) =>
+      new SandboxHttpError(message, status, retryAfterMs),
+    "sandboxes",
   );
 }
 

@@ -144,6 +144,59 @@ const { downloadUrl } = await fileStorage.getDownloadUrl(
 );
 ```
 
+## Errors
+
+A call that gets a response and fails throws that capability's error class when
+it has one (`SearchHttpError`, `DatabaseHttpError`, …) and `SapiomCallError`
+otherwise, both carrying `status` and the parsed `body`. A call that never
+reaches the server rejects with whatever `fetch` threw, which has neither. On top
+of both, every error from a call that was actually sent carries the same facts
+under `sapiomCall`, so you can read what happened without remembering which class
+you are holding. A capability's own input check (a missing email, an empty text)
+throws before anything is sent and carries none: it is deterministic, and no fact
+is invented to describe a request that never happened.
+
+```typescript
+import { readSapiomCall } from "@sapiom/tools";
+
+try {
+  await search.webSearch({ query: "..." });
+} catch (err) {
+  readSapiomCall(err); // { version: 1, capability: "web.search", status: 503, retryAfterMs: 2000 }
+}
+```
+
+These are facts, not a verdict: nothing in the SDK decides whether a call is
+retried. Inside a Sapiom agent run, an error that escapes your step carries them
+to the platform, which can therefore tell a transient failure (a 5xx, a rate
+limit, a request timeout, a connection that never happened) from a deterministic
+one, and keeps the status and message on the run's failure reason instead of a
+generic message. How many attempts that earns is the platform's policy, not
+something this package promises. To control retries from your own code, catch
+the error, decide from the facts, and return the `retry()` directive only for a
+failure a repeat can get past:
+
+```typescript
+import { isTransientSapiomCall } from "@sapiom/agent";
+import { readSapiomCall } from "@sapiom/tools";
+
+catch (err) {
+  const facts = readSapiomCall(err);
+  if (facts && isTransientSapiomCall(facts) && ctx.attempts + 1 < 3) {
+    return retry({ delayMs: facts.retryAfterMs ?? 1000 });
+  }
+  // Not retried, either because the failure is deterministic or because the
+  // attempts ran out. Say what actually failed rather than reporting a
+  // validation or auth error as an outage.
+  return fail(`search failed: ${(err as Error).message}`);
+}
+```
+
+An error from a raw `fetch` to a third party carries no facts, so neither you nor
+the platform can tell it apart from any other throw. Handle those yourself, and
+branch before retrying: a malformed URL or a rejected payload will fail the same
+way on every attempt.
+
 ## Usage analytics
 
 The SDK can emit anonymous usage analytics — one `capability.call` event per

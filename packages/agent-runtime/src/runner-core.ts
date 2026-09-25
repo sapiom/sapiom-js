@@ -17,8 +17,14 @@ import {
   isRetry,
   isTerminate,
   parseNonRetryableStepErrorPayload,
+  parseRetryableStepErrorPayload,
 } from '@sapiom/agent';
-import type { NextStepDirective, AgentManifest, NonRetryableStepErrorPayload } from '@sapiom/agent';
+import type {
+  NextStepDirective,
+  AgentManifest,
+  NonRetryableStepErrorPayload,
+  RetryableStepErrorPayload,
+} from '@sapiom/agent';
 
 import { ADVANCE_RESULT_KIND } from './advance-result.js';
 import type { AdvanceResult, CompleteDispatchOutcome, CreateExecutionOptions } from './advance-result.js';
@@ -277,7 +283,11 @@ export class AgentRunnerCore {
         });
         result = { kind: ADVANCE_RESULT_KIND.FAILED, error: terminalError };
       } else {
-        const err = rehydrateRemoteError(payload.error);
+        // `rehydrateRemoteError` alone would drop the payload's fields.
+        const retryablePayload = parseRetryableStepErrorPayload(payload.error);
+        const err = retryablePayload
+          ? rehydrateRetryableStepError(retryablePayload)
+          : rehydrateRemoteError(payload.error);
         await this.deps.store.failStep({
           stepRowId: stepRow.id,
           error: err,
@@ -910,5 +920,10 @@ function rehydrateRemoteError(error: { name: string; message: string; stack?: st
 
 /** Preserve Error identity while carrying only registry-normalized platform fields. */
 function rehydrateNonRetryableStepError(payload: NonRetryableStepErrorPayload): Error & NonRetryableStepErrorPayload {
+  return Object.assign(rehydrateRemoteError(payload), payload);
+}
+
+/** Preserve Error identity while carrying the retryable payload's fields. */
+function rehydrateRetryableStepError(payload: RetryableStepErrorPayload): Error & RetryableStepErrorPayload {
   return Object.assign(rehydrateRemoteError(payload), payload);
 }

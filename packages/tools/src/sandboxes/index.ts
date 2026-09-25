@@ -13,6 +13,7 @@
  *   await box.destroy();
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { failIfNotOk } from "../_client/sapiom-call.js";
 import { resolveServiceUrl } from "../_client/service-url.js";
 import {
   DEFAULT_CONCURRENCY,
@@ -186,10 +187,7 @@ export class Sandbox {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok)
-      throw new Error(
-        `Failed to create sandbox: ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, "Failed to create sandbox", "sandboxes");
 
     const data = (await res.json()) as CreateResponse;
     return new Sandbox(data.name, data.workspaceRoot, transport, baseUrl);
@@ -262,19 +260,13 @@ export class Sandbox {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ content }),
     });
-    if (!res.ok)
-      throw new Error(
-        `Failed to write file '${path}': ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, `Failed to write file '${path}'`, "sandboxes");
   }
 
   /** Read a file (path relative to the workspace root). */
   async readFile(path: string): Promise<string> {
     const res = await this.transport.fetch(this.fileUrl(path));
-    if (!res.ok)
-      throw new Error(
-        `Failed to read file '${path}': ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, `Failed to read file '${path}'`, "sandboxes");
     const data = (await res.json()) as { content: string };
     return data.content;
   }
@@ -523,10 +515,11 @@ export class Sandbox {
 
     async function* streamOutput(): AsyncGenerator<OutputLine> {
       const res = await transport.fetch(logsUrl, { signal });
-      if (!res.ok)
-        throw new Error(
-          `Failed to stream process ${proc.pid}: ${res.status} ${await res.text()}`,
-        );
+      await failIfNotOk(
+        res,
+        `Failed to stream process ${proc.pid}`,
+        "sandboxes",
+      );
       if (!res.body)
         throw new Error(`No response body for process ${proc.pid} log stream`);
 
@@ -557,10 +550,11 @@ export class Sandbox {
 
       async function readStatus(): Promise<ProcessStatus> {
         const s = await transport.fetch(statusUrl, { signal });
-        if (!s.ok)
-          throw new Error(
-            `Failed to get final status for process ${proc.pid}: ${s.status} ${await s.text()}`,
-          );
+        await failIfNotOk(
+          s,
+          `Failed to get final status for process ${proc.pid}`,
+          "sandboxes",
+        );
         return (await s.json()) as ProcessStatus;
       }
     }
@@ -577,10 +571,7 @@ export class Sandbox {
   /** Current status of a process by PID (useful for fire-and-forget execs). */
   async getProcess(pid: string): Promise<ProcessStatus> {
     const res = await this.transport.fetch(this.procUrl(`/${pid}`));
-    if (!res.ok)
-      throw new Error(
-        `Failed to get process ${pid}: ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, `Failed to get process ${pid}`, "sandboxes");
     return (await res.json()) as ProcessStatus;
   }
 
@@ -612,10 +603,7 @@ export class Sandbox {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok)
-      throw new Error(
-        `Failed to create public URL: ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, "Failed to create public URL", "sandboxes");
     const raw = (await res.json()) as {
       spec?: { url?: string };
       metadata?: { name?: string };
@@ -643,10 +631,7 @@ export class Sandbox {
         ...(opts.env ? { env: opts.env } : {}),
       }),
     });
-    if (!res.ok)
-      throw new Error(
-        `Failed to deploy preview: ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, "Failed to deploy preview", "sandboxes");
     return (await res.json()) as DeployPreviewResult;
   }
 
@@ -669,10 +654,7 @@ export class Sandbox {
       `${this.baseUrl}/v1/sandboxes/${encodeURIComponent(this.name)}`,
       { method: "DELETE" },
     );
-    if (!res.ok)
-      throw new Error(
-        `Failed to destroy sandbox: ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, "Failed to destroy sandbox", "sandboxes");
   }
 
   // --- internal ---
@@ -699,10 +681,7 @@ export class Sandbox {
       body: JSON.stringify(body),
       signal: opts?.signal,
     });
-    if (!res.ok)
-      throw new Error(
-        `Failed to execute command: ${res.status} ${await res.text()}`,
-      );
+    await failIfNotOk(res, "Failed to execute command", "sandboxes");
     return (await res.json()) as ProcessCreateResponse;
   }
 
@@ -716,10 +695,7 @@ export class Sandbox {
       const res = await this.transport.fetch(this.procUrl(`/${pid}`), {
         signal: opts?.signal,
       });
-      if (!res.ok)
-        throw new Error(
-          `Failed to poll process ${pid}: ${res.status} ${await res.text()}`,
-        );
+      await failIfNotOk(res, `Failed to poll process ${pid}`, "sandboxes");
       const status = (await res.json()) as ProcessStatus;
       if (isProcessTerminal(status.status)) {
         return toExecResult(pid, status);

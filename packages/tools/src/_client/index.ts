@@ -38,8 +38,9 @@ import {
   resolveCredentialPolicy,
   type CredentialPolicy,
 } from "./credential-policy.js";
+import { capabilityOf, ensureOk, markSapiomCall } from "./sapiom-call.js";
 import { VERSION } from "../_generated/version.js";
-import { TransportHttpError, readErrorBody } from "./errors.js";
+import { TransportHttpError } from "./errors.js";
 
 /**
  * Client marker stamped on EVERY request so the gateway can tell SDK traffic
@@ -127,6 +128,33 @@ export interface TransportRequestOptions {
    * A capability sets this only when its destination expects a different header.
    */
   authHeader?: AuthHeader;
+}
+
+/**
+ * Did `fetch` reject because the connection never happened?
+ *
+ * Checks `name`, not `instanceof`: an injected `fetch` can throw from another
+ * realm. Requires a `cause`: `fetch` also throws a bare `TypeError` for a
+ * malformed request (GET with a body, bad method), and only a real connection
+ * failure carries one. A miss just records no fact.
+ */
+function isNetworkRejection(error: unknown): error is Error {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "TypeError" &&
+    (error as { cause?: unknown }).cause !== undefined
+  );
+}
+
+/**
+ * Raise a malformed header before the call, so it is not mistaken for a dead
+ * connection. Runs the same validation `fetch` would.
+ */
+function assertRequestable(
+  headers: ConstructorParameters<typeof Headers>[0],
+): void {
+  new Headers(headers);
 }
 
 function attributionToHeaders(a: Attribution): Record<string, string> {
@@ -257,15 +285,20 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
-    // A malformed URL or a refused channel throws here, before anything is sent.
+    // Build and validate before the `try`: a failure here is deterministic and
+    // must not be recorded as a network failure.
     assertCredentialMayTravel(new URL(url), this.policy);
     const headers: Record<string, string> = {
       [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,
       ...attributionToHeaders(this.attribution),
-      // Merged as a plain object, as before: callers pass records.
-      ...(init.headers as Record<string, string> | undefined),
     };
+    // Iterate rather than spread: a spread drops a `Headers` instance or a
+    // tuple array.
+    for (const [name, value] of new Headers(init.headers ?? {})) {
+      headers[name] = value;
+    }
+    assertRequestable(headers);
     const startedAt = Date.now();
     let response: Response;
     try {
@@ -278,6 +311,10 @@ export class Transport {
       );
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
+      // An aborted signal is a deliberate cancellation, not a network failure.
+      if (init.signal?.aborted !== true && isNetworkRejection(error)) {
+        markSapiomCall(error, { network: true, capability: capabilityOf(url) });
+      }
       throw error;
     }
     this.trackCapabilityCall(url, init, startedAt, response);
@@ -338,17 +375,20 @@ export class Transport {
       },
       options,
     );
-    if (!res.ok) {
-      const method = init.method ?? "GET";
-      const { text, body } = await readErrorBody(res);
-      throw new TransportHttpError({
-        message: `${method} ${url} → ${res.status} ${text}`,
-        status: res.status,
-        method,
-        url,
-        body,
-      });
-    }
+    // Keeps `TransportHttpError` (`agents` branches on it) and its `→` message.
+    await ensureOk(
+      res,
+      `${init.method ?? "GET"} ${url} →`,
+      ({ errorPrefix, status, body, text }) =>
+        new TransportHttpError({
+          message: `${errorPrefix} ${status} ${text}`,
+          status,
+          method: init.method ?? "GET",
+          url,
+          body,
+        }),
+      capabilityOf(url),
+    );
     return (await res.json()) as T;
   }
 }
@@ -366,3 +406,18 @@ export {
 } from "./capability-call.js";
 
 export { TransportHttpError } from "./errors.js";
+
+export {
+  SAPIOM_CALL_MARKER_KEY,
+  SapiomCallError,
+  capabilityOf,
+  ensureOk,
+  failIfNotOk,
+  markSapiomCall,
+  parseRetryAfter,
+  readSapiomCall,
+  type SapiomCallErrorFactory,
+  type SapiomCallFactsInput,
+  type SapiomCallFailure,
+  type SapiomCallMarker,
+} from "./sapiom-call.js";

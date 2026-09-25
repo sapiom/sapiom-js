@@ -1,7 +1,13 @@
 import { z } from 'zod';
 
-import { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from '@sapiom/agent';
-import type { NonRetryableStepErrorPayload } from '@sapiom/agent';
+import {
+  isNonRetryableStepErrorPayload,
+  isRetryableStepErrorPayload,
+  parseNonRetryableStepErrorPayload,
+  parseRetryableStepErrorPayload,
+  toRetryableStepErrorPayload,
+} from '@sapiom/agent';
+import type { NonRetryableStepErrorPayload, RetryableStepErrorPayload, SapiomCallFacts } from '@sapiom/agent';
 
 export { MAX_SHARED_SNAPSHOT_BYTES } from '@sapiom/agent';
 
@@ -80,8 +86,16 @@ const nonRetryableStepCompletionErrorSchema = z
   })
   .transform((value) => parseNonRetryableStepErrorPayload(value) as NonRetryableStepErrorPayload);
 
+/** Transient Sapiom call. Parsed before legacy so its fields are not stripped. */
+const retryableStepCompletionErrorSchema = z
+  .custom<RetryableStepErrorPayload>(isRetryableStepErrorPayload, {
+    message: 'Invalid retryable platform step error payload',
+  })
+  .transform((value) => parseRetryableStepErrorPayload(value) as RetryableStepErrorPayload);
+
 export const stepCompletionErrorSchema = z.union([
   nonRetryableStepCompletionErrorSchema,
+  retryableStepCompletionErrorSchema,
   legacyStepCompletionErrorSchema,
 ]);
 
@@ -132,12 +146,20 @@ export type StepCompletionError = z.infer<typeof stepCompletionErrorSchema>;
  * `name`, `message`, and `stack`: it preserves normalized fields for the
  * closed set of platform errors that the runner may settle without retrying.
  * Ordinary and unrecognized throws retain the legacy error shape.
+ *
+ * `facts` comes from `readSapiomCall` in `@sapiom/tools`. Without it, the error
+ * serializes as legacy.
  */
-export function serializeStepCompletionError(error: unknown): StepCompletionError {
+export function serializeStepCompletionError(error: unknown, facts?: SapiomCallFacts): StepCompletionError {
   const platformError = parseNonRetryableStepErrorPayload(error);
   if (platformError) return platformError;
 
   const normalized = error instanceof Error ? error : new Error(String(error));
+
+  // A deterministic failure ships as legacy, with no disposition field.
+  const transient = toRetryableStepErrorPayload(normalized, facts);
+  if (transient) return transient;
+
   return {
     name: normalized.name,
     message: normalized.message,

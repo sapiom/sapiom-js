@@ -284,20 +284,7 @@ async function deleteDatabase(
     `${baseUrl}/v1/databases/${encodeURIComponent(idOrHandle)}`,
     { method: "DELETE" },
   );
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-    throw new DatabaseHttpError(
-      `Failed to delete database '${idOrHandle}': ${res.status} ${text}`,
-      res.status,
-      parsed,
-    );
-  }
+  await ensureOk(res, `Failed to delete database '${idOrHandle}'`);
 }
 
 export { deleteDatabase as delete };

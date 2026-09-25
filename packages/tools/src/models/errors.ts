@@ -1,3 +1,5 @@
+import { ensureOk as sharedEnsureOk } from "../_client/sapiom-call.js";
+
 /** Error thrown when a coding-run HTTP request is unsuccessful. */
 export class CodingRunHttpError extends Error {
   readonly status: number;
@@ -15,25 +17,25 @@ export class CodingRunHttpError extends Error {
   }
 }
 
-export async function ensureCodingRunOk(
+/**
+ * Return the response when 2xx, otherwise throw a {@link CodingRunHttpError}.
+ * Prefers the body's `message`, and omits the trailing space on an empty body.
+ */
+export function ensureCodingRunOk(
   response: Response,
   errorPrefix: string,
 ): Promise<Response> {
-  if (response.ok) return response;
-
-  const text = await response.text().catch(() => "");
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    body = text;
-  }
-
-  throw new CodingRunHttpError(
-    stringField(body, "message") ??
-      `${errorPrefix}: ${response.status}${text ? ` ${text}` : ""}`,
-    response.status,
-    body,
+  return sharedEnsureOk(
+    response,
+    errorPrefix,
+    ({ status, body, text }) =>
+      new CodingRunHttpError(
+        stringField(body, "message") ??
+          `${errorPrefix}: ${status}${text ? ` ${text}` : ""}`,
+        status,
+        body,
+      ),
+    "models",
   );
 }
 

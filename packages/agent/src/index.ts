@@ -98,6 +98,17 @@ export type {
 export { isNonRetryableStepErrorPayload, parseNonRetryableStepErrorPayload } from './non-retryable-step-error.js';
 export type { NonRetryableStepErrorPayload } from './non-retryable-step-error.js';
 
+// Retryable side: a transient Sapiom call.
+export {
+  SAPIOM_CALL_TRANSIENT_ERROR_CONTRACT,
+  isRetryableStepErrorPayload,
+  isTransientSapiomCall,
+  parseRetryableStepErrorPayload,
+  sapiomCallTransientErrorPayloadSchema,
+  toRetryableStepErrorPayload,
+} from './retryable-step-error.js';
+export type { RetryableStepErrorPayload, SapiomCallFacts } from './retryable-step-error.js';
+
 // Injected run configuration — the seam a step reads a chosen resource handle
 // from (the entry input the setup panel's settings / resource picker drive).
 export { resolveResourceHandle } from './config.js';
