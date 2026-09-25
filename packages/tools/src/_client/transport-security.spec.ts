@@ -183,6 +183,9 @@ describe("Transport: redirects", () => {
       "https://api.sapiom.ai/v1/start",
     );
     expect(res.redirected).toBe(true);
+    expect(res.clone().redirected).toBe(true);
+    expect(res.clone().clone().redirected).toBe(true);
+    expect(await res.clone().json()).toEqual({});
     expect(await res.json()).toEqual({});
 
     const direct = transportWith();
