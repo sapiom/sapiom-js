@@ -21,6 +21,10 @@
  * Being the single HTTP choke point also makes this the (one) instrumentation
  * seam: every call enqueues a `capability.call` usage event — synchronously,
  * never awaited, live by default. See `./analytics.ts`.
+ *
+ * It is also where the credential's channel is enforced: https, or plain http
+ * to loopback only, and never across a redirect to another origin. See
+ * `./credential-policy.ts`.
  */
 import {
   CAPABILITY_CALL_EVENT,
@@ -28,6 +32,12 @@ import {
   capabilityCallData,
   type AnalyticsHolder,
 } from "./analytics.js";
+import {
+  assertCredentialMayTravel,
+  fetchKeepingCredential,
+  resolveCredentialPolicy,
+  type CredentialPolicy,
+} from "./credential-policy.js";
 import { VERSION } from "../_generated/version.js";
 import { TransportHttpError, readErrorBody } from "./errors.js";
 
@@ -91,6 +101,12 @@ export interface TransportConfig {
    * When omitted, falls back to the env var, so both runtimes work.
    */
   resumeToken?: string;
+  /**
+   * Allow plain `http://` to a non-loopback host, for a trusted private network
+   * only (a Docker or CI service name). When unset, on iff
+   * `SAPIOM_ALLOW_INSECURE_HTTP=1`; otherwise https, or plain http to loopback.
+   */
+  allowInsecureHttp?: boolean;
 }
 
 /**
@@ -166,6 +182,7 @@ export class Transport {
    * which injects `SAPIOM_CAPABILITY_RESUME_TOKEN` — keeps working unchanged.
    */
   readonly resumeToken: string | undefined;
+  private readonly policy: CredentialPolicy;
   /**
    * Lazily-created usage-analytics emitter (see `./analytics.ts`). Not readonly:
    * `withAttribution` re-points the derived transport at ITS holder so one client
@@ -181,6 +198,7 @@ export class Transport {
       config.resumeToken ??
       process.env.SAPIOM_CAPABILITY_RESUME_TOKEN ??
       undefined;
+    this.policy = resolveCredentialPolicy(config.allowInsecureHttp);
   }
 
   /**
@@ -195,6 +213,7 @@ export class Transport {
       fetch: this.fetchImpl,
       attribution: { ...this.attribution, ...attribution },
       resumeToken: this.resumeToken,
+      allowInsecureHttp: this.policy.allowInsecureHttp,
     });
     derived.analyticsHolder = this.analyticsHolder;
     return derived;
@@ -238,18 +257,25 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
+    // A malformed URL or a refused channel throws here, before anything is sent.
+    assertCredentialMayTravel(new URL(url), this.policy);
+    const headers: Record<string, string> = {
+      [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
+      "x-sapiom-client": CLIENT_MARKER,
+      ...attributionToHeaders(this.attribution),
+      // Merged as a plain object, as before: callers pass records.
+      ...(init.headers as Record<string, string> | undefined),
+    };
     const startedAt = Date.now();
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        ...init,
-        headers: {
-          [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
-          "x-sapiom-client": CLIENT_MARKER,
-          ...attributionToHeaders(this.attribution),
-          ...(init.headers ?? {}),
-        },
-      });
+      response = await fetchKeepingCredential(
+        this.fetchImpl,
+        url,
+        init,
+        headers,
+        this.policy,
+      );
     } catch (error) {
       this.trackCapabilityCall(url, init, startedAt, undefined, error);
       throw error;
