@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Newsletter issue dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --series-1: #2a78d6;
+        --track: #eef1f5;
+        --good: #0ca30c;
+        --warning: #fab219;
+        --critical: #d03b3b;
+        --chip: #f3f2ef;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --series-1: #3987e5;
+          --track: #2c2c2a;
+          --chip: #2a2a28;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 28px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 22px;
+        font-weight: 650;
+        line-height: 1.1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-wrap: anywhere;
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: none;
+        display: inline-block;
+        background: var(--text-3);
+      }
+      .ok .dot {
+        background: var(--good);
+      }
+      .warn .dot {
+        background: var(--warning);
+      }
+      .bad .dot {
+        background: var(--critical);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+        gap: 12px;
+        align-items: start;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+      .issue {
+        max-height: 520px;
+        overflow: auto;
+      }
+      figure.hero {
+        margin: 0 0 12px;
+      }
+      figure.hero img {
+        display: block;
+        width: 100%;
+        max-height: 180px;
+        object-fit: cover;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .md h2,
+      .md h3 {
+        font-size: 15px;
+        margin: 14px 0 6px;
+        color: var(--text);
+        font-weight: 650;
+      }
+      .md h2:first-child,
+      .md h3:first-child {
+        margin-top: 0;
+      }
+      .md h2.title {
+        font-size: 18px;
+        line-height: 1.25;
+      }
+      .md p {
+        margin: 0 0 8px;
+      }
+      .md ul {
+        margin: 0 0 8px;
+        padding-left: 18px;
+      }
+      .md li {
+        margin: 2px 0;
+      }
+      .md code {
+        background: var(--chip);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      .md a {
+        color: var(--series-1);
+      }
+      .md em {
+        color: var(--text-2);
+      }
+      .md .note {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      ol.sources {
+        margin: 0;
+        padding-left: 22px;
+        display: grid;
+        gap: 6px;
+      }
+      ol.sources li {
+        min-width: 0;
+      }
+      ol.sources a {
+        color: var(--text);
+        text-decoration: none;
+        font-weight: 550;
+        display: block;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      ol.sources a:hover {
+        text-decoration: underline;
+      }
+      ol.sources .host {
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .meter {
+        height: 8px;
+        background: var(--track);
+        border-radius: 999px;
+        overflow: hidden;
+        margin: 8px 0 6px;
+      }
+      .meter .fill {
+        height: 100%;
+        background: var(--series-1);
+        border-radius: 999px;
+      }
+      .meter-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--text-3);
+      }
+      .facts-list {
+        margin: 0;
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        column-gap: 12px;
+        row-gap: 4px;
+        font-size: 13px;
+      }
+      .facts-list dt {
+        color: var(--text-3);
+      }
+      .facts-list dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .source {
+        margin: 14px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source b {
+        color: var(--text-2);
+        font-weight: 600;
+      }
+      .empty {
+        color: var(--text-3);
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Newsletter Autopilot</p>
+          <h1>Newsletter issue dashboard</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+
+      <section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+      <div class="grid">
+        <section class="card issue" aria-labelledby="issue-h">
+          <h2 id="issue-h">Latest issue</h2>
+          <div id="issue"></div>
+        </section>
+        <div class="stack">
+          <section class="card" aria-labelledby="sources-h">
+            <h2 id="sources-h">Sources kept after dedupe</h2>
+            <div id="sources"></div>
+          </section>
+          <section class="card" aria-labelledby="selfedit-h">
+            <h2 id="selfedit-h">Self-edit</h2>
+            <div id="selfedit"></div>
+          </section>
+          <section class="card" aria-labelledby="delivery-h">
+            <h2 id="delivery-h">Delivery</h2>
+            <div id="delivery"></div>
+          </section>
+        </div>
+      </div>
+
+      <p class="source" id="source"></p>
+    </div>
+
+    <script>
+      // Everything below renders `/api/issue` — the agent's own terminal
+      // output — into the page. No number here is computed by the dashboard
+      // except the self-edit meter width, which is the score the run returned.
+
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      /**
+       * Inline markdown on an already-escaped line: code, bold, emphasis,
+       * https links, and the bare https URLs the agent lists under Sources.
+       */
+      function inline(text) {
+        return text
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/(^|\s)_([^_]+)_(?=\s|$|[.,;:])/g, "$1<em>$2</em>")
+          .replace(
+            /\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g,
+            '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
+          )
+          .replace(
+            /(^|[\s(—–-])(https:\/\/[^\s<)]+)/g,
+            '$1<a href="$2" target="_blank" rel="noreferrer">$2</a>',
+          );
+      }
+
+      /**
+       * The small markdown subset the agent writes: `#`/`##`/`###` headings,
+       * `-` bullets, blank-line paragraphs, and the inline forms above. The
+       * issue's own `#` title renders as the card's headline. Escapes first,
+       * so nothing the model wrote can become markup.
+       */
+      function renderMarkdown(md) {
+        const out = [];
+        let list = null;
+        let para = [];
+        const flushPara = () => {
+          if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
+          para = [];
+        };
+        const flushList = () => {
+          if (list) out.push(`<ul>${list.join("")}</ul>`);
+          list = null;
+        };
+        for (const raw of String(md).split(/\r?\n/)) {
+          const line = esc(raw.trim());
+          if (!line) {
+            flushPara();
+            flushList();
+            continue;
+          }
+          const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+          if (heading) {
+            flushPara();
+            flushList();
+            const level = heading[1].length;
+            const cls = level === 1 ? ' class="title"' : "";
+            const tag = level === 1 ? "h2" : "h3";
+            out.push(`<${tag}${cls}>${inline(heading[2])}</${tag}>`);
+            continue;
+          }
+          const bullet = /^[-*]\s+(.*)$/.exec(line);
+          if (bullet) {
+            flushPara();
+            list = list ?? [];
+            list.push(`<li>${inline(bullet[1])}</li>`);
+            continue;
+          }
+          flushList();
+          para.push(line);
+        }
+        flushPara();
+        flushList();
+        return out.join("");
+      }
+
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+      const fmtNum = (n) =>
+        typeof n === "number" ? n.toLocaleString("en-US") : esc(n ?? "—");
+      const fmtScore = (n) =>
+        typeof n === "number" && Number.isFinite(n) ? n.toFixed(2) : "—";
+      const host = (url) => {
+        try {
+          return new URL(url).hostname.replace(/^www\./, "");
+        } catch {
+          return "";
+        }
+      };
+
+      function kpi(label, value, sub, cls = "") {
+        return `<article class="card kpi ${cls}"><p class="label">${label}</p><div class="value">${value}</div>${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      /** How the run says the issue went out, as a headline and a detail line. */
+      function deliveryFacts(o) {
+        if (o.dryRun || o.reason === "dry-run") {
+          return {
+            head: "Dry run",
+            sub: "written and graded, nothing sent",
+            cls: "warn",
+          };
+        }
+        if (!o.delivered) {
+          return {
+            head: "Not sent",
+            sub: "the run reached its end without a send",
+            cls: "bad",
+          };
+        }
+        if (o.demo) {
+          return {
+            head: "Emailed",
+            sub: "to the agent's own demo inbox",
+            cls: "ok",
+          };
+        }
+        const n = Number(o.recipients) || 0;
+        return {
+          head: "Emailed",
+          sub: `to ${fmtNum(n)} subscriber${n === 1 ? "" : "s"}`,
+          cls: "ok",
+        };
+      }
+
+      function renderSources(sources) {
+        if (!Array.isArray(sources) || sources.length === 0) {
+          return `<p class="empty">No sources survived this week's research.</p>`;
+        }
+        const items = sources
+          .map((s) => {
+            const url = typeof s?.url === "string" ? s.url : "";
+            const title = s?.title || url || "(untitled)";
+            const safeHref = /^https?:\/\//.test(url) ? esc(url) : "";
+            const link = safeHref
+              ? `<a href="${safeHref}" target="_blank" rel="noreferrer" title="${esc(title)}">${esc(title)}</a>`
+              : `<span>${esc(title)}</span>`;
+            const h = host(url);
+            return `<li>${link}${h ? `<span class="host">${esc(h)}</span>` : ""}</li>`;
+          })
+          .join("");
+        return `<ol class="sources">${items}</ol>`;
+      }
+
+      function renderSelfEdit(se) {
+        if (!se || typeof se !== "object") {
+          return `<p class="empty">This run returned no self-edit grade.</p>`;
+        }
+        const score = Number(se.score);
+        const pct = Number.isFinite(score)
+          ? Math.max(0, Math.min(1, score)) * 100
+          : 0;
+        const attempts = Number(se.iterations) || 0;
+        const verdict = se.passed
+          ? `Cleared the quality bar on attempt ${fmtNum(attempts)}.`
+          : `Sent the best draft after ${fmtNum(attempts)} attempt${attempts === 1 ? "" : "s"} without clearing the bar.`;
+        return (
+          `<p style="margin:0">${esc(verdict)}</p>` +
+          `<div class="meter" role="img" aria-label="Self-edit score ${fmtScore(score)} of 1"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
+          `<div class="meter-labels"><span>0</span><span>score ${fmtScore(score)}</span><span>1</span></div>`
+        );
+      }
+
+      function renderDelivery(o) {
+        const rows = [];
+        const to =
+          typeof o.to === "string" && o.to
+            ? o.to
+            : Array.isArray(o.to)
+              ? o.to.join(", ")
+              : null;
+        if (to) rows.push(["To", `<span class="mono">${esc(to)}</span>`]);
+        if (typeof o.recipients === "number")
+          rows.push(["Recipients", fmtNum(o.recipients)]);
+        if (o.subject) rows.push(["Subject", esc(o.subject)]);
+        if (o.messageId)
+          rows.push([
+            "Message id",
+            `<span class="mono">${esc(o.messageId)}</span>`,
+          ]);
+        if (Array.isArray(o.messageIds) && o.messageIds.length)
+          rows.push([
+            "Message ids",
+            `<span class="mono">${esc(o.messageIds.join(", "))}</span>`,
+          ]);
+        if (!rows.length) {
+          return `<p class="empty">Nothing was sent in this run.</p>`;
+        }
+        return `<dl class="facts-list">${rows
+          .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`)
+          .join("")}</dl>`;
+      }
+
+      function render({ source, output }) {
+        const o = output ?? {};
+        const sources = Array.isArray(o.sources) ? o.sources : [];
+        const se =
+          o.selfEdit && typeof o.selfEdit === "object" ? o.selfEdit : null;
+        const delivery = deliveryFacts(o);
+
+        document.getElementById("facts").innerHTML = [
+          o.niche
+            ? `<span class="chip">Niche <b>${esc(o.niche)}</b></span>`
+            : "",
+          o.schedule
+            ? `<span class="chip">Schedule <b class="mono">${esc(o.schedule)}</b></span>`
+            : "",
+          `<span class="chip">Issue finished <b>${fmtWhen(source?.finishedAt)}</b></span>`,
+        ].join("");
+
+        document.getElementById("kpis").innerHTML = [
+          kpi(
+            "Delivery",
+            `<span class="dot" aria-hidden="true"></span>${delivery.head}`,
+            delivery.sub,
+            delivery.cls,
+          ),
+          kpi(
+            "Self-edit score",
+            `<span class="dot" aria-hidden="true"></span>${fmtScore(se?.score)}`,
+            se
+              ? se.passed
+                ? `passed on attempt ${fmtNum(se.iterations)}`
+                : `below the bar after ${fmtNum(se.iterations)} attempt(s)`
+              : "no grade returned",
+            se ? (se.passed ? "ok" : "warn") : "",
+          ),
+          kpi("Sources cited", fmtNum(sources.length), "deduped and ranked"),
+          kpi(
+            "Header image",
+            o.headerImageUrl ? "Generated" : "None",
+            o.headerImageUrl
+              ? "by the illustrate step"
+              : "the issue went out without one",
+          ),
+        ].join("");
+
+        const hero = o.headerImageUrl
+          ? `<figure class="hero"><img src="${esc(o.headerImageUrl)}" alt="Header image the run generated for this issue" onerror="this.parentNode.remove()" /></figure>`
+          : "";
+        document.getElementById("issue").innerHTML =
+          hero +
+          (o.body
+            ? `<div class="md">${renderMarkdown(o.body)}</div>`
+            : `<p class="empty">This run returned no issue body.</p>`) +
+          // The run's own account of what it did and did not do (demo inbox,
+          // default niche, dry run) belongs with the issue it qualifies.
+          (o.note
+            ? `<div class="md"><p class="note">${inline(esc(o.note))}</p></div>`
+            : "");
+
+        document.getElementById("sources").innerHTML = renderSources(sources);
+        document.getElementById("selfedit").innerHTML = renderSelfEdit(se);
+        document.getElementById("delivery").innerHTML = renderDelivery(o);
+
+        const src = source ?? {};
+        const where =
+          src.kind === "live"
+            ? `Live — latest completed run`
+            : `Captured run, no subscribers set`;
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}` +
+          (src.liveError
+            ? ` · <span class="empty">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+      }
+
+      fetch("/api/issue", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("issue").innerHTML =
+            `<p class="empty">Could not load the issue: ${esc(err?.message ?? err)}</p>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>
