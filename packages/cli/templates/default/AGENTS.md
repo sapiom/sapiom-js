@@ -12,7 +12,7 @@ This project defines exactly one Sapiom agent in `index.ts`, authored against `@
 
 - Use `npm run check` as the tight feedback loop — prefer it over reasoning about whether the graph is valid.
 - For exact command options, run `sapiom agents --help`, and pass `--json` to any command for machine-readable output. Don't hardcode capability lists or schemas — query them at runtime.
-- Keep exactly one `defineAgent(...)` export in `index.ts` — one agent per project. A multi-stage system is several small projects composed with `ctx.sapiom.agents.run` (the rule and its worked example: [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition), summarized in the sapiom-agent-authoring skill).
+- Keep exactly one `defineAgent(...)` export in `index.ts` — one agent per project. A multi-stage system is several small projects; a coordinator launches each child with `ctx.sapiom.agents.launch` and pauses on it, since `agents.run` polls while it waits (the rules and worked examples: [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition) and [Waiting on work](https://api.sapiom.ai/v1/agents/authoring-rules#waiting-on-work), summarized in the sapiom-agent-authoring skill).
 
 ## Platform rules (served, not restated here)
 

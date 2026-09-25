@@ -54,6 +54,7 @@ export const AUTHORING_RULES_SECTIONS = [
   "app-links",
   "llm-call-surface",
   "agent-composition",
+  "waiting-on-work",
   "platform-vocabulary",
 ] as const;
 

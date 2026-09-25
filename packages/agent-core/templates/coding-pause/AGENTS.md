@@ -6,7 +6,7 @@ The full authoring guide ships inside this project at `.claude/skills/sapiom-age
 
 ## Authoring
 
-- An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export — one agent per project. A multi-stage system is several small projects composed with `ctx.sapiom.agents.run` (the rule and its worked example: [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition), summarized in the sapiom-agent-authoring skill).
+- An agent is `defineAgent({ entry, steps })`; each step is `defineStep({ name, next, run })`. Keep exactly one `defineAgent(...)` export — one agent per project. A multi-stage system is several small projects; a coordinator launches each child with `ctx.sapiom.agents.launch` and pauses on it, since `agents.run` polls while it waits (the rules and worked examples: [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition) and [Waiting on work](https://api.sapiom.ai/v1/agents/authoring-rules#waiting-on-work), summarized in the sapiom-agent-authoring skill).
 - **Capabilities come from the types.** What's available on `ctx.sapiom` is defined by `@sapiom/tools` — read the types / use autocomplete rather than guessing. A wrong capability or method name fails typecheck.
 
 ## The entry input contract
