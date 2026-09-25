@@ -120,7 +120,11 @@ async function readLive() {
       startedAt: run.startedAt ?? null,
       finishedAt: run.finishedAt ?? null,
       status: run.status ?? "completed",
-      input: run.input ?? null,
+      // Deliberately no `input`: a run with `subscribers` set carries their
+      // addresses there, and this route answers anyone who can reach the
+      // dashboard. The page never reads the input; the output names only
+      // counts and message ids for a subscriber send (the demo inbox is the
+      // agent's own address).
     },
     output: run.output,
   };
