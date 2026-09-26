@@ -559,7 +559,7 @@ coordinators wait at once. A paused step spends nothing and does not time out wh
 
 | Waiting on                                              | Do                                                                                                                                                         |
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| One child agent                                         | `agents.launch` with an `idempotencyKey`, then `pauseUntilSignal(handle, { resumeStep })`                                                                  |
+| One child agent                                         | `agents.launch` with an `idempotencyKey` built from `ctx.executionId`, then `pauseUntilSignal(handle, { resumeStep })`                                     |
 | Several children                                        | Launch each once, keep the pending execution ids in `ctx.shared`, pause on the first; the resumed step records it and pauses on the next until none remain |
 | A person or another system that can call back           | Pause on a named signal with a `correlationId`; the sender posts it to `POST /agents/v1/executions/:id/signals`                                            |
 | A system that cannot call back, or a point in time      | A `schedule_once` trigger, or `agents.launch` with `at` and a pause on the handle                                                                          |
@@ -568,6 +568,11 @@ coordinators wait at once. A paused step spends nothing and does not time out wh
 One child. The resumed step's input is the child's result, `{ status: "completed", output }` or
 `{ status: "failed", error }` (plus `executionId`); validate it with `agentResultSchema.parse`.
 A result that arrives before the step has paused is held and delivered on the pause.
+
+Build every child's `idempotencyKey` from `ctx.executionId` (as below). Keys are unique across
+the tenant and a child's result goes only to the run that first launched it, so a key shared by
+two coordinator runs hands the second one the first one's child, and the second waits until its
+pause times out.
 
 ```typescript
 import {
