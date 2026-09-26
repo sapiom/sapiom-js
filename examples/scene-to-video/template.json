@@ -59,6 +59,13 @@
       }
     }
   ],
+  "app": {
+    "name": "Scene video dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4174,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/scene-to-video/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [

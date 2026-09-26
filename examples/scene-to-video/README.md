@@ -77,5 +77,9 @@ i2v id) to trade quality for cost. Model ids are passed through verbatim.
 - `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
 - `AGENTS.md` — the authoring loop and why `animate` runs sequentially.
+- `app/` — the dashboard this template ships (`node server.mjs`): the finished
+  video, a filmstrip of its frames, and the shot list the model planned. See
+  `app/README.md`. `preview.png` is its screenshot, referenced from
+  `template.json` → `app.preview`.
 
 Run `npm run typecheck` to confirm it compiles.
