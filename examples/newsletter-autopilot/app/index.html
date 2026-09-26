@@ -482,10 +482,15 @@
           };
         }
         const n = Number(o.recipients) || 0;
+        const failed = Number(o.failed) || 0;
         return {
           head: "Emailed",
-          sub: `to ${fmtNum(n)} subscriber${n === 1 ? "" : "s"}`,
-          cls: "ok",
+          sub:
+            `to ${fmtNum(n)} subscriber${n === 1 ? "" : "s"}` +
+            (failed > 0
+              ? `, ${fmtNum(failed)} send${failed === 1 ? "" : "s"} failed`
+              : ""),
+          cls: failed > 0 ? "warn" : "ok",
         };
       }
 
@@ -538,6 +543,8 @@
         if (to) rows.push(["To", `<span class="mono">${esc(to)}</span>`]);
         if (typeof o.recipients === "number")
           rows.push(["Recipients", fmtNum(o.recipients)]);
+        if (Number(o.failed) > 0)
+          rows.push(["Failed sends", fmtNum(Number(o.failed))]);
         if (o.subject) rows.push(["Subject", esc(o.subject)]);
         if (o.messageId)
           rows.push([
