@@ -2,24 +2,41 @@ import {
   defineAgent,
   defineStep,
   goto,
+  pauseUntilSignal,
   terminate,
   type AgentExecutionContext,
 } from "@sapiom/agent";
+import {
+  AGENTS_RESULT_SIGNAL,
+  agentResultSchema,
+  type AgentRunResultPayload,
+} from "@sapiom/tools";
 import { z } from "zod/v4";
 
 /**
  * Fan Out and Combine — split a goal into parts, run each part as its own child
  * agent run in parallel, then merge the results into one answer.
  *
- * This is the canonical "an agent composes other agents" template. It reaches
- * the child-run capability through the run context (`ctx.sapiom.agents.run`), so
- * every child is a real, independently-metered agent run — not an in-process
- * function call. The pattern is fan-out → join → reduce, the durable equivalent of
+ * This is the canonical "an agent composes other agents" template. It launches
+ * each child through the run context (`ctx.sapiom.agents.launch`), so every child
+ * is a real, independently-metered agent run — not an in-process function call.
+ * The pattern is fan-out → fan-in → reduce, the durable equivalent of
  * `Promise.all` over sub-agents.
+ *
+ * Why launch + pause rather than `Promise.all(items.map(agents.run))`: a step that
+ * waits with `agents.run` polls the agents API from its sandbox every 3 s for as
+ * long as the child runs (about 20 requests a minute per child), and when many
+ * coordinators wait at once those polls hit the API's rate limit and runs fail
+ * with 429s. A paused step spends nothing: the engine resumes it with the child's
+ * result. One pause names one child — there is no wait-for-all — so the fan-in is
+ * a loop: `fanOut` launches every child and pauses on the first, and `fanIn`
+ * records each result and pauses on the next until none are pending. A result
+ * that arrives before its pause is held by the engine and delivered on the pause,
+ * so the order the children finish in does not matter.
  *
  * ONE agent, TWO roles, chosen by `mode`:
  *   - coordinate (default): the parent. Splits the goal into items, launches a
- *     child run per item, waits for all of them, and reduces their outputs.
+ *     child run per item, pauses until each has answered, and reduces their outputs.
  *   - leaf: a child. Does exactly ONE unit of work (analyse its item toward the
  *     goal with `llm.run`) and terminates. A leaf NEVER fans out, which is what
  *     bounds the recursion to a single level — there is no runaway.
@@ -30,13 +47,14 @@ import { z } from "zod/v4";
  * agent's slug and it fans that out instead, one child run per item.
  *
  * The graph, one legible line per role:
- *   plan ─▶ fanOut (agents.run × N) ─▶ reduce (llm.run) ─▶ done      (coordinate)
+ *   plan ─▶ fanOut (agents.launch × N) ─(pause)▶ fanIn ⟲ ─▶ reduce (llm.run) ─▶ done
+ *                                                                     (coordinate)
  *   plan ─▶ solve (llm.run) ─▶ (terminal)                            (leaf)
  *   plan ─▶ planned (terminal)                                          (dryRun)
  *
  * Never-fail discipline:
- *   - Every child dispatch is wrapped: a child that throws or ends non-`completed`
- *     becomes a `{ ok: false }` row, and the reduce runs over the survivors. Even
+ *   - Every child launch is wrapped: a launch that throws, or a child that ends
+ *     `failed`, becomes a `{ ok: false }` row, and the reduce runs over the survivors. Even
  *     if every child fails, the run still reaches a terminal state with an honest
  *     account of what happened — it never reports a combined answer it doesn't have.
  *   - `dryRun` returns the resolved fan-out PLAN (which child, how many items, the
@@ -55,6 +73,12 @@ const MAX_ANALYSIS_CHARS = 1200;
 const LEAF_MAX_TOKENS = 700;
 /** Bound the reduce model call — a combined brief, not a book. */
 const REDUCE_MAX_TOKENS = 1000;
+/**
+ * Safety net on each pause for a child. A pause timeout FAILS the run (there is no
+ * resume-with-a-default), so this is sized far above a leaf's one model call and
+ * is never a deadline a healthy child should hit.
+ */
+const CHILD_WAIT_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * The goal a zero-input run works on. A real goal with real sub-parts, so the
@@ -107,12 +131,30 @@ interface ChildResult {
   error: string | null;
 }
 
+/** A child launched by `fanOut` whose result has not been delivered yet. */
+interface PendingChild {
+  item: string;
+  executionId: string;
+}
+
+/** The fan-in bookkeeping kept in `ctx.shared` between pauses. */
+interface FanInState {
+  /** Children still running, in launch order; the run pauses on the first. */
+  pending: PendingChild[];
+  /** One row per item already settled (answered, failed, or never launched). */
+  results: ChildResult[];
+}
+
 interface Shared extends Record<string, unknown> {
   goal: string;
   childDefinition: string;
   dryRun: boolean;
   /** How many items the coordinator fanned out (0 on the leaf/dryRun paths). */
   itemCount: number;
+  /** The deduped items, in order — the order `children` is reported in. */
+  items?: string[];
+  pending?: PendingChild[];
+  results?: ChildResult[];
   /** Set when the run coordinated the default goal rather than a supplied one. */
   note?: string;
 }
@@ -121,7 +163,7 @@ type Ctx = AgentExecutionContext<Shared>;
 
 // ─────────────────────────────────────────────────────────────── helpers ──
 /** Trim, drop empties, de-dupe, and cap — the items a coordinate run fans out. */
-function normalizeItems(items: unknown, fallback: string[]): string[] {
+export function normalizeItems(items: unknown, fallback: string[]): string[] {
   const cleaned = Array.isArray(items)
     ? [
         ...new Set(
@@ -134,6 +176,99 @@ function normalizeItems(items: unknown, fallback: string[]): string[] {
     : [];
   const chosen = cleaned.length > 0 ? cleaned : fallback;
   return chosen.slice(0, MAX_ITEMS);
+}
+
+/**
+ * One child per item per run. Items are deduped before launch, so the index is a
+ * stable key: a retried `fanOut` resolves each launch to the child it already
+ * started instead of starting a second one.
+ */
+export function childIdempotencyKey(
+  executionId: string,
+  index: number,
+): string {
+  return `${executionId}:item:${index}`;
+}
+
+/** The child's result, or null when the resumed input is not one. */
+function asChildResult(input: unknown): AgentRunResultPayload | null {
+  try {
+    return agentResultSchema.parse(input);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record one resumed input against the pending children. A result for a pending
+ * child settles that child's row. Anything else (not a child result, or a child we
+ * are not waiting on) settles every pending child as undelivered, so the run moves
+ * on with an honest account instead of pausing on a result that will not come.
+ */
+export function recordChildResult(
+  state: FanInState,
+  input: unknown,
+): FanInState {
+  const result = asChildResult(input);
+  const hit = result
+    ? state.pending.find((p) => p.executionId === result.executionId)
+    : undefined;
+  if (!result || !hit) {
+    return {
+      pending: [],
+      results: [
+        ...state.results,
+        ...state.pending.map(
+          (p): ChildResult => ({
+            item: p.item,
+            ok: false,
+            status: "unknown",
+            analysis: null,
+            error: "no result was delivered for this child",
+          }),
+        ),
+      ],
+    };
+  }
+  const ok = result.status === "completed";
+  return {
+    pending: state.pending.filter((p) => p !== hit),
+    results: [
+      ...state.results,
+      {
+        item: hit.item,
+        ok,
+        status: result.status,
+        analysis: ok ? readAnalysis(result.output) : null,
+        error:
+          result.status === "completed"
+            ? null
+            : describeChildError(result.error, result.status),
+      },
+    ],
+  };
+}
+
+/** Rows in the order the items were given, whatever order the children answered in. */
+export function orderResults(
+  items: string[],
+  results: ChildResult[],
+): ChildResult[] {
+  const rank = new Map(items.map((item, i) => [item, i]));
+  return [...results].sort(
+    (a, b) =>
+      (rank.get(a.item) ?? items.length) - (rank.get(b.item) ?? items.length),
+  );
+}
+
+/** Pause until the named child's result arrives, then resume in `fanIn`. */
+function waitOn(child: PendingChild) {
+  return pauseUntilSignal({
+    signal: AGENTS_RESULT_SIGNAL,
+    correlationId: child.executionId,
+    resumeStep: "fanIn",
+    timeoutMs: CHILD_WAIT_TIMEOUT_MS,
+  });
 }
 
 /** A short, human-readable reason a child run did not complete. */
@@ -150,7 +285,7 @@ function describeChildError(error: unknown, status: string): string {
  * (and the offline stub returns `{}`), so read defensively and return null rather
  * than throw when there is nothing to read.
  */
-function readAnalysis(output: unknown): string | null {
+export function readAnalysis(output: unknown): string | null {
   if (!output || typeof output !== "object") return null;
   const value = (output as Record<string, unknown>).analysis;
   return typeof value === "string" && value.trim().length > 0
@@ -284,36 +419,32 @@ const solve = defineStep({
 
 const fanOut = defineStep({
   name: "fanOut",
-  next: ["reduce"],
+  next: ["fanIn", "reduce"],
+  pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "fanIn" },
   async run(
     input: { goal: string; childDefinition: string; items: string[] },
     ctx: Ctx,
   ) {
     const { goal, childDefinition, items } = input;
 
-    // Launch one child run per item and wait for all of them — the durable
-    // equivalent of Promise.all over sub-agents. `agents.run` blocks until the
-    // child reaches a terminal state, so a rejected promise here is a genuine
-    // dispatch failure, caught per-item so one bad child never sinks the batch.
-    const results = await Promise.all(
-      items.map(async (item): Promise<ChildResult> => {
+    // Launch one child run per item. `launch` returns as soon as the child is
+    // created, so this step never waits on a child; the fan-in below does, by
+    // pausing. Each launch is caught on its own, so one bad dispatch (unknown slug,
+    // transport fault) becomes a failed row instead of sinking the batch.
+    const launched = await Promise.all(
+      items.map(async (item, index): Promise<PendingChild | ChildResult> => {
         try {
-          const run = await ctx.sapiom.agents.run({
+          const handle = await ctx.sapiom.agents.launch({
             definition: childDefinition,
             // A self-child reads `mode`; a custom child just gets goal + item.
             input: { mode: "leaf", goal, item },
+            idempotencyKey: childIdempotencyKey(ctx.executionId, index),
           });
-          const ok = run.status === "completed";
-          return {
-            item,
-            ok,
-            status: run.status,
-            analysis: ok ? readAnalysis(run.output) : null,
-            error: ok ? null : describeChildError(run.error, run.status),
-          };
+          if (!handle.executionId) {
+            throw new Error("the launch returned no execution id");
+          }
+          return { item, executionId: handle.executionId };
         } catch (err) {
-          // A dispatch that throws (unknown slug, transport fault) is data, not a
-          // crash: record it and let the survivors carry the run.
           ctx.logger.warn("child dispatch failed", {
             item,
             childDefinition,
@@ -329,11 +460,45 @@ const fanOut = defineStep({
         }
       }),
     );
+    const pending = launched.filter(
+      (r): r is PendingChild => "executionId" in r,
+    );
+    const results = launched.filter((r): r is ChildResult => "ok" in r);
 
-    const succeeded = results.filter((r) => r.ok).length;
-    ctx.logger.info("fan-out joined", {
+    ctx.shared.set("items", items);
+    ctx.shared.set("pending", pending);
+    ctx.shared.set("results", results);
+    if (pending.length === 0) return goto("reduce", { results });
+
+    ctx.logger.info("fanned out; waiting for the first child", {
+      launched: pending.length,
+      failedToLaunch: results.length,
+    });
+    return waitOn(pending[0]!);
+  },
+});
+
+const fanIn = defineStep({
+  name: "fanIn",
+  next: ["fanIn", "reduce"],
+  pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "fanIn" },
+  // Resumed by the engine with one child's result as `input`; nothing polls.
+  async run(input: unknown, ctx: Ctx) {
+    const state = recordChildResult(
+      {
+        pending: ctx.shared.get("pending") ?? [],
+        results: ctx.shared.get("results") ?? [],
+      },
+      input,
+    );
+    ctx.shared.set("pending", state.pending);
+    ctx.shared.set("results", state.results);
+    if (state.pending.length > 0) return waitOn(state.pending[0]!);
+
+    const results = orderResults(ctx.shared.get("items") ?? [], state.results);
+    ctx.logger.info("fan-in complete", {
       total: results.length,
-      succeeded,
+      succeeded: results.filter((r) => r.ok).length,
     });
     return goto("reduce", { results });
   },
@@ -467,6 +632,7 @@ export const agent = defineAgent<EntryInput, Shared>({
     plan,
     solve,
     fanOut,
+    fanIn,
     reduce,
     done,
     planned,

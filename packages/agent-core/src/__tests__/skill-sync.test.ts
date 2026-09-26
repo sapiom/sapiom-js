@@ -21,7 +21,9 @@ describe("sapiom-agent-authoring skill sync", () => {
   const canonical = readFileSync(CANONICAL, "utf8");
 
   it("has a canonical source with the task-shape trigger frontmatter", () => {
-    expect(canonical.startsWith("---\nname: sapiom-agent-authoring")).toBe(true);
+    expect(canonical.startsWith("---\nname: sapiom-agent-authoring")).toBe(
+      true,
+    );
     expect(canonical).toContain("description:");
   });
 
@@ -80,8 +82,12 @@ describe("sapiom-agent-authoring content guards", () => {
     )) {
       consts.set(name, Number(value.replace(/_/g, "")));
     }
-    const caps = [...canonical.matchAll(/max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/g)]
-      .map(([, cap]) => (/^\d/.test(cap) ? Number(cap.replace(/_/g, "")) : consts.get(cap)))
+    const caps = [
+      ...canonical.matchAll(/max_tokens\s*:\s*([A-Za-z_$][\w$]*|\d[\d_]*)/g),
+    ]
+      .map(([, cap]) =>
+        /^\d/.test(cap) ? Number(cap.replace(/_/g, "")) : consts.get(cap),
+      )
       .filter((cap): cap is number => cap !== undefined);
     expect(caps.filter((cap) => cap < 2048)).toEqual([]);
   });
@@ -91,6 +97,15 @@ describe("sapiom-agent-authoring content guards", () => {
     // agents.run resolves on any terminal status and does not throw — the
     // worked example must branch on a non-completed child.
     expect(canonical).toContain('research.status !== "completed"');
+  });
+
+  it("teaches coordinators to pause on children, with the fan-in loop", () => {
+    // SAP-3615: an orchestrator whose steps waited with `agents.run` failed at ~100
+    // concurrent runs on the agents API's rate limit. Launch + pause is the default.
+    expect(canonical).toContain("Waiting on Work");
+    expect(canonical).toContain("there is no wait-for-all");
+    expect(canonical).toContain("correlationId: p.executionId");
+    expect(canonical).toContain("A pause `timeoutMs` elapsing fails the run.");
   });
 });
 
@@ -112,7 +127,10 @@ describe("template AGENTS.md content", () => {
       const md = readFileSync(mdPath, "utf8");
       expect(md).not.toContain("\u00e2"); // mojibake telltale (â)
       expect(md).toContain("one agent per project");
-      expect(md).toContain("ctx.sapiom.agents.run");
+      // SAP-3615: a coordinator launches and pauses; `agents.run` polls the
+      // agents API for as long as it waits, and a fleet of those hits the limit.
+      expect(md).toContain("ctx.sapiom.agents.launch");
+      expect(md).toContain("authoring-rules#waiting-on-work");
     });
   }
 });

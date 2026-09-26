@@ -119,6 +119,7 @@ alongside the `sapiom_dev_agents_*` tools) and why local work needs no account: 
 | `goto / terminate / fail / retry / pauseUntilSignal` | `@sapiom/agent` |
 | `AgentExecutionContext`                              | `@sapiom/agent` |
 | `CODING_RESULT_SIGNAL / CodingResultPayload`         | `@sapiom/tools` |
+| `AGENTS_RESULT_SIGNAL / agentResultSchema`           | `@sapiom/tools` |
 
 `@sapiom/agent` is the only authoring package.
 
@@ -396,17 +397,16 @@ Read it before the first `llm.*` / `models.run` / `agents.run` call. Customer gu
 **One agent per project — but a system is several projects.** The "keep exactly one
 `defineAgent(...)` export" rule is a statement about a PROJECT, not about your system: a
 multi-stage system is several small agents, each its own project, deployed separately, composed
-by a thin coordinator that dispatches them by slug with `ctx.sapiom.agents.run`. `agents.run`
-reports failure as DATA and never throws — one branch on `research.status !== "completed"`
-covers a failed child, a refused dispatch (`"rejected"`) and a wait timeout alike, and skipping
-it lets a bad stage silently feed `null` downstream. Only `"rejected"` proves nothing is
-running, so it is the only status you may re-dispatch on without an `idempotencyKey`. For a
-long-running child use `ctx.sapiom.agents.launch` and pause the calling step on the handle
-(`pauseUntilSignal`, below) so the coordinator's step doesn't time out — `launch` is the one
-that THROWS: it owes you a pausable handle and a refused dispatch has none, so catch
-`AgentDispatchError` and `fail()` the step. Deploy bottom-up —
-children first, the coordinator last, since it dispatches them by their slugs. The worked
-example is the served section
+by a thin coordinator that dispatches them by slug. A coordinator that waits on its children
+launches each with `ctx.sapiom.agents.launch` and pauses on the handle (_Waiting on Work_,
+below); `ctx.sapiom.agents.run` polls for as long as the child runs. `agents.run` reports
+failure as DATA and never throws — one branch on `research.status !== "completed"` covers a
+failed child, a refused dispatch (`"rejected"`) and a wait timeout alike, and skipping it lets a
+bad stage silently feed `null` downstream. Only `"rejected"` proves nothing is running, so it is
+the only status you may re-dispatch on without an `idempotencyKey`. `launch` is the one that
+THROWS: it owes you a pausable handle and a refused dispatch has none, so catch
+`AgentDispatchError` and `fail()` the step. Deploy bottom-up — children first, the coordinator
+last, since it dispatches them by their slugs. The worked example is the served section
 [Composing deployed agents](https://api.sapiom.ai/v1/agents/authoring-rules#agent-composition).
 
 <!-- /section: agent-composition -->
@@ -463,9 +463,9 @@ default, counting the initial attempt; keep author-controlled retry logic inside
 ## Pause & Resume (Long-Running Dispatched Steps)
 
 A step's `run` completes in one synchronous dispatch. For long-running capabilities (a
-dispatched coding-model run), **launch fire-and-forget and pause** — the engine suspends the
-execution until the result signal fires, then resumes into a designated step whose `input`
-IS the result payload.
+dispatched coding-model run) and for child agents, **launch fire-and-forget and pause** — the
+engine suspends the execution until the result signal fires, then resumes into a designated
+step whose `input` IS the result payload.
 
 ```typescript
 import {
@@ -547,6 +547,151 @@ return pauseUntilSignal({
 Under `run_local`, a dispatch pause auto-resumes with the stub result; a manual gate
 auto-resumes with `{}`. There is no manual-signal payload override in the local runner, so
 type the resumed step's input with optional fields accordingly.
+
+<!-- section: waiting-on-work -->
+
+### Waiting on Work: Pause, Don't Poll
+
+A step that waits with `agents.run` (or a launch handle's `wait()`) polls the agents API from
+its sandbox every 3 s until the child finishes: about 20 requests a minute per waiting step,
+all counted against that API's rate limit. Harmless for one run; runs fail with 429s when many
+coordinators wait at once. A paused step spends nothing and does not time out while it waits.
+
+| Waiting on                                              | Do                                                                                                                                                         |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One child agent                                         | `agents.launch` with an `idempotencyKey` built from `ctx.executionId`, then `pauseUntilSignal(handle, { resumeStep })`                                     |
+| Several children                                        | Launch each once, keep the pending execution ids in `ctx.shared`, pause on the first; the resumed step records it and pauses on the next until none remain |
+| A person or another system that can call back           | Pause on a named signal with a `correlationId`; the sender posts it to `POST /agents/v1/executions/:id/signals`                                            |
+| A system that cannot call back, or a point in time      | A `schedule_once` trigger, or `agents.launch` with `at` and a pause on the handle                                                                          |
+| A short child, in an agent that runs one copy at a time | `agents.run` is fine                                                                                                                                       |
+
+One child. The resumed step's input is the child's result, `{ status: "completed", output }` or
+`{ status: "failed", error }` (plus `executionId`); validate it with `agentResultSchema.parse`.
+A result that arrives before the step has paused is held and delivered on the pause.
+
+Build every child's `idempotencyKey` from `ctx.executionId` (as below). Keys are unique across
+the tenant and a child's result goes only to the run that first launched it, so a key shared by
+two coordinator runs hands the second one the first one's child, and the second waits until its
+pause times out.
+
+```typescript
+import {
+  AGENTS_RESULT_SIGNAL,
+  AgentDispatchError,
+  agentResultSchema,
+  type AgentRunResultPayload,
+} from "@sapiom/tools";
+
+const research = defineStep({
+  name: "research",
+  next: ["write"],
+  canFail: true,
+  pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "write" },
+  async run(input: { topic: string }, ctx) {
+    try {
+      const child = await ctx.sapiom.agents.launch({
+        definition: "research-topic",
+        input: { topic: input.topic },
+        idempotencyKey: `${ctx.executionId}:research`,
+      });
+      return pauseUntilSignal(child, { resumeStep: "write" });
+    } catch (err) {
+      if (err instanceof AgentDispatchError) return fail(err.message);
+      throw err;
+    }
+  },
+});
+
+const write = defineStep({
+  name: "write",
+  next: [],
+  terminal: true,
+  canFail: true,
+  async run(input: unknown, ctx) {
+    const research = agentResultSchema.parse(input);
+    if (research.status !== "completed") return fail("research failed");
+    return terminate({ research: research.output });
+  },
+});
+```
+
+Several children. One pause names one child — there is no wait-for-all — so fan-in is a loop:
+launch every child, pause on the first pending one, and let the resumed step record the result
+and pause on the next. Drop duplicate inputs before launching: a repeated `idempotencyKey`
+resolves to the same child, so two equal items would wait on one run.
+
+```typescript
+type Pending = { item: string; executionId: string };
+interface Shared extends Record<string, unknown> {
+  pending: Pending[];
+  results: AgentRunResultPayload[];
+}
+type Ctx = AgentExecutionContext<Shared>;
+
+// The object form pauses on a child launched in an earlier step, by its execution id.
+const waitOn = (p: Pending) =>
+  pauseUntilSignal({
+    signal: AGENTS_RESULT_SIGNAL,
+    correlationId: p.executionId,
+    resumeStep: "fanIn",
+  });
+
+const fanOut = defineStep({
+  name: "fanOut",
+  next: ["fanIn", "combine"],
+  pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "fanIn" },
+  async run(input: { items: string[] }, ctx: Ctx) {
+    const pending: Pending[] = [];
+    for (const item of new Set(input.items)) {
+      const child = await ctx.sapiom.agents.launch({
+        definition: "analyze-item",
+        input: { item },
+        idempotencyKey: `${ctx.executionId}:${item}`,
+      });
+      pending.push({ item, executionId: child.executionId! }); // null only for a delayed (`at`) launch
+    }
+    ctx.shared.set("pending", pending);
+    ctx.shared.set("results", []);
+    return pending.length > 0 ? waitOn(pending[0]) : goto("combine", {});
+  },
+});
+
+const fanIn = defineStep({
+  name: "fanIn",
+  next: ["fanIn", "combine"],
+  canFail: true,
+  pause: { signal: AGENTS_RESULT_SIGNAL, resumeStep: "fanIn" },
+  async run(input: unknown, ctx: Ctx) {
+    let result: AgentRunResultPayload;
+    try {
+      result = agentResultSchema.parse(input);
+    } catch {
+      // not a child result (run_local resumes a manual-form pause with {}): stop, don't wait on nothing
+      return fail("resumed without a child result");
+    }
+    const pending = (ctx.shared.get("pending") ?? []).filter(
+      (p) => p.executionId !== result.executionId,
+    );
+    ctx.shared.set("pending", pending);
+    ctx.shared.set("results", [...(ctx.shared.get("results") ?? []), result]);
+    return pending.length > 0 ? waitOn(pending[0]) : goto("combine", {});
+  },
+});
+```
+
+Two pause behaviours to design around:
+
+- **A pause `timeoutMs` elapsing fails the run.** There is no resume-with-a-default. On a pause
+  for a child, size it as a safety net well above the child's own step timeouts; where a
+  default is wanted, the sender posts it after its own grace period.
+- **A manual signal sent while the run is not paused on it is dropped** (`matched: 0`). Child
+  results are the exception: they are held until the pause. A sender that may arrive early
+  re-sends until it sees `matched: 1`.
+
+The platform rule, and when polling is acceptable, is the served section
+[Waiting on work](https://api.sapiom.ai/v1/agents/authoring-rules#waiting-on-work).
+
+<!-- /section: waiting-on-work -->
 
 <!-- section: trigger-kinds -->
 
@@ -679,6 +824,7 @@ Write each step the way it should run in production — never weaken logic to sh
 | `check` fails: step missing from graph                             | `steps` object key doesn't match `name` field   | Match the key in `steps: { start }` to `defineStep({ name: "start" })`                              |
 | `run_local` reports `unusedStubs`                                  | Stub path typo or namespace/handle mix-up       | Namespace path for calls (`repositories.list`), singular for handles (`repository.pushFromSandbox`) |
 | Paused step resumes with empty input                               | Manual gate; `run_local` auto-resumes with `{}` | Type the resumed step's input with optional fields                                                  |
+| Coordinator runs fail with 429s when many run at once              | Steps wait on children with `agents.run`        | `agents.launch` + pause ("Waiting on Work")                                                         |
 | `sapiom_authenticate` → credential not found at deploy             | Authenticated in a different shell              | Re-run `sapiom_authenticate`; credential is per-machine in `~/.sapiom/credentials.json`             |
 | Webhook trigger answers 401 to a third party (Slack, Meta, Stripe) | Their signature scheme is not our HMAC          | Receive on an App Link `/hook/*` (verify their signature there) or re-sign through a translator     |
 
