@@ -5,5 +5,5 @@
 // longer drift.
 export const VERSION_FALLBACK = {
   agent: "0.14.3",
-  tools: "0.39.0",
+  tools: "0.39.1",
 } as const;
