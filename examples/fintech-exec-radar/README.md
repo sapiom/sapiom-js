@@ -131,6 +131,13 @@ Local Run replaces `ctx.sapiom.*` calls with stubs, so it creates no capability
 spend. A production run uses real search, scraping, memory, child runs, model
 ranking, and optional email delivery.
 
+## Dashboard
+
+`app/` is the dashboard this template ships (`node server.mjs`): the new sourced
+items grouped by signal, each company's result and item counts, and the steps
+that degraded, all read from the latest radar run. See `app/README.md`.
+`preview.png` is its screenshot, referenced from `template.json` → `app.preview`.
+
 ## Deliberate v1 limits
 
 - No precise headcount claims.
