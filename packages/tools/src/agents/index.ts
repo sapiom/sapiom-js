@@ -65,12 +65,50 @@ export type ExecutionStatus =
 const TERMINAL = new Set<ExecutionStatus>(["completed", "failed", "cancelled"]);
 
 /**
- * How many CONSECUTIVE failed status reads `wait()` rides out before giving up
- * with `status: "unknown"`. Enough to survive a blip or a single bad node; far
- * short of spending a full `timeoutMs` (60 min / 3 s ≈ 1200 requests) on a
- * platform that is simply down.
+ * How `wait()` (and `status()`) ride out a TRANSIENT status-read fault — a 429
+ * or 408, a 5xx, or a transport fault such as a reset socket — instead of
+ * ending the wait on it. Each option has a default; pass `wait({ retry })` to
+ * override one.
+ *
+ * Why this exists (SAP-3615): the platform rate-limits the agents routes per
+ * client IP, and every sandbox shares one egress IP. When ~100 parents polled
+ * their children every 3 s in lockstep, a single 429 on a status read failed
+ * the parent run outright — 236 of 413 runs in one incident. A poll that keeps
+ * going, and spreads out when told to, is what a coordinator needs.
  */
-const MAX_CONSECUTIVE_POLL_FAULTS = 5;
+export interface WaitRetryOptions {
+  /**
+   * Delay before the first retry after a fault, in ms. Doubles on each
+   * consecutive fault (2 s, 4 s, 8 s, …) up to `maxBackoffMs`, with up to 20%
+   * upward jitter so parents that tripped the same limit together do not
+   * re-poll in step. A `Retry-After` header from the platform replaces the
+   * computed delay for that retry. Default `2_000`.
+   */
+  initialBackoffMs?: number;
+  /** Ceiling on a computed back-off delay, in ms. Default `30_000`. */
+  maxBackoffMs?: number;
+  /**
+   * How many CONSECUTIVE transient faults `wait()` rides out before giving up
+   * with `status: "unknown"` (carrying the last fault). A successful read
+   * resets the count. With the default schedule twelve faults span about four
+   * and a half minutes of back-off — enough to outlast a rate-limit window or a
+   * deploy, far short of spending a whole `timeoutMs` on a platform that is
+   * simply down. The caller's `timeoutMs` still bounds everything. Default `12`.
+   */
+  maxConsecutiveFaults?: number;
+}
+
+const DEFAULT_WAIT_RETRY: Required<WaitRetryOptions> = {
+  initialBackoffMs: 2_000,
+  maxBackoffMs: 30_000,
+  maxConsecutiveFaults: 12,
+};
+
+/**
+ * A `status()` read is a direct query, so it retries only briefly — this many
+ * attempts on the default back-off (≈ 2 s + 4 s) — before throwing the fault.
+ */
+const STATUS_READ_ATTEMPTS = 3;
 
 /**
  * Statuses that PROVE the platform created no child, so re-dispatching is safe.
@@ -84,10 +122,21 @@ const MAX_CONSECUTIVE_POLL_FAULTS = 5;
 const PROVES_NO_CHILD = new Set([400, 401, 403, 404, 422]);
 
 /**
- * Transient poll statuses: the platform answered, but with "ask again". Both
- * clear on their own, so they must not end a `wait()` the way a 404 does.
+ * Transient poll statuses below 500: the platform answered, but with "ask
+ * again". Both clear on their own, so they must not end a `wait()` the way a
+ * 404 does. Every 5xx is transient too; every other 4xx is permanent.
  */
 const TRANSIENT_POLL_STATUSES = new Set([408, 429]);
+
+/**
+ * The SDK's own deadline message (`models`' and `wait()`'s "timed out after …ms").
+ * Never a transient fault: it means a budget is spent, not that the platform
+ * hiccupped, so a caller who wraps a poll in its own timeout is not retried into.
+ */
+const SDK_DEADLINE_MESSAGE = /\btimed out after \d+ms\b/;
+
+/** `"GET https://… → 429 {…}"` — the transport's message shape, for a fallback status read. */
+const STATUS_IN_MESSAGE = /\u2192 (\d{3})\b/;
 
 /**
  * Every status an {@link AgentRunResult} can carry: a run's own lifecycle, plus
@@ -147,7 +196,10 @@ export type AgentRunErrorCode =
  * A dispatch rejection, an unreadable status, or a `wait()` timeout as data.
  * `details` is the parsed platform response body when there was one — it
  * carries the platform's own stable `code` (e.g. `"step_input_invalid"`) and
- * validation issues — and `null` for a transport fault or a timeout.
+ * validation issues — and `null` for a transport fault. On a `"timeout"` it is
+ * the {@link AgentRunError} of the poll fault the deadline interrupted (say,
+ * the 429 the loop was backing off from), or `null` when the last read
+ * succeeded.
  */
 export interface AgentRunError {
   code: AgentRunErrorCode;
@@ -352,8 +404,11 @@ export interface RunHandle extends DispatchHandle {
    */
   executionId: string | null;
   /**
-   * Fetch the current status without blocking. Unlike `wait()` this is a direct
-   * query, so a transport fault reading the status DOES throw.
+   * Fetch the current status without blocking on the run. A transient fault
+   * (429/408, 5xx, a transport error) is retried a few times on the default
+   * back-off, honouring `Retry-After`; then, and on any other failure at once
+   * (404 — the run is gone; 401/403), the error IS thrown. Unlike `wait()` this
+   * is a direct query with a direct answer.
    */
   status(): Promise<ExecutionStatus>;
   /**
@@ -361,8 +416,28 @@ export interface RunHandle extends DispatchHandle {
    * rejected dispatch (`"rejected"`), a status read that fails or keeps
    * faulting (`"unknown"`), and hitting `timeoutMs` (`"timed_out"`) all resolve
    * a non-completed {@link AgentRunResult}.
+   *
+   * Polls every `pollMs` while the run is going. A TRANSIENT fault on a read —
+   * 429 or 408, any 5xx, a transport error such as `fetch failed` /
+   * `ECONNRESET` — does not end the wait: the loop backs off (2 s, 4 s, 8 s, …
+   * capped at 30 s, with jitter; a `Retry-After` header wins when the platform
+   * sends one) and reads again, up to `retry.maxConsecutiveFaults` (12) in a
+   * row before resolving `"unknown"` with the last fault. A successful read
+   * resets the count. A permanent fault (404, 401/403, a malformed body)
+   * resolves `"unknown"` at once. No back-off ever outlasts `timeoutMs`: the
+   * deadline is checked before every sleep, and a sleep is clamped to it.
+   *
+   * From inside a step, prefer `launch` + `pauseUntilSignal(handle, …)` for a
+   * long child: the step suspends and resumes on the child's result signal,
+   * making NO poll calls at all — so it cannot be rate-limited, and holds no
+   * sandbox while it waits. `wait()`/`run` are for standalone, inline use.
    */
-  wait(opts?: { timeoutMs?: number; pollMs?: number }): Promise<AgentRunResult>;
+  wait(opts?: {
+    timeoutMs?: number;
+    pollMs?: number;
+    /** Back-off for transient read faults — see {@link WaitRetryOptions}. */
+    retry?: WaitRetryOptions;
+  }): Promise<AgentRunResult>;
 }
 
 /**
@@ -409,13 +484,100 @@ function asRunError(error: unknown): AgentRunError {
       details: error.body,
     };
   }
+  // A transport that threw a plain Error for a non-2xx (an older or
+  // third-party one) still names the status in the message — recover it, so a
+  // 429 is not mistaken for a socket fault. Never matches a transport fault
+  // (`fetch failed`, `ECONNRESET`), which carries no arrow-status.
+  const message = error instanceof Error ? error.message : String(error);
+  const statusInMessage = STATUS_IN_MESSAGE.exec(message);
+  if (statusInMessage) {
+    const status = Number(statusInMessage[1]);
+    return {
+      code:
+        status === 404
+          ? "not_found"
+          : status === 400 || status === 422
+            ? "invalid_input"
+            : "http",
+      message,
+      status,
+      details: null,
+    };
+  }
   return {
     code: "transport",
-    message: error instanceof Error ? error.message : String(error),
+    message,
     status: null,
     details: null,
   };
 }
+
+/** A status-read fault, classified for the poll loop. */
+interface PollFault {
+  runError: AgentRunError;
+  /** Whether reading again may succeed — see {@link isTransientPollFault}. */
+  transient: boolean;
+  /** The platform's `Retry-After`, in ms, when the transport exposed one. */
+  retryAfterMs: number | null;
+}
+
+/**
+ * Whether a status-read fault may clear on its own, so the loop should back off
+ * and read again rather than give up:
+ *
+ *   - 408/429 and every 5xx: the platform said "ask again" or fell over — yes.
+ *   - any other 4xx (404 gone, 401/403 declined): deterministic — no.
+ *   - no status at all: a transport fault (DNS, reset socket, aborted fetch,
+ *     `fetch failed`) — yes, EXCEPT a malformed 2xx body (a `SyntaxError` from
+ *     the JSON parse, i.e. a contract break) or the SDK's own deadline error,
+ *     neither of which a retry can fix.
+ */
+function isTransientPollFault(
+  error: unknown,
+  runError: AgentRunError,
+): boolean {
+  if (runError.status !== null) {
+    return (
+      runError.status >= 500 || TRANSIENT_POLL_STATUSES.has(runError.status)
+    );
+  }
+  if (error instanceof SyntaxError) return false;
+  if (SDK_DEADLINE_MESSAGE.test(runError.message)) return false;
+  return true;
+}
+
+function classifyPollFault(error: unknown): PollFault {
+  const runError = asRunError(error);
+  return {
+    runError,
+    transient: isTransientPollFault(error, runError),
+    retryAfterMs:
+      error instanceof TransportHttpError ? error.retryAfterMs : null,
+  };
+}
+
+/**
+ * Delay before retry number `attempt` (1-based) of a run of consecutive
+ * transient faults. The platform's `Retry-After` wins when it sent a positive
+ * one; otherwise the delay doubles from `initialBackoffMs` and is capped at
+ * `maxBackoffMs`. Either way up to 20% jitter is added (upward, so a
+ * `Retry-After` is never undercut) — parents that tripped one rate limit
+ * together must not come back together.
+ */
+function backoffMs(
+  fault: PollFault,
+  attempt: number,
+  policy: Required<WaitRetryOptions>,
+): number {
+  const jitter = 1 + Math.random() * 0.2;
+  if (fault.retryAfterMs !== null && fault.retryAfterMs > 0) {
+    return Math.round(fault.retryAfterMs * jitter);
+  }
+  const doubled = policy.initialBackoffMs * 2 ** Math.max(0, attempt - 1);
+  return Math.round(Math.min(policy.maxBackoffMs, doubled * jitter));
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** The platform's own `message` from an error body, when it sent a usable one. */
 function platformMessage(body: unknown): string | null {
@@ -507,6 +669,21 @@ export async function launch(
       `${baseUrl}/agents/v1/executions/${encodeURIComponent(executionId)}`,
     );
 
+  // `status()` is a direct query, so it rides out only a short run of transient
+  // faults before throwing the last one — long enough to survive one
+  // rate-limit answer, short enough to still be "fetch the status".
+  const fetchDocBriefly = async (): Promise<ExecutionDoc> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await fetchDoc();
+      } catch (error) {
+        const fault = classifyPollFault(error);
+        if (!fault.transient || attempt >= STATUS_READ_ATTEMPTS) throw error;
+        await sleep(backoffMs(fault, attempt, DEFAULT_WAIT_RETRY));
+      }
+    }
+  };
+
   return {
     executionId,
     // Framework plumbing for `pauseUntilSignal` — see DispatchHandle. correlationId
@@ -516,19 +693,31 @@ export async function launch(
       resultSignal: AGENTS_RESULT_SIGNAL,
     },
     async status() {
-      return (await fetchDoc()).status;
+      return (await fetchDocBriefly()).status;
     },
-    async wait({ timeoutMs = 60 * 60_000, pollMs = 3_000 } = {}) {
+    async wait({ timeoutMs = 60 * 60_000, pollMs = 3_000, retry = {} } = {}) {
+      const policy: Required<WaitRetryOptions> = {
+        initialBackoffMs:
+          retry.initialBackoffMs ?? DEFAULT_WAIT_RETRY.initialBackoffMs,
+        maxBackoffMs: retry.maxBackoffMs ?? DEFAULT_WAIT_RETRY.maxBackoffMs,
+        maxConsecutiveFaults:
+          retry.maxConsecutiveFaults ?? DEFAULT_WAIT_RETRY.maxConsecutiveFaults,
+      };
       const deadline = Date.now() + timeoutMs;
       // Not "unknown" — that is now a real status, and this string only ever
       // lands in the timeout message as "we never read one".
       let lastStatus = "unread";
       let consecutiveFaults = 0;
+      // The fault the loop was backing off from when the deadline fell, if any
+      // — reported in the timeout's `details` so a 429 storm is diagnosable.
+      let lastFault: AgentRunError | null = null;
       // eslint-disable-next-line no-constant-condition
       while (true) {
+        let delayMs = pollMs;
         try {
           const d = await fetchDoc();
           consecutiveFaults = 0;
+          lastFault = null;
           lastStatus = d.status;
           if (TERMINAL.has(d.status)) {
             return {
@@ -539,34 +728,33 @@ export async function launch(
             };
           }
         } catch (error) {
-          const pollError = asRunError(error);
+          const fault = classifyPollFault(error);
           consecutiveFaults += 1;
+          lastFault = fault.runError;
           // The run EXISTS — only reading its status failed — so this is never
           // `"rejected"`: an author who read that as "nothing was dispatched"
           // would start a second copy of a live child.
           //
-          // Most 4xx won't cure themselves (execution gone, credential
-          // declined), so give up at once. 408/429 are the exceptions — the
-          // platform is saying "ask again" — and a 5xx or transport fault may
-          // be a blip, so ride those out. Bounded either way, because a real
-          // outage would otherwise burn the whole `timeoutMs` on doomed
-          // requests.
-          const permanent =
-            pollError.status !== null &&
-            pollError.status < 500 &&
-            !TRANSIENT_POLL_STATUSES.has(pollError.status);
+          // A permanent fault (execution gone, credential declined, malformed
+          // body) won't cure itself, so give up at once. A transient one —
+          // 408/429 ("ask again"), a 5xx, a transport blip — is ridden out with
+          // back-off, bounded by `maxConsecutiveFaults` because a real outage
+          // would otherwise burn the whole `timeoutMs` on doomed requests.
           const hopeless =
-            permanent || consecutiveFaults >= MAX_CONSECUTIVE_POLL_FAULTS;
+            !fault.transient ||
+            consecutiveFaults >= policy.maxConsecutiveFaults;
           if (hopeless) {
             return {
               executionId,
               status: "unknown",
               output: null,
-              error: pollError,
+              error: fault.runError,
             };
           }
+          delayMs = backoffMs(fault, consecutiveFaults, policy);
         }
-        if (Date.now() > deadline) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
           // Not a throw: the run is still out there, and `executionId` lets the
           // caller check on it later. Timing out is one more non-completed
           // status to branch on.
@@ -578,11 +766,13 @@ export async function launch(
               code: "timeout",
               message: `orchestration ${executionId} timed out after ${timeoutMs}ms (last status: ${lastStatus})`,
               status: null,
-              details: null,
+              details: lastFault,
             },
           };
         }
-        await new Promise((r) => setTimeout(r, pollMs));
+        // A back-off never outlasts the caller's budget: clamp it, so the last
+        // read lands at the deadline's edge rather than well past it.
+        await sleep(Math.min(delayMs, remainingMs));
       }
     },
   };
