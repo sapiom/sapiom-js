@@ -489,7 +489,7 @@
             return `<tr class="o-${esc(outcome)}"><td class="name" title="${esc(c.company)}">${esc(c.company)}</td><td class="state"><span class="dot" aria-hidden="true"></span>${esc(OUTCOME_LABEL[outcome] ?? outcome ?? "—")}</td><td class="num">${fmtNum(n)}</td><td class="num">${fmtNum(c.observedItems)}</td><td class="bar"><span class="fill" style="width:${((n / max) * 100).toFixed(2)}%"></span></td></tr>`;
           })
           .join("");
-        return `<table class="cov"><thead><tr><th>Company</th><th>Result</th><th class="num">New</th><th class="num">Seen</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+        return `<table class="cov"><thead><tr><th>Company</th><th>Result</th><th class="num">New</th><th class="num" title="Relevant sources found this run, new ones included">Found</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
       }
 
       function renderGaps(unmet, failed) {

@@ -95,11 +95,13 @@ async function api(route) {
  * usually a child. The agent keys each child `<parent run id>:<company>`
  * (`index.ts`, `fanOut`); those rows are skipped without a detail read. A
  * candidate still has to prove itself on its detail: no parent run, and a
- * digest in its output (a dry-run preview or a budget block has none).
+ * digest in its output (a dry-run preview or a budget block has none). Both
+ * reads are capped, so a long streak of previews ends in the captured run with
+ * the reason in the footer rather than an unbounded scan.
  */
 const CHILD_KEY = /^\d+:/;
 const LIST_LIMIT = 50;
-const MAX_DETAIL_READS = 5;
+const MAX_DETAIL_READS = 10;
 
 function isRadarRun(run) {
   return (
@@ -145,7 +147,7 @@ async function readLive() {
   }
   if (!run) {
     throw new Error(
-      `no completed radar run among the latest ${rows.length} runs`,
+      `no completed radar run among the latest ${rows.length} runs (checked ${candidates.length})`,
     );
   }
   const value = {
