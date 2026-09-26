@@ -1,0 +1,130 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "156426",
+    "definitionId": "478",
+    "startedAt": "2026-08-04T17:35:50.195Z",
+    "finishedAt": "2026-08-04T17:36:18.739Z",
+    "status": "completed",
+    "note": "Terminal output and shared state of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 156426 on 2026-09-26. `output`, `campaign` and `steps` are the same projection of the run's terminal output, shared state and step trail that server.mjs applies to a live read."
+  },
+  "output": {
+    "campaign": "cold-outreach",
+    "demo": true,
+    "dryRun": false,
+    "enriched": 3,
+    "deliverable": 3,
+    "sent": 3,
+    "replied": 0,
+    "note": "This is a zero-setup demo: enrichment and verification simulated Hunter's response for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior."
+  },
+  "campaign": {
+    "demo": true,
+    "senderName": "The team",
+    "dripMs": 259200000,
+    "touchIndex": 0,
+    "contacts": [
+      {
+        "email": "jordan.rivera@brightloop.example",
+        "fullName": "Jordan Rivera",
+        "firstName": "Jordan",
+        "lastName": "Rivera",
+        "position": "Head of Growth",
+        "company": "Brightloop",
+        "firstLine": "That 40-store grocery case study caught my eye — cutting no-show shifts by a third in a quarter is a serious proof point for retail ops buyers.",
+        "deliverable": true,
+        "verifyStatus": "demo-stand-in",
+        "status": "active"
+      },
+      {
+        "email": "priya.nandan@fernwoodlabs.example",
+        "fullName": "Priya Nandan",
+        "firstName": "Priya",
+        "lastName": "Nandan",
+        "position": "VP of Engineering",
+        "company": "Fernwood Labs",
+        "firstLine": "The reagent auto-reorder partnership is a smart way to wedge deeper into biotech labs — the threshold logic must create a lot of interesting data to track.",
+        "deliverable": true,
+        "verifyStatus": "demo-stand-in",
+        "status": "active"
+      },
+      {
+        "email": "marcus.webb@haventree.example",
+        "fullName": "Marcus Webb",
+        "firstName": "Marcus",
+        "lastName": "Webb",
+        "position": "Director of Operations",
+        "company": "Haventree",
+        "firstLine": "Halving waiting-room time with online check-in is the kind of patient-experience win that tends to pull everything else at Haventree along with it.",
+        "deliverable": true,
+        "verifyStatus": "demo-stand-in",
+        "status": "active"
+      }
+    ],
+    "sequence": [
+      {
+        "subject": "Quick idea for {company}",
+        "body": "Worth a short call to dig in? Either way, happy to share a couple of thoughts.\n\nBest,\n{sender}"
+      },
+      {
+        "subject": "Re: Quick idea for {company}",
+        "body": "Bumping this in case it slipped — inboxes get busy. Still glad to send over a couple of ideas for {company} whenever the timing's right.\n\nBest,\n{sender}"
+      },
+      {
+        "subject": "Closing the loop, {firstName}",
+        "body": "I'll stop here so I'm not a bother. If growing {company} is on your list this quarter, just reply and I'll pick it back up.\n\nAll the best,\n{sender}"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "stepName": "enrich",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:35:50.318Z",
+      "finishedAt": "2026-08-04T17:35:52.217Z"
+    },
+    {
+      "stepName": "scrape",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:35:52.317Z",
+      "finishedAt": "2026-08-04T17:35:53.346Z"
+    },
+    {
+      "stepName": "personalize",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:35:53.927Z",
+      "finishedAt": "2026-08-04T17:36:04.862Z"
+    },
+    {
+      "stepName": "verify",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:36:05.468Z",
+      "finishedAt": "2026-08-04T17:36:06.198Z"
+    },
+    {
+      "stepName": "launch",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:36:06.435Z",
+      "finishedAt": "2026-08-04T17:36:13.444Z"
+    },
+    {
+      "stepName": "send",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:36:13.557Z",
+      "finishedAt": "2026-08-04T17:36:17.367Z"
+    },
+    {
+      "stepName": "done",
+      "status": "succeeded",
+      "attempt": 0,
+      "startedAt": "2026-08-04T17:36:17.457Z",
+      "finishedAt": "2026-08-04T17:36:18.229Z"
+    }
+  ]
+}
