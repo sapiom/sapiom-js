@@ -121,3 +121,6 @@ answer as a fraction; it throws when the judge gave no number at all.
   prompt, its structured-output schema, and its reader.
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
 - `AGENTS.md` — the authoring loop and the loop-bound contract.
+- `app/` — the draft grading dashboard (`node server.mjs`): the published
+  draft, the judge's score against the pass bar, and the brief and rubric it
+  was graded on. See `app/README.md`.
