@@ -6,39 +6,17 @@
     "startedAt": "2026-08-04T17:35:50.195Z",
     "finishedAt": "2026-08-04T17:36:18.739Z",
     "status": "completed",
-    "input": {},
     "note": "Terminal output and shared state of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 156426 on 2026-09-26. `output` is verbatim; `campaign` and `steps` are the same projection of the run's shared state and step trail that server.mjs applies to a live read."
   },
   "output": {
-    "demo": true,
-    "note": "This is a zero-setup demo: enrichment and verification simulated Hunter's response for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior.",
-    "sent": 3,
-    "dryRun": false,
-    "replied": 0,
     "campaign": "cold-outreach",
-    "contacts": [
-      {
-        "email": "jordan.rivera@brightloop.example",
-        "status": "active",
-        "company": "Brightloop",
-        "deliverable": true
-      },
-      {
-        "email": "priya.nandan@fernwoodlabs.example",
-        "status": "active",
-        "company": "Fernwood Labs",
-        "deliverable": true
-      },
-      {
-        "email": "marcus.webb@haventree.example",
-        "status": "active",
-        "company": "Haventree",
-        "deliverable": true
-      }
-    ],
+    "demo": true,
+    "dryRun": false,
     "enriched": 3,
     "deliverable": 3,
-    "touchesSent": 0
+    "sent": 3,
+    "replied": 0,
+    "note": "This is a zero-setup demo: enrichment and verification simulated Hunter's response for 3 built-in sample leads, the opener came from a real model call, and the first touch was actually sent to this agent's own Sapiom-hosted demo inbox — open it to read the personalized drafts. Pass your own `leads` to enrich, verify, and drip a real campaign, including the durable pause and reply-to-stop behavior."
   },
   "campaign": {
     "demo": true,

@@ -129,6 +129,26 @@ function projectCampaign(shared) {
   };
 }
 
+/**
+ * The terminal output's summary fields the page reads. A dry run also returns
+ * its whole `plan` and every contact's address; neither is shown, so neither
+ * is served.
+ */
+function projectOutput(output) {
+  const o = output && typeof output === "object" ? output : {};
+  const n = (v) => (Number.isFinite(v) ? v : null);
+  return {
+    campaign: text(o.campaign),
+    demo: o.demo === true,
+    dryRun: o.dryRun === true,
+    enriched: n(o.enriched),
+    deliverable: n(o.deliverable),
+    sent: n(o.sent),
+    replied: n(o.replied),
+    note: text(o.note),
+  };
+}
+
 /** Each step the run took, in order, with its timing; no inputs or logs. */
 function projectSteps(steps) {
   if (!Array.isArray(steps)) return [];
@@ -172,9 +192,8 @@ async function readLive() {
       startedAt: run.startedAt ?? null,
       finishedAt: run.finishedAt ?? null,
       status: run.status ?? "completed",
-      input: run.input ?? null,
     },
-    output: run.output,
+    output: projectOutput(run.output),
     campaign: projectCampaign(run.sharedState),
     steps: projectSteps(run.steps),
   };

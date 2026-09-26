@@ -23,9 +23,10 @@ The footer of the page names the source and the run id either way.
 
 The openers come from the run's shared state rather than its terminal output:
 `done` returns each contact's address and status, not the line the model wrote.
-The server passes through only the fields the page reads (contacts, the
-sequence, the sender name, the drip interval, and each step's name and timing),
-never the whole shared state.
+The server passes through only the fields the page reads (the output's
+counts and note, the contacts, the sequence, the sender name, the drip
+interval, and each step's name and timing), never the run's whole input,
+output, or shared state.
 
 When Sapiom publishes this dashboard as an App Link on clone, the publish step
 injects the two variables. Running it by hand, export them yourself to point the
