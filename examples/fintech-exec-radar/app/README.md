@@ -1,7 +1,7 @@
 # Opportunity radar dashboard
 
 The page this template ships beside its agent: the new sourced items grouped by
-signal, each company's result with its new and seen item counts, the run-health
+signal, each company's result with its new and found item counts, the run-health
 counters, and the steps that degraded. Every headline and every count on it
 comes from a run of the agent.
 

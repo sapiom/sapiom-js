@@ -134,7 +134,7 @@ ranking, and optional email delivery.
 ## Dashboard
 
 `app/` is the dashboard this template ships (`node server.mjs`): the new sourced
-items grouped by signal, each company's result and item counts, and the steps
+items grouped by signal, each company's result with new and found item counts, and the steps
 that degraded, all read from the latest radar run. See `app/README.md`.
 `preview.png` is its screenshot, referenced from `template.json` → `app.preview`.
 
