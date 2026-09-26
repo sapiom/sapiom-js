@@ -634,12 +634,22 @@
               ? "verification simulated for demo leads"
               : "sendable after verification",
           ),
+          // A dry run ends at `launch`, before `sent` and `replied` exist; it
+          // sent nothing and so heard nothing back, which is 0, not unknown.
           kpi(
             "Emails sent",
-            count(o.sent),
-            demo ? "to this agent's own demo inbox" : "across every touch",
+            count(o.dryRun ? 0 : o.sent),
+            o.dryRun
+              ? "a dry run sends nothing"
+              : demo
+                ? "to this agent's own demo inbox"
+                : "across every touch",
           ),
-          kpi("Replies", count(o.replied), "a reply ends that prospect's drip"),
+          kpi(
+            "Replies",
+            count(o.dryRun ? 0 : o.replied),
+            "a reply ends that prospect's drip",
+          ),
         ].join("");
 
         const run = { demo, dryRun: o.dryRun === true };

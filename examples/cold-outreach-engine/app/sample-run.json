@@ -6,7 +6,7 @@
     "startedAt": "2026-08-04T17:35:50.195Z",
     "finishedAt": "2026-08-04T17:36:18.739Z",
     "status": "completed",
-    "note": "Terminal output and shared state of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 156426 on 2026-09-26. `output` is verbatim; `campaign` and `steps` are the same projection of the run's shared state and step trail that server.mjs applies to a live read."
+    "note": "Terminal output and shared state of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 156426 on 2026-09-26. `output`, `campaign` and `steps` are the same projection of the run's terminal output, shared state and step trail that server.mjs applies to a live read."
   },
   "output": {
     "campaign": "cold-outreach",
