@@ -268,13 +268,11 @@
       .brief {
         margin: 0 0 12px;
         font-size: 13px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
-      .criteria {
-        margin: 0;
-        padding-left: 18px;
-        font-size: 13px;
-        display: grid;
-        gap: 3px;
+      .brief:last-child {
+        margin-bottom: 0;
       }
       .tag {
         font-size: 11px;
@@ -388,23 +386,6 @@
         }</article>`;
       }
 
-      /**
-       * A rubric written as sentences ("Under 120 words. Noir tone: ...") is
-       * shown one criterion per line; one written any other way is shown as
-       * it came. These are what the judge scored against, not per-criterion
-       * results: the judge returns one score for the whole draft.
-       */
-      function renderRubric(rubric) {
-        const parts = String(rubric)
-          .split(/(?<=[.!?])\s+(?=[A-Z])/)
-          .map((p) => p.trim())
-          .filter(Boolean);
-        if (parts.length < 2) return `<p class="brief">${esc(rubric)}</p>`;
-        return `<ol class="criteria">${parts
-          .map((p) => `<li>${esc(p)}</li>`)
-          .join("")}</ol>`;
-      }
-
       function render({ source, task, output }) {
         const o = output ?? {};
         const src = source ?? {};
@@ -486,7 +467,7 @@
           <h3>Brief ${t.sampleBrief ? `<span class="tag">· built-in sample</span>` : ""}</h3>
           <p class="brief">${esc(t.brief ?? "—")}</p>
           <h3>Rubric the judge scored against ${t.sampleRubric ? `<span class="tag">· built-in sample</span>` : ""}</h3>
-          ${renderRubric(t.rubric ?? "—")}`;
+          <p class="brief">${esc(t.rubric ?? "—")}</p>`;
 
         const where =
           src.kind === "live"

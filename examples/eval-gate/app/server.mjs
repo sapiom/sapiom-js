@@ -101,23 +101,23 @@ async function api(route) {
   return res.json();
 }
 
-const text = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
-
 /**
  * What the run was asked to do: its own brief and rubric when it was given
- * them, the built-in sample otherwise (the agent's zod defaults fill each one
- * independently, so each falls back on its own).
+ * them, the built-in sample otherwise. This mirrors the agent's zod schema
+ * exactly: a default applies only when the field is absent, and any non-empty
+ * string (whitespace included) is what the judge was actually given.
  */
 function taskOf(input) {
   const i = input && typeof input === "object" ? input : {};
-  const brief = text(i.brief);
-  const rubric = text(i.rubric);
+  const given = (v) => (typeof v === "string" && v.length > 0 ? v : null);
+  const brief = given(i.brief) ?? SAMPLE_BRIEF;
+  const rubric = given(i.rubric) ?? SAMPLE_RUBRIC;
   const max = Number(i.maxIterations);
   return {
-    brief: brief ?? SAMPLE_BRIEF,
-    rubric: rubric ?? SAMPLE_RUBRIC,
-    sampleBrief: brief === null,
-    sampleRubric: rubric === null,
+    brief,
+    rubric,
+    sampleBrief: brief === SAMPLE_BRIEF,
+    sampleRubric: rubric === SAMPLE_RUBRIC,
     maxIterations:
       Number.isInteger(max) && max > 0 ? max : DEFAULT_MAX_ITERATIONS,
   };
