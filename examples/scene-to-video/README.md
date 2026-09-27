@@ -68,9 +68,16 @@ Use `dryRun` while iterating, and keep `numShots` small for a real multi-shot ru
 
 ## Model choice
 
-`animate` defaults to Kling 2.1 Pro image-to-video (`fal-ai/kling-video/v2.1/pro/image-to-video`)
-for quality. Pass a cheaper model via the `model` input (e.g. a Wan or Seedance
-i2v id) to trade quality for cost. Model ids are passed through verbatim.
+`animate` defaults to `seedance-i2v`, the cataloged image-to-video alias. The
+clip follows the keyframe's shape, and `keyframe` renders at the requested
+`aspectRatio`, so the video comes out at that ratio.
+
+To use another cataloged alias, pass it as `model`. A raw provider id (anything
+with a `/`) is sent through `passthrough` in Kling's request shape (`image_url`,
+`duration` as `"5"` or `"10"`, `aspect_ratio`), so only Kling-compatible ids such
+as `fal-ai/kling-video/v2.1/pro/image-to-video` work. A model with another schema
+needs its own mapping in `animate`. Raw ids are uncataloged: they route today but
+will be rejected once alias-only enforcement is switched on.
 
 ## Files
 
