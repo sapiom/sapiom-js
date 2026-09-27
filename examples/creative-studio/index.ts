@@ -240,6 +240,11 @@ export function buildClipPrompt(shot: Shot): string {
   return `${motion} ${who} says, clearly and at a natural pace: "${shot.line.trim()}"`;
 }
 
+/** A raw provider id (`vendor/model/...`) rather than a cataloged alias. */
+export function isRawModelId(model: string): boolean {
+  return model.includes("/");
+}
+
 /** Trim and end with a full stop, so joined prompt parts stay separate sentences. */
 function sentence(text: string): string {
   const t = text.trim();
@@ -284,6 +289,7 @@ export function passesCheck(v: CheckVerdict): boolean {
   return (
     v.same_person &&
     v.clothing_matches &&
+    v.palette_matches &&
     v.composition_matches &&
     v.score >= CHECK_PASS_SCORE
   );
@@ -298,9 +304,11 @@ export function passesCheck(v: CheckVerdict): boolean {
 export function pickBestAttempt(
   checks: ReadonlyArray<CheckVerdict | null>,
 ): number {
+  // An unchecked attempt ranks below any frame known to keep the person and
+  // clothing, and above one known to have lost them.
   const rank = (v: CheckVerdict | null): number =>
     v === null
-      ? -1
+      ? 50
       : (passesCheck(v) ? 1000 : 0) +
         (v.same_person && v.clothing_matches ? 100 : 0) +
         v.score;
@@ -565,6 +573,33 @@ function costOf(x: { cost?: { estimateUsd?: number } } | undefined): number {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
+/** Hosts a generation result may point at: the media provider and file storage. */
+const MEDIA_HOSTS = [
+  "fal.media",
+  "storage.googleapis.com",
+  "file-storage.services.sapiom.ai",
+];
+
+/**
+ * Refuse to fetch anything but an https URL on a known media host, so a
+ * malformed or hostile result cannot point this step at an internal address.
+ */
+export function assertMediaUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(
+      `refusing to fetch a malformed media URL: ${url.slice(0, 120)}`,
+    );
+  }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = MEDIA_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  if (parsed.protocol !== "https:" || !allowed) {
+    throw new Error(`refusing to fetch media from ${parsed.protocol}//${host}`);
+  }
+}
+
 /**
  * Copy a provider-hosted file into Sapiom file storage and return its id. Used
  * when a generation comes back with a URL but no `fileId`: merging from a raw
@@ -576,6 +611,7 @@ async function persistFromUrl(
   contentType: string,
   fileName: string,
 ): Promise<string> {
+  assertMediaUrl(url);
   const res = await fetch(url);
   if (!res.ok)
     throw new Error(
@@ -745,7 +781,7 @@ const entryInput = z.object({
     .string()
     .optional()
     .describe(
-      "Optional image-to-video model override. Defaults to seedance-i2v.",
+      "Optional image-to-video model alias (not a raw provider id). Defaults to seedance-i2v.",
     ),
   dryRun: z
     .boolean()
@@ -784,6 +820,12 @@ const plan = defineStep({
       return terminate({
         status: "rejected",
         reason: "`scene` was empty — describe the scene to film.",
+      });
+    }
+    if (input.model !== undefined && isRawModelId(input.model)) {
+      return terminate({
+        status: "rejected",
+        reason: `\`model\` must be a cataloged image-to-video alias such as "seedance-i2v"; "${input.model}" is a raw provider id, which gets none of the neutral parameters (referenceImage, duration, audio) this agent sends.`,
       });
     }
     const usedSample = input.scene === undefined;
@@ -826,7 +868,14 @@ const plan = defineStep({
     ctx.shared.set("aspectRatio", aspectRatio);
     if (input.model) ctx.shared.set("model", input.model);
     ctx.shared.set("plan", p);
-    ctx.shared.set("warnings", planWarnings(p));
+    ctx.shared.set("warnings", [
+      ...(p.shots.length < numShots
+        ? [
+            `The plan has ${p.shots.length} shot(s) where ${numShots} were requested; the video has ${p.shots.length}.`,
+          ]
+        : []),
+      ...planWarnings(p),
+    ]);
     ctx.shared.set("costUsd", 0);
 
     if (input.dryRun === true) {
@@ -877,7 +926,13 @@ const plate = defineStep({
       }
       const verdict = await inspectPlate(ctx, fileId);
       ctx.logger.info("plate check", { attempt, verdict });
-      if (verdict === null || plateUsable(verdict)) break;
+      if (verdict === null) {
+        warnings.push(
+          "The character plate could not be checked for extra figures or text; it was used unchecked.",
+        );
+        break;
+      }
+      if (plateUsable(verdict)) break;
       if (attempt === MAX_PLATE_ATTEMPTS) {
         warnings.push(
           `The character plate still shows ${verdict.people} figure(s)${verdict.has_text_or_panels ? " with text or panels" : ""} after a redo; it was used anyway.`,
@@ -970,7 +1025,9 @@ const gather = defineStep({
         result?.status === "failed"
           ? JSON.stringify(result.error).slice(0, 300)
           : "no clip returned";
-      warnings.push(`Shot ${index + 1} failed and was left out: ${why}`);
+      warnings.push(
+        `Shot ${index + 1} failed and was left out: ${why}. Its spend is not in costUsd, which covers delivered shots only.`,
+      );
     }
     const nextResults = [...results, recorded];
     const nextIndex = index + 1;
@@ -1069,8 +1126,9 @@ const finalize = defineStep({
       bible: p.bible,
       shots: p.shots.map((s, i) => ({ ...s, result: results[i] ?? null })),
       warnings: ctx.shared.get("warnings") ?? [],
-      // Sum of the per-call quotes for images, clips and the merge. The planning
-      // and check model calls are not included (they are not metered per run yet).
+      // Sum of the per-call quotes for the plate, the merge, and every delivered
+      // shot's keyframes and clip. A failed shot's spend is not included (its
+      // warning says so), nor are the model calls, which are not metered per run.
       costUsd: round2(ctx.shared.get("costUsd") ?? 0),
       wallClockSeconds: Math.round((Date.now() - startedAt) / 1000),
       ...(ctx.shared.get("note") ? { note: ctx.shared.get("note") } : {}),
@@ -1191,18 +1249,27 @@ const check = defineStep({
       verdict,
     });
 
-    if (verdict && !passesCheck(verdict)) {
-      if (attempt < MAX_KEYFRAME_ATTEMPTS) {
-        return goto("keyframe", {});
-      }
-      const checks = ctx.shared.get("checks") ?? [];
+    if (verdict && !passesCheck(verdict) && attempt < MAX_KEYFRAME_ATTEMPTS) {
+      return goto("keyframe", {});
+    }
+    const checks = ctx.shared.get("checks") ?? [];
+    const passed = verdict !== null && passesCheck(verdict);
+    if (!passed && checks.length > 1) {
+      // A redo was made and did not pass (or could not be checked): animate
+      // the best attempt, not simply the last one.
       const ids = ctx.shared.get("keyframeIds") ?? [];
       const best = pickBestAttempt(checks);
-      const chosen = checks[best] ?? verdict;
+      const chosen = checks[best];
       if (ids[best]) ctx.shared.set("keyframeFileId", ids[best]);
       ctx.shared.set("lastCheck", chosen);
       warnings.push(
-        `Shot ${job.index + 1}: no keyframe passed the check after a redo; used attempt ${best + 1} of ${checks.length} (score ${chosen.score}/10: ${chosen.issues || "no detail"}).`,
+        chosen
+          ? `Shot ${job.index + 1}: no keyframe passed the check after a redo; used attempt ${best + 1} of ${checks.length} (score ${chosen.score}/10: ${chosen.issues || "no detail"}).`
+          : `Shot ${job.index + 1}: no keyframe passed the check after a redo; used attempt ${best + 1} of ${checks.length}, which could not be checked.`,
+      );
+    } else if (verdict && !passed) {
+      warnings.push(
+        `Shot ${job.index + 1}: the keyframe did not pass the check (score ${verdict.score}/10: ${verdict.issues || "no detail"}); it was used anyway.`,
       );
     }
     ctx.shared.set("childWarnings", warnings);

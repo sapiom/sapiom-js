@@ -65,14 +65,14 @@ Output:
 
 ## Input
 
-| Field         | Default | Notes                                                                             |
-| ------------- | ------- | --------------------------------------------------------------------------------- |
-| `scene`       | sample  | The scene to film. Quote any dialogue; quoted lines are spoken verbatim.          |
-| `numShots`    | 4       | 1–6. A run with no `scene` always films one 5-second silent shot.                 |
-| `aspectRatio` | `16:9`  | `16:9`, `9:16` or `1:1`. The plate is rendered at this ratio; every shot follows. |
-| `model`       |         | Image-to-video override. Defaults to `seedance-i2v`.                              |
-| `dryRun`      |         | Return the plan only, with each shot's final clip prompt. Generates nothing.      |
-| `shot`        |         | Internal: set by the coordinator on each per-shot run. Leave it empty.            |
+| Field         | Default | Notes                                                                                  |
+| ------------- | ------- | -------------------------------------------------------------------------------------- |
+| `scene`       | sample  | The scene to film. Quote any dialogue; quoted lines are spoken verbatim.               |
+| `numShots`    | 4       | 1–6. A run with no `scene` always films one 5-second silent shot.                      |
+| `aspectRatio` | `16:9`  | `16:9`, `9:16` or `1:1`. The plate is rendered at this ratio; every shot follows.      |
+| `model`       |         | Image-to-video model alias. Defaults to `seedance-i2v`. A raw provider id is rejected. |
+| `dryRun`      |         | Return the plan only, with each shot's final clip prompt. Generates nothing.           |
+| `shot`        |         | Internal: set by the coordinator on each per-shot run. Leave it empty.                 |
 
 ## Prompt rules
 
@@ -113,7 +113,9 @@ Wall clock is set by the slowest `seedance-i2v` clip, which took 3.5 to 10.5
 minutes in these runs. The same 3-shot scene through `scene-to-video`, which
 renders clips one after another, took 13m43s.
 
-`costUsd` sums the per-call quotes for the plate, keyframes, clips and merge.
+`costUsd` sums the per-call quotes for the plate, the merge, and each delivered
+shot's keyframes and clip. A failed shot's spend is not included; its warning
+says so.
 The two model calls per shot (plan, check) are not included: agent `llm.run`
 calls are not metered per run yet (SAP-3613).
 

@@ -5,6 +5,7 @@ import { AGENTS_RESULT_SIGNAL, fileStorage } from "@sapiom/tools";
 
 import {
   agent,
+  assertMediaUrl,
   buildClipPrompt,
   buildPlanSchema,
   buildPlatePrompt,
@@ -318,7 +319,7 @@ test("check redoes a drifting keyframe once, then accepts it with a warning", as
   assert.equal(d2.stepName, "animate");
   assert.match(
     second.shared.get("childWarnings")[0],
-    /no keyframe passed the check after a redo; used attempt 1 of 1 \(score 3\/10: different face\)/,
+    /the keyframe did not pass the check \(score 3\/10: different face\); it was used anyway/,
   );
 });
 
@@ -583,7 +584,10 @@ test("when both keyframes fail, the better attempt is animated, not the last", a
     issues: "cap missing",
   };
   assert.equal(pickBestAttempt([good, worse]), 0);
-  assert.equal(pickBestAttempt([null, worse]), 1);
+  // An unchecked attempt loses to one that kept the person and clothes, and
+  // beats one known to have lost them.
+  assert.equal(pickBestAttempt([null, good]), 1);
+  assert.equal(pickBestAttempt([null, worse]), 0);
   assert.equal(
     pickBestAttempt([
       { ...good, score: 6 },
@@ -662,4 +666,101 @@ test("runStructured retries a failed call and rethrows only when every attempt f
     ),
     /502/,
   );
+});
+
+test("a redo whose check fails does not replace a scored first attempt", async () => {
+  const first = {
+    same_person: true,
+    clothing_matches: true,
+    palette_matches: true,
+    composition_matches: false,
+    score: 8,
+    issues: "framing",
+  };
+  const job = {
+    index: 0,
+    shot: shot(),
+    plateFileId: "plate",
+    character: "c",
+    bible: "b",
+  };
+  const { ctx: c, shared } = ctx(
+    {
+      job,
+      keyframeAttempt: 2,
+      keyframeFileId: "kf2",
+      keyframeIds: ["kf1", "kf2"],
+      checks: [first],
+      childWarnings: [],
+    },
+    {
+      llm: {
+        run: async () => {
+          throw new Error("502 upstream_unavailable");
+        },
+        structuredOf: () => undefined,
+      },
+    },
+  );
+  const d = await agent.steps.check.run({}, c);
+  assert.equal(d.stepName, "animate");
+  assert.equal(shared.get("keyframeFileId"), "kf1");
+  assert.deepEqual(shared.get("checks"), [first, null]);
+});
+
+test("palette drift fails the keyframe check", () => {
+  const v = {
+    same_person: true,
+    clothing_matches: true,
+    palette_matches: false,
+    composition_matches: true,
+    score: 9,
+    issues: "",
+  };
+  assert.equal(passesCheck(v), false);
+});
+
+test("a raw provider id as model is rejected before any spend", async () => {
+  let called = false;
+  const { ctx: c } = ctx(
+    {},
+    {
+      llm: {
+        run: async () => ((called = true), {}),
+        structuredOf: () => undefined,
+      },
+    },
+  );
+  const d = await agent.steps.plan.run(
+    { scene: "x", model: "fal-ai/kling-video/v2.1/pro/image-to-video" },
+    c,
+  );
+  assert.equal(d.kind, "terminate");
+  assert.equal(d.output.status, "rejected");
+  assert.equal(called, false);
+});
+
+test("an unchecked plate is used with a warning", async () => {
+  const { ctx: c, shared } = plateCtx([undefined, undefined, undefined]);
+  await agent.steps.plate.run({}, c);
+  assert.match(
+    shared.get("warnings")[0],
+    /could not be checked for extra figures or text/,
+  );
+});
+
+test("persisting a media URL refuses anything but https on a known host", () => {
+  assert.doesNotThrow(() =>
+    assertMediaUrl("https://v3b.fal.media/files/x.mp4"),
+  );
+  assert.doesNotThrow(() =>
+    assertMediaUrl("https://storage.googleapis.com/b/o"),
+  );
+  assert.throws(() => assertMediaUrl("http://v3b.fal.media/x"), /refusing/);
+  assert.throws(
+    () => assertMediaUrl("https://169.254.169.254/latest/meta-data"),
+    /refusing/,
+  );
+  assert.throws(() => assertMediaUrl("https://evilfal.media/x"), /refusing/);
+  assert.throws(() => assertMediaUrl("not a url"), /malformed/);
 });
