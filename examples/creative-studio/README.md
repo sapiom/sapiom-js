@@ -106,7 +106,7 @@ Runs in a personal prod org, 2026-09-27. Cost is the sum of the per-call quotes.
 | --------------------------------------- | ---- | -------------- | ------------- |
 | 4 shots, 2 spoken lines, ~27s of video  | 4    | 6m00s – 11m40s | $6.39 – $7.41 |
 | 3 shots, same scene as `scene-to-video` | 4    | 5m10s – 7m25s  | $4.62 – $5.35 |
-| `{}` (one 5s silent shot)               | 5    | 4m04s – 6m59s  | $1.40 – $1.44 |
+| `{}` (one 5s silent shot)               | 6    | 4m04s – 8m59s  | $1.40 – $1.44 |
 | `{ "aspectRatio": "9:16" }`             | 1    | 4m19s          | $1.40         |
 
 Wall clock is set by the slowest `seedance-i2v` clip, which took 3.5 to 10.5
