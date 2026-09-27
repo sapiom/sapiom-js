@@ -137,10 +137,13 @@ const SAMPLE_SCENE =
  * and rejects `aspectRatio` (the clip follows the keyframe's shape, which
  * `keyframe` renders at the requested ratio).
  *
- * A raw provider id passed as `model` (anything with a `/`, e.g.
- * `fal-ai/kling-video/v2.1/pro/image-to-video`) is sent through `passthrough`
- * with that provider's own keys instead. Raw ids route today but are
- * uncataloged and will be rejected once alias-only enforcement (SAP-2582) is on.
+ * A raw provider id passed as `model` (anything with a `/`) is sent through
+ * `passthrough` in Kling's request shape: `image_url`, `duration` as "5" | "10",
+ * and `aspect_ratio`. Only Kling-compatible ids such as
+ * `fal-ai/kling-video/v2.1/pro/image-to-video` accept it; a model with another
+ * schema (Wan takes `num_frames`, not `duration`) needs its own mapping here.
+ * Raw ids route today but are uncataloged and will be rejected once alias-only
+ * enforcement (SAP-2582) is on.
  */
 const DEFAULT_VIDEO_MODEL = "seedance-i2v";
 /** Video merge model used by `stitch` — concats the clips into one video. */

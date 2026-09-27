@@ -72,10 +72,12 @@ Use `dryRun` while iterating, and keep `numShots` small for a real multi-shot ru
 clip follows the keyframe's shape, and `keyframe` renders at the requested
 `aspectRatio`, so the video comes out at that ratio.
 
-To use another model, pass its id as `model`. A raw provider id (anything with a
-`/`, such as `fal-ai/kling-video/v2.1/pro/image-to-video`) is sent with that
-provider's own keys through `passthrough`. Raw ids are uncataloged: they route
-today but will be rejected once alias-only enforcement is switched on.
+To use another cataloged alias, pass it as `model`. A raw provider id (anything
+with a `/`) is sent through `passthrough` in Kling's request shape (`image_url`,
+`duration` as `"5"` or `"10"`, `aspect_ratio`), so only Kling-compatible ids such
+as `fal-ai/kling-video/v2.1/pro/image-to-video` work. A model with another schema
+needs its own mapping in `animate`. Raw ids are uncataloged: they route today but
+will be rejected once alias-only enforcement is switched on.
 
 ## Files
 
