@@ -273,8 +273,6 @@ export class Transport {
           "or run inside a Sapiom agent run (the engine injects SAPIOM_API_KEY).",
       );
     }
-    // A malformed URL or a refused channel throws here, before anything is sent.
-    assertCredentialMayTravel(new URL(url), this.policy);
     const headers: Record<string, string> = {
       [options.authHeader ?? DEFAULT_AUTH_HEADER]: this.apiKey,
       "x-sapiom-client": CLIENT_MARKER,
@@ -285,6 +283,9 @@ export class Transport {
     const startedAt = Date.now();
     let response: Response;
     try {
+      // A malformed URL or a refused channel throws before anything is sent, and
+      // is still counted as a failed call.
+      assertCredentialMayTravel(new URL(url), this.policy);
       response = await fetchKeepingCredential(
         this.fetchImpl,
         url,
