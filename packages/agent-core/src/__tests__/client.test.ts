@@ -53,6 +53,17 @@ describe('createClient / GatewayClient', () => {
     expect((init.headers as Record<string, string>)['x-api-key']).toBe('sk_test');
   });
 
+  it.each([
+    ['a cycle', () => { const b: Record<string, unknown> = {}; b.self = b; return b; }],
+    ['a BigInt', () => ({ amount: 10n })],
+  ])('reports an unserializable body (%s) as BAD_PAYLOAD, never NETWORK', async (_label, build) => {
+    const spy = mockFetch([{ status: 200, body: {} }]);
+    const client = createClient({ host: 'https://example.com', apiKey: 'sk' });
+
+    await expect(client.post('/foo', build())).rejects.toMatchObject({ code: 'BAD_PAYLOAD' });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('throws AgentOperationError with HTTP_4xx code on error status', async () => {
     mockFetch([{ status: 401, body: { message: 'Unauthorized' } }]);
     const client = createClient({ host: 'https://example.com', apiKey: 'bad' });
