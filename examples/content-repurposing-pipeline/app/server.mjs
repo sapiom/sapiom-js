@@ -256,6 +256,32 @@ async function latestRun() {
   }
 }
 
+/**
+ * Only what the page renders leaves this server. The run's input carries the
+ * caller's source text and recipient list, and its output lists every address
+ * the pack was sent to; the page needs neither, only whether the source was
+ * the caller's own, whether the clip was asked for, and how many recipients
+ * there were. The pack markdown is dropped too, as `pack` already carries it.
+ */
+function forPage(run) {
+  const input = run.source?.input ?? {};
+  const { recipients, markdown: _markdown, ...output } = run.output ?? {};
+  const { input: _input, ...source } = run.source ?? {};
+  return {
+    ...run,
+    source: {
+      ...source,
+      ownSource: typeof input.source === "string" && input.source.trim() !== "",
+      renderClip:
+        typeof input.renderClip === "boolean" ? input.renderClip : null,
+    },
+    output: {
+      ...output,
+      recipientCount: Array.isArray(recipients) ? recipients.length : 0,
+    },
+  };
+}
+
 // Same observed-rejection pattern as `sample`: a missing page is a 500 on `/`,
 // not a crash at startup.
 const page = readFile(path.join(HERE, "index.html"));
@@ -269,7 +295,7 @@ const server = createServer(async (req, res) => {
     // rejection, not a 500.
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/api/run") {
-      const body = JSON.stringify(await latestRun());
+      const body = JSON.stringify(forPage(await latestRun()));
       res.writeHead(200, {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",

@@ -489,25 +489,25 @@
         show("linkedin");
       }
 
-      function clipKpi(o, input) {
+      function clipKpi(o, src) {
         if (o.clipFileId) return ["Rendered", "stored durably in file storage"];
         if (o.dryRun) return ["Skipped", "dry run, copy only"];
-        if (input?.renderClip === false)
-          return ["Skipped", "renderClip is off"];
-        if (!input?.source) {
+        if (src.renderClip === false) return ["Skipped", "renderClip is off"];
+        // The sample post skips the clip unless the run asked for one.
+        if (!src.ownSource && src.renderClip !== true) {
           return ["Skipped", "off for the built-in sample post"];
         }
         return ["None", "this run returned no clip"];
       }
 
       function deliveryKpi(o) {
-        const recipients = Array.isArray(o.recipients) ? o.recipients : [];
+        const recipients = Number(o.recipientCount) || 0;
         if (o.dryRun) return ["—", "dry run, nothing sent"];
         const delivered = Number(o.delivered) || 0;
         const sub =
           Array.isArray(o.unmet) && o.unmet.includes("deliverTo")
             ? "no <code>deliverTo</code> recipient set"
-            : `of ${recipients.length} recipient${recipients.length === 1 ? "" : "s"}`;
+            : `of ${recipients} recipient${recipients === 1 ? "" : "s"}`;
         return [String(delivered), sub];
       }
 
@@ -521,8 +521,7 @@
             : [];
         const urls = Array.isArray(media?.graphics) ? media.graphics : [];
         const tweets = Array.isArray(pack?.tweetThread) ? pack.tweetThread : [];
-        const ownSource =
-          typeof src.input?.source === "string" && src.input.source.trim();
+        const ownSource = src.ownSource === true;
 
         if (o.title) document.getElementById("title").textContent = o.title;
         document.getElementById("facts").innerHTML = [
@@ -534,7 +533,7 @@
         ].join("");
 
         const longest = tweets.reduce((m, t) => Math.max(m, [...t].length), 0);
-        const [clipValue, clipSub] = clipKpi(o, src.input);
+        const [clipValue, clipSub] = clipKpi(o, src);
         const [deliveredValue, deliveredSub] = deliveryKpi(o);
         document.getElementById("kpis").innerHTML = [
           kpi(
