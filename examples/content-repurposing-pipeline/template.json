@@ -99,6 +99,13 @@
       }
     }
   ],
+  "app": {
+    "name": "Content pack dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4176,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/content-repurposing-pipeline/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed_partial",
     "expect": [
