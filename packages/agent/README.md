@@ -241,7 +241,7 @@ const present = defineStep({
       signal: "approval.decision",
       resumeStep: "finalize",
       correlationId: ctx.executionId,
-      timeoutMs: 7 * 24 * 60 * 60 * 1000,
+      timeoutMs: 14 * 24 * 60 * 60 * 1000, // two weeks, past the 7-day default
     });
   },
 });
@@ -257,9 +257,10 @@ whole design decision:
   signal matching X": the fanout is 0..N runs, deliberately, and the count you
   get back is how many actually resumed.
 
-Give any gate a human might never answer an explicit `timeoutMs`: when the
-deadline lapses the run ends as a pause timeout instead of resuming, so the
-failure is recorded rather than sat on.
+Size `timeoutMs` to how long a human may take. Omitted, the hosted 7-day default
+applies; whichever deadline lapses, the run ends as a pause timeout instead of
+resuming, so pass a longer value for a gate that can outlive a week, or a shorter
+one for a decision that goes stale.
 
 Under `run_local` a manual gate auto-resumes with `{}` — there is no way to
 inject a payload — so type the resumed step's input with optional fields.

@@ -3,7 +3,7 @@
 This project defines exactly one Sapiom agent in `index.ts` — **PR Review Bot** —
 authored against `@sapiom/agent`. It builds a concrete agent on the durable
 pause/resume spine: `watch` registers a PR webhook and returns
-`pauseUntilSignal(...)`; the run suspends at $0 until a pull request is opened;
+`pauseUntilSignal(...)`; the run suspends at $0 until a pull request is opened, for up to the engine's 7-day default;
 `review` (the resume target) receives the PR payload as its input, hands the diff
 to a coding agent (`ctx.sapiom.models.coding.run`) that checks the code out and
 analyzes it; `assess` turns the findings into a structured review with
