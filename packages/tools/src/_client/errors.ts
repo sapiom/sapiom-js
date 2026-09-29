@@ -53,6 +53,9 @@ export class TransportHttpError extends Error {
  * returns `null` for a missing or unparseable value. A date in the past is a
  * delay of zero, not `null`: the platform did answer, and "now" is its answer.
  */
+/** Past a day, a `Retry-After` is a parse accident, not a hint. */
+const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
+
 export function parseRetryAfterMs(
   header: string | null | undefined,
   now: number = Date.now(),
@@ -60,13 +63,17 @@ export function parseRetryAfterMs(
   if (header == null) return null;
   const value = header.trim();
   if (value === "") return null;
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  if (/^\d+$/.test(value)) {
+    const ms = Number(value) * 1000;
+    return Number.isSafeInteger(ms) ? ms : null;
+  }
   // Any other bare number (negative, fractional) is malformed, not a date —
   // `Date.parse("-5")` would otherwise read it as a year.
   if (/^[-+]?\d*\.?\d+$/.test(value)) return null;
   const at = Date.parse(value);
   if (Number.isNaN(at)) return null;
-  return Math.max(0, at - now);
+  const ms = Math.max(0, at - now);
+  return ms <= MAX_RETRY_AFTER_MS ? ms : null;
 }
 
 /**
