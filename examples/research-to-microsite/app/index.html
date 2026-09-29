@@ -494,7 +494,7 @@
                 ? esc(review.final)
                 : // `drafted` writes a non-empty rationale into its note
                   // after this marker, and nowhere else.
-                  /Editorial self-critique: \S/.test(note ?? "")
+                  /Editorial self-critique:\s*\S/.test(note ?? "")
                   ? "The rationale is in the run's note, under the site."
                   : "No rationale was recorded."
             }</p></div>`,
