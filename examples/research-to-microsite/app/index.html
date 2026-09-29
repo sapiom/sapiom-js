@@ -473,7 +473,7 @@
         }" style="width:${pct}%"></span>${bar}</div>`;
       }
 
-      function renderVerdicts(review) {
+      function renderVerdicts(review, note) {
         const out = [];
         if (review.rejected) {
           out.push(
@@ -492,7 +492,11 @@
             `<div class="verdict ${cls}"><p class="who">${head}</p><p>${
               review.final
                 ? esc(review.final)
-                : "The rationale is in the run's note, under the site."
+                : // `drafted` writes a non-empty rationale into its note
+                  // after this marker, and nowhere else.
+                  /Editorial self-critique: \S/.test(note ?? "")
+                  ? "The rationale is in the run's note, under the site."
+                  : "No rationale was recorded."
             }</p></div>`,
           );
         }
@@ -643,7 +647,10 @@
         );
         fitFrame();
         window.addEventListener("resize", fitFrame);
-        document.getElementById("verdicts").innerHTML = renderVerdicts(review);
+        document.getElementById("verdicts").innerHTML = renderVerdicts(
+          review,
+          o.note,
+        );
         document.getElementById("sources").innerHTML = renderSources(sources);
 
         // The run's own account of what it did (default topic, no keeper)
