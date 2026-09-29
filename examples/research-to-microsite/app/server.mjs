@@ -144,9 +144,13 @@ async function probe(siteUrl) {
       error: String(err?.message ?? err),
     };
   }
-  // Each run publishes to a new URL, so only the current one is worth keeping.
-  probeCache.clear();
-  probeCache.set(siteUrl, { at: Date.now(), value });
+  // Each run publishes to a new URL, so drop entries past their TTL rather
+  // than letting one per run pile up.
+  const now = Date.now();
+  for (const [url, entry] of probeCache) {
+    if (now - entry.at >= PROBE_CACHE_MS) probeCache.delete(url);
+  }
+  probeCache.set(siteUrl, { at: now, value });
   return value;
 }
 
