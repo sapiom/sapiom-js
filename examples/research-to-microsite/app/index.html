@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Report site dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --accent: #2a78d6;
+        --chip: #f3f2ef;
+        --good: #1f7a3a;
+        --warn: #a15c00;
+        --bad: #b42318;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --accent: #3987e5;
+          --chip: #2a2a28;
+          --good: #5cc27d;
+          --warn: #e0a24a;
+          --bad: #f07a6f;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      a {
+        color: var(--accent);
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 28px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 45%;
+      }
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 20px;
+        font-weight: 650;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .meter {
+        position: relative;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--chip);
+        margin-top: 8px;
+      }
+      .meter .fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        border-radius: 3px;
+        background: var(--good);
+      }
+      .meter .fill.under {
+        background: var(--warn);
+      }
+      .meter .bar {
+        position: absolute;
+        top: -3px;
+        bottom: -3px;
+        width: 2px;
+        background: var(--text);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+        gap: 12px;
+        align-items: start;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .facts {
+          max-width: 100%;
+          justify-content: flex-start;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .site-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .site-head h2 {
+        margin: 0;
+      }
+      .site-head .meta {
+        font-size: 12px;
+        color: var(--text-3);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .frame {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--chip);
+      }
+      .frame .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-2);
+        background: var(--card);
+      }
+      .frame .bar .url {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .frame .viewport {
+        position: relative;
+        height: 540px;
+        overflow: hidden;
+        background: #fff;
+      }
+      /* The site is framed at a desktop width and scaled to fit, so the card
+         shows its layout (hero, sections, illustrations), not just the hero. */
+      .frame iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: var(--site-width, 100%);
+        height: calc(540px / var(--site-scale, 1));
+        border: 0;
+        transform: scale(var(--site-scale, 1));
+        transform-origin: 0 0;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--text-3);
+      }
+      .dot.up {
+        background: var(--good);
+      }
+      .dot.down {
+        background: var(--bad);
+      }
+      .outline p {
+        margin: 0 0 10px;
+      }
+      .outline ol {
+        margin: 0;
+        padding-left: 20px;
+      }
+      .outline li {
+        margin: 4px 0;
+      }
+      .tag {
+        font-size: 11px;
+        color: var(--text-3);
+        margin-left: 6px;
+      }
+      .verdicts {
+        display: grid;
+        gap: 10px;
+      }
+      .verdict {
+        border-left: 3px solid var(--line);
+        padding: 2px 0 2px 10px;
+      }
+      .verdict.sent-back {
+        border-left-color: var(--warn);
+      }
+      .verdict.cleared {
+        border-left-color: var(--good);
+      }
+      .verdict.missed {
+        border-left-color: var(--bad);
+      }
+      .verdict .who {
+        font-size: 12px;
+        font-weight: 600;
+        margin: 0 0 2px;
+      }
+      .verdict p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--text-2);
+      }
+      .sources {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .sources li {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr);
+        gap: 6px;
+        padding: 7px 0;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .sources li:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .sources .n {
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+      .sources a {
+        color: var(--text);
+        text-decoration: none;
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sources a:hover {
+        text-decoration: underline;
+      }
+      .sources .host {
+        display: block;
+        font-size: 11px;
+        color: var(--text-3);
+      }
+      .muted {
+        color: var(--text-3);
+      }
+      .note {
+        margin: 12px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source {
+        margin: 16px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Report site</p>
+          <h1 id="title">Loading the latest run…</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+
+      <div class="kpis" id="kpis"></div>
+
+      <div class="grid">
+        <section class="card" aria-labelledby="site-h">
+          <div class="site-head">
+            <h2 id="site-h">The site</h2>
+            <span class="meta" id="site-meta"></span>
+          </div>
+          <div id="site"></div>
+          <div id="note"></div>
+        </section>
+        <div class="stack">
+          <section class="card" aria-labelledby="review-h">
+            <h2 id="review-h">Self-critique</h2>
+            <div class="verdicts" id="verdicts"></div>
+          </section>
+          <section class="card" aria-labelledby="sources-h">
+            <h2 id="sources-h">Sources read and cited</h2>
+            <ol class="sources" id="sources"></ol>
+          </section>
+        </div>
+      </div>
+
+      <p class="source" id="source"></p>
+    </div>
+
+    <script>
+      // Everything below renders `/api/run`, the agent's own run, into the
+      // page. The only things computed here are the run time and each
+      // source's host name.
+
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      /** Inline markdown on already-escaped text: code only. */
+      const inline = (text) => text.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+
+      const fmtDuration = (from, to) => {
+        const ms = new Date(to).getTime() - new Date(from).getTime();
+        if (!Number.isFinite(ms) || ms < 0) return null;
+        const s = Math.round(ms / 1000);
+        return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+      };
+
+      const hostOf = (url) => {
+        try {
+          return new URL(url).hostname.replace(/^www\./, "");
+        } catch {
+          return "";
+        }
+      };
+
+      const score = (n) =>
+        typeof n === "number" && Number.isFinite(n) ? n.toFixed(2) : "—";
+
+      function kpi(label, value, sub, extra = "") {
+        return `<article class="card kpi"><p class="label">${label}</p><div class="value">${value}</div>${extra}${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      /** Which terminal the run ended in, in words. */
+      function outcome(o) {
+        if (o.published) return "Published";
+        if (o.dryRun) return "Dry run, not published";
+        if (o.built) return "Built, not deployed";
+        if (o.stage) return `Failed at ${o.stage}`;
+        if (o.reason === "empty-report") return "Nothing found to publish";
+        return "Not published";
+      }
+
+      function scoreMeter(review) {
+        const s = review.score;
+        const t = review.threshold;
+        if (typeof s !== "number") return "";
+        const pct = Math.max(0, Math.min(1, s)) * 100;
+        const bar =
+          typeof t === "number"
+            ? `<span class="bar" style="left:calc(${Math.max(0, Math.min(1, t)) * 100}% - 1px)" title="bar ${score(t)}"></span>`
+            : "";
+        return `<div class="meter" aria-hidden="true"><span class="fill${
+          review.passed ? "" : " under"
+        }" style="width:${pct}%"></span>${bar}</div>`;
+      }
+
+      function renderVerdicts(review) {
+        const out = [];
+        if (review.rejected) {
+          out.push(
+            `<div class="verdict sent-back"><p class="who">Draft ${review.iterations - 1}: sent back for revision</p><p>${esc(review.rejected)}</p></div>`,
+          );
+        }
+        if (review.final) {
+          const cls = review.passed ? "cleared" : "missed";
+          const head = review.passed
+            ? `Draft ${review.iterations ?? 1}: cleared the bar at ${score(review.score)}`
+            : `Draft ${review.iterations ?? 1}: ${score(review.score)}, under the bar with no attempts left`;
+          out.push(
+            `<div class="verdict ${cls}"><p class="who">${head}</p><p>${esc(review.final)}</p></div>`,
+          );
+        }
+        return out.length
+          ? out.join("")
+          : `<p class="muted">This run recorded no self-critique verdict.</p>`;
+      }
+
+      function renderSources(sources) {
+        if (sources.length === 0) {
+          return `<li class="muted">This run cited no sources.</li>`;
+        }
+        return sources
+          .map(
+            (s, i) =>
+              `<li><span class="n">[${i + 1}]</span><span><a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.title || s.url)}</a><span class="host">${esc(hostOf(s.url))}</span></span></li>`,
+          )
+          .join("");
+      }
+
+      function renderOutline(report, illustrated, why) {
+        if (!report) {
+          return `<p class="muted">${esc(why)}</p>`;
+        }
+        const pictured = new Set(illustrated);
+        return `<div class="outline"><p class="muted">${esc(why)} The report it was built from:</p><p>${esc(report.summary)}</p><ol>${report.sections
+          .map(
+            (s) =>
+              `<li>${esc(s.heading)}${pictured.has(s.heading) ? `<span class="tag">illustrated</span>` : ""}</li>`,
+          )
+          .join("")}</ol></div>`;
+      }
+
+      function renderSite(site, source, run) {
+        const o = run.output;
+        const h = site.health;
+        const status = !site.liveUrl
+          ? ""
+          : h?.reachable
+            ? `<span class="dot up"></span>`
+            : `<span class="dot down"></span>`;
+        const statusText = !site.liveUrl
+          ? ""
+          : h?.reachable
+            ? "answering /health"
+            : `not answering${h?.status ? ` (HTTP ${h.status})` : ""}`;
+
+        let meta = "";
+        if (site.liveUrl) {
+          meta = `live URL ${statusText}`;
+        }
+        document.getElementById("site-meta").textContent = meta;
+
+        if (site.frameUrl) {
+          const label =
+            site.kind === "live"
+              ? `<a class="url" href="${esc(site.liveUrl)}" target="_blank" rel="noreferrer">${esc(site.liveUrl)}</a>`
+              : `<span class="url">Copy of the page this run built, from its repo <span class="mono">${esc(source.repoSlug ?? "")}</span></span>`;
+          return `<div class="frame"><div class="bar">${status}${label}</div><div class="viewport"><iframe src="${esc(site.frameUrl)}" title="The published report site" sandbox="allow-popups allow-popups-to-escape-sandbox" loading="eager"></iframe></div></div>`;
+        }
+        const why = !o.published
+          ? `${outcome(o)}: no site was deployed.`
+          : `The site at ${site.liveUrl ?? "its preview URL"} is not answering, so it cannot be shown.`;
+        return renderOutline(run.report, run.illustrated, why);
+      }
+
+      /** Scale the framed site so SITE_WIDTH CSS pixels fill the card. */
+      const SITE_WIDTH = 1440;
+      function fitFrame() {
+        const box = document.querySelector(".frame .viewport");
+        if (!box) return;
+        const scale = Math.min(1, box.clientWidth / SITE_WIDTH);
+        box.style.setProperty("--site-scale", String(scale));
+        box.style.setProperty("--site-width", `${SITE_WIDTH}px`);
+      }
+
+      async function render({ source, run, site }) {
+        const src = source ?? {};
+        const o = run?.output ?? {};
+        const review = run?.review ?? {};
+        const sources = Array.isArray(o.sources) ? o.sources : [];
+
+        if (o.title) document.getElementById("title").textContent = o.title;
+        document.getElementById("facts").innerHTML = [
+          `<span class="chip"><b>${esc(outcome(o))}</b></span>`,
+          run?.audience
+            ? `<span class="chip">Audience <b>${esc(run.audience)}</b></span>`
+            : "",
+          site?.customUrl
+            ? `<span class="chip">Domain <b>${esc(hostOf(site.customUrl))}</b></span>`
+            : "",
+        ].join("");
+
+        const took = fmtDuration(src.startedAt, src.finishedAt);
+        const drafts = review.iterations ?? null;
+        document.getElementById("kpis").innerHTML = [
+          kpi(
+            "Self-critique score",
+            score(review.score),
+            typeof review.threshold === "number"
+              ? `${review.passed ? "cleared" : "under"} the ${score(review.threshold)} bar`
+              : "",
+            scoreMeter(review),
+          ),
+          kpi(
+            "Drafts",
+            drafts == null ? "—" : String(drafts),
+            drafts > 1
+              ? `first sent back, revised${review.maxDraftAttempts ? ` (cap ${review.maxDraftAttempts})` : ""}`
+              : drafts === 1
+                ? "passed on the first draft"
+                : "",
+          ),
+          kpi(
+            "Sources cited",
+            String(sources.length),
+            sources.length
+              ? `${new Set(sources.map((s) => hostOf(s.url))).size} sites, read in full`
+              : "none found",
+          ),
+          kpi(
+            "Run time",
+            took ?? "—",
+            typeof o.illustrationCount === "number"
+              ? `${o.illustrationCount} illustration${o.illustrationCount === 1 ? "" : "s"}, built and deployed`
+              : "",
+          ),
+        ].join("");
+
+        document.getElementById("site").innerHTML = renderSite(
+          site ?? {},
+          src,
+          run,
+        );
+        fitFrame();
+        window.addEventListener("resize", fitFrame);
+        document.getElementById("verdicts").innerHTML = renderVerdicts(review);
+        document.getElementById("sources").innerHTML = renderSources(sources);
+
+        // The run's own account of what it did (default topic, no keeper)
+        // belongs under the site it qualifies, not in the page chrome.
+        document.getElementById("note").innerHTML = o.note
+          ? `<p class="note">${inline(esc(o.note))}</p>`
+          : "";
+
+        const where =
+          src.kind === "live"
+            ? `Live — latest completed run`
+            : `Captured zero-setup run`;
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}` +
+          (src.liveError
+            ? ` · <span class="muted">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+
+        // Bounded, so a frame that never loads cannot hold the page in a
+        // loading state (the screenshot helper waits on data-ready).
+        const frame = document.querySelector(".frame iframe");
+        if (frame) {
+          await Promise.race([
+            new Promise((r) =>
+              frame.addEventListener("load", r, { once: true }),
+            ),
+            new Promise((r) => setTimeout(r, 10_000)),
+          ]);
+        }
+      }
+
+      fetch("/api/run", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("site").innerHTML =
+            `<p class="muted">Could not load the run: ${esc(err?.message ?? err)}</p>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>
