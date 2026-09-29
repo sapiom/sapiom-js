@@ -12,15 +12,19 @@ capabilities are pre-auth'd on `ctx.sapiom` (here, `ctx.sapiom.llm.run` and
 ## The approval + fallback spine
 
 - **`notifyApprover`** emails the ranked recommendation, then returns
-  `pauseUntilSignal({ signal: "approval.decision", resumeStep: "onDecision", correlationId: ctx.executionId })`.
+  `pauseUntilSignal({ signal: "approval.decision", resumeStep: "onDecision", correlationId: ctx.executionId, timeoutMs: GATE_PAUSE_TIMEOUT_MS })`.
   It carries a static `pause: { signal, resumeStep: "onDecision" }` annotation —
   the build-time graph edge that must match the directive.
+  **A one-year `timeoutMs` (`GATE_PAUSE_TIMEOUT_MS`):** omitting it inherits the
+  engine's 7-day default, and a lapsed deadline fails the run instead of resuming it.
 - **`onDecision`** reads the approval payload **directly as its `run` input**.
   Safe default: only `{ decision: "approve" }` proceeds; anything else (including
   a `run_local` resume with no payload) routes to `revert` — nothing commits
   without a deliberate human yes.
 - **`offer`** makes a _provisional, non-committing_ offer to `ranked[index]` and
-  pauses on `candidate.confirm`, resuming at `resolve`.
+  pauses on `candidate.confirm`, resuming at `resolve`, under the same one-year
+  `timeoutMs`. That deadline is only a backstop: moving on from a silent candidate
+  needs something external to fire `candidate.confirm` with `{ decision: "timeout" }`.
 - **`resolve`** reads the confirm payload as its input. `accept` → `commit`;
   `decline`/`timeout`/absent → `index + 1` and loop back to `offer` while
   candidates remain, else `escalate`. The loop edge is `resolve → offer`; the
