@@ -144,6 +144,8 @@ async function probe(siteUrl) {
       error: String(err?.message ?? err),
     };
   }
+  // Each run publishes to a new URL, so only the current one is worth keeping.
+  probeCache.clear();
   probeCache.set(siteUrl, { at: Date.now(), value });
   return value;
 }
@@ -189,6 +191,8 @@ function summarize(run) {
 async function withSite(value, fallbackFrame) {
   const liveUrl = httpsOrNull(value.run.output.liveUrl);
   const health = liveUrl ? await probe(liveUrl) : null;
+  // The copy stands in only for a site the run actually published.
+  const copy = value.run.output.published === true ? fallbackFrame : null;
   const site = {
     liveUrl,
     customUrl: httpsOrNull(value.run.output.customUrl),
@@ -196,8 +200,8 @@ async function withSite(value, fallbackFrame) {
     // What the page's frame shows: the live site when it answers, otherwise
     // the captured run's own copy of it, otherwise nothing (the page then
     // shows the report's outline instead).
-    kind: health?.reachable ? "live" : fallbackFrame ? "copy" : null,
-    frameUrl: health?.reachable ? liveUrl : fallbackFrame,
+    kind: health?.reachable ? "live" : copy ? "copy" : null,
+    frameUrl: health?.reachable ? liveUrl : copy,
   };
   return { ...value, site };
 }
@@ -299,20 +303,23 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
+      // Read before any header is written, so a failed read can still be a 500.
+      const body = await page;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(await page);
+      res.end(body);
       return;
     }
     if (url.pathname === SAMPLE_SITE_PATH) {
       // Generated markup, framed by the page: no scripts may run in it, so the
       // policy says so even if the frame's sandbox attribute were dropped.
+      const body = await sampleSite;
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "content-security-policy":
           "default-src 'none'; img-src https:; style-src 'unsafe-inline'; frame-ancestors 'self'",
         "cache-control": "public, max-age=3600",
       });
-      res.end(await sampleSite);
+      res.end(body);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

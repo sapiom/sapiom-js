@@ -480,13 +480,20 @@
             `<div class="verdict sent-back"><p class="who">Draft ${review.iterations - 1}: sent back for revision</p><p>${esc(review.rejected)}</p></div>`,
           );
         }
-        if (review.final) {
+        // A dry run records the score but carries its rationale only in the
+        // run's note (shown under the site card), so the verdict line stands
+        // on the score alone.
+        if (review.final || typeof review.score === "number") {
           const cls = review.passed ? "cleared" : "missed";
           const head = review.passed
             ? `Draft ${review.iterations ?? 1}: cleared the bar at ${score(review.score)}`
             : `Draft ${review.iterations ?? 1}: ${score(review.score)}, under the bar with no attempts left`;
           out.push(
-            `<div class="verdict ${cls}"><p class="who">${head}</p><p>${esc(review.final)}</p></div>`,
+            `<div class="verdict ${cls}"><p class="who">${head}</p><p>${
+              review.final
+                ? esc(review.final)
+                : "The rationale is in the run's note, under the site."
+            }</p></div>`,
           );
         }
         return out.length
@@ -566,9 +573,17 @@
         const src = source ?? {};
         const o = run?.output ?? {};
         const review = run?.review ?? {};
-        const sources = Array.isArray(o.sources) ? o.sources : [];
+        // A dry run ends with the report nested under `output.report`, not
+        // copied to the top level the way a published run's title and
+        // sources are.
+        const sources = Array.isArray(o.sources)
+          ? o.sources
+          : Array.isArray(o.report?.sources)
+            ? o.report.sources
+            : [];
+        const title = o.title ?? o.report?.title ?? o.topic;
 
-        if (o.title) document.getElementById("title").textContent = o.title;
+        if (title) document.getElementById("title").textContent = title;
         document.getElementById("facts").innerHTML = [
           `<span class="chip"><b>${esc(outcome(o))}</b></span>`,
           run?.audience
@@ -596,14 +611,20 @@
             drafts > 1
               ? `first sent back, revised${review.maxDraftAttempts ? ` (cap ${review.maxDraftAttempts})` : ""}`
               : drafts === 1
-                ? "passed on the first draft"
+                ? review.passed
+                  ? "passed on the first draft"
+                  : review.passed === false
+                    ? "under the bar, no revision allowed"
+                    : "one draft"
                 : "",
           ),
           kpi(
             "Sources cited",
             String(sources.length),
             sources.length
-              ? `${new Set(sources.map((s) => hostOf(s.url))).size} sites, read in full`
+              ? ((n) => `${n} site${n === 1 ? "" : "s"}, read in full`)(
+                  new Set(sources.map((s) => hostOf(s.url))).size,
+                )
               : "none found",
           ),
           kpi(
