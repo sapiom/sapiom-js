@@ -59,6 +59,18 @@ import { fail, gatewayClient, NOT_AUTHED, ok } from "./shared.js";
 import { webappRunUrl } from "./webapp-url.js";
 
 /**
+ * Run ids are numeric (bigint server-side). A bare `z.string()` let a model pass a step name or a
+ * variable (`result`, `child-expert-1`) and get back "execution not found" — which reads as "the run
+ * is gone" rather than "that is not an id", so the mistake was never self-correcting (SAP-3337).
+ */
+const executionIdSchema = z
+  .string()
+  .regex(
+    /^\d+$/,
+    'executionId must be the numeric execution id from run/launch or a listed execution (e.g. "4821"), not a step name or variable.',
+  );
+
+/**
  * Coerce a tool argument that may arrive as a JSON string (some MCP clients
  * serialize object-valued args) back into a value. A non-JSON string is
  * returned as-is (a legitimately string-valued input).
@@ -494,7 +506,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "Project directory (for build inspection, which needs the linked id).",
         ),
-      executionId: z.string().optional().describe("Execution to inspect."),
+      executionId: executionIdSchema.optional().describe("Execution to inspect."),
       buildRunId: z
         .string()
         .optional()
@@ -622,11 +634,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
     "sapiom_dev_agents_signal",
     "Resume a paused cloud execution by delivering a named signal (matched by name + correlationId, NOT by executionId — so one call resumes every run waiting on that pair). Signals resume; they never start a run — to start one, emit an event with sapiom_dev_agents_emit_event. Read `message` in the result whenever it is present: `matched` counts the runs that actually resumed, so it under-reports a partial fanout and a 0 does not prove nothing was waiting.",
     {
-      executionId: z
-        .string()
-        .describe(
-          "A paused execution, as the addressable resource. Delivery is matched on name + correlationId, so this need not be the only run that resumes.",
-        ),
+      executionId: executionIdSchema.describe(
+        "A paused execution, as the addressable resource. Delivery is matched on name + correlationId, so this need not be the only run that resumes.",
+      ),
       name: z.string().describe("Signal name to deliver."),
       correlationId: z.string().describe("Signal correlation id."),
       payload: z

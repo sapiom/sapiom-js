@@ -1,0 +1,21 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "158191",
+    "definitionId": "517",
+    "startedAt": "2026-08-05T00:11:44.707Z",
+    "finishedAt": "2026-08-05T00:12:44.069Z",
+    "status": "completed",
+    "input": {},
+    "note": "Verbatim terminal output of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 158191 on 2026-09-26."
+  },
+  "output": {
+    "note": "Drafted and judged the built-in sample brief/rubric. Pass your own `brief` and `rubric` to write and grade yours.",
+    "draft": "The phone rang at 3 a.m., which is the hour nobody calls with good news. A woman's voice asked for Northstar Investigations by name and said her brother had walked into a building downtown a week ago and never walked back out. The police dismissed it as a Tuesday; she had a checkbook that called it something else. I told her we'd take the case. I didn't tell her what it would take from her.",
+    "score": 0.9,
+    "passed": true,
+    "rationale": "Compact (under 120 words), punchy noir tone with understated menace ('I didn't tell her what it would take from her'), establishes a clear hook (missing brother case), avoids clichés, and reads as pure narrative with no meta-commentary.",
+    "threshold": 0.8,
+    "iterations": 1
+  }
+}

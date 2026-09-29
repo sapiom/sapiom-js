@@ -1,5 +1,33 @@
 # @sapiom/cli
 
+## 17.0.0
+
+### Patch Changes
+
+- Updated dependencies [bf4a404]
+- Updated dependencies [afa4569]
+- Updated dependencies [fe5b74d]
+- Updated dependencies [d80b6c7]
+- Updated dependencies [0c6e945]
+- Updated dependencies [c71bc50]
+- Updated dependencies [969caef]
+- Updated dependencies [54c6362]
+- Updated dependencies [c71bc50]
+- Updated dependencies [c71bc50]
+- Updated dependencies [79a52f9]
+- Updated dependencies [4bbea8d]
+- Updated dependencies [5f3f25b]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [85610db]
+- Updated dependencies [c87678c]
+  - @sapiom/harness@0.18.0
+  - @sapiom/agent-core@0.14.3
+  - @sapiom/agent@0.14.3
+  - @sapiom/sandbox-preview@0.1.25
+
 ## 16.0.0
 
 ### Patch Changes

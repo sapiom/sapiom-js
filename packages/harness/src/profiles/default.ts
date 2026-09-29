@@ -53,6 +53,11 @@ honored. Results disclose the served class + lane. Debugging a run: the
 Run Inspector, or the per-step I/O endpoint documented in the guide.
 Guide: https://docs.sapiom.ai/guides/choose-a-call-surface.
 
+Fixed answer set and you need a probability → \`ctx.sapiom.decisions.evaluate\` (yes/no, pick-one,
+rubric score from a System One decision model). Ask all independent questions over the same state
+in one \`ctx.sapiom.decisions.evaluate\` call. Use separate calls when a question needs an earlier
+answer. It is not a security boundary and is weak at arithmetic/date math — keep those in code.
+
 **Secrets, inbound events, App Link webhooks:** secrets set in the dashboard
 per deployed agent reach a step only as env vars (their Vault ref is derived
 server-side, so step code cannot name it); \`ctx.sapiom.vault.get(ref, key)\`

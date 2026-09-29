@@ -54,14 +54,10 @@ import {
   readDisclosure as llmReadDisclosure,
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
-  decide as llmDecide,
 } from "./llm/index.js";
 import type {
   LlmRunSpec,
   LlmSubmitSpec,
-  LlmDecideSpec,
-  LlmDecideResponse,
-  DecideQuestion,
   LlmRouteHandle,
   LlmGrantLink,
   LlmSessionCreateSpec,
@@ -157,6 +153,12 @@ import type {
   SoundEffectInput,
   VoicesResult,
 } from "./speech/index.js";
+import * as decisions from "./decisions/index.js";
+import type {
+  DecisionQuestion,
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+} from "./decisions/index.js";
 import * as browserAutomation from "./browser-automation/index.js";
 import type {
   BrowserSession,
@@ -236,13 +238,6 @@ export interface Sapiom {
   readonly llm: {
     /** One routed LLM call, executed immediately and returned inline. */
     run<T = Record<string, unknown>>(spec: LlmRunSpec): Promise<T>;
-    /**
-     * A fixed-answer-set decision with probabilities (yes/no, pick-one, rubric score)
-     * — TypeSafe Jev via the Capability Router. Generated text → `run`.
-     */
-    decide<Q extends Record<string, DecideQuestion>>(
-      spec: LlmDecideSpec<Q>,
-    ): Promise<LlmDecideResponse<Q>>;
     /** Submit a routed call; pass the handle to `pauseUntilSignal` to suspend on it. */
     submit(spec: LlmSubmitSpec): Promise<LlmRouteHandle>;
     /** Spend a granted link: POST the (re-sent) request to /v1/messages with it. */
@@ -589,6 +584,19 @@ export interface Sapiom {
     };
   };
   /**
+   * System One decisions — fixed-answer-set judgments with probabilities
+   * (a System One decision model via the Capability Router). Generated text → `llm.run`.
+   */
+  readonly decisions: {
+    /**
+     * Evaluate yes/no (`noul`), pick-one (`choice`), and rubric (`score`)
+     * questions over one state; the answers map is typed by the questions.
+     */
+    evaluate<Q extends Record<string, DecisionQuestion>>(
+      spec: DecisionsEvaluateSpec<Q>,
+    ): Promise<DecisionsEvaluateResponse<Q>>;
+  };
+  /**
    * Browser automation — sessions, screenshots, and identity management.
    * Use `withSession` for the safe auto-close pattern; use `sessions` +
    * `screenshot` + `identities` for direct control.
@@ -675,7 +683,6 @@ function bind(transport: Transport): Sapiom {
     },
     llm: {
       run: (spec) => llmRun(spec, transport),
-      decide: (spec) => llmDecide(spec, transport),
       submit: (spec) => llmSubmit(spec, transport),
       redeem: (link, request) => llmRedeem(link, request, transport),
       createSession: (spec) => llmCreateSession(spec, transport),
@@ -814,6 +821,9 @@ function bind(transport: Transport): Sapiom {
       voices: {
         list: () => speech.listVoices(transport),
       },
+    },
+    decisions: {
+      evaluate: (spec) => decisions.evaluate(spec, transport),
     },
     browserAutomation: {
       sessions: {

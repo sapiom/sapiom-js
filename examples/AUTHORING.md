@@ -359,7 +359,7 @@ result. Steps, capabilities and fan-out are a **tiebreak**, never the reason for
 To pick a band, count the template's **judgment points** — the places where something
 non-deterministic is produced:
 
-- a step with `kind: "llm"` (a model call — `llm.run`, `llm.decide`, `models.run`, `models.coding`),
+- a step with `kind: "llm"` (a model call — `llm.run`, `decisions.evaluate`, `models.run`, `models.coding`),
 - a generated image or video (`content.generation.*`),
 - a capability that synthesizes prose for you, e.g. `web.search`'s `answer` field. It counts
   even with no `llm` step in the graph, because the user still reads model-written output.
@@ -392,12 +392,12 @@ and the scorer legitimately disagree — the scorer can't see a synthesizing cap
 
 Set `kind` on every step:
 
-| `kind`       | Use when                                                                   |
-| ------------ | -------------------------------------------------------------------------- |
-| `capability` | It calls a priced catalog capability.                                      |
-| `llm`        | It calls a model (`llm.run`, `llm.decide`, `models.run`, `models.coding`). |
-| `compute`    | In-process logic, a branch, or a terminal.                                 |
-| `pause`      | It suspends the run at $0 until something wakes it.                        |
+| `kind`       | Use when                                                                           |
+| ------------ | ---------------------------------------------------------------------------------- |
+| `capability` | It calls a priced catalog capability.                                              |
+| `llm`        | It calls a model (`llm.run`, `decisions.evaluate`, `models.run`, `models.coding`). |
+| `compute`    | In-process logic, a branch, or a terminal.                                         |
+| `pause`      | It suspends the run at $0 until something wakes it.                                |
 
 A step that calls a capability _and then_ suspends is `pause` — suspending is what defines it.
 
@@ -731,7 +731,7 @@ reply comes back as a typed `tool_use` block. `structuredOf` reads it, and retur
 `undefined` rather than guessing when there is no such block. For a plain text reply,
 `textOf` — never `content[0]`, which can be a `thinking` block. When the answer is one of
 a fixed set you can name up front — a yes/no gate, a pick-one label, a rubric level — call
-`ctx.sapiom.llm.decide` instead of an `output` schema: it returns calibrated probabilities
+`ctx.sapiom.decisions.evaluate` instead of an `output` schema: it returns calibrated probabilities
 over those answers (`res.answers.<key>.noul` / `.choice` + `.probabilities` / `.score`) with
 no tool, schema, or `structuredOf` step.
 

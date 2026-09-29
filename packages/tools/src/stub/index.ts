@@ -38,10 +38,13 @@ import {
   readDisclosure as llmReadDisclosure,
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
-  type DecideQuestion,
-  type LlmDecideResponse,
-  LlmDecideHttpError,
 } from "../llm/index.js";
+import {
+  type DecisionQuestion,
+  type DecisionsEvaluateSpec,
+  type DecisionsEvaluateResponse,
+  DecisionsHttpError,
+} from "../decisions/index.js";
 import type {
   AgentRunResult,
   AgentRunError,
@@ -891,18 +894,20 @@ function stubMemoryFilterMatches(
 }
 
 /**
- * The Capability Router's `llm.decide` request bounds (Sapiom
- * `llm-decide.validator.ts`), which the stub mirrors so a rubric the router would
+ * The Capability Router's `decisions.evaluate` request bounds (Sapiom
+ * `decisions-evaluate.validator.ts`), which the stub mirrors so a rubric the router would
  * refuse fails under `run_local` too, instead of only once the agent is deployed.
  * The router answers 400 via Nest's `BadRequestException(reason)`; the SDK maps
- * that to {@link LlmDecideHttpError}, so the stub throws the same class, status,
- * body shape, and message prefix (`capabilityCall`'s `Failed to decide: <status> <body>`).
+ * that to {@link DecisionsHttpError}, so the stub throws the same class, status,
+ * body shape, and message prefix (`capabilityCall`'s `Failed to evaluate: <status> <body>`).
  */
-function stubDecideValidate(questions: Record<string, DecideQuestion>): void {
+function stubEvaluateValidate(
+  questions: Record<string, DecisionQuestion>,
+): void {
   const fail = (reason: string): never => {
     const body = { statusCode: 400, message: reason, error: "Bad Request" };
-    throw new LlmDecideHttpError(
-      `Failed to decide: 400 ${JSON.stringify(body)}`,
+    throw new DecisionsHttpError(
+      `Failed to evaluate: 400 ${JSON.stringify(body)}`,
       400,
       body,
     );
@@ -925,15 +930,15 @@ function stubDecideValidate(questions: Record<string, DecideQuestion>): void {
 }
 
 /**
- * A shape-correct, deterministic `llm.decide` reply for `run_local`: every question
+ * A shape-correct, deterministic `decisions.evaluate` reply for `run_local`: every question
  * answered under its own key, undecided (`noul` 0.5, a uniform distribution for
  * `choice` and `score`) so branching code runs both ways without inventing a verdict.
- * Rejects what the router would reject ({@link stubDecideValidate}) before answering.
+ * Rejects what the router would reject ({@link stubEvaluateValidate}) before answering.
  */
-function stubDecideResponse(
-  questions: Record<string, DecideQuestion>,
-): LlmDecideResponse {
-  stubDecideValidate(questions);
+function stubEvaluateResponse(
+  questions: Record<string, DecisionQuestion>,
+): DecisionsEvaluateResponse {
+  stubEvaluateValidate(questions);
   // Built on a null prototype so a question keyed `__proto__` becomes an
   // ordinary own property instead of a prototype swap that drops the answer;
   // copied onto a plain object below so the result also inherits
@@ -981,10 +986,8 @@ function stubDecideResponse(
     });
   }
   return {
-    model: "jev-stub",
-    answers: plain as LlmDecideResponse["answers"],
+    answers: plain as DecisionsEvaluateResponse["answers"],
     usage: { inputTokens: 0, outputTokens: 0 },
-    servedBy: "stub",
   };
 }
 
@@ -1411,16 +1414,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             state: "expired" as const,
           })) as LlmSession,
         ),
-      decide: <Q extends Record<string, DecideQuestion>>(spec: {
-        state: unknown;
-        questions: Q;
-        model?: string;
-      }) =>
-        // async so a validation throw surfaces as a rejection, like the router's 400.
-        (async () =>
-          r("llm.decide", [spec], () =>
-            stubDecideResponse(spec.questions),
-          ) as LlmDecideResponse<Q>)(),
       // Pure functions over a result value, not network calls — no stub
       // recording needed; delegate straight to the real implementation.
       readDisclosure: (result) => llmReadDisclosure(result),
@@ -2263,6 +2256,15 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as VoicesResult,
           ),
       },
+    },
+    decisions: {
+      // async so a validation throw surfaces as a rejection, like the router's 400.
+      evaluate: async <Q extends Record<string, DecisionQuestion>>(
+        spec: DecisionsEvaluateSpec<Q>,
+      ) =>
+        r("decisions.evaluate", [spec], () =>
+          stubEvaluateResponse(spec.questions),
+        ) as DecisionsEvaluateResponse<Q>,
     },
     browserAutomation: {
       sessions: {

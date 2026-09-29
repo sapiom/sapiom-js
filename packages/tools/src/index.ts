@@ -85,6 +85,7 @@ export type {
   AgentRunErrorCode,
   ExecutionStatus as AgentExecutionStatus,
   RunHandle as AgentRunHandle,
+  WaitRetryOptions as AgentWaitRetryOptions,
 } from "./agents/index.js";
 // Validate an AgentRunResultPayload at the resume boundary.
 export { agentResultSchema, AgentResultSchemaError } from "./agents/index.js";
@@ -205,6 +206,18 @@ export { MemoryHttpError } from "./memory/index.js";
 
 export * as speech from "./speech/index.js";
 export { SpeechHttpError } from "./speech/index.js";
+
+// decisions — System One judgments via the Capability Router:
+// `evaluate` returns calibrated probabilities over a fixed answer set.
+export * as decisions from "./decisions/index.js";
+export { DecisionsHttpError } from "./decisions/index.js";
+export type {
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+  DecisionQuestion,
+  DecisionAnswer,
+  DecisionAnswerFor,
+} from "./decisions/index.js";
 
 export * as browserAutomation from "./browser-automation/index.js";
 export { BrowserAutomationHttpError } from "./browser-automation/index.js";
