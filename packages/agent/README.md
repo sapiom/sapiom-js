@@ -260,9 +260,9 @@ import { createClient, emitEvent, signal } from "@sapiom/agent-core";
 const client = createClient({ apiKey: process.env.SAPIOM_API_KEY! });
 
 // Start: fans out to every active `event` trigger on `lead.created`.
-// `eventId` is your id for the delivery — reposting it starts nothing new.
+// `id` is your id for the delivery — reposting it starts nothing new.
 const receipt = await emitEvent(
-  { type: "lead.created", payload: { leadId: "l_42" }, eventId: "crm-evt-8f2a" },
+  { type: "lead.created", payload: { leadId: "l_42" }, id: "crm-evt-8f2a" },
   client,
 );
 // receipt.outcome === "unmatched" is a success: nothing subscribes to that type.

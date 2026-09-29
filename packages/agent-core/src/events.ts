@@ -62,12 +62,10 @@ export interface EmitEventOptions {
    * The sender's id for THIS delivery, 1..256 chars — the dedup identity.
    * Reposting the same id returns the original receipt and starts nothing new,
    * which is what makes a retry safe. Omit it and the server mints a UUID, so
-   * the call is accepted but a retry is a SECOND event. Sent on the wire as
-   * `id`; named `eventId` here because `id` alone, on an options object next to
-   * `type` and `payload`, reads as the event's own identity rather than the
-   * sender's.
+   * the call is accepted but a retry is a SECOND event. Same name as on the
+   * wire and in the REST docs.
    */
-  eventId?: string;
+  id?: string;
 }
 
 /**
@@ -86,7 +84,7 @@ export interface EmitEventResult {
   outcome: EventOutcome;
   /**
    * True when this delivery collided with an earlier one carrying the same
-   * `eventId`. The receipt above is the ORIGINAL, nothing new was started, and
+   * `id`. The receipt above is the ORIGINAL, nothing new was started, and
    * `fireIds` is empty — a retry loop sees success rather than a conflict.
    */
   duplicate: boolean;
@@ -104,7 +102,7 @@ export interface EmitEventResult {
  * "nothing was fired", never "nothing has finished yet".
  *
  * Throws `AgentOperationError` on gateway errors — including the engine's
- * validation 400s (reserved or malformed `type`, an over-long `eventId`) and
+ * validation 400s (reserved or malformed `type`, an over-long `id`) and
  * the per-IP throttle's 429.
  */
 export async function emitEvent(
@@ -117,10 +115,9 @@ export async function emitEvent(
   return client.post<EmitEventResult>("/events", {
     type: opts.type,
     payload,
-    // Omit rather than send `id: undefined`: the route runs a whitelisting
-    // validation pipe, so a declared-but-empty field is not the same as an
-    // absent one, and absent is what "let the server mint a UUID" means.
-    ...(opts.eventId !== undefined ? { id: opts.eventId } : {}),
+    // Omit rather than send `id: undefined`: absent is what lets the server
+    // mint the dedup id.
+    ...(opts.id !== undefined ? { id: opts.id } : {}),
   });
 }
 

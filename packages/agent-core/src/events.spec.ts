@@ -47,10 +47,10 @@ describe("emitEvent", () => {
     });
   });
 
-  it("sends eventId under its wire name, `id`", async () => {
+  it("sends id to the wire", async () => {
     const { client, calls } = fakeClient();
     await emitEvent(
-      { type: "lead.created", payload: {}, eventId: "crm-evt-8f2a" },
+      { type: "lead.created", payload: {}, id: "crm-evt-8f2a" },
       client,
     );
     expect(calls[0].body).toEqual({
@@ -60,7 +60,7 @@ describe("emitEvent", () => {
     });
   });
 
-  it("omits the `id` key entirely when no eventId is given (the server mints one)", async () => {
+  it("omits the `id` key entirely when no id is given (the server mints one)", async () => {
     const { client, calls } = fakeClient();
     await emitEvent({ type: "lead.created", payload: {} }, client);
     // Not `id: undefined` — the route's validation pipe rejects undeclared
@@ -104,7 +104,7 @@ describe("emitEvent", () => {
       fireIds: [],
     });
     const result = await emitEvent(
-      { type: "lead.craeted", payload: {}, eventId: "retry-1" },
+      { type: "lead.craeted", payload: {}, id: "retry-1" },
       client,
     );
     expect(result).toEqual({

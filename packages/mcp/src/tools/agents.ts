@@ -506,7 +506,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "Project directory (for build inspection, which needs the linked id).",
         ),
-      executionId: executionIdSchema.optional().describe("Execution to inspect."),
+      executionId: executionIdSchema
+        .optional()
+        .describe("Execution to inspect."),
       buildRunId: z
         .string()
         .optional()
@@ -660,7 +662,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
   registerTool(
     server,
     "sapiom_dev_agents_emit_event",
-    "Emit one custom event for this tenant. It fans out by type to every active 'event' trigger the tenant armed and starts 0..N NEW runs; it never resumes a paused run (use sapiom_dev_agents_signal for that). Events start, signals resume. Returns { receiptId, outcome: 'matched' | 'unmatched', duplicate, fireIds }: 'unmatched' is a success, not an error — it means nothing subscribes to this type, so check it for a typo or arm a trigger with sapiom_dev_agents_schedule (kind 'event'). `fireIds` are trigger fires, not execution ids; read the receipt to get from a fire to the run it started. Pass eventId to make a retry safe.",
+    "Emit one custom event for this tenant. It fans out by type to every active 'event' trigger the tenant armed and starts 0..N NEW runs; it never resumes a paused run (use sapiom_dev_agents_signal for that). Events start, signals resume. Returns { receiptId, outcome: 'matched' | 'unmatched', duplicate, fireIds }: 'unmatched' is a success, not an error — it means nothing subscribes to this type, so check it for a typo or arm a trigger with sapiom_dev_agents_schedule (kind 'event'). `fireIds` are trigger fires, not execution ids; read the receipt to get from a fire to the run it started. Pass id to make a retry safe.",
     {
       type: z
         .string()
@@ -682,14 +684,14 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         .describe(
           "Event data, as a JSON object. It becomes the top layer of the run input, folded over each matched trigger's configured input (the payload wins on a key conflict). Keys the target agent's entry step does not declare are NOT dropped for agents built with @sapiom/agent (buildManifest strips the marker the engine's filter keys off), so they reach the run input and the author's own parse decides: a z.object() entry ignores them, a z.strictObject() entry rejects them and the step fails. Match the entry schema when you can. Omit it for an event that carries no data.",
         ),
-      eventId: z
+      id: z
         .string()
         .optional()
         .describe(
           "Your id for THIS delivery (1..256 chars). Reposting the same id returns the original receipt and starts nothing new. Omit it and every call is a distinct event.",
         ),
     },
-    async ({ type, payload, eventId }) => {
+    async ({ type, payload, id }) => {
       const client = await gatewayClient(env);
       if (!client) return NOT_AUTHED;
       try {
@@ -700,7 +702,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         // prevent.
         const data =
           payload === undefined ? {} : asEventPayload(coerceJson(payload));
-        return ok(await emitEvent({ type, payload: data, eventId }, client));
+        return ok(await emitEvent({ type, payload: data, id }, client));
       } catch (err) {
         return fail(err);
       }

@@ -74,7 +74,7 @@ describe("sapiom_dev_agents_emit_event", () => {
     expect(handlers.has("sapiom_dev_agents_emit_event")).toBe(true);
   });
 
-  it("forwards type, payload and eventId to emitEvent and returns the receipt", async () => {
+  it("forwards type, payload and id to emitEvent and returns the receipt", async () => {
     vi.mocked(emitEvent).mockResolvedValue({
       receiptId: "rcpt-1",
       outcome: "matched",
@@ -87,13 +87,13 @@ describe("sapiom_dev_agents_emit_event", () => {
     const res = await handlers.get("sapiom_dev_agents_emit_event")!({
       type: "lead.created",
       payload: { leadId: "l_42" },
-      eventId: "crm-evt-8f2a",
+      id: "crm-evt-8f2a",
     });
 
     expect(vi.mocked(emitEvent).mock.calls[0][0]).toEqual({
       type: "lead.created",
       payload: { leadId: "l_42" },
-      eventId: "crm-evt-8f2a",
+      id: "crm-evt-8f2a",
     });
     expect(res.isError).toBeUndefined();
     expect(parse(res)).toEqual({
@@ -144,7 +144,7 @@ describe("sapiom_dev_agents_emit_event", () => {
     expect(vi.mocked(emitEvent).mock.calls[0][0]).toEqual({
       type: "heartbeat.tick",
       payload: {},
-      eventId: undefined,
+      id: undefined,
     });
   });
 
@@ -170,7 +170,7 @@ describe("sapiom_dev_agents_emit_event", () => {
     },
   );
 
-  it("passes an omitted eventId through as undefined (the server mints the dedup id)", async () => {
+  it("passes an omitted id through as undefined (the server mints the dedup id)", async () => {
     vi.mocked(emitEvent).mockResolvedValue({
       receiptId: "rcpt-2",
       outcome: "matched",
@@ -188,7 +188,7 @@ describe("sapiom_dev_agents_emit_event", () => {
     expect(vi.mocked(emitEvent).mock.calls[0][0]).toEqual({
       type: "lead.created",
       payload: {},
-      eventId: undefined,
+      id: undefined,
     });
   });
 
@@ -224,7 +224,7 @@ describe("sapiom_dev_agents_emit_event", () => {
     const res = await handlers.get("sapiom_dev_agents_emit_event")!({
       type: "lead.created",
       payload: {},
-      eventId: "crm-evt-8f2a",
+      id: "crm-evt-8f2a",
     });
 
     expect(res.isError).toBeUndefined();

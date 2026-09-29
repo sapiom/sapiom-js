@@ -251,7 +251,7 @@ describe('emitEvent', () => {
       },
     ]);
     const result = await emitEvent(
-      { type: 'lead.created', payload: { leadId: 'l_42' }, eventId: 'crm-evt-8f2a' },
+      { type: 'lead.created', payload: { leadId: 'l_42' }, id: 'crm-evt-8f2a' },
       client,
     );
 

@@ -37,7 +37,7 @@ export async function runEmit(
     const payload = parseEventPayload(opts.payload);
 
     const result = await emitEvent(
-      { type, payload, eventId: opts.eventId },
+      { type, payload, id: opts.eventId },
       client,
     );
 
