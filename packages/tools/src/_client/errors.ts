@@ -83,3 +83,42 @@ export async function readErrorBody(
     return { text, body: text };
   }
 }
+
+/** What a non-2xx response carried, for a capability to build its own error from. */
+export interface HttpFailure {
+  /** `${errorPrefix}: ${status} ${text}`. */
+  readonly message: string;
+  readonly status: number;
+  /** Parsed JSON, or the raw text. */
+  readonly body: unknown;
+  readonly text: string;
+  readonly retryAfterMs: number | undefined;
+  readonly errorPrefix: string;
+}
+
+export type HttpErrorFactory = (failure: HttpFailure) => Error;
+
+/**
+ * Return a 2xx response, otherwise throw the error `makeError` builds from it.
+ * The one non-2xx path every capability namespace goes through, so each keeps
+ * its own error class while the body and `Retry-After` are read in one place.
+ */
+export async function ensureOk(
+  response: Response,
+  errorPrefix: string,
+  makeError: HttpErrorFactory,
+): Promise<Response> {
+  if (response.ok) return response;
+  const { text, body } = await readErrorBody(response);
+  // A test double may have no `headers`.
+  const retryAfterMs =
+    parseRetryAfterMs(response.headers?.get?.("Retry-After")) ?? undefined;
+  throw makeError({
+    message: `${errorPrefix}: ${response.status} ${text}`,
+    status: response.status,
+    body,
+    text,
+    retryAfterMs,
+    errorPrefix,
+  });
+}
