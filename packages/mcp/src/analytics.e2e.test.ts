@@ -34,6 +34,7 @@ const ALL_TOOL_NAMES = [
   "sapiom_dev_agents_clone",
   "sapiom_dev_agents_cron_preview",
   "sapiom_dev_agents_deploy",
+  "sapiom_dev_agents_emit_event",
   "sapiom_dev_agents_inspect",
   "sapiom_dev_agents_link",
   "sapiom_dev_agents_run",
