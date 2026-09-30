@@ -37,6 +37,57 @@ function setup(impl: typeof globalThis.fetch = async () => json(receipt, 202)) {
 afterEach(() => jest.useRealTimers());
 
 describe("execution prepare/submit/get", () => {
+  it("prepares ambient submissions before credentials exist, then submits and gets", async () => {
+    const key = process.env.SAPIOM_API_KEY;
+    const base = process.env.SAPIOM_BASE_URL;
+    const fetch = jest
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_, init) =>
+        json(
+          init?.method === "POST"
+            ? receipt
+            : { ...receipt, status: "succeeded", result: { answer: 42 } },
+        ),
+      );
+    try {
+      delete process.env.SAPIOM_API_KEY;
+      process.env.SAPIOM_BASE_URL = "https://core.test/prefix/";
+      await jest.isolateModulesAsync(async () => {
+        const executions = await import("./index.js");
+        const submission = executions.prepare("fixture.echo", {
+          input: "local",
+        });
+        expect(fetch).not.toHaveBeenCalled();
+        expect(submission.coreBaseUrl).toBe("https://core.test/prefix");
+        process.env.SAPIOM_API_KEY = "injected-after-prepare";
+        const handle = await executions.submit(
+          JSON.parse(JSON.stringify(submission)),
+        );
+        await expect(executions.get(handle.receipt.id)).resolves.toMatchObject({
+          result: { answer: 42 },
+        });
+        expect(fetch.mock.calls.map(([, init]) => init?.method)).toEqual([
+          "POST",
+          "GET",
+        ]);
+        for (const [url, init] of fetch.mock.calls) {
+          expect(String(url)).toMatch(/^https:\/\/core.test\/prefix\/v1\//);
+          expect(new Headers(init?.headers).get("x-api-key")).toBe(
+            "injected-after-prepare",
+          );
+        }
+        expect(JSON.stringify(submission)).not.toContain(
+          "injected-after-prepare",
+        );
+      });
+    } finally {
+      if (key === undefined) delete process.env.SAPIOM_API_KEY;
+      else process.env.SAPIOM_API_KEY = key;
+      if (base === undefined) delete process.env.SAPIOM_BASE_URL;
+      else process.env.SAPIOM_BASE_URL = base;
+      fetch.mockRestore();
+    }
+  });
   it("keeps stub clients offline and clearly rejects durable submission", async () => {
     const stub = createStubClient();
     await expect(

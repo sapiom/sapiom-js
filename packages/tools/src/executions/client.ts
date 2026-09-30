@@ -39,6 +39,38 @@ function freeze<T>(value: T): T {
   return value;
 }
 
+/** Pure descriptor preparation: no authenticated transport or HTTP is needed. */
+export function prepareExecution(
+  capabilityId: string,
+  request: Record<string, unknown>,
+  options: ExecutionPrepareOptions = {},
+): ExecutionSubmission {
+  validateCapability(capabilityId);
+  const submissionKey = options.submissionKey ?? randomUUID();
+  validateKey(submissionKey);
+  let snapshot: unknown;
+  try {
+    snapshot = JSON.parse(JSON.stringify(request));
+  } catch {
+    throw new ExecutionProtocolError(
+      "Execution request must be a JSON object.",
+      { submissionKey },
+    );
+  }
+  if (!isRecord(snapshot))
+    throw new ExecutionProtocolError(
+      "Execution request must be a JSON object.",
+      { submissionKey },
+    );
+  return freeze({
+    version: 1,
+    capabilityId,
+    request: snapshot,
+    submissionKey,
+    coreBaseUrl: normalizeBaseUrl(options.baseUrl ?? resolveCoreBaseUrl()),
+  });
+}
+
 /** One authenticated client; descriptors/handles contain no credentials. */
 export class ExecutionClient {
   constructor(private readonly transport: Transport) {}
@@ -54,29 +86,9 @@ export class ExecutionClient {
     request: Record<string, unknown>,
     options: ExecutionPrepareOptions = {},
   ): ExecutionSubmission {
-    validateCapability(capabilityId);
-    const submissionKey = options.submissionKey ?? randomUUID();
-    validateKey(submissionKey);
-    let snapshot: unknown;
-    try {
-      snapshot = JSON.parse(JSON.stringify(request));
-    } catch {
-      throw new ExecutionProtocolError(
-        "Execution request must be a JSON object.",
-        { submissionKey },
-      );
-    }
-    if (!isRecord(snapshot))
-      throw new ExecutionProtocolError(
-        "Execution request must be a JSON object.",
-        { submissionKey },
-      );
-    return freeze({
-      version: 1,
-      capabilityId,
-      request: snapshot,
-      submissionKey,
-      coreBaseUrl: this.base(options),
+    return prepareExecution(capabilityId, request, {
+      ...options,
+      baseUrl: this.base(options),
     });
   }
 
