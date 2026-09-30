@@ -1,0 +1,47 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "782604",
+    "definitionId": "886",
+    "startedAt": "2026-09-28T20:16:03.236Z",
+    "finishedAt": "2026-09-28T20:17:01.203Z",
+    "status": "completed",
+    "input": {},
+    "note": "Verbatim terminal output of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 782604 on 2026-09-28. The two quote graphics were downloaded from the run's own public permalinks (graphics[].downloadUrl) and ship in sample/ as quote-1.jpg and quote-2.jpg (the run's 1312x736 PNGs, re-encoded as JPEG so the bundle stays small)."
+  },
+  "media": {
+    "graphics": ["/sample/quote-1.jpg", "/sample/quote-2.jpg"],
+    "packUrl": "https://file-storage.services.sapiom.ai/public/96bb027b-2d90-46ab-9198-613eeeada611"
+  },
+  "output": {
+    "note": "Nothing was emailed: no `deliverTo` recipient is set — the rendered quote graphics and the full pack are returned inline below. Repurposed the built-in sample post. Pass your own `source` to repurpose yours.",
+    "title": "Why small teams ship faster",
+    "unmet": ["deliverTo"],
+    "subject": "Content pack: Why small teams ship faster",
+    "channels": {
+      "clip": false,
+      "tweets": 5,
+      "graphics": 2,
+      "linkedIn": true,
+      "newsletter": true
+    },
+    "graphics": [
+      {
+        "quote": "Every additional person on a project adds communication paths, not just capacity.",
+        "downloadUrl": "https://file-storage.services.sapiom.ai/public/4267b720-22e1-4476-a7c4-9f4730901617"
+      },
+      {
+        "quote": "Speed is a consequence of cheap reversal, not of typing quickly.",
+        "downloadUrl": "https://file-storage.services.sapiom.ai/public/fc2a2755-4e74-4198-b204-c0a6bdf836d7"
+      }
+    ],
+    "markdown": "# Content pack: Why small teams ship faster\n\n## Tweet thread\n1. Small teams ship faster. Not because they work harder — because of structure. Here's the breakdown (1/5)\n2. 3 people share 3 communication pairs. 10 people share 45. Most of a larger team's extra energy goes into staying aligned, not into the work itself. (2/5)\n3. Small teams can't afford process theatre. When 4 people can see the whole system, coordination happens in the code and in a 2-minute hallway conversation — not in a status doc nobody reads. (3/5)\n4. The reason people miss: small teams make smaller decisions. Try something Tuesday, abandon it Thursday. Speed is a consequence of cheap reversal, not of typing quickly. (4/5)\n5. The real question isn't \"how do we grow?\" — it's \"what's the smallest team that can own this end to end?\" Answer that honestly and shipping speed follows. (5/5)\n\n## LinkedIn post\nSmall teams ship faster — and it has almost nothing to do with effort.\n\nThree people share three communication pairs. Ten people share 45. That's not a small efficiency gap; it's a structural tax. Most of the extra energy in a larger team disappears into staying aligned, not into the work itself.\n\nThe second reason is the absence of theatre. A small team can't afford a weekly status meeting whose only output is a document nobody reads, or a design review built to distribute blame. When four people can see the whole system, coordination happens in the code and in a two-minute hallway conversation. Process gets layered on when trust or context runs out.\n\nBut the reason people often miss is this: small teams make smaller decisions. A large team has to plan far ahead, because reversing course means re-aligning everyone. A small team can try something on Tuesday and abandon it on Thursday. Speed there is a consequence of cheap reversal — not of typing quickly.\n\nNone of this means small is always right. Some problems genuinely need more hands, and a team of four can't staff an on-call rotation without burning out.\n\nThe practical question, then, isn't \"how do we grow?\" It's \"what's the smallest team that can own this end to end?\"\n\n## Newsletter\n## Why small teams ship faster\n\nMost of the answer isn't effort. It's structure.\n\nCommunication paths scale exponentially: three people share three pairs, ten people share 45. Most of a larger team's extra energy goes into staying aligned, not into the work.\n\nSmall teams also can't afford process theatre. When four people can see the whole system, coordination happens in the code — not in a weekly status meeting whose only output is a document nobody reads.\n\nThe third reason is the one people miss: small teams make smaller decisions. They can try something on Tuesday and abandon it on Thursday, so they take more shots and learn faster.\n\n**Takeaway:** the question isn't \"how do we grow?\" — it's \"what's the smallest team that can own this end to end?\"\n\n## Quote graphics\n- Quote 1: \"Every additional person on a project adds communication paths, not just capacity.\" — [graphic](https://file-storage.services.sapiom.ai/public/4267b720-22e1-4476-a7c4-9f4730901617)\n- Quote 2: \"Speed is a consequence of cheap reversal, not of typing quickly.\" — [graphic](https://file-storage.services.sapiom.ai/public/fc2a2755-4e74-4198-b204-c0a6bdf836d7)\n\n## Teaser clip\n_(not generated)_\n",
+    "rendered": 2,
+    "schedule": "0 9 * * 1",
+    "delivered": 0,
+    "clipFileId": null,
+    "packFileId": "96bb027b-2d90-46ab-9198-613eeeada611",
+    "recipients": [],
+    "packDownloadUrl": "https://file-storage.services.sapiom.ai/public/96bb027b-2d90-46ab-9198-613eeeada611"
+  }
+}

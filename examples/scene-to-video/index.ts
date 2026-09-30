@@ -10,6 +10,7 @@ import {
   IMAGE_RESULT_SIGNAL,
   VIDEO_RESULT_SIGNAL,
   fileStorage,
+  type AspectRatio,
   type ImageResultPayload,
   type VideoResultPayload,
 } from "@sapiom/tools";
@@ -65,7 +66,7 @@ interface Shot {
   image_prompt: string;
   /** Motion prompt for the clip: subject → action → camera → duration → lighting → style. */
   motion_prompt: string;
-  /** Clip length in seconds (Kling 2.1 Pro accepts only 5 or 10). */
+  /** Clip length in seconds (normalized to 5 or 10). */
   duration: number;
   /** Transition into the next shot (e.g. "cut", "dissolve"). */
   transition: string;
@@ -131,16 +132,20 @@ const SAMPLE_SCENE =
   "a paper boat drifting down a rain-soaked city gutter at night";
 
 /**
- * Default image-to-video model. Kling 2.1 Pro is chosen for quality (the v1
- * default); swap for a budget model (Wan i2v, Seedance i2v) via the `model` input.
+ * Default image-to-video model: `seedance-i2v`, the cataloged image-to-video
+ * alias. It takes the keyframe as a neutral `referenceImage` and a `duration`,
+ * and rejects `aspectRatio` (the clip follows the keyframe's shape, which
+ * `keyframe` renders at the requested ratio).
  *
- * ⚠️ Raw provider id, uncataloged (SAP-2781 audit): the semantic video catalog has
- * no image-to-video alias yet, and this template's keyframe→animate design needs
- * one — so this pin gets no neutral-param normalization and WILL be rejected with
- * `400 unknown_model` once allowlist enforcement (SAP-2582/E8) closes. Repoint to
- * the image-to-video semantic alias the moment the catalog grows one.
+ * A raw provider id passed as `model` (anything with a `/`) is sent through
+ * `passthrough` in Kling's request shape: `image_url`, `duration` as "5" | "10",
+ * and `aspect_ratio`. Only Kling-compatible ids such as
+ * `fal-ai/kling-video/v2.1/pro/image-to-video` accept it; a model with another
+ * schema (Wan takes `num_frames`, not `duration`) needs its own mapping here.
+ * Raw ids route today but are uncataloged and will be rejected once alias-only
+ * enforcement (SAP-2582) is on.
  */
-const DEFAULT_VIDEO_MODEL = "fal-ai/kling-video/v2.1/pro/image-to-video";
+const DEFAULT_VIDEO_MODEL = "seedance-i2v";
 /** Video merge model used by `stitch` — concats the clips into one video. */
 const MERGE_MODEL = "fal-ai/ffmpeg-api/merge-videos";
 /** Fan-out bounds on the planned shot list. */
@@ -150,7 +155,10 @@ const MAX_SHOTS = 6;
 const MAX_CLIP_SECONDS = 10;
 const SHORT_CLIP_SECONDS = 5;
 
-/** Normalize an authored/model-proposed duration to the nearest Kling enum. */
+/**
+ * Normalize an authored/model-proposed duration to 5 or 10 seconds: the lengths
+ * both `seedance-i2v` and a raw Kling override accept.
+ */
 export function normalizeClipDuration(duration: number | undefined): number {
   if (typeof duration !== "number" || !Number.isFinite(duration)) {
     return MAX_CLIP_SECONDS;
@@ -161,6 +169,24 @@ export function normalizeClipDuration(duration: number | undefined): number {
 function clampShots(n: number | undefined): number {
   if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_NUM_SHOTS;
   return Math.max(1, Math.min(MAX_SHOTS, Math.floor(n)));
+}
+
+const ASPECT_RATIOS: readonly AspectRatio[] = [
+  "1:1",
+  "16:9",
+  "9:16",
+  "4:3",
+  "3:4",
+];
+
+/** The requested aspect ratio when the image models support it, else 16:9. */
+export function normalizeAspectRatio(r: string | undefined): AspectRatio {
+  return ASPECT_RATIOS.includes(r as AspectRatio) ? (r as AspectRatio) : "16:9";
+}
+
+/** A raw provider id (`vendor/model/...`) rather than a cataloged alias. */
+export function isRawModelId(model: string): boolean {
+  return model.includes("/");
 }
 
 function must<T>(v: T | undefined, name: string): T {
@@ -381,7 +407,7 @@ const decompose = defineStep({
         `Shot the built-in sample scene ("${SAMPLE_SCENE}") as a single shot to keep the zero-setup run cheap. Pass your own \`scene\` (and \`numShots\`) to shoot more.`,
       );
     }
-    const aspectRatio = input.aspectRatio ?? "16:9";
+    const aspectRatio = normalizeAspectRatio(input.aspectRatio);
 
     const system =
       "You are a cinematographer decomposing a scene into a shot list for a short video. " +
@@ -456,6 +482,9 @@ const keyframe = defineStep({
     const handle = await ctx.sapiom.contentGeneration.images.launch({
       prompt: shot.image_prompt,
       count: 1,
+      // The clip follows the keyframe's shape, so this is what sets the video's
+      // aspect ratio. Without it the image model renders its own default (4:3).
+      aspectRatio: normalizeAspectRatio(ctx.shared.get("aspectRatio")),
       // Intentionally private: a keyframe is never returned or linked to a
       // caller — it's only ever fed straight into `animate`'s `image_url`,
       // consumed immediately in-process, so a presigned URL is correct here.
@@ -517,26 +546,37 @@ const animate = defineStep({
     const index = must(ctx.shared.get("animateIndex"), "animateIndex");
     const shot = shots[index];
     const frame = frames[index];
-    const imageUrl = await resolveFrameUrl(frame, async (fileId) => {
-      return await ctx.sapiom.fileStorage.getDownloadUrl(fileId);
-    });
     const model = ctx.shared.get("model") ?? DEFAULT_VIDEO_MODEL;
+    const duration = normalizeClipDuration(shot.duration);
 
     ctx.logger.info("animating shot", { index: index + 1, of: shots.length });
-    // Launch the image-to-video job and pause on its result signal when queued.
-    // The shared aspect ratio keeps clips visually consistent. Kling 2.1 Pro
-    // accepts duration only as "5" or "10" and does not accept a seed parameter.
+    // Launch the image-to-video job and pause on its result signal.
     const handle = await ctx.sapiom.contentGeneration.video.launch({
       model,
       prompt: shot.motion_prompt,
-      // Kling 2.1 Pro image-to-video isn't in the semantic catalog, so the neutral param
-      // vocabulary doesn't apply here — pass the raw provider keys via `passthrough` (the
-      // escape hatch) rather than the deprecated `params`.
-      passthrough: {
-        image_url: imageUrl,
-        duration: String(normalizeClipDuration(shot.duration)),
-        aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
-      },
+      ...(isRawModelId(model)
+        ? {
+            // An uncataloged raw id gets no neutral-param mapping, so its own
+            // provider keys go through `passthrough` (Kling's shape: a URL,
+            // duration as "5" | "10", and an aspect ratio).
+            passthrough: {
+              image_url: await resolveFrameUrl(frame, async (fileId) => {
+                return await ctx.sapiom.fileStorage.getDownloadUrl(fileId);
+              }),
+              duration: String(duration),
+              aspect_ratio: must(ctx.shared.get("aspectRatio"), "aspectRatio"),
+            },
+          }
+        : {
+            // A cataloged alias takes neutral params. The keyframe's fileId is
+            // the durable reference; no aspectRatio (the clip follows the frame).
+            referenceImage:
+              frame.fileId ??
+              (await resolveFrameUrl(frame, async (fileId) => {
+                return await ctx.sapiom.fileStorage.getDownloadUrl(fileId);
+              })),
+            duration,
+          }),
       // Public: this clip may become the run's headline shareable output (the
       // single-clip bypass in `stitch`, or as merge input otherwise), so it
       // needs a durable permalink rather than a presigned URL that expires in
