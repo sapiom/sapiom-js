@@ -14,7 +14,12 @@ export function launch(modulePath, options = {}) {
   child.stdout.resume();
   child.stderr.resume();
   child.on("message", (message) => {
-    messages.push(message);
+    // Control replies are consumed by an already-registered waiter; snapshots must
+    // never become retained history. Keep a bounded backlog for asynchronous races.
+    if (message.type !== "response") {
+      messages.push(message);
+      if (messages.length > 128) messages.shift();
+    }
     events.emit("message", message);
   });
   child.on("error", () => {
@@ -26,8 +31,8 @@ export function launch(modulePath, options = {}) {
     events.emit("failure", failure);
   });
   const wait = (predicate, timeoutMs = 30_000) => {
-    const existing = messages.find(predicate);
-    if (existing) return Promise.resolve(existing);
+    const existing = messages.findIndex(predicate);
+    if (existing >= 0) return Promise.resolve(messages.splice(existing, 1)[0]);
     if (failure) return Promise.reject(failure);
     return new Promise((resolve, reject) => {
       const cleanup = () => {
@@ -37,6 +42,8 @@ export function launch(modulePath, options = {}) {
       };
       const onMessage = (message) => {
         if (predicate(message)) {
+          const index = messages.indexOf(message);
+          if (index >= 0) messages.splice(index, 1);
           cleanup();
           resolve(message);
         }
@@ -60,12 +67,13 @@ export function launch(modulePath, options = {}) {
     send: (message) => child.send(message),
     async control(action, options = {}) {
       const id = `control-${++seq}`;
-      child.send({ id, type: "control", action, options });
-      const message = await wait(
+      const response = wait(
         (message) => message.id === id && message.type === "response",
         // Core permits a 45-second worker bootstrap before reporting failure.
         action === "worker" ? 60_000 : 30_000,
       );
+      child.send({ id, type: "control", action, options });
+      const message = await response;
       if (message.error)
         throw new Error(`Harness ${action} failed: ${message.error}`);
       return message.result;
