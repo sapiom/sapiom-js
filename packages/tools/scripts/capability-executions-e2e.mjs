@@ -402,6 +402,16 @@ try {
   console.error(`${error.name}: ${error.message}`);
   process.exitCode = 1;
 } finally {
-  evidence.finishedAt = new Date().toISOString();
-  await cleanupExecutionGate(save, harness, active);
+  await cleanupExecutionGate(
+    async (cleanupErrors) => {
+      if (cleanupErrors.length) {
+        evidence.exitCode = 1;
+        evidence.cleanupErrors = cleanupErrors;
+      }
+      evidence.finishedAt = new Date().toISOString();
+      await save();
+    },
+    harness,
+    active,
+  );
 }
