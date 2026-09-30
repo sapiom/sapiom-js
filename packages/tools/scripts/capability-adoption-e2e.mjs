@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupExecutionGate } from "./capability-executions-cleanup.mjs";
 import { launch } from "./capability-executions-harness-client.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -393,11 +394,16 @@ try {
   );
   evidence.passed = true;
 } finally {
-  try {
-    await harness.control("shutdown");
-  } finally {
-    await Promise.allSettled([...active].map((child) => child.stop()));
-    evidence.completedAt = new Date().toISOString();
-    await save();
-  }
+  await cleanupExecutionGate(
+    async (cleanupErrors) => {
+      if (cleanupErrors.length) {
+        evidence.passed = false;
+        evidence.cleanupErrors = cleanupErrors;
+      }
+      evidence.completedAt = new Date().toISOString();
+      await save();
+    },
+    harness,
+    active,
+  );
 }
