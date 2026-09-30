@@ -12,7 +12,7 @@ if (state.status === "succeeded") console.log(state.result);
 
 Explicit execution calls require a backend with admission enabled for that capability.
 Existing capability methods continue to use their current transport.
-The `@sapiom/tools/executions` subpath also exports ambient `prepare`, `submit`, and `get`.
+The `@sapiom/tools/executions` subpath also exports ambient `prepare`, `submit`, `get`, and `wait`.
 Generic result types are caller annotations; the SDK validates the execution envelope,
 not individual capability DTOs.
 
@@ -30,6 +30,8 @@ Logical failure/indeterminate states are HTTP 200 outcomes; HTTP errors retain t
 actual status. Saved confirmed failures are classified as invalid_request=400,
 rate_limited/capability_usage_limit=429, deadline_exceeded=504, execution_failed=502.
 These SDK classifications do not reconstruct original provider HTTP responses.
+Memory append/recall/forget additionally preserve the allowlisted caller validation codes
+secret_detected, invalid_metadata and invalid_filter as HTTP 400 with safe messages.
 Indeterminate outcomes must not be automatically resubmitted. HTTP 410 means the saved
 payload expired, and does not authorize another execution under the same key.
 
@@ -45,7 +47,8 @@ Errors carry available executionId/submissionKey. Persisting caller state is the
 responsibility. Request and credential contents are never included in error messages.
 
 `await client.executions.wait<T>(handle)` returns the saved result or throws a typed
-ExecutionFailedError/ExecutionIndeterminateError. Pass a serialized handle on a fresh
+ExecutionFailedError/ExecutionIndeterminateError, or ExecutionExpiredError for HTTP 410.
+Pass a serialized handle on a fresh
 client to retain origin checks; raw IDs require the original backend configuration.
 Wait only issues GET. After losing a receipt, submit the original descriptor first.
 It defaults to a five-minute local budget, 500 ms initial polling and exponential
