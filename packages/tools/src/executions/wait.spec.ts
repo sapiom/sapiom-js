@@ -175,14 +175,52 @@ describe("execution wait and resumption", () => {
     await expect(
       client.executions.wait({ ...handle, coreBaseUrl: "https://evil.test" }),
     ).rejects.toBeInstanceOf(ExecutionProtocolError);
-    for (const waitTimeoutMs of [0, -1, NaN, Infinity])
-      await expect(
-        client.executions.wait(handle, { waitTimeoutMs }),
-      ).rejects.toBeInstanceOf(ExecutionProtocolError);
+    for (const option of [
+      "waitTimeoutMs",
+      "initialPollIntervalMs",
+      "maxPollIntervalMs",
+      "requestTimeoutMs",
+    ])
+      for (const value of [0, -1, NaN, Infinity])
+        await expect(
+          client.executions.wait(handle, { [option]: value }),
+        ).rejects.toMatchObject({
+          name: "ExecutionProtocolError",
+          executionId: receipt.id,
+          submissionKey: handle.submissionKey,
+        });
     expect(fetch).not.toHaveBeenCalled();
     await expect(client.executions.wait(handle)).rejects.toBeInstanceOf(
       ExecutionProtocolError,
     );
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("interrupts an elapsed wait instead of passing a nonpositive derived request timeout", async () => {
+    const { client, fetch } = setup(async () => json(receipt));
+    jest
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1000)
+      .mockReturnValue(1001);
+    await expect(
+      client.executions.wait(handle, { waitTimeoutMs: 0.5 }),
+    ).rejects.toMatchObject({
+      name: "ExecutionWaitInterruptedError",
+      executionId: receipt.id,
+      submissionKey: handle.submissionKey,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("does not fetch when the wait budget expires before the first poll", async () => {
+    const { client, fetch } = setup(async () => json(receipt));
+    jest.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(1001);
+    await expect(
+      client.executions.wait(handle, { waitTimeoutMs: 0.5 }),
+    ).rejects.toMatchObject({
+      name: "ExecutionWaitInterruptedError",
+      executionId: receipt.id,
+      submissionKey: handle.submissionKey,
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

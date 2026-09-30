@@ -24,39 +24,41 @@ export async function waitForExecution<T>(
   options: ExecutionWaitOptions,
   capabilityId?: string,
 ): Promise<T> {
-  const deadline =
-    Date.now() + positiveMs(options.waitTimeoutMs ?? 300_000, "waitTimeoutMs");
-  const initial = positiveMs(
-    options.initialPollIntervalMs ?? 500,
-    "initialPollIntervalMs",
-  );
-  const cap = positiveMs(
-    options.maxPollIntervalMs ?? 5000,
-    "maxPollIntervalMs",
-  );
-  const requestCap = positiveMs(
-    options.requestTimeoutMs ?? 15_000,
-    "requestTimeoutMs",
-  );
-  if (initial > cap)
-    throw new ExecutionProtocolError(
-      "Initial poll interval exceeds its maximum.",
-      reference,
-    );
   const stopped = () =>
     new ExecutionWaitInterruptedError(
       "Execution wait stopped; accepted work continues. Resume with the saved ID or handle.",
       reference,
     );
-  let interval = initial;
   try {
+    const deadline =
+      Date.now() +
+      positiveMs(options.waitTimeoutMs ?? 300_000, "waitTimeoutMs");
+    const initial = positiveMs(
+      options.initialPollIntervalMs ?? 500,
+      "initialPollIntervalMs",
+    );
+    const cap = positiveMs(
+      options.maxPollIntervalMs ?? 5000,
+      "maxPollIntervalMs",
+    );
+    const requestCap = positiveMs(
+      options.requestTimeoutMs ?? 15_000,
+      "requestTimeoutMs",
+    );
+    if (initial > cap)
+      throw new ExecutionProtocolError(
+        "Initial poll interval exceeds its maximum.",
+        reference,
+      );
+    let interval = initial;
     for (;;) {
-      if (options.signal?.aborted || Date.now() >= deadline) throw stopped();
+      const requestRemaining = deadline - Date.now();
+      if (options.signal?.aborted || requestRemaining <= 0) throw stopped();
       let retryAfter: number | undefined;
       try {
         const state = await get({
           ...options,
-          requestTimeoutMs: Math.min(requestCap, deadline - Date.now()),
+          requestTimeoutMs: Math.min(requestCap, requestRemaining),
         });
         if (capabilityId && state.capabilityId !== capabilityId)
           throw new ExecutionProtocolError(
@@ -69,7 +71,6 @@ export async function waitForExecution<T>(
         if (state.status === "indeterminate")
           throw new ExecutionIndeterminateError(state.error, reference);
       } catch (error) {
-        if (error instanceof ExecutionError) Object.assign(error, reference);
         const transient =
           error instanceof ExecutionTransportError ||
           (error instanceof ExecutionHttpError &&
@@ -88,6 +89,7 @@ export async function waitForExecution<T>(
       interval = Math.min(cap, interval * 2);
     }
   } catch (error) {
+    if (error instanceof ExecutionError) Object.assign(error, reference);
     if (error instanceof ExecutionInterruptedError) throw stopped();
     throw error;
   }
