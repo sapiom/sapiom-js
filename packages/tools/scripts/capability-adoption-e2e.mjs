@@ -295,7 +295,11 @@ try {
         if (capabilityDelivery === "executions") {
           assert.ok(reply.error.executionId);
           assert.ok(reply.error.submissionKey);
-          assert.equal(reply.error.message, safeMessage);
+          const prefix =
+            capability === "memory.append"
+              ? "Failed to append memory"
+              : "Failed to recall memories";
+          assert.equal(reply.error.message, `${prefix}: ${safeMessage}`);
           job = await snapshot(reply.error.executionId);
           assert.equal(job.execution.status, "failed");
           const read = await sdk("get", {
