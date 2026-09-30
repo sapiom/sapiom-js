@@ -36,12 +36,13 @@ import { executionDeliveryEligible } from "./execution-delivery.js";
  * → the production default). There is no per-capability URL knob: one Core base URL
  * re-homes every routed verb at once, so nothing silently escapes to a stale host.
  */
-export function resolveCoreBaseUrl(): string {
+export function resolveCoreBaseUrl(baseUrl?: string): string {
   return (
+    baseUrl ??
     process.env.SAPIOM_BASE_URL ??
     process.env.SAPIOM_API_URL ??
     "https://api.sapiom.ai"
-  );
+  ).replace(/\/+$/, "");
 }
 
 /** Options for {@link capabilityCall}. */
@@ -85,7 +86,7 @@ export async function capabilityCall<Res>(
   opts: CapabilityCallOptions<Res>,
 ): Promise<Res> {
   const transport = opts.transport ?? defaultTransport();
-  const baseUrl = opts.baseUrl ?? transport.coreBaseUrl ?? resolveCoreBaseUrl();
+  const baseUrl = resolveCoreBaseUrl(opts.baseUrl ?? transport.coreBaseUrl);
   // Snapshot mode/origin/key once. No error path switches transport after acceptance ambiguity.
   if (
     transport.capabilityDelivery === "executions" &&
