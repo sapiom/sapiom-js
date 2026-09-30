@@ -144,7 +144,7 @@ try {
     try {
       await stdio.connect(transport, { timeout: 8_000 });
       const tools = (await stdio.listTools()).tools;
-      assert.equal(tools.length, 25);
+      assert.equal(tools.length, 26);
       assert.equal(new Set(tools.map((tool) => tool.name)).size, tools.length);
       assert(
         !tools.some((tool) => /(?:agent_map|sapiom_dev_map)/.test(tool.name)),

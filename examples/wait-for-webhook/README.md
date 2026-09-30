@@ -66,17 +66,30 @@ meant to prevent).
 ## Resuming a paused run in dev
 
 A real `run` pauses at `kickoff` and waits for the `webhook.callback` signal.
-Instead of a real webhook, fire it yourself via the MCP `signal_workflow` /
-`workflow_signal` tool. The `correlationId` is the paused run's `executionId`,
-and the `payload` becomes `decide`'s input:
+Instead of a real webhook, fire it yourself with `sapiom_dev_agents_signal`. The
+`correlationId` is the paused run's `executionId`, and the `payload` becomes
+`decide`'s input:
 
 ```json
 {
-  "signal": "webhook.callback",
+  "executionId": "<executionId of the paused run>",
+  "name": "webhook.callback",
   "correlationId": "<executionId of the paused run>",
   "payload": { "status": "succeeded", "result": { "note": "job done" } }
 }
 ```
+
+Or from the CLI:
+
+```sh
+sapiom agents signal <executionId> --name webhook.callback \
+  --correlation-id <executionId> \
+  --payload '{"status":"succeeded","result":{"note":"job done"}}'
+```
+
+A signal only ever resumes a run that is already paused. To *start* runs from
+the outside instead, arm an `event` trigger and `sapiom agents emit` its type —
+events start, signals resume.
 
 The run wakes at `decide`, summarizes that `payload`, and branches to `accept`
 (a success-looking payload) or `reject` (a `status` of `failed`/`error`/etc.).

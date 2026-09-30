@@ -74,5 +74,9 @@ Input: `{ "niche": "indie game development", "newsletterName": "Pixel Weekly", "
 
 - `index.ts` — the agent (edit this).
 - `package.json` / `tsconfig.json` — pinned SDK deps and typecheck config.
+- `app/` — the dashboard this template ships (`node server.mjs`): the latest
+  issue as written, its sources, the self-edit grade, and where it was sent.
+  See `app/README.md`. `preview.png` is its screenshot, referenced from
+  `template.json` → `app.preview`.
 
 Run `npm run typecheck` to confirm it compiles.
