@@ -352,6 +352,7 @@ export class Transport {
             ok: state.status === "succeeded",
             attribution: this.attribution,
           }),
+          capability: state.capabilityId,
           execution_id: state.id,
           execution_status: state.status,
         },

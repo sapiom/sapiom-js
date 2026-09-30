@@ -176,6 +176,14 @@ export class ExecutionClient {
     executionId: string,
     options: ExecutionRequestOptions = {},
   ): Promise<ExecutionState<T>> {
+    return this.retrieve<T>(executionId, options);
+  }
+
+  private async retrieve<T>(
+    executionId: string,
+    options: ExecutionRequestOptions,
+    capabilityId?: string,
+  ): Promise<ExecutionState<T>> {
     validateId(executionId);
     const baseUrl = this.base(options);
     const raw = await executionRequest(
@@ -185,9 +193,12 @@ export class ExecutionClient {
       options,
       { executionId },
     );
-    const state = parseExecution<T>(raw, true, {
-      executionId,
-    }) as ExecutionState<T>;
+    const state = parseExecution<T>(
+      raw,
+      true,
+      { executionId },
+      capabilityId,
+    ) as ExecutionState<T>;
     this.transport.observeExecution(baseUrl, state);
     return state;
   }
@@ -217,7 +228,13 @@ export class ExecutionClient {
     try {
       return await waitForExecution<T>(
         (request) =>
-          this.get<T>(reference.executionId, { ...request, baseUrl }),
+          this.retrieve<T>(
+            reference.executionId,
+            { ...request, baseUrl },
+            typeof execution === "string"
+              ? undefined
+              : execution.receipt.capabilityId,
+          ),
         reference,
         options,
         typeof execution === "string"
