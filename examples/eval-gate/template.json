@@ -56,6 +56,13 @@
       }
     }
   ],
+  "app": {
+    "name": "Draft grading dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4178,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/eval-gate/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [

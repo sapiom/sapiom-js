@@ -1,0 +1,29 @@
+{
+  "source": {
+    "kind": "captured",
+    "executionId": "158213",
+    "definitionId": "524",
+    "startedAt": "2026-08-05T00:19:03.717Z",
+    "finishedAt": "2026-08-05T00:22:02.565Z",
+    "status": "completed",
+    "input": {},
+    "note": "Verbatim terminal output of a zero-setup run of this template (input {}), read back over the Sapiom API from agent run 158213 on 2026-09-25. The run's downloadUrl was a 15-minute presigned link that had expired by capture, so it is null here; the render itself was fetched from file storage by its videoFileId and ships in sample/ as clip.mp4 (the run's own 1660x1244 H.264 clip, scaled to 720p so the bundle stays small) with its first frame as poster.jpg."
+  },
+  "media": {
+    "videoUrl": "/sample/clip.mp4",
+    "posterUrl": "/sample/poster.jpg"
+  },
+  "output": {
+    "note": "Shot the built-in sample scene (\"a paper boat drifting down a rain-soaked city gutter at night\") as a single shot to keep the zero-setup run cheap. Pass your own `scene` (and `numShots`) to shoot more.",
+    "shots": [
+      {
+        "duration": 5,
+        "transition": "fade in from black over first half second, hold, fade to black at end",
+        "image_prompt": "A small white origami paper boat, edges softening and curling from absorbed rain, drifts through a rain-soaked city gutter at night. Color palette is moody nocturnal: wet asphalt blacks and gunmetal grays lit by warm amber sodium-vapor streetlamps, accented with cyan and teal neon reflections bleeding off puddles and storefront signage. Lighting is cinematic low-key night with a single key streetlamp overhead casting an amber pool, cool teal rim light from a distant neon sign, and visible rain streaks catching the light. Lens is a 35mm anamorphic with shallow depth of field, gentle horizontal lens flares, soft bokeh from city lights, and subtle grain. Aspect ratio 16:9. Keyframe composition: low-angle ground-level shot, the paper boat centered in the foreground floating in a shallow stream of rainwater flowing along a cracked urban curb gutter, blurred wet cobblestone texture, amber streetlamp glow overhead, neon reflections shimmering across the water surface.",
+        "motion_prompt": "the small white paper boat -> drifts forward and slightly rotates as it bobs through rippling gutter water, picking up speed and weaving around a small pebble -> low-angle camera tracks smoothly forward at water-level, parallel to the boat, with a very subtle handheld drift, holding the boat near center frame while rain streaks whip across the lens -> 5 seconds -> cinematic low-key night lighting with warm amber streetlamp key light, cool teal rim from distant neon, and visible rain catching highlights -> anamorphic 35mm filmic style with shallow depth of field, soft bokeh city lights, gentle horizontal lens flares, subtle film grain, 16:9"
+      }
+    ],
+    "downloadUrl": null,
+    "videoFileId": "5ebff9af-2d1a-4711-a475-cc6e522d31ba"
+  }
+}
