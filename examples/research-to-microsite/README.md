@@ -109,6 +109,9 @@ Input:
 - `template.json` — gallery detail (manifest v1).
 - `AGENTS.md` — the authoring loop.
 - `index.test.mjs` — unit tests against individual step `run` functions.
+- `app/` — the dashboard this template ships (`node server.mjs`): the published
+  site, the self-critique verdicts, and the sources, for the latest run. See
+  `app/README.md`.
 
 Run `npm run typecheck` to confirm it compiles, and `npm test` to run the
 unit tests.

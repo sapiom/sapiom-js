@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Content pack dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --accent: #2a78d6;
+        --chip: #f3f2ef;
+        --warn: #a15c00;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --accent: #3987e5;
+          --chip: #2a2a28;
+          --warn: #e0a24a;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      a {
+        color: var(--accent);
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 28px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 65%;
+      }
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 20px;
+        font-weight: 650;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+        gap: 12px;
+        align-items: start;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .facts {
+          max-width: 100%;
+          justify-content: flex-start;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .graphics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .graphic {
+        margin: 0;
+        min-width: 0;
+      }
+      .graphic img,
+      .graphic .missing {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        display: block;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: var(--chip);
+      }
+      .graphic .missing {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px;
+        text-align: center;
+        color: var(--text-3);
+        font-size: 12px;
+      }
+      .graphic figcaption {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--text-2);
+      }
+      .tweets {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 0;
+      }
+      .tweet {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 8px 0;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .tweet:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .tweet .n {
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+      }
+      .tweet p {
+        margin: 0;
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+      }
+      .tweet .len {
+        font-size: 11px;
+        color: var(--text-3);
+        font-variant-numeric: tabular-nums;
+        padding-top: 2px;
+      }
+      .tweet .len.over {
+        color: var(--warn);
+        font-weight: 600;
+      }
+      .tabs {
+        display: flex;
+        gap: 4px;
+        margin: -2px 0 10px;
+      }
+      .tabs button {
+        font: inherit;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        background: var(--chip);
+        color: var(--text-2);
+        border-radius: 999px;
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+      .tabs button[aria-selected="true"] {
+        background: var(--text);
+        border-color: var(--text);
+        color: var(--card);
+      }
+      .copy {
+        font-size: 13px;
+        max-height: 560px;
+        overflow: auto;
+      }
+      .copy p {
+        margin: 0 0 10px;
+        white-space: pre-line;
+      }
+      .copy h3 {
+        font-size: 15px;
+        margin: 0 0 8px;
+      }
+      .copy ul {
+        margin: 0 0 10px;
+        padding-left: 18px;
+      }
+      .copy .meta {
+        font-size: 12px;
+        color: var(--text-3);
+        margin: 0 0 8px;
+      }
+      .note {
+        margin: 12px 0 0;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source {
+        margin: 14px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source b {
+        color: var(--text-2);
+        font-weight: 600;
+      }
+      .muted {
+        color: var(--text-3);
+        font-style: italic;
+      }
+      .sr {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Content Pack</p>
+          <h1 id="title">Content pack dashboard</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+
+      <section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+      <div class="grid">
+        <div class="stack">
+          <section class="card" aria-labelledby="graphics-h">
+            <h2 id="graphics-h">Quote graphics</h2>
+            <div class="graphics" id="graphics"></div>
+          </section>
+          <section class="card" aria-labelledby="thread-h">
+            <h2 id="thread-h">Tweet thread</h2>
+            <ol class="tweets" id="thread"></ol>
+            <div id="note"></div>
+          </section>
+        </div>
+        <section class="card" aria-labelledby="copy-h">
+          <h2 id="copy-h" class="sr">Long-form copy</h2>
+          <div class="tabs" role="tablist" aria-labelledby="copy-h">
+            <button role="tab" id="tab-linkedin" aria-selected="true">
+              LinkedIn post
+            </button>
+            <button role="tab" id="tab-newsletter" aria-selected="false">
+              Newsletter
+            </button>
+          </div>
+          <div class="copy" id="copy" role="tabpanel"></div>
+        </section>
+      </div>
+
+      <p class="source" id="source"></p>
+    </div>
+
+    <script>
+      // Everything below renders `/api/run`, the agent's own terminal output,
+      // into the page. The only thing computed here is each tweet's length
+      // against the 280-character limit.
+
+      const TWEET_LIMIT = 280;
+
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      /** Inline markdown on an already-escaped line: code and bold. */
+      const inline = (text) =>
+        text
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
+      /**
+       * The newsletter is short markdown: `##` headings, paragraphs, bullet
+       * lists, bold. Rendered block by block after escaping, so nothing in the
+       * copy can become markup.
+       */
+      function renderMarkdown(md) {
+        return String(md)
+          .split(/\n{2,}/)
+          .map((block) => block.trim())
+          .filter(Boolean)
+          .map((block) => {
+            const h = /^#{1,6}\s+(.*)$/.exec(block);
+            if (h && !block.includes("\n")) {
+              return `<h3>${inline(esc(h[1]))}</h3>`;
+            }
+            const lines = block.split("\n");
+            if (lines.every((l) => /^\s*[-*]\s+/.test(l))) {
+              return `<ul>${lines
+                .map(
+                  (l) =>
+                    `<li>${inline(esc(l.replace(/^\s*[-*]\s+/, "")))}</li>`,
+                )
+                .join("")}</ul>`;
+            }
+            return `<p>${inline(esc(block))}</p>`;
+          })
+          .join("");
+      }
+
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+      const words = (s) => String(s).trim().split(/\s+/).filter(Boolean).length;
+
+      function kpi(label, value, sub) {
+        return `<article class="card kpi"><p class="label">${label}</p><div class="value">${value}</div>${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      function renderGraphics(graphics, urls, dryRun) {
+        if (graphics.length === 0) {
+          return `<p class="muted">${
+            dryRun
+              ? "This run was a dry run: the copy was written and no graphics were rendered."
+              : "This run rendered no quote graphics."
+          }</p>`;
+        }
+        return graphics
+          .map((g, i) => {
+            const url = urls[i] ?? null;
+            const quote = String(g?.quote ?? "");
+            const art = url
+              ? `<img src="${esc(url)}" alt="${esc(`Quote graphic: “${quote}”`)}" />`
+              : `<div class="missing">${dryRun ? "Not rendered (dry run)" : "Graphic link no longer available"}</div>`;
+            return `<figure class="graphic">${art}<figcaption>“${esc(quote)}”</figcaption></figure>`;
+          })
+          .join("");
+      }
+
+      function renderThread(tweets) {
+        if (tweets.length === 0) {
+          return `<li class="muted">This run wrote no tweets.</li>`;
+        }
+        return tweets
+          .map((t, i) => {
+            const len = [...t].length;
+            return `<li class="tweet"><span class="n">${i + 1}</span><p>${esc(t)}</p><span class="len${
+              len > TWEET_LIMIT ? " over" : ""
+            }" title="characters, of ${TWEET_LIMIT}">${len}/${TWEET_LIMIT}</span></li>`;
+          })
+          .join("");
+      }
+
+      function setupTabs(pack) {
+        const copy = document.getElementById("copy");
+        const tabs = {
+          linkedin: {
+            button: document.getElementById("tab-linkedin"),
+            html: () =>
+              pack?.linkedInPost
+                ? `<p class="meta">${words(pack.linkedInPost)} words</p>${pack.linkedInPost
+                    .split(/\n{2,}/)
+                    .map((p) => `<p>${inline(esc(p.trim()))}</p>`)
+                    .join("")}`
+                : `<p class="muted">This run returned no LinkedIn post.</p>`,
+          },
+          newsletter: {
+            button: document.getElementById("tab-newsletter"),
+            html: () =>
+              pack?.newsletter
+                ? `<p class="meta">${words(pack.newsletter)} words</p>${renderMarkdown(pack.newsletter)}`
+                : `<p class="muted">This run returned no newsletter section.</p>`,
+          },
+        };
+        const show = (key) => {
+          for (const [k, t] of Object.entries(tabs)) {
+            t.button.setAttribute("aria-selected", String(k === key));
+          }
+          copy.innerHTML = tabs[key].html();
+        };
+        for (const [k, t] of Object.entries(tabs)) {
+          t.button.addEventListener("click", () => show(k));
+        }
+        show("linkedin");
+      }
+
+      function clipKpi(o, src) {
+        if (o.clipFileId) return ["Rendered", "stored durably in file storage"];
+        if (o.dryRun) return ["Skipped", "dry run, copy only"];
+        if (src.renderClip === false) return ["Skipped", "renderClip is off"];
+        // The sample post skips the clip unless the run asked for one.
+        if (!src.ownSource && src.renderClip !== true) {
+          return ["Skipped", "off for the built-in sample post"];
+        }
+        return ["None", "this run returned no clip"];
+      }
+
+      function deliveryKpi(o) {
+        const recipients = Number(o.recipientCount) || 0;
+        if (o.dryRun) return ["—", "dry run, nothing sent"];
+        const delivered = Number(o.delivered) || 0;
+        const sub =
+          Array.isArray(o.unmet) && o.unmet.includes("deliverTo")
+            ? "no <code>deliverTo</code> recipient set"
+            : `of ${recipients} recipient${recipients === 1 ? "" : "s"}`;
+        return [String(delivered), sub];
+      }
+
+      async function render({ source, media, pack, output }) {
+        const o = output ?? {};
+        const src = source ?? {};
+        const graphics = Array.isArray(o.graphics)
+          ? o.graphics
+          : Array.isArray(o.pack?.quoteGraphics)
+            ? o.pack.quoteGraphics
+            : [];
+        const urls = Array.isArray(media?.graphics) ? media.graphics : [];
+        const tweets = Array.isArray(pack?.tweetThread) ? pack.tweetThread : [];
+        const ownSource = src.ownSource === true;
+
+        if (o.title) document.getElementById("title").textContent = o.title;
+        document.getElementById("facts").innerHTML = [
+          `<span class="chip">Source <b>${ownSource ? "your post" : "built-in sample post"}</b></span>`,
+          o.schedule
+            ? `<span class="chip">Schedule <b class="mono">${esc(o.schedule)}</b></span>`
+            : "",
+          `<span class="chip">Finished <b>${fmtWhen(src.finishedAt)}</b></span>`,
+        ].join("");
+
+        const longest = tweets.reduce((m, t) => Math.max(m, [...t].length), 0);
+        const [clipValue, clipSub] = clipKpi(o, src);
+        const [deliveredValue, deliveredSub] = deliveryKpi(o);
+        document.getElementById("kpis").innerHTML = [
+          kpi(
+            "Tweets",
+            String(tweets.length),
+            tweets.length
+              ? `longest ${longest} of ${TWEET_LIMIT} characters`
+              : "none written",
+          ),
+          kpi(
+            "Quote graphics",
+            String(urls.filter(Boolean).length),
+            graphics.length
+              ? "rendered with the quote set in the image"
+              : "none rendered",
+          ),
+          kpi("Teaser clip", clipValue, clipSub),
+          kpi("Emails delivered", deliveredValue, deliveredSub),
+        ].join("");
+
+        document.getElementById("graphics").innerHTML = renderGraphics(
+          graphics,
+          urls,
+          Boolean(o.dryRun),
+        );
+        document.getElementById("thread").innerHTML = pack
+          ? renderThread(tweets)
+          : `<li class="muted">The copy in this run's pack could not be read.</li>`;
+        setupTabs(pack);
+
+        // The run's own account of what it did (sample post, nothing emailed)
+        // belongs under the copy it qualifies, not in the page chrome.
+        document.getElementById("note").innerHTML = o.note
+          ? `<p class="note">${inline(esc(o.note))}</p>`
+          : "";
+
+        const where =
+          src.kind === "live"
+            ? `Live — latest completed run`
+            : `Captured zero-setup run`;
+        const packLink = media?.packUrl
+          ? ` · <a href="${esc(media.packUrl)}" target="_blank" rel="noreferrer">full pack (markdown) ↗</a>`
+          : "";
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}${packLink}` +
+          (src.liveError
+            ? ` · <span class="muted">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+
+        // Bounded, so an image that never loads cannot hold the page in a
+        // loading state (the screenshot helper waits on data-ready).
+        const images = [...document.querySelectorAll(".graphic img")];
+        await Promise.race([
+          Promise.all(
+            images.map(
+              (img) =>
+                img.complete ||
+                new Promise((r) => {
+                  img.addEventListener("load", r, { once: true });
+                  img.addEventListener("error", r, { once: true });
+                }),
+            ),
+          ),
+          new Promise((r) => setTimeout(r, 10_000)),
+        ]);
+      }
+
+      fetch("/api/run", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("thread").innerHTML =
+            `<li class="muted">Could not load the run: ${esc(err?.message ?? err)}</li>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>
