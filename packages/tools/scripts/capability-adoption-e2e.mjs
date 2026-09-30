@@ -85,7 +85,7 @@ async function startSdk(operation, args = {}) {
   });
   return child;
 }
-async function sdk(operation, args) {
+async function sdk(operation, args, expectedType = "result") {
   const child = await startSdk(operation, args);
   try {
     const message = await child.wait(
@@ -94,7 +94,7 @@ async function sdk(operation, args) {
     );
     assert.equal(
       message.type,
-      "result",
+      expectedType,
       `SDK failed: ${message.error?.name}/${message.error?.code ?? message.error?.status}`,
     );
     return message;
@@ -244,6 +244,82 @@ try {
           };
         },
       );
+  }
+  for (const [capability, code, safeMessage] of [
+    [
+      "memory.append",
+      "secret_detected",
+      "Memory content must not contain secrets.",
+    ],
+    ["memory.append", "invalid_metadata", "Memory metadata is invalid."],
+    ["memory.recall", "invalid_filter", "Memory filter is invalid."],
+  ]) {
+    await scenario(`${capability} ${code} error parity`, async () => {
+      const fixture = cases.find((item) => item.capability === capability);
+      const failures = [];
+      let job;
+      for (const capabilityDelivery of ["legacy", "executions"]) {
+        await harness.control("provider", {
+          responses: [
+            {
+              path: fixture.responses[0].path,
+              status: 400,
+              body: {
+                code,
+                message: "private-provider-diagnostic",
+                private: "never-expose-this",
+              },
+            },
+          ],
+        });
+        const before = (await snapshot()).providerAttempts.length;
+        const reply = await sdk(
+          "capability",
+          {
+            capabilityKey: capability,
+            request: fixture.request,
+            capabilityDelivery,
+          },
+          "error",
+        );
+        assert.equal(reply.error.name, "MemoryHttpError");
+        assert.equal(reply.error.status, 400);
+        assert.equal(reply.error.code, code);
+        const attempts = (await snapshot()).providerAttempts.slice(before);
+        assert.equal(
+          attempts.length,
+          1,
+          "Caller errors must not resend provider work",
+        );
+        failures.push({ status: reply.error.status, code: reply.error.code });
+        if (capabilityDelivery === "executions") {
+          assert.ok(reply.error.executionId);
+          assert.ok(reply.error.submissionKey);
+          assert.equal(reply.error.message, safeMessage);
+          job = await snapshot(reply.error.executionId);
+          assert.equal(job.execution.status, "failed");
+          const read = await sdk("get", {
+            executionId: reply.error.executionId,
+          });
+          assert.deepEqual(read.result.error, { code, message: safeMessage });
+          assert.ok(
+            !JSON.stringify(read).includes("private-provider-diagnostic"),
+          );
+          assert.ok(!JSON.stringify(read).includes("never-expose-this"));
+          assert.equal(
+            (await snapshot(reply.error.executionId)).providerAttempts.length,
+            1,
+          );
+        }
+      }
+      assert.deepEqual(failures[0], failures[1]);
+      return {
+        ...summary(job),
+        status: failures[1].status,
+        code,
+        safeMessageVerified: true,
+      };
+    });
   }
   await scenario(
     "deep search lost receipt, caller exit and fresh-process resume over 90 seconds",
