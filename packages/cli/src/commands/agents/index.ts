@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { action, json } from "../shared.js";
 import { runCheck } from "./check.js";
 import { runDeploy } from "./deploy.js";
+import { runEmit } from "./emit.js";
 import { runInit } from "./init.js";
 import { runLink } from "./link.js";
 import { runLogs } from "./logs.js";
@@ -87,6 +88,24 @@ export function registerAgentsCommands(program: Command): void {
   )
     .option("--build <buildRunId>", "inspect a build instead of an execution")
     .action(action(runLogs));
+
+  // `emit` starts runs, `signal` resumes them — the two halves of one idea, so
+  // they sit together.
+  withHostFlags(
+    json(
+      group
+        .command("emit <type>")
+        .description(
+          "Emit a custom event; starts a run for every active event trigger on that type (0..N).",
+        ),
+    ),
+  )
+    .requiredOption("--payload <json>", "event payload as a JSON object")
+    .option(
+      "--event-id <id>",
+      "your id for this delivery (1..256 chars); reposting the same id starts nothing new",
+    )
+    .action(action(runEmit));
 
   withHostFlags(
     json(
