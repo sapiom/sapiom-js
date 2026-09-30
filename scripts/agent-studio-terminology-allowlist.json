@@ -706,5 +706,40 @@
     "pattern": "^/v1/workflows/executions/$",
     "occurrences": 1,
     "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "research-to-microsite-dashboard-runs-list-route",
+    "path": "examples/research-to-microsite/app/server.mjs",
+    "pattern": "^/v1/workflows/executions\\?$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that lists an agent's runs. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "research-to-microsite-dashboard-run-detail-route",
+    "path": "examples/research-to-microsite/app/server.mjs",
+    "pattern": "^/v1/workflows/executions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "research-to-microsite-dashboard-sample-run-source-url",
+    "path": "examples/research-to-microsite/app/sample-run.json",
+    "pattern": "quellixlabs\\.com/insights/durable-execution-long-running-ai-agent-workflows",
+    "occurrences": 1,
+    "reason": "The captured run's own research output: a third-party source URL the agent read and cited, kept verbatim so the sample is a real run."
+  },
+  {
+    "id": "research-to-microsite-dashboard-sample-site-source-url",
+    "path": "examples/research-to-microsite/app/sample/site.json",
+    "pattern": "quellixlabs\\.com/insights/durable-execution-long-running-ai-agent-workflows",
+    "occurrences": 1,
+    "reason": "The captured run's own research output: a third-party source URL the agent read and cited, kept verbatim so the sample is a real run."
+  },
+  {
+    "id": "research-to-microsite-dashboard-sample-site-third-party-products",
+    "path": "examples/research-to-microsite/app/sample/site.json",
+    "pattern": "Workflow engines like Temporal|Cloudflare Workflows",
+    "occurrences": 2,
+    "reason": "The captured run's built site, verbatim: the model's research prose naming third-party products (Temporal-style engines, Cloudflare Workflows), not Sapiom copy."
   }
 ]
