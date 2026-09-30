@@ -5,6 +5,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupExecutionGate } from "./capability-executions-cleanup.mjs";
 import { launch } from "./capability-executions-harness-client.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -402,11 +403,5 @@ try {
   process.exitCode = 1;
 } finally {
   evidence.finishedAt = new Date().toISOString();
-  await save();
-  try {
-    await harness.control("shutdown");
-  } catch {
-    /* Force cleanup below. */
-  }
-  await Promise.all([...active].map((child) => child.stop()));
+  await cleanupExecutionGate(save, harness, active);
 }
