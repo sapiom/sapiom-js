@@ -12,7 +12,7 @@ if (state.status === "succeeded") console.log(state.result);
 
 Explicit execution calls require a backend with admission enabled for that capability.
 Existing capability methods continue to use their current transport.
-The `@sapiom/tools/executions` subpath also exports ambient `prepare`, `submit`, and `get`.
+The `@sapiom/tools/executions` subpath also exports ambient `prepare`, `submit`, `get`, and `wait`.
 Generic result types are caller annotations; the SDK validates the execution envelope,
 not individual capability DTOs.
 
@@ -45,7 +45,8 @@ Errors carry available executionId/submissionKey. Persisting caller state is the
 responsibility. Request and credential contents are never included in error messages.
 
 `await client.executions.wait<T>(handle)` returns the saved result or throws a typed
-ExecutionFailedError/ExecutionIndeterminateError. Pass a serialized handle on a fresh
+ExecutionFailedError/ExecutionIndeterminateError, or ExecutionExpiredError for HTTP 410.
+Pass a serialized handle on a fresh
 client to retain origin checks; raw IDs require the original backend configuration.
 Wait only issues GET. After losing a receipt, submit the original descriptor first.
 It defaults to a five-minute local budget, 500 ms initial polling and exponential

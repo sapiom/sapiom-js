@@ -43,6 +43,47 @@ afterEach(() => {
 });
 
 describe("execution wait and resumption", () => {
+  it("can wait with credentials injected after ambient preparation", async () => {
+    jest.useRealTimers();
+    const key = process.env.SAPIOM_API_KEY;
+    const fetch = jest
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        json({ ...receipt, status: "succeeded", result: { answer: 42 } }),
+      );
+    try {
+      delete process.env.SAPIOM_API_KEY;
+      await jest.isolateModulesAsync(async () => {
+        const executions = await import("./index.js");
+        const saved = executions.prepare(
+          "fixture.echo",
+          {},
+          { baseUrl: handle.coreBaseUrl },
+        );
+        expect(fetch).not.toHaveBeenCalled();
+        process.env.SAPIOM_API_KEY = "injected-after-prepare";
+        await expect(
+          executions.wait(
+            {
+              receipt,
+              submissionKey: saved.submissionKey,
+              coreBaseUrl: saved.coreBaseUrl,
+            },
+            { baseUrl: saved.coreBaseUrl, waitTimeoutMs: 100 },
+          ),
+        ).resolves.toEqual({ answer: 42 });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch.mock.calls[0][1]?.method).toBe("GET");
+        expect(
+          new Headers(fetch.mock.calls[0][1]?.headers).get("x-api-key"),
+        ).toBe("injected-after-prepare");
+      });
+    } finally {
+      if (key === undefined) delete process.env.SAPIOM_API_KEY;
+      else process.env.SAPIOM_API_KEY = key;
+      fetch.mockRestore();
+    }
+  });
   it("keeps bounded backoff when a rate-limit response asks for immediate retry", async () => {
     let attempts = 0;
     const { client, fetch } = setup(async () =>
@@ -175,14 +216,52 @@ describe("execution wait and resumption", () => {
     await expect(
       client.executions.wait({ ...handle, coreBaseUrl: "https://evil.test" }),
     ).rejects.toBeInstanceOf(ExecutionProtocolError);
-    for (const waitTimeoutMs of [0, -1, NaN, Infinity])
-      await expect(
-        client.executions.wait(handle, { waitTimeoutMs }),
-      ).rejects.toBeInstanceOf(ExecutionProtocolError);
+    for (const option of [
+      "waitTimeoutMs",
+      "initialPollIntervalMs",
+      "maxPollIntervalMs",
+      "requestTimeoutMs",
+    ])
+      for (const value of [0, -1, NaN, Infinity])
+        await expect(
+          client.executions.wait(handle, { [option]: value }),
+        ).rejects.toMatchObject({
+          name: "ExecutionProtocolError",
+          executionId: receipt.id,
+          submissionKey: handle.submissionKey,
+        });
     expect(fetch).not.toHaveBeenCalled();
     await expect(client.executions.wait(handle)).rejects.toBeInstanceOf(
       ExecutionProtocolError,
     );
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("interrupts an elapsed wait instead of passing a nonpositive derived request timeout", async () => {
+    const { client, fetch } = setup(async () => json(receipt));
+    jest
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1000)
+      .mockReturnValue(1001);
+    await expect(
+      client.executions.wait(handle, { waitTimeoutMs: 0.5 }),
+    ).rejects.toMatchObject({
+      name: "ExecutionWaitInterruptedError",
+      executionId: receipt.id,
+      submissionKey: handle.submissionKey,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("does not fetch when the wait budget expires before the first poll", async () => {
+    const { client, fetch } = setup(async () => json(receipt));
+    jest.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(1001);
+    await expect(
+      client.executions.wait(handle, { waitTimeoutMs: 0.5 }),
+    ).rejects.toMatchObject({
+      name: "ExecutionWaitInterruptedError",
+      executionId: receipt.id,
+      submissionKey: handle.submissionKey,
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
