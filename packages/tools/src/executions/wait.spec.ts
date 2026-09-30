@@ -43,6 +43,47 @@ afterEach(() => {
 });
 
 describe("execution wait and resumption", () => {
+  it("can wait with credentials injected after ambient preparation", async () => {
+    jest.useRealTimers();
+    const key = process.env.SAPIOM_API_KEY;
+    const fetch = jest
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        json({ ...receipt, status: "succeeded", result: { answer: 42 } }),
+      );
+    try {
+      delete process.env.SAPIOM_API_KEY;
+      await jest.isolateModulesAsync(async () => {
+        const executions = await import("./index.js");
+        const saved = executions.prepare(
+          "fixture.echo",
+          {},
+          { baseUrl: handle.coreBaseUrl },
+        );
+        expect(fetch).not.toHaveBeenCalled();
+        process.env.SAPIOM_API_KEY = "injected-after-prepare";
+        await expect(
+          executions.wait(
+            {
+              receipt,
+              submissionKey: saved.submissionKey,
+              coreBaseUrl: saved.coreBaseUrl,
+            },
+            { baseUrl: saved.coreBaseUrl, waitTimeoutMs: 100 },
+          ),
+        ).resolves.toEqual({ answer: 42 });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch.mock.calls[0][1]?.method).toBe("GET");
+        expect(
+          new Headers(fetch.mock.calls[0][1]?.headers).get("x-api-key"),
+        ).toBe("injected-after-prepare");
+      });
+    } finally {
+      if (key === undefined) delete process.env.SAPIOM_API_KEY;
+      else process.env.SAPIOM_API_KEY = key;
+      fetch.mockRestore();
+    }
+  });
   it("keeps bounded backoff when a rate-limit response asks for immediate retry", async () => {
     let attempts = 0;
     const { client, fetch } = setup(async () =>

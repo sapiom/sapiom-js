@@ -37,7 +37,7 @@ function setup(impl: typeof globalThis.fetch = async () => json(receipt, 202)) {
 afterEach(() => jest.useRealTimers());
 
 describe("execution prepare/submit/get", () => {
-  it("prepares ambient submissions before credentials exist, then submits, gets and waits", async () => {
+  it("prepares ambient submissions before credentials exist, then submits and gets", async () => {
     const key = process.env.SAPIOM_API_KEY;
     const base = process.env.SAPIOM_BASE_URL;
     const fetch = jest
@@ -66,10 +66,8 @@ describe("execution prepare/submit/get", () => {
         await expect(executions.get(handle.receipt.id)).resolves.toMatchObject({
           result: { answer: 42 },
         });
-        await expect(executions.wait(handle)).resolves.toEqual({ answer: 42 });
         expect(fetch.mock.calls.map(([, init]) => init?.method)).toEqual([
           "POST",
-          "GET",
           "GET",
         ]);
         for (const [url, init] of fetch.mock.calls) {
