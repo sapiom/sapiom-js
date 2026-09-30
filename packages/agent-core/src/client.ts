@@ -96,12 +96,24 @@ export class GatewayClient {
    * deliberately NOT bounded this way), so one generous cap fits all.
    */
   private async send<T>(method: string, url: string, body?: unknown): Promise<T> {
+    // Serialized outside the fetch `try`: a body that cannot serialize (a
+    // cycle, a BigInt) is the caller's payload fault, not an unreachable host.
+    let payload: string | undefined;
+    try {
+      payload = body === undefined ? undefined : JSON.stringify(body);
+    } catch (err) {
+      throw new AgentOperationError({
+        code: 'BAD_PAYLOAD',
+        message: `Request body is not serializable: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
     let res: Response;
     try {
       res = await fetch(url, {
         method,
         headers: { 'x-api-key': this.apiKey, 'content-type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: payload,
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {

@@ -3,11 +3,13 @@
  * plus the resume-payload schema. Injects a fake fetch (no real network).
  */
 import { createClient } from "../index.js";
+import type { Transport } from "../_client/index.js";
 import {
   AGENTS_RESULT_SIGNAL,
   AgentDispatchError,
   AgentResultSchemaError,
   agentResultSchema,
+  launch,
 } from "./index.js";
 
 function fakeFetch(capture?: {
@@ -445,14 +447,18 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
     const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
 
     // A one-hour budget would otherwise mean ~1200 doomed requests.
-    const result = await handle.wait({ timeoutMs: 60 * 60_000, pollMs: 1 });
+    const result = await handle.wait({
+      timeoutMs: 60 * 60_000,
+      pollMs: 1,
+      retry: { initialBackoffMs: 1, maxBackoffMs: 1 },
+    });
 
     expect(result).toMatchObject({
       executionId: "exec-9",
       status: "unknown",
       error: { code: "http", status: 503 },
     });
-    expect(reads).toBe(5);
+    expect(reads).toBe(12);
   });
 
   it("a 'timed_out' result always carries code 'timeout', even after earlier poll faults", async () => {
@@ -507,7 +513,11 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
       });
       const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
 
-      const result = await handle.wait({ timeoutMs: 60_000, pollMs: 1 });
+      const result = await handle.wait({
+        timeoutMs: 60_000,
+        pollMs: 1,
+        retry: { initialBackoffMs: 1, maxBackoffMs: 1 },
+      });
 
       // One rate-limit answer must not end an hour-long wait.
       expect(result.status).toBe("completed");
@@ -538,7 +548,11 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
     });
     const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
 
-    const result = await handle.wait({ timeoutMs: 60_000, pollMs: 1 });
+    const result = await handle.wait({
+      timeoutMs: 60_000,
+      pollMs: 1,
+      retry: { initialBackoffMs: 1, maxBackoffMs: 1 },
+    });
 
     expect(result).toEqual({
       executionId: "exec-9",
@@ -547,5 +561,376 @@ describe("orchestrations wait() — non-terminal outcomes are data too", () => {
       error: null,
     });
     expect(reads).toBe(2);
+  });
+});
+
+/**
+ * SAP-3615: a 429 on a status read failed the whole parent run when ~100
+ * parents polled their children from one egress IP. `wait()` now backs off
+ * (2 s → 4 s → … capped at 30 s, honouring `Retry-After`), never past the
+ * caller's deadline, and gives up only after a bounded run of faults.
+ *
+ * Fake timers drive the schedule: `Date.now()` is faked too, so both the
+ * back-off and the deadline check run in virtual time.
+ */
+describe("wait() back-off on transient status-read faults [SAP-3615]", () => {
+  type Answer =
+    | { kind: "doc"; status: string; output?: unknown }
+    | { kind: "http"; status: number; retryAfter?: string }
+    | { kind: "throw"; error: unknown };
+
+  /** POST the launch, then answer each status read from `script` in order (the last answer repeats). */
+  function scripted(script: Answer[]) {
+    const readAt: number[] = [];
+    let first = true;
+    let i = 0;
+    const fetch = (async () => {
+      if (first) {
+        first = false;
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ status: "enqueued", executionId: "exec-9" }),
+          text: async () => "",
+        } as unknown as Response;
+      }
+      readAt.push(Date.now());
+      const answer = script[Math.min(i, script.length - 1)];
+      i += 1;
+      if (answer.kind === "throw") throw answer.error;
+      if (answer.kind === "http") {
+        return {
+          ok: false,
+          status: answer.status,
+          headers: {
+            get: (name: string) =>
+              name.toLowerCase() === "retry-after"
+                ? (answer.retryAfter ?? null)
+                : null,
+          },
+          text: async () =>
+            JSON.stringify({
+              statusCode: answer.status,
+              message: "ThrottlerException: Too Many Requests",
+            }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ status: answer.status, output: answer.output }),
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+    return { fetch, readAt, reads: () => readAt.length };
+  }
+
+  /** Gaps between consecutive reads, in virtual ms. */
+  const gaps = (readAt: number[]) =>
+    readAt.slice(1).map((t, idx) => t - readAt[idx]);
+
+  const doc = (status: string, output?: unknown): Answer => ({
+    kind: "doc",
+    status,
+    output,
+  });
+  const http = (status: number, retryAfter?: string): Answer => ({
+    kind: "http",
+    status,
+    retryAfter,
+  });
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    // Deterministic schedule: no jitter unless a test asks for it.
+    jest.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it("(a) 429 → running → completed resolves, backing off 2 s after the 429 and pollMs after 'running'", async () => {
+    const s = scripted([http(429), doc("running"), doc("completed", { n: 1 })]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60_000, pollMs: 3_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toEqual({
+      executionId: "exec-9",
+      status: "completed",
+      output: { n: 1 },
+      error: null,
+    });
+    expect(s.reads()).toBe(3);
+    expect(gaps(s.readAt)).toEqual([2_000, 3_000]);
+  });
+
+  it("(b) a 404 on the read ends the wait at once — no back-off, one read", async () => {
+    const s = scripted([http(404)]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      status: "unknown",
+      error: { code: "not_found", status: 404 },
+    });
+    expect(s.reads()).toBe(1);
+  });
+
+  it("(c) a 429 storm past the deadline resolves 'timed_out' at the deadline, carrying the last 429", async () => {
+    const s = scripted([http(429)]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const startedAt = Date.now();
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      executionId: "exec-9",
+      status: "timed_out",
+      error: {
+        code: "timeout",
+        status: null,
+        details: { code: "http", status: 429 },
+      },
+    });
+    // 2 + 4 + 8 + 16 + 30 = 60 s of back-off: reads at 0, 2, 6, 14, 30, 60 —
+    // the last one sits exactly on the deadline's edge, never beyond it.
+    expect(Date.now() - startedAt).toBe(60_000);
+    expect(s.readAt.map((t) => t - startedAt)).toEqual([
+      0, 2_000, 6_000, 14_000, 30_000, 60_000,
+    ]);
+  });
+
+  it("caps the back-off at 30 s and gives up 'unknown' after 12 consecutive faults", async () => {
+    const s = scripted([http(429)]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60 * 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      executionId: "exec-9",
+      status: "unknown",
+      error: { code: "http", status: 429 },
+    });
+    expect(s.reads()).toBe(12);
+    expect(gaps(s.readAt)).toEqual([
+      2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+      30_000, 30_000,
+    ]);
+  });
+
+  it("jitter only lengthens a delay, by at most 20%, and never breaches the cap", async () => {
+    (Math.random as jest.Mock).mockReturnValue(1);
+    const s = scripted([http(503), http(503), doc("completed")]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({
+      timeoutMs: 60_000,
+      retry: { initialBackoffMs: 20_000, maxBackoffMs: 30_000 },
+    });
+    await jest.runAllTimersAsync();
+    await pending;
+
+    // 20 s × 1.2 = 24 s; then 40 s × 1.2 would be 48 s, capped to 30 s.
+    expect(gaps(s.readAt)).toEqual([24_000, 30_000]);
+  });
+
+  it("(d) honours a Retry-After header (seconds) over the computed back-off", async () => {
+    const s = scripted([http(429, "7"), doc("completed")]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.status).toBe("completed");
+    expect(gaps(s.readAt)).toEqual([7_000]);
+  });
+
+  it("(d) honours a Retry-After HTTP-date too, and clamps it to the caller's deadline", async () => {
+    const at = new Date(Date.now() + 90_000).toUTCString();
+    const s = scripted([http(429, at), doc("running")]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const startedAt = Date.now();
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    // The platform asked for 90 s; the caller allowed 60. The one retry lands
+    // at the deadline and the wait times out there — 30 s early is the
+    // caller's call, not the platform's.
+    expect(result.status).toBe("timed_out");
+    expect(s.readAt.map((t) => t - startedAt)).toEqual([0, 60_000]);
+  });
+
+  it("rides out a network fault (fetch failed / ECONNRESET) like a 5xx", async () => {
+    const reset = new TypeError("fetch failed");
+    (reset as { cause?: unknown }).cause = { code: "ECONNRESET" };
+    const s = scripted([
+      { kind: "throw", error: reset },
+      { kind: "throw", error: new Error("read ETIMEDOUT") },
+      doc("completed", "ok"),
+    ]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({ status: "completed", output: "ok" });
+    expect(gaps(s.readAt)).toEqual([2_000, 4_000]);
+  });
+
+  it("a malformed 2xx body (schema fault) is permanent: 'unknown' at once", async () => {
+    const s = scripted([
+      { kind: "throw", error: new SyntaxError("Unexpected token < in JSON") },
+    ]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      status: "unknown",
+      error: { code: "transport", status: null },
+    });
+    expect(s.reads()).toBe(1);
+  });
+
+  it("the SDK's own deadline error is never treated as transient", async () => {
+    const s = scripted([
+      {
+        kind: "throw",
+        error: new Error("coding run r-1 timed out after 60000ms"),
+      },
+    ]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.status).toBe("unknown");
+    expect(s.reads()).toBe(1);
+  });
+
+  it("a successful read resets the consecutive-fault count", async () => {
+    const s = scripted([
+      ...Array.from({ length: 11 }, () => http(429)),
+      doc("running"),
+      ...Array.from({ length: 11 }, () => http(503)),
+      doc("completed"),
+    ]);
+    const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+    const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+    const pending = handle.wait({
+      timeoutMs: 24 * 60 * 60_000,
+      retry: { initialBackoffMs: 1, maxBackoffMs: 1 },
+    });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    // 22 faults in total, never 12 in a row.
+    expect(result.status).toBe("completed");
+    expect(s.reads()).toBe(24);
+  });
+
+  it("falls back to the status in a plain error message when the transport is not typed", async () => {
+    // An older/third-party transport: a bare Error with the arrow-status shape.
+    let calls = 0;
+    const transport = {
+      resumeToken: undefined,
+      async request(url: string) {
+        if (url.endsWith("/executions")) {
+          return { status: "enqueued", executionId: "exec-9" };
+        }
+        calls += 1;
+        if (calls === 1) {
+          throw new Error(
+            `GET ${url} → 429 {"statusCode":429,"message":"ThrottlerException: Too Many Requests"}`,
+          );
+        }
+        if (calls === 2) {
+          throw new Error(`GET ${url} → 404 {"code":"execution_not_found"}`);
+        }
+        return { status: "completed" };
+      },
+    } as unknown as Transport;
+    const handle = await launch({ definition: "d" }, transport, "https://t");
+
+    const pending = handle.wait({ timeoutMs: 60_000 });
+    await jest.runAllTimersAsync();
+    const result = await pending;
+
+    // The 429 was ridden out (read #2 happened); the 404 ended the wait.
+    expect(result).toMatchObject({
+      status: "unknown",
+      error: { code: "not_found", status: 404 },
+    });
+    expect(calls).toBe(2);
+  });
+
+  describe("status()", () => {
+    it("retries a transient fault briefly, then answers", async () => {
+      const s = scripted([http(429), doc("paused")]);
+      const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+      const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+      const pending = handle.status();
+      await jest.runAllTimersAsync();
+
+      await expect(pending).resolves.toBe("paused");
+      expect(gaps(s.readAt)).toEqual([2_000]);
+    });
+
+    it("throws a permanent fault (404) at once", async () => {
+      const s = scripted([http(404)]);
+      const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+      const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+      await expect(handle.status()).rejects.toMatchObject({ status: 404 });
+      expect(s.reads()).toBe(1);
+    });
+
+    it("throws the last fault after three consecutive transient ones", async () => {
+      const s = scripted([http(503)]);
+      const sapiom = createClient({ apiKey: "k", fetch: s.fetch });
+      const handle = await sapiom.agents.launch({ definition: "enrich-lead" });
+
+      const pending = handle.status();
+      // Swallow here so an unhandled rejection can't fire while timers run.
+      const outcome = pending.then(
+        () => "resolved",
+        (e: unknown) => e,
+      );
+      await jest.runAllTimersAsync();
+
+      await expect(outcome).resolves.toMatchObject({ status: 503 });
+      expect(s.reads()).toBe(3);
+      expect(gaps(s.readAt)).toEqual([2_000, 4_000]);
+    });
   });
 });
