@@ -11,6 +11,50 @@ export const receipt = {
   expiresAt: "2026-09-22T00:00:00.000Z",
 };
 describe("execution API v1", () => {
+  it.each(["secret_detected", "invalid_metadata", "invalid_filter"])(
+    "accepts caller-safe %s only for failed adopted memory operations",
+    (code) => {
+      const error = { code, message: "Safe memory validation message" };
+      for (const capabilityId of [
+        "memory.append",
+        "memory.recall",
+        "memory.forget",
+      ])
+        expect(
+          parseExecution(
+            {
+              ...receipt,
+              capabilityId,
+              status: "failed",
+              error: { ...error, providerDetails: "discard" },
+            },
+            true,
+          ),
+        ).toMatchObject({ error });
+      for (const capabilityId of [
+        "fixture.echo",
+        "memory.drop",
+        "memory.unknown",
+      ])
+        expect(() =>
+          parseExecution(
+            { ...receipt, capabilityId, status: "failed", error },
+            true,
+          ),
+        ).toThrow(ExecutionProtocolError);
+      expect(() =>
+        parseExecution(
+          {
+            ...receipt,
+            capabilityId: "memory.append",
+            status: "indeterminate",
+            error,
+          },
+          true,
+        ),
+      ).toThrow(ExecutionProtocolError);
+    },
+  );
   it.each(["queued", "running", "succeeded", "failed", "indeterminate"])(
     "parses a %s receipt without inventing a result",
     (status) => {
@@ -102,6 +146,9 @@ describe("execution API v1", () => {
   it("documents logical failure classifications separately from HTTP errors", () => {
     expect(executionFailureStatus).toEqual({
       invalid_request: 400,
+      secret_detected: 400,
+      invalid_metadata: 400,
+      invalid_filter: 400,
       rate_limited: 429,
       capability_usage_limit: 429,
       deadline_exceeded: 504,

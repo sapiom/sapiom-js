@@ -30,6 +30,8 @@ Logical failure/indeterminate states are HTTP 200 outcomes; HTTP errors retain t
 actual status. Saved confirmed failures are classified as invalid_request=400,
 rate_limited/capability_usage_limit=429, deadline_exceeded=504, execution_failed=502.
 These SDK classifications do not reconstruct original provider HTTP responses.
+Memory append/recall/forget additionally preserve the allowlisted caller validation codes
+secret_detected, invalid_metadata and invalid_filter as HTTP 400 with safe messages.
 Indeterminate outcomes must not be automatically resubmitted. HTTP 410 means the saved
 payload expired, and does not authorize another execution under the same key.
 

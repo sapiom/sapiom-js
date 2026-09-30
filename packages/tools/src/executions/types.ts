@@ -28,6 +28,9 @@ export interface ExecutionHandle {
 export interface ExecutionErrorBody {
   readonly code:
     | "invalid_request"
+    | "secret_detected"
+    | "invalid_metadata"
+    | "invalid_filter"
     | "rate_limited"
     | "capability_usage_limit"
     | "deadline_exceeded"

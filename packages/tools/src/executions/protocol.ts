@@ -111,6 +111,12 @@ export function parseExecution<T>(
     !isRecord(error) ||
     typeof error.code !== "string" ||
     !own(executionFailureStatus, error.code) ||
+    (["secret_detected", "invalid_metadata", "invalid_filter"].includes(
+      error.code,
+    ) &&
+      !["memory.append", "memory.recall", "memory.forget"].includes(
+        receipt.capabilityId,
+      )) ||
     typeof error.message !== "string" ||
     !error.message ||
     error.message.length > 2000 ||
