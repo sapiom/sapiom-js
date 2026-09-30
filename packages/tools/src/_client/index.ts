@@ -29,7 +29,11 @@ import {
   type AnalyticsHolder,
 } from "./analytics.js";
 import { VERSION } from "../_generated/version.js";
-import { TransportHttpError, readErrorBody } from "./errors.js";
+import {
+  TransportHttpError,
+  parseRetryAfterMs,
+  readErrorBody,
+} from "./errors.js";
 
 /**
  * Client marker stamped on EVERY request so the gateway can tell SDK traffic
@@ -321,6 +325,9 @@ export class Transport {
         method,
         url,
         body,
+        // Optional chaining: test doubles often build a bare `{ ok, status,
+        // text }` with no `headers` at all.
+        retryAfterMs: parseRetryAfterMs(res.headers?.get?.("retry-after")),
       });
     }
     return (await res.json()) as T;
