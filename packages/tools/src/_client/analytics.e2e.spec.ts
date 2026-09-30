@@ -171,6 +171,85 @@ describe("capability.call analytics (e2e, mock collector)", () => {
   // Event emission
   // -------------------------------------------------------------------------
 
+  it("labels a prefixed Core execution with its canonical capability", async () => {
+    enableTelemetry();
+    const state = {
+      version: 1,
+      id: "11111111-1111-4111-8111-111111111111",
+      capabilityId: "fixture.echo",
+      status: "succeeded",
+      result: null,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    const { transport } = makeTransport(() => jsonResponse(state), {
+      coreBaseUrl: "https://core.test/proxy",
+    });
+    await new ExecutionClient(transport).get(state.id);
+    const logical = (await flushedEvents(transport)).filter(
+      (event) => event.event_type === "capability.call",
+    );
+    expect(logical).toHaveLength(1);
+    expect(logical[0].data).toMatchObject({
+      capability: "fixture.echo",
+      url: "https://core.test/proxy/v1/capabilities/fixture.echo",
+    });
+  });
+
+  it("does not observe or cache a mismatched handle result before a corrected direct get", async () => {
+    enableTelemetry();
+    const receipt = {
+      version: 1 as const,
+      id: "11111111-1111-4111-8111-111111111111",
+      capabilityId: "fixture.echo",
+      status: "queued" as const,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString(),
+    };
+    let capabilityId = "email.find";
+    const { transport } = makeTransport(
+      () =>
+        jsonResponse({
+          ...receipt,
+          capabilityId,
+          status: "succeeded",
+          result: 42,
+        }),
+      { coreBaseUrl: "https://core.test" },
+    );
+    const client = new ExecutionClient(transport);
+    await expect(
+      client.wait({
+        receipt,
+        submissionKey: "saved-key",
+        coreBaseUrl: "https://core.test",
+      }),
+    ).rejects.toMatchObject({
+      name: "ExecutionProtocolError",
+      executionId: receipt.id,
+      submissionKey: "saved-key",
+    });
+    expect(
+      (await flushedEvents(transport)).filter(
+        (event) => event.event_type === "capability.call",
+      ),
+    ).toHaveLength(0);
+    expect(
+      (transport as unknown as { analyticsHolder: AnalyticsHolder })
+        .analyticsHolder.executionCompletions?.size ?? 0,
+    ).toBe(0);
+    capabilityId = receipt.capabilityId;
+    await expect(client.get(receipt.id)).resolves.toMatchObject({ result: 42 });
+    const logical = (await flushedEvents(transport)).filter(
+      (event) => event.event_type === "capability.call",
+    );
+    expect(logical).toHaveLength(1);
+    expect(logical[0].data).toMatchObject({
+      capability: "fixture.echo",
+      ok: true,
+    });
+  });
+
   it("separates execution transport from one logical failed outcome across concurrent attributed waits", async () => {
     enableTelemetry();
     const receipt = {

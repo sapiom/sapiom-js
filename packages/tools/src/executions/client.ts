@@ -41,6 +41,38 @@ function freeze<T>(value: T): T {
   return value;
 }
 
+/** Pure descriptor preparation: no authenticated transport or HTTP is needed. */
+export function prepareExecution(
+  capabilityId: string,
+  request: Record<string, unknown>,
+  options: ExecutionPrepareOptions = {},
+): ExecutionSubmission {
+  validateCapability(capabilityId);
+  const submissionKey = options.submissionKey ?? randomUUID();
+  validateKey(submissionKey);
+  let snapshot: unknown;
+  try {
+    snapshot = JSON.parse(JSON.stringify(request));
+  } catch {
+    throw new ExecutionProtocolError(
+      "Execution request must be a JSON object.",
+      { submissionKey },
+    );
+  }
+  if (!isRecord(snapshot))
+    throw new ExecutionProtocolError(
+      "Execution request must be a JSON object.",
+      { submissionKey },
+    );
+  return freeze({
+    version: 1,
+    capabilityId,
+    request: snapshot,
+    submissionKey,
+    coreBaseUrl: normalizeBaseUrl(options.baseUrl ?? resolveCoreBaseUrl()),
+  });
+}
+
 /** One authenticated client; descriptors/handles contain no credentials. */
 export class ExecutionClient {
   constructor(private readonly transport: Transport) {}
@@ -56,29 +88,9 @@ export class ExecutionClient {
     request: Record<string, unknown>,
     options: ExecutionPrepareOptions = {},
   ): ExecutionSubmission {
-    validateCapability(capabilityId);
-    const submissionKey = options.submissionKey ?? randomUUID();
-    validateKey(submissionKey);
-    let snapshot: unknown;
-    try {
-      snapshot = JSON.parse(JSON.stringify(request));
-    } catch {
-      throw new ExecutionProtocolError(
-        "Execution request must be a JSON object.",
-        { submissionKey },
-      );
-    }
-    if (!isRecord(snapshot))
-      throw new ExecutionProtocolError(
-        "Execution request must be a JSON object.",
-        { submissionKey },
-      );
-    return freeze({
-      version: 1,
-      capabilityId,
-      request: snapshot,
-      submissionKey,
-      coreBaseUrl: this.base(options),
+    return prepareExecution(capabilityId, request, {
+      ...options,
+      baseUrl: this.base(options),
     });
   }
 
@@ -164,6 +176,14 @@ export class ExecutionClient {
     executionId: string,
     options: ExecutionRequestOptions = {},
   ): Promise<ExecutionState<T>> {
+    return this.retrieve<T>(executionId, options);
+  }
+
+  private async retrieve<T>(
+    executionId: string,
+    options: ExecutionRequestOptions,
+    capabilityId?: string,
+  ): Promise<ExecutionState<T>> {
     validateId(executionId);
     const baseUrl = this.base(options);
     const raw = await executionRequest(
@@ -173,9 +193,12 @@ export class ExecutionClient {
       options,
       { executionId },
     );
-    const state = parseExecution<T>(raw, true, {
-      executionId,
-    }) as ExecutionState<T>;
+    const state = parseExecution<T>(
+      raw,
+      true,
+      { executionId },
+      capabilityId,
+    ) as ExecutionState<T>;
     this.transport.observeExecution(baseUrl, state);
     return state;
   }
@@ -205,7 +228,13 @@ export class ExecutionClient {
     try {
       return await waitForExecution<T>(
         (request) =>
-          this.get<T>(reference.executionId, { ...request, baseUrl }),
+          this.retrieve<T>(
+            reference.executionId,
+            { ...request, baseUrl },
+            typeof execution === "string"
+              ? undefined
+              : execution.receipt.capabilityId,
+          ),
         reference,
         options,
         typeof execution === "string"
