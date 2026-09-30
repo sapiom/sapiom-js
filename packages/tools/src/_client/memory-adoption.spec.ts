@@ -65,6 +65,69 @@ const cases = [
 ];
 
 describe("memory adoption", () => {
+  it.each([
+    {
+      code: "secret_detected",
+      message: "Memory content must not contain secrets.",
+      fixture: cases[0],
+    },
+    {
+      code: "invalid_metadata",
+      message: "Memory metadata is invalid.",
+      fixture: cases[0],
+    },
+    {
+      code: "invalid_filter",
+      message: "Memory filter is invalid.",
+      fixture: cases[1],
+    },
+  ])(
+    "preserves caller-safe $code validation errors in both modes",
+    async ({ code, message, fixture }) => {
+      for (const capabilityDelivery of ["legacy", "executions"] as const) {
+        const saved = { ...receipt, capabilityId: fixture.id };
+        const fetch = jest.fn(
+          async (
+            _: Parameters<typeof globalThis.fetch>[0],
+            init?: RequestInit,
+          ) => {
+            if (capabilityDelivery === "legacy")
+              return json({ code, message }, 400);
+            return json(
+              init?.method === "POST"
+                ? saved
+                : {
+                    ...saved,
+                    status: "failed",
+                    error: { code, message, providerDetails: "not public" },
+                  },
+            );
+          },
+        );
+        const client = createClient({
+          apiKey: "fixture",
+          coreBaseUrl: "https://core.test",
+          capabilityDelivery,
+          fetch,
+        });
+        const error = await fixture
+          .call(client)
+          .catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(MemoryHttpError);
+        expect(error).toMatchObject({ status: 400, body: { code, message } });
+        expect((error as MemoryHttpError).body).toEqual({ code, message });
+        expect(fetch).toHaveBeenCalledTimes(
+          capabilityDelivery === "executions" ? 2 : 1,
+        );
+        if (capabilityDelivery === "executions")
+          expect(error).toMatchObject({
+            executionId: saved.id,
+            submissionKey: expect.any(String),
+          });
+      }
+    },
+  );
+
   it.each(cases)(
     "preserves $id DTOs and void results in both modes",
     async (fixture) => {

@@ -31,6 +31,9 @@ export const executionFailureStatus: Readonly<
   Record<ExecutionErrorBody["code"], number>
 > = {
   invalid_request: 400,
+  secret_detected: 400,
+  invalid_metadata: 400,
+  invalid_filter: 400,
   rate_limited: 429,
   capability_usage_limit: 429,
   deadline_exceeded: 504,
