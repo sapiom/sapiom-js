@@ -1,0 +1,16 @@
+{
+  "type": "issue.escalate",
+  "description": "A teammate clicked Escalate on the draft card.",
+  "payload": {
+    "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
+    "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "source": "slack",
+    "causationId": "1790889700.1004",
+    "slack": {
+      "channel": "C0C6YDCFJBS",
+      "ts": "1790889355.981329"
+    },
+    "summary": "Inbound events fail after retry; customer blocked.",
+    "requestedBy": "U0AV4AD94BY"
+  }
+}

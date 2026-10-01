@@ -1,0 +1,26 @@
+{
+  "name": "@sapiom/example-sylon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sylon: a clone-able Slack support desk built from a fleet of Sapiom agents that meet only through events and one shared Postgres.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "setup": "tsx setup.ts",
+    "format": "prettier --write \"**/*.{ts,json,md}\""
+  },
+  "dependencies": {
+    "@sapiom/agent": "^0.14.4",
+    "@sapiom/tools": "^0.40.0",
+    "pg-mem": "^3.0.14",
+    "postgres": "^3.4.9",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.2",
+    "vitest": "^3.2.4"
+  }
+}

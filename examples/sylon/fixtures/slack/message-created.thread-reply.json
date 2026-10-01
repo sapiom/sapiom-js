@@ -1,0 +1,38 @@
+{
+  "type": "slack.message.created",
+  "description": "A customer reply in the thread of the channel message (same shape, with thread_ts).",
+  "payload": {
+    "event": {
+      "ts": "1790889500.000300",
+      "team": "T096M2LJ4RF",
+      "text": "[sylon test] Following up: it still fails after a retry.",
+      "type": "message",
+      "user": "U0AV4AD94BY",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "rpl1",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "text",
+                  "text": "[sylon test] Following up: it still fails after a retry."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "channel": "C0C6YDCFJBS",
+      "event_ts": "1790889500.000300",
+      "channel_type": "channel",
+      "thread_ts": "1790889355.981329"
+    },
+    "teamId": "T096M2LJ4RF",
+    "eventId": "Ev0SYLONREPLY1",
+    "apiAppId": "A0C6MPVEB6U",
+    "eventTime": 1790889500
+  }
+}

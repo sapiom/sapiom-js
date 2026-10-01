@@ -1,0 +1,15 @@
+{
+  "type": "issue.nudged",
+  "description": "The controller pinged the triage thread: no owner yet.",
+  "payload": {
+    "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
+    "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "source": "slack",
+    "causationId": "controller:a1b2c3d4-0000-4000-8000-0000000000a1:no_owner",
+    "slack": {
+      "channel": "C0C6YDCFJBS",
+      "ts": "1790889355.981329"
+    },
+    "kind": "no_owner"
+  }
+}

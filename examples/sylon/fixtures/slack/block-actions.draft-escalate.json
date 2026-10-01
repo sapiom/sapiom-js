@@ -1,0 +1,57 @@
+{
+  "type": "slack.block_actions",
+  "description": "A click on Escalate on the draft card in #sylon-triage. Shape: Slack interaction minus token and response_url; value = the row id.",
+  "payload": {
+    "type": "block_actions",
+    "user": {
+      "id": "U0AV4AD94BY",
+      "username": "dave",
+      "name": "dave",
+      "team_id": "T096M2LJ4RF"
+    },
+    "api_app_id": "A0C6MPVEB6U",
+    "trigger_id": "1790889700.1004",
+    "team": {
+      "id": "T096M2LJ4RF",
+      "domain": "sapiom"
+    },
+    "enterprise": null,
+    "is_enterprise_install": false,
+    "container": {
+      "type": "message",
+      "message_ts": "1790889450.000250",
+      "channel_id": "C0C67P6GQKE",
+      "is_ephemeral": false
+    },
+    "channel": {
+      "id": "C0C67P6GQKE",
+      "name": "sylon-triage"
+    },
+    "message": {
+      "type": "message",
+      "user": "U0C5N4B5PS9",
+      "bot_id": "B0SYLONBOT",
+      "ts": "1790889450.000250",
+      "text": "Escalate",
+      "blocks": [],
+      "thread_ts": "1790889400.000200"
+    },
+    "state": {
+      "values": {}
+    },
+    "actions": [
+      {
+        "action_id": "draft.escalate",
+        "block_id": "draft.actions",
+        "text": {
+          "type": "plain_text",
+          "text": "Escalate",
+          "emoji": true
+        },
+        "value": "a1b2c3d4-0000-4000-8000-0000000000d1",
+        "type": "button",
+        "action_ts": "1790889700.000500"
+      }
+    ]
+  }
+}
