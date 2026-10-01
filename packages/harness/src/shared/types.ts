@@ -1102,6 +1102,7 @@ export interface SessionRecord {
 // GET    /api/templates                 → TemplateListResponse (relays core's gallery)
 // GET    /api/templates/:id             → TemplateDetailView
 // GET    /api/account/plan              → AccountPlanView (relays core's plan + usage readout)
+// GET    /api/workflows/:id/app-link    → DefinitionAppLinkView (relays the definition's App Link)
 // GET    /api/fs/list?path=&hidden=     → FsListResponse (directory autocomplete)
 // GET    /api/studio-rail?root=         → StudioRailFileResponse (the rail's stored groups)
 // PUT    /api/studio-rail?root=         { raw } → { ok: true }
@@ -1803,6 +1804,22 @@ export interface AgentSecret {
   /** Whether this machine holds a plaintext copy, which is what lets a LOCAL
    *  run receive the value — and what "remove local copy" acts on. */
   hasLocalCopy: boolean;
+}
+
+/**
+ * The durable App Link bound to an agent's cloud definition (SAP-3255), as the
+ * session bar's running-app slot reads it. Relayed from core's
+ * `GET /v1/workflows/definitions/:id/app-link`, which withholds the URL until a
+ * bundle is published.
+ *
+ * `status: null` covers every "nothing to show" case at once: no link bound,
+ * an unlinked agent, signed out, unreachable, or a drifted shape. The slot
+ * renders nothing for all of them, so the harness does not distinguish them.
+ */
+export interface DefinitionAppLinkView {
+  /** An `https:` URL, present exactly when `status` is `"live"`. */
+  url: string | null;
+  status: "live" | "unpublished" | null;
 }
 
 export interface AgentSecretsView {

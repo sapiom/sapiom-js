@@ -2557,6 +2557,57 @@ test("a detected dev server surfaces a Preview chip on the action bar", async ({
   );
 });
 
+test("an agent without an App Link gets no App Link chip", async ({ page }) => {
+  // The linked boot agent's bar, at rest: the read answered "no App Link", so
+  // the bar is exactly what it was before the chip existed (SAP-3255).
+  await expect(page.getByTestId("session-step-prod")).toBeVisible();
+  await expect(page.getByTestId("session-app-link-chip")).toHaveCount(0);
+});
+
+test("a published App Link sits beside the Preview chip, told apart by word and icon", async ({
+  page,
+}) => {
+  // Pins anatomy only. Mock mode has no durable App Link, so `mockAppLink=live`
+  // is a fixture opt-in, not evidence the read works (SAP-3255).
+  await page.goto("/?seed=0&mockAppLink=live");
+  const appLink = page.getByTestId("session-app-link-chip");
+  // Shown with no detected port: the link belongs to the definition.
+  await expect(page.getByTestId("session-preview-chip")).toHaveCount(0);
+  await expect(appLink).toBeVisible();
+  await expect(appLink).toHaveText("App Link");
+  await expect(appLink).toHaveAttribute("href", /^https:\/\/apps\.sapiom\.ai\/mock-org\//);
+  await expect(appLink).toHaveAttribute(
+    "data-tooltip",
+    /^Your published App Link\. It stays up after this session ends and starts when someone opens it\. Opens https:\/\/apps\.sapiom\.ai\/mock-org\//,
+  );
+  await expect(appLink).toHaveAttribute("aria-label", /^Open App Link apps\.sapiom\.ai\/mock-org\//);
+
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        __HARNESS_TEST__: { publish: (m: unknown) => void };
+      }
+    ).__HARNESS_TEST__.publish({
+      type: "port.detected",
+      harnessSessionId: "sess-boot",
+      port: 5173,
+      url: "http://localhost:5173/",
+    });
+  });
+  const preview = page.getByTestId("session-preview-chip");
+  await expect(preview).toContainText("Preview :5173");
+  await expect(appLink).toBeVisible();
+  // Preview first, then the App Link, then the Prod globe.
+  const order = await page
+    .getByTestId("session-steps")
+    .evaluate((bar) =>
+      Array.from(bar.querySelectorAll("[data-testid]"))
+        .map((el) => el.getAttribute("data-testid"))
+        .filter((id) => id === "session-preview-chip" || id === "session-app-link-chip" || id === "session-step-prod"),
+    );
+  expect(order).toEqual(["session-preview-chip", "session-app-link-chip", "session-step-prod"]);
+});
+
 test("an observed run renders per-step status and latency in the steps tab", async ({
   page,
 }) => {
