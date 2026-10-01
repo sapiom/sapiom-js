@@ -63,19 +63,96 @@ describe("stub slack + mcp connectors", () => {
     await expect(pending).rejects.toThrow("slack boom");
   });
 
-  it("lists no MCP tools and answers callTool with a text result by default", async () => {
+  it("lists no MCP tools and, like the relay, answers callTool with an unavailable-tool error by default", async () => {
     const client = createStubClient();
+    const unavailable = {
+      content: [{ type: "text", text: "That tool is not available." }],
+      isError: true,
+    };
 
     await expect(client.connectors.linear.listTools()).resolves.toEqual([]);
     await expect(
       client.connectors.notion.callTool("search", { query: "q" }),
+    ).resolves.toEqual(unavailable);
+    await expect(
+      client.connectors.mcp("acme-crm").callTool("lookup"),
+    ).resolves.toEqual(unavailable);
+  });
+
+  it("answers callTool with a text result for a tool in the stubbed tool list", async () => {
+    const calls: StubCallRecord[] = [];
+    const client = createStubClient({
+      calls,
+      overrides: {
+        "connectors.linear.listTools": () => [
+          { name: "list_issues", inputSchema: {} },
+        ],
+      },
+    });
+
+    await expect(
+      client.connectors.linear.callTool("list_issues", {}),
     ).resolves.toEqual({
-      content: [{ type: "text", text: "stub result for notion.search" }],
+      content: [{ type: "text", text: "stub result for linear.list_issues" }],
       isError: false,
     });
     await expect(
-      client.connectors.mcp("acme-crm").callTool("lookup"),
-    ).resolves.toMatchObject({ isError: false });
+      client.connectors.linear.callTool("save_issue", {}),
+    ).resolves.toMatchObject({ isError: true });
+    // Checking the stubbed list is not itself a listTools call.
+    expect(calls.map((c) => c.capability)).toEqual([
+      "connectors.linear.callTool",
+      "connectors.linear.callTool",
+    ]);
+  });
+
+  it("warns on malformed Slack and MCP overrides", async () => {
+    const warnings = new Set<string>();
+    const client = createStubClient({
+      warnings,
+      overrides: {
+        "connectors.slack.postMessage": "sent",
+        "connectors.linear.listTools": { tools: [] },
+        "connectors.notion.listTools": [{ title: "no name" }],
+        "connectors.mcp.callTool": { text: "no content array" },
+      },
+    });
+
+    await client.connectors.slack.postMessage({ channel: "C1", text: "x" });
+    await expect(client.connectors.linear.listTools()).resolves.toEqual([]);
+    await client.connectors.notion.listTools();
+    await client.connectors.notion.callTool("search");
+
+    const all = [...warnings];
+    expect(all).toHaveLength(4);
+    expect(all[0]).toMatch(
+      /'connectors\.slack\.postMessage'.*Slack response object.*string/,
+    );
+    expect(all[1]).toMatch(
+      /'connectors\.linear\.listTools'.*array of tools.*object/,
+    );
+    expect(all[2]).toMatch(/'connectors\.notion\.listTools'\[0\].*tool shape/);
+    expect(all[3]).toMatch(/'connectors\.mcp\.callTool'.*CallToolResult/);
+  });
+
+  it("does not warn on well-formed overrides or defaults", async () => {
+    const warnings = new Set<string>();
+    const client = createStubClient({
+      warnings,
+      overrides: {
+        "connectors.slack.userInfo": { ok: true, user: { id: "U1" } },
+        "connectors.linear.listTools": [{ name: "t", inputSchema: {} }],
+        "connectors.linear.callTool": { content: [] },
+      },
+    });
+
+    await client.connectors.slack.userInfo({ user: "U1" });
+    await client.connectors.slack.postMessage({ channel: "C1", text: "x" });
+    await client.connectors.linear.listTools();
+    await client.connectors.linear.callTool("t");
+    await client.connectors.notion.listTools();
+    await client.connectors.notion.callTool("x");
+    expect([...warnings]).toEqual([]);
   });
 
   it("prefers a per-slug MCP override over the connectors.mcp catch-all", async () => {

@@ -205,6 +205,7 @@ export function mcp(slug: string, transport?: Transport): McpConnector {
   return {
     async listTools() {
       const tools: McpTool[] = [];
+      const seen = new Set<string>();
       let cursor: string | undefined;
       do {
         const page = await rpc<{ tools: McpTool[]; nextCursor?: string }>(
@@ -215,6 +216,19 @@ export function mcp(slug: string, transport?: Transport): McpConnector {
         );
         tools.push(...page.tools);
         cursor = page.nextCursor;
+        // A relay that hands back a cursor it already gave would page forever.
+        if (cursor) {
+          if (seen.has(cursor)) {
+            throw new McpRelayError({
+              message: "MCP relay returned a repeated cursor for tools/list",
+              code: -32603,
+              data: { cursor },
+              slug,
+              method: "tools/list",
+            });
+          }
+          seen.add(cursor);
+        }
       } while (cursor);
       return tools;
     },

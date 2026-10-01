@@ -120,6 +120,20 @@ describe("mcp relay connector", () => {
     expect(calls.map((c) => bodyOf(c).params)).toEqual([{}, { cursor: "p2" }]);
   });
 
+  it("listTools throws McpRelayError when the relay repeats a cursor", async () => {
+    const { transport, calls } = makeTransport([
+      rpcHandler(() => ({ tools: [TOOL], nextCursor: "p2" })),
+    ]);
+
+    await expect(mcp("linear", transport).listTools()).rejects.toMatchObject({
+      name: "McpRelayError",
+      method: "tools/list",
+      data: { cursor: "p2" },
+    });
+    // Page 1 hands out p2, page 2 hands out p2 again: two requests, then stop.
+    expect(calls).toHaveLength(2);
+  });
+
   it("callTool POSTs tools/call with name + arguments and returns the CallToolResult", async () => {
     const result = { content: [{ type: "text", text: "3 issues" }] };
     const { transport, calls } = makeTransport([rpcHandler(() => result)]);
