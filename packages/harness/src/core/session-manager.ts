@@ -915,7 +915,7 @@ export class SessionManager {
       targets.map(async ({ id, runtimeEpoch }) => {
         const session = this.sessions.get(id);
         let resumable = false;
-        if (session?.agentSessionId) {
+        if (session?.agentSessionId && !this.subsessionBindings.has(id)) {
           try {
             resumable = await this.getAdapter(session.harness).canResume(
               session.agentSessionId,
@@ -1574,6 +1574,17 @@ export class SessionManager {
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
     else delete session.agentMapIdentity;
+    const bootstrap = session.projectBootstrap as unknown;
+    if (
+      bootstrap !== undefined &&
+      (rejectedMetadata ||
+        !agentMapIdentity ||
+        !isRecord(bootstrap) ||
+        bootstrap.projectId !== agentMapIdentity.projectId ||
+        bootstrap.targetSessionId !== id)
+    ) {
+      delete session.projectBootstrap;
+    }
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against

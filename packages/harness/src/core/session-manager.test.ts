@@ -849,9 +849,11 @@ describe("SessionManager", () => {
     };
     await writeFile(sessionsPath, JSON.stringify([session]), "utf8");
     const migrations = vi.fn();
+    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity: async () => identity,
       onProjectAgentIdentityMigration: migrations,
+      onProjectBootstrapSession,
     });
 
     await manager.init();
@@ -868,6 +870,14 @@ describe("SessionManager", () => {
     });
     expect(adapter.resume).toHaveBeenCalledTimes(1);
     expect(spawns).toHaveLength(1);
+    expect(onProjectBootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: session.id,
+        projectBootstrap: session.projectBootstrap,
+      }),
+      "resumed",
+      expect.any(String),
+    );
   });
 
   it("resumes a session with rejected legacy metadata using freshly resolved scope", async () => {
@@ -993,8 +1003,10 @@ describe("SessionManager", () => {
       "utf8",
     );
     const migrations = vi.fn();
+    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
+      onProjectBootstrapSession,
     });
 
     await manager.init();
@@ -1017,11 +1029,20 @@ describe("SessionManager", () => {
     await expect(manager.resume(malformedBootstrap.id)).resolves.toMatchObject({
       id: malformedBootstrap.id,
       status: "running",
-      projectBootstrap: "not-an-object",
     });
     expect(manager.get(malformedBootstrap.id)).not.toHaveProperty(
       "agentMapIdentity",
     );
+    expect(manager.get(malformedBootstrap.id)).not.toHaveProperty(
+      "projectBootstrap",
+    );
+    const persistedAfterResume = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as Array<Record<string, unknown>>;
+    expect(
+      persistedAfterResume.find(({ id }) => id === malformedBootstrap.id),
+    ).not.toHaveProperty("projectBootstrap");
+    expect(onProjectBootstrapSession).not.toHaveBeenCalled();
     expect(adapter.canResume).toHaveBeenCalledTimes(2);
     expect(adapter.resume).toHaveBeenCalledTimes(2);
     expect(spawns).toHaveLength(2);
@@ -4254,6 +4275,63 @@ describe("SessionManager", () => {
     expect(spawns).toHaveLength(4);
   });
 
+  it("kills credential-bearing bound subsessions without ordinary relaunch", async () => {
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async () => true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: generation === 1,
+        },
+      }),
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000118";
+    const input = delegatedCreate(sessionId);
+    const expected = marker(sessionId);
+    const next = marker(sessionId, 2, 2);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      expected,
+      input.trusted,
+    );
+    await manager.setAgentSessionId(
+      sessionId,
+      "agent-bound-credential-removal",
+      "startup",
+      manager.getRuntimeEpoch(sessionId)!,
+    );
+    generation = 2;
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+    spawns[0]!.emitExit(0);
+    await removal;
+    await manager.flush();
+
+    expect(manager.get(sessionId)).toMatchObject({
+      status: "exited",
+    });
+    expect(manager.get(sessionId)?.mcpAuthState).not.toBe("restarting");
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+
+    await expect(
+      manager.resumeBound(sessionId, expected, next),
+    ).resolves.toMatchObject({ id: sessionId, status: "running" });
+    expect(adapter.canResume).toHaveBeenCalledOnce();
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
+  });
+
   it("does not reject credential removal when the keyless resume fails", async () => {
     let generation = 1;
     const adapter = createFakeAdapter({
@@ -5815,7 +5893,7 @@ describe("SessionManager", () => {
   });
 
 
-  it("resumes without project scope when neutral scope cannot be revalidated", async () => {
+  it("removes bootstrap metadata when neutral project scope cannot be revalidated", async () => {
     const identity = (sessionId: string) => ({
       projectId: "project-1",
       userId: "user-1",
@@ -5827,14 +5905,23 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockResolvedValueOnce(undefined);
+    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
+      onProjectBootstrapSession,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
       harness: "claude-code",
     });
     await manager.setAgentSessionId(session.id, "provider-project-session");
+    await manager.setProjectBootstrapMetadata(session.id, {
+      projectId: "project-1",
+      userId: "user-1",
+      targetSessionId: session.id,
+      bootstrap: { status: "pending" },
+      queuedInputIds: [],
+    });
     spawns[0]?.emitExit(0);
     await manager.flush();
     const persistedIdentity = structuredClone(session.agentMapIdentity);
@@ -5851,6 +5938,14 @@ describe("SessionManager", () => {
       persistedIdentity,
     );
     expect(manager.get(session.id)).not.toHaveProperty("agentMapIdentity");
+    expect(manager.get(session.id)).not.toHaveProperty("projectBootstrap");
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as Array<Record<string, unknown>>;
+    expect(persisted.find(({ id }) => id === session.id)).not.toHaveProperty(
+      "projectBootstrap",
+    );
+    expect(onProjectBootstrapSession).not.toHaveBeenCalled();
     expect(adapter.resume).toHaveBeenCalledOnce();
     expect(spawns).toHaveLength(2);
   });
