@@ -832,7 +832,7 @@ describe("SessionManager", () => {
     expect(spawns).toHaveLength(1);
   });
 
-  it("preserves malformed or conflicting legacy identity records without deleting or duplicating them", async () => {
+  it("drops malformed or conflicting legacy identity records from the registry on load", async () => {
     const malformed = {
       id: "malformed-session",
       agentSessionId: "provider-malformed",
@@ -891,12 +891,10 @@ describe("SessionManager", () => {
 
     await manager.init();
 
-    expect(manager.list()).toHaveLength(2);
-    expect(manager.get(malformed.id)).toEqual(malformed);
-    expect(manager.get(conflicting.id)).toEqual(conflicting);
+    expect(manager.list()).toEqual([]);
     expect(migrations.mock.calls).toEqual([
-      [{ sessionId: malformed.id, outcome: "rejected" }],
-      [{ sessionId: conflicting.id, outcome: "rejected" }],
+      [{ sessionId: malformed.id, outcome: "dropped" }],
+      [{ sessionId: conflicting.id, outcome: "dropped" }],
     ]);
     await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
@@ -909,7 +907,53 @@ describe("SessionManager", () => {
     const persisted = JSON.parse(
       await readFile(sessionsPath, "utf8"),
     ) as unknown[];
-    expect(persisted).toEqual([malformed, conflicting]);
+    expect(persisted).toEqual([]);
+  });
+
+  it("lists only sessions with a valid identity when the registry mixes valid and malformed records", async () => {
+    const record = (id: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code" as const,
+      cwd: `/tmp/project/${id}`,
+      title: id,
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    const valid = {
+      ...record("valid-session"),
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "valid-session",
+      },
+    };
+    const malformed = {
+      ...record("malformed-session"),
+      agentMapIdentity: { projectId: 42 },
+    };
+    await writeFile(sessionsPath, JSON.stringify([valid, malformed]), "utf8");
+    const resolveAgentMapIdentity = vi.fn(
+      async (sessionId: string): Promise<never> => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      },
+    );
+    const { manager } = makeManager({ resolveAgentMapIdentity });
+
+    await manager.init();
+
+    expect(manager.list().map(({ id }) => id)).toEqual([valid.id]);
+    expect(
+      manager.list().every((session) => session.agentMapIdentity !== undefined),
+    ).toBe(true);
+    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
+    await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
   });
 
   it("migrates identity-less legacy sessions to the deepest open root, drops ones no project can own, and persists the result", async () => {
@@ -1014,7 +1058,7 @@ describe("SessionManager", () => {
     ]);
   });
 
-  it("preserves present-but-malformed legacy planner and bootstrap records", async () => {
+  it("drops a malformed legacy planner record with no identity and keeps a malformed bootstrap record that has one", async () => {
     const base = {
       agentSessionId: "provider-session",
       harness: "claude-code",
@@ -1055,11 +1099,9 @@ describe("SessionManager", () => {
 
     await manager.init();
 
-    expect(manager.list()).toHaveLength(2);
-    expect(manager.get(malformedPlanning.id)).toEqual(malformedPlanning);
-    expect(manager.get(malformedBootstrap.id)).toEqual(malformedBootstrap);
+    expect(manager.list()).toEqual([malformedBootstrap]);
     expect(migrations.mock.calls).toEqual([
-      [{ sessionId: malformedPlanning.id, outcome: "rejected" }],
+      [{ sessionId: malformedPlanning.id, outcome: "dropped" }],
       [{ sessionId: malformedBootstrap.id, outcome: "rejected" }],
     ]);
     await expect(manager.resume(malformedPlanning.id)).rejects.toBeInstanceOf(
@@ -1071,7 +1113,7 @@ describe("SessionManager", () => {
     expect(adapter.canResume).not.toHaveBeenCalled();
     expect(spawns).toEqual([]);
     expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
-      [malformedPlanning, malformedBootstrap],
+      [malformedBootstrap],
     );
   });
 

@@ -1181,7 +1181,18 @@ export class SessionManager {
       }
       let outcome: "unchanged" | "migrated" | "rejected" | "dropped" =
         migration.outcome;
-      if (migration.identity === undefined && outcome !== "rejected") {
+      if (
+        outcome === "rejected" &&
+        (migration.identity === undefined ||
+          session.agentMapIdentity === undefined)
+      ) {
+        // Rejected metadata never becomes authority, and a session with no
+        // valid identity cannot be listed: every published session carries
+        // one. The id stays in `rejectedProjectSessionMetadata` so a resume
+        // still reports the scope error rather than an unknown session.
+        outcome = "dropped";
+        dirty = true;
+      } else if (migration.identity === undefined && outcome !== "rejected") {
         // A session written before project identity existed joins the deepest
         // open root containing its cwd, or a project minted for that cwd. A
         // cwd no project can own is not a session this build can represent.
@@ -1465,6 +1476,9 @@ export class SessionManager {
     trusted: TrustedSessionResumeOptions = {},
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
+    if (this.rejectedProjectSessionMetadata.has(id)) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
     const session = this.sessions.get(id);
     if (!session) throw new UnknownSessionError(id);
     if (!session.agentSessionId) {
@@ -1472,9 +1486,6 @@ export class SessionManager {
     }
     if (this.ptys.has(id)) {
       throw new SessionAlreadyLiveError(id);
-    }
-    if (this.rejectedProjectSessionMetadata.has(id)) {
-      throw new ProjectSessionScopeUnavailableError(id);
     }
     const bindingTransition = trusted.subsessionBindingTransition;
     if (bindingTransition) {
