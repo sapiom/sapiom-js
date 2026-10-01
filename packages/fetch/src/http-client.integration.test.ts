@@ -549,6 +549,24 @@ describe("HTTP Client Integration Tests", () => {
       expect(mocks.create).not.toHaveBeenCalled();
       expect(mocks.complete).not.toHaveBeenCalled();
     });
+
+    it("should skip Sapiom when Request metadata sets enabled false", async () => {
+      fetchMock.get("https://api.example.com/public", {
+        status: 200,
+        body: { public: true },
+      });
+
+      const fetch = createFetch({ sapiomClient: mockSapiomClient });
+      const request = new Request("https://api.example.com/public");
+      (request as any).__sapiom = { enabled: false };
+
+      const response = await fetch(request);
+      await flushPromises();
+
+      expect(response.status).toBe(200);
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.complete).not.toHaveBeenCalled();
+    });
   });
 
   // ============================================================================

@@ -1,4 +1,3 @@
-import { SapiomClient } from "@sapiom/core";
 import {
   BaseSapiomIntegrationConfig,
   initializeSapiomClient,
@@ -120,7 +119,13 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
+    const inputMetadata =
+      input instanceof Request ? (input as any).__sapiom : undefined;
     let request = new Request(input, init);
+
+    if (inputMetadata !== undefined) {
+      (request as any).__sapiom = inputMetadata;
+    }
 
     const requestMetadata = (request as any).__sapiom || {};
     const userMetadata = { ...defaultMetadata, ...requestMetadata };
@@ -138,10 +143,12 @@ export function createFetch(config?: SapiomFetchConfig): typeof fetch {
         const headers = new Headers(request.headers);
         headers.set("Sapiom-Identity", identityHeaders["Sapiom-Identity"]);
         request = new Request(request, { headers });
+        (request as any).__sapiom = requestMetadata;
       }
     }
 
     request = await handleAuthorization(request, authConfig, defaultMetadata);
+    (request as any).__sapiom = requestMetadata;
 
     const startTime = Date.now();
     let response: Response | null = null;
