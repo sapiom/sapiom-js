@@ -84,6 +84,8 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `memory`            | Tenant-scoped long-term memory (namespace-isolated append-log; semantic/keyword/hybrid recall)          | [src/memory](./src/memory/README.md)                         |
 | `google`            | Act as a tenant inside Google: Drive, Gmail, and the raw OAuth credential                               | [src/google](./src/google/README.md)                         |
 | `github`            | List a tenant's GitHub repositories                                                                     | [src/github](./src/github/README.md)                         |
+| `slack`             | Post, edit, and react to Slack messages; read threads and users                                         | [src/connectors/slack](./src/connectors/slack/README.md)     |
+| `linear` / `notion` | Call a tenant's Linear or Notion MCP tools (`listTools`, `callTool`); `mcp(slug)` for any MCP connector | [src/connectors/mcp](./src/connectors/mcp/README.md)         |
 | `llm`               | Routed LLM calls: one-shot `run` and deferred `submit` / sessions                                       | [src/llm](./src/llm/index.ts)                                |
 | `decisions`         | System One decisions: `evaluate` returns calibrated probabilities over a fixed answer set               | [src/decisions](./src/decisions/index.ts)                    |
 

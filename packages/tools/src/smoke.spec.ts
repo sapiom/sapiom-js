@@ -112,6 +112,11 @@ describe("@sapiom/tools public surface", () => {
 
     expect(typeof sapiom.connectors.github).toBe("object");
     expect(typeof sapiom.connectors.github.listRepos).toBe("function");
+    expect(typeof sapiom.connectors.slack.postMessage).toBe("function");
+    expect(typeof sapiom.connectors.slack.userInfo).toBe("function");
+    expect(typeof sapiom.connectors.linear.listTools).toBe("function");
+    expect(typeof sapiom.connectors.notion.callTool).toBe("function");
+    expect(typeof sapiom.connectors.mcp("acme").callTool).toBe("function");
 
     expect(typeof sapiom.events.emit).toBe("function");
 
@@ -155,6 +160,11 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof connectors.google.gmail.sendEmail).toBe("function");
     expect(typeof connectors.github).toBe("object");
     expect(typeof connectors.github.listRepos).toBe("function");
+    expect(typeof connectors.slack.postMessage).toBe("function");
+    expect(typeof connectors.linear.listTools).toBe("function");
+    expect(typeof connectors.notion.callTool).toBe("function");
+    expect(typeof connectors.mcp).toBe("function");
+    expect(typeof connectors.McpRelayError).toBe("function");
     expect(typeof events.emit).toBe("function");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof MemoryHttpError).toBe("function");
