@@ -13,6 +13,8 @@ export class ExecutionError extends Error implements ExecutionReference {
 export class ExecutionProtocolError extends ExecutionError {}
 export class ExecutionTransportError extends ExecutionError {}
 export class ExecutionInterruptedError extends ExecutionError {}
+/** Only the caller's wait stopped; the server execution was not cancelled. */
+export class ExecutionWaitInterruptedError extends ExecutionInterruptedError {}
 export class ExecutionExpiredError extends ExecutionError {
   readonly status = 410;
 }
@@ -31,6 +33,9 @@ export const executionFailureStatus: Readonly<
   Record<ExecutionErrorBody["code"], number>
 > = {
   invalid_request: 400,
+  secret_detected: 400,
+  invalid_metadata: 400,
+  invalid_filter: 400,
   rate_limited: 429,
   capability_usage_limit: 429,
   deadline_exceeded: 504,

@@ -21,6 +21,7 @@
  * credentials and you run your own SQL with the client of your choice.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { capabilityCall } from "../_client/capability-call.js";
 import { ensureOk, DatabaseHttpError } from "./errors.js";
 
 export { DatabaseHttpError };
@@ -226,15 +227,28 @@ export async function create(
   if (input.region !== undefined) body.region = input.region;
   if (input.pgVersion !== undefined) body.pgVersion = input.pgVersion;
 
-  const res = await ensureOk(
-    await transport.fetch(`${baseUrl}/v1/databases`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-    "Failed to create database",
+  const raw = await capabilityCall<RawDatabaseResponse>(
+    "database.create",
+    { ...body },
+    {
+      transport,
+      makeError: (message, status, body) =>
+        new DatabaseHttpError(message, status, body),
+      errorPrefix: "Failed to create database",
+      legacyCall: async () => {
+        const res = await ensureOk(
+          await transport.fetch(`${baseUrl}/v1/databases`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+          "Failed to create database",
+        );
+        return (await res.json()) as RawDatabaseResponse;
+      },
+    },
   );
-  return mapDatabase((await res.json()) as RawDatabaseResponse);
+  return mapDatabase(raw);
 }
 
 /** Retrieve a database by its id or handle. */
