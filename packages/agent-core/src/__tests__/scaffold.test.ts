@@ -203,10 +203,7 @@ describe("scaffold", () => {
     const targetDir = makeTmp();
     const studioDir = path.join(targetDir, ".sapiom");
     mkdirSync(studioDir);
-    writeFileSync(
-      path.join(studioDir, "harness-context.json"),
-      '{"sentinel":"__PROJECT_NAME__"}\n',
-    );
+    writeFileSync(path.join(studioDir, "harness-context.json"), '{"sentinel":"__PROJECT_NAME__"}\n');
     try {
       const result = await scaffold({
         targetDir,
@@ -215,16 +212,14 @@ describe("scaffold", () => {
       });
 
       expect(result.gitInitialized).toBe(true);
-      expect(
-        readFileSync(path.join(studioDir, "harness-context.json"), "utf8"),
-      ).toBe('{"sentinel":"__PROJECT_NAME__"}\n');
+      expect(readFileSync(path.join(studioDir, "harness-context.json"), "utf8")).toBe(
+        '{"sentinel":"__PROJECT_NAME__"}\n',
+      );
 
       const tracked = execFileSync("git", ["ls-files"], {
         cwd: targetDir,
         encoding: "utf8",
-      })
-        .trim()
-        .split("\n");
+      }).trim().split("\n");
       expect(tracked).toContain("sapiom.json");
       expect(tracked).toContain(".sapiom-dev/stubs.json");
       expect(tracked.some((file) => file.startsWith(".sapiom/"))).toBe(false);
@@ -244,9 +239,7 @@ describe("scaffold", () => {
           versions: { agent: "1.0.0", tools: "1.0.0", zod: "3.0.0" },
         }),
       ).rejects.toMatchObject({ code: "DIR_NOT_EMPTY" });
-      expect(readFileSync(path.join(targetDir, "existing.txt"), "utf8")).toBe(
-        "keep me",
-      );
+      expect(readFileSync(path.join(targetDir, "existing.txt"), "utf8")).toBe("keep me");
     } finally {
       rmSync(targetDir, { recursive: true, force: true });
     }
@@ -425,16 +418,10 @@ describe("resolveVersions offline fallback", () => {
     }) as unknown as typeof fetch;
 
     const workspaceAgentVersion = JSON.parse(
-      readFileSync(
-        path.resolve(__dirname, "..", "..", "..", "agent", "package.json"),
-        "utf8",
-      ),
+      readFileSync(path.resolve(__dirname, "..", "..", "..", "agent", "package.json"), "utf8"),
     ).version;
     const workspaceToolsVersion = JSON.parse(
-      readFileSync(
-        path.resolve(__dirname, "..", "..", "..", "tools", "package.json"),
-        "utf8",
-      ),
+      readFileSync(path.resolve(__dirname, "..", "..", "..", "tools", "package.json"), "utf8"),
     ).version;
 
     const versions = await resolveVersions();
