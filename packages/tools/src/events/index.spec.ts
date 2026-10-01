@@ -1,7 +1,4 @@
-/**
- * events.emit: URL, body (id forwarded or omitted), receipt returned as is, non-2xx
- * surfaced as TransportHttpError with no retry. Injects a fake fetch (no real network).
- */
+/** Inject fetch so the HTTP contract can be checked without contacting the gateway. */
 import { createClient } from "../index.js";
 import { Transport, TransportHttpError } from "../_client/index.js";
 import { emit, type EmitEventResult } from "./index.js";

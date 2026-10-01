@@ -1,7 +1,3 @@
-/**
- * Stub events.emit: the run_local default (unmatched, no network) and the
- * `events.emit` override, both recorded in the calls sink.
- */
 import { createStubClient, type StubCallRecord } from "./index.js";
 
 describe("stub events.emit", () => {

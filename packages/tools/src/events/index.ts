@@ -1,14 +1,4 @@
-/**
- * `events` capability: emit a tenant event from a running step, with the run's own credential.
- *
- *   import { events } from "@sapiom/tools";
- *   await events.emit({ type: "lead.created", payload: { leadId }, id: `lead-${leadId}` });
- *
- * An event STARTS every deployed agent whose `event` trigger matches its `type` (a signal, by
- * contrast, resumes one paused run). The route sits under the agents gateway (`/agents/v1`, same
- * front door as {@link ../agents/index.js}). Thin passthrough: the gateway validates the type and
- * payload, and the 202 receipt comes back as is.
- */
+/** SAP-3684: run credentials need the agents gateway rather than the org-key Events API. */
 import { Transport, defaultTransport } from "../_client/index.js";
 
 const DEFAULT_BASE_URL =
@@ -40,7 +30,6 @@ export interface EmitEventResult {
   fireIds: string[];
 }
 
-/** Emit a tenant event; resolves with the gateway's 202 receipt. */
 export async function emit(
   spec: EmitEventSpec,
   transport: Transport = defaultTransport(),

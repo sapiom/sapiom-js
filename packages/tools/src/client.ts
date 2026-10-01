@@ -233,7 +233,7 @@ export interface Sapiom {
     launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
   };
   readonly events: {
-    /** Emit a tenant event: starts every deployed agent with a matching `event` trigger. */
+    /** SAP-3684: expose event emission through the gateway that accepts run credentials. */
     emit(spec: EmitEventSpec): Promise<EmitEventResult>;
   };
   /**
