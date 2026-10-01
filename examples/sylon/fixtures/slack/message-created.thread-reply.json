@@ -4,10 +4,10 @@
   "payload": {
     "event": {
       "ts": "1790889500.000300",
-      "team": "T096M2LJ4RF",
-      "text": "[sylon test] Following up: it still fails after a retry.",
+      "team": "T0EXAMPLE01",
+      "text": "Following up: it still fails after a retry.",
       "type": "message",
-      "user": "U0AV4AD94BY",
+      "user": "U0CUSTOMER1",
       "blocks": [
         {
           "type": "rich_text",
@@ -18,21 +18,21 @@
               "elements": [
                 {
                   "type": "text",
-                  "text": "[sylon test] Following up: it still fails after a retry."
+                  "text": "Following up: it still fails after a retry."
                 }
               ]
             }
           ]
         }
       ],
-      "channel": "C0C6YDCFJBS",
+      "channel": "C0CUSTOMER1",
       "event_ts": "1790889500.000300",
       "channel_type": "channel",
       "thread_ts": "1790889355.981329"
     },
-    "teamId": "T096M2LJ4RF",
+    "teamId": "T0EXAMPLE01",
     "eventId": "Ev0SYLONREPLY1",
-    "apiAppId": "A0C6MPVEB6U",
+    "apiAppId": "A0SYLONAPP1",
     "eventTime": 1790889500
   }
 }

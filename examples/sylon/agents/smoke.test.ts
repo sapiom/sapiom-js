@@ -42,7 +42,7 @@ describe("smoke agents", () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({
       type: "issue.created",
-      id: "issue.created:Ev0C67Q6T4LU",
+      id: "issue.created:Ev0EXAMPLE01",
     });
 
     // A retry re-runs the step: same issue, no second card, the emit dedups.
@@ -85,7 +85,7 @@ describe("smoke agents", () => {
     const other = structuredClone(
       fixture("slack/message-created.channel.json").payload,
     ) as { event: { channel: string } };
-    other.event.channel = "C0C67P6GQKE";
+    other.event.channel = "C0TRIAGE001";
     expect((await step(ingest, "guard").run(other, ctx)).output).toMatchObject({
       skipped: expect.stringMatching(/not a customer channel/),
     });

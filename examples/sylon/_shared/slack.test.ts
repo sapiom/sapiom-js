@@ -114,7 +114,7 @@ describe("slack.ts", () => {
           ok: true,
           user: {
             id: "U1",
-            name: "dave",
+            name: "pat",
             profile: { display_name: "Dave", email: "d@x.io" },
           },
         },

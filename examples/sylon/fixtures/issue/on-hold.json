@@ -7,7 +7,7 @@
     "source": "slack",
     "causationId": "1790889700.1004",
     "slack": {
-      "channel": "C0C6YDCFJBS",
+      "channel": "C0CUSTOMER1",
       "ts": "1790889355.981329"
     },
     "linearIdentifier": "SAP-9999"

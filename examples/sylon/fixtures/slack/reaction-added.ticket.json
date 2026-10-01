@@ -2,20 +2,20 @@
   "type": "slack.reaction_added",
   "description": "A teammate adds the :ticket: reaction to the customer message.",
   "payload": {
-    "teamId": "T096M2LJ4RF",
-    "apiAppId": "A0C6MPVEB6U",
+    "teamId": "T0EXAMPLE01",
+    "apiAppId": "A0SYLONAPP1",
     "eventId": "Ev0SYLONREACT1",
     "eventTime": 1790889600,
     "event": {
       "type": "reaction_added",
-      "user": "U0AV4AD94BY",
+      "user": "U0CUSTOMER1",
       "reaction": "ticket",
       "item": {
         "type": "message",
-        "channel": "C0C6YDCFJBS",
+        "channel": "C0CUSTOMER1",
         "ts": "1790889355.981329"
       },
-      "item_user": "U0AV4AD94BY",
+      "item_user": "U0CUSTOMER1",
       "event_ts": "1790889600.000400"
     }
   }

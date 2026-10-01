@@ -7,7 +7,7 @@
     "source": "slack",
     "causationId": "controller:a1b2c3d4-0000-4000-8000-0000000000a1:no_owner",
     "slack": {
-      "channel": "C0C6YDCFJBS",
+      "channel": "C0CUSTOMER1",
       "ts": "1790889355.981329"
     },
     "kind": "no_owner"

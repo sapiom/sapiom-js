@@ -7,11 +7,11 @@
     "source": "slack",
     "causationId": "Ev0SYLONREPLY1",
     "slack": {
-      "channel": "C0C6YDCFJBS",
+      "channel": "C0CUSTOMER1",
       "ts": "1790889500.000300",
       "threadTs": "1790889355.981329"
     },
     "messageId": "a1b2c3d4-0000-4000-8000-0000000000b1",
-    "text": "[sylon test] Following up: it still fails after a retry."
+    "text": "Following up: it still fails after a retry."
   }
 }

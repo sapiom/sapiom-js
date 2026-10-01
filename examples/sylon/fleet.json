@@ -102,13 +102,13 @@
     }
   ],
   "config": {
-    "linear.team_id": "281fa96c-99ae-48d4-a908-711ccd204185",
-    "linear.project_id": "f913263b-a6ad-4715-bd9c-e6d5f3e1022a",
-    "channels.triage": "C0C67P6GQKE",
+    "linear.team_id": "example-linear-team-id",
+    "linear.project_id": "example-linear-project-id",
+    "channels.triage": "C0TRIAGE001",
     "channels.customer": [
-      { "channelId": "C0C6YDCFJBS", "accountName": "Sylon Test Customer" }
+      { "channelId": "C0CUSTOMER1", "accountName": "Example Customer" }
     ],
-    "oncall.slack_id": "U0AV4AD94BY",
+    "oncall.slack_id": "U0ONCALL001",
     "nudge.minutes": 5
   }
 }

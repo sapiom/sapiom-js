@@ -30,7 +30,7 @@ import {
   type IssueStatus,
 } from "./issues";
 
-const CUSTOMER = { channel: "C0C6YDCFJBS", ts: "1790889355.981329" };
+const CUSTOMER = { channel: "C0CUSTOMER1", ts: "1790889355.981329" };
 
 async function seed(db: Db) {
   const account = await upsertAccount(db, {
@@ -180,7 +180,7 @@ describe("issues.ts on a database", () => {
       text: "Hello",
       citations: ["kb/a.md"],
     });
-    await setDraftCard(db, draft.id, { channel: "C0C67P6GQKE", ts: "5.5" });
+    await setDraftCard(db, draft.id, { channel: "C0TRIAGE001", ts: "5.5" });
     expect(await pendingDrafts(db, issue.id)).toHaveLength(1);
     const first = await decideDraft(db, draft.id, "approved", "U1");
     const second = await decideDraft(db, draft.id, "dismissed", "U2");

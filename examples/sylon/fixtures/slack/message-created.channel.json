@@ -1,49 +1,37 @@
 {
   "type": "slack.message.created",
-  "description": "Captured verbatim from receipt 205 on Sapiom Internal (2026-10-01): a top-level message in #sylon-customer.",
+  "description": "A top-level customer message. Shape captured from a real slack.message.created receipt (2026-10-01); ids and text replaced with examples.",
   "payload": {
     "event": {
       "ts": "1790889355.981329",
-      "team": "T096M2LJ4RF",
-      "text": "[sylon setup check] Testing inbound events, please ignore. *Sent using* <@U09JB0767AN>",
+      "team": "T0EXAMPLE01",
+      "text": "Hi team, our webhook deliveries started failing this morning. Can you take a look?",
       "type": "message",
-      "user": "U0AV4AD94BY",
-      "app_id": "A08SF47R6P4",
+      "user": "U0CUSTOMER1",
       "blocks": [
         {
           "type": "rich_text",
-          "block_id": "wRNVRD",
+          "block_id": "msg01",
           "elements": [
             {
               "type": "rich_text_section",
               "elements": [
                 {
-                  "text": "[sylon setup check] Testing inbound events, please ignore.",
-                  "type": "text"
+                  "type": "text",
+                  "text": "Hi team, our webhook deliveries started failing this morning. Can you take a look?"
                 }
               ]
             }
           ]
-        },
-        {
-          "type": "context",
-          "block_id": "rWJQJ",
-          "elements": [
-            {
-              "text": "*Sent using* <@U09JB0767AN>",
-              "type": "mrkdwn",
-              "verbatim": false
-            }
-          ]
         }
       ],
-      "channel": "C0C6YDCFJBS",
+      "channel": "C0CUSTOMER1",
       "event_ts": "1790889355.981329",
       "channel_type": "channel"
     },
-    "teamId": "T096M2LJ4RF",
-    "eventId": "Ev0C67Q6T4LU",
-    "apiAppId": "A0C6MPVEB6U",
+    "teamId": "T0EXAMPLE01",
+    "eventId": "Ev0EXAMPLE01",
+    "apiAppId": "A0SYLONAPP1",
     "eventTime": 1790889355
   }
 }

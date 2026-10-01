@@ -11,12 +11,38 @@ import { ConfigSchemas, setConfig, type ConfigKey } from "./config";
 import type { Db } from "./db";
 import { ensureAccount } from "./issues";
 
+/** Example values from fleet.json. Real ids go in a gitignored fleet.local.json (see setup.ts). */
 export const FLEET_CONFIG = fleet.config as { [K in ConfigKey]: unknown };
+
+export type FleetConfigValues = { [K in ConfigKey]: unknown };
+
+/** fleet.json's example values with a local override merged over them, key by key. */
+export function mergeConfig(
+  local: Partial<FleetConfigValues> | undefined,
+): FleetConfigValues {
+  return { ...FLEET_CONFIG, ...(local ?? {}) };
+}
+
+/** Keys that name things in your Slack and Linear workspaces; fleet.json can only hold examples. */
+export const WORKSPACE_KEYS: readonly ConfigKey[] = [
+  "linear.team_id",
+  "linear.project_id",
+  "channels.triage",
+  "channels.customer",
+  "oncall.slack_id",
+];
+
+/** Workspace keys still holding fleet.json's example value: setup refuses to seed those. */
+export function exampleKeys(values: FleetConfigValues): ConfigKey[] {
+  return WORKSPACE_KEYS.filter(
+    (k) => JSON.stringify(values[k]) === JSON.stringify(FLEET_CONFIG[k]),
+  );
+}
 
 export async function seedFleet(
   db: Db,
   setBy: string,
-  opts: { overwrite?: boolean; values?: { [K in ConfigKey]: unknown } } = {},
+  opts: { overwrite?: boolean; values?: FleetConfigValues } = {},
 ): Promise<{ set: ConfigKey[]; kept: ConfigKey[] }> {
   const values = opts.values ?? FLEET_CONFIG;
   const present = new Set(

@@ -4,3 +4,5 @@ pnpm-lock.yaml
 agents/_scratch/
 .q.ts
 .pgcheck.ts
+fleet.local.json
+agents/*/sapiom.json

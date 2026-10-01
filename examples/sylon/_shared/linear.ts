@@ -3,7 +3,7 @@
  * `POST {tools}/connectors/v1/linear/mcp` (JSON-RPC over streamable HTTP, stateless) on the run's
  * credential. The relay serves Linear's own MCP tools; nothing here is a Sapiom verb.
  *
- * Tool names and arguments pinned from `tools/list` on Sapiom Internal, 2026-10-01 (76 tools):
+ * Tool names and arguments pinned from `tools/list` in a live tenant, 2026-10-01 (76 tools):
  *
  *   save_issue  create when `id` is absent. Args used here: team (name or id, required on create),
  *               title, description (markdown), project (name, id or slug), priority

@@ -4,33 +4,33 @@
   "payload": {
     "type": "block_actions",
     "user": {
-      "id": "U0AV4AD94BY",
-      "username": "dave",
-      "name": "dave",
-      "team_id": "T096M2LJ4RF"
+      "id": "U0TEAMMATE1",
+      "username": "teammate",
+      "name": "teammate",
+      "team_id": "T0EXAMPLE01"
     },
-    "api_app_id": "A0C6MPVEB6U",
+    "api_app_id": "A0SYLONAPP1",
     "trigger_id": "1790889700.1004",
     "team": {
-      "id": "T096M2LJ4RF",
-      "domain": "sapiom"
+      "id": "T0EXAMPLE01",
+      "domain": "example"
     },
     "enterprise": null,
     "is_enterprise_install": false,
     "container": {
       "type": "message",
       "message_ts": "1790889450.000250",
-      "channel_id": "C0C67P6GQKE",
+      "channel_id": "C0TRIAGE001",
       "is_ephemeral": false
     },
     "channel": {
-      "id": "C0C67P6GQKE",
+      "id": "C0TRIAGE001",
       "name": "sylon-triage"
     },
     "message": {
       "type": "message",
-      "user": "U0C5N4B5PS9",
-      "bot_id": "B0SYLONBOT",
+      "user": "U0SYLONBOT1",
+      "bot_id": "B0SYLONBOT1",
       "ts": "1790889450.000250",
       "text": "Escalate",
       "blocks": [],

@@ -8,7 +8,7 @@ import { getConfig, setConfig } from "./_shared/config";
 import { memoryDb } from "./_shared/db";
 import { Events, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
-import { seedFleet } from "./_shared/seed";
+import { exampleKeys, mergeConfig, seedFleet } from "./_shared/seed";
 import fleet from "./fleet.json";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -47,12 +47,12 @@ describe("fleet.json", () => {
     const db = await memoryDb();
     await seedFleet(db, "test");
     await seedFleet(db, "test");
-    expect(await getConfig(db, "channels.triage")).toBe("C0C67P6GQKE");
+    expect(await getConfig(db, "channels.triage")).toBe("C0TRIAGE001");
     expect(await getConfig(db, "linear.team_id")).toBe(
-      "281fa96c-99ae-48d4-a908-711ccd204185",
+      "example-linear-team-id",
     );
-    expect((await accountByChannel(db, "C0C6YDCFJBS"))?.name).toBe(
-      "Sylon Test Customer",
+    expect((await accountByChannel(db, "C0CUSTOMER1"))?.name).toBe(
+      "Example Customer",
     );
     expect(await db.query("select * from accounts")).toHaveLength(1);
   });
@@ -66,6 +66,21 @@ describe("fleet.json", () => {
     await seedFleet(db, "setup", { overwrite: true });
     expect(await getConfig(db, "nudge.minutes")).toBe(
       fleet.config["nudge.minutes"],
+    );
+  });
+
+  it("flags every key left at its example value, and none once overridden", () => {
+    expect(exampleKeys(mergeConfig(undefined))).toHaveLength(5);
+    const local = {
+      "linear.team_id": "t",
+      "linear.project_id": "p",
+      "channels.triage": "C1",
+      "channels.customer": [{ channelId: "C2", accountName: "Acme" }],
+      "oncall.slack_id": "U1",
+    };
+    expect(exampleKeys(mergeConfig(local))).toEqual([]);
+    expect(exampleKeys(mergeConfig({ "channels.triage": "C1" }))).not.toContain(
+      "channels.triage",
     );
   });
 });
