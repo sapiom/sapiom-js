@@ -72,6 +72,14 @@ export { AGENTS_RESULT_SIGNAL } from "./agents/index.js";
 
 // schedules — create/manage cron + one-off triggers for a deployed agent.
 export * as schedules from "./schedules/index.js";
+
+// events: emit a tenant event from a step (starts agents with a matching `event` trigger).
+export * as events from "./events/index.js";
+export type {
+  EmitEventSpec,
+  EmitEventResult,
+  EventOutcome,
+} from "./events/index.js";
 // The shape a step resumed from `pauseUntilSignal(agentHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { AgentRunResultPayload } from "./agents/index.js";

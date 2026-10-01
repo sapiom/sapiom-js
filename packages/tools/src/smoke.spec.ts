@@ -20,6 +20,7 @@ import {
   browserAutomation,
   keys,
   connectors,
+  events,
   Sandbox,
   Repository,
   SearchHttpError,
@@ -112,6 +113,8 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.connectors.github).toBe("object");
     expect(typeof sapiom.connectors.github.listRepos).toBe("function");
 
+    expect(typeof sapiom.events.emit).toBe("function");
+
     expect(typeof sapiom.withAttribution).toBe("function");
   });
 
@@ -152,6 +155,7 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof connectors.google.gmail.sendEmail).toBe("function");
     expect(typeof connectors.github).toBe("object");
     expect(typeof connectors.github.listRepos).toBe("function");
+    expect(typeof events.emit).toBe("function");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof MemoryHttpError).toBe("function");
     expect(typeof SpeechHttpError).toBe("function");

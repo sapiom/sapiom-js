@@ -585,7 +585,9 @@ Arming an `event` trigger is only half of it — something has to emit the event
 `sapiom_dev_agents_emit_event` (or `sapiom agents emit`, or `emitEvent` from
 `@sapiom/agent-core`) does that: **events start runs, signals resume them**, so an emit never
 wakes the paused run above and a signal never starts a new one. An emit that matches no
-trigger comes back `outcome: "unmatched"` — a success, not an error.
+trigger comes back `outcome: "unmatched"` — a success, not an error. From inside a step,
+`ctx.sapiom.events.emit({ type, payload, id? })` (`@sapiom/tools` >= 0.40.0) emits with the
+run's own credential; pass a stable `id` so a retried step starts nothing twice.
 
 <!-- /section: trigger-kinds -->
 
