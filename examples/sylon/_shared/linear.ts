@@ -47,21 +47,39 @@ export class LinearRelayError extends Error {
 
 let rpcId = 0;
 
-/** Parse a streamable-HTTP MCP reply, which is either JSON or one SSE `data:` frame. */
-export function parseMcpReply(body: string): {
+type McpReply = {
+  id?: unknown;
   result?: unknown;
   error?: { message?: string };
-} {
+};
+
+/**
+ * Parse a streamable-HTTP MCP reply: plain JSON, or SSE frames (blank-line separated, each with
+ * one or more `data:` lines). A stream may carry notifications before the response, so the
+ * response is the frame holding `result` or `error`, matched on `id` when one is given.
+ */
+export function parseMcpReply(body: string, id?: number): McpReply {
   const trimmed = body.trim();
-  if (trimmed.startsWith("{")) return JSON.parse(trimmed);
-  const data = trimmed
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim())
-    .join("");
-  if (!data)
-    throw new LinearRelayError(`empty MCP reply: ${trimmed.slice(0, 200)}`);
-  return JSON.parse(data);
+  if (trimmed.startsWith("{")) return JSON.parse(trimmed) as McpReply;
+  const frames = trimmed
+    .split(/\r?\n\r?\n/)
+    .map((frame) =>
+      frame
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+        .join("\n"),
+    )
+    .filter(Boolean)
+    .map((data) => JSON.parse(data) as McpReply);
+  const responses = frames.filter((f) => "result" in f || "error" in f);
+  const reply =
+    responses.find((f) => id !== undefined && f.id === id) ?? responses.at(-1);
+  if (!reply)
+    throw new LinearRelayError(
+      `no MCP response in reply: ${trimmed.slice(0, 200)}`,
+    );
+  return reply;
 }
 
 export async function mcpRequest(
@@ -76,6 +94,7 @@ export async function mcpRequest(
   const base = (
     process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai"
   ).replace(/\/+$/, "");
+  const id = ++rpcId;
   const res = await fetch(`${base}/connectors/v1/${LINEAR_RELAY_SLUG}/mcp`, {
     method: "POST",
     headers: {
@@ -83,14 +102,14 @@ export async function mcpRequest(
       accept: "application/json, text/event-stream",
       "x-sapiom-api-key": key,
     },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
   });
   const text = await res.text();
   if (!res.ok)
     throw new LinearRelayError(
       `linear relay ${method} failed (${res.status}): ${text.slice(0, 300)}`,
     );
-  const reply = parseMcpReply(text);
+  const reply = parseMcpReply(text, id);
   if (reply.error)
     throw new LinearRelayError(
       `linear relay ${method}: ${reply.error.message ?? "error"}`,

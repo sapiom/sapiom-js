@@ -25,7 +25,7 @@ export interface Db {
 /** What `openDb` needs from a step context. */
 export type DbCtx = Pick<
   AgentExecutionContext<Record<string, unknown>>,
-  "sapiom" | "isLocalTrace" | "logger"
+  "sapiom" | "isLocalTrace" | "logger" | "executionId"
 >;
 
 /** Postgres `unique_violation`. pg-mem raises the same code. */
@@ -78,6 +78,7 @@ function wrapMemory(
   mem: MemDb,
   run: (text: string, params: unknown[]) => Promise<{ rows: unknown[] }>,
   inTx = false,
+  lock: { tail: Promise<unknown> } = { tail: Promise.resolve() },
 ): Db {
   return {
     kind: "memory",
@@ -86,15 +87,20 @@ function wrapMemory(
     },
     async transaction<R>(fn: (tx: Db) => Promise<R>) {
       if (inTx) return fn(this);
-      // pg-mem's pg adapter accepts begin/rollback but does not undo writes; a snapshot does.
-      // Memory dbs serve one process, so snapshot-and-restore is a faithful transaction.
-      const snapshot = mem.backup();
-      try {
-        return await fn(wrapMemory(mem, run, true));
-      } catch (err) {
-        snapshot.restore();
-        throw err;
-      }
+      // pg-mem has no row locks and its pg adapter accepts begin/rollback without undoing writes.
+      // Running one transaction at a time, with a snapshot to restore on throw, gives the
+      // serializable behaviour `for update` callers rely on in Postgres.
+      const turn = lock.tail.then(async () => {
+        const snapshot = mem.backup();
+        try {
+          return await fn(wrapMemory(mem, run, true, lock));
+        } catch (err) {
+          snapshot.restore();
+          throw err;
+        }
+      });
+      lock.tail = turn.catch(() => undefined);
+      return turn;
     },
   };
 }
@@ -165,16 +171,31 @@ function splitStatements(sql: string): string[] {
 
 // --- opening the fleet database from a step --------------------------------------------------
 
-let localDb: Promise<Db> | undefined;
+/** Local-trace databases, one per execution: steps of one trace share it, separate traces never do. */
+const localDbs = new Map<string, Promise<Db>>();
+let localOverride: Promise<Db> | undefined;
 
-/** Resolve the `sylon` handle to a connection string, creating the database on first use. */
+/** A fresh in-process database seeded from fleet.json, as a local trace sees it. */
+export async function localFleetDb(): Promise<Db> {
+  const db = await memoryDb();
+  // Imported lazily: seed.ts depends on config.ts and issues.ts, which depend on this file.
+  const { seedFleet } = await import("./seed");
+  await seedFleet(db, "run_local");
+  return db;
+}
+
+/** Resolve the `sylon` handle to a connection string, creating the database only when it does not exist. */
 export async function resolveConnectionString(
   ctx: Pick<DbCtx, "sapiom">,
 ): Promise<string> {
   const database = ctx.sapiom.database;
-  const found = await database
-    .get(DB_HANDLE)
-    .catch(() => database.create({ handle: DB_HANDLE }));
+  const found = await database.get(DB_HANDLE).catch((err: unknown) => {
+    // Only a missing handle provisions; an outage or a permission error must surface as itself.
+    if ((err as { status?: unknown })?.status === 404) {
+      return database.create({ handle: DB_HANDLE });
+    }
+    throw err;
+  });
   const connectionString = found.connection?.connectionString;
   if (!connectionString)
     throw new Error(
@@ -186,21 +207,18 @@ export async function resolveConnectionString(
 /**
  * Run `fn` against the fleet database, migrated, and close the connection afterwards.
  *
- * On a local trace the database is an in-process pg-mem shared by every step of the trace, so a
- * `run_local` walks the real SQL without touching the deployed database.
+ * On a local trace the database is an in-process pg-mem, one per execution, so a `run_local`
+ * walks the real SQL without touching the deployed database and without seeing earlier traces.
  */
 export async function withDb<R>(
   ctx: DbCtx,
   fn: (db: Db) => Promise<R>,
 ): Promise<R> {
   if (ctx.isLocalTrace) {
-    localDb ??= memoryDb().then(async (db) => {
-      // Imported lazily: seed.ts depends on config.ts and issues.ts, which depend on this file.
-      const { seedFleet } = await import("./seed");
-      await seedFleet(db, "run_local");
-      return db;
-    });
-    return fn(await localDb);
+    if (localOverride) return fn(await localOverride);
+    let db = localDbs.get(ctx.executionId);
+    if (!db) localDbs.set(ctx.executionId, (db = localFleetDb()));
+    return fn(await db);
   }
   const { db, close } = await connectPostgres(
     await resolveConnectionString(ctx),
@@ -213,7 +231,11 @@ export async function withDb<R>(
   }
 }
 
-/** Test hook: install (or drop) the database `withDb` uses on a local trace. */
+/**
+ * Test hook: make every local trace use `db` (so a test can follow one issue across two agents'
+ * executions), or pass `undefined` to return to one fresh database per execution.
+ */
 export function setLocalDb(db: Db | undefined): void {
-  localDb = db ? Promise.resolve(db) : undefined;
+  localOverride = db ? Promise.resolve(db) : undefined;
+  localDbs.clear();
 }

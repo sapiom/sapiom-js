@@ -11,11 +11,13 @@ import {
   canTransition,
   createDraft,
   decideDraft,
+  ensureAccount,
   getIssue,
   issueByCustomerThread,
   issueByTriageRoot,
   linkMessage,
   openIssue,
+  openIssueForMessage,
   openIssuesForAccount,
   pendingDrafts,
   recordNudge,
@@ -215,5 +217,55 @@ describe("issues.ts on a database", () => {
     ).toEqual([
       { execution_id: "e1", issue_id: issue.id, agent: "smoke-ingest" },
     ]);
+  });
+
+  it("opens one issue per message, even for a second caller", async () => {
+    const { account } = await seed(db);
+    const { message } = await linkMessage(db, {
+      source: "slack",
+      sourceEventId: "Ev-race",
+      direction: "customer",
+      slack: { channel: CUSTOMER.channel, ts: "3.0" },
+      userId: "U1",
+      text: "x",
+    });
+    const input = {
+      accountId: account.id,
+      source: "slack" as const,
+      category: "bug",
+      priority: "low",
+      title: "t",
+      customer: { channel: CUSTOMER.channel, ts: "3.0" },
+    };
+    const [a, b] = await Promise.all([
+      openIssueForMessage(db, message.id, input),
+      openIssueForMessage(db, message.id, input),
+    ]);
+    expect(a.issue.id).toBe(b.issue.id);
+    expect([a.created, b.created].sort()).toEqual([false, true]);
+  });
+
+  it("ensureAccount never renames; upsertAccount does", async () => {
+    await ensureAccount(db, { name: "Onboarded", slackChannelId: "C9" });
+    expect(
+      (
+        await ensureAccount(db, {
+          name: "From fleet.json",
+          slackChannelId: "C9",
+        })
+      ).name,
+    ).toBe("Onboarded");
+    expect(
+      (await upsertAccount(db, { name: "Renamed", slackChannelId: "C9" })).name,
+    ).toBe("Renamed");
+  });
+
+  it("links a run to its issue whichever record lands first", async () => {
+    const { issue } = await seed(db);
+    await recordRun(db, { executionId: "e2" }, "a", issue.id);
+    await recordRun(db, { executionId: "e2" }, "a");
+    expect(
+      await db.query("select issue_id from runs where execution_id = 'e2'"),
+    ).toEqual([{ issue_id: issue.id }]);
   });
 });

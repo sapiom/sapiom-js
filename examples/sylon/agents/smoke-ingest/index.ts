@@ -7,17 +7,20 @@
  */
 import { defineAgent, defineStep, goto, terminate } from "@sapiom/agent";
 
-import { issueCard, issueCardText } from "../../_shared/blocks";
+import {
+  escapeMrkdwn,
+  issueCard,
+  issueCardText,
+  slackToPlain,
+} from "../../_shared/blocks";
 import { customerChannel, getConfig } from "../../_shared/config";
 import { withDb } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import { SlackMessageCreated } from "../../_shared/events";
 import {
   accountByChannel,
-  attachMessage,
-  getIssue,
   linkMessage,
-  openIssue,
+  openIssueForMessage,
   recordRun,
   setTriageRoot,
   upsertAccount,
@@ -26,14 +29,10 @@ import { post } from "../../_shared/slack";
 
 export const AGENT = "sylon-smoke-ingest";
 
-/** First 80 chars of the message, without Slack's `<@U…>` / `<url|label>` tokens. */
+/** First 80 chars of the message as plain text (mentions and links made inert). */
 export function titleOf(text: string): string {
   return (
-    text
-      .replace(/<[^>]*>/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 80) || "(no text)"
+    slackToPlain(text).replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)"
   );
 }
 
@@ -83,20 +82,15 @@ const ingest = defineStep({
         userId: e.user,
         text: e.text,
       });
-      let issue = linked.message.issueId
-        ? await getIssue(db, linked.message.issueId)
-        : null;
-      if (!issue) {
-        issue = await openIssue(db, {
-          accountId: account.id,
-          source: "slack",
-          category: "other",
-          priority: "normal",
-          title: titleOf(e.text),
-          customer: slack,
-        });
-        await attachMessage(db, linked.message.id, issue.id);
-      }
+      // Locks the message row, so two overlapping runs for this event agree on one issue.
+      let { issue } = await openIssueForMessage(db, linked.message.id, {
+        accountId: account.id,
+        source: "slack",
+        category: "other",
+        priority: "normal",
+        title: titleOf(e.text),
+        customer: slack,
+      });
       await recordRun(db, ctx, AGENT, issue.id);
 
       if (!issue.triageRootTs) {
@@ -109,7 +103,7 @@ const ingest = defineStep({
         await post(ctx, {
           channel: triageChannel,
           threadTs: card.ts,
-          text: `<@${e.user}>: ${e.text}`,
+          text: `<@${e.user}>: ${escapeMrkdwn(slackToPlain(e.text))}`,
         });
       }
 

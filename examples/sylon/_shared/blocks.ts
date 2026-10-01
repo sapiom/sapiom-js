@@ -46,6 +46,27 @@ export function statusLabel(status: IssueStatus): string {
   return STATUS_LABEL[status];
 }
 
+/**
+ * Customer text with Slack's `<…>` tokens made inert, for re-posting elsewhere: user, group and
+ * broadcast mentions become plain `@name` (so a customer cannot ping the triage channel), channel
+ * links become `#name`, and `<url|label>` becomes `label (url)`. Any stray `<` or `>` is dropped.
+ * Escape the result with {@link escapeMrkdwn} before posting it as mrkdwn.
+ */
+export function slackToPlain(text: string): string {
+  // `[^<>]*` cannot cross another `<`, so this is linear on any input.
+  const replaced = text.replace(/<([^<>]*)>/g, (_m, inner: string) => {
+    const [target, label] = inner.split("|", 2);
+    const sigil = target.charAt(0);
+    if (sigil === "@" || sigil === "!") {
+      const name = label ?? target.slice(1).replace(/^subteam\^/, "");
+      return `@${name}`;
+    }
+    if (sigil === "#") return `#${label ?? target.slice(1)}`;
+    return label ? `${label} (${target})` : target;
+  });
+  return replaced.replace(/[<>]/g, "");
+}
+
 /** Slack mrkdwn needs `&`, `<`, `>` escaped in user text. */
 export function escapeMrkdwn(text: string): string {
   return text

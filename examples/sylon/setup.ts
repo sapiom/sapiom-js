@@ -1,8 +1,9 @@
 /**
  * `pnpm run setup` (not `pnpm setup`, which is pnpm's own command).
  *
- * E2 scope: resolve or create the `sylon` database, apply migrations, seed `config` and
- * `accounts` from fleet.json. Idempotent: a second run changes nothing but `updated_at`.
+ * E2 scope: resolve or create the `sylon` database, apply migrations, seed missing `config`
+ * keys and `accounts` from fleet.json. Idempotent: a second run changes nothing.
+ * `--overwrite` resets every config key to fleet.json.
  * E7 extends this into the full installer (link, deploy, triggers).
  *
  * Needs SAPIOM_API_KEY (an org key for the target org) in the environment. Prints no secrets.
@@ -30,7 +31,11 @@ async function main() {
         ? `migrations applied: ${applied.join(", ")}`
         : "migrations: up to date",
     );
-    await seedFleet(db, "setup");
+    const overwrite = process.argv.includes("--overwrite");
+    const { set, kept } = await seedFleet(db, "setup", { overwrite });
+    console.log(
+      `config set: ${set.join(", ") || "none"}; kept: ${kept.join(", ") || "none"}`,
+    );
     const keys = await db.query<{ key: string }>(
       "select key from config order by key",
     );

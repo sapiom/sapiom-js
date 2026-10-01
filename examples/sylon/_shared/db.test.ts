@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { memoryDb } from "./db";
+import { memoryDb, resolveConnectionString } from "./db";
 
 describe("db", () => {
   it("creates every M1 table", async () => {
@@ -39,5 +39,41 @@ describe("db", () => {
       }),
     ).rejects.toThrow("boom");
     expect(await db.query("select * from accounts")).toEqual([]);
+  });
+});
+
+describe("resolveConnectionString", () => {
+  const conn = { connection: { connectionString: "postgresql://x" } };
+  const ctxWith = (
+    get: () => Promise<unknown>,
+    create: () => Promise<unknown>,
+  ) => ({ sapiom: { database: { get, create } } }) as never;
+
+  it("creates the database only when the handle is missing (404)", async () => {
+    let created = 0;
+    const missing = Object.assign(new Error("not found"), { status: 404 });
+    await expect(
+      resolveConnectionString(
+        ctxWith(
+          () => Promise.reject(missing),
+          async () => (created++, conn),
+        ),
+      ),
+    ).resolves.toBe("postgresql://x");
+    expect(created).toBe(1);
+  });
+
+  it("surfaces any other failure without provisioning", async () => {
+    let created = 0;
+    const outage = Object.assign(new Error("bad gateway"), { status: 502 });
+    await expect(
+      resolveConnectionString(
+        ctxWith(
+          () => Promise.reject(outage),
+          async () => (created++, conn),
+        ),
+      ),
+    ).rejects.toThrow("bad gateway");
+    expect(created).toBe(0);
   });
 });

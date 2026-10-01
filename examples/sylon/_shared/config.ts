@@ -67,7 +67,8 @@ export async function setConfig<K extends ConfigKey>(
      on conflict (key) do update set value = excluded.value, set_by = excluded.set_by, updated_at = now()`,
     [key, JSON.stringify(parsed), setBy],
   );
-  cacheFor(db).set(key, parsed);
+  // Invalidate, never set: the write may sit in a transaction that later rolls back.
+  cacheFor(db).delete(key);
 }
 
 /** The account name for a customer channel, or null when the channel is not a customer channel. */

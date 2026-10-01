@@ -1,12 +1,12 @@
 /**
  * The only writer of the Sylon tables (except `config`, which `config.ts` owns).
  *
- * Every insert sets `source`. Duplicate detection is select-then-insert inside a transaction with
- * a unique-violation fallback, rather than `on conflict do nothing returning`, so it behaves the
- * same on Postgres and pg-mem.
+ * Every insert sets `source`. Idempotent inserts select first, then insert with
+ * `on conflict do nothing` and reselect when no row came back. Never a caught unique violation:
+ * in Postgres that aborts the caller's transaction. The pre-select is what makes pg-mem agree,
+ * since its `on conflict do nothing returning` wrongly returns the existing row.
  */
 import type { Db, Row } from "./db";
-import { isUniqueViolation } from "./db";
 import type { SlackRef } from "./events";
 
 export type IssueStatus =
@@ -190,29 +190,40 @@ function one<T>(rows: T[], what: string): T {
 
 // --- accounts --------------------------------------------------------------------------------
 
-/** Setup and onboarding: one account per customer channel. Renames on a second call. */
+/**
+ * Create the account for a channel if there is none; never renames. Setup uses this, so a rerun
+ * keeps names an onboarding flow has changed. Safe under concurrent first sightings.
+ */
+export async function ensureAccount(
+  db: Db,
+  input: { name: string; slackChannelId: string },
+): Promise<Account> {
+  const found = await accountByChannel(db, input.slackChannelId);
+  if (found) return found;
+  await db.query(
+    "insert into accounts (name, slack_channel_id) values ($1, $2) on conflict (slack_channel_id) do nothing",
+    [input.name, input.slackChannelId],
+  );
+  return one(
+    [await accountByChannel(db, input.slackChannelId)].filter(
+      (x): x is Account => x !== null,
+    ),
+    "account",
+  );
+}
+
+/** Onboarding: create the account, or rename it when it exists. */
 export async function upsertAccount(
   db: Db,
   input: { name: string; slackChannelId: string },
 ): Promise<Account> {
-  return db.transaction(async (tx) => {
-    const found = await tx.query(
-      "select * from accounts where slack_channel_id = $1",
-      [input.slackChannelId],
-    );
-    if (found[0]) {
-      const rows = await tx.query(
-        "update accounts set name = $2 where id = $1 returning *",
-        [found[0].id, input.name],
-      );
-      return toAccount(one(rows, "account"));
-    }
-    const rows = await tx.query(
-      "insert into accounts (name, slack_channel_id) values ($1, $2) returning *",
-      [input.name, input.slackChannelId],
-    );
-    return toAccount(one(rows, "account"));
-  });
+  const account = await ensureAccount(db, input);
+  if (account.name === input.name) return account;
+  const rows = await db.query(
+    "update accounts set name = $2 where id = $1 returning *",
+    [account.id, input.name],
+  );
+  return toAccount(one(rows, "account"));
 }
 
 export async function accountByChannel(
@@ -435,35 +446,30 @@ export async function linkMessage(
   };
   const found = await existing();
   if (found) return { message: found, duplicate: true };
-  try {
-    const rows = await db.query(
-      `insert into messages (issue_id, source, source_event_id, channel, ts, thread_ts, user_id, user_name, direction, text, jev)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text::jsonb) returning *`,
-      [
-        input.issueId ?? null,
-        input.source,
-        input.sourceEventId,
-        input.slack.channel,
-        input.slack.ts,
-        input.slack.threadTs ?? null,
-        input.userId,
-        input.userName ?? null,
-        input.direction,
-        input.text,
-        json(input.jev),
-      ],
-    );
-    return { message: toMessage(one(rows, "message")), duplicate: false };
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    return {
-      message: one(
-        [await existing()].filter((m): m is Message => m !== null),
-        "message",
-      ),
-      duplicate: true,
-    };
-  }
+  // `on conflict do nothing` (not a caught unique violation) keeps this safe inside a caller's
+  // transaction, where a raised violation would abort it.
+  const rows = await db.query(
+    `insert into messages (issue_id, source, source_event_id, channel, ts, thread_ts, user_id, user_name, direction, text, jev)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::text::jsonb)
+     on conflict (source_event_id) do nothing returning *`,
+    [
+      input.issueId ?? null,
+      input.source,
+      input.sourceEventId,
+      input.slack.channel,
+      input.slack.ts,
+      input.slack.threadTs ?? null,
+      input.userId,
+      input.userName ?? null,
+      input.direction,
+      input.text,
+      json(input.jev),
+    ],
+  );
+  if (rows[0]) return { message: toMessage(rows[0]), duplicate: false };
+  // Lost a race with a concurrent run for the same event.
+  const winner = await existing();
+  return { message: one(winner ? [winner] : [], "message"), duplicate: true };
 }
 
 export async function messageBySourceEventId(
@@ -488,6 +494,34 @@ export async function attachMessage(
     [messageId, issueId],
   );
   return toMessage(one(rows, `message ${messageId}`));
+}
+
+/**
+ * Open an issue for a stored message exactly once. The message row is locked, so two runs for the
+ * same message (a retry overlapping a slow first attempt) agree on one issue: the second gets the
+ * first's issue with `created: false`.
+ */
+export async function openIssueForMessage(
+  db: Db,
+  messageId: string,
+  input: OpenIssueInput,
+): Promise<{ issue: Issue; created: boolean }> {
+  return db.transaction(async (tx) => {
+    const message = toMessage(
+      one(
+        await tx.query("select * from messages where id = $1 for update", [
+          messageId,
+        ]),
+        `message ${messageId}`,
+      ),
+    );
+    if (message.issueId) {
+      return { issue: await getIssue(tx, message.issueId), created: false };
+    }
+    const issue = await openIssue(tx, input);
+    await attachMessage(tx, messageId, issue.id);
+    return { issue, created: true };
+  });
 }
 
 export async function messagesForIssue(
@@ -598,16 +632,11 @@ export async function recordNudge(
     [issueId, kind],
   );
   if (seen.length > 0) return false;
-  try {
-    await db.query("insert into nudges (issue_id, kind) values ($1, $2)", [
-      issueId,
-      kind,
-    ]);
-    return true;
-  } catch (err) {
-    if (isUniqueViolation(err)) return false;
-    throw err;
-  }
+  const rows = await db.query(
+    "insert into nudges (issue_id, kind) values ($1, $2) on conflict (issue_id, kind) do nothing returning kind",
+    [issueId, kind],
+  );
+  return rows.length > 0;
 }
 
 /** Every agent records its execution on its first step, so the board can sum cost per issue. */
@@ -617,28 +646,13 @@ export async function recordRun(
   agent: string,
   issueId?: string,
 ): Promise<void> {
-  const seen = await db.query<{ issue_id: string | null }>(
-    "select issue_id from runs where execution_id = $1",
-    [ctx.executionId],
+  // One statement, so a concurrent first record cannot drop the issue link. A later call fills in
+  // the issue; it never overwrites one.
+  await db.query(
+    `insert into runs (execution_id, issue_id, agent) values ($1, $2, $3)
+     on conflict (execution_id) do update set issue_id = coalesce(runs.issue_id, excluded.issue_id)`,
+    [ctx.executionId, issueId ?? null, agent],
   );
-  if (seen[0]) {
-    // A later step learned the issue: fill it in, never overwrite.
-    if (issueId && !seen[0].issue_id) {
-      await db.query("update runs set issue_id = $2 where execution_id = $1", [
-        ctx.executionId,
-        issueId,
-      ]);
-    }
-    return;
-  }
-  try {
-    await db.query(
-      "insert into runs (execution_id, issue_id, agent) values ($1, $2, $3)",
-      [ctx.executionId, issueId ?? null, agent],
-    );
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-  }
 }
 
 export async function logEvent(

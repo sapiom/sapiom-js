@@ -7,6 +7,7 @@ import {
   encodeAction,
   issueCard,
   nudge,
+  slackToPlain,
 } from "./blocks";
 import type { Account, Draft, Issue } from "./issues";
 
@@ -139,5 +140,30 @@ describe("nudge", () => {
     const owned = nudge(issue, "draft_pending", "U5");
     expect(buttons(owned)).toEqual([]);
     expect(JSON.stringify(owned)).toContain("<@U5>");
+  });
+});
+
+describe("slackToPlain", () => {
+  it("makes mentions and broadcasts inert and unwraps links", () => {
+    expect(
+      slackToPlain(
+        "hi <@U1> <@U2|ann> <!here> <!channel> <#C1|general> <https://x.io|docs> <https://y.io>",
+      ),
+    ).toBe(
+      "hi @U1 @ann @here @channel #general docs (https://x.io) https://y.io",
+    );
+  });
+
+  it("drops stray angle brackets, so no tag survives", () => {
+    expect(slackToPlain("<script>alert(1)</script> <<<<a")).toBe(
+      "scriptalert(1)/script a",
+    );
+  });
+
+  it("stays linear on a long run of '<'", () => {
+    const evil = "<".repeat(200_000);
+    const t = performance.now();
+    expect(slackToPlain(evil)).toBe("");
+    expect(performance.now() - t).toBeLessThan(500);
   });
 });

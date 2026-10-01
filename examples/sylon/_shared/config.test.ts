@@ -41,6 +41,19 @@ describe("config", () => {
     expect(row).toEqual({ value: 2, set_by: "test" });
   });
 
+  it("does not serve a value from a rolled-back write", async () => {
+    const db = await memoryDb();
+    await setConfig(db, "nudge.minutes", 5, "test");
+    expect(await getConfig(db, "nudge.minutes")).toBe(5);
+    await expect(
+      db.transaction(async (tx) => {
+        await setConfig(tx, "nudge.minutes", 9, "test");
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(await getConfig(db, "nudge.minutes")).toBe(5);
+  });
+
   it("rejects a value of the wrong shape", async () => {
     const db = await memoryDb();
     await expect(setConfig(db, "nudge.minutes", -1, "test")).rejects.toThrow();

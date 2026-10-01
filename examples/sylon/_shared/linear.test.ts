@@ -33,6 +33,17 @@ describe("linear.ts", () => {
     ).toEqual({ result: { a: 2 } });
   });
 
+  it("picks the response frame out of a multi-frame stream", () => {
+    const body = [
+      'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}',
+      'event: message\ndata: {"jsonrpc":"2.0","id":7,\ndata: "result":{"ok":true}}',
+    ].join("\n\n");
+    expect(parseMcpReply(body, 7)).toMatchObject({
+      id: 7,
+      result: { ok: true },
+    });
+  });
+
   it("creates an issue with save_issue and maps identifier/uuid", async () => {
     const bodies = mockRelay({
       content: [
