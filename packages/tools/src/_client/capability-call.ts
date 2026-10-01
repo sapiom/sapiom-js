@@ -37,12 +37,14 @@ import { executionDeliveryEligible } from "./execution-delivery.js";
  * re-homes every routed verb at once, so nothing silently escapes to a stale host.
  */
 export function resolveCoreBaseUrl(baseUrl?: string): string {
-  return (
+  const url =
     baseUrl ??
     process.env.SAPIOM_BASE_URL ??
     process.env.SAPIOM_API_URL ??
-    "https://api.sapiom.ai"
-  ).replace(/\/+$/, "");
+    "https://api.sapiom.ai";
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47) end--;
+  return url.slice(0, end);
 }
 
 /** Options for {@link capabilityCall}. */
