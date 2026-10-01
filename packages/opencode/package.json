@@ -27,6 +27,7 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:native": "vitest run --config vitest.native.config.ts",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "pnpm build"
   },

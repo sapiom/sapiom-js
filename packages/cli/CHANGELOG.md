@@ -1,5 +1,67 @@
 # @sapiom/cli
 
+## 17.1.0
+
+### Minor Changes
+
+- 5bb66c6: Emit custom events from the SDK, the CLI and the MCP — the start verb next to
+  `signal`'s resume verb.
+
+  `emitEvent({ type, payload, id? })` posts to `POST /v1/workflows/events`
+  and returns the receipt verbatim: `{ receiptId, outcome, duplicate, fireIds }`.
+  It fans out by type to every active `event` trigger the tenant armed and starts
+  0..N new runs. `outcome: "unmatched"` is a success, not an error — nothing
+  subscribes to that type. `id` is the sender's dedup identity, so reposting
+  it returns the original receipt and starts nothing new; omit it and every call
+  is a distinct event. `sapiom agents emit <type> --payload <json> [--event-id
+<id>]` and `sapiom_dev_agents_emit_event` wrap it, and `parseEventPayload`
+  rejects a payload that is not a JSON object, which the run-input fold would
+  otherwise drop silently.
+
+  Events start runs, signals resume them, so `signal()` stays the resume verb and
+  now surfaces the server's `message` next to `matched` — `matched` counts the
+  runs that actually resumed, so it under-reports a partial fanout and a `0` does
+  not prove nothing was waiting.
+
+### Patch Changes
+
+- 89d91d4: The platform-rules stamp is now written into a project's `AGENTS.md` when it is scaffolded, from the release constants in `@sapiom/agent-core`, instead of being hard-coded in every template and gallery example. Scaffold output is unchanged: a new project still carries a concrete `<!-- sapiom-authoring-rules release=… digest=… -->` and `sapiom_dev_agents_check` still warns when it differs from the served copy. Gallery examples, `examples/AUTHORING.md` and the `@sapiom/tools` JSDoc keep the pointer to the served rules but no longer record a release, so a content release touches the two constants and the four skill copies only.
+- Updated dependencies [89d91d4]
+- Updated dependencies [5bb66c6]
+- Updated dependencies [06adb78]
+  - @sapiom/agent-core@0.15.0
+  - @sapiom/agent@0.14.4
+  - @sapiom/sandbox-preview@0.1.26
+  - @sapiom/harness@0.18.1
+
+## 17.0.0
+
+### Patch Changes
+
+- Updated dependencies [bf4a404]
+- Updated dependencies [afa4569]
+- Updated dependencies [fe5b74d]
+- Updated dependencies [d80b6c7]
+- Updated dependencies [0c6e945]
+- Updated dependencies [c71bc50]
+- Updated dependencies [969caef]
+- Updated dependencies [54c6362]
+- Updated dependencies [c71bc50]
+- Updated dependencies [c71bc50]
+- Updated dependencies [79a52f9]
+- Updated dependencies [4bbea8d]
+- Updated dependencies [5f3f25b]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [85610db]
+- Updated dependencies [c87678c]
+  - @sapiom/harness@0.18.0
+  - @sapiom/agent-core@0.14.3
+  - @sapiom/agent@0.14.3
+  - @sapiom/sandbox-preview@0.1.25
+
 ## 16.0.0
 
 ### Patch Changes

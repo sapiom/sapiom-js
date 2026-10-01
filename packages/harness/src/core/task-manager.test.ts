@@ -119,17 +119,19 @@ describe("TaskManager", () => {
    * (set because it cannot exec a binary from inside app.asar) reached background
    * agent tasks too, breaking any project on a different esbuild version.
    */
-  it("never leaks the host's ESBUILD_BINARY_PATH pin into a background task", async () => {
-    process.env["ESBUILD_BINARY_PATH"] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
+  it.each(["ESBUILD_BINARY_PATH", "SAPIOM_STUDIO_HOST_CONTEXT"])("never leaks ambient %s into a background task", async (key) => {
+    const previous = process.env[key];
+    process.env[key] = "/app/resources/app.asar.unpacked/node_modules/@esbuild/linux-x64/bin/esbuild";
     try {
       const { manager, spawned } = makeManager();
       await manager.run(runRequest);
       expect(spawned).toHaveLength(1);
-      expect("ESBUILD_BINARY_PATH" in spawned[0].options.env).toBe(false);
+      expect(key in spawned[0].options.env).toBe(false);
       // Targeted strip, not a clean environment — the agent still needs the rest.
       expect(spawned[0].options.env.PATH).toBe(process.env["PATH"]);
     } finally {
-      delete process.env["ESBUILD_BINARY_PATH"];
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
     }
   });
 

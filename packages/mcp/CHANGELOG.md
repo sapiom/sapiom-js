@@ -1,5 +1,94 @@
 # @sapiom/mcp
 
+## 0.18.0
+
+### Minor Changes
+
+- 5bb66c6: Emit custom events from the SDK, the CLI and the MCP — the start verb next to
+  `signal`'s resume verb.
+
+  `emitEvent({ type, payload, id? })` posts to `POST /v1/workflows/events`
+  and returns the receipt verbatim: `{ receiptId, outcome, duplicate, fireIds }`.
+  It fans out by type to every active `event` trigger the tenant armed and starts
+  0..N new runs. `outcome: "unmatched"` is a success, not an error — nothing
+  subscribes to that type. `id` is the sender's dedup identity, so reposting
+  it returns the original receipt and starts nothing new; omit it and every call
+  is a distinct event. `sapiom agents emit <type> --payload <json> [--event-id
+<id>]` and `sapiom_dev_agents_emit_event` wrap it, and `parseEventPayload`
+  rejects a payload that is not a JSON object, which the run-input fold would
+  otherwise drop silently.
+
+  Events start runs, signals resume them, so `signal()` stays the resume verb and
+  now surfaces the server's `message` next to `matched` — `matched` counts the
+  runs that actually resumed, so it under-reports a partial fanout and a `0` does
+  not prove nothing was waiting.
+
+### Patch Changes
+
+- c3b6f26: `sapiom_dev_agents_inspect` and `sapiom_dev_agents_signal` now reject a non-numeric `executionId` at the schema, with a message naming where a real id comes from. Passing a step name or a variable (`result`, `child-expert-1`) previously reached the server and came back as "execution not found", which reads as "the run is gone" rather than "that is not an id".
+- Updated dependencies [89d91d4]
+- Updated dependencies [5bb66c6]
+- Updated dependencies [06adb78]
+  - @sapiom/agent-core@0.15.0
+  - @sapiom/sandbox-preview@0.1.26
+
+## 0.17.0
+
+### Minor Changes
+
+- d532e49: Verify Studio host context over bounded authenticated loopback requests. Recognize
+  legacy Studio launches and keep invalid or unavailable Studio context distinct
+  from standalone access. No shared map tools or new instructions activate yet.
+- c8c706e: Serve the authoring primer live → last-known-good → bundled, and stop pinning the bundled copy
+  to the backend by digest (SAP-3579).
+
+  - **Last-known-good cache.** After every successful `GET /v1/mcp/instructions`, the body and
+    its `X-Sapiom-Content-Release` / `-Digest` / `-Key` stamp are written next to
+    `~/.sapiom/credentials.json`, one file per `apiURL` so production and staging never overwrite
+    each other. Written atomically (temp file + rename). When the live fetch fails, that copy is
+    served before the compiled-in snapshot; a missing, unreadable or corrupt cache is ignored.
+  - **Generated snapshot.** The compiled-in fallback is now `instructions.generated.ts`, written
+    by `scripts/mcp-instructions-snapshot.mjs` from the served endpoint together with the release
+    and digest it was taken from. `instructions.ts` re-exports it, so `AUTHORING_INSTRUCTIONS`
+    keeps working; `AUTHORING_INSTRUCTIONS_RELEASE` and `AUTHORING_INSTRUCTIONS_DIGEST` are new.
+    Regenerating it is a release step (see `PUBLISHING.md`); nothing fetches the network at
+    install or publish time.
+  - **Startup provenance.** One line on stderr at server start names the source being served,
+    its release and its digest prefix, e.g.
+    `sapiom-dev: authoring primer source=cached release=2.14 digest=055076ab6773`. stdout stays
+    the MCP transport.
+  - **Digest pin retired.** The test that froze a sha-256 of the bundled body against the
+    backend's current content release is gone, replaced by a self-consistency check
+    (sha-256 of the generated body equals the digest the generator stamped beside it). A backend
+    content release no longer needs a paired sapiom-js PR to keep this package green; the
+    backend's matching `SAPIOM_JS_FALLBACK_DIGEST` pin is removed in sapiom/Sapiom separately.
+
+- b052979: Add a browser-safe Studio host protocol and an offline MCP capability descriptor.
+  The probe reports the installed package identity without starting the server; map
+  features remain inactive until their implementations and Studio activation land.
+
+### Patch Changes
+
+- 1a3db42: Re-sync the offline `AUTHORING_INSTRUCTIONS` fallback with the served 2.14 primer (SAP-3178,
+  SAP-3217). The fallback had stayed on the 2.10 body while the backend shipped four content
+  releases, so a session whose startup fetch of `GET /v1/mcp/instructions` failed never saw them:
+  2.11 (Vault semantics, `ctx.sapiom.agents.launch`, receipts and replay, App Link webhooks), 2.12
+  (the two servers named by role, and the App Link management tools `sapiom_dev_app_list` /
+  `_settings` / `_delete` taught inside the webhook paragraph), 2.13 (a Sapiom Postgres is
+  permanent), and 2.14 (an App Link is a redirector, not a reverse proxy, plus the `/hook/*`
+  exposure caveats). The tools themselves shipped in 0.15.0; this moves only the offline copy of
+  the text that teaches them. The digest pin now matches the backend's `SAPIOM_JS_FALLBACK_DIGEST`.
+- Updated dependencies [0c6e945]
+- Updated dependencies [b052979]
+- Updated dependencies [d9d6b13]
+- Updated dependencies [8a77b06]
+- Updated dependencies [5e9aacd]
+- Updated dependencies [5b61bac]
+- Updated dependencies [85610db]
+  - @sapiom/agent-core@0.14.3
+  - @sapiom/agent-map@0.2.0
+  - @sapiom/sandbox-preview@0.1.25
+
 ## 0.16.0
 
 ### Minor Changes

@@ -68,6 +68,7 @@ import {
   ONE_SHOT_LLM_TEMPLATE_IDS,
   checkLlmCopySurface,
   checkNoSliceParse,
+  checkStructuredOutputCap,
   checkOneShotLlmTemplate,
   checkStubStructuredOutput,
 } from "./lib/examples-llm-surface.mjs";
@@ -215,10 +216,24 @@ for (const id of ONE_SHOT_LLM_TEMPLATE_IDS) {
 // `index.ts`, and the whole point is that a NEW template can't reintroduce it
 // (SAP-2892).
 for (const sourcePath of collectTemplateSources(EXAMPLES_DIR)) {
+  const relativePath = path
+    .relative(ROOT, sourcePath)
+    .split(path.sep)
+    .join("/");
+  const source = readFileSync(sourcePath, "utf8");
+  errors.push(...checkNoSliceParse({ path: relativePath, source }));
+  errors.push(...checkStructuredOutputCap({ path: relativePath, source }));
+}
+
+// AUTHORING.md is the snippet an example author copies, so it is held to the same
+// cap floor as the templates. It sat outside every check while teaching the shape
+// they are all checked for (SAP-3280).
+const authoringDoc = path.join(EXAMPLES_DIR, "AUTHORING.md");
+if (existsSync(authoringDoc)) {
   errors.push(
-    ...checkNoSliceParse({
-      path: path.relative(ROOT, sourcePath).split(path.sep).join("/"),
-      source: readFileSync(sourcePath, "utf8"),
+    ...checkStructuredOutputCap({
+      path: path.relative(ROOT, authoringDoc).split(path.sep).join("/"),
+      source: readFileSync(authoringDoc, "utf8"),
     }),
   );
 }

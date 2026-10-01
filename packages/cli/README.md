@@ -33,6 +33,30 @@ sapiom agents check          # validate locally (bundle, manifest, graph)
 sapiom agents deploy         # build and ship
 ```
 
+### Events and signals
+
+Two verbs, two jobs: an **event starts** runs, a **signal resumes** one that is
+already paused. Neither reaches the other's namespace.
+
+```sh
+# Start: fans out to every active event trigger on this type (0..N new runs).
+sapiom agents emit lead.created --payload '{"leadId":"l_42"}' --event-id crm-evt-8f2a
+
+# Resume: wakes the run(s) paused on this exact (name, correlation id) pair.
+sapiom agents signal <executionId> --name approval.decision \
+  --correlation-id <executionId> --payload '{"approved":true}'
+```
+
+`--event-id` is your id for the delivery: reposting it returns the original
+receipt and starts nothing new, which is what makes a retry safe. Omit it and
+every call is a distinct event. An emit with no matching trigger is still a
+success (`outcome: "unmatched"`) — the event is recorded, nothing subscribed.
+
+`signal` takes an execution id to address the run, but delivery is matched on
+`(name, correlationId)`, so one call can resume several waiting runs. Read
+`message` in the result whenever it is present: it qualifies a `matched` count
+that under-reports a partial fanout.
+
 ### Schedules
 
 Run a deployed agent on a schedule — recurring (cron) or once at a set time:

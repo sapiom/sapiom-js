@@ -1,3 +1,4 @@
+import { STUDIO_HOST_CONTEXT_ENV, type StudioHostBootstrap } from "@sapiom/agent-map/host-protocol";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveEnvironment } from "@sapiom/mcp/auth";
@@ -25,6 +26,8 @@ export interface McpDevServerCommand {
 }
 
 export interface McpConfigOptions {
+  /** Verified private host bootstrap, provided only for project sessions. */
+  studioHost?: StudioHostBootstrap;
   /** Session-scoped embedded Agent Map HTTP MCP authority. */
   agentMap?: { url: string; bearerToken: string };
   /** Override for the local sapiom-dev server launch — see {@link McpDevServerCommand}. */
@@ -75,7 +78,11 @@ export async function generateMcpConfig(
 
   const sapiomEnvironment =
     options.environment ?? process.env.SAPIOM_ENVIRONMENT;
+  // Host authority comes only from this session, never from a command override.
+  const launcherEnv = { ...options.devServer?.env };
+  delete launcherEnv[STUDIO_HOST_CONTEXT_ENV];
   const devEnvEntries: Record<string, string> = {
+    ...(options.studioHost ? { [STUDIO_HOST_CONTEXT_ENV]: JSON.stringify(options.studioHost) } : {}),
     ...(sapiomEnvironment ? { SAPIOM_ENVIRONMENT: sapiomEnvironment } : {}),
     ...(options.harnessVersion
       ? { SAPIOM_HARNESS_VERSION: options.harnessVersion }
@@ -100,7 +107,7 @@ export async function generateMcpConfig(
             // The launcher's own env (e.g. ELECTRON_RUN_AS_NODE) must win over
             // the shared entries — it is what makes the command a node at all.
             ...(devEnv || options.devServer.env
-              ? { env: { ...devEnvEntries, ...options.devServer.env } }
+              ? { env: { ...devEnvEntries, ...launcherEnv } }
               : {}),
           }
         : {

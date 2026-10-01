@@ -32,9 +32,9 @@ installers attached to a GitHub Release by
 `.github/workflows/desktop-release.yml`, on its own tag namespace so it can never
 trigger the npm publish above:
 
-| Tag | Release | Update channel |
-| --- | --- | --- |
-| `v1.2.3` | final | `latest` — every user |
+| Tag             | Release     | Update channel        |
+| --------------- | ----------- | --------------------- |
+| `v1.2.3`        | final       | `latest` — every user |
 | `v1.2.3-beta.1` | pre-release | `beta` — testers only |
 
 Bump `packages/harness-desktop/package.json` **first**: the tag must match it
@@ -45,6 +45,18 @@ has to reach people once. Details and pitfalls:
 
 ## The normal flow (automated)
 
+0. **For an `@sapiom/mcp` release, refresh the bundled authoring primer first.**
+   The server's `instructions` on the MCP `initialize` handshake are fetched
+   live, then read from a last-known-good cache, then taken from a snapshot
+   compiled into the package. That snapshot
+   (`packages/mcp/src/instructions.generated.ts`) is generated from the
+   production endpoint, never hand-edited:
+   ```bash
+   node scripts/mcp-instructions-snapshot.mjs   # or --api-url <url>
+   ```
+   Commit the regenerated file (the script is a no-op when it already matches).
+   Do not wire this into `prepublishOnly` — publishing must not fetch the
+   network.
 1. **In your change PR, add a changeset** describing the bump:
    ```bash
    pnpm changeset        # pick package(s) + bump type, write summary
@@ -82,7 +94,7 @@ that already have one. So the **first** publish of a new package is manual;
 every publish after that is automated.
 
 Symptom you'll see if you skip this: the `Publish` job fails on the new package
-with an **E404**, *after* successfully publishing the already-configured ones
+with an **E404**, _after_ successfully publishing the already-configured ones
 (so the run is red but partially published).
 
 ### 1. Make sure the version-bump flow has run
@@ -138,7 +150,7 @@ Publisher → Add**:
 - Provider: **GitHub Actions**
 - Repository: `sapiom/sapiom-js`
 - Workflow filename: `publish.yml`
-- Environment: *(leave blank)*
+- Environment: _(leave blank)_
 
 From here on, the package publishes automatically via the normal flow.
 

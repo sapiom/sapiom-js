@@ -3,7 +3,11 @@ import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { AUTHORING_INSTRUCTIONS } from "./instructions.js";
+import {
+  AUTHORING_INSTRUCTIONS,
+  AUTHORING_INSTRUCTIONS_DIGEST,
+  AUTHORING_INSTRUCTIONS_RELEASE,
+} from "./instructions.js";
 
 describe("server instructions", () => {
   it("are delivered to a client over the initialize handshake", async () => {
@@ -22,6 +26,18 @@ describe("server instructions", () => {
 
     // This is the channel a capable client injects into the agent's context.
     expect(client.getInstructions()).toBe(AUTHORING_INSTRUCTIONS);
+  });
+
+  it("bundled snapshot is self-consistent: sha-256(body) equals the stamped digest", () => {
+    // instructions.generated.ts is written by scripts/mcp-instructions-snapshot.mjs
+    // from the served endpoint, body and digest together. Editing the body by hand
+    // fails this; the fix is to re-run the script, never to re-point the digest.
+    expect(AUTHORING_INSTRUCTIONS_DIGEST).toMatch(/^[0-9a-f]{64}$/);
+    expect(AUTHORING_INSTRUCTIONS_RELEASE).toMatch(/^\d+\.\d+$/);
+    const sha256 = createHash("sha256")
+      .update(AUTHORING_INSTRUCTIONS, "utf8")
+      .digest("hex");
+    expect(sha256).toBe(AUTHORING_INSTRUCTIONS_DIGEST);
   });
 
   it("primer covers the lifecycle, canonical rules, and points to the docs", () => {
@@ -125,13 +141,13 @@ describe("server instructions", () => {
 
   it("names the entry step's inputSchema as the agent's public API (SAP-2227)", () => {
     // The primer is the only always-in-context surface, so authors learn the entry
-    // contract here. Kept byte-identical to the backend DEFAULT_MCP_INSTRUCTIONS copy.
+    // contract here. Matches the served text.
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "entry step's `inputSchema` is the agent's public API",
     );
   });
 
-  it("teaches the LLM call-surface rule (SAP-2775) — kept byte-identical to the backend copy", () => {
+  it("teaches the LLM call-surface rule (SAP-2775) — matches the served text", () => {
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.llm.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.models.run");
     expect(AUTHORING_INSTRUCTIONS).toContain("models.coding.run");
@@ -174,11 +190,11 @@ describe("server instructions", () => {
     // was in THIS fallback and not in the served primer, so online sessions — the vast
     // majority — never saw it. Syncing to the served text drops it here too.
     //
-    // That is a consequence of the sync, not an oversight, and it is the direction the
-    // rule requires: the two copies are one canonical text, and the digest below cannot
-    // hold if they differ by a paragraph. The contract still reaches authors through
-    // packages/agent/README.md and the scaffold-shipped `sapiom-agent-authoring` skill.
-    // Putting it back in the primer is a server-side content release, not an edit here.
+    // That is a consequence of the sync, not an oversight: the snapshot is generated
+    // from the served text, so it cannot carry a paragraph the server does not. The
+    // contract still reaches authors through packages/agent/README.md and the
+    // scaffold-shipped `sapiom-agent-authoring` skill. Putting it back in the primer is
+    // a server-side content release, not an edit here.
     expect(AUTHORING_INSTRUCTIONS).toContain(
       "Cross-step state: `ctx.shared` — the entry input reaches only the entry step.",
     );
@@ -214,50 +230,10 @@ describe("server instructions", () => {
     );
   });
 
-  it("is byte-identical to the backend primer (frozen sha-256, SAP-2959)", () => {
-    // THE SYNC RULE, which lives here rather than in instructions.ts because that
-    // file's JSDoc is emitted into dist/instructions.d.ts and published to npm, where
-    // none of this is actionable for a consumer: AUTHORING_INSTRUCTIONS is duplicated
-    // verbatim from the server's canonical primer (a private companion repo). The
-    // package must work offline, so it cannot import it. The two are one canonical
-    // text — KEEP THEM IDENTICAL whenever either changes.
-    //
-    // The `contain` assertions above are what let this copy fall two content
-    // releases behind the server without anything going red: each one still
-    // passed against the older text. This digest is what actually binds the two
-    // copies, and it works from both ends: the server-side spec pins this same
-    // value against ITS current primer, so a content release there reddens that
-    // spec and forces its author onto this pin, while an in-place edit here
-    // reddens this one. Neither suite makes a network call.
-    //
-    // Be honest about the limit: neither pin can block a merge in the other
-    // repository, and an author can still move one side alone. What the pair
-    // removes is the silent path — drifting now takes a deliberate edit to a line
-    // that says what it is for.
-    //
-    // To change the primer: ship the server-side content release, copy its new
-    // body here verbatim, and update both pins to the new digest in the same pair
-    // of PRs. Never re-point this digest on its own — that just re-blesses the
-    // drift the guard exists to catch.
-    //
-    // Current release: 2.14 (App Link is a redirector, not a reverse proxy; the `/hook/*`
-    // exposure caveats, SAP-3217) on top of 2.13 (a Sapiom Postgres is permanent), 2.12
-    // (servers named by role, SAP-3179; App Link management tools folded into the webhook
-    // paragraph, SAP-3178), 2.11 (Vault, `agents.launch`, receipts/replay, App Link webhooks,
-    // SAP-3180) and 2.10 (trigger kinds, SAP-3174). The backend's frozen-digest spec pins this
-    // same value for AUTHORING_CONTENT_V2_14 and for SAPIOM_JS_FALLBACK_DIGEST.
-    const sha256 = createHash("sha256")
-      .update(AUTHORING_INSTRUCTIONS, "utf8")
-      .digest("hex");
-    expect(sha256).toBe(
-      "055076ab6773f92133a88da8aae71e2130f4c693a79779176c3e0707cb4ffeac",
-    );
-  });
-
   it("teaches Vault semantics, agents.launch, receipts/replay, and App Link webhooks (SAP-3180)", () => {
     // Served since 2.11 (sapiom/Sapiom#4885); this copy carries it from 2.14 on.
     // Each of these shipped without any served text teaching it, so an agent could only
-    // guess at it. Byte-identical to the backend copy, so asserted here too.
+    // guess at it. Matches the served text, so asserted here too.
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.vault.get");
     expect(AUTHORING_INSTRUCTIONS).toContain("agent code cannot write");
     expect(AUTHORING_INSTRUCTIONS).toContain("ctx.sapiom.agents.launch");

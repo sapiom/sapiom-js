@@ -43,6 +43,8 @@ import type {
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "./agents/index.js";
+import { emit as eventsEmit } from "./events/index.js";
+import type { EmitEventSpec, EmitEventResult } from "./events/index.js";
 import {
   run as llmRun,
   submit as llmSubmit,
@@ -153,6 +155,12 @@ import type {
   SoundEffectInput,
   VoicesResult,
 } from "./speech/index.js";
+import * as decisions from "./decisions/index.js";
+import type {
+  DecisionQuestion,
+  DecisionsEvaluateSpec,
+  DecisionsEvaluateResponse,
+} from "./decisions/index.js";
 import * as browserAutomation from "./browser-automation/index.js";
 import type {
   BrowserSession,
@@ -185,8 +193,27 @@ import type {
 import type { OAuth2Client } from "google-auth-library";
 import * as github from "./connectors/github/index.js";
 import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
+import * as slack from "./connectors/slack/index.js";
+import type {
+  SlackPostEphemeralArgs,
+  SlackPostEphemeralResult,
+  SlackPostMessageArgs,
+  SlackPostMessageResult,
+  SlackReactionArgs,
+  SlackReactionResult,
+  SlackRepliesArgs,
+  SlackRepliesResult,
+  SlackUpdateArgs,
+  SlackUpdateResult,
+  SlackUserInfoArgs,
+  SlackUserInfoResult,
+} from "./connectors/slack/index.js";
+import { mcp } from "./connectors/mcp/index.js";
+import type { McpConnector } from "./connectors/mcp/index.js";
+import { ExecutionClient } from "./executions/client.js";
 
 export interface Sapiom {
+  readonly executions: ExecutionClient;
   readonly sandboxes: {
     create(opts: SandboxCreateOptions): Promise<Sandbox>;
     attach(
@@ -221,6 +248,10 @@ export interface Sapiom {
     run(spec: AgentRunSpec): Promise<AgentRunResult>;
     /** Launch a deployed agent; pass the handle to `pauseUntilSignal` to suspend on it. */
     launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
+  };
+  readonly events: {
+    /** SAP-3684: expose event emission through the gateway that accepts run credentials. */
+    emit(spec: EmitEventSpec): Promise<EmitEventResult>;
   };
   /**
    * Routed LLM calls through the gateway's `/v2` routing front-end. `run` is the
@@ -332,10 +363,17 @@ export interface Sapiom {
       domainSearch(input: DomainSearchInput): Promise<DomainSearchResult>;
     };
   };
-  /** On-demand Postgres databases, returned with direct connection credentials. */
+  /**
+   * Postgres databases, returned with direct connection credentials. A Sapiom
+   * Postgres is permanent: it lives until you delete it and holds one slot of
+   * your plan's database limit while held. There is no lifetime to pick.
+   */
   readonly database: {
-    /** Provision a database (returns connection credentials). `duration` is required. */
-    create(input: CreateDatabaseInput): Promise<Database>;
+    /**
+     * Provision a database (returns connection credentials). Every field is
+     * optional; `create({})` works. A legacy `duration` is ignored.
+     */
+    create(input?: CreateDatabaseInput): Promise<Database>;
     /** Retrieve a database by its id or handle. */
     get(idOrHandle: string): Promise<Database>;
     /** List every database you own, each with connection credentials (read-only). */
@@ -554,6 +592,43 @@ export interface Sapiom {
        */
       listRepos(args?: ListReposArgs): Promise<GitHubRepo[]>;
     };
+    /**
+     * Slack Web API methods. The gateway resolves the tenant's Slack bot token internally
+     * and calls Slack; the token never reaches the run. Each throws 404 when no Slack
+     * connector is connected and 502 when Slack answers `ok: false`.
+     */
+    readonly slack: {
+      /** `chat.postMessage`: post to a channel or DM, in a thread when `threadTs` is set. */
+      postMessage(args: SlackPostMessageArgs): Promise<SlackPostMessageResult>;
+      /** `chat.update`: edit a message the bot posted. */
+      update(args: SlackUpdateArgs): Promise<SlackUpdateResult>;
+      /** `chat.postEphemeral`: a message only `user` sees. */
+      postEphemeral(
+        args: SlackPostEphemeralArgs,
+      ): Promise<SlackPostEphemeralResult>;
+      /** `reactions.add`: react to a message with an emoji. */
+      addReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
+      /** `reactions.remove`: remove the bot's reaction. */
+      removeReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
+      /** `conversations.replies`: a thread's parent message and replies, paginated. */
+      replies(args: SlackRepliesArgs): Promise<SlackRepliesResult>;
+      /** `users.info`: look up a user by id. */
+      userInfo(args: SlackUserInfoArgs): Promise<SlackUserInfoResult>;
+    };
+    /**
+     * The tenant's Linear connector over the MCP relay (slug `linear`). Its tools come
+     * from `listTools()` once the tenant has connected Linear and run Discover.
+     */
+    readonly linear: McpConnector;
+    /** The tenant's Notion connector over the MCP relay (slug `notion`). */
+    readonly notion: McpConnector;
+    /**
+     * Any MCP-backed connector by slug — a renamed or second Linear/Notion connector
+     * (`linear-2`) or a custom MCP server. `listTools()` / `callTool(name, args)`; a
+     * failed tool call is a result with `isError: true`, a JSON-RPC error throws
+     * `McpRelayError`.
+     */
+    mcp(slug: string): McpConnector;
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -569,6 +644,19 @@ export interface Sapiom {
     voices: {
       list(): Promise<VoicesResult>;
     };
+  };
+  /**
+   * System One decisions — fixed-answer-set judgments with probabilities
+   * (a System One decision model via the Capability Router). Generated text → `llm.run`.
+   */
+  readonly decisions: {
+    /**
+     * Evaluate yes/no (`noul`), pick-one (`choice`), and rubric (`score`)
+     * questions over one state; the answers map is typed by the questions.
+     */
+    evaluate<Q extends Record<string, DecisionQuestion>>(
+      spec: DecisionsEvaluateSpec<Q>,
+    ): Promise<DecisionsEvaluateResponse<Q>>;
   };
   /**
    * Browser automation — sessions, screenshots, and identity management.
@@ -630,6 +718,7 @@ export interface Sapiom {
 /** Bind every capability namespace to a transport. `withAttribution` rebinds to a derived one. */
 function bind(transport: Transport): Sapiom {
   return {
+    executions: new ExecutionClient(transport),
     sandboxes: {
       create: (opts) => Sandbox.create(opts, transport),
       attach: (name, opts) => Sandbox.attach(name, opts, transport),
@@ -654,6 +743,9 @@ function bind(transport: Transport): Sapiom {
     agents: {
       run: (spec) => agentsRun(spec, transport),
       launch: (spec) => agentsLaunch(spec, transport),
+    },
+    events: {
+      emit: (spec) => eventsEmit(spec, transport),
     },
     llm: {
       run: (spec) => llmRun(spec, transport),
@@ -784,6 +876,18 @@ function bind(transport: Transport): Sapiom {
       github: {
         listRepos: (args) => github.listRepos(args, transport),
       },
+      slack: {
+        postMessage: (args) => slack.postMessage(args, transport),
+        update: (args) => slack.update(args, transport),
+        postEphemeral: (args) => slack.postEphemeral(args, transport),
+        addReaction: (args) => slack.addReaction(args, transport),
+        removeReaction: (args) => slack.removeReaction(args, transport),
+        replies: (args) => slack.replies(args, transport),
+        userInfo: (args) => slack.userInfo(args, transport),
+      },
+      linear: mcp("linear", transport),
+      notion: mcp("notion", transport),
+      mcp: (slug) => mcp(slug, transport),
     },
     speech: {
       textToSpeech: {
@@ -795,6 +899,9 @@ function bind(transport: Transport): Sapiom {
       voices: {
         list: () => speech.listVoices(transport),
       },
+    },
+    decisions: {
+      evaluate: (spec) => decisions.evaluate(spec, transport),
     },
     browserAutomation: {
       sessions: {

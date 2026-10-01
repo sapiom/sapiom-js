@@ -286,7 +286,6 @@ async function openSql(ctx: Ctx, handle: string): Promise<Sql | null> {
     } catch {
       db = await ctx.sapiom.database.create({
         handle,
-        duration: "7d",
         name: "Cold Outreach Engine",
         description: "Campaign contacts, drip touches, and reply state",
       });

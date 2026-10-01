@@ -17,7 +17,6 @@
     {
       "kind": "postgres",
       "handle": "cold-outreach-engine",
-      "duration": "7d",
       "ephemeral": false,
       "reuse": { "key": "dbHandle" }
     }
@@ -65,6 +64,13 @@
       }
     }
   ],
+  "app": {
+    "name": "Outreach campaign dashboard",
+    "entry": "app/",
+    "start": "node server.mjs",
+    "port": 4175,
+    "preview": "https://raw.githubusercontent.com/sapiom/sapiom-js/main/examples/cold-outreach-engine/preview.png"
+  },
   "zeroSetup": {
     "terminalState": "completed",
     "expect": [

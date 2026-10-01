@@ -32,6 +32,7 @@ import type {
 } from "../models/index.js";
 import { AGENTS_RESULT_SIGNAL, AgentDispatchError } from "../agents/index.js";
 import type { ExecutionStatus } from "../agents/index.js";
+import type { EmitEventResult } from "../events/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
@@ -39,6 +40,12 @@ import {
   textOf as llmTextOf,
   structuredOf as llmStructuredOf,
 } from "../llm/index.js";
+import {
+  type DecisionQuestion,
+  type DecisionsEvaluateSpec,
+  type DecisionsEvaluateResponse,
+  DecisionsHttpError,
+} from "../decisions/index.js";
 import type {
   AgentRunResult,
   AgentRunError,
@@ -53,6 +60,9 @@ import type {
   LlmStructuredOutputSpec,
 } from "../llm/index.js";
 import type { Sapiom } from "../client.js";
+import { Transport } from "../_client/index.js";
+import { ExecutionClient } from "../executions/client.js";
+import { ExecutionProtocolError } from "../executions/errors.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { SandboxInfo } from "../sandboxes/index.js";
@@ -129,6 +139,19 @@ import type {
   SendEmailResult,
 } from "../connectors/google/index.js";
 import type { GitHubRepo } from "../connectors/github/index.js";
+import type {
+  SlackPostEphemeralResult,
+  SlackPostMessageResult,
+  SlackReactionResult,
+  SlackRepliesResult,
+  SlackUpdateResult,
+  SlackUserInfoResult,
+} from "../connectors/slack/index.js";
+import type {
+  McpCallToolResult,
+  McpConnector,
+  McpTool,
+} from "../connectors/mcp/index.js";
 import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
 
 /**
@@ -887,6 +910,104 @@ function stubMemoryFilterMatches(
   return true;
 }
 
+/**
+ * The Capability Router's `decisions.evaluate` request bounds (Sapiom
+ * `decisions-evaluate.validator.ts`), which the stub mirrors so a rubric the router would
+ * refuse fails under `run_local` too, instead of only once the agent is deployed.
+ * The router answers 400 via Nest's `BadRequestException(reason)`; the SDK maps
+ * that to {@link DecisionsHttpError}, so the stub throws the same class, status,
+ * body shape, and message prefix (`capabilityCall`'s `Failed to evaluate: <status> <body>`).
+ */
+function stubEvaluateValidate(
+  questions: Record<string, DecisionQuestion>,
+): void {
+  const fail = (reason: string): never => {
+    const body = { statusCode: 400, message: reason, error: "Bad Request" };
+    throw new DecisionsHttpError(
+      `Failed to evaluate: 400 ${JSON.stringify(body)}`,
+      400,
+      body,
+    );
+  };
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const n = Object.keys(q.criteria).length;
+      if (n < 2)
+        fail(`question '${id}' choice criteria must have at least two options`);
+      if (n > 32)
+        fail(`question '${id}' choice criteria must have at most 32 options`);
+    } else if (q.type === "score") {
+      const n = q.criteria.length;
+      if (n < 2)
+        fail(`question '${id}' score criteria must have at least two levels`);
+      if (n > 10)
+        fail(`question '${id}' score criteria must have at most 10 levels`);
+    }
+  }
+}
+
+/**
+ * A shape-correct, deterministic `decisions.evaluate` reply for `run_local`: every question
+ * answered under its own key, undecided (`noul` 0.5, a uniform distribution for
+ * `choice` and `score`) so branching code runs both ways without inventing a verdict.
+ * Rejects what the router would reject ({@link stubEvaluateValidate}) before answering.
+ */
+function stubEvaluateResponse(
+  questions: Record<string, DecisionQuestion>,
+): DecisionsEvaluateResponse {
+  stubEvaluateValidate(questions);
+  // Built on a null prototype so a question keyed `__proto__` becomes an
+  // ordinary own property instead of a prototype swap that drops the answer;
+  // copied onto a plain object below so the result also inherits
+  // `Object.prototype` (`hasOwnProperty` etc.) exactly like the parsed JSON the
+  // router returns.
+  const answers: Record<string, unknown> = Object.create(null);
+  for (const [id, q] of Object.entries(questions)) {
+    if (q.type === "choice") {
+      const options = Object.keys(q.criteria);
+      const p = options.length > 0 ? 1 / options.length : 0;
+      answers[id] = {
+        type: "choice",
+        choice: options[0] ?? "",
+        probabilities: Object.fromEntries(options.map((o) => [o, p])),
+        confidence: options.length > 0 ? p : 0,
+      };
+    } else if (q.type === "score") {
+      // Uniform over the levels, like `choice`: the stub must not fabricate
+      // certainty. `score` is the probability-weighted position, which for a
+      // uniform distribution is the midpoint (n-1)/2; `confidence` is the
+      // top probability, 1/n, the lowest a concentration measure can honestly be.
+      const levels = q.criteria;
+      const n = levels.length;
+      const p = n > 0 ? 1 / n : 0;
+      answers[id] = {
+        type: "score",
+        score: n > 0 ? (n - 1) / 2 : 0,
+        legend: Object.fromEntries(levels.map((l, i) => [String(i), l])),
+        probabilities: Object.fromEntries(levels.map((_, i) => [String(i), p])),
+        confidence: p,
+      };
+    } else {
+      answers[id] = { type: "noul", noul: 0.5 };
+    }
+  }
+  // `Object.assign({}, answers)` would hit the `__proto__` setter again, so
+  // define each key as an own data property, as JSON.parse does on the wire.
+  const plain: Record<string, unknown> = {};
+  for (const key of Object.keys(answers)) {
+    Object.defineProperty(plain, key, {
+      value: answers[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return {
+    answers: plain as DecisionsEvaluateResponse["answers"],
+    usage: { inputTokens: 0, outputTokens: 0 },
+  };
+}
+
 export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   // Record which override keys actually match a call, so the runner can flag
   // supplied-but-unmatched keys (typos / wrong plural-singular form).
@@ -898,6 +1019,111 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     capabilityOverride?: string,
   ) =>
     resolve(overrides, paths, args, fallback, opts.calls, capabilityOverride);
+
+  // The override key a call resolved to, if any — read from the raw overrides so the lookup
+  // itself never counts as a use.
+  const matchedOverride = (paths: string[]) =>
+    paths.find((k) =>
+      Object.prototype.hasOwnProperty.call(opts.overrides ?? {}, k),
+    );
+
+  // A Slack method offline. An override must be a Slack response object; anything else is
+  // returned as given but reported, since step code would read `ts` / `user` off it.
+  const stubSlack = <T>(
+    method: string,
+    args: unknown,
+    fallback: () => T,
+  ): T => {
+    const key = `connectors.slack.${method}`;
+    const result = r(key, [args], fallback);
+    if (
+      matchedOverride([key]) &&
+      (result === null || typeof result !== "object" || Array.isArray(result))
+    ) {
+      opts.warnings?.add(
+        `'${key}' stub must be a Slack response object (e.g. { "ok": true, ... }); got ${describeShape(result)}.`,
+      );
+    }
+    return result as T;
+  };
+
+  // An MCP-relay connector offline. `connectors.<slug>.<op>` wins over the catch-all
+  // `connectors.mcp.<op>`. With no callTool override it answers like the relay: a tool the
+  // step has not seen in its latest `listTools()` for that slug (every tool, before any
+  // discovery) is an `isError` result, so a local run takes the deployed failure branch.
+  // The list is cached from the step's own tracked call — never re-read from the overrides,
+  // which would re-run a stateful override and bypass usedKeys / the calls sink.
+  const discoveredMcpTools = new Map<string, Set<string>>();
+  const stubMcp = (slug: string): McpConnector => {
+    const listKeys = [
+      `connectors.${slug}.listTools`,
+      "connectors.mcp.listTools",
+    ];
+    const callKeys = [`connectors.${slug}.callTool`, "connectors.mcp.callTool"];
+    return {
+      listTools: async () => {
+        const tools = await Promise.resolve(r(listKeys, [], () => []));
+        const key = matchedOverride(listKeys);
+        if (!Array.isArray(tools)) {
+          opts.warnings?.add(
+            `'${key}' stub must be an array of tools (e.g. [{ "name": "...", "inputSchema": {} }]); ` +
+              `got ${describeShape(tools)}. Returning an empty list.`,
+          );
+          discoveredMcpTools.set(slug, new Set());
+          return [];
+        }
+        discoveredMcpTools.set(
+          slug,
+          new Set(
+            tools
+              .map((t) => (t as { name?: unknown } | null)?.name)
+              .filter((n): n is string => typeof n === "string"),
+          ),
+        );
+        tools.forEach((tool, i) => {
+          if (typeof (tool as { name?: unknown } | null)?.name !== "string") {
+            opts.warnings?.add(
+              `'${key}'[${i}] is not a tool shape (expected { name, inputSchema }); got ${describeShape(tool)}.`,
+            );
+          }
+        });
+        return tools as McpTool[];
+      },
+      callTool: async (name, args) => {
+        let overridden = true;
+        const result = await Promise.resolve(
+          r(callKeys, [name, args], () => {
+            overridden = false;
+            return discoveredMcpTools.get(slug)?.has(name)
+              ? {
+                  content: [
+                    { type: "text", text: `stub result for ${slug}.${name}` },
+                  ],
+                  isError: false,
+                }
+              : {
+                  content: [
+                    { type: "text", text: "That tool is not available." },
+                  ],
+                  isError: true,
+                };
+          }),
+        );
+        if (
+          overridden &&
+          (result === null ||
+            typeof result !== "object" ||
+            !Array.isArray((result as { content?: unknown }).content))
+        ) {
+          opts.warnings?.add(
+            `'${callKeys[0]}' / '${callKeys[1]}' stub must be a CallToolResult ` +
+              `(e.g. { "content": [{ "type": "text", "text": "..." }] }); got ${describeShape(result)}.`,
+          );
+        }
+        return result as McpCallToolResult;
+      },
+    };
+  };
 
   // Per-client memory state: namespace → (id → record). See the `memory`
   // capability below for what is and isn't simulated.
@@ -928,6 +1154,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     r(keys, [spec], () => stubAgentResult()) as ModelRunResult;
 
   const client: Sapiom = {
+    executions: new ExecutionClient(
+      new Transport({
+        apiKey: "stub",
+        coreBaseUrl: "http://stub.invalid",
+        fetch: async () => {
+          throw new ExecutionProtocolError(
+            "Durable executions are unavailable in stub mode.",
+          );
+        },
+      }),
+    ),
     sandboxes: {
       create: (sandboxOpts) =>
         Promise.resolve(
@@ -1169,6 +1406,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               },
         );
       },
+    },
+    events: {
+      // `unmatched`: a local run deploys no other agent, so no trigger can match.
+      // `async` so a throwing override rejects instead of throwing at the call site.
+      emit: async (spec) =>
+        r("events.emit", [spec], () => ({
+          receiptId: `stub-receipt-${++launchSeq}`,
+          outcome: "unmatched",
+          duplicate: false,
+          fireIds: [],
+        })) as EmitEventResult,
     },
     llm: {
       run: <T = Record<string, unknown>>(spec: {
@@ -1535,9 +1783,14 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
       },
     },
     database: {
-      create: (input) =>
+      // A Sapiom Postgres is permanent (SAP-3100): `create({})` is the whole call,
+      // and the stub, like the gateway, returns no `duration` and no `expiresAt`.
+      create: (...args) =>
         Promise.resolve(
-          r("database.create", [input], () => {
+          // Record what the caller actually passed (`[]` for a bare `create()`);
+          // the default applies only when building the fallback result.
+          r("database.create", args, () => {
+            const input = args[0] ?? {};
             const handle = input.handle ?? null;
             const name = `stub-${handle ?? "db"}`;
             return {
@@ -1548,7 +1801,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               status: "active",
               region: input.region ?? "us-east-1",
               pgVersion: input.pgVersion ?? 17,
-              duration: input.duration,
               connection: {
                 connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/${name}`,
                 host: STUB_DB_HOST,
@@ -1557,7 +1809,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                 password: "stub_pass",
                 databaseName: name,
               },
-              expiresAt: "2099-01-01T00:00:00Z",
               createdAt: "2099-01-01T00:00:00Z",
             };
           }) as Database,
@@ -1572,7 +1823,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             status: "active",
             region: "us-east-1",
             pgVersion: 17,
-            duration: "1h",
             connection: {
               connectionString: `postgresql://stub_user:stub_pass@${STUB_DB_HOST}:5432/stub-${idOrHandle}`,
               host: STUB_DB_HOST,
@@ -1581,7 +1831,6 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               password: "stub_pass",
               databaseName: `stub-${idOrHandle}`,
             },
-            expiresAt: "2099-01-01T00:00:00Z",
             createdAt: "2099-01-01T00:00:00Z",
           })) as Database,
         ),
@@ -2012,7 +2261,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           })) as ScopedKey,
         ),
     },
-    // Connection-backed third-party providers (Google, GitHub) — mirrors the
+    // Connection-backed third-party providers (Google, GitHub, Slack, MCP) — mirrors the
     // `connectors` grouping on the real client.
     connectors: {
       // A live Google credential is fetched server-side in production; the stub returns
@@ -2123,6 +2372,65 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             },
           ]) as GitHubRepo[],
       },
+      // Slack methods run server-side in the gateway (the bot token is injected there) in
+      // production; the stub returns shape-faithful, obviously-fake Slack bodies so an
+      // offline run can exercise the call graph without a Slack connector or network call.
+      slack: {
+        postMessage: async (args) =>
+          stubSlack("postMessage", args, () => ({
+            ok: true,
+            channel: args.channel,
+            ts: "1700000000.000100",
+          })) as SlackPostMessageResult,
+        update: async (args) =>
+          stubSlack("update", args, () => ({
+            ok: true,
+            channel: args.channel,
+            ts: args.ts,
+            text: args.text,
+          })) as SlackUpdateResult,
+        postEphemeral: async (args) =>
+          stubSlack("postEphemeral", args, () => ({
+            ok: true,
+            message_ts: "1700000000.000200",
+          })) as SlackPostEphemeralResult,
+        addReaction: async (args) =>
+          stubSlack("addReaction", args, () => ({
+            ok: true,
+          })) as SlackReactionResult,
+        removeReaction: async (args) =>
+          stubSlack("removeReaction", args, () => ({
+            ok: true,
+          })) as SlackReactionResult,
+        replies: async (args) =>
+          stubSlack("replies", args, () => ({
+            ok: true,
+            messages: [
+              {
+                type: "message",
+                ts: args.ts,
+                user: "U0STUBUSER",
+                text: "stub thread parent",
+              },
+            ],
+            has_more: false,
+          })) as SlackRepliesResult,
+        userInfo: async (args) =>
+          stubSlack("userInfo", args, () => ({
+            ok: true,
+            user: {
+              id: args.user,
+              name: "stub-user",
+              real_name: "Stub User",
+              is_bot: false,
+              tz: "UTC",
+              profile: { display_name: "stub-user", real_name: "Stub User" },
+            },
+          })) as SlackUserInfoResult,
+      },
+      linear: stubMcp("linear"),
+      notion: stubMcp("notion"),
+      mcp: (slug) => stubMcp(slug),
     },
     speech: {
       textToSpeech: {
@@ -2151,6 +2459,15 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             })) as VoicesResult,
           ),
       },
+    },
+    decisions: {
+      // async so a validation throw surfaces as a rejection, like the router's 400.
+      evaluate: async <Q extends Record<string, DecisionQuestion>>(
+        spec: DecisionsEvaluateSpec<Q>,
+      ) =>
+        r("decisions.evaluate", [spec], () =>
+          stubEvaluateResponse(spec.questions),
+        ) as DecisionsEvaluateResponse<Q>,
     },
     browserAutomation: {
       sessions: {

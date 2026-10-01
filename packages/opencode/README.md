@@ -58,3 +58,9 @@ generated supervisor needs no source loader and runs under Electron with
 `pnpm` must allow the `opencode-ai` install script so the platform binary exists
 before Studio starts. The workspace allowlist includes it. No UI is bundled in
 this package.
+
+`pnpm test` runs the suites that use the in-repo fixture runtime. The
+`*.native.test.ts` files launch the pinned OpenCode binary itself and run in a
+separate sequential pass, `pnpm test:native`, so a cold native startup never
+competes with other suites for CPU. In CI that pass is the OpenCode native
+workflow, which runs only when this package or the shared build inputs change.

@@ -1,3 +1,4 @@
+import { STUDIO_HOST_CONTEXT_ENV } from "@sapiom/agent-map/host-protocol";
 /**
  * TaskManager — registry of headless one-shot agent runs (BackgroundTask in
  * shared/types.ts). A background task (canvas enrichment today; deploy/run
@@ -329,6 +330,7 @@ export class TaskManager {
       if (value !== undefined) env[key] = value;
     }
     delete env[HOST_ESBUILD_PIN];
+    delete env[STUDIO_HOST_CONTEXT_ENV];
     for (const [key, value] of Object.entries(spec.env)) {
       if (value === null) delete env[key];
       else env[key] = value;

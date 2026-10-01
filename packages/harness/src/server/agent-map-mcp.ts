@@ -1,3 +1,4 @@
+import { StudioHostContextSchema, STUDIO_HOST_CONTEXT_PATH } from "@sapiom/agent-map/host-protocol";
 import { randomUUID } from "node:crypto";
 import express, { Router, type Request, type Response } from "express";
 import {
@@ -33,6 +34,8 @@ export interface AgentMapMcpRouterOptions
   agentBriefService: AgentBriefService;
   subsessionCoordinator: SubsessionCoordinator;
   readSnapshotFor?: (identity: ResolvedAgentMapCapability["identity"]) => Promise<object>;
+  /** Verifies current Studio scope before disclosing the private state root. */
+  hostContextFor?: (identity: ResolvedAgentMapCapability["identity"]) => Promise<{ stateRoot: string }>;
   maxSessions?: number;
   now?: () => number;
   /** Deterministic lifecycle seam for transport-failure regression tests. */
@@ -90,6 +93,39 @@ export function createAgentMapMcpRouter(options: AgentMapMcpRouterOptions): Agen
       return null;
     }
   };
+
+  router.get(STUDIO_HOST_CONTEXT_PATH, async (request, response) => {
+    response.setHeader("Cache-Control", "no-store");
+    const capability = authenticate(request, response);
+    if (!capability) return;
+    if (Object.keys(request.query).length > 0) {
+      protocolError(response, 400, "Host context does not accept scope selectors");
+      return;
+    }
+    if (!options.hostContextFor) {
+      protocolError(response, 404, "Host context unavailable");
+      return;
+    }
+    try {
+      const { stateRoot } = await options.hostContextFor(capability.identity);
+      // Resume, exit and principal changes can revoke authority during lookup.
+      if (!options.capabilities.isGenerationLive(capability.identity.sessionId, capability.generation)) {
+        protocolError(response, 401, "Agent Map capability rejected");
+        return;
+      }
+      response.json(StudioHostContextSchema.parse({
+        protocolVersion: 1,
+        host: "sapiom-studio",
+        ...capability.identity,
+        stateRoot,
+        generation: capability.generation,
+        capabilities: ["session-context"],
+      }));
+    } catch {
+      // Lookup/schema errors may contain paths or secrets. Return a fixed error.
+      protocolError(response, 403, "Host context unavailable");
+    }
+  });
 
   const resolveBound = (request: Request, response: Response, capability: ResolvedAgentMapCapability) => {
     const sessionId = request.header("mcp-session-id");

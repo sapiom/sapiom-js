@@ -10,6 +10,7 @@
  */
 import {
   createClient,
+  executions,
   sandboxes,
   repositories,
   models,
@@ -19,6 +20,7 @@ import {
   browserAutomation,
   keys,
   connectors,
+  events,
   Sandbox,
   Repository,
   SearchHttpError,
@@ -51,6 +53,10 @@ describe("@sapiom/tools public surface", () => {
     const sapiom = createClient({ apiKey: "test-key" });
 
     expect(typeof sapiom.sandboxes.create).toBe("function");
+    expect(typeof sapiom.executions.prepare).toBe("function");
+    expect(typeof sapiom.executions.submit).toBe("function");
+    expect(typeof sapiom.executions.get).toBe("function");
+    expect(typeof sapiom.executions.wait).toBe("function");
     expect(typeof sapiom.sandboxes.attach).toBe("function");
 
     expect(typeof sapiom.repositories.create).toBe("function");
@@ -106,6 +112,13 @@ describe("@sapiom/tools public surface", () => {
 
     expect(typeof sapiom.connectors.github).toBe("object");
     expect(typeof sapiom.connectors.github.listRepos).toBe("function");
+    expect(typeof sapiom.connectors.slack.postMessage).toBe("function");
+    expect(typeof sapiom.connectors.slack.userInfo).toBe("function");
+    expect(typeof sapiom.connectors.linear.listTools).toBe("function");
+    expect(typeof sapiom.connectors.notion.callTool).toBe("function");
+    expect(typeof sapiom.connectors.mcp("acme").callTool).toBe("function");
+
+    expect(typeof sapiom.events.emit).toBe("function");
 
     expect(typeof sapiom.withAttribution).toBe("function");
   });
@@ -113,12 +126,15 @@ describe("@sapiom/tools public surface", () => {
   it("withAttribution derives a client of the same shape", () => {
     const derived = createClient({ apiKey: "test-key" }).withAttribution({});
     expect(typeof derived.sandboxes.create).toBe("function");
+    expect(typeof derived.executions.submit).toBe("function");
     expect(typeof derived.models.coding.run).toBe("function");
     expect(typeof derived.withAttribution).toBe("function");
   });
 
   it("barrel re-exports the capability namespaces and resource classes", () => {
     expect(typeof sandboxes).toBe("object");
+    expect(typeof executions.prepare).toBe("function");
+    expect(typeof executions.wait).toBe("function");
     expect(typeof repositories).toBe("object");
     expect(typeof models).toBe("object");
     expect(typeof search).toBe("object");
@@ -144,6 +160,12 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof connectors.google.gmail.sendEmail).toBe("function");
     expect(typeof connectors.github).toBe("object");
     expect(typeof connectors.github.listRepos).toBe("function");
+    expect(typeof connectors.slack.postMessage).toBe("function");
+    expect(typeof connectors.linear.listTools).toBe("function");
+    expect(typeof connectors.notion.callTool).toBe("function");
+    expect(typeof connectors.mcp).toBe("function");
+    expect(typeof connectors.McpRelayError).toBe("function");
+    expect(typeof events.emit).toBe("function");
     expect(typeof SearchHttpError).toBe("function"); // error class constructor
     expect(typeof MemoryHttpError).toBe("function");
     expect(typeof SpeechHttpError).toBe("function");

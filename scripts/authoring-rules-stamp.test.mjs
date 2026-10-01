@@ -14,15 +14,6 @@ test("moves the Markdown stamp and the prose release together", () => {
   );
 });
 
-test("moves the JSDoc pointer's release without touching the URL", () => {
-  const before =
-    " * https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface (written against release 1.0).\n";
-  assert.equal(
-    restamp(before, next),
-    " * https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface (written against release 1.1).\n",
-  );
-});
-
 test("moves both agent-core constants", () => {
   const before =
     'export const AUTHORING_RULES_RELEASE = "1.0";\nexport const AUTHORING_RULES_DIGEST = "1f3e5cd9648f";\n';
@@ -37,11 +28,8 @@ test("leaves a file with nothing to stamp unchanged", () => {
   assert.equal(restamp(before, next), before);
 });
 
-test("moves a JSDoc pointer whose release wrapped onto the next comment line", () => {
+test("leaves a scaffold template's placeholder for scaffold to fill", () => {
   const before =
-    " * https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface\n * (written against release 1.0).\n";
-  assert.equal(
-    restamp(before, next),
-    " * https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface\n * (written against release 1.1).\n",
-  );
+    "This file was written against release __AUTHORING_RULES_RELEASE__ of that text.\n\n<!-- sapiom-authoring-rules -->\n";
+  assert.equal(restamp(before, next), before);
 });

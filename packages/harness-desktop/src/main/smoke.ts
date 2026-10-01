@@ -65,6 +65,7 @@ import { resolveWebDir } from "./paths.js";
 import { shimDir } from "./runtime-shims.js";
 import { CHANNEL_ENV_VAR, resolveUpdateChannel } from "./update-policy.js";
 import type { BootResult } from "./boot.js";
+import { checkMcpCapabilities } from "./smoke-mcp.js";
 import { checkAgentMap } from "./smoke-agent-map.js";
 import { checkOpenCodeRuntime } from "./smoke-opencode.js";
 
@@ -1132,6 +1133,7 @@ export async function runSmokeChecks(boot: BootResult): Promise<SmokeCheck[]> {
     await check("run-local", () => checkRunLocal(base, token)),
     await check("deploy-bundle", checkDeployBundle),
     await check("desktop-bridge", () => checkDesktopBridge(boot)),
+    await check("mcp-capabilities", checkMcpCapabilities),
     await check("agent-map", () => checkAgentMap(boot)),
     await check("update-config", checkUpdateConfig),
   ];

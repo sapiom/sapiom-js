@@ -34,10 +34,10 @@ only summarized here; each such chapter is bracketed by `section:` markers namin
 section it points at. A pointer's `#name` fragment names that section's marker (an HTML
 comment, `section: name`) in the served text — the endpoint serves raw Markdown, so search for
 the marker rather than expecting a browser to jump to it. When a summary below and the served text disagree, the served text wins.
-This copy was written against release 1.0 of it; `sapiom_dev_agents_check` warns when the
+This copy was written against release 1.1 of it; `sapiom_dev_agents_check` warns when the
 served copy differs.
 
-<!-- sapiom-authoring-rules release=1.0 digest=1f3e5cd9648f -->
+<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->
 
 <!-- section: one-off-vs-agent -->
 
@@ -362,6 +362,32 @@ try {
 }
 ```
 
+### Calling Slack, Linear, and Notion from a step
+
+The tenant connects each provider on the Connectors page; the gateway holds the credential, so a
+step never sees a token. `@sapiom/tools` >= 0.41.0:
+
+```typescript
+const { slack, linear } = ctx.sapiom.connectors;
+await slack.postMessage({ channel, text: "On it.", threadTs: ts }); // also update, postEphemeral,
+await slack.addReaction({ channel, timestamp: ts, name: "eyes" }); // removeReaction, replies, userInfo
+const tools = await linear.listTools(); // names + JSON Schemas; empty until connected + discovered
+const res = await linear.callTool("<tool name from listTools>", {
+  /* its inputSchema */
+});
+if (res.isError) return fail(res.content.map((c) => c.text).join("\n")); // canFail: true
+```
+
+- Slack events start runs through `event` triggers on `slack.<type>`: `slack.message.created`,
+  `slack.reaction_added`, `slack.block_actions`. A trigger has no channel filter, so check the
+  channel in the first step (`payload.event.channel`; `payload.channel.id` for `block_actions`)
+  and `terminate()` (from a `terminal: true` step) for channels the agent ignores. Messages from
+  bots (the agent's own replies included) are never delivered, so a reply cannot re-trigger it.
+- Linear and Notion run through the MCP relay: their tools are whatever `listTools()` returns
+  after the tenant connects the provider and clicks **Discover** on /connectors. Read the names
+  there; do not guess them. A failed call is a result with `isError: true`, not a throw.
+  `ctx.sapiom.connectors.mcp("<slug>")` reaches a renamed or custom MCP connector.
+
 <!-- section: llm-call-surface -->
 
 ## Calling LLMs from Steps
@@ -372,6 +398,12 @@ the most common mistake in authored agents. In one line each: `ctx.sapiom.llm.ru
 multi-turn reasoning + tool-calling loop (never for a one-shot — it loops and overthinks);
 `ctx.sapiom.agents.run` dispatches a DEPLOYED agent by slug. You never pick a model: omit
 `model` and let the platform route it — a raw provider model id is never honored on any surface.
+For answers drawn from a fixed set you name up front (a yes/no gate, a pick-one label, a rubric
+level), use `ctx.sapiom.decisions.evaluate` — a System One decision model, not an LLM: it returns
+calibrated probabilities over those answers (`answers.<key>.noul` / `.choice` + `.probabilities` /
+`.score`) instead of generated text — reach for it before an `output` schema whose only job is to
+pick one of a few values. It is the one surface that takes an optional `model` id (the platform picks
+the current default System One model when you omit it — still omit it).
 
 The full rule — the worked example (`llm.run` with `output`, read back with `structuredOf`;
 `textOf` for plain text; never `content[0]`), why `max_tokens` must budget for thinking as well
@@ -542,6 +574,25 @@ Under `run_local`, a dispatch pause auto-resumes with the stub result; a manual 
 auto-resumes with `{}`. There is no manual-signal payload override in the local runner, so
 type the resumed step's input with optional fields accordingly.
 
+### Waiting on a user-named signal
+
+The signal name in the object form is yours to choose — `pauseUntilSignal` takes any
+string, so a gate needs no capability handle and no registration. What decides the shape is
+the `correlationId`:
+
+- `ctx.executionId` (the default when omitted) makes the waiter unique to this run: one
+  delivery, one resume. Use it for a per-run approval.
+- A shared business key (an order id, a customer id) makes every run waiting on that key
+  resume together from a single delivery — "wait for any signal matching X". The fanout is
+  0..N runs, deliberately.
+
+Deliver it with `sapiom_dev_agents_signal` (or `sapiom agents signal`). Give any gate a human
+might never answer an explicit `timeoutMs`: when the deadline lapses the run ends as a pause
+timeout instead of resuming, so the failure is recorded rather than sat on. Delivery is
+matched on `(name, correlationId)`, never on the execution id the tool addresses, and the
+result's `matched` counts the runs that ACTUALLY resumed — read its `message` whenever
+present, because a `0` does not prove nothing was waiting.
+
 <!-- section: trigger-kinds -->
 
 ## Triggers — Run a Deployed Agent Without a Human
@@ -555,7 +606,14 @@ field per kind, the signing scheme a webhook sender must follow, secret rotation
 Slack / Stripe / GitHub / Meta sender needs an App Link `/hook/*` receiver instead of our HMAC:
 served sections [Trigger kinds](https://api.sapiom.ai/v1/agents/authoring-rules#trigger-kinds)
 and [App Links and third-party webhooks](https://api.sapiom.ai/v1/agents/authoring-rules#app-links).
-Full guide: [Triggers](https://docs.sapiom.ai/guides/triggers).
+
+Arming an `event` trigger is only half of it — something has to emit the event.
+`sapiom_dev_agents_emit_event` (or `sapiom agents emit`, or `emitEvent` from
+`@sapiom/agent-core`) does that: **events start runs, signals resume them**, so an emit never
+wakes the paused run above and a signal never starts a new one. An emit that matches no
+trigger comes back `outcome: "unmatched"` — a success, not an error. From inside a step,
+`ctx.sapiom.events.emit({ type, payload, id? })` (`@sapiom/tools` >= 0.40.0) emits with the
+run's own credential; pass a stable `id` so a retried step starts nothing twice.
 
 <!-- /section: trigger-kinds -->
 
@@ -680,10 +738,9 @@ Write each step the way it should run in production — never weaken logic to sh
 
 | Resource                                                                     | What it covers                                                                                                 |
 | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.0 |
+| [Platform rules (served)](https://api.sapiom.ai/v1/agents/authoring-rules)   | The live text every platform chapter above summarizes and points at; this copy was written against release 1.1 |
 | [Authoring guide](https://docs.sapiom.ai/agents/authoring)                   | Full step model, failure patterns, pause/resume, determinism                                                   |
 | [Quickstart](https://docs.sapiom.ai/agents/quick-start)                      | Scaffold → write → test → deploy walkthrough                                                                   |
 | [Capabilities](https://docs.sapiom.ai/capabilities)                          | The full `ctx.sapiom.*` catalog with pricing                                                                   |
 | [Choose a call surface](https://docs.sapiom.ai/guides/choose-a-call-surface) | `llm.run` vs `models.run` vs `agents.run` — which to call and why                                              |
-| [Triggers](https://docs.sapiom.ai/guides/triggers)                           | Cron, one-off, event, and webhook triggers; webhook signing + secret rotation                                  |
 | `AGENTS.md` in your scaffold                                                 | The quick in-project reference                                                                                 |

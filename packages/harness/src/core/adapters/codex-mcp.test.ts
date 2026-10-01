@@ -54,6 +54,7 @@ describe("Codex per-session MCP configuration", () => {
           SAPIOM_ENVIRONMENT: "staging",
           SAPIOM_HARNESS_VERSION: "0.14.0",
           SAPIOM_API_KEY: "private-stdio-api-key",
+          SAPIOM_STUDIO_HOST_CONTEXT: "private-studio-bootstrap",
         },
       },
       "agent-map": {
@@ -78,6 +79,9 @@ describe("Codex per-session MCP configuration", () => {
         "private-sapiom-api-key",
       );
 
+      expect(spec.env.SAPIOM_STUDIO_HOST_CONTEXT).toBe("private-studio-bootstrap");
+      expect(spec.args.join(" ")).not.toContain("private-studio-bootstrap");
+      expect(spec.args.join(" ")).toContain("shell_environment_policy.set.SAPIOM_STUDIO_HOST_CONTEXT");
       const local = serverArg(spec, "sapiom-dev");
       expect(local).toContain(
         '"command" = "/Applications/Agent Studio.app/Contents/MacOS/Agent Studio"',
@@ -85,7 +89,7 @@ describe("Codex per-session MCP configuration", () => {
       expect(local).toContain(
         '"args" = ["/Applications/Agent Studio.app/Contents/Resources/mcp.js"]',
       );
-      expect(local).toContain('"env_vars" = ["SAPIOM_API_KEY"]');
+      expect(local).toContain('"env_vars" = ["SAPIOM_API_KEY", "SAPIOM_STUDIO_HOST_CONTEXT"]');
       expect(local).toContain(
         '"env" = { "ELECTRON_RUN_AS_NODE" = "1", "SAPIOM_ENVIRONMENT" = "staging", "SAPIOM_HARNESS_VERSION" = "0.14.0" }',
       );
