@@ -1,5 +1,52 @@
 # @sapiom/orchestration-core
 
+## 0.15.0
+
+### Minor Changes
+
+- 5bb66c6: Emit custom events from the SDK, the CLI and the MCP — the start verb next to
+  `signal`'s resume verb.
+
+  `emitEvent({ type, payload, id? })` posts to `POST /v1/workflows/events`
+  and returns the receipt verbatim: `{ receiptId, outcome, duplicate, fireIds }`.
+  It fans out by type to every active `event` trigger the tenant armed and starts
+  0..N new runs. `outcome: "unmatched"` is a success, not an error — nothing
+  subscribes to that type. `id` is the sender's dedup identity, so reposting
+  it returns the original receipt and starts nothing new; omit it and every call
+  is a distinct event. `sapiom agents emit <type> --payload <json> [--event-id
+<id>]` and `sapiom_dev_agents_emit_event` wrap it, and `parseEventPayload`
+  rejects a payload that is not a JSON object, which the run-input fold would
+  otherwise drop silently.
+
+  Events start runs, signals resume them, so `signal()` stays the resume verb and
+  now surfaces the server's `message` next to `matched` — `matched` counts the
+  runs that actually resumed, so it under-reports a partial fanout and a `0` does
+  not prove nothing was waiting.
+
+### Patch Changes
+
+- 89d91d4: The platform-rules stamp is now written into a project's `AGENTS.md` when it is scaffolded, from the release constants in `@sapiom/agent-core`, instead of being hard-coded in every template and gallery example. Scaffold output is unchanged: a new project still carries a concrete `<!-- sapiom-authoring-rules release=… digest=… -->` and `sapiom_dev_agents_check` still warns when it differs from the served copy. Gallery examples, `examples/AUTHORING.md` and the `@sapiom/tools` JSDoc keep the pointer to the served rules but no longer record a release, so a content release touches the two constants and the four skill copies only.
+- 06adb78: `@sapiom/tools`: new `events` capability. A step emits a tenant event with its own run
+  credential through `ctx.sapiom.events.emit({ type, payload, id? })` (also
+  `import { events } from "@sapiom/tools"`), which calls the gateway's
+  `POST /agents/v1/events` and resolves with the 202 receipt
+  `{ receiptId, outcome, duplicate, fireIds }`. Pass a stable `id` to make a retry safe.
+  The `run_local` stub answers `outcome: "unmatched"` unless overridden under `events.emit`.
+
+  `@sapiom/agent-core`: the authoring skill's trigger section names `ctx.sapiom.events.emit`.
+
+- Updated dependencies [3a22965]
+- Updated dependencies [89d91d4]
+- Updated dependencies [21f060b]
+- Updated dependencies [0e4dce3]
+- Updated dependencies [97c2c61]
+- Updated dependencies [c4411a0]
+- Updated dependencies [92ab6df]
+- Updated dependencies [8a38f6d]
+- Updated dependencies [06adb78]
+  - @sapiom/tools@0.40.0
+  - @sapiom/agent@0.14.4
+
 ## 0.14.3
 
 ### Patch Changes
