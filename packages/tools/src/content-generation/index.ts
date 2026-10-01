@@ -23,7 +23,6 @@ import {
   Transport,
   capabilityCall,
   defaultTransport,
-  resolveCoreBaseUrl,
 } from "../_client/index.js";
 import {
   ContentGenerationFailedError,
@@ -542,7 +541,7 @@ function applyMediaParams(
 export async function createImage(
   input: ImageCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<ImageGenerationResult> {
   assertPrompt(input.prompt);
 
@@ -763,7 +762,7 @@ export function toImageResumePayload(
 export async function launchImage(
   input: ImageCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<ImageLaunchHandle> {
   assertPrompt(input.prompt);
 
@@ -1157,7 +1156,7 @@ function mapVideoResult(raw: RawVideoResult): {
 export async function createVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<VideoGenerationResult> {
   assertPrompt(input.prompt);
 
@@ -1364,7 +1363,7 @@ export function toVideoResumePayload(
 export async function launchVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<VideoLaunchHandle> {
   assertPrompt(input.prompt);
 
