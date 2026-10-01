@@ -542,7 +542,7 @@ function applyMediaParams(
 export async function createImage(
   input: ImageCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
 ): Promise<ImageGenerationResult> {
   assertPrompt(input.prompt);
 
@@ -763,7 +763,7 @@ export function toImageResumePayload(
 export async function launchImage(
   input: ImageCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
 ): Promise<ImageLaunchHandle> {
   assertPrompt(input.prompt);
 
@@ -1157,7 +1157,7 @@ function mapVideoResult(raw: RawVideoResult): {
 export async function createVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
 ): Promise<VideoGenerationResult> {
   assertPrompt(input.prompt);
 
@@ -1364,7 +1364,7 @@ export function toVideoResumePayload(
 export async function launchVideo(
   input: VideoCreateInput,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl: string = transport.coreBaseUrl ?? resolveCoreBaseUrl(),
 ): Promise<VideoLaunchHandle> {
   assertPrompt(input.prompt);
 

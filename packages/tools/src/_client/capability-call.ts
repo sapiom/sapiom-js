@@ -16,6 +16,12 @@
  * path. Do not consolidate the two until the async/resource primitives exist.
  */
 import { Transport, defaultTransport } from "./index.js";
+import { ExecutionClient } from "../executions/client.js";
+import {
+  ExecutionFailedError,
+  ExecutionHttpError,
+} from "../executions/errors.js";
+import { executionDeliveryEligible } from "./execution-delivery.js";
 
 /**
  * The single Core base URL, resolved at CALL TIME — never frozen in a module-level
@@ -29,12 +35,15 @@ import { Transport, defaultTransport } from "./index.js";
  * → the production default). There is no per-capability URL knob: one Core base URL
  * re-homes every routed verb at once, so nothing silently escapes to a stale host.
  */
-export function resolveCoreBaseUrl(): string {
-  return (
+export function resolveCoreBaseUrl(baseUrl?: string): string {
+  const url =
+    baseUrl ??
     process.env.SAPIOM_BASE_URL ??
     process.env.SAPIOM_API_URL ??
-    "https://api.sapiom.ai"
-  );
+    "https://api.sapiom.ai";
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47) end--;
+  return url.slice(0, end);
 }
 
 /** Options for {@link capabilityCall}. */
@@ -76,7 +85,40 @@ export async function capabilityCall<Res>(
   opts: CapabilityCallOptions,
 ): Promise<Res> {
   const transport = opts.transport ?? defaultTransport();
-  const baseUrl = opts.baseUrl ?? resolveCoreBaseUrl();
+  const baseUrl = resolveCoreBaseUrl(opts.baseUrl ?? transport.coreBaseUrl);
+  // Snapshot mode/origin/key once. No error path switches transport after acceptance ambiguity.
+  if (
+    transport.capabilityDelivery === "executions" &&
+    executionDeliveryEligible(id)
+  ) {
+    const executions = new ExecutionClient(transport);
+    const submission = executions.prepare(id, req, { baseUrl });
+    try {
+      const handle = await executions.submit(submission, {
+        baseUrl,
+        headers: opts.headers,
+      });
+      return await executions.wait<Res>(handle, { baseUrl });
+    } catch (error) {
+      if (
+        error instanceof ExecutionFailedError ||
+        error instanceof ExecutionHttpError
+      ) {
+        throw Object.assign(
+          opts.makeError(
+            `${opts.errorPrefix}: ${error.message}`,
+            error.status,
+            error.body,
+          ),
+          {
+            executionId: error.executionId,
+            submissionKey: error.submissionKey,
+          },
+        );
+      }
+      throw error;
+    }
+  }
 
   const res = await transport.fetch(
     `${baseUrl}/v1/capabilities/${id}`,
