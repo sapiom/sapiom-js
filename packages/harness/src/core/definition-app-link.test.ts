@@ -101,7 +101,10 @@ describe("createDefinitionAppLinkReader", () => {
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       `${BASE}/v1/workflows/definitions/886/app-link`,
-      { headers: { Authorization: "Bearer sk_a" } },
+      expect.objectContaining({
+        headers: { Authorization: "Bearer sk_a" },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -139,7 +142,10 @@ describe("createDefinitionAppLinkReader", () => {
     expect(keys.refreshCalls).toBe(1);
     expect(fetchImpl).toHaveBeenLastCalledWith(
       `${BASE}/v1/workflows/definitions/886/app-link`,
-      { headers: { Authorization: "Bearer sk_new" } },
+      expect.objectContaining({
+        headers: { Authorization: "Bearer sk_new" },
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 

@@ -30,6 +30,9 @@ function isAuthRejection(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+/** Matches definition-slug-resolver.ts's per-read deadline. */
+const READ_TIMEOUT_MS = 5_000;
+
 export const NO_APP_LINK: DefinitionAppLinkView = { url: null, status: null };
 
 export interface DefinitionAppLinkReader {
@@ -80,6 +83,10 @@ export function createDefinitionAppLinkReader(opts: {
       return await fetchImpl(`${baseUrl}${path}`, {
         // Core (`api.*`) takes a Bearer token — see template-catalog.ts.
         headers: { Authorization: `Bearer ${key}` },
+        // Bounded like definition-slug-resolver.ts's reads: the chip is
+        // ambient, so a stalled core must not hold the page's request open.
+        // The signal also covers the body read in `read()`.
+        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
       });
     } catch {
       return null;
