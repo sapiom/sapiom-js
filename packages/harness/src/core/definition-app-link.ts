@@ -30,7 +30,9 @@ function isAuthRejection(status: number): boolean {
   return status === 401 || status === 403;
 }
 
-/** Matches definition-slug-resolver.ts's per-read deadline. */
+/** Matches definition-slug-resolver.ts's per-read deadline. Bounds the
+ *  network I/O of one read (both attempts and the body), not the local
+ *  credential refresh between them. */
 const READ_TIMEOUT_MS = 5_000;
 
 export const NO_APP_LINK: DefinitionAppLinkView = { url: null, status: null };
@@ -67,7 +69,7 @@ export function createDefinitionAppLinkReader(opts: {
   baseUrl?: string;
   /** Injectable fetch. Test seam. */
   fetchImpl?: typeof fetch;
-  /** Per-read deadline. Test seam; defaults to {@link READ_TIMEOUT_MS}. */
+  /** Network deadline per read. Test seam; defaults to {@link READ_TIMEOUT_MS}. */
   timeoutMs?: number;
 }): DefinitionAppLinkReader {
   const provider: ApiKeyProvider =
@@ -99,7 +101,7 @@ export function createDefinitionAppLinkReader(opts: {
       const apiKey = provider.getKey();
       if (!apiKey) return NO_APP_LINK;
       const path = `/v1/workflows/definitions/${encodeURIComponent(definitionId)}/app-link`;
-      // ONE deadline for the whole read, bounded like definition-slug-resolver.ts:
+      // ONE network deadline per read, bounded like definition-slug-resolver.ts:
       // the chip is ambient, so a stalled core must not hold the page's request
       // open. Shared by both attempts and the body read, so a refresh + retry
       // cannot double the budget.
@@ -107,8 +109,10 @@ export function createDefinitionAppLinkReader(opts: {
 
       let response = await attempt(path, apiKey, signal);
       if (response && isAuthRejection(response.status)) {
-        // A local credential re-read, not a network call; the retry still
-        // shares the deadline above.
+        // Not bounded by the deadline: refresh is a queued re-read of the local
+        // credential store, with no network call to hang on, and racing it
+        // would not cancel it, only stop waiting for it. If the budget ran out
+        // meanwhile, the retry is skipped.
         const refreshed = await provider.refresh();
         if (signal.aborted) return NO_APP_LINK;
         if (refreshed && refreshed !== apiKey) {
