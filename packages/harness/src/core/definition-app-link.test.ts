@@ -170,4 +170,25 @@ describe("createDefinitionAppLinkReader", () => {
     });
     await expect(reader.read("886")).resolves.toEqual(NO_APP_LINK);
   });
+
+  it("settles a stalled core as no App Link once the deadline passes", async () => {
+    // A fetch that never answers on its own: it settles only when the reader's
+    // signal aborts it, the way a hung upstream behaves.
+    const stalled = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        }),
+    ) as unknown as typeof fetch;
+    const reader = createDefinitionAppLinkReader({
+      apiKey: "sk_a",
+      baseUrl: BASE,
+      fetchImpl: stalled,
+      timeoutMs: 20,
+    });
+
+    await expect(reader.read("886")).resolves.toEqual(NO_APP_LINK);
+  });
 });

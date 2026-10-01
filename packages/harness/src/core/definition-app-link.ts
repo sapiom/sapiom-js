@@ -67,6 +67,8 @@ export function createDefinitionAppLinkReader(opts: {
   baseUrl?: string;
   /** Injectable fetch. Test seam. */
   fetchImpl?: typeof fetch;
+  /** Per-read deadline. Test seam; defaults to {@link READ_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }): DefinitionAppLinkReader {
   const provider: ApiKeyProvider =
     opts.apiKey !== null && typeof opts.apiKey === "object"
@@ -74,6 +76,7 @@ export function createDefinitionAppLinkReader(opts: {
       : staticApiKeyProvider(opts.apiKey);
   const baseUrl = opts.baseUrl ?? resolveCoreBaseUrl();
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? READ_TIMEOUT_MS;
 
   const attempt = async (
     path: string,
@@ -86,7 +89,7 @@ export function createDefinitionAppLinkReader(opts: {
         // Bounded like definition-slug-resolver.ts's reads: the chip is
         // ambient, so a stalled core must not hold the page's request open.
         // The signal also covers the body read in `read()`.
-        signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       return null;
