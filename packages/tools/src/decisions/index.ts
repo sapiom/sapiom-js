@@ -28,10 +28,7 @@
  * typed by the questions you passed, so `res.answers.team.choice` type-checks.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
-import {
-  capabilityCall,
-  resolveCoreBaseUrl,
-} from "../_client/capability-call.js";
+import { capabilityCall } from "../_client/capability-call.js";
 
 /** `state` and `instructions` accept prose or structured JSON; prefer named fields when the context has several parts. */
 export type DecisionContent = string | Record<string, unknown> | unknown[];
@@ -151,7 +148,7 @@ export class DecisionsHttpError extends Error {
 export async function evaluate<Q extends Record<string, DecisionQuestion>>(
   spec: DecisionsEvaluateSpec<Q>,
   transport: Transport = defaultTransport(),
-  baseUrl: string = resolveCoreBaseUrl(),
+  baseUrl?: string,
 ): Promise<DecisionsEvaluateResponse<Q>> {
   // `!= null` so a JS caller passing `model: null` gets the default rather than
   // forwarding a null the router would reject.

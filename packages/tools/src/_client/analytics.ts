@@ -16,10 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  createAnalytics,
-  type SapiomAnalytics,
-} from "@sapiom/analytics-core";
+import { createAnalytics, type SapiomAnalytics } from "@sapiom/analytics-core";
 
 import { VERSION } from "../_generated/version.js";
 import type { Attribution } from "./index.js";
@@ -34,6 +31,8 @@ export const CAPABILITY_CALL_EVENT = "capability.call";
  */
 export interface AnalyticsHolder {
   instance?: SapiomAnalytics;
+  /** Shared across attributed views: bounded terminal observation cache, not billing authority. */
+  executionCompletions?: Map<string, number>;
 }
 
 /** Get (creating on first use) the holder's emitter. Never throws — `createAnalytics` can't. */
