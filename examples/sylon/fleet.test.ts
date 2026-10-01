@@ -82,5 +82,17 @@ describe("fleet.json", () => {
     expect(exampleKeys(mergeConfig({ "channels.triage": "C1" }))).not.toContain(
       "channels.triage",
     );
+    const examples = mergeConfig(undefined)["channels.customer"] as {
+      channelId: string;
+      accountName: string;
+    }[];
+    const mixed = mergeConfig({
+      ...local,
+      "channels.customer": [
+        { channelId: "C2", accountName: "Acme" },
+        ...examples,
+      ],
+    });
+    expect(exampleKeys(mixed)).toEqual(["channels.customer"]);
   });
 });

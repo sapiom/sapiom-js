@@ -32,11 +32,29 @@ export const WORKSPACE_KEYS: readonly ConfigKey[] = [
   "oncall.slack_id",
 ];
 
-/** Workspace keys still holding fleet.json's example value: setup refuses to seed those. */
+/**
+ * Workspace keys still holding a fleet.json example value: setup refuses to seed those. A
+ * customer-channel list is flagged when any entry still uses an example channel id, even if real
+ * entries were added beside it.
+ */
 export function exampleKeys(values: FleetConfigValues): ConfigKey[] {
-  return WORKSPACE_KEYS.filter(
-    (k) => JSON.stringify(values[k]) === JSON.stringify(FLEET_CONFIG[k]),
+  const exampleChannels = new Set(
+    (FLEET_CONFIG["channels.customer"] as { channelId: string }[]).map(
+      (c) => c.channelId,
+    ),
   );
+  return WORKSPACE_KEYS.filter((k) => {
+    if (k === "channels.customer") {
+      const list = values[k];
+      return (
+        !Array.isArray(list) ||
+        list.some((c) =>
+          exampleChannels.has((c as { channelId?: string }).channelId ?? ""),
+        )
+      );
+    }
+    return JSON.stringify(values[k]) === JSON.stringify(FLEET_CONFIG[k]);
+  });
 }
 
 export async function seedFleet(
