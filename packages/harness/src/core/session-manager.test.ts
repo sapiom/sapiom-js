@@ -132,6 +132,7 @@ describe("SessionManager", () => {
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
       currentCredentialGeneration?: SessionManagerOptions["currentCredentialGeneration"];
       resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
+      migrateAgentMapIdentity?: SessionManagerOptions["migrateAgentMapIdentity"];
       prepareProjectSession?: SessionManagerOptions["prepareProjectSession"];
       onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
       onTerminalInput?: SessionManagerOptions["onTerminalInput"];
@@ -179,6 +180,9 @@ describe("SessionManager", () => {
         opts.resolveAgentMapIdentity ??
         (async (sessionId, _cwd, persisted) =>
           persisted ?? { projectId: "project-test", userId: "user-test", sessionId }),
+      migrateAgentMapIdentity:
+        opts.migrateAgentMapIdentity ??
+        (async (sessionId) => ({ projectId: "project-test", userId: "user-test", sessionId })),
       prepareProjectSession: opts.prepareProjectSession,
       onAgentMapSessionExit: opts.onAgentMapSessionExit,
       onTerminalInput: opts.onTerminalInput,
@@ -937,12 +941,12 @@ describe("SessionManager", () => {
       agentMapIdentity: { projectId: 42 },
     };
     await writeFile(sessionsPath, JSON.stringify([valid, malformed]), "utf8");
-    const resolveAgentMapIdentity = vi.fn(
+    const migrateAgentMapIdentity = vi.fn(
       async (sessionId: string): Promise<never> => {
         throw new ProjectSessionScopeUnavailableError(sessionId);
       },
     );
-    const { manager } = makeManager({ resolveAgentMapIdentity });
+    const { manager } = makeManager({ migrateAgentMapIdentity });
 
     await manager.init();
 
@@ -950,7 +954,7 @@ describe("SessionManager", () => {
     expect(
       manager.list().every((session) => session.agentMapIdentity !== undefined),
     ).toBe(true);
-    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
+    expect(migrateAgentMapIdentity).not.toHaveBeenCalled();
     await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
@@ -981,13 +985,15 @@ describe("SessionManager", () => {
       ["/tmp/monorepo/packages/app", "project-app"],
       ["/tmp/monorepo", "project-monorepo"],
     ];
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string, cwd: string) => {
+    const migrateAgentMapIdentity = vi.fn(async (sessionId: string, cwd: string) => {
       const owner = roots.find(([root]) => cwd === root || cwd.startsWith(`${root}/`));
       if (!owner) throw new ProjectSessionScopeUnavailableError(sessionId);
       return { projectId: owner[1], userId: "user-1", sessionId };
     });
     const migrations = vi.fn();
+    const resolveAgentMapIdentity = vi.fn();
     const { manager } = makeManager({
+      migrateAgentMapIdentity,
       resolveAgentMapIdentity,
       onProjectAgentIdentityMigration: migrations,
     });
@@ -1017,11 +1023,14 @@ describe("SessionManager", () => {
     expect(persisted.map(({ id }) => id)).toEqual([outer.id, inner.id]);
     expect(persisted.every((session) => session.agentMapIdentity !== undefined)).toBe(true);
 
-    // A restart finds nothing left to migrate.
-    resolveAgentMapIdentity.mockClear();
-    const { manager: restarted } = makeManager({ resolveAgentMapIdentity });
-    await restarted.init();
+    // Migration never goes through the create-time resolver, which may mint.
     expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
+
+    // A restart finds nothing left to migrate.
+    migrateAgentMapIdentity.mockClear();
+    const { manager: restarted } = makeManager({ migrateAgentMapIdentity });
+    await restarted.init();
+    expect(migrateAgentMapIdentity).not.toHaveBeenCalled();
     expect(restarted.list()).toHaveLength(2);
   });
 

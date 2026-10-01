@@ -1486,6 +1486,72 @@ export const startServer = async (
       sessionId: string;
     }) => Promise<void>;
   } = {};
+  const resolveProjectSessionIdentity = async (
+    sessionId: string,
+    cwd: string,
+    {
+      persisted,
+      mayMintForCwd,
+    }: { persisted?: ProjectAgentSession; mayMintForCwd: boolean },
+  ): Promise<ProjectAgentSession> => {
+    const userId = localProjectPrincipal(projectUserId, machineId);
+    return serializeProjectScopeResolution(async () => {
+      const assertPrincipal = (): void => {
+        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+      };
+      const identityFor = (projectId: string): ProjectAgentSession => ({
+        projectId,
+        sessionId,
+        userId,
+      });
+      assertPrincipal();
+      if (
+        persisted &&
+        (persisted.sessionId !== sessionId || persisted.userId !== userId)
+      ) {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      }
+
+      // Resume/final-spawn validation is read-only. In particular, never add
+      // a descendant cwd as a candidate root before proving that the current
+      // durable project still owns it.
+      let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+      assertPrincipal();
+      if (persisted) {
+        if (!project || project.projectId !== persisted.projectId) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        return identityFor(project.projectId);
+      }
+
+      if (project) return identityFor(project.projectId);
+
+      assertPrincipal();
+      await studioProjectCatalog.reconcile(
+        await studioWorkspaceScopeCatalog.list(),
+      );
+      assertPrincipal();
+      project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+
+      if (!project && mayMintForCwd) {
+        pendingProjectCwds.add(cwd);
+        try {
+          await studioProjectCatalog.reconcile(
+            await studioWorkspaceScopeCatalog.list(),
+          );
+          assertPrincipal();
+          project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+        } finally {
+          pendingProjectCwds.delete(cwd);
+        }
+      }
+      assertPrincipal();
+      if (!project) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return identityFor(project.projectId);
+    });
+  };
   sessionManager = new SessionManager({
     adapters,
     ingestUrl: `http://${host}:${options.port}`,
@@ -1498,65 +1564,15 @@ export const startServer = async (
     buildLaunchOpts,
     currentCredentialGeneration: () =>
       apiKeyProvider.snapshot().generation,
-    resolveAgentMapIdentity: async (sessionId, cwd, persisted) => {
-      const userId = localProjectPrincipal(projectUserId, machineId);
-      return serializeProjectScopeResolution(async () => {
-        const assertPrincipal = (): void => {
-          if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-            throw new ProjectSessionScopeUnavailableError(sessionId);
-          }
-        };
-        const identityFor = (projectId: string): ProjectAgentSession => ({
-          projectId,
-          sessionId,
-          userId,
-        });
-        assertPrincipal();
-        if (
-          persisted &&
-          (persisted.sessionId !== sessionId || persisted.userId !== userId)
-        ) {
-          throw new ProjectSessionScopeUnavailableError(sessionId);
-        }
-
-        // Resume/final-spawn validation is read-only. In particular, never add
-        // a descendant cwd as a candidate root before proving that the current
-        // durable project still owns it.
-        let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-        assertPrincipal();
-        if (persisted) {
-          if (!project || project.projectId !== persisted.projectId) {
-            throw new ProjectSessionScopeUnavailableError(sessionId);
-          }
-          return identityFor(project.projectId);
-        }
-
-        if (project) return identityFor(project.projectId);
-
-        assertPrincipal();
-        await studioProjectCatalog.reconcile(
-          await studioWorkspaceScopeCatalog.list(),
-        );
-        assertPrincipal();
-        project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-
-        if (!project) {
-          pendingProjectCwds.add(cwd);
-          try {
-            await studioProjectCatalog.reconcile(
-              await studioWorkspaceScopeCatalog.list(),
-            );
-            assertPrincipal();
-            project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-          } finally {
-            pendingProjectCwds.delete(cwd);
-          }
-        }
-        assertPrincipal();
-        if (!project) throw new ProjectSessionScopeUnavailableError(sessionId);
-        return identityFor(project.projectId);
-      });
-    },
+    resolveAgentMapIdentity: (sessionId, cwd, persisted) =>
+      resolveProjectSessionIdentity(sessionId, cwd, {
+        persisted,
+        mayMintForCwd: true,
+      }),
+    // Load-time migration only joins roots Studio already has open. Minting
+    // for a legacy cwd would resurrect a project the user removed.
+    migrateAgentMapIdentity: (sessionId, cwd) =>
+      resolveProjectSessionIdentity(sessionId, cwd, { mayMintForCwd: false }),
     // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
     // session is an ordinary session: no bootstrap claim, no "Plan Agents"
     // title, no metadata that would make its first turn the coordinator's.

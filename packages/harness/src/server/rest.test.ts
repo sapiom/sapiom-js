@@ -2252,6 +2252,8 @@ describe("createRestRouter", () => {
         ingestCredentials: new IngestCredentialRegistry(() => "test-token"),
         resolveAgentMapIdentity: async (sessionId, _cwd, persisted) =>
           persisted ?? { projectId: "project-test", userId: "user-test", sessionId },
+        migrateAgentMapIdentity: async (sessionId) =>
+          ({ projectId: "project-test", userId: "user-test", sessionId }),
         sessionsPath: path.join(smDir, "sessions.json"),
         // spawnPty not provided — tests only call resume/submitInput which
         // throw before reaching spawn for external-harness sessions.

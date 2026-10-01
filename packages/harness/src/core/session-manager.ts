@@ -468,14 +468,24 @@ export interface SessionManagerOptions {
   currentCredentialGeneration?: () => number;
   /**
    * Issues the one project identity a session belongs to. Called before every
-   * spawn to revalidate cwd containment and the current principal, and once
-   * on load for persisted sessions that predate project identity. Throws
+   * spawn to revalidate cwd containment and the current principal. Throws
    * `ProjectSessionScopeUnavailableError` when no project can own `cwd`.
    */
   resolveAgentMapIdentity: (
     sessionId: string,
     cwd: string,
     persisted?: ProjectAgentSession,
+  ) => Promise<ProjectAgentSession>;
+  /**
+   * Called once on load for a persisted session that predates project
+   * identity. Joins the deepest already-open root containing `cwd` and never
+   * mints a project for the cwd itself, so a session left behind by a removed
+   * project cannot bring it back. Throws `ProjectSessionScopeUnavailableError`
+   * when no open root owns `cwd`.
+   */
+  migrateAgentMapIdentity: (
+    sessionId: string,
+    cwd: string,
   ) => Promise<ProjectAgentSession>;
   /** Claims new-project lifecycle metadata after trusted scope resolution. */
   prepareProjectSession?: (
@@ -1042,6 +1052,7 @@ export class SessionManager {
     | (() => number)
     | undefined;
   private readonly resolveAgentMapIdentity: SessionManagerOptions["resolveAgentMapIdentity"];
+  private readonly migrateAgentMapIdentity: SessionManagerOptions["migrateAgentMapIdentity"];
   private readonly onProjectAgentIdentityMigration: SessionManagerOptions["onProjectAgentIdentityMigration"];
   private readonly rejectedProjectSessionMetadata = new Set<string>();
   private readonly onAgentMapSessionExit: SessionManagerOptions["onAgentMapSessionExit"];
@@ -1111,6 +1122,7 @@ export class SessionManager {
     this.buildLaunchOpts = options.buildLaunchOpts ?? defaultBuildLaunchOpts;
     this.currentCredentialGeneration = options.currentCredentialGeneration;
     this.resolveAgentMapIdentity = options.resolveAgentMapIdentity;
+    this.migrateAgentMapIdentity = options.migrateAgentMapIdentity;
     this.prepareProjectSession = options.prepareProjectSession;
     this.onAgentMapSessionExit = options.onAgentMapSessionExit;
     this.onTerminalInput = options.onTerminalInput ?? (() => {});
@@ -1194,11 +1206,11 @@ export class SessionManager {
         dirty = true;
       } else if (migration.identity === undefined && outcome !== "rejected") {
         // A session written before project identity existed joins the deepest
-        // open root containing its cwd, or a project minted for that cwd. A
-        // cwd no project can own is not a session this build can represent.
+        // open root containing its cwd. A cwd no open root owns is not a
+        // session this build can represent.
         try {
           session.agentMapIdentity = structuredClone(
-            await this.resolveAgentMapIdentity(session.id, session.cwd),
+            await this.migrateAgentMapIdentity(session.id, session.cwd),
           );
           outcome = "migrated";
         } catch (error) {

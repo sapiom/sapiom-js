@@ -217,6 +217,8 @@ describe("SubsessionCoordinator", () => {
       },
       resolveAgentMapIdentity: async (sessionId, _cwd, persisted) =>
         persisted ?? { projectId: "project-test", userId: "user-test", sessionId },
+      migrateAgentMapIdentity: async (sessionId) =>
+        ({ projectId: "project-test", userId: "user-test", sessionId }),
       ...managerOptions,
     });
     managers.push(manager);
