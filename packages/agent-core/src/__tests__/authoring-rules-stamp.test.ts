@@ -1,12 +1,13 @@
 /**
- * Stamp agreement guard (SAP-3181). Every npm-shipped file that summarizes or
- * points at the served platform rules records which release it was written
- * against. Those records have to move together — a file left on an old stamp
- * would make `sapiom_dev_agents_check` warn about a copy that was in fact
- * re-read, or stay silent about one that was not — so this holds all of them
- * to the constants in src/authoring-rules.ts, which the backend's own digest
- * pin holds to the served body. `scripts/authoring-rules-stamp.mjs` is how
- * they move.
+ * Stamp agreement guard (SAP-3181, SAP-3647). The four synced copies of the
+ * skill ship frozen inside the npm package, so each records which release of the
+ * served platform rules it was written against; they have to agree with the
+ * constants in src/authoring-rules.ts, which `scaffold` stamps into every new
+ * project. Nothing else in the repo carries a concrete stamp: the scaffold
+ * templates carry a placeholder that `scaffold` fills, and the gallery examples,
+ * `examples/AUTHORING.md` and the `@sapiom/tools` JSDoc carry only the pointer.
+ * That keeps a content release to the constants plus the skill copies.
+ * `scripts/authoring-rules-stamp.mjs` is how they move.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -14,7 +15,9 @@ import path from "node:path";
 import {
   AUTHORING_RULES_DIGEST,
   AUTHORING_RULES_RELEASE,
+  AUTHORING_RULES_RELEASE_PLACEHOLDER,
   AUTHORING_RULES_SECTIONS,
+  AUTHORING_RULES_STAMP_PLACEHOLDER,
   AUTHORING_RULES_URL,
   authoringRulesDriftWarning,
   parseAuthoringRulesStamp,
@@ -30,14 +33,43 @@ const CANONICAL_SKILL = path.join(
   "SKILL.md",
 );
 
-/** Markdown files carrying the HTML-comment stamp. */
-function stampedMarkdownFiles(): string[] {
-  const files = [
-    CANONICAL_SKILL,
-    path.join(PKG_ROOT, "templates", "default", "AGENTS.md"),
-    path.join(PKG_ROOT, "templates", "coding-pause", "AGENTS.md"),
-    path.join(REPO_ROOT, "examples", "AUTHORING.md"),
-  ];
+/** The skill copies — the only Markdown that carries a concrete stamp. */
+const SKILL_COPIES = [
+  CANONICAL_SKILL,
+  path.join(
+    PKG_ROOT,
+    "templates",
+    "default",
+    ".claude",
+    "skills",
+    "sapiom-agent-authoring",
+    "SKILL.md",
+  ),
+  path.join(
+    PKG_ROOT,
+    "templates",
+    "coding-pause",
+    ".claude",
+    "skills",
+    "sapiom-agent-authoring",
+    "SKILL.md",
+  ),
+  path.join(
+    REPO_ROOT,
+    "plugins",
+    "sapiom",
+    "skills",
+    "sapiom-agent-authoring",
+    "SKILL.md",
+  ),
+];
+
+/** The scaffold templates' AGENTS.md — placeholder, never a concrete stamp. */
+function templateAgentsMd(): string[] {
+  const templatesDir = path.join(PKG_ROOT, "templates");
+  const files = readdirSync(templatesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(templatesDir, entry.name, "AGENTS.md"));
   // The CLI's separately published template — may not exist on every branch.
   const cliAgentsMd = path.join(
     REPO_ROOT,
@@ -48,6 +80,12 @@ function stampedMarkdownFiles(): string[] {
     "AGENTS.md",
   );
   if (existsSync(cliAgentsMd)) files.push(cliAgentsMd);
+  return files;
+}
+
+/** In-repo files that point at the served rules but are not frozen copies. */
+function pointerOnlyFiles(): string[] {
+  const files = [path.join(REPO_ROOT, "examples", "AUTHORING.md")];
   const examples = path.join(REPO_ROOT, "examples");
   for (const entry of readdirSync(examples, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -57,13 +95,17 @@ function stampedMarkdownFiles(): string[] {
   return files;
 }
 
-/** `.ts` files carrying the JSDoc form, `(written against release X)`. */
+/** `.ts` files pointing at a served section from JSDoc. */
 const JSDOC_FILES = [
   path.join(REPO_ROOT, "packages", "tools", "src", "llm", "index.ts"),
   path.join(REPO_ROOT, "packages", "tools", "src", "models", "index.ts"),
 ];
 
 const rel = (file: string) => path.relative(REPO_ROOT, file);
+
+/** Any mention of a concrete release, in prose or as the HTML-comment stamp. */
+const CONCRETE_RELEASE =
+  /written against release \d+\.\d+|sapiom-authoring-rules\s+release=/;
 
 describe("authoring-rules stamp", () => {
   it("renders and parses round-trip", () => {
@@ -74,20 +116,20 @@ describe("authoring-rules stamp", () => {
     expect(parseAuthoringRulesStamp("# no stamp here\n")).toBeNull();
   });
 
+  it("a template placeholder parses as no stamp, so check stays silent on it", () => {
+    expect(
+      parseAuthoringRulesStamp(
+        `# AGENTS\n\n${AUTHORING_RULES_STAMP_PLACEHOLDER}\n`,
+      ),
+    ).toBeNull();
+  });
+
   it("the shipped stamp is a well-formed release id and 12-hex digest", () => {
     expect(AUTHORING_RULES_RELEASE).toMatch(/^\d+\.\d+$/);
     expect(AUTHORING_RULES_DIGEST).toMatch(/^[0-9a-f]{12}$/);
   });
 
-  const markdownFiles = stampedMarkdownFiles();
-
-  it("guards the skill, the templates, AUTHORING.md and every example", () => {
-    // 3 templates + skill + AUTHORING.md + the gallery. A missing example is a
-    // gallery change, not a stamp change, but a count this low means the walk broke.
-    expect(markdownFiles.length).toBeGreaterThan(20);
-  });
-
-  for (const file of markdownFiles) {
+  for (const file of SKILL_COPIES) {
     it(`${rel(file)} carries the current stamp`, () => {
       const markdown = readFileSync(file, "utf8");
       expect(parseAuthoringRulesStamp(markdown)).toEqual({
@@ -107,16 +149,37 @@ describe("authoring-rules stamp", () => {
     });
   }
 
-  for (const file of JSDOC_FILES) {
-    it(`${rel(file)} JSDoc pointers name the current release`, () => {
+  const templates = templateAgentsMd();
+
+  it("finds every scaffold template", () => {
+    expect(templates.length).toBeGreaterThanOrEqual(3);
+  });
+
+  for (const file of templates) {
+    it(`${rel(file)} carries the placeholder, not a concrete stamp`, () => {
+      const markdown = readFileSync(file, "utf8");
+      expect(markdown).toContain(AUTHORING_RULES_STAMP_PLACEHOLDER);
+      expect(markdown).toContain(
+        `written against release\n${AUTHORING_RULES_RELEASE_PLACEHOLDER}`,
+      );
+      expect(markdown).not.toMatch(CONCRETE_RELEASE);
+      expect(parseAuthoringRulesStamp(markdown)).toBeNull();
+    });
+  }
+
+  const pointerOnly = pointerOnlyFiles();
+
+  it("finds AUTHORING.md and the gallery", () => {
+    // A missing example is a gallery change, but a count this low means the walk broke.
+    expect(pointerOnly.length).toBeGreaterThan(20);
+  });
+
+  for (const file of [...pointerOnly, ...JSDOC_FILES]) {
+    it(`${rel(file)} points at the served rules without recording a release`, () => {
       const source = readFileSync(file, "utf8");
-      const releases = [
-        ...source.matchAll(
-          /authoring-rules#[a-z-]+\s*(?:\*\s*)?\(written against release ([^)\s]+)\)/g,
-        ),
-      ].map((m) => m[1]);
-      expect(releases.length).toBeGreaterThan(0);
-      expect(new Set(releases)).toEqual(new Set([AUTHORING_RULES_RELEASE]));
+      expect(source).toContain(AUTHORING_RULES_URL);
+      expect(source).not.toMatch(CONCRETE_RELEASE);
+      expect(source).not.toContain("sapiom-authoring-rules");
     });
   }
 });
@@ -127,7 +190,12 @@ describe("authoring-rules pointers", () => {
 
   it("every section anchor a shipped file points at exists on the served body", () => {
     const known = new Set<string>(AUTHORING_RULES_SECTIONS);
-    for (const file of [...stampedMarkdownFiles(), ...JSDOC_FILES]) {
+    for (const file of [
+      ...SKILL_COPIES,
+      ...templateAgentsMd(),
+      ...pointerOnlyFiles(),
+      ...JSDOC_FILES,
+    ]) {
       for (const anchor of anchorsOf(readFileSync(file, "utf8"))) {
         expect({
           file: rel(file),

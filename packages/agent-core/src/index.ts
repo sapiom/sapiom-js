@@ -62,6 +62,8 @@ export {
   AUTHORING_RULES_DIGEST,
   AUTHORING_RULES_SECTIONS,
   AUTHORING_RULES_STAMP,
+  AUTHORING_RULES_STAMP_PLACEHOLDER,
+  AUTHORING_RULES_RELEASE_PLACEHOLDER,
   renderAuthoringRulesStamp,
   parseAuthoringRulesStamp,
   authoringRulesDriftWarning,

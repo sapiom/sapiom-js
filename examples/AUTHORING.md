@@ -21,10 +21,7 @@ for the person who built it.** Plain, concrete, second-person. No pitch.
 The platform rules a template must respect — which capability calls an LLM, database lifetime,
 trigger kinds, App Link webhooks — are served live at
 <https://api.sapiom.ai/v1/agents/authoring-rules> and are not restated in this guide; where a
-step below touches one, it points at the served section. This guide was
-written against release 1.1 of that text.
-
-<!-- sapiom-authoring-rules release=1.1 digest=8ed17f08af11 -->
+step below touches one, it points at the served section.
 
 ---
 

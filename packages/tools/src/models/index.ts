@@ -81,7 +81,6 @@ export interface CodingRunSpec {
    * honored. Omit it (recommended) to let the platform choose; pass
    * `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    * The full rule is the served platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
-   * (written against release 1.1).
    */
   model?: ModelLabel;
   /**
@@ -610,7 +609,6 @@ export interface ModelRunSpec {
    * (SAP-2765). Omit it (recommended) to let the platform choose; pass
    * `"small"`/`"medium"`/`"large"` only to pick a billing class deliberately.
    * The full rule is the served platform text: https://api.sapiom.ai/v1/agents/authoring-rules#llm-call-surface
-   * (written against release 1.1).
    */
   model?: ModelLabel;
   /**
