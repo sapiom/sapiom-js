@@ -139,6 +139,19 @@ import type {
   SendEmailResult,
 } from "../connectors/google/index.js";
 import type { GitHubRepo } from "../connectors/github/index.js";
+import type {
+  SlackPostEphemeralResult,
+  SlackPostMessageResult,
+  SlackReactionResult,
+  SlackRepliesResult,
+  SlackUpdateResult,
+  SlackUserInfoResult,
+} from "../connectors/slack/index.js";
+import type {
+  McpCallToolResult,
+  McpConnector,
+  McpTool,
+} from "../connectors/mcp/index.js";
 import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
 
 /**
@@ -1006,6 +1019,26 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     capabilityOverride?: string,
   ) =>
     resolve(overrides, paths, args, fallback, opts.calls, capabilityOverride);
+
+  // An MCP-relay connector offline: no tools until overridden, and a text result naming
+  // the call. `connectors.<slug>.<op>` wins over the catch-all `connectors.mcp.<op>`.
+  const stubMcp = (slug: string): McpConnector => ({
+    listTools: async () =>
+      r(
+        [`connectors.${slug}.listTools`, "connectors.mcp.listTools"],
+        [],
+        () => [],
+      ) as McpTool[],
+    callTool: async (name, args) =>
+      r(
+        [`connectors.${slug}.callTool`, "connectors.mcp.callTool"],
+        [name, args],
+        () => ({
+          content: [{ type: "text", text: `stub result for ${slug}.${name}` }],
+          isError: false,
+        }),
+      ) as McpCallToolResult,
+  });
 
   // Per-client memory state: namespace → (id → record). See the `memory`
   // capability below for what is and isn't simulated.
@@ -2143,7 +2176,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           })) as ScopedKey,
         ),
     },
-    // Connection-backed third-party providers (Google, GitHub) — mirrors the
+    // Connection-backed third-party providers (Google, GitHub, Slack, MCP) — mirrors the
     // `connectors` grouping on the real client.
     connectors: {
       // A live Google credential is fetched server-side in production; the stub returns
@@ -2254,6 +2287,65 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             },
           ]) as GitHubRepo[],
       },
+      // Slack methods run server-side in the gateway (the bot token is injected there) in
+      // production; the stub returns shape-faithful, obviously-fake Slack bodies so an
+      // offline run can exercise the call graph without a Slack connector or network call.
+      slack: {
+        postMessage: async (args) =>
+          r("connectors.slack.postMessage", [args], () => ({
+            ok: true,
+            channel: args.channel,
+            ts: "1700000000.000100",
+          })) as SlackPostMessageResult,
+        update: async (args) =>
+          r("connectors.slack.update", [args], () => ({
+            ok: true,
+            channel: args.channel,
+            ts: args.ts,
+            text: args.text,
+          })) as SlackUpdateResult,
+        postEphemeral: async (args) =>
+          r("connectors.slack.postEphemeral", [args], () => ({
+            ok: true,
+            message_ts: "1700000000.000200",
+          })) as SlackPostEphemeralResult,
+        addReaction: async (args) =>
+          r("connectors.slack.addReaction", [args], () => ({
+            ok: true,
+          })) as SlackReactionResult,
+        removeReaction: async (args) =>
+          r("connectors.slack.removeReaction", [args], () => ({
+            ok: true,
+          })) as SlackReactionResult,
+        replies: async (args) =>
+          r("connectors.slack.replies", [args], () => ({
+            ok: true,
+            messages: [
+              {
+                type: "message",
+                ts: args.ts,
+                user: "U0STUBUSER",
+                text: "stub thread parent",
+              },
+            ],
+            has_more: false,
+          })) as SlackRepliesResult,
+        userInfo: async (args) =>
+          r("connectors.slack.userInfo", [args], () => ({
+            ok: true,
+            user: {
+              id: args.user,
+              name: "stub-user",
+              real_name: "Stub User",
+              is_bot: false,
+              tz: "UTC",
+              profile: { display_name: "stub-user", real_name: "Stub User" },
+            },
+          })) as SlackUserInfoResult,
+      },
+      linear: stubMcp("linear"),
+      notion: stubMcp("notion"),
+      mcp: (slug) => stubMcp(slug),
     },
     speech: {
       textToSpeech: {

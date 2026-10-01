@@ -193,6 +193,23 @@ import type {
 import type { OAuth2Client } from "google-auth-library";
 import * as github from "./connectors/github/index.js";
 import type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
+import * as slack from "./connectors/slack/index.js";
+import type {
+  SlackPostEphemeralArgs,
+  SlackPostEphemeralResult,
+  SlackPostMessageArgs,
+  SlackPostMessageResult,
+  SlackReactionArgs,
+  SlackReactionResult,
+  SlackRepliesArgs,
+  SlackRepliesResult,
+  SlackUpdateArgs,
+  SlackUpdateResult,
+  SlackUserInfoArgs,
+  SlackUserInfoResult,
+} from "./connectors/slack/index.js";
+import { mcp } from "./connectors/mcp/index.js";
+import type { McpConnector } from "./connectors/mcp/index.js";
 import { ExecutionClient } from "./executions/client.js";
 
 export interface Sapiom {
@@ -575,6 +592,43 @@ export interface Sapiom {
        */
       listRepos(args?: ListReposArgs): Promise<GitHubRepo[]>;
     };
+    /**
+     * Slack Web API methods. The gateway resolves the tenant's Slack bot token internally
+     * and calls Slack; the token never reaches the run. Each throws 404 when no Slack
+     * connector is connected and 502 when Slack answers `ok: false`.
+     */
+    readonly slack: {
+      /** `chat.postMessage`: post to a channel or DM, in a thread when `threadTs` is set. */
+      postMessage(args: SlackPostMessageArgs): Promise<SlackPostMessageResult>;
+      /** `chat.update`: edit a message the bot posted. */
+      update(args: SlackUpdateArgs): Promise<SlackUpdateResult>;
+      /** `chat.postEphemeral`: a message only `user` sees. */
+      postEphemeral(
+        args: SlackPostEphemeralArgs,
+      ): Promise<SlackPostEphemeralResult>;
+      /** `reactions.add`: react to a message with an emoji. */
+      addReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
+      /** `reactions.remove`: remove the bot's reaction. */
+      removeReaction(args: SlackReactionArgs): Promise<SlackReactionResult>;
+      /** `conversations.replies`: a thread's parent message and replies, paginated. */
+      replies(args: SlackRepliesArgs): Promise<SlackRepliesResult>;
+      /** `users.info`: look up a user by id. */
+      userInfo(args: SlackUserInfoArgs): Promise<SlackUserInfoResult>;
+    };
+    /**
+     * The tenant's Linear connector over the MCP relay (slug `linear`). Its tools come
+     * from `listTools()` once the tenant has connected Linear and run Discover.
+     */
+    readonly linear: McpConnector;
+    /** The tenant's Notion connector over the MCP relay (slug `notion`). */
+    readonly notion: McpConnector;
+    /**
+     * Any MCP-backed connector by slug — a renamed or second Linear/Notion connector
+     * (`linear-2`) or a custom MCP server. `listTools()` / `callTool(name, args)`; a
+     * failed tool call is a result with `isError: true`, a JSON-RPC error throws
+     * `McpRelayError`.
+     */
+    mcp(slug: string): McpConnector;
   };
   /** Text-to-speech, sound effects, and voice listing. */
   readonly speech: {
@@ -822,6 +876,18 @@ function bind(transport: Transport): Sapiom {
       github: {
         listRepos: (args) => github.listRepos(args, transport),
       },
+      slack: {
+        postMessage: (args) => slack.postMessage(args, transport),
+        update: (args) => slack.update(args, transport),
+        postEphemeral: (args) => slack.postEphemeral(args, transport),
+        addReaction: (args) => slack.addReaction(args, transport),
+        removeReaction: (args) => slack.removeReaction(args, transport),
+        replies: (args) => slack.replies(args, transport),
+        userInfo: (args) => slack.userInfo(args, transport),
+      },
+      linear: mcp("linear", transport),
+      notion: mcp("notion", transport),
+      mcp: (slug) => mcp(slug, transport),
     },
     speech: {
       textToSpeech: {

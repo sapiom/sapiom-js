@@ -362,6 +362,32 @@ try {
 }
 ```
 
+### Calling Slack, Linear, and Notion from a step
+
+The tenant connects each provider on the Connectors page; the gateway holds the credential, so a
+step never sees a token. `@sapiom/tools` >= 0.41.0:
+
+```typescript
+const { slack, linear } = ctx.sapiom.connectors;
+await slack.postMessage({ channel, text: "On it.", threadTs: ts }); // also update, postEphemeral,
+await slack.addReaction({ channel, timestamp: ts, name: "eyes" }); // removeReaction, replies, userInfo
+const tools = await linear.listTools(); // names + JSON Schemas; empty until connected + discovered
+const res = await linear.callTool("<tool name from listTools>", {
+  /* its inputSchema */
+});
+if (res.isError) return fail(res.content.map((c) => c.text).join("\n")); // canFail: true
+```
+
+- Slack events start runs through `event` triggers on `slack.<type>`: `slack.message.created`,
+  `slack.reaction_added`, `slack.block_actions`. A trigger has no channel filter, so check the
+  channel in the first step (`payload.event.channel`; `payload.channel.id` for `block_actions`)
+  and `terminate()` (from a `terminal: true` step) for channels the agent ignores. Messages from
+  bots (the agent's own replies included) are never delivered, so a reply cannot re-trigger it.
+- Linear and Notion run through the MCP relay: their tools are whatever `listTools()` returns
+  after the tenant connects the provider and clicks **Discover** on /connectors. Read the names
+  there; do not guess them. A failed call is a result with `isError: true`, not a throw.
+  `ctx.sapiom.connectors.mcp("<slug>")` reaches a renamed or custom MCP connector.
+
 <!-- section: llm-call-surface -->
 
 ## Calling LLMs from Steps
