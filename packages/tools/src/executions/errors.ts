@@ -13,6 +13,8 @@ export class ExecutionError extends Error implements ExecutionReference {
 export class ExecutionProtocolError extends ExecutionError {}
 export class ExecutionTransportError extends ExecutionError {}
 export class ExecutionInterruptedError extends ExecutionError {}
+/** Only the caller's wait stopped; the server execution was not cancelled. */
+export class ExecutionWaitInterruptedError extends ExecutionInterruptedError {}
 export class ExecutionExpiredError extends ExecutionError {
   readonly status = 410;
 }
