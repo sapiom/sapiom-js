@@ -2,10 +2,20 @@ import { createClient } from "../client.js";
 import { evaluate } from "../decisions/index.js";
 import { Transport } from "./index.js";
 import { executionDeliveryEligible } from "./execution-delivery.js";
+import { resolveCoreBaseUrl } from "./capability-call.js";
 
 const json = (value: unknown) => new Response(JSON.stringify(value));
 
 describe("Core origin configuration", () => {
+  it("trims trailing slashes while preserving long internal path segments", () => {
+    const base = `https://core.test/${"/".repeat(250_000)}x`;
+    expect(resolveCoreBaseUrl(base)).toBe(base);
+    expect(resolveCoreBaseUrl(`${base}///`)).toBe(base);
+    expect(resolveCoreBaseUrl("https://core.test/prefix///")).toBe(
+      "https://core.test/prefix",
+    );
+  });
+
   it.each(["legacy", "executions"] as const)(
     "honors a decisions client origin while keeping decisions synchronous in %s mode",
     async (capabilityDelivery) => {
