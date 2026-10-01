@@ -131,6 +131,7 @@
     "dev": "npm run gen:version && tsc --watch --project tsconfig.cjs.json",
     "gen:version": "node scripts/generate-version.mjs",
     "test": "npm run gen:version && jest",
+    "test:executions:subprocess": "node --test scripts/capability-executions-*.test.mjs",
     "test:coverage": "npm run gen:version && jest --coverage",
     "test:watch": "npm run gen:version && jest --watch",
     "typecheck": "npm run gen:version && tsc --noEmit",

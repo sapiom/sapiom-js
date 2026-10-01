@@ -43,6 +43,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Verify capability execution subprocesses
+        run: pnpm --filter @sapiom/tools test:executions:subprocess
+
       - name: Verify installed Agent Map package
         run: pnpm --filter @sapiom/agent-map test:package
 
