@@ -10,8 +10,9 @@
  * release id and a 12-hex sha-256 digest of the body (SAP-3190). Everything
  * this package ships that used to restate one of those rules — the
  * `sapiom-agent-authoring` skill's platform chapters, every scaffolded
- * `AGENTS.md`, `examples/AUTHORING.md` — now carries a short summary, a pointer
- * to the served section, and this stamp. A copy inside a scaffolded project is
+ * `AGENTS.md`, `examples/AUTHORING.md` — now carries a short summary and a
+ * pointer to the served section; the skill and every scaffolded `AGENTS.md`
+ * also carry this stamp. A copy inside a scaffolded project is
  * frozen at scaffold time and can never be corrected; the stamp is what lets
  * `sapiom_dev_agents_check` say "this differs from the served copy" instead of
  * teaching a stale rule silently.
@@ -24,8 +25,12 @@
  *
  * Bumping: when the backend cuts a new release, run
  * `node scripts/authoring-rules-stamp.mjs --from-served` at the repo root. It
- * rewrites these two constants and every stamped file together;
- * `__tests__/authoring-rules-stamp.test.ts` fails if any of them disagree.
+ * rewrites these two constants and the four synced copies of the skill (which
+ * ship frozen inside the npm package). The scaffold templates carry
+ * `AUTHORING_RULES_STAMP_PLACEHOLDER` and get the concrete stamp from these
+ * constants when a project is scaffolded (SAP-3647); the gallery examples carry
+ * only the pointer. `__tests__/authoring-rules-stamp.test.ts` fails if the
+ * constants and the skill copies disagree.
  */
 
 /** Public URL of the served rules (production). */
@@ -80,6 +85,20 @@ export function renderAuthoringRulesStamp(
 ): string {
   return `<!-- sapiom-authoring-rules release=${stamp.release} digest=${stamp.digest} -->`;
 }
+
+/**
+ * What an in-repo scaffold template carries where a scaffolded project gets its
+ * stamp (SAP-3647). The template is not a frozen copy, so it records no release;
+ * `scaffold` swaps this for `renderAuthoringRulesStamp()` and
+ * `AUTHORING_RULES_RELEASE_PLACEHOLDER` for the release id. A placeholder parses
+ * as no stamp, so `check` stays silent on it.
+ */
+export const AUTHORING_RULES_STAMP_PLACEHOLDER =
+  "<!-- sapiom-authoring-rules -->";
+
+/** The token a template's prose carries in place of the release id it names. */
+export const AUTHORING_RULES_RELEASE_PLACEHOLDER =
+  "__AUTHORING_RULES_RELEASE__";
 
 const STAMP_PATTERN =
   /<!--\s*sapiom-authoring-rules\s+release=(\S+)\s+digest=([0-9a-f]{12})\s*-->/;

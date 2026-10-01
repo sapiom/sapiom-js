@@ -25,6 +25,12 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  AUTHORING_RULES_RELEASE,
+  AUTHORING_RULES_RELEASE_PLACEHOLDER,
+  AUTHORING_RULES_STAMP_PLACEHOLDER,
+  renderAuthoringRulesStamp,
+} from "./authoring-rules.js";
 import { writeConfig } from "./config.js";
 import { AgentOperationError } from "./errors.js";
 import { installProjectDependencies } from "./install-deps.js";
@@ -250,7 +256,11 @@ function copyTemplate(
 function initGitRepo(dir: string): boolean {
   const tryGit = (args: string[]): boolean => {
     try {
-      execFileSync("git", args, { cwd: dir, stdio: "ignore", windowsHide: true });
+      execFileSync("git", args, {
+        cwd: dir,
+        stdio: "ignore",
+        windowsHide: true,
+      });
       return true;
     } catch {
       return false;
@@ -348,6 +358,10 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     __AGENT_VERSION__: versions.agent,
     __TOOLS_VERSION__: versions.tools,
     __ZOD_VERSION__: versions.zod,
+    // The template records no release; the project is frozen from here on, so
+    // it gets the one this package was built against (SAP-3647).
+    [AUTHORING_RULES_STAMP_PLACEHOLDER]: renderAuthoringRulesStamp(),
+    [AUTHORING_RULES_RELEASE_PLACEHOLDER]: AUTHORING_RULES_RELEASE,
   });
 
   // When versions were resolved from a non-default registry (a local Verdaccio

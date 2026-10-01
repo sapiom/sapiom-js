@@ -8,14 +8,15 @@
  *
  * The backend serves the platform rules at GET /v1/agents/authoring-rules and
  * stamps each response with `X-Sapiom-Content-Release` / `X-Sapiom-Content-Digest`.
- * The skill's platform chapters, every AGENTS.md, examples/AUTHORING.md, the
- * `@sapiom/tools` JSDoc pointers and the constants in
- * packages/agent-core/src/authoring-rules.ts all record which release they were
- * written against, and `packages/agent-core/src/__tests__/authoring-rules-stamp.test.ts`
- * fails when any of them disagree. When a release is cut, re-read the summaries
- * against the new text, then run this once so the stamps move together.
+ * The constants in packages/agent-core/src/authoring-rules.ts and the four
+ * synced copies of the skill (frozen inside the npm package at publish time)
+ * record which release they were written against, and
+ * `packages/agent-core/src/__tests__/authoring-rules-stamp.test.ts` fails when
+ * they disagree. Scaffolded `AGENTS.md` files get their stamp from the
+ * constants at scaffold time (SAP-3647). When a release is cut, re-read the
+ * skill's summaries against the new text, then run this once.
  */
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,34 +25,20 @@ import { isDigest, restamp } from "./lib/authoring-rules-stamp.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_URL = "https://api.sapiom.ai/v1/agents/authoring-rules";
 
-/** Every file that carries a stamp in any of its forms. Mirrors the test's list. */
+/**
+ * Every file that carries a concrete stamp. Mirrors the test's list. The
+ * scaffold templates carry a placeholder that `scaffold` fills from the
+ * constants (SAP-3647), and the gallery examples carry only the pointer, so a
+ * release touches these five and nothing else.
+ */
 export function stampedFiles(root = ROOT) {
-  const files = [
+  return [
     "packages/agent-core/src/authoring-rules.ts",
     "packages/agent-core/skills/sapiom-agent-authoring/SKILL.md",
     "packages/agent-core/templates/default/.claude/skills/sapiom-agent-authoring/SKILL.md",
     "packages/agent-core/templates/coding-pause/.claude/skills/sapiom-agent-authoring/SKILL.md",
     "plugins/sapiom/skills/sapiom-agent-authoring/SKILL.md",
-    "packages/agent-core/templates/default/AGENTS.md",
-    "packages/agent-core/templates/coding-pause/AGENTS.md",
-    "packages/cli/templates/default/AGENTS.md",
-    "packages/tools/src/llm/index.ts",
-    "packages/tools/src/models/index.ts",
-    "examples/AUTHORING.md",
-  ];
-  const examples = path.join(root, "examples");
-  for (const entry of readdirSync(examples)) {
-    const agentsMd = path.join(examples, entry, "AGENTS.md");
-    if (statSync(path.join(examples, entry)).isDirectory()) {
-      try {
-        statSync(agentsMd);
-        files.push(path.relative(root, agentsMd));
-      } catch {
-        // an example without an AGENTS.md carries nothing to stamp
-      }
-    }
-  }
-  return files.map((f) => path.join(root, f));
+  ].map((f) => path.join(root, f));
 }
 
 function parseArgs(argv) {
