@@ -88,6 +88,9 @@ export interface LocalRunResult {
   /** Warnings about stub values that matched a key but had the wrong shape for
    *  the capability (the silent-wrong-data trap). Empty when none. */
   stubWarnings: string[];
+  /** `true` when the MAX_ADVANCES guard fires before a terminal state is
+   *  reached. The `outcome` field will be `"running"` in this case. */
+  limitExceeded?: boolean;
 }
 
 const MAX_ADVANCES = 1000; // backstop against a pathological non-terminating graph
@@ -156,6 +159,7 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
     // 'running' (or just-resumed) → advance again
   }
 
+  const limitExceeded = guard > MAX_ADVANCES;
   const final = await store.loadExecution(executionId);
   // A local run never cancels; fold the unreachable 'cancelled' into 'failed'.
   const outcome: LocalRunOutcome =
@@ -178,6 +182,7 @@ export async function runLocal(opts: RunLocalOptions): Promise<LocalRunResult> {
     steps: dispatcher.trace,
     unusedStubs,
     stubWarnings: [...dispatcher.stubWarnings],
+    ...(limitExceeded ? { limitExceeded: true } : {}),
   };
 }
 
