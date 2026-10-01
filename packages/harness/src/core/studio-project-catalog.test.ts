@@ -7,6 +7,7 @@ import {
   StudioProjectCatalog,
   StudioProjectCatalogError,
 } from "@sapiom/agent-map/node/studio-project-catalog";
+import { resolveProjectRootForPath } from "@sapiom/agent-map/project-roots";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -190,7 +191,7 @@ describe("StudioProjectCatalog", () => {
       .toBe(project.projectId);
   });
 
-  it("preserves separate legacy project identities when Windows roots become ambiguous", async () => {
+  it("publishes no scope for a root claimed by two projects, so clients and the resolver agree it has no owner", async () => {
     const { catalogPath } = await fixture();
     const catalog = new StudioProjectCatalog(catalogPath);
     const first = await catalog.create("First legacy project");
@@ -205,21 +206,26 @@ describe("StudioProjectCatalog", () => {
     const restarted = new StudioProjectCatalog(catalogPath);
     expect((await restarted.list()).map(({ projectId }) => projectId).sort())
       .toEqual([first.projectId, second.projectId].sort());
-    expect(await restarted.resolveIdentityForPath("C:\\Work\\Project\\src")).toBeNull();
+    const descendant = "C:\\Work\\Project\\src";
+    expect(await restarted.resolveIdentityForPath(descendant)).toBeNull();
     const result = await restarted.reconcile([
       { workspaceKey: "ambiguous", cwd: "C:\\Work\\Project" },
+      { workspaceKey: "ambiguous-lower", cwd: "c:\\work\\project" },
       { workspaceKey: "unrelated", cwd: "/unrelated-project" },
     ]);
-    // Both legacy projects survive; the published scope belongs to exactly one
-    // of them, chosen deterministically (oldest project) so restarts agree.
-    expect(result.workspaceScopes.find(({ workspaceKey }) => workspaceKey === "ambiguous"))
-      .toEqual({
-        workspaceKey: "ambiguous",
-        cwd: "C:\\Work\\Project",
-        projectId: first.projectId,
-      });
-    expect(result.workspaceScopes.find(({ workspaceKey }) => workspaceKey === "unrelated")?.projectId)
-      .toMatch(/^project_/);
+    // Neither spelling of the conflicted root is published, so no client can
+    // hold a project id for it that the server resolver would refuse.
+    expect(result.workspaceScopes.map(({ workspaceKey }) => workspaceKey))
+      .toEqual(["unrelated"]);
+    expect(result.workspaceScopes[0]?.projectId).toMatch(/^project_/);
+    expect(
+      resolveProjectRootForPath(
+        descendant,
+        result.workspaceScopes.map(({ cwd, projectId }) => ({ cwd, projectId })),
+      ),
+    ).toBeNull();
+    expect(await restarted.resolveIdentityForPath(descendant)).toBeNull();
+    // Durable bindings are left for an explicit repair; both projects survive.
     expect(await restarted.resolve(first.projectId)).not.toBeNull();
     expect(await restarted.resolve(second.projectId)).not.toBeNull();
   });

@@ -688,10 +688,14 @@ export class StudioProjectCatalog {
               candidate.legacyWorkspaceKeys.includes(scope.workspaceKey)) ||
             bindsRoot(candidate),
         );
-        // Several projects claiming one root is a durable-state conflict; the
-        // root still needs exactly one owner. A project bound to the root by
-        // path outranks one that knows it only through a legacy alias, then
-        // the oldest project wins so the choice is stable across restarts.
+        // Several projects bound to one root by path is a durable-state
+        // conflict that path resolution refuses as ambiguous. Publishing either
+        // owner would hand clients an identity the server cannot resolve, so
+        // the scope stays unpublished until the bindings are repaired.
+        if (matchingProjects.filter(bindsRoot).length > 1) continue;
+        // A project bound to the root by path outranks one that knows it only
+        // through a legacy alias, then the oldest project wins so the choice
+        // is stable across restarts.
         let project = [...matchingProjects].sort(
           (left, right) =>
             Number(bindsRoot(right)) - Number(bindsRoot(left)) ||
