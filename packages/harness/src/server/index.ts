@@ -1528,10 +1528,7 @@ export const startServer = async (
           userId,
         });
         assertPrincipal();
-        if (
-          persisted &&
-          (persisted.sessionId !== sessionId || persisted.userId !== userId)
-        ) {
+        if (persisted && persisted.sessionId !== sessionId) {
           throw new ProjectSessionScopeUnavailableError(sessionId);
         }
 
@@ -1541,10 +1538,7 @@ export const startServer = async (
         let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
         assertPrincipal();
         if (persisted) {
-          if (!project || project.projectId !== persisted.projectId) {
-            throw new ProjectSessionScopeUnavailableError(sessionId);
-          }
-          return identityFor(project.projectId);
+          return project ? identityFor(project.projectId) : undefined;
         }
 
         if (project) return identityFor(project.projectId);
@@ -1711,7 +1705,7 @@ export const startServer = async (
       .catch(() => {})
       .then(() =>
         Promise.all([
-          sessionManager.terminateCredentialBearingSessions(generation),
+          sessionManager.relaunchCredentialBearingSessions(generation),
           taskManager.terminateCredentialBearingTasks(generation),
         ]).then(() => {}),
       );

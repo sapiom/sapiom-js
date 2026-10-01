@@ -375,6 +375,46 @@ describe("SessionManager", () => {
     expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
   });
 
+  it("rejects a bound resume when its freshly resolved project scope is unavailable", async () => {
+    const identity = (sessionId: string) => ({
+      projectId: "project_00000000-0000-4000-8000-000000000001",
+      userId: "user-1",
+      sessionId,
+    });
+    const resolveAgentMapIdentity = vi
+      .fn()
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockResolvedValueOnce(undefined);
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity,
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000117";
+    const input = delegatedCreate(sessionId);
+    const expected = marker(sessionId);
+    const next = marker(sessionId, 2, 2);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      expected,
+      input.trusted,
+    );
+    await manager.setAgentSessionId(sessionId, "agent-bound-scope-unavailable");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    const beforeResume = structuredClone(manager.get(sessionId));
+
+    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+
+    expect(manager.get(sessionId)).toEqual(beforeResume);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(1);
+  });
+
   it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
     const initial = createFakePty();
     const resumedPty = createFakePty();
@@ -830,7 +870,7 @@ describe("SessionManager", () => {
     expect(spawns).toHaveLength(1);
   });
 
-  it("preserves malformed or conflicting legacy identity records without deleting or duplicating them", async () => {
+  it("resumes a session with rejected legacy metadata using freshly resolved scope", async () => {
     const malformed = {
       id: "malformed-session",
       agentSessionId: "provider-malformed",
@@ -883,8 +923,15 @@ describe("SessionManager", () => {
       "utf8",
     );
     const migrations = vi.fn();
+    const resolvedIdentity = (sessionId: string) => ({
+      projectId: "project-1",
+      userId: "current-user",
+      sessionId,
+    });
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
+      resolveAgentMapIdentity: async (sessionId) =>
+        resolvedIdentity(sessionId),
     });
 
     await manager.init();
@@ -896,21 +943,22 @@ describe("SessionManager", () => {
       [{ sessionId: malformed.id, outcome: "rejected" }],
       [{ sessionId: conflicting.id, outcome: "rejected" }],
     ]);
-    await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-    await expect(manager.resume(conflicting.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-    expect(adapter.canResume).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
     const persisted = JSON.parse(
       await readFile(sessionsPath, "utf8"),
     ) as unknown[];
     expect(persisted).toEqual([malformed, conflicting]);
+
+    await expect(manager.resume(malformed.id)).resolves.toMatchObject({
+      id: malformed.id,
+      status: "running",
+      agentMapIdentity: resolvedIdentity(malformed.id),
+    });
+    expect(manager.get(conflicting.id)).toEqual(conflicting);
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(spawns).toHaveLength(1);
   });
 
-  it("preserves present-but-malformed legacy planner and bootstrap records", async () => {
+  it("resumes with present-but-malformed legacy planner and bootstrap records", async () => {
     const base = {
       agentSessionId: "provider-session",
       harness: "claude-code",
@@ -958,17 +1006,25 @@ describe("SessionManager", () => {
       [{ sessionId: malformedPlanning.id, outcome: "rejected" }],
       [{ sessionId: malformedBootstrap.id, outcome: "rejected" }],
     ]);
-    await expect(manager.resume(malformedPlanning.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-    await expect(manager.resume(malformedBootstrap.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
-    expect(adapter.canResume).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
     expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
       [malformedPlanning, malformedBootstrap],
     );
+
+    await expect(manager.resume(malformedPlanning.id)).resolves.toMatchObject({
+      id: malformedPlanning.id,
+      status: "running",
+    });
+    await expect(manager.resume(malformedBootstrap.id)).resolves.toMatchObject({
+      id: malformedBootstrap.id,
+      status: "running",
+      projectBootstrap: "not-an-object",
+    });
+    expect(manager.get(malformedBootstrap.id)).not.toHaveProperty(
+      "agentMapIdentity",
+    );
+    expect(adapter.canResume).toHaveBeenCalledTimes(2);
+    expect(adapter.resume).toHaveBeenCalledTimes(2);
+    expect(spawns).toHaveLength(2);
   });
 
   it("routes write() and resize() to the underlying pty", async () => {
@@ -4129,42 +4185,116 @@ describe("SessionManager", () => {
     });
   });
 
-  it("terminates only credential-bearing MCP runtimes at or before the removal generation", async () => {
-    let launchCount = 0;
+  it("relaunches resumable removed-credential sessions after killing their old runtimes", async () => {
     let generation = 1;
+    let launchCount = 0;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async (agentSessionId: string) =>
+        agentSessionId === "provider-resumable",
+      ),
+    });
+    const resumePreparationStarted = deferred<void>();
+    const allowResumePreparation = deferred<void>();
     const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      prepareWorkspaceContext: async () => {
+        resumePreparationStarted.resolve();
+        await allowResumePreparation.promise;
+      },
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: launchCount++ < 3,
+        },
+      }),
+    });
+    const resumable = await manager.create({
+      cwd: "/tmp/resumable-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(resumable.id, "provider-resumable");
+    const unavailable = await manager.create({
+      cwd: "/tmp/unavailable-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(unavailable.id, "provider-unavailable");
+    const noProviderSession = await manager.create({
+      cwd: "/tmp/no-provider-session-with-key",
+      harness: "claude-code",
+    });
+    const oldRuntime = manager.getRuntimeEpoch(resumable.id);
+    generation = 2;
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() =>
+      expect(spawns.slice(0, 3).every(({ pty }) => pty.kill.mock.calls.length > 0)).toBe(
+        true,
+      ),
+    );
+    spawns[0]!.emitExit(0);
+    spawns[1]!.emitExit(0);
+    spawns[2]!.emitExit(0);
+    try {
+      await removal;
+      await resumePreparationStarted.promise;
+      expect(manager.get(resumable.id)?.status).toBe("starting");
+      expect(spawns).toHaveLength(3);
+    } finally {
+      allowResumePreparation.resolve();
+    }
+    await manager.flush();
+
+    expect(manager.get(resumable.id)).toMatchObject({ status: "running" });
+    expect(manager.get(unavailable.id)?.status).toBe("exited");
+    expect(manager.get(noProviderSession.id)?.status).toBe("exited");
+    expect(manager.getRuntimeEpoch(resumable.id)).not.toBe(oldRuntime);
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(adapter.canResume).toHaveBeenCalledTimes(3);
+    expect(spawns).toHaveLength(4);
+  });
+
+  it("does not reject credential removal when the keyless resume fails", async () => {
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      resume: vi.fn(() => {
+        throw new Error("resume failed");
+      }),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
         mcpCredentialLaunch: {
           generation,
-          credentialBearing: launchCount++ !== 1,
+          credentialBearing: generation === 1,
         },
       }),
     });
-    const credentialBearing = await manager.create({
-      cwd: "/tmp/with-key",
+    const session = await manager.create({
+      cwd: "/tmp/resume-failure-with-key",
       harness: "claude-code",
     });
-    const signedOut = await manager.create({
-      cwd: "/tmp/without-key",
-      harness: "claude-code",
-    });
+    await manager.setAgentSessionId(session.id, "provider-resume-failure");
     generation = 2;
-    const newer = await manager.create({
-      cwd: "/tmp/newer-key",
-      harness: "claude-code",
-    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const terminating = manager.terminateCredentialBearingSessions(1);
+    const removal = manager.relaunchCredentialBearingSessions(1);
     await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
-    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
-    expect(spawns[2]!.pty.kill).not.toHaveBeenCalled();
-
     spawns[0]!.emitExit(0);
-    await terminating;
-    expect(manager.get(credentialBearing.id)?.status).toBe("exited");
-    expect(manager.get(signedOut.id)?.status).toBe("running");
-    expect(manager.get(newer.id)?.status).toBe("running");
+    await expect(removal).resolves.toBeUndefined();
+    await manager.flush();
+
+    expect(manager.get(session.id)).toMatchObject({
+      status: "exited",
+      mcpAuthState: "not-applicable",
+    });
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "[harness] credential-removal session relaunch failed",
+      { sessionId: session.id },
+    );
+    consoleError.mockRestore();
   });
 
 
@@ -5685,7 +5815,7 @@ describe("SessionManager", () => {
   });
 
 
-  it("fails resume closed when neutral project scope cannot be revalidated and preserves the session identity", async () => {
+  it("resumes without project scope when neutral scope cannot be revalidated", async () => {
     const identity = (sessionId: string) => ({
       projectId: "project-1",
       userId: "user-1",
@@ -5707,24 +5837,60 @@ describe("SessionManager", () => {
     await manager.setAgentSessionId(session.id, "provider-project-session");
     spawns[0]?.emitExit(0);
     await manager.flush();
-    const beforeResume = structuredClone(manager.get(session.id));
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
 
-    await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
-      ProjectSessionScopeUnavailableError,
-    );
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      agentSessionId: "provider-project-session",
+      status: "running",
+    });
 
     expect(resolveAgentMapIdentity).toHaveBeenLastCalledWith(
       session.id,
       session.cwd,
-      session.agentMapIdentity,
+      persistedIdentity,
     );
-    expect(manager.get(session.id)).toEqual(beforeResume);
+    expect(manager.get(session.id)).not.toHaveProperty("agentMapIdentity");
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(spawns).toHaveLength(2);
+  });
+
+  it("restamps a resumed project identity to the currently resolved principal", async () => {
+    let resolutionCount = 0;
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      resolutionCount += 1;
+      return {
+        projectId: "project-1",
+        userId: resolutionCount <= 3 ? "original-user" : "current-user",
+        sessionId,
+      };
+    });
+    const { manager, spawns } = makeManager({
+      resolveAgentMapIdentity,
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-principal-change");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      status: "running",
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "current-user",
+        sessionId: session.id,
+      },
+    });
+
     expect(manager.get(session.id)?.agentMapIdentity).toEqual({
       projectId: "project-1",
-      userId: "user-1",
+      userId: "current-user",
       sessionId: session.id,
     });
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(spawns).toHaveLength(1);
+    expect(spawns).toHaveLength(2);
   });
 });

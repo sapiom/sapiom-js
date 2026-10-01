@@ -901,8 +901,8 @@ export class SessionManager {
     return this.kill(id);
   }
 
-  /** Stop credential-bearing PTYs launched no later than the removed generation. */
-  async terminateCredentialBearingSessions(
+  /** Retire credential-bearing PTYs before scheduling keyless resumes. */
+  async relaunchCredentialBearingSessions(
     throughGeneration: number,
   ): Promise<void> {
     const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
@@ -912,10 +912,56 @@ export class SessionManager {
         : [],
     );
     await Promise.all(
-      targets.map(({ id, runtimeEpoch }) =>
-        this.killIfRuntime(id, runtimeEpoch),
-      ),
+      targets.map(async ({ id, runtimeEpoch }) => {
+        const session = this.sessions.get(id);
+        let resumable = false;
+        if (session?.agentSessionId) {
+          try {
+            resumable = await this.getAdapter(session.harness).canResume(
+              session.agentSessionId,
+              session.cwd,
+            );
+          } catch {
+            resumable = false;
+          }
+        }
+        if (resumable && session) {
+          session.mcpAuthState = "restarting";
+          this.emitStatus(session, runtimeEpoch);
+        }
+
+        const killed = await this.killIfRuntime(id, runtimeEpoch);
+        if (!killed || !resumable || !session) return;
+
+        session.mcpAuthState = "restarting";
+        this.emitStatus(session);
+        this.trackCredentialRemovalResume(id);
+      }),
     );
+  }
+
+  private trackCredentialRemovalResume(id: string): void {
+    const session = this.sessions.get(id);
+    const relaunch = this.resume(id)
+      .then(() => {})
+      .catch(() => {
+        if (
+          session &&
+          this.sessions.get(id) === session &&
+          !this.ptys.has(id) &&
+          session.mcpAuthState === "restarting"
+        ) {
+          session.mcpAuthState = "not-applicable";
+          this.emitStatus(session);
+        }
+        console.error("[harness] credential-removal session relaunch failed", {
+          sessionId: id,
+        });
+      });
+    const tracked = relaunch.finally(() => {
+      this.credentialRemovalRelaunches.delete(tracked);
+    });
+    this.credentialRemovalRelaunches.add(tracked);
   }
 
 
@@ -1062,6 +1108,7 @@ export class SessionManager {
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
+  private readonly credentialRemovalRelaunches = new Set<Promise<void>>();
   private readonly statusEmitter = new EventEmitter();
   private readonly activityEmitter = new EventEmitter();
   /** Epoch ms of the last `onActivity` broadcast per session — see `recordActivity()`. */
@@ -1346,7 +1393,7 @@ export class SessionManager {
     return adapter;
   }
 
-  /** Recheck the immutable project principal immediately before spawning. */
+  /** Recheck that the resolved project scope is still current before spawning. */
   private async revalidateAgentMapIdentity(
     sessionId: string,
     cwd: string,
@@ -1448,9 +1495,7 @@ export class SessionManager {
     if (this.ptys.has(id)) {
       throw new SessionAlreadyLiveError(id);
     }
-    if (this.rejectedProjectSessionMetadata.has(id)) {
-      throw new ProjectSessionScopeUnavailableError(id);
-    }
+    const rejectedMetadata = this.rejectedProjectSessionMetadata.has(id);
     const bindingTransition = trusted.subsessionBindingTransition;
     if (bindingTransition) {
       const expected = parseTrustedSubsessionBindingMarker(
@@ -1497,6 +1542,21 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
+    const trustedIdentity = rejectedMetadata
+      ? undefined
+      : session.agentMapIdentity;
+    const agentMapIdentity = this.resolveAgentMapIdentity
+      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
+      : trustedIdentity;
+    if (
+      bindingTransition &&
+      (!agentMapIdentity ||
+        agentMapIdentity.projectId !== bindingTransition.next.projectId)
+    ) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
+    if (trusted.focusedContext && !agentMapIdentity)
+      throw new TypeError("Focused project context requires a project-agent identity");
     if (bindingTransition) {
       const current = this.subsessionBindings.get(id)!;
       // A failed spawn may leave the exact next marker durably committed.
@@ -1511,15 +1571,9 @@ export class SessionManager {
         }
       }
     }
-    const trustedIdentity = session.agentMapIdentity;
-    const agentMapIdentity = this.resolveAgentMapIdentity
-      ? await this.resolveAgentMapIdentity(id, session.cwd, trustedIdentity)
-      : trustedIdentity;
     if (agentMapIdentity)
       session.agentMapIdentity = structuredClone(agentMapIdentity);
-    else if (trustedIdentity) throw new ProjectSessionScopeUnavailableError(id);
-    if (trusted.focusedContext && !agentMapIdentity)
-      throw new TypeError("Focused project context requires a project-agent identity");
+    else delete session.agentMapIdentity;
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against
@@ -2767,6 +2821,9 @@ export class SessionManager {
     // drained.
     while (this.projectCreateQueues.size > 0) {
       await Promise.all([...this.projectCreateQueues.values()]);
+    }
+    while (this.credentialRemovalRelaunches.size > 0) {
+      await Promise.all([...this.credentialRemovalRelaunches]);
     }
     await this.agentSessionIdentityQueue;
     await this.subsessionBindingQueue;
