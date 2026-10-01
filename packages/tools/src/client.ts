@@ -43,6 +43,8 @@ import type {
   AgentRunResult,
   RunHandle as AgentRunHandle,
 } from "./agents/index.js";
+import { emit as eventsEmit } from "./events/index.js";
+import type { EmitEventSpec, EmitEventResult } from "./events/index.js";
 import {
   run as llmRun,
   submit as llmSubmit,
@@ -229,6 +231,10 @@ export interface Sapiom {
     run(spec: AgentRunSpec): Promise<AgentRunResult>;
     /** Launch a deployed agent; pass the handle to `pauseUntilSignal` to suspend on it. */
     launch(spec: AgentRunSpec): Promise<AgentRunHandle>;
+  };
+  readonly events: {
+    /** SAP-3684: expose event emission through the gateway that accepts run credentials. */
+    emit(spec: EmitEventSpec): Promise<EmitEventResult>;
   };
   /**
    * Routed LLM calls through the gateway's `/v2` routing front-end. `run` is the
@@ -683,6 +689,9 @@ function bind(transport: Transport): Sapiom {
     agents: {
       run: (spec) => agentsRun(spec, transport),
       launch: (spec) => agentsLaunch(spec, transport),
+    },
+    events: {
+      emit: (spec) => eventsEmit(spec, transport),
     },
     llm: {
       run: (spec) => llmRun(spec, transport),

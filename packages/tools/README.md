@@ -77,6 +77,7 @@ Each capability is a namespace, importable from the barrel or its own subpath (e
 | `search`            | Search the web (`webSearch`), read a page (`scrape`), and look up professional emails (`emailSearch`)   | [src/search](./src/search/README.md)                         |
 | `orchestrations`    | Run a deployed orchestration, or dispatch one from a step and await its result                          | [src/orchestrations](./src/orchestrations/README.md)         |
 | `schedules`         | Schedule a deployed orchestration to run on a cron, or once at a set time                               | [src/schedules](./src/schedules/README.md)                   |
+| `events`            | Emit a tenant event from a step, starting every agent whose `event` trigger matches its type            | [src/events](./src/events/index.ts)                          |
 | `database`          | Permanent Postgres databases (yours until you delete them), returned with direct connection credentials | [src/database](./src/database/README.md)                     |
 | `email`             | Transactional email — inboxes, messages, sending domains, threads, and inbound webhooks                 | [src/email](./src/email/README.md)                           |
 | `domains`           | Register domain names and manage their DNS records                                                      | [src/domains](./src/domains/README.md)                       |

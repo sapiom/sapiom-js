@@ -32,6 +32,7 @@ import type {
 } from "../models/index.js";
 import { AGENTS_RESULT_SIGNAL, AgentDispatchError } from "../agents/index.js";
 import type { ExecutionStatus } from "../agents/index.js";
+import type { EmitEventResult } from "../events/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
@@ -1287,6 +1288,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               },
         );
       },
+    },
+    events: {
+      // `unmatched`: a local run deploys no other agent, so no trigger can match.
+      // `async` so a throwing override rejects instead of throwing at the call site.
+      emit: async (spec) =>
+        r("events.emit", [spec], () => ({
+          receiptId: `stub-receipt-${++launchSeq}`,
+          outcome: "unmatched",
+          duplicate: false,
+          fireIds: [],
+        })) as EmitEventResult,
     },
     llm: {
       run: <T = Record<string, unknown>>(spec: {
