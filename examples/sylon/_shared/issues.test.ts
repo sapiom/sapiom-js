@@ -195,6 +195,27 @@ describe("issues.ts on a database", () => {
     expect(await pendingDrafts(db, issue.id)).toHaveLength(0);
   });
 
+  it("reports exactly one winner for concurrent nudges and links", async () => {
+    const { issue } = await seed(db);
+    const nudges = await Promise.all(
+      [1, 2, 3].map(() => recordNudge(db, issue.id, "race")),
+    );
+    expect(nudges.filter(Boolean)).toHaveLength(1);
+    const input = {
+      source: "slack" as const,
+      sourceEventId: "Ev-dup",
+      direction: "customer" as const,
+      slack: CUSTOMER,
+      userId: "U1",
+      text: "x",
+    };
+    const links = await Promise.all([
+      linkMessage(db, input),
+      linkMessage(db, input),
+    ]);
+    expect(links.map((l) => l.duplicate).sort()).toEqual([false, true]);
+  });
+
   it("records a nudge once per kind", async () => {
     const { issue } = await seed(db);
     expect(await recordNudge(db, issue.id, "no_owner")).toBe(true);

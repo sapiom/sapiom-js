@@ -28,6 +28,28 @@ describe("db", () => {
     ]);
   });
 
+  it("keeps a standalone write made during a transaction that rolls back", async () => {
+    const db = await memoryDb();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const tx = db.transaction(async (t) => {
+      await t.query(
+        "insert into accounts (name, slack_channel_id) values ('in-tx', 'C1')",
+      );
+      await gate;
+      throw new Error("rollback");
+    });
+    const standalone = db.query(
+      "insert into accounts (name, slack_channel_id) values ('outside', 'C2')",
+    );
+    release();
+    await expect(tx).rejects.toThrow("rollback");
+    await standalone;
+    expect(await db.query("select name from accounts")).toEqual([
+      { name: "outside" },
+    ]);
+  });
+
   it("rolls a transaction back on throw", async () => {
     const db = await memoryDb();
     await expect(

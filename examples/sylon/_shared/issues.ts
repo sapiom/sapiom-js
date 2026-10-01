@@ -437,6 +437,14 @@ export async function linkMessage(
   db: Db,
   input: LinkMessageInput,
 ): Promise<{ message: Message; duplicate: boolean }> {
+  // In a transaction so pg-mem (serialized transactions) agrees with Postgres under concurrency.
+  return db.transaction((tx) => linkMessageIn(tx, input));
+}
+
+async function linkMessageIn(
+  db: Db,
+  input: LinkMessageInput,
+): Promise<{ message: Message; duplicate: boolean }> {
   const existing = async () => {
     const rows = await db.query(
       "select * from messages where source_event_id = $1",
@@ -623,6 +631,14 @@ export async function decideDraft(
 
 /** `false` when this `(issue, kind)` nudge was already sent. */
 export async function recordNudge(
+  db: Db,
+  issueId: string,
+  kind: string,
+): Promise<boolean> {
+  return db.transaction((tx) => recordNudgeIn(tx, issueId, kind));
+}
+
+async function recordNudgeIn(
   db: Db,
   issueId: string,
   kind: string,

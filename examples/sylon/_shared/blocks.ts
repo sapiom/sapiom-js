@@ -55,7 +55,10 @@ export function statusLabel(status: IssueStatus): string {
 export function slackToPlain(text: string): string {
   // `[^<>]*` cannot cross another `<`, so this is linear on any input.
   const replaced = text.replace(/<([^<>]*)>/g, (_m, inner: string) => {
-    const [target, label] = inner.split("|", 2);
+    // Only the first `|` separates; a label may itself contain `|`.
+    const separator = inner.indexOf("|");
+    const target = separator < 0 ? inner : inner.slice(0, separator);
+    const label = separator < 0 ? undefined : inner.slice(separator + 1);
     const sigil = target.charAt(0);
     if (sigil === "@" || sigil === "!") {
       const name = label ?? target.slice(1).replace(/^subteam\^/, "");

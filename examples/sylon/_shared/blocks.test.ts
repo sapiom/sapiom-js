@@ -154,6 +154,10 @@ describe("slackToPlain", () => {
     );
   });
 
+  it("keeps a link label that itself contains '|'", () => {
+    expect(slackToPlain("<https://x.io|a | b>")).toBe("a | b (https://x.io)");
+  });
+
   it("drops stray angle brackets, so no tag survives", () => {
     expect(slackToPlain("<script>alert(1)</script> <<<<a")).toBe(
       "scriptalert(1)/script a",

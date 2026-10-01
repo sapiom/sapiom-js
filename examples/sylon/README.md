@@ -38,6 +38,11 @@ pnpm typecheck
 SAPIOM_API_KEY=<org key> pnpm run setup
 ```
 
+`run_local` gives each execution its own in-memory database (seeded from `fleet.json`), so two
+agents run locally one after another do not share issues. To follow one issue through several
+agents offline, use the vitest smoke test (`agents/smoke.test.ts`), which installs one shared
+database with `setLocalDb`. The deployed agents always share the `sylon` database.
+
 Per agent: `sapiom agents link <slug> --create`, `sapiom agents deploy`, then attach the triggers
 from `fleet.json` (`POST /v1/workflows/definitions/<slug>/triggers { kind, eventType | cron }`).
 The contract every agent builds against is `plans/sylon/interfaces.md` in the Sapiom monorepo.

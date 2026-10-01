@@ -18,7 +18,10 @@ export type Row = Record<string, unknown>;
 export interface Db {
   readonly kind: "postgres" | "memory";
   query<T = Row>(text: string, params?: unknown[]): Promise<T[]>;
-  /** Run `fn` in one transaction; a throw rolls it back. Nested calls reuse the outer transaction. */
+  /**
+   * Run `fn` in one transaction; a throw rolls it back. Nested calls reuse the outer transaction.
+   * Inside `fn`, query through `tx` only: on a memory db the outer `db` waits for this transaction.
+   */
   transaction<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
 }
 
@@ -83,6 +86,9 @@ function wrapMemory(
   return {
     kind: "memory",
     async query<T>(text: string, params: unknown[] = []) {
+      // Outside a transaction, wait for any open one, so a standalone write can neither interleave
+      // with it nor be undone by its rollback snapshot.
+      if (!inTx) await lock.tail;
       return (await run(text, params)).rows as T[];
     },
     async transaction<R>(fn: (tx: Db) => Promise<R>) {
@@ -173,6 +179,8 @@ function splitStatements(sql: string): string[] {
 
 /** Local-trace databases, one per execution: steps of one trace share it, separate traces never do. */
 const localDbs = new Map<string, Promise<Db>>();
+/** A long-lived host (the authoring MCP server) runs many traces; keep only the most recent. */
+const MAX_LOCAL_DBS = 16;
 let localOverride: Promise<Db> | undefined;
 
 /** A fresh in-process database seeded from fleet.json, as a local trace sees it. */
@@ -217,7 +225,12 @@ export async function withDb<R>(
   if (ctx.isLocalTrace) {
     if (localOverride) return fn(await localOverride);
     let db = localDbs.get(ctx.executionId);
-    if (!db) localDbs.set(ctx.executionId, (db = localFleetDb()));
+    if (!db) {
+      localDbs.set(ctx.executionId, (db = localFleetDb()));
+      // Map iteration is insertion order, so the first key is the oldest trace.
+      if (localDbs.size > MAX_LOCAL_DBS)
+        localDbs.delete(localDbs.keys().next().value as string);
+    }
     return fn(await db);
   }
   const { db, close } = await connectPostgres(
