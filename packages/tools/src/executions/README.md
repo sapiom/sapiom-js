@@ -30,6 +30,8 @@ Logical failure/indeterminate states are HTTP 200 outcomes; HTTP errors retain t
 actual status. Saved confirmed failures are classified as invalid_request=400,
 rate_limited/capability_usage_limit=429, deadline_exceeded=504, execution_failed=502.
 These SDK classifications do not reconstruct original provider HTTP responses.
+Memory append/recall/forget additionally preserve the allowlisted caller validation codes
+secret_detected, invalid_metadata and invalid_filter as HTTP 400 with safe messages.
 Indeterminate outcomes must not be automatically resubmitted. HTTP 410 means the saved
 payload expired, and does not authorize another execution under the same key.
 
@@ -59,11 +61,27 @@ only local waiting; the server job continues. Persist handles in caller-owned st
 The offline stub supports preparation but rejects durable submission/retrieval explicitly.
 
 `capabilityDelivery: "executions"` opts the common capability helper into job delivery
-only for capabilities on its reviewed allow-list. The production allow-list is currently
-empty; family adoption follows separately. The default is `legacy`. A selected invocation
+only for capabilities on its reviewed allow-list: search, scrape, the three email lookups,
+image/video submissions, the four memory operations, database creation, domain registration,
+and upload reservations (14 capability IDs). `decisions.evaluate` remains inline because its
+streamed metering needs separate adoption. The default is `legacy`, and Core admission is
+still disabled pending the release gate. A selected invocation
 keeps its mode, Core base and key through retries; admission rejection never falls back
 to the synchronous path. Existing namespace mappers receive the stored raw result, including
 native media launch handles; generation polling and finalization retain their owners.
+
+For memory and provisioning, the common helper selects the existing gateway callback before
+any I/O in legacy mode. Gateway URL overrides apply to that callback; execution delivery uses
+the configured Core origin. Existing database/domain/file lifecycle methods stay unchanged.
+
+Inputs and ordinary results have a 1 MiB protected JSON limit (input authorization metadata
+counts toward that limit). Memory recall accepts up to 10 MiB of protected output. A legal
+search/scrape result larger than its storage bound can become indeterminate after dispatch;
+it is never truncated or automatically rerun. Execution retention does not renew a native
+handle or upload URL: replay returns the original reservation, including its original expiry.
+Saved failures use sanitized execution codes mapped to namespace HTTP errors. They do not
+preserve arbitrary upstream error bodies. Indeterminate, expired-result and interrupted-wait
+errors remain distinct and carry execution/submission references for recovery.
 
 Execution HTTP requests emit `capability.execution.transport`, not `capability.call`.
 An observed terminal outcome emits `capability.call` with execution_status and logical ok;

@@ -11,6 +11,9 @@ const ELIGIBLE_CAPABILITIES: ReadonlySet<string> = new Set([
   "memory.recall",
   "memory.forget",
   "memory.drop",
+  "database.create",
+  "domains.purchase",
+  "storage.put",
 ]);
 export function executionDeliveryEligible(capabilityId: string): boolean {
   return ELIGIBLE_CAPABILITIES.has(capabilityId);
