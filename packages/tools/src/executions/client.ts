@@ -1,4 +1,3 @@
-import { waitForExecution, type ExecutionWaitOptions } from "./wait.js";
 import { randomUUID } from "node:crypto";
 import { Transport, resolveCoreBaseUrl } from "../_client/index.js";
 import {
@@ -6,6 +5,7 @@ import {
   ExecutionInterruptedError,
   ExecutionProtocolError,
   ExecutionTransportError,
+  ExecutionWaitInterruptedError,
 } from "./errors.js";
 import {
   executionRequest,
@@ -26,6 +26,7 @@ import type {
   ExecutionState,
   ExecutionSubmission,
 } from "./types.js";
+import { waitForExecution, type ExecutionWaitOptions } from "./wait.js";
 
 export interface ExecutionPrepareOptions {
   submissionKey?: string;
@@ -112,6 +113,8 @@ export class ExecutionClient {
       submissionKey: submission.submissionKey,
     });
     const body = JSON.stringify(saved.request);
+    const transport = this.transport.withAttribution({});
+    const headers = { ...options.headers };
     const deadline = Date.now() + 30_000;
     for (let attempt = 0; ; attempt++) {
       const remaining = deadline - Date.now();
@@ -122,7 +125,7 @@ export class ExecutionClient {
         );
       try {
         const raw = await executionRequest(
-          this.transport,
+          transport,
           `${saved.coreBaseUrl}/v1/capabilities/${encodeURIComponent(saved.capabilityId)}/executions`,
           {
             method: "POST",
@@ -134,6 +137,7 @@ export class ExecutionClient {
           },
           {
             ...options,
+            headers,
             requestTimeoutMs: Math.min(
               options.requestTimeoutMs ?? 15_000,
               remaining,
@@ -172,15 +176,31 @@ export class ExecutionClient {
     executionId: string,
     options: ExecutionRequestOptions = {},
   ): Promise<ExecutionState<T>> {
+    return this.retrieve<T>(executionId, options);
+  }
+
+  private async retrieve<T>(
+    executionId: string,
+    options: ExecutionRequestOptions,
+    capabilityId?: string,
+  ): Promise<ExecutionState<T>> {
     validateId(executionId);
+    const baseUrl = this.base(options);
     const raw = await executionRequest(
       this.transport,
-      `${this.base(options)}/v1/capability-executions/${executionId}`,
+      `${baseUrl}/v1/capability-executions/${executionId}`,
       { method: "GET" },
       options,
       { executionId },
     );
-    return parseExecution<T>(raw, true, { executionId }) as ExecutionState<T>;
+    const state = parseExecution<T>(
+      raw,
+      true,
+      { executionId },
+      capabilityId,
+    ) as ExecutionState<T>;
+    this.transport.observeExecution(baseUrl, state);
+    return state;
   }
 
   async wait<T = unknown>(
@@ -205,13 +225,26 @@ export class ExecutionClient {
         );
     }
     validateId(reference.executionId);
-    return waitForExecution<T>(
-      (request) => this.get<T>(reference.executionId, { ...request, baseUrl }),
-      reference,
-      options,
-      typeof execution === "string"
-        ? undefined
-        : execution.receipt.capabilityId,
-    );
+    try {
+      return await waitForExecution<T>(
+        (request) =>
+          this.retrieve<T>(
+            reference.executionId,
+            { ...request, baseUrl },
+            typeof execution === "string"
+              ? undefined
+              : execution.receipt.capabilityId,
+          ),
+        reference,
+        options,
+        typeof execution === "string"
+          ? undefined
+          : execution.receipt.capabilityId,
+      );
+    } catch (error) {
+      if (error instanceof ExecutionWaitInterruptedError)
+        this.transport.observeExecutionWaitInterrupted(reference.executionId);
+      throw error;
+    }
   }
 }
