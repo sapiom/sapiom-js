@@ -8,6 +8,10 @@
  * contract is to render nothing in every one of those, so the bar of an agent
  * without an App Link is exactly the bar it had before this existed.
  *
+ * Why `authenticated` is a key: signing in while the bar is mounted must show
+ * a link the signed-out read could not see, and signing out must drop it —
+ * the same refetch key useAccountPlan uses.
+ *
  * Why the deployment state is a key: a deploy is when a template's `app` build
  * stage publishes the dashboard, so the link can appear without the subject's
  * path or definition id changing.
@@ -22,6 +26,7 @@ export function useDefinitionAppLink(
   workflowPath: string | null,
   definitionId: number | string | null | undefined,
   deploymentState: string,
+  authenticated: boolean,
 ): string | null {
   const [url, setUrl] = useState<string | null>(null);
 
@@ -29,7 +34,13 @@ export function useDefinitionAppLink(
     // Drop the previous subject's link immediately: switching agents must not
     // show agent A's App Link on agent B's bar while B's read is in flight.
     setUrl(null);
-    if (!workflowPath || definitionId === null || definitionId === undefined) {
+    // Signed out, the server could only answer "no App Link"; skip the read.
+    if (
+      !authenticated ||
+      !workflowPath ||
+      definitionId === null ||
+      definitionId === undefined
+    ) {
       return;
     }
     let cancelled = false;
@@ -44,7 +55,7 @@ export function useDefinitionAppLink(
     return () => {
       cancelled = true;
     };
-  }, [workflowPath, definitionId, deploymentState]);
+  }, [workflowPath, definitionId, deploymentState, authenticated]);
 
   return url;
 }

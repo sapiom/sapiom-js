@@ -90,6 +90,7 @@ export function SessionStepsBar({
     workflow.path,
     workflow.definitionId,
     deploymentState,
+    authenticated,
   );
 
   // Launched-but-not-durable feedback: a clicked action shows a dotted

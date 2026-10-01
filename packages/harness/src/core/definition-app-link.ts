@@ -81,15 +81,13 @@ export function createDefinitionAppLinkReader(opts: {
   const attempt = async (
     path: string,
     key: string,
+    signal: AbortSignal,
   ): Promise<Response | null> => {
     try {
       return await fetchImpl(`${baseUrl}${path}`, {
         // Core (`api.*`) takes a Bearer token — see template-catalog.ts.
         headers: { Authorization: `Bearer ${key}` },
-        // Bounded like definition-slug-resolver.ts's reads: the chip is
-        // ambient, so a stalled core must not hold the page's request open.
-        // The signal also covers the body read in `read()`.
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
     } catch {
       return null;
@@ -101,12 +99,20 @@ export function createDefinitionAppLinkReader(opts: {
       const apiKey = provider.getKey();
       if (!apiKey) return NO_APP_LINK;
       const path = `/v1/workflows/definitions/${encodeURIComponent(definitionId)}/app-link`;
+      // ONE deadline for the whole read, bounded like definition-slug-resolver.ts:
+      // the chip is ambient, so a stalled core must not hold the page's request
+      // open. Shared by both attempts and the body read, so a refresh + retry
+      // cannot double the budget.
+      const signal = AbortSignal.timeout(timeoutMs);
 
-      let response = await attempt(path, apiKey);
+      let response = await attempt(path, apiKey, signal);
       if (response && isAuthRejection(response.status)) {
+        // A local credential re-read, not a network call; the retry still
+        // shares the deadline above.
         const refreshed = await provider.refresh();
+        if (signal.aborted) return NO_APP_LINK;
         if (refreshed && refreshed !== apiKey) {
-          response = await attempt(path, refreshed);
+          response = await attempt(path, refreshed, signal);
         }
       }
       if (!response || !response.ok) return NO_APP_LINK;

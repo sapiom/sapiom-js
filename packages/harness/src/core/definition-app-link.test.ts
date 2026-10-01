@@ -191,4 +191,33 @@ describe("createDefinitionAppLinkReader", () => {
 
     await expect(reader.read("886")).resolves.toEqual(NO_APP_LINK);
   });
+
+  it("gives the refresh retry the remaining budget, not a fresh one", async () => {
+    // The first attempt answers 401 at once; the retry stalls. With one
+    // deadline per read the retry is aborted at the original budget, so the
+    // read settles well before a second full timeout could elapse.
+    const keys = provider(["sk_old", "sk_new"]);
+    const signals: AbortSignal[] = [];
+    let call = 0;
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      call += 1;
+      if (call === 1) return Promise.resolve(new Response("", { status: 401 }));
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(init.signal?.reason),
+        );
+      });
+    }) as unknown as typeof fetch;
+    const reader = createDefinitionAppLinkReader({
+      apiKey: keys,
+      baseUrl: BASE,
+      fetchImpl,
+      timeoutMs: 40,
+    });
+
+    await expect(reader.read("886")).resolves.toEqual(NO_APP_LINK);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBe(signals[1]);
+  });
 });
