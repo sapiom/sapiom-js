@@ -55,6 +55,7 @@ describe("@sapiom/tools public surface", () => {
     expect(typeof sapiom.executions.prepare).toBe("function");
     expect(typeof sapiom.executions.submit).toBe("function");
     expect(typeof sapiom.executions.get).toBe("function");
+    expect(typeof sapiom.executions.wait).toBe("function");
     expect(typeof sapiom.sandboxes.attach).toBe("function");
 
     expect(typeof sapiom.repositories.create).toBe("function");
@@ -125,6 +126,7 @@ describe("@sapiom/tools public surface", () => {
   it("barrel re-exports the capability namespaces and resource classes", () => {
     expect(typeof sandboxes).toBe("object");
     expect(typeof executions.prepare).toBe("function");
+    expect(typeof executions.wait).toBe("function");
     expect(typeof repositories).toBe("object");
     expect(typeof models).toBe("object");
     expect(typeof search).toBe("object");

@@ -12,7 +12,7 @@ if (state.status === "succeeded") console.log(state.result);
 
 Explicit execution calls require a backend with admission enabled for that capability.
 Existing capability methods continue to use their current transport.
-The `@sapiom/tools/executions` subpath also exports ambient `prepare`, `submit`, and `get`.
+The `@sapiom/tools/executions` subpath also exports ambient `prepare`, `submit`, `get`, and `wait`.
 Generic result types are caller annotations; the SDK validates the execution envelope,
 not individual capability DTOs.
 
@@ -43,3 +43,17 @@ implicitly: resume using credentials for the same stable token family or API-key
 
 Errors carry available executionId/submissionKey. Persisting caller state is the caller's
 responsibility. Request and credential contents are never included in error messages.
+
+`await client.executions.wait<T>(handle)` returns the saved result or throws a typed
+ExecutionFailedError/ExecutionIndeterminateError, or ExecutionExpiredError for HTTP 410.
+Pass a serialized handle on a fresh
+client to retain origin checks; raw IDs require the original backend configuration.
+Wait only issues GET. After losing a receipt, submit the original descriptor first.
+It defaults to a five-minute local budget, 500 ms initial polling and exponential
+backoff with jitter capped at five seconds. Transient network and 429/502/503/504
+responses are retried within that budget. Retry-After is capped by remaining time.
+Override waitTimeoutMs, initialPollIntervalMs, maxPollIntervalMs or requestTimeoutMs
+with finite positive durations. Each request is bounded by remaining time and 15 seconds.
+AbortSignal or local timeout throws ExecutionWaitInterruptedError with ID/key. It stops
+only local waiting; the server job continues. Persist handles in caller-owned storage.
+The offline stub supports preparation but rejects durable submission/retrieval explicitly.
