@@ -23,6 +23,11 @@
       "import": "./dist/esm/sandboxes/index.js",
       "require": "./dist/cjs/sandboxes/index.js"
     },
+    "./executions": {
+      "types": "./dist/cjs/executions/index.d.ts",
+      "import": "./dist/esm/executions/index.js",
+      "require": "./dist/cjs/executions/index.js"
+    },
     "./repositories": {
       "types": "./dist/cjs/repositories/index.d.ts",
       "import": "./dist/esm/repositories/index.js",

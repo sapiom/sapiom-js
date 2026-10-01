@@ -59,6 +59,9 @@ import type {
   LlmStructuredOutputSpec,
 } from "../llm/index.js";
 import type { Sapiom } from "../client.js";
+import { Transport } from "../_client/index.js";
+import { ExecutionClient } from "../executions/client.js";
+import { ExecutionProtocolError } from "../executions/errors.js";
 import { Repository } from "../repositories/index.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { SandboxInfo } from "../sandboxes/index.js";
@@ -1032,6 +1035,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     r(keys, [spec], () => stubAgentResult()) as ModelRunResult;
 
   const client: Sapiom = {
+    executions: new ExecutionClient(
+      new Transport({
+        apiKey: "stub",
+        coreBaseUrl: "http://stub.invalid",
+        fetch: async () => {
+          throw new ExecutionProtocolError(
+            "Durable executions are unavailable in stub mode.",
+          );
+        },
+      }),
+    ),
     sandboxes: {
       create: (sandboxOpts) =>
         Promise.resolve(
