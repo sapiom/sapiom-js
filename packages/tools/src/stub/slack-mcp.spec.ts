@@ -79,17 +79,21 @@ describe("stub slack + mcp connectors", () => {
     ).resolves.toEqual(unavailable);
   });
 
-  it("answers callTool with a text result for a tool in the stubbed tool list", async () => {
+  it("succeeds for a tool the step discovered, even when the listTools override is stateful", async () => {
     const calls: StubCallRecord[] = [];
+    let page = 0;
     const client = createStubClient({
       calls,
       overrides: {
+        // A different list on every call: a hidden re-read would miss list_issues.
         "connectors.linear.listTools": () => [
-          { name: "list_issues", inputSchema: {} },
+          { name: page++ === 0 ? "list_issues" : "other", inputSchema: {} },
         ],
       },
     });
 
+    const tools = await client.connectors.linear.listTools();
+    expect(tools.map((t) => t.name)).toEqual(["list_issues"]);
     await expect(
       client.connectors.linear.callTool("list_issues", {}),
     ).resolves.toEqual({
@@ -99,11 +103,62 @@ describe("stub slack + mcp connectors", () => {
     await expect(
       client.connectors.linear.callTool("save_issue", {}),
     ).resolves.toMatchObject({ isError: true });
-    // Checking the stubbed list is not itself a listTools call.
+    // The override ran once, for the step's own listTools call.
+    expect(page).toBe(1);
     expect(calls.map((c) => c.capability)).toEqual([
+      "connectors.linear.listTools",
       "connectors.linear.callTool",
       "connectors.linear.callTool",
     ]);
+  });
+
+  it("returns isError for a listed tool the step never discovered", async () => {
+    const client = createStubClient({
+      overrides: {
+        "connectors.linear.listTools": [
+          { name: "list_issues", inputSchema: {} },
+        ],
+      },
+    });
+    await expect(
+      client.connectors.linear.callTool("list_issues", {}),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "That tool is not available." }],
+      isError: true,
+    });
+  });
+
+  it("keeps discovery per slug and shares it across mcp(slug) handles", async () => {
+    const client = createStubClient({
+      overrides: {
+        "connectors.mcp.listTools": [{ name: "search", inputSchema: {} }],
+      },
+    });
+    await client.connectors.mcp("acme").listTools();
+
+    await expect(
+      client.connectors.mcp("acme").callTool("search"),
+    ).resolves.toMatchObject({ isError: false });
+    await expect(
+      client.connectors.notion.callTool("search"),
+    ).resolves.toMatchObject({ isError: true });
+  });
+
+  it("marks a listTools override used only when the step calls listTools", async () => {
+    const overrides = {
+      "connectors.linear.listTools": [{ name: "list_issues", inputSchema: {} }],
+    };
+
+    const idle = new Set<string>();
+    const a = createStubClient({ overrides, usedKeys: idle });
+    await a.connectors.linear.callTool("list_issues");
+    expect([...idle]).toEqual([]);
+
+    const used = new Set<string>();
+    const b = createStubClient({ overrides, usedKeys: used });
+    await b.connectors.linear.listTools();
+    await b.connectors.linear.callTool("list_issues");
+    expect([...used]).toEqual(["connectors.linear.listTools"]);
   });
 
   it("warns on malformed Slack and MCP overrides", async () => {

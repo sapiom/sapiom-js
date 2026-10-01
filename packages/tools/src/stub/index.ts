@@ -1048,29 +1048,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   };
 
   // An MCP-relay connector offline. `connectors.<slug>.<op>` wins over the catch-all
-  // `connectors.mcp.<op>`. With no callTool override it answers like the relay: a tool
-  // that is not in the (stubbed) tool list — every tool, by default — is an `isError`
-  // result, so a local run takes the same failure branch a deployed one would.
+  // `connectors.mcp.<op>`. With no callTool override it answers like the relay: a tool the
+  // step has not seen in its latest `listTools()` for that slug (every tool, before any
+  // discovery) is an `isError` result, so a local run takes the deployed failure branch.
+  // The list is cached from the step's own tracked call — never re-read from the overrides,
+  // which would re-run a stateful override and bypass usedKeys / the calls sink.
+  const discoveredMcpTools = new Map<string, Set<string>>();
   const stubMcp = (slug: string): McpConnector => {
     const listKeys = [
       `connectors.${slug}.listTools`,
       "connectors.mcp.listTools",
     ];
     const callKeys = [`connectors.${slug}.callTool`, "connectors.mcp.callTool"];
-    const stubbedToolNames = async (): Promise<Set<string>> => {
-      const key = matchedOverride(listKeys);
-      const o = key === undefined ? [] : opts.overrides![key];
-      const tools = await Promise.resolve(
-        typeof o === "function" ? (o as () => unknown)() : o,
-      );
-      return new Set(
-        Array.isArray(tools)
-          ? tools
-              .map((t) => (t as { name?: unknown } | null)?.name)
-              .filter((n): n is string => typeof n === "string")
-          : [],
-      );
-    };
     return {
       listTools: async () => {
         const tools = await Promise.resolve(r(listKeys, [], () => []));
@@ -1080,8 +1069,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             `'${key}' stub must be an array of tools (e.g. [{ "name": "...", "inputSchema": {} }]); ` +
               `got ${describeShape(tools)}. Returning an empty list.`,
           );
+          discoveredMcpTools.set(slug, new Set());
           return [];
         }
+        discoveredMcpTools.set(
+          slug,
+          new Set(
+            tools
+              .map((t) => (t as { name?: unknown } | null)?.name)
+              .filter((n): n is string => typeof n === "string"),
+          ),
+        );
         tools.forEach((tool, i) => {
           if (typeof (tool as { name?: unknown } | null)?.name !== "string") {
             opts.warnings?.add(
@@ -1092,12 +1090,11 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
         return tools as McpTool[];
       },
       callTool: async (name, args) => {
-        const known = matchedOverride(callKeys)
-          ? undefined
-          : await stubbedToolNames();
+        let overridden = true;
         const result = await Promise.resolve(
-          r(callKeys, [name, args], () =>
-            known?.has(name)
+          r(callKeys, [name, args], () => {
+            overridden = false;
+            return discoveredMcpTools.get(slug)?.has(name)
               ? {
                   content: [
                     { type: "text", text: `stub result for ${slug}.${name}` },
@@ -1109,19 +1106,18 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
                     { type: "text", text: "That tool is not available." },
                   ],
                   isError: true,
-                },
-          ),
+                };
+          }),
         );
-        const key = matchedOverride(callKeys);
         if (
-          key &&
+          overridden &&
           (result === null ||
             typeof result !== "object" ||
             !Array.isArray((result as { content?: unknown }).content))
         ) {
           opts.warnings?.add(
-            `'${key}' stub must be a CallToolResult (e.g. { "content": [{ "type": "text", "text": "..." }] }); ` +
-              `got ${describeShape(result)}.`,
+            `'${callKeys[0]}' / '${callKeys[1]}' stub must be a CallToolResult ` +
+              `(e.g. { "content": [{ "type": "text", "text": "..." }] }); got ${describeShape(result)}.`,
           );
         }
         return result as McpCallToolResult;
