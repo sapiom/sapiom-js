@@ -1,5 +1,37 @@
 # @sapiom/mcp
 
+## 0.18.0
+
+### Minor Changes
+
+- 5bb66c6: Emit custom events from the SDK, the CLI and the MCP — the start verb next to
+  `signal`'s resume verb.
+
+  `emitEvent({ type, payload, id? })` posts to `POST /v1/workflows/events`
+  and returns the receipt verbatim: `{ receiptId, outcome, duplicate, fireIds }`.
+  It fans out by type to every active `event` trigger the tenant armed and starts
+  0..N new runs. `outcome: "unmatched"` is a success, not an error — nothing
+  subscribes to that type. `id` is the sender's dedup identity, so reposting
+  it returns the original receipt and starts nothing new; omit it and every call
+  is a distinct event. `sapiom agents emit <type> --payload <json> [--event-id
+<id>]` and `sapiom_dev_agents_emit_event` wrap it, and `parseEventPayload`
+  rejects a payload that is not a JSON object, which the run-input fold would
+  otherwise drop silently.
+
+  Events start runs, signals resume them, so `signal()` stays the resume verb and
+  now surfaces the server's `message` next to `matched` — `matched` counts the
+  runs that actually resumed, so it under-reports a partial fanout and a `0` does
+  not prove nothing was waiting.
+
+### Patch Changes
+
+- c3b6f26: `sapiom_dev_agents_inspect` and `sapiom_dev_agents_signal` now reject a non-numeric `executionId` at the schema, with a message naming where a real id comes from. Passing a step name or a variable (`result`, `child-expert-1`) previously reached the server and came back as "execution not found", which reads as "the run is gone" rather than "that is not an id".
+- Updated dependencies [89d91d4]
+- Updated dependencies [5bb66c6]
+- Updated dependencies [06adb78]
+  - @sapiom/agent-core@0.15.0
+  - @sapiom/sandbox-preview@0.1.26
+
 ## 0.17.0
 
 ### Minor Changes

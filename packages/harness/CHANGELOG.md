@@ -1,5 +1,17 @@
 # @sapiom/harness
 
+## 0.18.1
+
+### Patch Changes
+
+- Updated dependencies [89d91d4]
+- Updated dependencies [c3b6f26]
+- Updated dependencies [5bb66c6]
+- Updated dependencies [06adb78]
+  - @sapiom/agent-core@0.15.0
+  - @sapiom/mcp@0.18.0
+  - @sapiom/agent@0.14.4
+
 ## 0.18.0
 
 ### Minor Changes
