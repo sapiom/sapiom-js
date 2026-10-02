@@ -1,5 +1,28 @@
 # @sapiom/harness
 
+## 0.19.0
+
+### Minor Changes
+
+- a879a93: The session bar's running-app slot shows the agent's durable App Link beside the
+  localhost Preview chip (SAP-3255). When the agent's cloud definition has a
+  published App Link, an `App Link` chip opens it. The chip shows with or without a
+  detected port, because the link belongs to the definition and stays up after the
+  sandbox ends. The two chips use different words, icons, and ink, so the local
+  preview and the durable link are not read as interchangeable. An agent with no
+  App Link gets the bar it had before.
+
+  The harness server reads the link from core's
+  `GET /v1/workflows/definitions/:id/app-link` through a new
+  `GET /api/workflows/:id/app-link` route. The definition id comes from the agent's
+  own `sapiom.json`, the API key stays server-side, and only an `https:` URL is
+  passed to the page. Any failed read (signed out, unlinked, unreachable, drifted
+  shape) shows no chip.
+
+### Patch Changes
+
+- 5a55a34: Agent Studio navigation is Project › Sessions. The rail lists each project's sessions under it, newest activity first, so one click reaches any session in any project; the session tab strip, the agent tree, the Group axis and drag-to-move are gone. Clicking a project shows its Agent Map at full width in the centre, with no chat beside it, and leaves the selected session alone. Clicking an agent on the map opens a panel with its location (Change moves it, after a confirm), its sessions, Start chat and Open canvas. A project header's `+` starts a new chat in that project; New agent moved to the map view's header. The right pane is the selected session's bound agent and only appears when there is one.
+
 ## 0.18.2
 
 ### Patch Changes
