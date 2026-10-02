@@ -69,7 +69,6 @@ import {
   copilotCard,
   normalizeOutput,
   outputSchema,
-  type DraftMeta,
 } from "./draft";
 import { seedLocalFixtures } from "./local";
 
@@ -225,16 +224,12 @@ async function draftReply(
           summary: output.summary,
           confidence,
         });
-      const meta: DraftMeta = {
-        causationId: trigger.causationId,
-        confidence: output.confidence,
-        sources: output.citations,
-        summary: output.summary,
-      };
       draft = await createDraft(db, {
         issueId: issue.id,
         text: output.reply,
-        citations: meta,
+        citations: output.citations,
+        causationId: trigger.causationId,
+        confidence: output.confidence,
       });
     }
     const reused = !!draft.cardTs;

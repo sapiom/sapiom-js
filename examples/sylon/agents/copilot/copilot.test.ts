@@ -160,11 +160,9 @@ describe("draft path", () => {
       status: "pending",
       text: DRAFTED.reply,
       cardChannel: "C0TRIAGE001",
-      citations: {
-        causationId: "Ev0EXAMPLE01",
-        confidence: 0.8,
-        sources: ["webhooks"],
-      },
+      citations: ["webhooks"],
+      causationId: "Ev0EXAMPLE01",
+      confidence: 0.8,
     });
     const [posted] = t.slack("chat.postMessage");
     expect(posted).toMatchObject({
@@ -195,12 +193,9 @@ describe("draft path", () => {
     const stored = await createDraft(db, {
       issueId: FIXTURE_ISSUE,
       text: "Stored by an earlier attempt.",
-      citations: {
-        causationId: "Ev0EXAMPLE01",
-        confidence: 0.5,
-        sources: [],
-        summary: "s",
-      },
+      citations: [],
+      causationId: "Ev0EXAMPLE01",
+      confidence: 0.5,
     });
     const t = ctxFor("exec-retry");
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);

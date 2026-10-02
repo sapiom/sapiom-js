@@ -54,35 +54,25 @@ export async function seedLocalFixtures(db: Db): Promise<void> {
     ],
   );
   await db.query(
-    `insert into drafts (id, issue_id, card_channel, card_ts, text, citations, status)
-     values ($1, $2, $3, '1790889450.000250', $4, $5::text::jsonb, 'pending')`,
+    `insert into drafts (id, issue_id, card_channel, card_ts, text, citations, causation_id, confidence, status)
+     values ($1, $2, $3, '1790889450.000250', $4, $5::text::jsonb, 'Ev0FIXTURE00', 0.7, 'pending')`,
     [
       FIXTURE_DRAFT,
       FIXTURE_ISSUE,
       TRIAGE_CHANNEL,
       "Nothing changed on our side. Signature errors usually mean the body was re-serialized before verification; verify against the raw bytes.",
-      JSON.stringify({
-        causationId: "Ev0FIXTURE00",
-        confidence: 0.7,
-        sources: ["webhooks"],
-        summary: "Webhook signature errors since this morning.",
-      }),
+      JSON.stringify(["webhooks"]),
     ],
   );
   await db.query(
-    `insert into drafts (id, issue_id, card_channel, card_ts, text, citations, status, decided_by, decided_at)
-     values ($1, $2, $3, '1790889460.000260', $4, $5::text::jsonb, 'approved', 'U0TEAMMATE2', now())`,
+    `insert into drafts (id, issue_id, card_channel, card_ts, text, citations, causation_id, confidence, status, decided_by, decided_at)
+     values ($1, $2, $3, '1790889460.000260', $4, $5::text::jsonb, 'Ev0FIXTURE01', 0.6, 'approved', 'U0TEAMMATE2', now())`,
     [
       FIXTURE_DECIDED_DRAFT,
       FIXTURE_ISSUE,
       TRIAGE_CHANNEL,
       "An earlier reply that a teammate already approved.",
-      JSON.stringify({
-        causationId: "Ev0FIXTURE01",
-        confidence: 0.6,
-        sources: [],
-        summary: "Earlier draft.",
-      }),
+      JSON.stringify([]),
     ],
   );
 }

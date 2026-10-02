@@ -134,26 +134,9 @@ export function normalizeOutput(
   };
 }
 
-/**
- * Stored in `drafts.citations`. `causationId` is the event that produced the draft, which is how a
- * retried run finds it (`draftForCausation`).
- */
-export interface DraftMeta {
-  causationId: string;
-  confidence: number;
-  sources: string[];
-  summary: string;
-}
-
-export function draftMeta(draft: Draft): DraftMeta | null {
-  const c = draft.citations as Partial<DraftMeta> | null;
-  if (!c || typeof c !== "object" || Array.isArray(c)) return null;
-  return {
-    causationId: String(c.causationId ?? ""),
-    confidence: typeof c.confidence === "number" ? c.confidence : 0,
-    sources: Array.isArray(c.sources) ? c.sources.map(String) : [],
-    summary: typeof c.summary === "string" ? c.summary : "",
-  };
+/** `drafts.citations`: the kb page slugs the draft cites. */
+export function citedSlugs(draft: Draft): string[] {
+  return Array.isArray(draft.citations) ? draft.citations.map(String) : [];
 }
 
 export function cardText(issue: Issue): string {
@@ -176,11 +159,11 @@ export function copilotCard(
       ? { ...draft, decidedBy: null }
       : draft;
   const blocks = draftCard(shown, issue);
-  const meta = draftMeta(draft);
   const facts: string[] = [];
-  if (meta?.summary) facts.push(`*Summary:* ${escapeMrkdwn(meta.summary)}`);
-  if (meta) facts.push(`*Confidence:* ${Math.round(meta.confidence * 100)}%`);
-  const titles = (meta?.sources ?? []).map(
+  if (issue.summary) facts.push(`*Summary:* ${escapeMrkdwn(issue.summary)}`);
+  if (draft.confidence !== null)
+    facts.push(`*Confidence:* ${Math.round(draft.confidence * 100)}%`);
+  const titles = citedSlugs(draft).map(
     (s) => kb.find((p) => p.slug === s)?.title ?? s,
   );
   facts.push(

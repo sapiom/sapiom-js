@@ -83,6 +83,9 @@ export interface Draft {
   cardTs: string | null;
   text: string;
   citations: unknown;
+  /** The event that produced the draft (copilot); null for drafts made without one. */
+  causationId: string | null;
+  confidence: number | null;
   status: DraftStatus;
   decidedBy: string | null;
   decidedAt: Date | null;
@@ -173,6 +176,8 @@ const toDraft = (r: Row): Draft => ({
   cardTs: (r.card_ts as string | null) ?? null,
   text: r.text as string,
   citations: r.citations ?? null,
+  causationId: (r.causation_id as string | null) ?? null,
+  confidence: r.confidence == null ? null : Number(r.confidence),
   status: r.status as DraftStatus,
   decidedBy: (r.decided_by as string | null) ?? null,
   decidedAt: (r.decided_at as Date | null) ?? null,
@@ -553,17 +558,21 @@ export async function createDraft(
     citations?: unknown;
     cardChannel?: string;
     cardTs?: string;
+    causationId?: string;
+    confidence?: number;
   },
 ): Promise<Draft> {
   const rows = await db.query(
-    `insert into drafts (issue_id, text, citations, card_channel, card_ts, status)
-     values ($1, $2, $3::text::jsonb, $4, $5, 'pending') returning *`,
+    `insert into drafts (issue_id, text, citations, card_channel, card_ts, causation_id, confidence, status)
+     values ($1, $2, $3::text::jsonb, $4, $5, $6, $7, 'pending') returning *`,
     [
       input.issueId,
       input.text,
       json(input.citations),
       input.cardChannel ?? null,
       input.cardTs ?? null,
+      input.causationId ?? null,
+      input.confidence ?? null,
     ],
   );
   return toDraft(one(rows, "draft"));
@@ -600,8 +609,7 @@ export async function pendingDrafts(db: Db, issueId: string): Promise<Draft[]> {
 }
 
 /**
- * The draft an event already produced, when its `citations` object carries `causationId` (the
- * copilot writes `{ causationId, ... }`), so a retried drafting step reuses it instead of adding a
+ * The draft an event already produced, so a retried drafting step reuses it instead of adding a
  * second card. Any status: a retry must not redraft what a teammate already decided.
  */
 export async function draftForCausation(
@@ -610,7 +618,7 @@ export async function draftForCausation(
   causationId: string,
 ): Promise<Draft | null> {
   const rows = await db.query(
-    "select * from drafts where issue_id = $1 and citations ->> 'causationId' = $2 order by created_at desc limit 1",
+    "select * from drafts where issue_id = $1 and causation_id = $2 order by created_at desc limit 1",
     [issueId, causationId],
   );
   return rows[0] ? toDraft(rows[0]) : null;
