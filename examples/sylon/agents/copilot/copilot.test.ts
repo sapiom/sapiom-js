@@ -336,6 +336,51 @@ describe("draft path", () => {
     expect(t.slack("chat.update")).toHaveLength(0);
   });
 
+  it("a failed note post is logged and still ends the run without another model call", async () => {
+    const t = ctxFor("e");
+    skipToolCall(t, 2);
+    // On a local trace a post is only this log line; throwing here fails the post.
+    const info = t.ctx.logger.info;
+    t.ctx.logger.info = (msg: string, data?: unknown) => {
+      if (msg.startsWith("slack chat.postMessage"))
+        throw new Error("slack down");
+      info(msg, data);
+    };
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    expect(last(ds).output).toMatchObject({ skipped: "no structured draft" });
+    expect(t.llmCalls).toHaveLength(2);
+    expect(
+      t.logs.find((l) => l.msg === "draft-failed note not posted; continuing"),
+    ).toMatchObject({ level: "warn" });
+  });
+
+  it("no note when a concurrent delivery drafted this event while ours missed", async () => {
+    const t = ctxFor("e");
+    skipToolCall(t, 2);
+    const llm = (
+      t.ctx.sapiom as { llm: { run: (s: unknown) => Promise<unknown> } }
+    ).llm;
+    const run = llm.run.bind(llm);
+    llm.run = async (spec) => {
+      const response = await run(spec);
+      if (t.llmCalls.length === 2)
+        await createDraftOnce(db, {
+          issueId: FIXTURE_ISSUE,
+          text: "drafted by the other delivery",
+          citations: [],
+          causationId: "Ev0EXAMPLE01",
+          confidence: 0.7,
+        });
+      return response;
+    };
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    expect(last(ds).output).toMatchObject({
+      skipped: "no structured draft",
+      draftId: expect.any(String),
+    });
+    expect(t.slack("chat.postMessage")).toHaveLength(0);
+  });
+
   it("concurrent deliveries of one event post exactly one card", async () => {
     const payload = fixture("issue/created.json").payload;
     const a = ctxFor("exec-a");

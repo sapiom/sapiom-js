@@ -172,6 +172,20 @@ async function triggerTs(db: Db, draft: Draft): Promise<number | null> {
   return message?.ts ? Number(message.ts) : null;
 }
 
+/** A pending draft with a posted card that answers a newer customer message than the trigger's. */
+async function newerPostedDraft(
+  db: Db,
+  issueId: string,
+  trigger: DraftTrigger,
+): Promise<Draft | undefined> {
+  const ours = Number(trigger.slack.ts);
+  for (const pending of await pendingDrafts(db, issueId)) {
+    const theirs = await triggerTs(db, pending);
+    if (pending.cardTs && theirs !== null && theirs > ours) return pending;
+  }
+  return undefined;
+}
+
 /**
  * Covers thinking plus the forced tool call (SAP-3280): a routed label may think before it
  * answers, and those tokens come out of the same cap.
@@ -268,16 +282,13 @@ async function draftReply(
       // A late event must not replace the posted draft for a newer customer message. A newer
       // draft without a card (its post failed or is in flight) does not stop us: if ours were
       // dropped too, the customer could be left with no actionable reply.
-      const ours = Number(trigger.slack.ts);
-      for (const pending of await pendingDrafts(db, issue.id)) {
-        const theirs = await triggerTs(db, pending);
-        if (pending.cardTs && theirs !== null && theirs > ours)
-          return terminate({
-            issueId: issue.id,
-            skipped: "a newer message already has a pending draft",
-            draftId: pending.id,
-          });
-      }
+      const newer = await newerPostedDraft(db, issue.id, trigger);
+      if (newer)
+        return terminate({
+          issueId: issue.id,
+          skipped: "a newer message already has a pending draft",
+          draftId: newer.id,
+        });
 
       const [account, stored] = await Promise.all([
         getAccount(db, issue.accountId),
@@ -293,10 +304,16 @@ async function draftReply(
         }),
       );
       if (!raw) {
-        await postDraftFailedNote(ctx, db, triageRootTs);
+        // A concurrent delivery of this event, or a newer message, may have drafted while ours
+        // missed: then the thread has a card to act on and the note would be wrong.
+        const drafted =
+          (await draftForCausation(db, issue.id, trigger.causationId)) ??
+          (await newerPostedDraft(db, issue.id, trigger));
+        if (!drafted) await postDraftFailedNote(ctx, db, triageRootTs);
         return terminate({
           issueId: issue.id,
           skipped: "no structured draft",
+          ...(drafted && { draftId: drafted.id }),
         });
       }
       const output = normalizeOutput(raw, KB);
