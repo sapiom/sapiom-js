@@ -109,6 +109,8 @@
       { "channelId": "C0CUSTOMER1", "accountName": "Example Customer" }
     ],
     "oncall.slack_id": "U0ONCALL001",
-    "nudge.minutes": 5
+    "nudge.minutes": 5,
+    "customers.test_user_ids": [],
+    "intake.reactions": true
   }
 }

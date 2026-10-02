@@ -15,7 +15,16 @@ export const ConfigSchemas = {
   ),
   "oncall.slack_id": z.string().min(1),
   "nudge.minutes": z.number().int().positive(),
+  /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
+  "team.slack_team_ids": z.array(z.string().min(1)),
+  /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
+  "customers.test_user_ids": z.array(z.string().min(1)),
+  /** Whether intake adds 👀 / 🎫 to customer messages. Off for a shadow pilot that must leave no footprint. */
+  "intake.reactions": z.boolean(),
 } as const;
+
+/** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
+export const OPTIONAL_KEYS: readonly ConfigKey[] = ["team.slack_team_ids"];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
   (typeof ConfigSchemas)[K]
@@ -53,6 +62,23 @@ export async function getConfig<K extends ConfigKey>(
   const value = ConfigSchemas[key].parse(rows[0].value) as ConfigValue<K>;
   c.set(key, value);
   return value;
+}
+
+/**
+ * Like {@link getConfig}, but an unset key yields `fallback`. For keys added after a fleet was
+ * installed: the live config table does not have them until setup re-seeds.
+ */
+export async function getConfigOr<K extends ConfigKey, F>(
+  db: Db,
+  key: K,
+  fallback: F,
+): Promise<ConfigValue<K> | F> {
+  try {
+    return await getConfig(db, key);
+  } catch (err) {
+    if (err instanceof MissingConfigError) return fallback;
+    throw err;
+  }
 }
 
 export async function setConfig<K extends ConfigKey>(
