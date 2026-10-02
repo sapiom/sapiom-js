@@ -79,7 +79,7 @@ describe('validateManifestStepInput', () => {
 describe('validateManifestStepInput: memory (SAP-3671)', () => {
   afterEach(() => jest.restoreAllMocks());
 
-  /** Ajv internals that grow with every compiled schema. */
+  // Track both schema and generated-validator retention to detect leaks in either store (SAP-3671).
   type AjvInternals = { _cache: Map<unknown, unknown>; scope: { get(): { validate?: unknown[] } } };
   const footprint = (ajv: AjvInternals) => ({
     cache: ajv._cache.size,
