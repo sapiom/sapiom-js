@@ -34,6 +34,10 @@
       * {
         box-sizing: border-box;
       }
+      /* main sets display: grid, which would otherwise beat the hidden attribute. */
+      [hidden] {
+        display: none !important;
+      }
       body {
         margin: 0;
         background: var(--bg);
@@ -82,6 +86,7 @@
         color: var(--muted);
         margin: 0 0 8px;
         display: flex;
+        flex-wrap: wrap;
         justify-content: space-between;
         gap: 8px;
         align-items: center;
@@ -212,6 +217,58 @@
         overflow: auto;
         margin: 0;
       }
+      .tabs {
+        display: flex;
+        gap: 4px;
+        padding: 8px 16px 0;
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+      .tabs button[aria-selected="true"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .flow {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+      }
+      .box {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 10px;
+        background: var(--bg);
+      }
+      .box strong {
+        display: block;
+      }
+      .arrow {
+        text-align: center;
+        color: var(--muted);
+        line-height: 1;
+        padding: 3px 0;
+      }
+      .side {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+        gap: 6px;
+      }
+      dl.kv {
+        margin: 4px 0 0;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 2px 10px;
+      }
+      dl.kv dt {
+        color: var(--muted);
+      }
+      dl.kv dd {
+        margin: 0;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
       .confirm {
         border: 1px solid var(--bad);
         border-radius: 6px;
@@ -228,7 +285,11 @@
       <h1>Sylon Console</h1>
       <div class="row" id="auth"></div>
     </header>
-    <main>
+    <nav class="tabs" role="tablist">
+      <button role="tab" id="tab-operate" aria-selected="true">Operate</button>
+      <button role="tab" id="tab-system" aria-selected="false">System</button>
+    </nav>
+    <main id="operate">
       <section id="fleet-panel">
         <h2>
           Fleet
@@ -318,6 +379,76 @@
       <section>
         <h2>Action log</h2>
         <pre id="log" class="muted">nothing yet</pre>
+      </section>
+    </main>
+    <main id="system" hidden>
+      <section>
+        <h2>Channels</h2>
+        <div id="sys-channels" class="muted">loading…</div>
+      </section>
+
+      <section>
+        <h2>How events come in</h2>
+        <div class="flow">
+          <div class="side">
+            <div class="box">
+              <strong>Slack</strong>Events API (messages, reactions) and
+              interactivity (button clicks)
+            </div>
+            <div class="box">
+              <strong>Agents</strong
+              ><code>ctx.sapiom.events.emit</code> (<code>issue.*</code>), id
+              <code>&lt;type&gt;:&lt;causationId&gt;</code>
+            </div>
+          </div>
+          <div class="arrow">↓ Slack only</div>
+          <div class="box">
+            <strong>Sapiom Slack connector</strong>checks the Slack signature,
+            drops bot posts and edits, emits
+            <code>slack.message.created</code> /
+            <code>slack.reaction_added</code> /
+            <code>slack.block_actions</code>
+          </div>
+          <div class="arrow">↓ both</div>
+          <div class="box">
+            <strong>Engine receipt</strong>one per event, deduped on the Slack
+            event id, trigger id or emit id
+          </div>
+          <div class="arrow">↓</div>
+          <div class="box">
+            <strong>Trigger match</strong>by exact event type, one fire per
+            matching agent
+          </div>
+          <div class="arrow">↓</div>
+          <div class="box">
+            <strong>Outbox relay</strong>currently a 15 s poll (SAP-3716): most
+            of the wait between a receipt and its run
+          </div>
+          <div class="arrow">↓</div>
+          <div class="box">
+            <strong>Run</strong>the agent's steps, in a sandbox
+          </div>
+          <div class="arrow" style="margin-top: 8px">separately</div>
+          <div class="box">
+            <strong>Controller cron</strong><code>*/2 * * * *</code> starts a
+            run directly, no event involved
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Agents</h2>
+        <div id="sys-agents" class="muted">loading…</div>
+      </section>
+
+      <section>
+        <h2>Shared database <code>sylon</code></h2>
+        <div id="sys-tables" class="muted">loading…</div>
+      </section>
+
+      <section>
+        <h2>Linear</h2>
+        <div id="sys-linear" class="muted">loading…</div>
       </section>
     </main>
 
@@ -427,7 +558,7 @@
             renderAuth();
           };
         } else {
-          el.innerHTML = `<input id="secret" type="password" placeholder="console secret" autocomplete="off" aria-label="Console secret"> <button id="unlock" class="primary">Unlock</button>`;
+          el.innerHTML = `<input id="secret" type="password" placeholder="console secret" autocomplete="off" aria-label="Console secret" style="width:160px;max-width:100%"> <button id="unlock" class="primary">Unlock</button>`;
           const go = async () => {
             const v = $("secret").value.trim();
             if (!v) return;
@@ -453,6 +584,7 @@
         try {
           fleet = await get("/api/fleet");
           renderFleet();
+          renderSystemAgents();
         } catch (e) {
           $("fleet").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
         }
@@ -665,6 +797,75 @@
         }
       }
 
+      // --- system ------------------------------------------------------------------------
+      const link = (url, text) =>
+        url
+          ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`
+          : esc(text);
+      let systemLoaded = false;
+      async function loadSystem() {
+        try {
+          const s = await get("/api/system");
+          systemLoaded = true;
+          const ch = (c, name) => link(c.url, `${name} (${c.channelId})`);
+          $("sys-channels").className = "";
+          $("sys-channels").innerHTML = `
+            ${s.slack.customers
+              .map(
+                (c) =>
+                  `<div class="box" style="margin-bottom:6px"><strong>${ch(c, "Customer channel")}</strong>Stands in for <em>${esc(c.accountName)}</em>'s shared Slack Connect channel. The customer posts here; the bot only reacts and posts the approved reply in the customer's thread.</div>`,
+              )
+              .join("")}
+            <div class="box"><strong>${ch(s.slack.triage, "Triage channel")}</strong>The team's internal channel: ticket cards, mirrored customer messages, AI drafts with Approve / Escalate / Dismiss, and nudges.</div>
+            ${s.slack.teamId ? "" : `<p class="warn">Slack team id unavailable, so channels are not linked.</p>`}`;
+          renderSystemAgents(s.agents);
+          $("sys-tables").className = "";
+          $("sys-tables").innerHTML =
+            `<dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
+          $("sys-linear").className = "";
+          $("sys-linear").innerHTML =
+            `${link(s.linear.url, s.linear.name)}<div class="muted">escalation creates an issue here for each escalated ticket; its description starts <code>sylon:&lt;issueId&gt;</code></div>`;
+        } catch (e) {
+          $("sys-channels").innerHTML =
+            `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      let systemAgents = [];
+      function renderSystemAgents(agents) {
+        if (agents) systemAgents = agents;
+        if (!systemAgents.length) return;
+        $("sys-agents").className = "";
+        $("sys-agents").innerHTML = systemAgents
+          .map((a) => {
+            const live = fleet.find((f) => f.key === a.key);
+            const state = !live
+              ? ""
+              : !live.deployed
+                ? `<span class="warn">not deployed</span>`
+                : `<span class="${live.on ? "ok" : "muted"}">${live.on ? "on" : "off"}</span> ${live.triggers.map((t) => `<span class="chip ${t.state === "active" ? "ok" : t.state === "paused" ? "warn" : "muted"}">${esc(t.label)}${t.id ? ` #${esc(t.id)}` : ""}</span>`).join(" ")}`;
+            return `<div class="agent"><div style="min-width:0"><strong>${link(a.url, a.key)}</strong> ${state}
+              <dl class="kv">
+                <dt>listens</dt><dd>${a.listens.map((x) => `<code>${esc(x)}</code>`).join(", ") || "—"}</dd>
+                <dt>emits</dt><dd>${a.emits.map((x) => `<code>${esc(x)}</code>`).join(", ") || "nothing"}</dd>
+                <dt>writes</dt><dd>${esc(a.writes)}</dd>
+                <dt>agent</dt><dd><code>${esc(a.slug)}</code>${a.definitionId ? ` · definition ${esc(a.definitionId)}` : ""}</dd>
+              </dl></div></div>`;
+          })
+          .join("");
+      }
+      function showTab(name) {
+        for (const t of ["operate", "system"]) {
+          $(t).hidden = t !== name;
+          $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
+        }
+        try {
+          localStorage.setItem("sylon-console-tab", name);
+        } catch {}
+        if (name === "system" && !systemLoaded) loadSystem();
+      }
+      $("tab-operate").onclick = () => showTab("operate");
+      $("tab-system").onclick = () => showTab("system");
+
       renderAuth();
       refreshFleet();
       refreshBoard();
@@ -676,6 +877,14 @@
         refreshTimeline();
       }, 3000);
       setInterval(refreshFleet, 10000);
+      try {
+        if (
+          location.hash === "#system" ||
+          (location.hash !== "#operate" &&
+            localStorage.getItem("sylon-console-tab") === "system")
+        )
+          showTab("system");
+      } catch {}
       setInterval(refreshReceipts, 20000);
     </script>
   </body>

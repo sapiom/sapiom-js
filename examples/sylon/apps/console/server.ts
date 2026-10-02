@@ -12,7 +12,7 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { createClient } from "@sapiom/tools";
+import { connectors, createClient } from "@sapiom/tools";
 
 import { getConfig } from "../../_shared/config";
 import {
@@ -20,24 +20,30 @@ import {
   resolveConnectionString,
   type Db,
 } from "../../_shared/db";
+import { callTool } from "../../_shared/linear";
 import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
 import cues from "./cues.json";
 import page from "./index.html";
 import {
   AGENTS,
+  AGENT_ROLES,
   CONTROLLER,
   LIVE_AGENT,
+  TABLES,
   SECRET_HEADER,
   agentByKey,
+  agentPageUrl,
   checkSecret,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
   latencies,
+  listensTo,
   planSwitch,
   receiptView,
   redact,
+  slackChannelUrl,
   triggerBody,
   triggerStates,
   type AttachedTrigger,
@@ -288,6 +294,67 @@ async function failedReceipts() {
   return failedFleetReceipts(receipts).map(receiptView);
 }
 
+/**
+ * The system map: channels, agents, tables and the Linear project, as ids, names and links only.
+ * Slack names no team id in config, so it is read off the on-call user's profile; a lookup that
+ * fails leaves its link out rather than failing the page.
+ */
+async function system(d: Db) {
+  const [triage, customers, oncall, projectId] = await Promise.all([
+    getConfig(d, "channels.triage"),
+    getConfig(d, "channels.customer"),
+    getConfig(d, "oncall.slack_id"),
+    getConfig(d, "linear.project_id"),
+  ]);
+  const [teamId, project, definitions] = await Promise.all([
+    connectors.slack
+      .userInfo({ user: oncall })
+      .then(
+        (r) => (r.user as { team_id?: string } | undefined)?.team_id ?? null,
+      )
+      .catch(() => null),
+    callTool("get_project", { query: projectId })
+      .then((p) => ({
+        name: typeof p.name === "string" ? p.name : "Linear project",
+        url: typeof p.url === "string" ? p.url : null,
+      }))
+      .catch(() => ({ name: "Linear project", url: null })),
+    sapiom<{ id: string; slug: string }[]>(
+      "GET",
+      "/v1/workflows/definitions?limit=200",
+    ).catch(() => []),
+  ]);
+  const channel = (channelId: string) => ({
+    channelId,
+    url: teamId ? slackChannelUrl(teamId, channelId) : null,
+  });
+  const ids = new Map(definitions.map((x) => [x.slug, String(x.id)]));
+  return {
+    slack: {
+      teamId,
+      triage: channel(triage),
+      customers: customers.map((c) => ({
+        ...channel(c.channelId),
+        accountName: c.accountName,
+      })),
+    },
+    linear: project,
+    agents: AGENTS.map((a) => {
+      const definitionId = ids.get(a.slug) ?? null;
+      return {
+        key: a.key,
+        slug: a.slug,
+        definitionId,
+        url: definitionId ? agentPageUrl(definitionId) : null,
+        listens: listensTo(a.key),
+        emits: AGENT_ROLES[a.key]?.emits ?? [],
+        writes: AGENT_ROLES[a.key]?.writes ?? "",
+      };
+    }),
+    tables: TABLES.map(([name, role]) => ({ name, role })),
+  };
+}
+
 // --- HTTP ------------------------------------------------------------------------------------
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -334,6 +401,7 @@ const GET: [RegExp, Handler][] = [
   ],
   [/^\/api\/receipts\/failed$/, () => failedReceipts()],
   [/^\/api\/cues$/, async () => cues],
+  [/^\/api\/system$/, () => withConsoleDb(system)],
 ];
 
 /** Every POST changes state and passes the secret check first. */

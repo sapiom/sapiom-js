@@ -132,6 +132,80 @@ export function fleetWideKeys(): string[] {
   return AGENTS.filter((a) => a.key !== LIVE_AGENT).map((a) => a.key);
 }
 
+// --- system map ----------------------------------------------------------------------------
+
+export interface AgentRole {
+  emits: string[];
+  /** Tables it writes, then what it posts outside the database. */
+  writes: string;
+}
+
+/** What each agent emits and writes, as its code does; fleet.json says only what it listens to. */
+export const AGENT_ROLES: Record<string, AgentRole> = {
+  intake: {
+    emits: ["issue.created", "issue.message_added"],
+    writes:
+      "messages, issues, accounts, runs, events_log; posts the ticket card and mirrors customer messages in triage, reacts in the customer channel",
+  },
+  copilot: {
+    emits: ["issue.escalate"],
+    writes:
+      "drafts, messages, issues (status, summary), runs, events_log; posts draft cards in triage and the approved reply in the customer thread",
+  },
+  escalation: {
+    emits: ["issue.on_hold"],
+    writes:
+      "issues (Linear link, on_hold), messages, runs, events_log; creates the Linear issue, replies in both threads",
+  },
+  controller: {
+    emits: ["issue.nudged"],
+    writes: "nudges, runs, events_log; posts nudges in triage threads",
+  },
+  "urgent-pager": {
+    emits: [],
+    writes: "messages, runs; DMs on-call for urgent issues",
+  },
+};
+
+/** What the agent listens to, from fleet.json `triggers`. */
+export function listensTo(key: string): string[] {
+  return wantedTriggers(key).map(triggerLabel);
+}
+
+/** The `sylon` database's tables, one line each. */
+export const TABLES: [string, string][] = [
+  ["accounts", "one row per customer channel (name, Slack channel id)"],
+  [
+    "issues",
+    "the tickets: status, category, priority, owner, both Slack threads, Linear link",
+  ],
+  [
+    "messages",
+    "every customer, agent and internal message, keyed by Slack event id",
+  ],
+  ["drafts", "AI reply drafts and their Approve / Escalate / Dismiss outcome"],
+  [
+    "nudges",
+    "follow-ups the controller already sent, one per issue and condition",
+  ],
+  ["runs", "each agent execution and the issue it worked on"],
+  [
+    "events_log",
+    "every domain event an agent emitted, with its engine receipt id",
+  ],
+  [
+    "config",
+    "runtime config: channels, on-call, Linear team and project, nudge minutes",
+  ],
+  ["schema_migrations", "applied migrations"],
+];
+
+export const slackChannelUrl = (teamId: string, channelId: string) =>
+  `https://app.slack.com/client/${teamId}/${channelId}`;
+
+export const agentPageUrl = (definitionId: string) =>
+  `https://app.sapiom.ai/agents/${definitionId}`;
+
 // --- latency ---------------------------------------------------------------------------------
 
 /** A Slack `ts` (`"1790889355.981329"`, seconds since the epoch) in milliseconds. */
