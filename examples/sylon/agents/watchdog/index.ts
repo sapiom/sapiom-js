@@ -7,8 +7,9 @@
  * this polls `GET /v1/workflows/executions?status=failed`.
  *
  * Credential: that route needs `org.read`, which the per-run key behind `ctx.sapiom` does not
- * hold. The key is read from the tenant vault: ref `sylon-watchdog`, key `SAPIOM_API_KEY` (see
- * the README). Channel: `alerts.channel`, else `channels.triage`.
+ * hold. `pnpm run setup` mints a read-only key and stores it as this agent's secret
+ * `SYLON_WATCHDOG_API_KEY`, which the engine injects as an environment variable. Channel:
+ * `alerts.channel`, else `channels.triage`.
  *
  * State: `watchdog_reported` holds every execution already announced (the dedup) and
  * `watchdog_state` one cursor. A failure is posted, then recorded (post then record, a known
@@ -40,8 +41,7 @@ import {
 } from "./logic";
 
 export const AGENT = "sylon-watchdog";
-export const VAULT_REF = "sylon-watchdog";
-export const VAULT_KEY = "SAPIOM_API_KEY";
+export const KEY_ENV = "SYLON_WATCHDOG_API_KEY";
 
 const API_URL = "https://api.sapiom.ai";
 const PAGE = 500;
@@ -231,18 +231,24 @@ export async function tick(ctx: TickCtx, db: Db, deps: Deps) {
   };
 }
 
+/** The org key setup stored as this agent's secret; its absence means setup has not run. */
+export function requireKey(env: Record<string, string | undefined>): string {
+  const key = env[KEY_ENV];
+  if (!key)
+    throw new Error(
+      `${KEY_ENV} is not set; run \`pnpm run setup --only watchdog\` in examples/sylon to provision it`,
+    );
+  return key;
+}
+
 const scan = defineStep({
   name: "scan",
   terminal: true,
   inputSchema: z.object({}).passthrough(),
   async run(_input, ctx) {
-    // A local trace has no vault and no org key; it must not poll the live API.
+    // A local trace has no org key; it must not poll the live API.
     if (ctx.isLocalTrace) return terminate({ outcome: "local_trace" });
-    const apiKey = await ctx.sapiom.vault.get(VAULT_REF, VAULT_KEY);
-    if (!apiKey)
-      throw new Error(
-        `vault secret ${VAULT_REF}/${VAULT_KEY} is not set; store an org API key with org.read there (see examples/sylon/README.md)`,
-      );
+    const apiKey = requireKey(process.env);
     return withDb(ctx, async (db) =>
       terminate(await tick(ctx, db, { fetch: globalThis.fetch, apiKey })),
     );

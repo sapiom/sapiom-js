@@ -47,6 +47,7 @@ import {
 import { listTools } from "./_shared/linear";
 import { exampleKeys, mergeConfig, seedFleet } from "./_shared/seed";
 import { SlackMethodError, replies, userInfo } from "./_shared/slack";
+import { WATCHDOG_SECRET, ensureWatchdogKey } from "./scripts/secrets";
 import { KB_OUT, readKb, renderKb } from "./scripts/build-kb";
 import {
   bundleHash,
@@ -332,6 +333,33 @@ async function triggers(
   }
 }
 
+/** The watchdog's read-only key, set as an agent secret before its first cron tick. */
+async function secrets(
+  selected: FleetProject[],
+  client: GatewayClient,
+  state: FleetState,
+) {
+  const watchdog = selected.find((p) => p.key === "watchdog");
+  if (!watchdog) return;
+  console.log("secrets");
+  const definitionId = state.projects[watchdog.key]?.definitionId;
+  if (!definitionId)
+    throw new Error(
+      "watchdog has no deployed definition to attach a secret to",
+    );
+  const out = await ensureWatchdogKey(client, definitionId);
+  if (out.outcome === "present") return say(`${WATCHDOG_SECRET}: set`);
+  state.secrets = {
+    ...state.secrets,
+    [watchdog.key]: {
+      name: WATCHDOG_SECRET,
+      keyId: out.keyId,
+      at: new Date().toISOString(),
+    },
+  };
+  changed(`${WATCHDOG_SECRET}: provisioned a read-only key for the watchdog`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const selected = selectProjects(args);
@@ -348,6 +376,7 @@ async function main() {
   const state = loadState();
   try {
     await projects(selected, client, state);
+    await secrets(selected, client, state);
     if (args.noTriggers) console.log("triggers\n  skipped (--no-triggers)");
     else await triggers(selected, client, state);
   } finally {

@@ -5,7 +5,7 @@ import { fixture } from "../../fixtures/index";
 import { setConfig } from "../../_shared/config";
 import { memoryDb, type Db } from "../../_shared/db";
 import { fakeCtx } from "../../_shared/test-ctx";
-import { agent, tick, type Deps } from "./index";
+import { agent, requireKey, tick, type Deps } from "./index";
 import {
   actionItems,
   failureMessage,
@@ -335,5 +335,15 @@ describe("watchdog step", () => {
     };
     const done = await step.run(fixture("watchdog/cron.json").payload, ctx);
     expect(done.output).toEqual({ outcome: "local_trace" });
+  });
+});
+
+describe("requireKey", () => {
+  it("returns the injected key", () => {
+    expect(requireKey({ SYLON_WATCHDOG_API_KEY: "k" })).toBe("k");
+  });
+
+  it("tells the operator to run setup when the secret is missing", () => {
+    expect(() => requireKey({})).toThrow(/pnpm run setup --only watchdog/);
   });
 });

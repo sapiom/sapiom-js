@@ -123,10 +123,13 @@ tick post 10 and one "and N more" line linking the Events page.
 
 - **Channel.** `alerts.channel` in `fleet.local.json` (or the `config` table). When unset, alerts go to
   `channels.triage`.
-- **Credential.** That route needs `org.read`, which the per-run key behind `ctx.sapiom` does not hold.
-  Store an org API key with `org.read` in the tenant vault under ref `sylon-watchdog`, key
-  `SAPIOM_API_KEY` (dashboard, or `@sapiom/core` `VaultAPI`). The agent reads it with
-  `ctx.sapiom.vault.get`. Without it each tick fails with a message naming the missing secret.
+- **Credential.** That route needs `org.read`, which the per-run key behind `ctx.sapiom` does not
+  hold. `pnpm run setup` provisions it: it mints a child key with only `org.read` and stores it as
+  the watchdog's secret `SYLON_WATCHDOG_API_KEY`, which Sapiom injects into the agent as an
+  environment variable. A rerun finds the secret and does nothing. The key running setup needs
+  `org.api_keys.write` and `org.write`; without them setup stops and tells you to create an
+  `org.read` key yourself and add it in the agent's Secrets tab. The key is never printed or
+  written to `.sapiom/fleet-state.json` (only its id).
 
 Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
 each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open
