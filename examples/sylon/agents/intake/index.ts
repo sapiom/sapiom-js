@@ -30,6 +30,7 @@ import {
   assign,
   attachMessage,
   ensureAccount,
+  eventLogged,
   getAccount,
   getIssue,
   issueByCustomerThread,
@@ -493,8 +494,14 @@ const persist = defineStep({
         // same outcome. The emit id dedups, and `duplicate` keeps the mirror from posting twice.
         const issue = await getIssue(db, replay.issueId);
         const first = (await messagesForIssue(db, issue.id))[0];
-        // The first attempt may have failed before moving the status; the move is idempotent.
-        if (first?.id !== replay.id) await followUp(db, issue.id);
+        // The fresh path moves the status before it emits, so a logged `issue.message_added` means
+        // the move happened; replaying it then would reopen an issue a teammate has since closed.
+        // No logged emit means the first attempt died in between and the move is still owed.
+        if (
+          first?.id !== replay.id &&
+          !(await eventLogged(db, "issue.message_added", input.eventId))
+        )
+          await followUp(db, issue.id);
         return goto("announce", {
           incoming,
           userName: input.userName,

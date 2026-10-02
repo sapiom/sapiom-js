@@ -472,6 +472,31 @@ describe("intake agent", () => {
     expect(retry.slack("chat.postMessage")).toHaveLength(0);
   });
 
+  it("a redelivered follow-up does not reopen an issue closed since", async () => {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    const issueId = output.issueId as string;
+    const fup = intakeFixture("message-created.follow-up.json").payload;
+    await run(fup, makeCtx("exec-fup").ctx);
+    expect((await getIssue(db, issueId)).status).toBe("on_you");
+    const close = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as { actions: { value: string }[] };
+    close.actions[0].value = issueId;
+    await run(close, makeCtx("exec-close").ctx);
+    // Slack redelivers the follow-up: its issue.message_added is logged, so the move already ran.
+    const again = makeCtx("exec-fup-again");
+    expect((await run(fup, again.ctx)).output).toMatchObject({
+      outcome: "linked",
+      issueId,
+    });
+    expect((await getIssue(db, issueId)).status).toBe("closed");
+    expect(again.slack("chat.postMessage")).toHaveLength(0);
+  });
+
   it("overlapping announce runs for one issue post exactly one card", async () => {
     const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
     const issue = await openIssue(db, {

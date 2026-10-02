@@ -716,3 +716,16 @@ export async function logEvent(
     ],
   );
 }
+
+/** Whether `emit.ts` logged an event of `type` for `causationId` (a step that emitted has finished its writes). */
+export async function eventLogged(
+  db: Db,
+  type: string,
+  causationId: string,
+): Promise<boolean> {
+  const rows = await db.query(
+    "select 1 from events_log where type = $1 and payload->>'causationId' = $2 limit 1",
+    [type, causationId],
+  );
+  return rows.length > 0;
+}
