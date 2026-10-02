@@ -5,7 +5,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { focusRfqAgent } from "./mock-navigation";
+import { startChatWithRfq } from "./mock-navigation";
 
 type HarnessHook = {
   lastDirectAction?: { action: string; req: Record<string, unknown> };
@@ -111,8 +111,7 @@ test("Deploy remains a direct, de-duplicated build stream", async ({ page }) => 
 });
 
 test("a draft agent disables only Cloud while Local remains runnable", async ({ page }) => {
-  await focusRfqAgent(page);
-  await page.getByTestId("open-agent-start-session").click();
+  await startChatWithRfq(page);
   await expect(page.getByTestId("session-step-local")).toHaveAccessibleName("Run using Local");
 
   await page.getByRole("button", { name: "Choose run target" }).click();

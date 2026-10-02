@@ -47,7 +47,7 @@ test("folds to one column: both side panes start collapsed and nothing overflows
   await page.screenshot({ path: "web/e2e/screenshots/mobile-shell.png" });
 });
 
-test("rail opens as a drawer and closes on opening a workflow or a scrim tap", async ({
+test("rail opens as a drawer and closes on selecting a session or a scrim tap", async ({
   page,
 }) => {
   await page.getByTestId("rail-expand").click();
@@ -61,17 +61,13 @@ test("rail opens as a drawer and closes on opening a workflow or a scrim tap", a
   expect(box?.width ?? Number.POSITIVE_INFINITY).toBeLessThan(375);
   await page.screenshot({ path: "web/e2e/screenshots/mobile-drawer.png" });
 
-  // This row is both a Project root and an agent, and the row IS the agent:
-  // opening it focuses that agent and closes the drawer. It used to take the
-  // long way round, opening a one-node dependency graph and then clicking the
-  // node, because the Project action won the row's click unconditionally.
-  await page
-    .getByTestId("workflow-rfq")
-    .locator(".workspace-row-main")
-    .click();
+  // A session row is the rail's one-click verb: selecting a session in
+  // another project closes the drawer and puts that session in the centre.
+  await page.getByTestId("rail-session-select-sess-bg").click();
   await expect(rail).toHaveCount(0);
-  await expect(page.getByTestId("open-agent-empty")).toContainText(
-    "No running session for rfq",
+  await expect(page.getByTestId("session-context")).toHaveAttribute(
+    "data-session-id",
+    "sess-bg",
   );
 
   // The scrim's exposed sliver (right of the drawer) dismisses on tap.
@@ -104,38 +100,29 @@ test("right pane opens as a bottom sheet and dismisses from its own collapse con
   await expect(pane).toHaveCount(1);
 });
 
-test("Agent Map opens in the right sheet, over a workbench that is still there", async ({
+test("a project's Agent Map takes the whole centre on a phone, with no sheet and no chat", async ({
   page,
 }) => {
   await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1");
-  // It used to be a full-main destination that hid BOTH panes — the mode
-  // switch SAP-2980 removes. On mobile the map is the right pane's map, so it
-  // arrives in the sheet, and the conversation is one dismissal away rather
-  // than gone.
+  // The project view is the centre at every width (flow-navigation.md 4.3):
+  // no right pane beside it, so no sheet to open and no scrim to tap out of.
   await page.getByTestId("rail-expand").click();
   await page.getByTestId("project-select-acme-app").click();
 
   const graph = page.getByTestId("agent-map-frame");
   await expect(graph).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toBeVisible();
-  // A sheet, so it brings the sheet's own scrim — the tap-out back to the
-  // conversation, which a full-main destination could not offer.
-  await expect(page.getByTestId("right-sheet-scrim")).toBeVisible();
-  await expect(page.locator(".center-pane")).toHaveCount(1);
+  await expect(page.getByTestId("right-sheet-scrim")).toHaveCount(0);
+  await expect(page.getByTestId("right-expand")).toHaveCount(0);
+  await expect(page.getByTestId("agent-view")).toHaveCount(0);
 
-  // Sheet anatomy, same as the board's: full width, anchored to the bottom,
-  // one header height of the page left visible above as context.
-  await settled(page.locator(".right-pane"));
-  const sheet = await page.locator(".right-pane").boundingBox();
-  expect(sheet?.x).toBe(0);
-  expect(sheet?.width).toBe(375);
-  expect((sheet?.y ?? 0) + (sheet?.height ?? 0)).toBe(812);
-  expect(sheet?.y ?? 0).toBeGreaterThan(0);
-  const bounds = await graph.boundingBox();
-  expect(bounds?.x).toBe(0);
-  expect(bounds?.width).toBe(375);
-  expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBe(812);
+  // Full width, ending at the bottom edge (once the drawer's exit settles).
+  await expect
+    .poll(async () => {
+      const box = await graph.boundingBox();
+      return [box?.x, box?.width, Math.round((box?.y ?? 0) + (box?.height ?? 0))];
+    })
+    .toEqual([0, 375, 812]);
 
   const controls = await page
     .getByRole("group", { name: "Agent Map view controls" })
@@ -153,10 +140,12 @@ test("Agent Map opens in the right sheet, over a workbench that is still there",
     path: "web/e2e/screenshots/mobile-agent-map.png",
   });
 
-  // Drilling into a node cuts to board altitude; the sheet's own collapse
-  // control then hands the whole screen back to the conversation.
+  // A node opens its panel in place; the selected session is one rail tap
+  // away, and its workbench comes back with it.
   await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
+  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await page.getByTestId("rail-expand").click();
+  await page.getByTestId("rail-session-select-sess-boot").click();
   await expect(graph).toHaveCount(0);
-  await page.getByTestId("right-collapse").click();
-  await expect(page.locator(".center-pane")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toBeVisible();
 });

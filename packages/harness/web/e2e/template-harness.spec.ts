@@ -95,8 +95,11 @@ async function expectTemplateSession(
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("templates-panel")).toHaveCount(0);
   if (starter) {
-    // A starter is scaffolded AS that starter, under the project.
-    await expect(page.getByTestId("workflow-coding-pause")).toBeVisible();
+    // A starter is scaffolded AS that starter, under the project; its first
+    // chat is bound to it.
+    await expect(
+      page.locator('.rail-session-row[data-agent="coding-pause"]'),
+    ).toHaveCount(1);
   } else {
     // A gallery template is named in the setup for build time; nothing is
     // typed at the pty after launch.

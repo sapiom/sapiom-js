@@ -4,7 +4,6 @@ import {
   patch,
   release,
   held,
-  rail,
   screenshot,
   type DeploymentProbe,
   type DeploymentWindow,
@@ -153,7 +152,9 @@ async function evidence(page: Page) {
     ].map((key) => (calls[key] as unknown[] | undefined)?.length ?? 0);
   });
 }
-test("mixed badges agree with the rail and inspector and refresh without changing the map", async ({
+// The rail lists sessions, not agents (flow-navigation.md Q3), so the badge
+// the map and the inspector agree on no longer has a rail twin to agree with.
+test("mixed badges agree with the inspector and refresh without changing the map", async ({
   page,
 }) => {
   await open(page);
@@ -177,9 +178,6 @@ test("mixed badges agree with the rail and inspector and refresh without changin
   await expect(node(page)).toHaveAttribute("title", deployedTitle);
   await expect(inspector(page).locator(".status-tag"))
     .toHaveAttribute("title", deployedTitle);
-  await expect(await rail(page)).toHaveAttribute("title", deployedTitle);
-  await expect(await rail(page)).toHaveAttribute("data-deployed", "true");
-  await page.getByTestId("canvas-expand").click();
   await screenshot(page, "desktop");
   const before = await evidence(page);
   const transform = await page
@@ -188,7 +186,6 @@ test("mixed badges agree with the rail and inspector and refresh without changin
   await patch(page, { ready: false });
   await expect(node(page)).toHaveAttribute("data-deployment-state", "draft");
   await expect(inspector(page).locator(".status-tag")).toHaveText("Draft");
-  await expect(await rail(page)).toHaveAttribute("data-deployed", "false");
   await expect(node(page)).toHaveAttribute("title", "Cloud build in progress.");
   await patch(page, { ready: true });
   await expect(node(page)).toHaveAttribute("data-deployment-state", "deployed");
@@ -202,9 +199,8 @@ test("mixed badges agree with the rail and inspector and refresh without changin
   expect(
     await page.evaluate(() => (window as TestWindow).__deployment.targets),
   ).toBe(0);
-  await page.getByTestId("canvas-expand-exit").click();
+  // The map is the centre on a phone too: no sheet to open first.
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByTestId("right-expand").click();
   await expect(inspector(page)).toBeVisible();
   await screenshot(page, "mobile");
 });
@@ -215,7 +211,6 @@ for (const failure of ["bulk", "list", "nested"] as const) {
   }) => {
     await open(page);
     await page.getByTestId(`agent-map-info-${id()}`).click();
-    await page.getByTestId("canvas-expand").click();
     const before = await evidence(page);
     const transform = await page
       .getByTestId("agent-map-subject")
@@ -238,14 +233,7 @@ for (const failure of ["bulk", "list", "nested"] as const) {
     expect(
       await page.getByTestId("agent-map-subject").getAttribute("style"),
     ).toBe(transform);
-    if (failure === "list") {
-      await expect(await rail(page)).toHaveAttribute("data-deployed", "true");
-      await expect(await rail(page)).toHaveAttribute(
-        "data-deployment-unavailable",
-        "true",
-      );
-      await screenshot(page, "retained-error");
-    }
+    if (failure === "list") await screenshot(page, "retained-error");
     if (failure === "bulk") {
       await patch(page, { ready: false });
       await expect(node(page)).toHaveAttribute(
@@ -317,7 +305,6 @@ test("auth changes discard held ready responses and old display evidence", async
   await expect(node(page)).toHaveAccessibleName(
     /Deployment status unavailable/,
   );
-  await expect(await rail(page)).toHaveAttribute("data-deployed", "false");
 });
 
 test("a held binding reply cannot carry a badge into another project", async ({

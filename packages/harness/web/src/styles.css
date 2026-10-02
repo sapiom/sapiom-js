@@ -1152,15 +1152,7 @@ input {
   overflow-y: auto;
 }
 
-/* The fixed-choices region (Group by + Sort by): re-states the body's column
-   + gap so wrapping the choices doesn't flatten their rhythm. */
-.menu-choice-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tree-row-gap);
-}
-
-/* A choice row (Group by / Sort): the shared menu-row anatomy plus a check in
+/* A choice row (Sort by): the shared menu-row anatomy plus a check in
    the trailing gutter. `menuitemradio` carries the semantics; this only sizes
    the mark slot so every row's copy column ends on the same edge, checked or
    not. */
@@ -1863,14 +1855,11 @@ button.rail-footer-card:hover {
   margin-top: var(--sp2);
 }
 
-
 /* Build is informational (the session itself) — quiet disabled treatment;
    gated macro steps keep the shared dim. */
 .session-step:disabled {
   cursor: default;
 }
-
-
 
 .rail-empty {
   color: var(--text-faint);
@@ -2098,15 +2087,6 @@ button.rail-footer-card:hover {
   outline-offset: -2px;
 }
 
-.workspace-group-empty {
-  height: var(--tree-row-h);
-  display: flex;
-  align-items: center;
-  padding: 0 var(--tree-pad-x) 0 var(--tree-indent);
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-}
-
 /* Section rhythm (both rail views share it — folders and groups both build
    from .workspace-group): ONE continuous hairline guide drawn on the GROUP,
    starting under the header row, so a merged workspace/session row reads as
@@ -2117,21 +2097,7 @@ button.rail-footer-card:hover {
   position: relative;
 }
 
-.workspace-group:has(> .tree-row, > .workflow-item, > .workspace-group-empty)::before {
-  content: "";
-  position: absolute;
-  /* Centered under the 13px header icon: pad + half the glyph. */
-  left: calc(var(--tree-pad-x) + 6px);
-  top: calc(var(--tree-row-h) + var(--tree-row-gap));
-  bottom: 0;
-  width: 1px;
-  background: var(--ui-line);
-  pointer-events: none;
-}
-
-.workspace-group > .tree-row,
-.workspace-group > .workflow-item,
-.workspace-group > .workspace-group-empty {
+.workspace-group > .tree-row {
   position: relative;
 }
 
@@ -2150,12 +2116,6 @@ button.rail-footer-card:hover {
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--transition-fast);
-}
-
-.workflow-item:hover .workflow-row-actions,
-.workflow-item:focus-within .workflow-row-actions {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 /* The shared .workspace-row-action rule keeps buttons at opacity 0; inside
@@ -2242,53 +2202,6 @@ button.rail-footer-card:hover {
 
 /* Deployment state, trailing: cloud = live on Sapiom, crossed cloud = a
    draft that exists locally (sapiom.json) but hasn't been deployed yet. */
-.workflow-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  flex: 0 0 auto;
-  color: var(--text-faint);
-}
-
-.workflow-status[data-deployed="true"] {
-  color: var(--green);
-}
-
-/* One ROW: the trigger fills it; an optional trailing ⋯ actions slot
-   (hover-revealed, see .workflow-row-menu-wrap) rides its right edge. */
-.workflow-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius);
-  color: var(--text-dim);
-}
-
-.workflow-item:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-/* Exactly ONE agent row ever reads as selected: the FOCUSED agent — the rail
-   is an explorer, and the focused row is what the main panel's tab strip is
-   showing. Selection is FILL ONLY (a shaded fill, never a side
-   line — an edge bar clips against the row radius and reads as a broken
-   border) plus a brand-tinted leading glyph. */
-.workflow-item.is-focused {
-  background: var(--active-shade);
-  color: var(--text);
-}
-
-.workflow-item.is-focused .tree-row > svg:first-child {
-  color: var(--brand);
-}
-
-.workflow-item-trigger {
-  flex: 1;
-  min-width: 0;
-  color: inherit;
-}
 
 /* Session attribute of an agent row: filled green when a live session is
    bound and working on it, a hollow ring when none is. Same 14px trailing
@@ -2305,13 +2218,6 @@ button.rail-footer-card:hover {
 .workflow-session-dot[data-live="true"] {
   background: var(--green);
   box-shadow: none;
-}
-
-/* The expander caret sits inline with the other trailing actions but stays
-   visible whenever it exists (a multi-session agent) — it is meaningful, not
-   a hover convenience. */
-.workflow-item .workflow-expander {
-  opacity: 1;
 }
 
 .workflow-dot {
@@ -2348,7 +2254,6 @@ button.rail-footer-card:hover {
   margin-right: 3px;
 }
 
-.workflow-item:hover .workflow-row-menu-wrap .workspace-row-action,
 .workflow-row-menu-wrap .workspace-row-action:focus-visible,
 .workflow-row-menu-wrap .workspace-row-action[aria-expanded="true"] {
   opacity: 1;
@@ -2410,7 +2315,6 @@ button.rail-footer-card:hover {
   }
 }
 
-
 .connect-trigger {
   display: inline-flex;
   align-items: center;
@@ -2431,11 +2335,6 @@ button.rail-footer-card:hover {
   color: var(--text-dim);
   border-color: var(--text-faint);
 }
-
-
-
-
-
 
 .macro-icon-btn {
   position: relative;
@@ -2509,9 +2408,8 @@ button.rail-footer-card:hover {
   }
 }
 
-/* The session queue owns the header's flexible left side. Live-session
-   overflow is handled inside .session-tabs-list, keeping the trailing + fixed
-   and the action cluster reachable without a second header row. */
+/* The session queue owns the header's flexible left side, keeping the action
+   cluster reachable without a second header row. */
 .session-queue {
   display: flex;
   align-items: center;
@@ -2526,7 +2424,7 @@ button.rail-footer-card:hover {
   flex: 0 0 auto;
 }
 
-/* Static/ended session identity when a live tab strip does not apply. */
+/* The session's identity in the header: its title is its options menu. */
 .session-current {
   display: inline-flex;
   align-items: center;
@@ -2593,9 +2491,6 @@ button.rail-footer-card:hover {
   color: var(--text);
 }
 
-
-
-
 .session-context-none {
   font-size: var(--type-label);
   color: var(--text-faint);
@@ -2638,7 +2533,6 @@ button.rail-footer-card:hover {
   color: var(--text-dim);
   font-weight: 600;
 }
-
 
 /* Native Assistant state is separate from the Terminal output pulse. */
 .assistant-activity {
@@ -2695,9 +2589,6 @@ button.rail-footer-card:hover {
    its running state, standing at the trailing edge of the row ahead of the
    actions that fade in on hover, so a hovered row never shifts it. Geometry
    only; the colour is the running state's and is not restated here. */
-.project-live-dot {
-  margin-right: var(--sp1);
-}
 
 .session-dot[data-status="running"] {
   background: var(--green);
@@ -2711,121 +2602,7 @@ button.rail-footer-card:hover {
   background: var(--text-faint);
 }
 
-/* Session tab strip -------------------------------------------------------
-
-   Browser-style tabs live INSIDE .session-bar. Only the list scrolls; the +
-   stays pinned beside it and the action cluster remains outside this flex
-   item. Ending a session stays in the active tab's options menu. */
-.session-tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
-  flex: 1;
-  min-width: 0;
-}
-
-.session-tabs-list {
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.session-tabs-list::-webkit-scrollbar {
-  display: none;
-}
-
-/* One tab: a main select button plus the active tab's options caret. */
-.session-tab {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  max-width: 24ch;
-  height: var(--control-h-xs);
-  border-radius: var(--radius);
-  color: var(--text-faint);
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.session-tab:hover {
-  background: var(--surface-hover);
-  color: var(--text-dim);
-}
-
-.session-tab.is-active {
-  background: var(--active-shade);
-  color: var(--text);
-}
-
-.session-tab-main {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp2);
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 100%;
-  padding: 0 var(--sp1) 0 var(--sp2);
-  border: 0;
-  background: transparent;
-  border-radius: var(--radius) 0 0 var(--radius);
-  color: inherit;
-  font-size: var(--type-label);
-  text-align: left;
-  cursor: pointer;
-}
-
-.session-tab-main:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
-}
-
-.session-tab.is-active .session-tab-main {
-  padding-right: 0;
-}
-
-.session-tab-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The caret belongs to the selected tab, and rotates while its menu is open. */
-.session-tab-menu {
-  flex: 0 0 auto;
-  color: inherit;
-}
-
-.session-tab-menu[aria-expanded="true"] svg {
-  transform: rotate(180deg);
-}
-
-.session-tab-rename {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  margin: 0 var(--sp1);
-  padding: 0 var(--sp1);
-}
-
-.session-tab-new:disabled {
-  color: var(--text-faint);
-  cursor: wait;
-}
-
-.session-tab-new:disabled:hover {
-  background: transparent;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .session-tab {
-    transition: none;
-  }
   .session-busy {
     animation: none;
   }
@@ -3642,9 +3419,6 @@ button.rail-footer-card:hover {
     flex: 1 1 auto;
   }
 }
-
-
-
 
 .dead-session-pane {
   height: 100%;
@@ -4786,7 +4560,6 @@ button.rail-footer-card:hover {
   outline-offset: 1px;
 }
 
-
 .canvas-step-index {
   font-family: var(--font-mono);
   /* Label scale, not micro: the index is scanning copy, and the row has
@@ -5176,7 +4949,6 @@ button.rail-footer-card:hover {
   padding-left: var(--sp3);
   color: var(--text-faint);
 }
-
 
 /* Preview chip (port.detected): the session's running app, one click away.
    Flat interactive tag (.status-tag .status-tag-action): brand ink names
@@ -7928,7 +7700,6 @@ button.rail-footer-card:hover {
   padding-top: var(--sp3);
 }
 
-
 /* Harness dropdown: compact trigger in the footer — [brand icon][label]
    [caret], same anatomy as the composer's provider control. The menu itself
    is the shared popover recipe (see .harness-select-menu). */
@@ -8165,11 +7936,6 @@ button.rail-footer-card:hover {
   .right-pane-tab {
     padding: 3px var(--sp2);
   }
-
-  /* "Agent Map" shortens to "Map" rather than stacking its two words. */
-  .right-pane-tab-qualifier {
-    display: none;
-  }
 }
 
 /* Segmented control row — same --pane-header-h as the brand header and
@@ -8352,8 +8118,6 @@ button.rail-footer-card:hover {
   scrollbar-width: thin;
   scrollbar-color: rgba(161, 161, 170, 0.75) transparent;
 }
-
-
 
 /* ==========================================================================
    Session surface — the terminal is the only session view.
@@ -10240,57 +10004,9 @@ button.rail-footer-card:hover {
    (0,1,0) whatever the source order, and the section header lit up solid brand
    green on hover. */
 .workspace-row:hover .project-mark:not(.project-mark-none),
-.workspace-row.is-focused .project-mark:not(.project-mark-none),
 .workspace-row.is-selected .project-mark:not(.project-mark-none) {
   background: var(--brand);
   color: var(--brand-ink);
-}
-
-/* The stray-agents header has no project behind it, so it carries the folder
-   glyph rather than a mark that would imply one. */
-.project-mark-none {
-  background: transparent;
-  color: var(--text-faint);
-}
-
-/* Prefix and name are ONE flex child.
-   Sitting as two children of the row, the row's 6px gap opened a space inside
-   a path — `scripts/tools/ rollup` read as two separate things rather than one
-   location. */
-.tree-row-name {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-}
-
-/* The prefix loses width first, by a wide margin. Flex distributes shrink in
-   proportion to (shrink factor × basis), so a plain 1:1 ratio hands the
-   shrinkage to whichever string is LONGER — which is how a deep path clipped
-   the agent's own name. A 100:1 factor inverts that: the context gives way and
-   the identity survives. */
-.tree-row-name > .tree-row-prefix {
-  flex: 0 100 auto;
-  min-width: 0;
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-faint);
-}
-
-/* The `/` sits OUTSIDE the truncating span so it survives a clip. Inside it,
-   `components/mailer` rendered as `componen…mailer` — one word where there
-   were two things. */
-.tree-row-name > .tree-row-sep {
-  flex: 0 0 auto;
-  padding: 0 1px 0 0;
-  color: var(--text-faint);
-}
-
-.tree-row-name > .tree-row-label {
-  flex: 0 1 auto;
 }
 
 /* Depth rides as a custom property so the indent step stays a token rather
@@ -10303,324 +10019,6 @@ button.rail-footer-card:hover {
 
 .rail-list .workspace-row.is-nested .row-disclosure {
   padding-left: calc((var(--tree-depth, 0) + 1) * var(--tree-indent));
-}
-
-/* A nested directory group is a row inside a container, not a container of its
-   own: indent alone carries its nesting, and the project's single hairline
-   guide already runs the full height of the subtree. */
-.rail-list .workspace-subgroup {
-  margin-bottom: 0;
-}
-
-.rail-list .workspace-subgroup::before {
-  content: none;
-}
-
-/* A project whose rows are all directories still gets the guide — without
-   this, the line appeared only on projects that happened to hold a direct
-   agent row, which nothing on screen explained. */
-.rail-list .workspace-group:has(> .workspace-subgroup)::before {
-  content: "";
-  position: absolute;
-  left: calc(var(--tree-pad-x) + 6px);
-  top: calc(var(--tree-row-h) + var(--tree-row-gap));
-  bottom: 0;
-  width: 1px;
-  background: var(--ui-line);
-  pointer-events: none;
-}
-
-.rail-list .workspace-group > .workspace-subgroup {
-  position: relative;
-}
-
-/* The filing panel: VISIBLE dropdowns, not a menu of radio rows. Each states
-   its current value on the face of the control, so "how is this list filed?"
-   is answerable without opening anything. */
-.filing-field {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  min-height: var(--tree-row-h);
-  padding: 0 var(--tree-pad-x);
-  font-size: var(--type-label);
-  color: var(--text-dim);
-}
-
-.filing-field-label {
-  flex: 0 0 auto;
-}
-
-.filing-field-select {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 24px;
-  padding: 0 4px;
-  border: 1px solid var(--ui-line);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--type-label);
-}
-
-.filing-field-select:hover {
-  border-color: var(--ui-line-strong);
-}
-
-.filing-field-select:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
-/* ── Group axis: group rows, the drag host, and the two list-end actions ────
-   Added with the rail's Group axis (SAP-2929), appended as its own block for
-   the same reason the Project-axis block above was: it keeps parallel work off
-   each other's lines. Nothing above is reordered or restated except where a
-   `:has()` selector cannot see this axis's markup, which is noted where it
-   happens. The pixel system is unchanged. */
-
-/* The group-axis agent row is WRAPPED in a drag host (components/GroupRow.tsx:
-   GroupAgentRow) so `draggable` and the dataTransfer payload have somewhere to
-   live without a second copy of the agent-row anatomy. One rule above gives
-   `.workspace-group > .workflow-item` its stacking context and cannot see
-   through the wrapper, so it is re-stated for it here rather than edited in
-   place. The project's single hairline guide needs nothing: a group section is a
-   `.workspace-subgroup`, which the Project-axis block already draws the guide
-   for at the PROJECT level and deliberately suppresses per-subgroup. */
-.group-agent-drag {
-  position: relative;
-}
-
-/* A row being dragged reads as picked up rather than gone: the source stays in
-   place (the drop may be a copy, and on a refused drop nothing happened at
-   all), it simply steps back. */
-.group-agent-drag:active {
-  opacity: 0.65;
-}
-
-/* THE DROP TARGET.
-   A wash plus a leading rule, not a border: a border on a 24px row changes the
-   row's height and shoves every row under it by a pixel mid-drag, which reads
-   as the list rearranging before the drop has happened. */
-.workspace-row.is-drop-target {
-  /* A WASH, which is what the comment above always claimed. `var(--accent)` is
-     `var(--brand)` — a saturated green — so this painted the whole row solid
-     brand and read as an error state rather than a target. The leading rule
-     stays full-strength: that is the part doing the pointing. */
-  background: color-mix(in srgb, var(--brand) 14%, transparent);
-  box-shadow: inset 2px 0 0 var(--brand);
-}
-
-.workspace-row.is-drop-target .tree-row-label {
-  color: var(--text);
-}
-
-/* CREATE and RESET, at the END of the list they act on.
-   Both were menu items in the prototype and neither was found — someone went
-   looking for a way to make a group and concluded the feature did not exist. A
-   row at the end of the list is where the eye already is after reading it, and
-   it is visible AT REST rather than on hover, because a list you cannot add to
-   reads as a fixed list. Built from the row metrics so it sits in the same
-   rhythm as the group rows above it, and dimmed so it never competes with a
-   real group for attention. */
-.rail-add-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp2);
-  width: 100%;
-  min-height: var(--tree-row-h);
-  /* Its glyph lands on the same axis as a group row's, which `is-nested`
-     resolves to (depth 0 + 1) × --tree-indent. Stated the same way rather than
-     as a magic number, so an indent-token change moves both. */
-  padding: 0 var(--tree-pad-x) 0 var(--tree-indent);
-  border: none;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-faint);
-  font-family: inherit;
-  font-size: var(--type-label);
-  text-align: left;
-  cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-
-.rail-add-row:hover {
-  /* THE SAME NEUTRAL HOVER AS EVERY OTHER RAIL ROW (`--bg-hover`). This was
-     `var(--accent)`, and `--accent` is `var(--brand)` — full brand green — so
-     hovering "New group" painted the whole row solid green. `--accent` reads
-     like a subtle accent surface and is not one; `--accent-dim`
-     (`var(--brand-wash)`) is the wash. A create row is not a brand moment, it
-     is a row, so it hovers like one. */
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.rail-add-row:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: -2px;
-}
-
-/* The cost of a reset, stated in the copy rather than paid for by hiding the
-   control: "Discards 3 groups". Pushed to the row's right so the label reads
-   first and the consequence second. */
-.rail-add-row-cost {
-  margin-left: auto;
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-}
-
-/* Armed: the second click performs the reset, so the row says so. Danger tone
-   only once it is actually about to happen — a permanently red row in the tree
-   would read as a warning about the list rather than about one action. */
-.rail-reset-row.is-armed {
-  /* A RED WASH, which is what the comment above always described. This was
-     `var(--accent)` — full brand GREEN — under red text: a destructive
-     confirmation rendered in the success colour, which is the opposite of the
-     signal intended. Same token confusion as `.rail-add-row:hover` above. */
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  color: var(--red-text, var(--red));
-}
-
-.rail-reset-row.is-armed .rail-add-row-cost {
-  color: inherit;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .rail-add-row {
-    transition: none;
-  }
-}
-
-/* ── Project axis: the move drag ─────────────────────────────────────────────
-   Added with the Project-axis move (SAP-2930), appended as its own block for
-   the same reason the two blocks above were: it keeps parallel work off each
-   other's lines. Nothing above is reordered or restated, and nothing new is
-   needed for the drop target itself — a directory row and a project row are
-   both `.workspace-row`, so both light up from the single
-   `.workspace-row.is-drop-target` rule the Group axis already states.
-
-   Nothing is needed for the drag SOURCE's layout either, and deliberately: the
-   project-axis agent row carries `draggable` on the row element itself rather
-   than inside a wrapper host, so the hairline guide's `:has(> .workflow-item)`
-   and the stacking-context rule above still see it, and the row order the axis
-   is asserted on is unchanged. */
-
-/* A row being dragged reads as picked up rather than gone: the source stays in
-   place — on a refused drop nothing happened at all — it simply steps back. */
-.rail-list .workflow-item[draggable="true"]:active {
-  opacity: 0.65;
-}
-
-/* ── Round 2: the unrooted section, and an empty project ─────────────────────
-   Appended as its own delimited block, the convention wave 1 established so
-   parallel work stays off each other's lines. Nothing above is reordered or
-   restated.
-
-   Two things get styling here, and both exist because the round-1 rail was
-   only ever rendered against fixtures with a handful of tidy, uniquely-named
-   agents:
-
-    1. "Outside your projects" is not a footnote. It held ~78 of 88 agents on a
-       real install, which made it the largest thing in the rail and the least
-       important. It now collapses (closed by default) and names its count.
-    2. A project with NO agents is an ordinary state, not an impossible one —
-       you open a project in order to build the first agent in it — so its row
-       needs something honest to say underneath it. */
-
-/* The count on the closed header. A quiet numeral, not a pill: this is the
-   size of a section the user is being invited to ignore, and a badge would
-   make the least important row the loudest. */
-.unrooted-count {
-  margin-left: auto;
-  flex: 0 0 auto;
-  padding-left: 6px;
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-  font-variant-numeric: tabular-nums;
-}
-
-/* An unrooted row carries a trailing action, so its trigger has to stop short
-   of the row's right edge rather than run under the button. `.workflow-item`
-   is already `display: flex`; this only re-states the shrink. */
-.unrooted-item .workflow-item-trigger {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-/* The row's PREFIX is doing real work here, unlike in the tree: for six rows
-   named `ari-grade-repo` it is the only thing that differs. It truncates from
-   the RIGHT (the default), which is the correct end to keep — the six worktrees
-   diverge at their LEADING characters (`design-eng-fix` / `design-eng-ij` /
-   `design-eng-main`), so a left-truncating prefix would clip away the only
-   thing being disambiguated.
-
-   And it yields BEFORE the name does: [SEEN] rule 1's point is that the row is
-   named for the AGENT, and a grown prefix must not win the width it shares with
-   that name. `flex: 0 100 auto` (inherited from the tree prefix) already gives
-   it 100× the label's shrink; the cap is what stops it claiming most of a
-   narrow rail before shrinking begins. Measured at rail width against a real
-   85-row section: 45% keeps `ari-grade-repo` whole while
-   `design-eng-main/ari` still reads as distinct from `design-eng-ij/ari`. */
-.unrooted-item .tree-row-prefix {
-  max-width: 45%;
-}
-
-/* The folder chooser behind "Open as project". A menu of rows, each naming a
-   folder and how many registered agents it would bring in — the count is the
-   thing being chosen between, so it is part of the row, not a tooltip. */
-.unrooted-open-choice {
-  justify-content: flex-start;
-  gap: 6px;
-}
-
-.unrooted-open-choice-label {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tree-row-empty {
-  padding-left: var(--tree-pad-x);
-  color: var(--text-faint);
-  font-size: var(--type-meta);
-}
-
-/* The trailing action reveals on the ROW's hover, and an unrooted row is a
-   `.workflow-item`, not a `.workspace-row` — the shared reveal rule keys on
-   the latter, so without this the one way out of the section is invisible at
-   rest AND on hover. Focus reveals it too, so it is reachable by keyboard. */
-.unrooted-item:hover .workspace-row-action,
-.unrooted-item .workspace-row-action[aria-expanded="true"],
-.unrooted-item .workspace-row-action:focus-visible {
-  opacity: 1;
-}
-
-/* Armed: the second press is the one that registers, so the control says so.
-   Danger tone only once it is actually about to happen — the same rule the
-   group-axis reset row follows. */
-.modal-start-actions .btn-primary.is-armed,
-.modal-start-actions .btn-ghost.is-armed {
-  background: var(--red, #b42318);
-  border-color: var(--red, #b42318);
-  color: #fff;
-}
-
-/* The separator between a prefix and an agent NAME, where the two are not a
-   path. A slash asserts "these join into one location"; that is true only when
-   the agent's folder is named for the agent, and on a real install the common
-   case was the other one (`ari-grade-repo` in `ari/orchestration`). The dot
-   takes air on both sides, because unlike a path separator it is a break
-   between two things rather than a joint inside one. */
-.tree-row-name > .tree-row-sep-loose {
-  padding: 0 3px;
 }
 
 /* A NOTE ROW, not an action. When a scan stopped at separate checkouts,
@@ -10891,4 +10289,402 @@ button.rail-footer-card:hover {
   font: inherit;
   line-height: 1.5;
   color: var(--text);
+}
+
+/* ── Navigation: Project › Sessions, the project view, the agent panel ──────
+   plans/studio-navigation/flow-navigation.md, design.md; design-eng
+   agent-studio-v2 docs/NAVIGATION.md. Appended as its own delimited block.
+   Tokens via var() only; no full-strength brand surface (css-brand-surface). */
+
+/* The project header: the selected session's project wears a QUIETER
+   highlight than the fill (ink and weight, no fill), so with every project
+   expanded the eye still finds "where am I" (flow 4.1.2). */
+.workspace-row.holds-selection .workspace-row-main {
+  color: var(--text);
+  font-weight: 640;
+}
+
+/* New chat is visible at rest (reduced) rather than hover-only: a project with
+   no sessions shows its header and this + and nothing else (4.6.1). */
+.workspace-row-action.rail-project-new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 3px;
+  opacity: 0.45;
+}
+
+.workspace-row:hover .workspace-row-action.rail-project-new-chat,
+.workspace-row-action.rail-project-new-chat:focus-visible {
+  opacity: 1;
+}
+
+/* A session row under its project: mark, name, relative time, ×. */
+.rail-session-row {
+  gap: 0;
+}
+
+.rail-session-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding-left: calc(var(--tree-indent) + 2px);
+  cursor: pointer;
+}
+
+.rail-session-row:hover .rail-session-main,
+.rail-session-row.is-selected .rail-session-main {
+  color: var(--text);
+}
+
+.rail-session-time {
+  flex: 0 0 auto;
+  margin-left: var(--sp2, 8px);
+  color: var(--text-faint);
+  font-size: var(--type-meta, 11px);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The × sits where the time is and takes its place on hover, so a row never
+   grows a column it only needs while you are about to act on it. */
+.workspace-row-action.rail-session-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 3px;
+}
+
+.rail-session-row:hover .rail-session-close,
+.rail-session-row:focus-within .rail-session-close {
+  display: flex;
+  opacity: 1;
+}
+
+.rail-session-row:hover .rail-session-time,
+.rail-session-row:focus-within .rail-session-time {
+  display: none;
+}
+
+/* live: filled green (the `.session-dot` running state); idle: filled
+   neutral (its rest state); exited: hollow (NAVIGATION.md). */
+.rail-session-mark {
+  box-sizing: border-box;
+}
+
+.rail-session-mark[data-mark="exited"] {
+  background: transparent;
+  border: 1.5px solid var(--text-faint);
+}
+
+/* The project view: the map, or an agent's canvas, at the FULL centre width. */
+.project-map-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.project-map-pane > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.project-view-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp1, 4px);
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.project-map-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The agent's panel, in the step inspector's slot on the map. */
+.map-agent-panel {
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp4, 16px);
+  width: min(360px, 42%);
+  padding: var(--sp4, 16px);
+  overflow: auto;
+  border-left: 1px solid var(--ui-line);
+  background: var(--surface-raised);
+}
+
+.project-agent-grid-panel .map-agent-panel {
+  width: 100%;
+  border-left: none;
+  border-top: 1px solid var(--ui-line);
+}
+
+.map-agent-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2, 8px);
+  color: var(--text-dim);
+}
+
+.map-agent-panel-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-agent-panel-state {
+  color: var(--text-faint);
+  font-size: var(--type-meta, 11px);
+}
+
+.map-agent-panel-close {
+  margin-left: auto;
+}
+
+.map-agent-section {
+  display: grid;
+  gap: var(--sp1, 4px);
+}
+
+.map-agent-section-label {
+  color: var(--text-faint);
+  font-size: var(--type-meta, 11px);
+  font-weight: 600;
+}
+
+.map-agent-location {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2, 8px);
+  min-width: 0;
+}
+
+.map-agent-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta, 11px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-agent-location-form {
+  display: grid;
+  gap: var(--sp2, 8px);
+}
+
+.map-agent-location-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 var(--sp2, 8px);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta, 11px);
+}
+
+.map-agent-location-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.map-agent-location-error {
+  margin: 0;
+  color: var(--red-text);
+  font-size: var(--type-meta, 11px);
+}
+
+.map-agent-location-actions,
+.map-agent-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp2, 8px);
+}
+
+.map-agent-location-actions {
+  justify-content: flex-end;
+}
+
+.map-agent-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+}
+
+.map-agent-sessions {
+  display: grid;
+}
+
+.map-agent-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--tree-row-h);
+  padding: 0 var(--sp1, 4px);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--type-label);
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-agent-session:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.map-agent-session:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.map-agent-session-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-agent-start-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.change-location-paths {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp1, 4px) var(--sp3, 12px);
+  margin: var(--sp3, 12px) 0 0;
+}
+
+.change-location-paths dt {
+  color: var(--text-faint);
+}
+
+.change-location-paths dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.change-location-paths code {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta, 11px);
+}
+
+/* A project with no drawn map lists its agents as cards (design.md §3). */
+.project-agent-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp3, 12px);
+  padding: var(--sp4, 16px);
+  overflow: auto;
+}
+
+.project-agent-grid-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp2, 8px);
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--type-label);
+}
+
+.project-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp2, 8px);
+}
+
+.project-agent-grid-item {
+  display: flex;
+  min-width: 0;
+}
+
+.project-agent-card {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--sp3, 12px);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-agent-card:hover {
+  border-color: var(--ui-line-strong);
+}
+
+.project-agent-card.is-selected {
+  border-color: var(--text-dim);
+  background: var(--active-shade);
+}
+
+.project-agent-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.project-agent-card-name {
+  font-weight: 600;
+}
+
+.project-agent-card-path {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--type-meta, 11px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-agent-card-state {
+  color: var(--text-dim);
+  font-size: var(--type-meta, 11px);
+}
+
+.project-agent-grid-panel {
+  max-width: 420px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* A session with no bound agent has no right pane at all (design.md I3):
+   absent, not a closed pane with a reopen control. */
+.right-pane[data-absent] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-row-action.rail-project-new-chat {
+    transition: none;
+  }
 }

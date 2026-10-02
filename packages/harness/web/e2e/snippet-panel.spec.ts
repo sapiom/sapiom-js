@@ -16,12 +16,16 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { focusRfqAgent } from "./mock-navigation";
+import { selectSession, startChatWithRfq } from "./mock-navigation";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+  // The boot session is bound to leasing, so the right pane is leasing's.
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-agent",
+    "leasing",
+  );
   await page.getByTestId("right-tab-steps").click();
   await page.getByTestId("steps-snippets-toggle").click();
 });
@@ -40,30 +44,19 @@ test.describe("the snippets follow the SUBJECT's deploy state", () => {
   test("only a READY cloud build offers them — an undeployed agent has nothing to copy", async ({
     page,
   }) => {
-    // Opening rfq (no session in its workspace) drops the disclosure entirely:
-    // no other agent's snippets leak in, and a snippet for an agent with no
-    // ready build could only produce a 404 call. Since SAP-2931 this follows
-    // the rail SELECTION, not the binding — how you trigger an agent from code
-    // has nothing to do with which session is live.
-    await focusRfqAgent(page);
+    // A chat bound to rfq drops the disclosure entirely: no other agent's
+    // snippets leak in, and a snippet for an agent with no ready build could
+    // only produce a 404 call. It follows the right pane's agent, which is the
+    // session's bound agent (flow-navigation.md Q5).
+    await startChatWithRfq(page);
     await page.getByTestId("right-tab-steps").click();
     await expect(page.getByTestId("snippet-panel")).toHaveCount(0);
     await expect(page.getByTestId("steps-snippets")).toHaveCount(0);
 
-    // Opening leasing again switches back to its most-recent deployed session.
-    // Wait for that session transition before inspecting the pane: its board
-    // may collapse the pane.
-    await page.getByTestId("workflow-leasing").locator(".workflow-item-trigger").click();
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      "sess-leasing-2",
-    );
+    // Back on a leasing session, one click in the rail.
+    await selectSession(page, "sess-leasing-2");
     // The disclosure is keyed to the AGENT, not to a flag, so leasing's own
-    // section comes back open exactly as it was left. Asserted on the DOM
-    // rather than on visibility: an empty board auto-collapses the pane, and
-    // whether that lands before or after this line is a race that says nothing
-    // about the snippets.
+    // section comes back open exactly as it was left.
     await expect(page.getByTestId("steps-snippets-toggle")).toHaveAttribute(
       "aria-expanded",
       "true",

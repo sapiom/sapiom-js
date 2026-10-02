@@ -1,113 +1,94 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { LINEAR_TOOLS, createIssue, getIssue, parseMcpReply } from "./linear";
+import {
+  LINEAR_TOOLS,
+  LinearRelayError,
+  createIssue,
+  getIssue,
+  listTools,
+} from "./linear";
 import { fakeCtx } from "./test-ctx";
 
-function mockRelay(result: unknown) {
-  const bodies: Record<string, unknown>[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_url: string, init: RequestInit) => {
-      bodies.push(JSON.parse(init.body as string));
-      const frame = `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result })}\n\n`;
-      return new Response(frame, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    }),
-  );
-  return bodies;
+/** A ctx whose `sapiom.connectors.linear` answers every call with `result` (or throws `err`). */
+function ctxWithLinear(result: unknown, err?: unknown) {
+  const calls: { name: string; args: unknown }[] = [];
+  const linear = {
+    async listTools() {
+      return [{ name: "save_issue", inputSchema: {} }];
+    },
+    async callTool(name: string, args: unknown) {
+      calls.push({ name, args });
+      if (err) throw err;
+      return result;
+    },
+  };
+  const { ctx } = fakeCtx();
+  (ctx as { sapiom: unknown }).sapiom = { connectors: { linear } };
+  return { ctx: ctx as never, calls };
 }
 
+const text = (o: unknown) => ({
+  content: [{ type: "text", text: JSON.stringify(o) }],
+});
+
 describe("linear.ts", () => {
-  beforeEach(() => vi.stubEnv("SAPIOM_API_KEY", "sat_test"));
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-  });
-
-  it("parses both JSON and SSE replies", () => {
-    expect(parseMcpReply('{"result":{"a":1}}')).toEqual({ result: { a: 1 } });
-    expect(
-      parseMcpReply('event: message\ndata: {"result":{"a":2}}\n\n'),
-    ).toEqual({ result: { a: 2 } });
-  });
-
-  it("picks the response frame out of a multi-frame stream", () => {
-    const body = [
-      'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}',
-      'event: message\ndata: {"jsonrpc":"2.0","id":7,\ndata: "result":{"ok":true}}',
-    ].join("\n\n");
-    expect(parseMcpReply(body, 7)).toMatchObject({
-      id: 7,
-      result: { ok: true },
-    });
-  });
-
   it("creates an issue with save_issue and maps identifier/uuid", async () => {
-    const bodies = mockRelay({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            id: "SAP-42",
-            uuid: "u-42",
-            url: "https://linear.app/x/SAP-42",
-          }),
-        },
-      ],
-    });
-    const { ctx } = fakeCtx();
-    const out = await createIssue(ctx as never, {
+    const { ctx, calls } = ctxWithLinear(
+      text({ id: "SAP-42", uuid: "u-42", url: "https://linear.app/x/SAP-42" }),
+    );
+    const out = await createIssue(ctx, {
       teamId: "team-1",
       title: "T",
       description: "D",
       projectId: "proj-1",
+      priority: 2,
     });
-    expect(out).toEqual({
+    expect(out).toMatchObject({
       id: "u-42",
       identifier: "SAP-42",
       url: "https://linear.app/x/SAP-42",
-      status: undefined,
-      statusType: undefined,
     });
-    expect(bodies[0]).toMatchObject({
-      method: "tools/call",
-      params: {
+    expect(calls).toEqual([
+      {
         name: LINEAR_TOOLS.createIssue,
-        arguments: {
+        args: {
           team: "team-1",
           title: "T",
           description: "D",
           project: "proj-1",
+          priority: 2,
         },
       },
-    });
+    ]);
   });
 
   it("surfaces a tool error", async () => {
-    mockRelay({
+    const { ctx } = ctxWithLinear({
       isError: true,
       content: [{ type: "text", text: "Team not found" }],
     });
-    const { ctx } = fakeCtx();
-    await expect(getIssue(ctx as never, "SAP-1")).rejects.toThrow(
-      /Team not found/,
+    await expect(getIssue(ctx, "SAP-1")).rejects.toThrow(/Team not found/);
+  });
+
+  it("wraps a relay failure as a LinearRelayError", async () => {
+    const { ctx } = ctxWithLinear(undefined, new Error("relay unavailable"));
+    await expect(getIssue(ctx, "SAP-1")).rejects.toBeInstanceOf(
+      LinearRelayError,
     );
   });
 
+  it("lists tools through the ctx connector", async () => {
+    const { ctx } = ctxWithLinear(undefined);
+    expect((await listTools(ctx)).map((t) => t.name)).toEqual(["save_issue"]);
+  });
+
   it("sends nothing on a local trace", async () => {
-    const bodies = mockRelay({});
-    const { ctx } = fakeCtx({ isLocalTrace: true });
+    const { ctx, calls } = ctxWithLinear(text({}));
+    (ctx as { isLocalTrace: boolean }).isLocalTrace = true;
     expect(
-      (
-        await createIssue(ctx as never, {
-          teamId: "t",
-          title: "T",
-          description: "D",
-        })
-      ).identifier,
+      (await createIssue(ctx, { teamId: "t", title: "T", description: "D" }))
+        .identifier,
     ).toBe("LOCAL-1");
-    expect(bodies).toEqual([]);
+    expect(calls).toEqual([]);
   });
 });
