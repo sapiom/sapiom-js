@@ -16,7 +16,7 @@ the Sapiom Internal runs on 2026-10-02.
    `issue.created` trigger (`DELETE /v1/workflows/triggers/<id>`; the id is in
    `.sapiom/fleet-state.json`). setup re-attaches it.
 4. **Prepare the replay.** Set `scripts/replay.json` `prefix` to `""` for the live show (rehearsals
-   keep `[sylon test] [sylon demo]`). For the script to post itself, export
+   keep `[sylon test]`). For the script to post itself, export
    `SLACK_REPLAY_USER_TOKEN`, a user token (`xoxp-...`) of the test customer with `chat:write`.
    Without it, someone posts each step by hand as the customer while the script watches.
 5. **Open the tabs:** the customer channel, the triage channel, the on-call user's DMs with the

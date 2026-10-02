@@ -24,7 +24,7 @@ import {
   type Candidate,
   type IntakeJev,
 } from "./decide";
-import { agent } from "./index";
+import { TITLE_MAX, agent, titleOf } from "./index";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const intakeFixture = (file: string) =>
@@ -142,9 +142,32 @@ describe("decide", () => {
   });
 
   it("offers each open issue plus `new` as link options", () => {
-    expect(Object.keys(questions([cand]).linked_issue.criteria).sort()).toEqual(
-      ["issue_7", "new"],
+    const q = questions([cand]);
+    expect(
+      "linked_issue" in q && Object.keys(q.linked_issue.criteria).sort(),
+    ).toEqual(["issue_7", "new"]);
+  });
+
+  it("asks no link question when the account has no open issues", () => {
+    // A one-option choice is a 400 from the decisions API, which left first messages unclassified.
+    expect(questions([])).not.toHaveProperty("linked_issue");
+    const { linked_issue: _, ...jev } = JEV.bug;
+    expect(decide({ ...base, jev, candidates: [] })).toEqual({
+      kind: "open",
+      reason: "jev",
+    });
+  });
+
+  it("cuts a long title at a word, with an ellipsis", () => {
+    const text =
+      "Our webhook deliveries started failing this morning. Every POST to our endpoint is rejected";
+    const title = titleOf(text);
+    expect(title).toBe(
+      "Our webhook deliveries started failing this morning. Every POST to our endpoint…",
     );
+    expect(title.length).toBeLessThanOrEqual(TITLE_MAX);
+    expect(titleOf("short  <!here> one")).toBe("short @here one");
+    expect(titleOf("x".repeat(100))).toBe(`${"x".repeat(79)}…`);
   });
 });
 

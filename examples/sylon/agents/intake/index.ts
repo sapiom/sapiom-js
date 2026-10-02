@@ -74,10 +74,19 @@ const EYES = "eyes";
 const MAX_CANDIDATES = 10;
 
 /** First 80 chars of the message as plain text (mentions and links made inert). */
+export const TITLE_MAX = 80;
+
+/** The message as one plain line, at most `TITLE_MAX` characters, cut at a word with an ellipsis. */
 export function titleOf(text: string): string {
-  return (
-    slackToPlain(text).replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)"
-  );
+  const line = slackToPlain(text).replace(/\s+/g, " ").trim();
+  if (!line) return "(no text)";
+  if (line.length <= TITLE_MAX) return line;
+  const cut = line.slice(0, TITLE_MAX - 1);
+  // Cut back to the last whole word, unless the cut already ends one; a single long word (a URL)
+  // is cut mid-word rather than reduced to a stub.
+  const space = line[cut.length] === " " ? cut.length : cut.lastIndexOf(" ");
+  const head = space > TITLE_MAX / 2 ? cut.slice(0, space) : cut;
+  return `${head.replace(/[\s.,;:!?-]+$/, "")}…`;
 }
 
 const plain = (text: string) => escapeMrkdwn(slackToPlain(text));
