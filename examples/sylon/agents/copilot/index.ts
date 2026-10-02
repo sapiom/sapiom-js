@@ -267,16 +267,18 @@ async function draftReply(
       if (!own.cardTs && own.status === "pending" && newer.length > 0) {
         own = (await decideDraft(tx, own.id, "superseded", SUPERSEDED_BY))
           .draft;
-        return { own, retired: [] as Draft[], stale: true };
+        return { own, retired: [] as Draft[], stale: true, posted: false };
       }
+      let posted = false;
       if (!own.cardTs && own.status === "pending") {
-        const posted = await post(ctx, {
+        const card = await post(ctx, {
           channel: triage,
           threadTs: triageRootTs,
           text: cardText(current),
           blocks: copilotCard(own, current, KB),
         });
-        own = await setDraftCard(tx, own.id, posted);
+        own = await setDraftCard(tx, own.id, card);
+        posted = true;
       }
       // Retire the older pending drafts only now that ours is posted. Also runs on a retry, so a
       // crash after the post never leaves two actionable cards.
@@ -291,7 +293,7 @@ async function draftReply(
           );
           if (decided.changed) retired.push(decided.draft);
         }
-      return { own, retired, stale: false };
+      return { own, retired, stale: false, posted };
     });
     for (const old of published.retired) await updateCard(ctx, old, issue);
     if (published.stale)
@@ -306,7 +308,8 @@ async function draftReply(
       cardTs: published.own.cardTs,
       status: published.own.status,
       confidence,
-      reused: published.own.id === draft.id && !!draft.cardTs,
+      // False only for the run that posted the card.
+      reused: !published.posted,
     });
   });
 }
