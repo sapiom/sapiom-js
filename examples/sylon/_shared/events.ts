@@ -132,6 +132,11 @@ export const Events = {
   }),
   "issue.on_hold": Envelope.extend({ linearIdentifier: z.string() }),
   "issue.nudged": Envelope.extend({ kind: z.string() }),
+  /** linear-sync saw the escalated issue's Linear issue reach a completed state. */
+  "issue.engineering_resolved": Envelope.extend({
+    linearIdentifier: z.string(),
+    linearState: z.string(),
+  }),
 } as const;
 export type EventType = keyof typeof Events;
 export type EventPayload<T extends EventType> = z.infer<(typeof Events)[T]>;

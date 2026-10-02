@@ -4,6 +4,7 @@ import {
   MissingConfigError,
   customerChannel,
   getConfig,
+  getConfigOr,
   setConfig,
 } from "./config";
 import { memoryDb } from "./db";
@@ -16,6 +17,17 @@ describe("config", () => {
     );
     await expect(getConfig(db, "channels.triage")).rejects.toThrow(
       /pnpm run setup/,
+    );
+  });
+
+  it("getConfigOr falls back for a missing key and returns a stored one", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "linear_sync.notify_customer", false)).toBe(
+      false,
+    );
+    await setConfig(db, "linear_sync.notify_customer", true, "test");
+    expect(await getConfigOr(db, "linear_sync.notify_customer", false)).toBe(
+      true,
     );
   });
 

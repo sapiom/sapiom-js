@@ -39,14 +39,16 @@ flowchart LR
   E -- issue.on_hold --> F[your next agent]
   K[controller<br/>cron] -- issue.nudged --> F
   E --> L[Linear]
-  I & P & E & K & U <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
+  L -. state read .-> S[linear-sync<br/>cron]
+  S -- issue.engineering_resolved --> F
+  I & P & E & K & U & S <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
 ```
 
 | Layer         | What lives there                                                                                                                                                                        |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Adapters      | `intake` reads `slack.*` and is the only agent that knows Slack message shapes. A later adapter (Read.ai, email) emits the same `issue.*`.                                              |
-| Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
-| Domain agents | copilot, escalation, controller, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                   |
+| Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged`, `issue.engineering_resolved` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
+| Domain agents | copilot, escalation, controller, linear-sync, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                   |
 | Shared state  | One Postgres (`sylon`), written only through `_shared/issues.ts`; runtime config in its `config` table.                                                                                 |
 
 ## Agents
@@ -57,7 +59,16 @@ flowchart LR
 | `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from `kb/`, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                                                      |
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in both threads, moves the issue On Hold.                                                                             |
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
+| `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
+
+### linear-sync and customer messages
+
+`linear-sync` always posts in the triage thread. It posts in the customer thread ("Our engineering
+team has shipped a fix for this. ...") only when the config key `linear_sync.notify_customer` is
+`true`. It is `false` in `fleet.json`, so a shadow install shows customers nothing. Turn it on with
+`setConfig(db, "linear_sync.notify_customer", true, "you")` or by editing the `config` row; a
+database seeded before this key existed behaves as `false`.
 
 ## Quickstart
 

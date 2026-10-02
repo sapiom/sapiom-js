@@ -15,6 +15,8 @@ export const ConfigSchemas = {
   ),
   "oncall.slack_id": z.string().min(1),
   "nudge.minutes": z.number().int().positive(),
+  /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
+  "linear_sync.notify_customer": z.boolean(),
 } as const;
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
@@ -53,6 +55,20 @@ export async function getConfig<K extends ConfigKey>(
   const value = ConfigSchemas[key].parse(rows[0].value) as ConfigValue<K>;
   c.set(key, value);
   return value;
+}
+
+/** {@link getConfig} for a key a deployed database may predate: the fallback when the row is missing. */
+export async function getConfigOr<K extends ConfigKey>(
+  db: Db,
+  key: K,
+  fallback: ConfigValue<K>,
+): Promise<ConfigValue<K>> {
+  try {
+    return await getConfig(db, key);
+  } catch (err) {
+    if (err instanceof MissingConfigError) return fallback;
+    throw err;
+  }
 }
 
 export async function setConfig<K extends ConfigKey>(

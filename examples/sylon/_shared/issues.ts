@@ -340,6 +340,28 @@ export async function openIssuesForAccount(
   return rows.map(toIssue);
 }
 
+/** On Hold issues linked to Linear, least recently checked first (061_linear_sync), at most `limit`. */
+export async function onHoldLinked(db: Db, limit: number): Promise<Issue[]> {
+  const rows = await db.query(
+    `select * from issues
+     where status = 'on_hold' and linear_identifier is not null
+     order by linear_checked_at asc nulls first, number asc
+     limit $1`,
+    [limit],
+  );
+  return rows.map(toIssue);
+}
+
+/** Stamp the time linear-sync last read this issue's Linear state, so the next tick checks others first. */
+export async function markLinearChecked(
+  db: Db,
+  issueId: string,
+): Promise<void> {
+  await db.query("update issues set linear_checked_at = now() where id = $1", [
+    issueId,
+  ]);
+}
+
 /** Enforces {@link TRANSITIONS}. Moving to the current status is a no-op, so retries are safe. */
 export async function setStatus(
   db: Db,
