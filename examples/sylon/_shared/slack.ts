@@ -1,17 +1,19 @@
 /**
- * Slack, through the tenant's Slack connector: `POST {tools}/connectors/v1/slack/methods/<name>`
- * on the run's credential. The bot token never enters the run. `@sapiom/tools` has no Slack
- * wrapper, so this is a thin fetch.
+ * Slack, through the tenant's Slack connector (`@sapiom/tools` `connectors.slack`). The gateway
+ * holds the bot token and calls Slack; the token never enters the run.
  *
- * On a local trace nothing is sent: each call logs and returns a plausible stub, so `run_local`
- * walks the real step code without posting to Slack.
+ * Calls go through `ctx.sapiom.connectors.slack` when the context has one (a step), so they carry
+ * the run's attribution, and through the ambient client on `SAPIOM_API_KEY` otherwise (a laptop
+ * script). On a local trace nothing is sent: each call logs and returns a plausible stub, so
+ * `run_local` walks the real step code without posting to Slack.
  */
 import type { AgentExecutionContext } from "@sapiom/agent";
+import { connectors } from "@sapiom/tools";
 
 export type SlackCtx = Pick<
   AgentExecutionContext<Record<string, unknown>>,
   "isLocalTrace" | "logger"
->;
+> & { sapiom?: unknown };
 
 export interface SlackMessageRow {
   ts: string;
@@ -35,27 +37,52 @@ export class SlackMethodError extends Error {
   }
 }
 
-function toolsBase(): string {
-  return (process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai").replace(
-    /\/+$/,
-    "",
-  );
+type SlackApi = typeof connectors.slack;
+
+function api(ctx: SlackCtx): SlackApi {
+  const fromCtx = (
+    ctx.sapiom as { connectors?: { slack?: SlackApi } } | undefined
+  )?.connectors?.slack;
+  return fromCtx ?? connectors.slack;
 }
 
-/** Live agent steps receive their run credential as `SAPIOM_API_KEY`. */
-function runCredential(): string {
-  const key = process.env.SAPIOM_API_KEY;
-  if (!key)
-    throw new Error(
-      "SAPIOM_API_KEY is not set; Slack connector methods need the run credential",
-    );
-  return key;
+/** The gateway's error body names the Slack error (`channel_not_found`, a missing scope, ...). */
+function toSlackError(method: string, err: unknown): SlackMethodError {
+  const e = err as { status?: unknown; body?: unknown; message?: unknown };
+  const status = typeof e?.status === "number" ? e.status : 0;
+  const body = e?.body as { message?: unknown; error?: unknown } | undefined;
+  const detail =
+    (typeof body?.message === "string" && body.message) ||
+    (typeof body?.error === "string" && body.error) ||
+    (typeof e?.message === "string" ? e.message : String(err));
+  return new SlackMethodError(method, status, detail);
 }
 
 let localTs = 1_790_000_000;
 const stubTs = () => `${++localTs}.000100`;
 
-/** Call one connector method. Arg names are the connector's, which are not always Slack's. */
+async function call<T>(
+  ctx: SlackCtx,
+  method: string,
+  args: Record<string, unknown>,
+  live: (slack: SlackApi) => Promise<T>,
+  stub: () => T,
+): Promise<T> {
+  if (ctx.isLocalTrace) {
+    ctx.logger.info(`slack ${method} (local trace, not sent)`, { args });
+    return stub();
+  }
+  try {
+    return await live(api(ctx));
+  } catch (err) {
+    throw toSlackError(method, err);
+  }
+}
+
+/**
+ * The generic tail for a connector method `connectors.slack` does not wrap. Arg names are the
+ * gateway's, which are not always Slack's.
+ */
 export async function callSlack<T = Record<string, unknown>>(
   ctx: SlackCtx,
   method: string,
@@ -66,27 +93,32 @@ export async function callSlack<T = Record<string, unknown>>(
     ctx.logger.info(`slack ${method} (local trace, not sent)`, { args });
     return stub();
   }
-  const res = await fetch(
-    `${toolsBase()}/connectors/v1/slack/methods/${method}`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-sapiom-api-key": runCredential(),
-      },
-      body: JSON.stringify(args),
-    },
-  );
+  const key = process.env.SAPIOM_API_KEY;
+  if (!key)
+    throw new Error(
+      "SAPIOM_API_KEY is not set; Slack connector methods need the run credential",
+    );
+  const base = (
+    process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai"
+  ).replace(/\/+$/, "");
+  const res = await fetch(`${base}/connectors/v1/slack/methods/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-sapiom-api-key": key },
+    body: JSON.stringify(args),
+  });
   const text = await res.text();
   if (!res.ok) {
-    let detail = text.slice(0, 300);
+    let body: unknown = text;
     try {
-      const body = JSON.parse(text) as { message?: string; error?: string };
-      detail = body.message ?? body.error ?? detail;
+      body = JSON.parse(text);
     } catch {
-      // not JSON; keep the raw prefix
+      // not JSON; keep the raw text
     }
-    throw new SlackMethodError(method, res.status, detail);
+    throw toSlackError(method, {
+      status: res.status,
+      body,
+      message: text.slice(0, 300),
+    });
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -100,16 +132,12 @@ export async function post(
     threadTs?: string;
   },
 ): Promise<{ channel: string; ts: string }> {
-  const out = await callSlack<{ channel: string | null; ts: string | null }>(
+  const out = await call(
     ctx,
     "chat.postMessage",
-    {
-      channel: input.channel,
-      text: input.text,
-      blocks: input.blocks,
-      threadTs: input.threadTs,
-    },
-    () => ({ channel: input.channel, ts: stubTs() }),
+    input,
+    (s) => s.postMessage(input),
+    () => ({ ok: true as const, channel: input.channel, ts: stubTs() }),
   );
   if (!out.ts)
     throw new SlackMethodError("chat.postMessage", 200, "no ts in response");
@@ -120,22 +148,16 @@ export async function update(
   ctx: SlackCtx,
   input: { channel: string; ts: string; text?: string; blocks?: Block[] },
 ): Promise<void> {
-  await callSlack(
+  await call(
     ctx,
     "chat.update",
-    {
-      channel: input.channel,
-      ts: input.ts,
-      text: input.text,
-      blocks: input.blocks,
-    },
-    () => ({
-      ok: true,
-    }),
+    input,
+    (s) => s.update(input),
+    () => ({ ok: true as const, channel: input.channel, ts: input.ts }),
   );
 }
 
-/** Visible only to `user`. The connector takes `thread_ts` here, not `threadTs`. */
+/** Visible only to `user`. */
 export async function postEphemeral(
   ctx: SlackCtx,
   input: {
@@ -146,17 +168,12 @@ export async function postEphemeral(
     threadTs?: string;
   },
 ): Promise<void> {
-  await callSlack(
+  await call(
     ctx,
     "chat.postEphemeral",
-    {
-      channel: input.channel,
-      user: input.user,
-      text: input.text,
-      blocks: input.blocks,
-      thread_ts: input.threadTs,
-    },
-    () => ({ ok: true }),
+    input,
+    (s) => s.postEphemeral(input),
+    () => ({ ok: true as const, message_ts: stubTs() }),
   );
 }
 
@@ -165,12 +182,21 @@ async function reaction(
   method: "reactions.add" | "reactions.remove",
   input: { channel: string; ts: string; name: string },
 ) {
+  const args = {
+    channel: input.channel,
+    timestamp: input.ts,
+    name: input.name,
+  };
   try {
-    await callSlack(
+    await call(
       ctx,
       method,
-      { channel: input.channel, timestamp: input.ts, name: input.name },
-      () => ({ ok: true }),
+      args,
+      (s) =>
+        method === "reactions.add"
+          ? s.addReaction(args)
+          : s.removeReaction(args),
+      () => ({ ok: true as const }),
     );
   } catch (err) {
     // Reactions are acknowledgements; a rate limit or an already_reacted must never fail a run.
@@ -195,27 +221,28 @@ export async function replies(
   ctx: SlackCtx,
   input: { channel: string; ts: string },
 ): Promise<SlackMessageRow[]> {
-  const out = await callSlack<{ messages?: SlackMessageRow[] }>(
+  const args = { channel: input.channel, ts: input.ts, limit: 200 };
+  const out = await call<Awaited<ReturnType<SlackApi["replies"]>>>(
     ctx,
     "conversations.replies",
-    { channel: input.channel, ts: input.ts, limit: 200 },
-    () => ({ messages: [] }),
+    args,
+    (s) => s.replies(args),
+    () => ({ ok: true as const, messages: [] }),
   );
-  return out.messages ?? [];
+  return (out.messages ?? []) as SlackMessageRow[];
 }
 
 export async function userInfo(
   ctx: SlackCtx,
   user: string,
 ): Promise<{ id: string; name: string; email?: string }> {
-  const out = await callSlack<{
-    user?: {
-      id: string;
-      name?: string;
-      real_name?: string;
-      profile?: { display_name?: string; real_name?: string; email?: string };
-    };
-  }>(ctx, "users.info", { user }, () => ({ user: { id: user, name: user } }));
+  const out = await call<Awaited<ReturnType<SlackApi["userInfo"]>>>(
+    ctx,
+    "users.info",
+    { user },
+    (s) => s.userInfo({ user }),
+    () => ({ ok: true as const, user: { id: user, name: user } }),
+  );
   const u = out.user;
   if (!u) return { id: user, name: user };
   const name =
