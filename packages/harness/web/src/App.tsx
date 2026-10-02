@@ -3254,12 +3254,6 @@ export const App = (): JSX.Element => {
               }
               onRenameSession={renameSession}
               boundWorkflowName={boundWorkflow?.name ?? null}
-              sessions={showWorkbench || projectMapSelected ? focusTabs : []}
-              busySessionIds={harness.busySessionIds}
-              onSelectSession={selectTab}
-              labelOf={(session) =>
-                sessionDisplayName(session, sessionNames)
-              }
               busy={
                 sessionBarSession != null &&
                 harness.busySessionIds.has(sessionBarSession.id)
@@ -3277,18 +3271,6 @@ export const App = (): JSX.Element => {
               }
               showExpandRightLabel={isMobile && projectMapSelected}
               expandRightRef={rightPaneTriggerRef}
-              subjectName={
-                projectMapSelected
-                  ? (selectedStudioProject?.displayName ?? "Agent Map")
-                  : (focusedWorkflow?.name ??
-                    (activeSession ? basenameOf(activeSession.cwd) : null))
-              }
-              newSessionPending={siblingSessionPending}
-              onNewSession={
-                newTabSource
-                  ? () => handleStartSiblingSession(newTabSource)
-                  : null
-              }
               /* The agent action cluster shares the same row as the tabs.
                  Its subject AND its gating are `rightPaneWorkflow` — the same
                  one value the board draws (SAP-2931). Passing the binding here
