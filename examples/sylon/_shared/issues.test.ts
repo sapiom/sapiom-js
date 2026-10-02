@@ -16,6 +16,7 @@ import {
   issueByCustomerThread,
   issueByTriageRoot,
   linkMessage,
+  lockIssue,
   openIssue,
   openIssueForMessage,
   openIssuesForAccount,
@@ -149,6 +150,24 @@ describe("issues.ts on a database", () => {
       linearIdentifier: "SAP-1",
       linearIssueId: "uuid-1",
     });
+  });
+
+  it("lockIssue makes a second transaction wait for the first to commit", async () => {
+    const { issue } = await seed(db);
+    const order: string[] = [];
+    await Promise.all([
+      db.transaction(async (tx) => {
+        await lockIssue(tx, issue.id);
+        await new Promise((r) => setTimeout(r, 5));
+        await updateIssue(tx, issue.id, { linearIdentifier: "SAP-1" });
+        order.push("first");
+      }),
+      db.transaction(async (tx) => {
+        const seen = await lockIssue(tx, issue.id);
+        order.push(`second saw ${seen.linearIdentifier}`);
+      }),
+    ]);
+    expect(order).toEqual(["first", "second saw SAP-1"]);
   });
 
   it("links a message once per source event id", async () => {

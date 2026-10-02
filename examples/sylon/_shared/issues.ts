@@ -286,6 +286,19 @@ export async function getIssue(db: Db, id: string): Promise<Issue> {
   );
 }
 
+/**
+ * Read the issue under a row lock (`select … for update`), held until the caller's transaction ends.
+ * Call it inside `db.transaction`; a second run locking the same issue waits for the first to commit.
+ */
+export async function lockIssue(db: Db, id: string): Promise<Issue> {
+  return toIssue(
+    one(
+      await db.query("select * from issues where id = $1 for update", [id]),
+      `issue ${id}`,
+    ),
+  );
+}
+
 /** The issue whose customer thread is rooted at `rootTs` in `channel`, newest first. */
 export async function issueByCustomerThread(
   db: Db,
