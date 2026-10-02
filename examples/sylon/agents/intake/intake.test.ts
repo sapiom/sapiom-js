@@ -507,6 +507,51 @@ describe("intake agent", () => {
       ]);
     });
 
+    it("an outsider in an unlisted channel opens an issue and creates its account", async () => {
+      const msg = structuredClone(
+        intakeFixture("message-created.bug.json").payload,
+      ) as { event: { channel: string } };
+      msg.event.channel = "C0UNLISTED1";
+      expect(await accountByChannel(db, "C0UNLISTED1")).toBeNull();
+      const out = await run(msg, makeCtx("exec-unlisted", JEV.bug).ctx);
+      expect(out.output).toMatchObject({ outcome: "opened" });
+      expect(await accountByChannel(db, "C0UNLISTED1")).toMatchObject({
+        name: "C0UNLISTED1",
+      });
+    });
+
+    it("a team message in a channel with no account is skipped and stores nothing", async () => {
+      const msg = structuredClone(teamReply()) as {
+        event: { channel: string; thread_ts?: string };
+      };
+      msg.event.channel = "C0INTERNAL01";
+      delete msg.event.thread_ts;
+      const t = makeCtx("exec-internal-chat");
+      const out = await run(msg, t.ctx);
+      expect(out).toMatchObject({
+        visited: ["guard"],
+        output: { skipped: "team message outside a customer channel" },
+      });
+      expect(await messageBySourceEventId(db, "Ev0INTAKETEAM1")).toBeNull();
+      expect(t.slack("reactions.add")).toHaveLength(0);
+    });
+
+    it("a team message in a channel that has an account takes the team step", async () => {
+      const msg = structuredClone(
+        intakeFixture("message-created.connect-customer.json").payload,
+      ) as { event: { channel: string; user: string; user_team: string } };
+      msg.event.channel = "C0UNLISTED1";
+      await run(msg, makeCtx("exec-cnx", JEV.bug).ctx);
+      const chat = structuredClone(teamReply()) as {
+        event: { channel: string; thread_ts?: string };
+      };
+      chat.event.channel = "C0UNLISTED1";
+      delete chat.event.thread_ts;
+      const out = await run(chat, makeCtx("exec-team-acct").ctx);
+      expect(out.visited).toEqual(["guard", "team"]);
+      expect(out.output).toMatchObject({ outcome: "team_message" });
+    });
+
     it("a listed test user is the customer even from our workspace", async () => {
       await setConfig(db, "customers.test_user_ids", ["U0TEAMENG01"], "test");
       const top = structuredClone(teamReply()) as {
@@ -561,11 +606,11 @@ describe("intake agent", () => {
     expect((await run(reaction, ctx)).output).toEqual({
       skipped: "reaction thumbsup",
     });
-    const elsewhere = structuredClone(
-      intakeFixture("message-created.bug.json").payload,
-    ) as { event: { channel: string } };
-    elsewhere.event.channel = "C0ELSEWHERE";
-    expect((await run(elsewhere, ctx)).output).toMatchObject({
+    const ticket = structuredClone(
+      intakeFixture("reaction-added.ticket.json").payload,
+    ) as { event: { item: { channel: string } } };
+    ticket.event.item.channel = "C0ELSEWHERE";
+    expect((await run(ticket, ctx)).output).toMatchObject({
       skipped: expect.stringMatching(/not a customer channel/),
     });
   });

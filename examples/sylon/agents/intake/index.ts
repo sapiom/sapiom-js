@@ -217,7 +217,7 @@ const guard = defineStep({
       if (e.item.type !== "message")
         return terminate({ skipped: `reaction on ${e.item.type}` });
       const target = await withDb(ctx, async (db) =>
-        (await customerChannel(db, e.item.channel))
+        (await knownChannel(db, e.item.channel))
           ? { stored: await messageBySlackTs(db, e.item.channel, e.item.ts) }
           : null,
       );
@@ -246,18 +246,13 @@ const guard = defineStep({
       const e = m.data.event;
       if (e.subtype || e.bot_id)
         return terminate({ skipped: "bot or edited message" });
+      // The bot only receives events from channels it was invited to, so the invite is the control:
+      // an outsider posting in any of them is a customer. The connector has no conversations.info, so
+      // we cannot ask Slack whether a channel is shared; the poster's workspace decides instead.
       const route = await withDb(ctx, async (db) => {
-        if (await customerChannel(db, e.channel)) return "customer";
         if ((await getConfig(db, "channels.triage")) === e.channel)
           return "triage";
-        return null;
-      });
-      if (route === "triage") return goto("internal", m.data);
-      if (!route)
-        return terminate({ skipped: `not a customer channel: ${e.channel}` });
-      // Our own engineers post in Slack Connect channels too; they are not the customer.
-      const poster = await withDb(ctx, async (db) =>
-        classifyPoster({
+        const poster = classifyPoster({
           user: e.user,
           userTeam: e.user_team,
           team: e.team,
@@ -268,9 +263,18 @@ const guard = defineStep({
             undefined,
           ),
           testUserIds: await getConfigOr(db, "customers.test_user_ids", []),
-        }),
-      );
-      if (poster === "team") return goto("team", m.data);
+        });
+        if (poster === "customer") return "customer";
+        // Our own engineers post in customer channels too, but in internal channels the bot is in
+        // their chatter is not ours to keep: only a channel with an account gets the team step.
+        return (await knownChannel(db, e.channel)) ? "team" : "ignore";
+      });
+      if (route === "triage") return goto("internal", m.data);
+      if (route === "team") return goto("team", m.data);
+      if (route === "ignore")
+        return terminate({
+          skipped: "team message outside a customer channel",
+        });
       return goto("ack", {
         eventId: m.data.eventId,
         trigger: "message",
@@ -438,6 +442,14 @@ const ack = defineStep({
     return goto("context", input);
   },
 });
+
+/** A channel with an account (an outsider has posted there) or listed in `channels.customer`. */
+async function knownChannel(db: Db, channel: string): Promise<boolean> {
+  return !!(
+    (await accountByChannel(db, channel)) ??
+    (await customerChannel(db, channel))
+  );
+}
 
 async function accountFor(db: Db, channel: string): Promise<Account> {
   const found = await accountByChannel(db, channel);

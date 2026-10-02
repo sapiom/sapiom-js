@@ -24,7 +24,10 @@ export const ConfigSchemas = {
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
-export const OPTIONAL_KEYS: readonly ConfigKey[] = ["team.slack_team_ids"];
+export const OPTIONAL_KEYS: readonly ConfigKey[] = [
+  "team.slack_team_ids",
+  "channels.customer",
+];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
   (typeof ConfigSchemas)[K]
@@ -102,6 +105,6 @@ export async function customerChannel(
   db: Db,
   channelId: string,
 ): Promise<{ channelId: string; accountName: string } | null> {
-  const channels = await getConfig(db, "channels.customer");
+  const channels = await getConfigOr(db, "channels.customer", []);
   return channels.find((c) => c.channelId === channelId) ?? null;
 }
