@@ -473,6 +473,43 @@ describe("click path", () => {
     );
   });
 
+  it("an issue closed between the decision and the send keeps the approval but sends nothing", async () => {
+    const t = ctxFor("e");
+    const click = fixture("slack/block-actions.draft-approve.json").payload;
+    const decided = await step("decide").run(click, t.ctx);
+    expect(decided.stepName).toBe("apply");
+    await setStatus(db, FIXTURE_ISSUE, "closed");
+    const done = await step("apply").run(decided.input, t.ctx);
+    expect(done.output).toMatchObject({
+      replySent: false,
+      issueStatus: "closed",
+    });
+    expect(t.slack("chat.postMessage")).toHaveLength(0);
+    expect(
+      await messageBySourceEventId(db, `draft:${FIXTURE_DRAFT}`),
+    ).toBeNull();
+    expect((await getDraft(db, FIXTURE_DRAFT)).status).toBe("approved");
+    const card = JSON.stringify(t.slack("chat.update").at(-1)!.blocks);
+    expect(card).toContain(
+      "Approved by <@U0TEAMMATE1>; issue closed before sending, reply not sent",
+    );
+    expect(card).not.toContain("Approved and sent");
+  });
+
+  it("a retry after the reply went out still reports it sent, even if the issue closed since", async () => {
+    const t = ctxFor("e");
+    const ds = await runAgent(
+      fixture("slack/block-actions.draft-approve.json").payload,
+      t.ctx,
+    );
+    await setStatus(db, FIXTURE_ISSUE, "closed");
+    const retry = await step("apply").run(ds[1].input, t.ctx);
+    expect(retry.output).toHaveProperty("replyTs");
+    expect(
+      t.slack("chat.postMessage").filter((p) => p.channel === "C0CUSTOMER1"),
+    ).toHaveLength(1);
+  });
+
   it("a retried apply step does not post the reply twice", async () => {
     const click = fixture("slack/block-actions.draft-approve.json").payload;
     const t = ctxFor("exec-apply");

@@ -103,6 +103,7 @@ async function updateCard(
   issue: Issue,
   note?: string,
   fallback?: { channel?: string; ts?: string },
+  outcome?: string,
 ): Promise<void> {
   const channel = draft.cardChannel ?? fallback?.channel;
   const ts = draft.cardTs ?? fallback?.ts;
@@ -114,7 +115,7 @@ async function updateCard(
     channel,
     ts,
     text: cardText(issue),
-    blocks: copilotCard(draft, issue, KB, note),
+    blocks: copilotCard(draft, issue, KB, note, outcome),
   });
 }
 
@@ -427,24 +428,29 @@ const apply = defineStep({
       };
       let note: string | undefined;
 
-      if (draft.status === "approved" && issue.status === "closed") {
-        // Closed between the decision and this step.
-        note = "Issue is closed; reply not sent.";
-        out.issueStatus = issue.status;
-      } else if (draft.status === "approved") {
+      let outcome: string | undefined;
+
+      if (draft.status === "approved") {
         if (!issue.customerChannel || !issue.customerRootTs)
           throw new Error(`issue ${issue.id} has no customer thread`);
+        const customerChannel = issue.customerChannel;
+        const customerRootTs = issue.customerRootTs;
         // Keyed on the draft, so a retry after the post never sends the reply twice.
         const sourceEventId = `draft:${draft.id}`;
-        let sent = await messageBySourceEventId(db, sourceEventId);
-        if (!sent) {
+        // Under the issue row lock, so a close (setStatus locks the same row) cannot land between
+        // the status check and the send.
+        const sent = await db.transaction(async (tx) => {
+          const locked = await lockIssue(tx, issue.id);
+          const already = await messageBySourceEventId(tx, sourceEventId);
+          if (already) return already;
+          if (locked.status === "closed") return null;
           const posted = await post(ctx, {
-            channel: issue.customerChannel,
-            threadTs: issue.customerRootTs,
+            channel: customerChannel,
+            threadTs: customerRootTs,
             text: escapeMrkdwn(draft.text),
           });
-          sent = (
-            await linkMessage(db, {
+          return (
+            await linkMessage(tx, {
               issueId: issue.id,
               source: "slack",
               sourceEventId,
@@ -452,19 +458,26 @@ const apply = defineStep({
               slack: {
                 channel: posted.channel,
                 ts: posted.ts,
-                threadTs: issue.customerRootTs,
+                threadTs: customerRootTs,
               },
               userId: clicker,
               text: draft.text,
             })
           ).message;
-        }
-        out.replyTs = sent.ts;
-        if (canTransition(issue.status, "on_customer")) {
-          issue = await setStatus(db, issue.id, "on_customer");
-          await refreshIssueCard(ctx, db, issue);
+        });
+        issue = await getIssue(db, issue.id);
+        if (!sent) {
+          // The click happened, so the decision stays approved; the card says nothing went out.
+          outcome = `Approved by <@${clicker}>; issue closed before sending, reply not sent`;
+          out.replySent = false;
         } else {
-          note = `Status left at ${statusLabel(issue.status)}: it cannot move to On Customer from there.`;
+          out.replyTs = sent.ts;
+          if (canTransition(issue.status, "on_customer")) {
+            issue = await setStatus(db, issue.id, "on_customer");
+            await refreshIssueCard(ctx, db, issue);
+          } else {
+            note = `Status left at ${statusLabel(issue.status)}: it cannot move to On Customer from there.`;
+          }
         }
         out.issueStatus = issue.status;
       } else if (draft.status === "escalated") {
@@ -484,10 +497,17 @@ const apply = defineStep({
         out.duplicate = receipt.duplicate;
       }
 
-      await updateCard(ctx, draft, issue, note, {
-        channel: click.container?.channel_id,
-        ts: click.container?.message_ts,
-      });
+      await updateCard(
+        ctx,
+        draft,
+        issue,
+        note,
+        {
+          channel: click.container?.channel_id,
+          ts: click.container?.message_ts,
+        },
+        outcome,
+      );
       return terminate(out);
     });
   },

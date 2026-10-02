@@ -111,20 +111,13 @@ create table config (
   },
   {
     id: "020_copilot",
-    sql: `-- E4 copilot: the event that produced a draft (so a retried or redelivered event reuses it) and the
--- model's confidence. citations stays a list of kb page slugs.
+    sql: `-- E4 copilot: the event that produced a draft and the model's confidence. citations stays a list
+-- of kb page slugs. The unique index makes one draft per triggering event, so concurrent
+-- deliveries of the same event share one row; Postgres treats NULLs as distinct, so drafts
+-- without a causation stay allowed.
 
 alter table drafts add column causation_id text;
 alter table drafts add column confidence real;
-create index drafts_issue_causation on drafts (issue_id, causation_id);
-`,
-  },
-  {
-    id: "021_copilot_unique",
-    sql: `-- E4 copilot: one draft per triggering event, so concurrent deliveries of the same event cannot
--- each post a card. Postgres treats NULLs as distinct, so drafts without a causation stay allowed.
-
-drop index drafts_issue_causation;
 create unique index drafts_issue_causation on drafts (issue_id, causation_id);
 `,
   },

@@ -25,11 +25,7 @@ describe("db", () => {
     const db = await memoryDb();
     expect(
       await db.query("select id from schema_migrations order by id"),
-    ).toEqual([
-      { id: "001_init" },
-      { id: "020_copilot" },
-      { id: "021_copilot_unique" },
-    ]);
+    ).toEqual([{ id: "001_init" }, { id: "020_copilot" }]);
   });
 
   it("keeps a standalone write made during a transaction that rolls back", async () => {

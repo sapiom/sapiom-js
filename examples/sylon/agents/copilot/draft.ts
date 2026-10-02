@@ -176,6 +176,8 @@ export function copilotCard(
   issue: Issue,
   kb: readonly KbPage[],
   note?: string,
+  /** Replaces `draftCard`'s outcome line, when the decision alone would mislead. */
+  outcome?: string,
 ): Block[] {
   // A superseded draft was decided by the copilot, not a person: say so without a broken mention.
   const shown =
@@ -199,6 +201,16 @@ export function copilotCard(
     block_id: "draft.meta",
     elements: [{ type: "mrkdwn", text: facts.join("   ") }],
   });
+  if (outcome) {
+    const i = blocks.findIndex((b) => b.block_id === "draft.outcome");
+    const line: Block = {
+      type: "context",
+      block_id: "draft.outcome",
+      elements: [{ type: "mrkdwn", text: outcome }],
+    };
+    if (i >= 0) blocks[i] = line;
+    else blocks.push(line);
+  }
   if (note)
     blocks.push({
       type: "context",
