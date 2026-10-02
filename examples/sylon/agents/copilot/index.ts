@@ -183,11 +183,13 @@ async function draftReply(
     let draft = await draftForCausation(db, issue.id, trigger.causationId);
     let confidence: number | null = null;
     if (!draft) {
-      // A late event must not replace the draft for a newer customer message.
+      // A late event must not replace the posted draft for a newer customer message. A newer
+      // draft without a card (its post failed or is in flight) does not stop us: if ours were
+      // dropped too, the customer could be left with no actionable reply.
       const ours = Number(trigger.slack.ts);
       for (const pending of await pendingDrafts(db, issue.id)) {
         const theirs = await triggerTs(db, pending);
-        if (theirs !== null && theirs > ours)
+        if (pending.cardTs && theirs !== null && theirs > ours)
           return terminate({
             issueId: issue.id,
             skipped: "a newer message already has a pending draft",
@@ -262,9 +264,12 @@ async function draftReply(
       const older: Draft[] = [];
       for (const other of others) {
         const theirs = await triggerTs(tx, other);
-        (theirs !== null && theirs > ours ? newer : older).push(other);
+        if (theirs === null || theirs <= ours) older.push(other);
+        // A newer draft without a card is neither retired by us nor a reason to retire ours:
+        // its own publish supersedes ours once its card is posted.
+        else if (other.cardTs) newer.push(other);
       }
-      // A newer message's draft is already out (or being published): ours would be stale.
+      // A newer message's draft is already posted: ours would be stale.
       if (!own.cardTs && own.status === "pending" && newer.length > 0) {
         own = (await decideDraft(tx, own.id, "superseded", SUPERSEDED_BY))
           .draft;

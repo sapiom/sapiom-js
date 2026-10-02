@@ -15,6 +15,7 @@ import {
   linkMessage,
   messageBySourceEventId,
   pendingDrafts,
+  setDraftCard,
   setStatus,
 } from "../../_shared/issues";
 import { KB } from "../../_shared/kb.generated";
@@ -355,7 +356,7 @@ describe("draft path", () => {
     ]);
   });
 
-  it("a late event does not replace the draft for a newer customer message", async () => {
+  it("a late event does not replace the posted draft for a newer customer message", async () => {
     await linkMessage(db, {
       issueId: FIXTURE_ISSUE,
       source: "slack",
@@ -374,6 +375,10 @@ describe("draft path", () => {
       text: "Reply to the newer follow-up.",
       causationId: "Ev0NEWER0001",
     });
+    await setDraftCard(db, newer.draft.id, {
+      channel: "C0TRIAGE001",
+      ts: "1790890000.000100",
+    });
     const t = ctxFor("e");
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
     expect(last(ds).output).toMatchObject({
@@ -381,6 +386,39 @@ describe("draft path", () => {
       draftId: newer.draft.id,
     });
     expect(t.llmCalls).toHaveLength(0);
+    expect((await getDraft(db, newer.draft.id)).status).toBe("pending");
+  });
+
+  it("an older event still publishes when the newer draft's card never got posted", async () => {
+    await linkMessage(db, {
+      issueId: FIXTURE_ISSUE,
+      source: "slack",
+      sourceEventId: "Ev0NEWER0002",
+      direction: "customer",
+      slack: {
+        channel: "C0CUSTOMER1",
+        ts: "1790889999.000200",
+        threadTs: "1790889355.981329",
+      },
+      userId: "U0CUSTOMER1",
+      text: "A newer follow-up whose card post failed.",
+    });
+    // The newer run stored its draft, then its Slack post failed: no card.
+    const newer = await createDraftOnce(db, {
+      issueId: FIXTURE_ISSUE,
+      text: "Reply to the newer follow-up.",
+      causationId: "Ev0NEWER0002",
+    });
+    const t = ctxFor("e");
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    const out = last(ds).output!;
+    expect(out).toMatchObject({ status: "pending", reused: false });
+    expect(t.slack("chat.postMessage")).toHaveLength(1);
+    const actionable = (await pendingDrafts(db, FIXTURE_ISSUE)).filter(
+      (d) => d.cardTs,
+    );
+    expect(actionable.map((d) => d.id)).toEqual([out.draftId]);
+    // The newer draft is left for its own run's retry, which will supersede this one.
     expect((await getDraft(db, newer.draft.id)).status).toBe("pending");
   });
 
