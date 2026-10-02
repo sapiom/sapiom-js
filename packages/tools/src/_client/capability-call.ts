@@ -11,9 +11,10 @@
  *     errorPrefix: "Failed to scrape",
  *   });
  *
- * Two patterns coexist by design (SAP-1112): routed caps come here; the deferred
- * async/stateful caps (SAP-1117) keep their `resolveServiceUrl` → provider-gateway
- * path. Do not consolidate the two until the async/resource primitives exist.
+ * Delivery is selected here before I/O. Adopted memory/resource verbs supply
+ * their existing gateway call as `legacyCall`; execution mode submits and waits
+ * through Core. Native lifecycle methods keep their existing gateway protocols.
+ * The eligibility inventory and authoring steps are in ../executions/README.md.
  */
 import { Transport, defaultTransport } from "./index.js";
 import { ExecutionClient } from "../executions/client.js";
