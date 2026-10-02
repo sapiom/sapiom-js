@@ -97,6 +97,15 @@ async function sapiom<T>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+/** Definition ids by slug, for the agent pages and for starting a run. */
+async function definitionIds(): Promise<Map<string, string>> {
+  const defs = await sapiom<{ id: string; slug: string }[]>(
+    "GET",
+    "/v1/workflows/definitions?limit=200",
+  );
+  return new Map(defs.map((x) => [x.slug, String(x.id)]));
+}
+
 /** The agent's attached triggers, or null when its definition is not deployed. */
 async function attachedTriggers(
   slug: string,
@@ -336,16 +345,13 @@ async function system(d: Db) {
       )
       .catch(() => null),
     linearProject(d),
-    sapiom<{ id: string; slug: string }[]>(
-      "GET",
-      "/v1/workflows/definitions?limit=200",
-    ).catch(() => []),
+    definitionIds().catch(() => new Map<string, string>()),
   ]);
   const channel = (channelId: string) => ({
     channelId,
     url: teamId ? slackChannelUrl(teamId, channelId) : null,
   });
-  const ids = new Map(definitions.map((x) => [x.slug, String(x.id)]));
+  const ids = definitions;
   return {
     slack: {
       teamId,
@@ -443,7 +449,11 @@ const POST: [RegExp, Handler][] = [
     /^\/api\/controller\/run$/,
     async () => {
       const slug = agentByKey(CONTROLLER)!.slug;
-      return sapiom("POST", `/v1/workflows/definitions/${slug}/executions`, {
+      const definitionId = (await definitionIds()).get(slug);
+      if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
+      // The public API starts a run by definition id; the by-slug route is engine-internal.
+      return sapiom("POST", "/v1/workflows/executions", {
+        definitionId,
         input: {},
       });
     },
