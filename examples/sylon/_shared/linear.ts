@@ -1,7 +1,6 @@
 /**
- * Linear, through the tenant's Linear connector: the MCP relay at
- * `POST {tools}/connectors/v1/linear/mcp` (JSON-RPC over streamable HTTP, stateless) on the run's
- * credential. The relay serves Linear's own MCP tools; nothing here is a Sapiom verb.
+ * Linear, through the tenant's Linear connector (`@sapiom/tools` `connectors.linear`, the MCP
+ * relay with slug `linear`). The relay serves Linear's own MCP tools; nothing here is a Sapiom verb.
  *
  * Tool names and arguments pinned from `tools/list` in a live tenant, 2026-10-01 (76 tools):
  *
@@ -14,6 +13,8 @@
  * Both return one text content block holding JSON; `id` there is the identifier (SAP-123) and
  * `uuid` is the Linear id. On a local trace nothing is sent and a stub issue comes back.
  */
+import { connectors, type McpCallToolResult } from "@sapiom/tools";
+
 import type { SlackCtx } from "./slack";
 
 export const LINEAR_RELAY_SLUG = "linear";
@@ -45,96 +46,39 @@ export class LinearRelayError extends Error {
   }
 }
 
-let rpcId = 0;
+type LinearApi = typeof connectors.linear;
 
-type McpReply = {
-  id?: unknown;
-  result?: unknown;
-  error?: { message?: string };
-};
-
-/**
- * Parse a streamable-HTTP MCP reply: plain JSON, or SSE frames (blank-line separated, each with
- * one or more `data:` lines). A stream may carry notifications before the response, so the
- * response is the frame holding `result` or `error`, matched on `id` when one is given.
- */
-export function parseMcpReply(body: string, id?: number): McpReply {
-  const trimmed = body.trim();
-  if (trimmed.startsWith("{")) return JSON.parse(trimmed) as McpReply;
-  const frames = trimmed
-    .split(/\r?\n\r?\n/)
-    .map((frame) =>
-      frame
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).replace(/^ /, ""))
-        .join("\n"),
-    )
-    .filter(Boolean)
-    .map((data) => JSON.parse(data) as McpReply);
-  const responses = frames.filter((f) => "result" in f || "error" in f);
-  const reply =
-    responses.find((f) => id !== undefined && f.id === id) ?? responses.at(-1);
-  if (!reply)
-    throw new LinearRelayError(
-      `no MCP response in reply: ${trimmed.slice(0, 200)}`,
-    );
-  return reply;
+/** `ctx.sapiom.connectors.linear` in a step (run attribution), the ambient client otherwise. */
+function api(ctx?: SlackCtx): LinearApi {
+  const fromCtx = (
+    ctx?.sapiom as { connectors?: { linear?: LinearApi } } | undefined
+  )?.connectors?.linear;
+  return fromCtx ?? connectors.linear;
 }
 
-export async function mcpRequest(
-  method: string,
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  const key = process.env.SAPIOM_API_KEY;
-  if (!key)
-    throw new LinearRelayError(
-      "SAPIOM_API_KEY is not set; the Linear relay needs the run credential",
-    );
-  const base = (
-    process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai"
-  ).replace(/\/+$/, "");
-  const id = ++rpcId;
-  const res = await fetch(`${base}/connectors/v1/${LINEAR_RELAY_SLUG}/mcp`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "x-sapiom-api-key": key,
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-  });
-  const text = await res.text();
-  if (!res.ok)
-    throw new LinearRelayError(
-      `linear relay ${method} failed (${res.status}): ${text.slice(0, 300)}`,
-    );
-  const reply = parseMcpReply(text, id);
-  if (reply.error)
-    throw new LinearRelayError(
-      `linear relay ${method}: ${reply.error.message ?? "error"}`,
-    );
-  return reply.result;
+export async function listTools(ctx?: SlackCtx): Promise<McpTool[]> {
+  return (await api(ctx).listTools()) as McpTool[];
 }
 
-export async function listTools(): Promise<McpTool[]> {
-  const result = (await mcpRequest("tools/list", {})) as { tools?: McpTool[] };
-  return result.tools ?? [];
-}
-
-/** Call one Linear MCP tool and parse its JSON text block. */
+/** Call one Linear MCP tool and parse its JSON text block. A relay or tool error throws. */
 export async function callTool(
   name: string,
   args: Record<string, unknown>,
+  ctx?: SlackCtx,
 ): Promise<Record<string, unknown>> {
-  const result = (await mcpRequest("tools/call", {
-    name,
-    arguments: args,
-  })) as {
-    content?: { type: string; text?: string }[];
-    isError?: boolean;
-  };
-  const text = result.content?.find((c) => c.type === "text")?.text ?? "";
+  let result: McpCallToolResult;
+  try {
+    result = await api(ctx).callTool(name, args);
+  } catch (err) {
+    throw new LinearRelayError(
+      `linear relay ${name}: ${(err as Error)?.message ?? String(err)}`,
+    );
+  }
+  const text =
+    (
+      result.content.find((c) => c.type === "text") as
+        { text?: string } | undefined
+    )?.text ?? "";
   if (result.isError)
     throw new LinearRelayError(`linear ${name}: ${text.slice(0, 300)}`);
   try {
@@ -191,7 +135,7 @@ export async function createIssue(
   if (input.projectId) args.project = input.projectId;
   if (input.priority !== undefined) args.priority = input.priority;
   if (input.links?.length) args.links = input.links;
-  return toLinearIssue(await callTool(LINEAR_TOOLS.createIssue, args));
+  return toLinearIssue(await callTool(LINEAR_TOOLS.createIssue, args, ctx));
 }
 
 export async function getIssue(
@@ -211,6 +155,6 @@ export async function getIssue(
     };
   }
   return toLinearIssue(
-    await callTool(LINEAR_TOOLS.getIssue, { id: idOrIdentifier }),
+    await callTool(LINEAR_TOOLS.getIssue, { id: idOrIdentifier }, ctx),
   );
 }
