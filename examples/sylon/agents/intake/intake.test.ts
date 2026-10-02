@@ -7,7 +7,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, withDb, type Db } from "../../_shared/db";
-import { getIssue, messagesForIssue } from "../../_shared/issues";
+import {
+  accountByChannel,
+  getIssue,
+  linkMessage,
+  messagesForIssue,
+  openIssue,
+} from "../../_shared/issues";
 import { fakeCtx } from "../../_shared/test-ctx";
 import {
   decide,
@@ -392,5 +398,166 @@ describe("intake agent", () => {
       ]),
     );
     expect(rows).toEqual([{ direction: "internal" }]);
+  });
+  it("links a reply in a thread that Jev cross-linked to an existing issue, without Jev", async () => {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    const issueId = output.issueId as string;
+    // A new top-level message that Jev links to #1: its thread is not the issue's customer thread.
+    const other = structuredClone(
+      intakeFixture("message-created.thank-you.json").payload,
+    ) as { eventId: string; event: { ts: string; text: string } };
+    other.eventId = "Ev0INTAKEXLNK1";
+    other.event.ts = "1790890600.000600";
+    other.event.text = "Same export problem from another team, export 4412.";
+    const xl = makeCtx("exec-xlink", asJev(0.9, "issue_1", 0.95));
+    expect((await run(other, xl.ctx)).output).toMatchObject({
+      outcome: "linked",
+      issueId,
+    });
+    // A reply in that second thread links through the stored root message; Jev is never asked.
+    const reply = structuredClone(other) as typeof other & {
+      event: { thread_ts?: string };
+    };
+    reply.eventId = "Ev0INTAKEXLNK2";
+    reply.event.ts = "1790890700.000700";
+    reply.event.thread_ts = "1790890600.000600";
+    reply.event.text = "Any news?";
+    const r = makeCtx("exec-xlink-reply");
+    expect((await run(reply, r.ctx)).output).toMatchObject({
+      outcome: "linked",
+      issueId,
+    });
+    expect(r.calls).toHaveLength(0);
+    expect(await messagesForIssue(db, issueId)).toHaveLength(3);
+  });
+
+  it("a retry after an interrupted link reapplies the status move", async () => {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    const issueId = output.issueId as string;
+    // The first attempt stored and linked the follow-up, then died before setStatus.
+    const fup = intakeFixture("message-created.follow-up.json").payload as {
+      eventId: string;
+      event: { ts: string; thread_ts: string; user: string; text: string };
+    };
+    await linkMessage(db, {
+      issueId,
+      source: "slack",
+      sourceEventId: fup.eventId,
+      direction: "customer",
+      slack: {
+        channel: "C0CUSTOMER1",
+        ts: fup.event.ts,
+        threadTs: fup.event.thread_ts,
+      },
+      userId: fup.event.user,
+      text: fup.event.text,
+    });
+    expect((await getIssue(db, issueId)).status).toBe("new");
+    const retry = makeCtx("exec-fup-retry");
+    expect((await run(fup, retry.ctx)).output).toMatchObject({
+      outcome: "linked",
+      issueId,
+    });
+    expect((await getIssue(db, issueId)).status).toBe("on_you");
+    expect(retry.slack("chat.update")).toHaveLength(1);
+    // The mirror went out (or not) with the first attempt; a replay never posts it again.
+    expect(retry.slack("chat.postMessage")).toHaveLength(0);
+  });
+
+  it("overlapping announce runs for one issue post exactly one card", async () => {
+    const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
+    const issue = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "high",
+      title: "Race",
+      customer: { channel: "C0CUSTOMER1", ts: "1790891000.000100" },
+    });
+    const announce = (agent.steps as unknown as Record<string, StepDef>)
+      .announce;
+    const input = {
+      incoming: {
+        eventId: "Ev0INTAKERACE1",
+        trigger: "message",
+        channel: "C0CUSTOMER1",
+        ts: "1790891000.000100",
+      },
+      userName: "customer",
+      text: "Race",
+      accountId: account.id,
+      decision: "open",
+      issueId: issue.id,
+      messageId: "00000000-0000-4000-8000-000000000001",
+      created: true,
+      duplicate: false,
+    };
+    const a = makeCtx("exec-race-a");
+    const b = makeCtx("exec-race-b");
+    await Promise.all([announce.run(input, a.ctx), announce.run(input, b.ctx)]);
+    const cards = [
+      ...a.slack("chat.postMessage"),
+      ...b.slack("chat.postMessage"),
+    ].filter((p) => !p.threadTs);
+    expect(cards).toHaveLength(1);
+    expect((await getIssue(db, issue.id)).triageRootTs).toBeTruthy();
+  });
+
+  it("ignores an issue.* click from outside the triage channel, before any write", async () => {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    const close = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as {
+      actions: { value: string }[];
+      container: { channel_id: string };
+      channel: { id: string };
+    };
+    close.actions[0].value = output.issueId as string;
+    close.container.channel_id = "C0CUSTOMER1";
+    close.channel.id = "C0CUSTOMER1";
+    const c = makeCtx("exec-close-foreign");
+    expect((await run(close, c.ctx)).output).toEqual({
+      skipped: "issue action from channel C0CUSTOMER1, not triage",
+    });
+    expect((await getIssue(db, output.issueId as string)).status).toBe("new");
+    expect(c.slack("chat.update")).toHaveLength(0);
+    expect(c.slack("chat.postMessage")).toHaveLength(0);
+    const runs = await db.query("select 1 from runs where execution_id = $1", [
+      "exec-close-foreign",
+    ]);
+    expect(runs).toHaveLength(0);
+  });
+
+  it("two overlapping Close clicks post one Closed by", async () => {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    const close = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as { actions: { value: string }[] };
+    close.actions[0].value = output.issueId as string;
+    const a = makeCtx("exec-close-a");
+    const b = makeCtx("exec-close-b");
+    const outs = await Promise.all([run(close, a.ctx), run(close, b.ctx)]);
+    expect(outs.map((o) => o.output.changed).sort()).toEqual([false, true]);
+    const closedBy = [
+      ...a.slack("chat.postMessage"),
+      ...b.slack("chat.postMessage"),
+    ].filter((p) => String(p.text).startsWith("Closed by"));
+    expect(closedBy).toHaveLength(1);
   });
 });

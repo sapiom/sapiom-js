@@ -286,6 +286,16 @@ export async function getIssue(db: Db, id: string): Promise<Issue> {
   );
 }
 
+/** {@link getIssue} under `for update`, for a caller's transaction that decides on the row. */
+export async function lockIssue(db: Db, id: string): Promise<Issue> {
+  return toIssue(
+    one(
+      await db.query("select * from issues where id = $1 for update", [id]),
+      `issue ${id}`,
+    ),
+  );
+}
+
 /** The issue whose customer thread is rooted at `rootTs` in `channel`, newest first. */
 export async function issueByCustomerThread(
   db: Db,

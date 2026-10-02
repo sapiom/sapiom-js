@@ -35,6 +35,7 @@ import {
   issueByCustomerThread,
   issueByTriageRoot,
   linkMessage,
+  lockIssue,
   messageBySlackTs,
   messageBySourceEventId,
   messagesForIssue,
@@ -289,6 +290,20 @@ async function accountFor(db: Db, channel: string): Promise<Account> {
   });
 }
 
+/**
+ * The issue a reply in the thread rooted at `rootTs` belongs to: the issue that thread opened, else
+ * the issue its root message was linked to (a new thread Jev linked to an existing issue).
+ */
+async function threadIssueFor(
+  db: Db,
+  channel: string,
+  rootTs: string,
+): Promise<string | null> {
+  const opened = await issueByCustomerThread(db, channel, rootTs);
+  if (opened) return opened.id;
+  return (await messageBySlackTs(db, channel, rootTs))?.issueId ?? null;
+}
+
 async function candidatesFor(db: Db, accountId: string): Promise<Candidate[]> {
   const open = (await openIssuesForAccount(db, accountId)).slice(
     0,
@@ -322,13 +337,14 @@ const context = defineStep({
         input.trigger === "reaction"
           ? await messageBySlackTs(db, input.channel, input.ts)
           : null;
-      const threadIssue = await issueByCustomerThread(
-        db,
-        input.channel,
-        rootTs,
-      );
+      // A top-level message's own row is not a thread root to link through (only a replay has one).
+      const threadIssueId =
+        rootTs === input.ts
+          ? ((await issueByCustomerThread(db, input.channel, rootTs))?.id ??
+            null)
+          : await threadIssueFor(db, input.channel, rootTs);
       const candidates = await candidatesFor(db, account.id);
-      return { account, stored, threadIssue, candidates };
+      return { account, stored, threadIssueId, candidates };
     });
 
     // A 🎫 on a message that already belongs to an issue: nothing to open.
@@ -384,14 +400,11 @@ const context = defineStep({
         : [];
     const poster = await userInfo(ctx, user);
     // The thread lookup above used the input's root; a reaction learns its root only now.
-    let threadIssueId = found.threadIssue?.id ?? null;
+    let threadIssueId = found.threadIssueId;
     if (!threadIssueId && threadTs && threadTs !== rootTs) {
-      threadIssueId =
-        (
-          await withDb(ctx, (d) =>
-            issueByCustomerThread(d, input.channel, threadTs!),
-          )
-        )?.id ?? null;
+      threadIssueId = await withDb(ctx, (d) =>
+        threadIssueFor(d, input.channel, threadTs!),
+      );
     }
 
     return goto("classify", {
@@ -476,10 +489,12 @@ const persist = defineStep({
         ? null
         : await messageBySourceEventId(db, input.eventId);
       if (replay?.issueId) {
-        // A redelivered event already handled: replay the same outcome without moving the status.
-        // The emit id dedups, and `duplicate` keeps the mirror from posting twice.
+        // A redelivered event, or a retry after the first attempt stored the message: replay the
+        // same outcome. The emit id dedups, and `duplicate` keeps the mirror from posting twice.
         const issue = await getIssue(db, replay.issueId);
         const first = (await messagesForIssue(db, issue.id))[0];
+        // The first attempt may have failed before moving the status; the move is idempotent.
+        if (first?.id !== replay.id) await followUp(db, issue.id);
         return goto("announce", {
           incoming,
           userName: input.userName,
@@ -551,10 +566,7 @@ const persist = defineStep({
         } satisfies Persisted);
       }
 
-      // A follow-up puts the ball back with the team; On Hold stays On Hold until engineering is done.
-      const current = await getIssue(db, decision.issueId);
-      if (current.status !== "on_hold")
-        await setStatus(db, current.id, "on_you");
+      const current = await followUp(db, decision.issueId);
       await recordRun(db, ctx, AGENT, current.id);
       return goto("announce", {
         ...base,
@@ -566,6 +578,14 @@ const persist = defineStep({
     });
   },
 });
+
+/** A follow-up puts the ball back with the team; On Hold stays On Hold until engineering is done. */
+async function followUp(db: Db, issueId: string): Promise<Issue> {
+  const current = await getIssue(db, issueId);
+  return current.status === "on_hold"
+    ? current
+    : setStatus(db, current.id, "on_you");
+}
 
 async function refreshCard(
   ctx: SlackCtx,
@@ -589,29 +609,42 @@ const announce = defineStep({
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
       const triageChannel = await getConfig(db, "channels.triage");
-      let issue = await getIssue(db, input.issueId!);
-      const account = await getAccount(db, issue.accountId);
+      const account = await getAccount(
+        db,
+        (await getIssue(db, input.issueId!)).accountId,
+      );
       const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(input.text)}`;
-      if (!issue.triageRootTs) {
-        // First sighting (or a retry after a failed card post): one card, then the message under it.
+      // Overlapping runs for one issue (a retry beside a slow first attempt, or two messages at once)
+      // both see no card on an unlocked read; under the row lock only the first posts one.
+      const { issue, carded } = await db.transaction(async (tx) => {
+        const locked = await lockIssue(tx, input.issueId!);
+        if (locked.triageRootTs) return { issue: locked, carded: false };
         const card = await post(ctx, {
           channel: triageChannel,
-          text: issueCardText(issue, account),
-          blocks: issueCard(issue, account),
+          text: issueCardText(locked, account),
+          blocks: issueCard(locked, account),
         });
-        issue = await setTriageRoot(db, issue.id, card.ts);
+        return {
+          issue: await setTriageRoot(tx, locked.id, card.ts),
+          carded: true,
+        };
+      });
+      if (carded) {
+        // First sighting (or a retry after a failed card post): the message goes under the new card.
         await post(ctx, {
           channel: triageChannel,
-          threadTs: card.ts,
+          threadTs: issue.triageRootTs!,
           text: mirror,
         });
-      } else if (input.decision === "link" && !input.duplicate) {
+      } else if (input.decision === "link") {
+        // The card shows the status the follow-up set; a replay refreshes it but mirrors nothing.
         await refreshCard(ctx, triageChannel, issue, account);
-        await post(ctx, {
-          channel: triageChannel,
-          threadTs: issue.triageRootTs,
-          text: mirror,
-        });
+        if (!input.duplicate)
+          await post(ctx, {
+            channel: triageChannel,
+            threadTs: issue.triageRootTs!,
+            text: mirror,
+          });
       }
       return goto("notify", input);
     });
@@ -693,6 +726,20 @@ const button = defineStep({
     const clicker = input.user.id;
 
     return withDb(ctx, async (db) => {
+      // Issue cards and nudges live only in the triage channel. A click from anywhere else (say a
+      // customer replaying a payload with a guessed issue id) is ignored before any write.
+      const triageChannel = await getConfig(db, "channels.triage");
+      const from = input.container?.channel_id;
+      if (from !== triageChannel) {
+        ctx.logger.warn("issue action outside the triage channel; ignored", {
+          actionId: action.action_id,
+          channel: from ?? null,
+          user: clicker,
+        });
+        return terminate({
+          skipped: `issue action from channel ${from ?? "unknown"}, not triage`,
+        });
+      }
       await recordRun(db, ctx, AGENT);
       const rows = await db.query("select 1 from issues where id = $1", [
         issueId.data,
@@ -700,26 +747,28 @@ const button = defineStep({
       if (rows.length === 0)
         return terminate({ skipped: `issue ${issueId.data} not found` });
       await recordRun(db, ctx, AGENT, issueId.data);
-      const triageChannel = await getConfig(db, "channels.triage");
-      let issue = await getIssue(db, issueId.data);
-      let changed = false;
-
-      if (verb === "take") {
-        // Idempotent on the row: an owned or closed issue keeps its owner.
-        if (!issue.ownerSlackId && issue.status !== "closed") {
-          issue = await assign(db, issue.id, clicker);
-          changed = true;
-        }
-      } else if (verb === "close") {
-        if (issue.status !== "closed") {
-          issue = await setStatus(db, issue.id, "closed");
-          changed = true;
-        }
-      } else {
+      if (verb !== "take" && verb !== "close")
         return terminate({
           skipped: `unknown issue action ${action.action_id}`,
         });
-      }
+
+      // Decided under the row lock, so of two overlapping Close clicks only the one that moved the
+      // issue posts "Closed by". Take on an unowned issue is last-click-wins by design.
+      const { issue, changed } = await db.transaction(async (tx) => {
+        const locked = await lockIssue(tx, issueId.data);
+        if (verb === "take") {
+          // An owned or closed issue keeps its owner.
+          if (locked.ownerSlackId || locked.status === "closed")
+            return { issue: locked, changed: false };
+          return { issue: await assign(tx, locked.id, clicker), changed: true };
+        }
+        if (locked.status === "closed")
+          return { issue: locked, changed: false };
+        return {
+          issue: await setStatus(tx, locked.id, "closed"),
+          changed: true,
+        };
+      });
 
       // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
       const account = await getAccount(db, issue.accountId);
