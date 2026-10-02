@@ -51,7 +51,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { selectMockSessionFromPalette } from "./mock-navigation";
+import { startChatWithRfq } from "./mock-navigation";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -195,7 +195,7 @@ test.describe("cost-removed guard", () => {
     await page.keyboard.press("Escape");
 
     // History menu
-    await page.getByTestId("rail-options").click();
+    await page.getByTestId("history-trigger").click();
     await page.keyboard.press("Escape");
 
     // Allow any pending async calls to settle
@@ -301,10 +301,10 @@ test.describe("cost-removed guard", () => {
   // Surface 4: Steps accordion tab (pre-run and with run truth)
   // -------------------------------------------------------------------------
   test("steps tab has no cost affordances (empty state)", async ({ page }) => {
-    // Scratch session has no board — clean empty state on the Steps tab
-    await selectMockSessionFromPalette(page, "scratch");
-    // Focusing scratch (no canvas board) auto-collapses the right pane — reopen it first.
-    await page.getByTestId("right-expand").click();
+    // A fresh chat bound to rfq: its agent has no board yet, so the Steps tab
+    // is a clean empty state. (The right pane only exists beside a bound
+    // session; an unbound one like scratch has none, design.md I3.)
+    await startChatWithRfq(page);
     await page.getByTestId("right-tab-steps").click();
 
     const stepsEmpty = page.locator(".canvas-empty");
@@ -314,8 +314,8 @@ test.describe("cost-removed guard", () => {
   });
 
   test("steps tab with a populated run has no cost affordances", async ({ page }) => {
-    // Must be on leasing / boot session with its board loaded first
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+    // Must be on the boot session, bound to leasing, with its board loaded first
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute("data-agent", "leasing");
     await loadBoard(page);
     await page.getByTestId("right-tab-steps").click();
     await triggerRun(page);
@@ -388,7 +388,7 @@ test.describe("cost-removed guard", () => {
   // Surface 7: History menu + dead-session pane
   // -------------------------------------------------------------------------
   test("options menu, history card and dead-session pane have no cost affordances", async ({ page }) => {
-    await page.getByTestId("rail-options").click();
+    await page.getByTestId("history-trigger").click();
 
     const optionsMenu = page.getByTestId("rail-options-menu");
     await expect(optionsMenu).toBeVisible();

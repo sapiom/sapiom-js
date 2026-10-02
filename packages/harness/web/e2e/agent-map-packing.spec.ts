@@ -66,10 +66,7 @@ async function openPacking(page: Page) {
   await page.goto(
     "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1",
   );
-  await page
-    .getByTestId("workspace-group-acme-app")
-    .getByTestId("project-select-acme-app")
-    .click();
+  await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
     "data-layout-state",
     "ready",
@@ -111,15 +108,30 @@ async function openPacking(page: Page) {
   await expect(page.locator(".agent-map-node")).toHaveCount(34);
   return fixture;
 }
-async function arranged(page: Page, aspect: string) {
+/**
+ * The aspect the layout was asked for is the viewport's own, quantized as the
+ * hook does. The map is the centre at full width now (flow-navigation.md 4.3),
+ * so its aspect follows the window and the rail rather than a half-width right
+ * pane; the spec reads it from the viewport instead of pinning the old pane's
+ * numbers.
+ */
+async function viewportAspect(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>(".agent-map-viewport")!;
+    return String(
+      Math.max(0.25, Math.round((el.clientWidth / el.clientHeight) * 4) / 4),
+    );
+  });
+}
+async function arranged(page: Page, aspect?: string) {
   await expect
-    .poll(() =>
-      page.evaluate(
+    .poll(async () =>
+      (await page.evaluate(
         () =>
           window.layoutJobs.at(-1)?.graph.layoutOptions?.["elk.aspectRatio"],
-      ),
+      )) === (aspect ?? (await viewportAspect(page))),
     )
-    .toBe(aspect);
+    .toBe(true);
   await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
     "data-layout-state",
     "ready",
@@ -172,18 +184,22 @@ test("packs every disconnected node in normal and expanded panes", async ({
   page,
 }, info) => {
   await openPacking(page);
-  await arranged(page, "0.5");
+  await arranged(page);
+  const normalAspect = await viewportAspect(page);
   const normalVertical = await metrics(page);
-  await page.getByTestId("canvas-expand").click();
-  await arranged(page, "1.5");
+  // The wider pane: the rail folded away (there is no separate full view of a
+  // map that already fills the centre).
+  await page.getByTestId("rail-collapse").click();
+  await expect.poll(() => viewportAspect(page)).not.toBe(normalAspect);
+  await arranged(page);
   const expandedVertical = await metrics(page);
   expect(normalVertical.fit).toBeGreaterThan(0.4);
-  expect(expandedVertical.fit).toBeGreaterThan(0.8);
+  expect(expandedVertical.fit).toBeGreaterThan(0.4);
   for (const result of [normalVertical, expandedVertical]) {
     expect(result.clippedLabels).toBe(0);
     expect(result.overlappingLabels).toBe(0);
   }
-  await arranged(page, "1.5");
+  await arranged(page);
   await expect
     .poll(() => page.evaluate(() => window.layoutJobs.at(-1)?.ms ?? 0))
     .toBeGreaterThan(0);
@@ -208,10 +224,13 @@ test("keeps manual view and selection through unrelated updates and topology cha
   page,
 }) => {
   const fixture = await openPacking(page);
-  await arranged(page, "0.5");
+  await arranged(page);
   const selected = fixture.nodes[33]!;
   await page.getByTestId(`agent-map-node-${selected.id}`).click();
-  await arranged(page, "0.25");
+  // The inspector takes its slot beside the canvas; the viewport narrows.
+  await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
+  await arranged(page);
+  const inspectedAspect = await viewportAspect(page);
   await page.getByRole("button", { name: "Reset Agent Map view" }).click();
   const viewport = page.getByTestId("agent-map-viewport"),
     subject = page.getByTestId("agent-map-subject");
@@ -261,7 +280,7 @@ test("keeps manual view and selection through unrelated updates and topology cha
   await expect
     .poll(() => page.evaluate(() => window.layoutJobs.length))
     .toBe(count + 1);
-  await arranged(page, "0.25");
+  await arranged(page, inspectedAspect);
   expect(
     await subject.evaluate((el) => (el as HTMLElement).style.transform),
   ).toBe(transform!.match(/transform: ([^;]+)/)![1]);
@@ -282,7 +301,7 @@ test("keeps manual view and selection through unrelated updates and topology cha
   await expect
     .poll(() => page.evaluate(() => window.layoutJobs.length))
     .toBe(count + 2);
-  await arranged(page, "0.25");
+  await arranged(page, inspectedAspect);
   await delta(
     page,
     [...added, selected].map((node) => ({
@@ -292,7 +311,7 @@ test("keeps manual view and selection through unrelated updates and topology cha
     6,
   );
   await expect(page.getByTestId("agent-map-inspector")).toHaveCount(0);
-  await arranged(page, "0.5");
+  await arranged(page);
   await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
   await page.getByRole("button", { name: "Reset Agent Map view" }).click();
   const first = page.locator(".agent-map-node").first();
@@ -303,15 +322,15 @@ test("keeps manual view and selection through unrelated updates and topology cha
   expect(card!.y).toBeGreaterThanOrEqual(area!.y);
   expect(card!.x + card!.width).toBeLessThanOrEqual(area!.x + area!.width);
   expect(card!.y + card!.height).toBeLessThanOrEqual(area!.y + area!.height);
-  await page.getByTestId("canvas-expand").click();
-  await arranged(page, "1.5");
-  await page.getByTestId("canvas-expand-exit").click();
-  await arranged(page, "0.5");
+  await page.getByTestId("rail-collapse").click();
+  await arranged(page);
+  await page.getByTestId("rail-expand").click();
+  await arranged(page);
 });
 
 test("keeps auto-fit after selecting a visible node", async ({ page }) => {
   const fixture = await openPacking(page);
-  await arranged(page, "0.5");
+  await arranged(page);
   await page.getByTestId(`agent-map-info-${fixture.nodes[0]!.id}`).click();
   const larger = agentMapPackingFixture(undefined, 2);
   await delta(
@@ -324,8 +343,8 @@ test("keeps auto-fit after selecting a visible node", async ({ page }) => {
     ],
     2,
   );
-  await arranged(page, "0.25");
   await expect(page.locator(".agent-map-node")).toHaveCount(68);
+  await arranged(page);
   const automatic = await metrics(page);
   await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
   expect((await metrics(page)).fit).toBe(automatic.fit);

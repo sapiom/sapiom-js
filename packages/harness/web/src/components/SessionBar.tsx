@@ -10,7 +10,6 @@ import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
 import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
-import { SessionTabs } from "./SessionTabs";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 /** The workspace a session belongs to is its directory's basename — the
@@ -18,8 +17,6 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 function workspaceLabelOf(path: string): string {
   return basenameOf(path);
 }
-
-const EMPTY_BUSY_SESSION_IDS: ReadonlySet<string> = new Set();
 
 interface SessionBarProps {
   assistant?: AssistantProjection;
@@ -66,27 +63,31 @@ interface SessionBarProps {
   onToast: (message: string, tone?: ToastTone) => void;
   /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
   actions?: ReactNode;
-  /** Start a sibling session (the + pinned after the live-session tabs). */
-  onNewSession?: (() => void) | null;
-  /** Disables fresh-session creation until its create/bind transaction settles. */
-  newSessionPending?: boolean;
-  /** Agent name (or bare folder name) used by the new-session affordance. */
-  subjectName?: string | null;
-  /** The focused agent/folder's live sessions, rendered oldest first as tabs. */
-  sessions?: HarnessSession[];
-  /** Live output state for every visible session, including background tabs. */
-  busySessionIds?: ReadonlySet<string>;
-  /** Switch the active session (clicking another session's tab). */
-  onSelectSession?: ((id: string) => void) | null;
-  /** Display name for a tab (rename > title > folder). */
-  labelOf?: (session: HarnessSession) => string;
+  /**
+   * Set while a project's Agent Map (or an agent's canvas entered from it) is
+   * the centre (flow-navigation.md 4.3, 4.4). The header reads
+   * `project · Agent Map`, or `← project · agent` with the way back, and
+   * carries New agent (Q11), over the agents it adds to.
+   */
+  projectView?: ProjectViewHeader | null;
+}
+
+export interface ProjectViewHeader {
+  label: string;
+  /** The agent whose canvas was entered from the map, if any. */
+  agentName: string | null;
+  onBackToMap: () => void;
+  onNewAgent: () => void;
+  /** Full view for a drawn map; null when there is no map to enlarge. */
+  onExpandMap: (() => void) | null;
 }
 
 /**
- * The single main-panel header. Live sessions for the focused agent/folder are
- * browser-style tabs on the left, followed by a pinned + for a fresh sibling.
- * The active tab owns Copy path / Rename / Open in editor / End session through
- * its caret, while agent actions remain right-anchored on the same row.
+ * The single main-panel header. The rail is the session switcher now
+ * (flow-navigation.md Q2), so there is no tab strip: the header names the
+ * session on screen, and its title IS the session's options menu (Copy path /
+ * Rename / Open in editor / End session), live or exited alike. Agent actions
+ * remain right-anchored on the same row.
  */
 export function SessionBar({
   assistant,
@@ -111,13 +112,7 @@ export function SessionBar({
   editorLabel,
   onToast,
   actions = null,
-  onNewSession = null,
-  newSessionPending = false,
-  subjectName = null,
-  sessions = [],
-  busySessionIds = EMPTY_BUSY_SESSION_IDS,
-  onSelectSession = null,
-  labelOf,
+  projectView = null,
 }: SessionBarProps): JSX.Element {
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -154,7 +149,47 @@ export function SessionBar({
         data-testid="session-context"
         data-session-id={activeSession?.id ?? ""}
       >
-        {overviewMode ? (
+        {projectView ? (
+          /* A project is selected: the centre is its Agent Map, or an agent's
+             canvas entered from it, with the way back. */
+          <div className="session-current session-current-static">
+            {projectView.agentName ? (
+              <button
+                type="button"
+                className="theme-toggle project-map-back"
+                data-testid="project-map-back"
+                aria-label={`Back to ${projectView.label}'s Agent Map`}
+                data-tooltip="Back to the Agent Map"
+                onClick={projectView.onBackToMap}
+              >
+                <Icon name="ArrowLeft" size={14} />
+              </button>
+            ) : (
+              <Icon name="Waypoints" size={14} />
+            )}
+            <span
+              className="session-context-title"
+              data-testid="session-context-title"
+            >
+              {projectView.label}
+            </span>
+            {projectView.agentName ? (
+              <span
+                className="session-project-chip"
+                data-testid="session-map-agent-chip"
+              >
+                {projectView.agentName}
+              </span>
+            ) : (
+              <span
+                className="session-project-chip"
+                data-testid="session-project-map-chip"
+              >
+                Agent Map
+              </span>
+            )}
+          </div>
+        ) : overviewMode ? (
           <div className="session-current session-current-static">
             <Icon name="Radio" size={13} />
             <span
@@ -235,40 +270,7 @@ export function SessionBar({
               </span>
             )}
           </div>
-        ) : sessions.length > 0 &&
-          onSelectSession &&
-          onNewSession &&
-          labelOf ? (
-          <SessionTabs
-            assistant={assistant}
-            sessions={sessions}
-            activeSessionId={activeSession?.id ?? null}
-            busySessionIds={busySessionIds}
-            labelOf={labelOf}
-            subjectName={
-              subjectName ??
-              (activeSession ? workspaceLabelOf(activeSession.cwd) : "project")
-            }
-            onSelect={onSelectSession}
-            onNew={onNewSession}
-            newSessionPending={newSessionPending}
-            menuOpen={menuOpen}
-            onToggleMenu={() => setMenuOpen((open) => !open)}
-            menuTriggerRef={menuTriggerRef}
-            menuTooltip={
-              activeSession
-                ? `${HARNESS_LABELS[activeSession.harness]} · ${workspaceLabelOf(activeSession.cwd)} · ${activeSession.cwd}`
-                : undefined
-            }
-            renaming={renaming}
-            renameDraft={renameDraft}
-            onRenameDraftChange={setRenameDraft}
-            onCommitRename={commitRename}
-            onCancelRename={() => setRenaming(false)}
-          />
         ) : activeSession ? (
-          /* An exited session is historical context, not a live tab. Keep its
-             compact title/menu while still allowing a fresh sibling below. */
           <div className="session-current-wrap">
             {renaming ? (
               <input
@@ -313,9 +315,7 @@ export function SessionBar({
                   className="session-context-title"
                   data-testid="session-context-title"
                 >
-                  {labelOf
-                    ? labelOf(activeSession)
-                    : (sessionName ?? activeSession.title)}
+                  {sessionName ?? activeSession.title}
                 </span>
                 <AssistantActivity assistant={assistant} sessionId={activeSession.id} />
                 <Icon name="ChevronDown" size={13} />
@@ -403,32 +403,35 @@ export function SessionBar({
         </AnchoredPopover>
       )}
 
-      {/* Ended sessions do not join the live strip, but their + still starts a
-          fresh session from the same folder/provider/binding. Live-session +
-          is pinned inside SessionTabs, outside its scrolling list. */}
-      {onNewSession &&
-        activeSession?.status === "exited" &&
-        sessions.length === 0 &&
-        !composing && (
+      {actions}
+
+      {projectView && (
+        <div className="project-view-actions">
+          {/* New agent, in the project view's header (Q11): the map is where
+              a project's agents are, so the verb that adds one sits over it. */}
           <button
             type="button"
-            className="theme-toggle session-tab-new"
-            data-testid="session-tab-new"
-            aria-label={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
-            aria-busy={newSessionPending}
-            data-tooltip={`New session on ${subjectName ?? workspaceLabelOf(activeSession.cwd)}`}
-            disabled={newSessionPending}
-            onClick={onNewSession}
+            className="btn-line project-map-new-agent"
+            data-testid="project-map-new-agent"
+            data-tooltip={`New agent in ${projectView.label}`}
+            onClick={projectView.onNewAgent}
           >
-            {newSessionPending ? (
-              <span className="session-busy" aria-hidden="true" />
-            ) : (
-              <Icon name="Plus" size={14} />
-            )}
+            <Icon name="Plus" size={13} /> New agent
           </button>
-        )}
-
-      {actions}
+          {projectView.onExpandMap && (
+            <button
+              type="button"
+              className="theme-toggle"
+              data-testid="canvas-expand"
+              aria-label="Expand Agent Map"
+              title="Expand Agent Map"
+              onClick={projectView.onExpandMap}
+            >
+              <Icon name="Maximize2" size={15} />
+            </button>
+          )}
+        </div>
+      )}
 
       {onExpandRight && (
         <button

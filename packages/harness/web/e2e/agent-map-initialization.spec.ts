@@ -86,15 +86,11 @@ for (const topology of ["chain", "fan-out", "cycles", "components"]) {
   });
 }
 
-const projectGroup = "workspace-group-acme-app";
 async function open(page: Page, query: string) {
   await page.goto(
     `/?seed=0&mockFixtures=deep&mockStudioProjects=present&${query}`,
   );
-  await page
-    .getByTestId(projectGroup)
-    .getByTestId("project-select-acme-app")
-    .click();
+  await page.getByTestId("project-select-acme-app").click();
 }
 async function evidence(page: Page) {
   return page.evaluate(() => {
@@ -191,6 +187,8 @@ test("queued and running generation show a compact state without creating a sess
   );
   await expect(page.locator(".agent-map-node")).toHaveCount(0);
   await page.reload();
+  // The centre's view is not persisted; the generation state is the server's.
+  await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-generating")).toBeVisible();
   expect(await evidence(page)).toEqual(before);
   expect(errors).toEqual([]);

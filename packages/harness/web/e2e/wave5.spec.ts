@@ -78,6 +78,18 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
   await expect(detail).toContainText("Claude Code");
   await expect(detail).toContainText("Ended");
 
+  // The right pane is a BOUND session's agent (design.md I3); sess-leasing is
+  // unbound, so end a bound one to see its pane. It stays selected as ended.
+  await page.getByTestId("rail-session-sess-leasing-2").hover();
+  await page.getByTestId("rail-session-close-sess-leasing-2").click();
+  await page.getByTestId("end-session-confirm-btn").click();
+  await expect(page.getByTestId("rail-session-sess-leasing-2")).toHaveAttribute(
+    "data-mark",
+    "exited",
+  );
+  await page.getByTestId("rail-session-select-sess-leasing-2").click();
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+
   // The right pane stops inviting a Visualize that cannot run.
   await expect(page.getByTestId("canvas-empty-exited")).toContainText("Session ended");
   await expect(page.getByTestId("canvas-empty-exited")).toContainText(
@@ -85,10 +97,11 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
   );
   await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
 
+  // Steps is the AGENT's: leasing's run evidence (announced by its other
+  // session) still shows there, and nothing invites a run in an ended session.
   await page.getByTestId("right-tab-steps").click();
-  await expect(page.getByTestId("canvas-empty-exited")).toContainText(
-    "Resume the session to see the agent's steps here.",
-  );
+  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

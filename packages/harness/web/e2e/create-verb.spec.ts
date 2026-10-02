@@ -131,13 +131,16 @@ test.describe("the two verbs", () => {
     await expect(page.getByTestId("session-project-chip")).toContainText(
       "New agent in blank-slate",
     );
-    // The folder is a project in the rail, with nothing under it yet.
-    await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
-    // No right pane: nothing exists to project until submit.
-    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+    // The folder is a project in the rail, with no sessions under it yet.
+    await expect(page.getByTestId("workspace-group-blank-slate")).toBeVisible();
+    await expect(
+      page.getByTestId("rail-project-blank-slate").locator(".rail-session-row"),
+    ).toHaveCount(0);
+    // No map and no right pane: nothing exists to project until submit.
+    await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+    await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
     // AND NO SESSION (Q5): the user types first.
     expect((await evidence(page)).createSessionCalls).toEqual([]);
-    await expect(page.locator(".session-tabs-list > .session-tab")).toHaveCount(0);
   });
 
   test("New project (desktop): the OS picker directly, no Studio dialog, cancel returns", async ({
@@ -162,14 +165,14 @@ test.describe("the two verbs", () => {
     await installDesktopBridge(page, null);
     await page.goto("/?seed=0&mockStudioProjects=present");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    const rows = await page.locator('[data-testid^="project-row-"]').count();
+    const rows = await page.locator('[data-testid^="rail-project-"]').count();
 
     await page.getByTestId("rail-new-project").click();
     await expect.poll(() => chooseCalls(page)).toHaveLength(1);
     await page.waitForTimeout(300);
     await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
-    await expect(page.locator('[data-testid^="project-row-"]')).toHaveCount(rows);
+    await expect(page.locator('[data-testid^="rail-project-"]')).toHaveCount(rows);
     // Back where they were: the boot session is still the one on screen.
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
@@ -188,15 +191,16 @@ test.describe("the two verbs", () => {
     await page.getByTestId("folder-field-input").fill(BLANK_PROJECT_ROOT);
     await page.getByTestId("project-folder-continue").click();
 
-    await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
-    // No screen, no session (§4.5, Q5). The session on screen is unchanged.
+    await expect(page.getByTestId("workspace-group-blank-slate")).toBeVisible();
+    // No screen, no session (§4.5, Q5). The selected session is unchanged:
+    // still the one the rail highlights (flow-navigation.md 4.3.2).
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
     await page.waitForTimeout(300);
     expect((await evidence(page)).createSessionCalls).toEqual([]);
     await expect(page.getByText("Plan Agents", { exact: true })).toHaveCount(0);
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      "sess-boot",
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-selected",
+      "true",
     );
   });
 
@@ -238,7 +242,7 @@ test.describe("the two verbs", () => {
     await expect(page.getByTestId("new-session-composer")).toBeVisible();
     await expect(page.getByTestId("new-agent-project")).toContainText("blank-slate");
     // Not a map with nothing drawn in it.
-    await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+    await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
     expect((await evidence(page)).createSessionCalls).toEqual([]);
   });
 
@@ -275,8 +279,12 @@ test.describe("submit", () => {
         `scaffold:${BLANK_PROJECT_ROOT}/competitors-pricing`,
         `session:${BLANK_PROJECT_ROOT}`,
       ]);
-    // The agent is a row in the rail under its project.
-    await expect(page.getByTestId("workflow-competitors-pricing")).toBeVisible();
+    // The agent's session is a row in the rail under its project, bound to it.
+    await expect(
+      page
+        .getByTestId("rail-project-blank-slate")
+        .locator('.rail-session-row[data-agent="competitors-pricing"]'),
+    ).toHaveCount(1);
     // The screen gave way to the live workbench.
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
     await expect(page.getByTestId("agent-view")).toBeVisible();
@@ -436,7 +444,11 @@ test.describe("submit", () => {
     await expect(page.getByTestId("new-agent-error")).toContainText(
       "screenshot was created, but its session didn't start",
     );
-    await expect(page.getByTestId("workflow-screenshot")).toBeVisible();
+    // The rail lists sessions, not agents (flow-navigation.md Q3), and no
+    // session exists yet: nothing for the rail to show.
+    await expect(
+      page.getByTestId("rail-project-blank-slate").locator(".rail-session-row"),
+    ).toHaveCount(0);
     await expect(page.locator(".composer-file-name")).toHaveText(["shot.png"]);
     expect((await evidence(page)).createOrder).toEqual([
       `scaffold:${BLANK_PROJECT_ROOT}/screenshot`,
@@ -536,20 +548,22 @@ test.describe("templates route through the screen", () => {
 });
 
 test.describe("the rail top", () => {
-  test("the options menu files the tree and nothing else; history has its own glyph", async ({
+  test("the options menu sorts the projects and nothing else; history has its own glyph", async ({
     page,
   }) => {
     await page.goto("/?seed=0");
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
-    const options = page.getByTestId("rail-options");
-    await expect(options).toHaveAttribute("aria-label", "Group and sort projects");
+    const options = page.getByTestId("history-trigger");
+    await expect(options).toHaveAttribute("aria-label", "Sort projects");
     await expect(options.locator("svg.lucide-sliders-horizontal")).toHaveCount(1);
     await options.click();
     const menu = page.getByTestId("rail-options-menu");
     await expect(menu).toBeVisible();
-    await expect(menu.getByTestId("filing-group-by")).toBeVisible();
-    await expect(menu.getByTestId("filing-sort-by")).toBeVisible();
+    // Sort, and no Group by (flow-navigation.md Q8).
+    await expect(menu.getByTestId("sort-recent")).toBeVisible();
+    await expect(menu.getByTestId("sort-name")).toBeVisible();
+    await expect(menu.getByTestId("filing-group-by")).toHaveCount(0);
     await expect(menu).not.toContainText("Past sessions");
     await expect(page.getByTestId("past-sessions-trigger")).toHaveCount(0);
     await page.keyboard.press("Escape");
@@ -583,23 +597,5 @@ test.describe("the rail top", () => {
     await options.click();
     await expect(page.getByTestId("history-menu")).toBeHidden();
     await expect(menu).toBeVisible();
-  });
-
-  test("an empty project's row says it is the door to the screen (D36)", async ({
-    page,
-  }) => {
-    await page.goto("/?seed=0&mockStudioProjects=present");
-    await expect(page.locator(".rail-workflows")).toBeVisible();
-    await addProject(page, BLANK_PROJECT_ROOT);
-    // No agents, so no map to draw: the row's tooltip names what its name does.
-    await expect(page.getByTestId("project-select-blank-slate")).toHaveAttribute(
-      "data-tooltip",
-      "Create this project's first agent",
-    );
-    // A project that holds agents keeps its map.
-    await expect(page.getByTestId("project-select-acme-app")).toHaveAttribute(
-      "data-tooltip",
-      /Agent Map/,
-    );
   });
 });

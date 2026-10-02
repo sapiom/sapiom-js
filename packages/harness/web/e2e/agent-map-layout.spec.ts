@@ -5,10 +5,7 @@ const url =
   "/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1";
 async function open(page: Page, query = "") {
   await page.goto(url + query);
-  await page
-    .getByTestId("workspace-group-acme-app")
-    .getByTestId("project-select-acme-app")
-    .click();
+  await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
 }
 const map = (page: Page) => page.getByTestId("agent-map-canvas");
@@ -45,7 +42,9 @@ test("renders the saved map through a lazy local worker with measured cards/labe
   const before = await identities(page);
   const selected = page.locator(".agent-map-node").first();
   await page.locator(".agent-map-node-info").first().click();
-  await page.getByTestId("canvas-expand").click();
+  // The map is the centre at full width (flow-navigation.md 4.3), so there is
+  // no separate full view: folding the rail is the pane resize that remains.
+  await page.getByTestId("rail-collapse").click();
   await expect(map(page)).toHaveAttribute("data-layout-engine", "elk");
   expect(await identities(page)).toEqual(before);
   expect(workers).toHaveLength(1);
@@ -84,7 +83,7 @@ test("renders the saved map through a lazy local worker with measured cards/labe
     expect(measured.width).toBeCloseTo(actual.width, 2);
     expect(measured.height).toBeCloseTo(actual.height, 2);
   }
-  await page.getByTestId("canvas-expand-exit").click();
+  await page.getByTestId("rail-expand").click();
   await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
   expect(await identities(page)).toEqual(before);
   await expect(selected).toHaveAttribute("aria-pressed", "true");
@@ -107,6 +106,8 @@ test("shows a retryable layout error after worker failure and recovers without c
   const before = await identities(page);
   expect(before.length).toBeGreaterThan(0);
   await page.reload();
+  // The view is not persisted; the saved map is.
+  await page.getByTestId("project-select-acme-app").click();
   await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
   expect(await identities(page)).toEqual(before);
 });

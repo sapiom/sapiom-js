@@ -288,7 +288,9 @@ test.describe("templates journey (from the composer)", () => {
         `scaffold:${BLANK_PROJECT_ROOT}/coding-pause`,
         `session:${BLANK_PROJECT_ROOT}`,
       ]);
-    await expect(page.getByTestId("workflow-coding-pause")).toBeVisible();
+    await expect(
+      page.locator('.rail-session-row[data-agent="coding-pause"]'),
+    ).toHaveCount(1);
     // And nobody was asked, in English, to perform a filesystem operation.
     expect(await firstTurn(page)).not.toContain("sapiom_dev_agents_scaffold");
     expect(await lastInject(page)).toBeUndefined();

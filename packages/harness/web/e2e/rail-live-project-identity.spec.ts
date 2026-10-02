@@ -1,3 +1,9 @@
+/**
+ * A session belongs to exactly ONE project, by its server-issued identity
+ * (design.md I1, `lib/rail-sessions.ts`), never by cwd containment: an outer
+ * project's root contains a nested project's sessions on disk, and must not
+ * list them.
+ */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
@@ -33,6 +39,7 @@ async function publishSession(
       }
     ).__HARNESS_TEST__?.publish;
     if (!publish) throw new Error("Mock event bus is not ready");
+    const now = new Date().toISOString();
     publish({
       type: "session.status",
       session: {
@@ -43,7 +50,8 @@ async function publishSession(
         cwd: value.cwd,
         title: value.id,
         status: value.status ?? "running",
-        createdAt: "2026-09-07T00:00:00.000Z",
+        createdAt: now,
+        lastActiveAt: now,
         ready: true,
         agentMapIdentity: value.projectId
           ? {
@@ -57,6 +65,9 @@ async function publishSession(
   }, update);
 }
 
+const rowIn = (page: Page, project: string, id: string) =>
+  page.getByTestId(`rail-project-${project}`).getByTestId(`rail-session-${id}`);
+
 test.beforeEach(async ({ page }) => {
   await page.goto(
     "/?seed=0&mockFixtures=deep&mockNoLiveSessions=1&mockStudioProjects=present&mockAgentMapGolden=1",
@@ -64,7 +75,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId(`workspace-group-${PARENT}`)).toBeVisible();
 });
 
-test("a nested project's session does not light its parent project", async ({
+test("a nested project's session is listed under it, never under its parent", async ({
   page,
 }) => {
   const childId = await projectId(page, CHILD);
@@ -75,83 +86,50 @@ test("a nested project's session does not light its parent project", async ({
     boundWorkflowPath: QUEUE,
   });
 
-  await expect(page.getByTestId(`project-live-${CHILD}`)).toHaveAttribute(
-    "aria-label",
-    "1 live session",
-  );
-  await expect(page.getByTestId(`project-live-${PARENT}`)).toHaveCount(0);
+  await expect(rowIn(page, CHILD, "child-session")).toHaveAttribute("data-mark", "live");
+  await expect(rowIn(page, PARENT, "child-session")).toHaveCount(0);
+  await expect(page.getByTestId("rail-session-child-session")).toHaveCount(1);
 
+  // The parent's map is the centre with no chat: the nested session is not
+  // the parent's to show.
   await page.getByTestId(`project-select-${PARENT}`).click();
-  await expect(page.getByTestId("project-session-empty")).toBeVisible();
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toHaveCount(0);
 });
 
-test("groups count shared agent paths only within their own project", async ({
-  page,
-}) => {
-  const parentId = await projectId(page, PARENT);
-  const childId = await projectId(page, CHILD);
-  expect(childId).not.toBe(parentId);
-
-  await page.getByTestId("rail-options").click();
-  await page.getByTestId("filing-group-by").selectOption("group");
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId(`group-create-${CHILD}`)).toBeVisible();
-
-  await publishSession(page, {
-    id: "child-session",
-    cwd: CHILD_ROOT,
-    projectId: childId,
-    boundWorkflowPath: QUEUE,
-  });
-  const parent = page.getByTestId(`workspace-group-${PARENT}`);
-  const child = page.getByTestId(`workspace-group-${CHILD}`);
-  await expect(child.getByTestId("group-live-Ungrouped")).toHaveAttribute(
-    "aria-label",
-    "1 live session",
-  );
-  await expect(parent.getByTestId("group-live-gateway")).toHaveCount(0);
-
-  await publishSession(page, {
-    id: "parent-session",
-    cwd: PARENT_ROOT,
-    projectId: parentId,
-    boundWorkflowPath: QUEUE,
-  });
-  await expect(parent.getByTestId("group-live-gateway")).toHaveAttribute(
-    "aria-label",
-    "1 live session",
-  );
-  await expect(child.getByTestId("group-live-Ungrouped")).toHaveAttribute(
-    "aria-label",
-    "1 live session",
-  );
-});
-
-test("a project counts its sessions outside the displayed root without a cwd fallback", async ({
+test("a project lists its sessions outside the displayed root, and an unidentified session is in no project", async ({
   page,
 }) => {
   const parentId = await projectId(page, PARENT);
   // A durable project can have another active root. Its session principal,
-  // rather than containment under the displayed root, owns the live count.
+  // rather than containment under the displayed root, owns the row.
   await publishSession(page, {
     id: "other-root-session",
     cwd: "/Users/demo/polsia-secondary-root",
     projectId: parentId,
     status: "starting",
   });
-  await expect(page.getByTestId(`project-live-${PARENT}`)).toHaveAttribute(
-    "aria-label",
-    "1 live session",
+  await expect(rowIn(page, PARENT, "other-root-session")).toHaveAttribute(
+    "data-mark",
+    "live",
   );
 
   // Missing identity must not become a match just because its cwd is inside
-  // a durable project. Ending the identified session therefore clears it.
+  // a durable project: History and Search reach it, the rail does not.
   await publishSession(page, { id: "unidentified-session", cwd: PARENT_ROOT });
+  await expect(page.getByTestId("rail-session-unidentified-session")).toHaveCount(0);
+  // ...and the rail is still drawn: a session without identity is skipped,
+  // never a crash that takes every row with it.
+  await expect(rowIn(page, PARENT, "other-root-session")).toBeVisible();
+
   await publishSession(page, {
     id: "other-root-session",
     cwd: "/Users/demo/polsia-secondary-root",
     projectId: parentId,
     status: "exited",
   });
-  await expect(page.getByTestId(`project-live-${PARENT}`)).toHaveCount(0);
+  await expect(rowIn(page, PARENT, "other-root-session")).toHaveAttribute(
+    "data-mark",
+    "exited",
+  );
 });

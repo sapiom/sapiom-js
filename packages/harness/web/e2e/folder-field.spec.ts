@@ -87,7 +87,7 @@ test.describe("desktop host", () => {
     // The picker was asked, with no pre-chosen parent (Q8) ...
     await expect.poll(() => chooseCalls(page)).toEqual([undefined]);
     // ... and no Studio dialog ever opened in front of it (D29).
-    await expect(page.getByTestId("project-row-blank-slate")).toBeVisible();
+    await expect(page.getByTestId("workspace-group-blank-slate")).toBeVisible();
     await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
     await expect(page.locator(".modal-start")).toHaveCount(0);
     // Add project stops there: no screen, no session.
@@ -100,12 +100,12 @@ test.describe("desktop host", () => {
     await installDesktopBridge(page, null);
     await page.goto("/");
     await expect(page.locator(".rail-workflows")).toBeVisible();
-    const rows = await page.locator('[data-testid^="project-row-"]').count();
+    const rows = await page.locator('[data-testid^="rail-project-"]').count();
     await page.getByTestId("rail-add-project").click();
 
     await expect.poll(() => chooseCalls(page)).toHaveLength(1);
     await page.waitForTimeout(300);
     await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
-    await expect(page.locator('[data-testid^="project-row-"]')).toHaveCount(rows);
+    await expect(page.locator('[data-testid^="rail-project-"]')).toHaveCount(rows);
   });
 });

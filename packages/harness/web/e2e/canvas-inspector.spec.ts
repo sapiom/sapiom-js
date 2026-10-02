@@ -172,8 +172,13 @@ test("a launched-agent node keeps its private identifiers and navigates to the a
   await expect(openAgent).toHaveText(/Open agent/);
   await openAgent.click();
 
-  await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
-  // The binding now reads in the current session's ⌄ menu (moved off the bar).
+  // Opening the agent lands on a session bound to it in its own project, and
+  // the rail shows that session selected (flow-navigation.md 4.2).
+  const opened = page
+    .getByTestId("rail-project-rfq-agent")
+    .locator('.rail-session-row[data-selected="true"]');
+  await expect(opened).toHaveAttribute("data-agent", "rfq");
+  // The binding reads in the current session's ⌄ menu.
   await page.getByTestId("session-menu").click();
   await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
   await page.keyboard.press("Escape");

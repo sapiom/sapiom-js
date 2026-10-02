@@ -1,15 +1,17 @@
 import { expect, test } from "@playwright/test";
 
-test("delegation retries project one ordinary tab per real session without touching manual tabs", async ({
+test("delegation retries project one ordinary rail row per real session without touching manual sessions", async ({
   page,
 }) => {
   await page.goto("/?seed=0&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await page.getByTestId("project-select-acme-app").click();
-  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
   const projectId = "project_00000000-0000-4000-8000-000000000001";
-  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
-  const manualTabCount = await tabs.count();
+  const rows = page
+    .getByTestId("rail-project-acme-app")
+    .locator(".rail-session-row");
+  const manualRowCount = await rows.count();
 
   await page.evaluate((selectedProjectId) => {
     const publish = (
@@ -48,22 +50,19 @@ test("delegation retries project one ordinary tab per real session without touch
     });
   }, projectId);
 
-  await expect(tabs).toHaveCount(manualTabCount + 1);
-  await expect(page.getByTestId("session-tab-sess-delegated")).toHaveCount(1);
-  await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(1);
+  await expect(rows).toHaveCount(manualRowCount + 1);
+  await expect(page.getByTestId("rail-session-sess-delegated")).toHaveCount(1);
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(1);
 
-  await page
-    .getByTestId("session-tab-sess-delegated")
-    .getByRole("tab")
-    .click();
+  await page.getByTestId("rail-session-select-sess-delegated").click();
   await expect(page.getByTestId("session-context")).toHaveAttribute(
     "data-session-id",
     "sess-delegated",
   );
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+  await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
   await expect(page.locator(".harness-terminal")).toBeVisible();
 
   await page.getByTestId("project-select-acme-app").click();
-  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
-  await expect(page.getByTestId("session-tab-sess-boot")).toHaveCount(1);
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(1);
 });
