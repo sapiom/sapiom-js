@@ -44,6 +44,14 @@ export interface UiPrefs {
    *  arrangement it belongs to. */
   sessionNames?: Record<string, string>;
   /**
+   * Exited sessions the user hid from the rail with the row's `×`
+   * (flow-navigation.md Q4). Client-side for the reason `sessionNames` is: a
+   * hidden row is an arrangement, not a fact about the session, which the
+   * server keeps exited and History still lists. Only an exited session can be
+   * hidden (`rail-sessions.ts` ignores the id while its process runs).
+   */
+  hiddenSessionIds?: string[];
+  /**
    * Project roots the user REMOVED from the rail (SAP-2932).
    *
    * Client-side, for the same reason `sessionNames` is: the server has no

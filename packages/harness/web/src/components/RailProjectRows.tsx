@@ -1,6 +1,9 @@
 import type { JSX, ReactNode } from "react";
+import type { HarnessSession } from "@shared/types";
 
+import { HARNESS_LABELS, formatRelativeTime } from "../lib/history-meta";
 import { projectInitial } from "../lib/project-tree";
+import type { SessionMark } from "../lib/rail-sessions";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { Icon } from "./Icon";
 
@@ -137,6 +140,99 @@ export function ProjectRow({
         <span className="tree-row-label">{label}</span>
       </button>
       {trailing}
+    </div>
+  );
+}
+
+const MARK_TITLE: Record<SessionMark, string> = {
+  live: "Live: the agent is working",
+  idle: "Idle: running, quiet for a while",
+  exited: "Exited: the process ended",
+};
+
+/**
+ * One session under its project (flow-navigation.md 4.1.2): its name, a
+ * live/idle/exited mark, and when it was last active. One click selects it
+ * from anywhere in the rail, which is the whole ask: "it should take one
+ * click to go from one to the other".
+ *
+ * The trailing `×` means two things, both said in its label: on a live row it
+ * ENDS the session (behind the existing confirm), on an exited row it HIDES
+ * the row (History keeps it). Q4 settled that close and end stay one action,
+ * and a row with no process behind it has nothing left to end.
+ */
+export function SessionRow({
+  session,
+  name,
+  mark,
+  agentName,
+  selected,
+  onSelect,
+  onClose,
+  now,
+}: {
+  session: HarnessSession;
+  name: string;
+  mark: SessionMark;
+  /** The agent this session is bound to, when it is. */
+  agentName: string | null;
+  selected: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+  now: number;
+}): JSX.Element {
+  const exited = mark === "exited";
+  return (
+    <div
+      className={
+        "workspace-row is-nested rail-session-row" +
+        (selected ? " is-selected" : "")
+      }
+      data-testid={`rail-session-${session.id}`}
+      data-mark={mark}
+      data-agent={agentName ?? undefined}
+      data-selected={selected || undefined}
+    >
+      <button
+        type="button"
+        className="tree-row rail-session-main"
+        data-testid={`rail-session-select-${session.id}`}
+        aria-current={selected ? "true" : undefined}
+        title={`${HARNESS_LABELS[session.harness]} · ${session.cwd}${agentName ? ` · ${agentName}` : ""}`}
+        onClick={onSelect}
+        {...trackingAttrs({ object: "session" })}
+      >
+        <span
+          className="session-dot rail-session-mark"
+          data-mark={mark}
+          /* The dot recipe's running state carries the green, so one dot
+             means one thing across the app. */
+          data-status={mark === "live" ? "running" : undefined}
+          data-testid={`rail-session-mark-${session.id}`}
+          role="img"
+          aria-label={MARK_TITLE[mark]}
+          data-tooltip={MARK_TITLE[mark]}
+        />
+        <span className="tree-row-label">{name}</span>
+        <span
+          className="rail-session-time"
+          data-testid={`rail-session-time-${session.id}`}
+        >
+          {formatRelativeTime(session.lastActiveAt ?? session.createdAt, now)}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="workspace-row-action rail-session-close"
+        data-testid={`rail-session-close-${session.id}`}
+        aria-label={exited ? `Hide ${name} from the rail` : `End ${name}`}
+        data-tooltip={
+          exited ? "Hide from the rail (History keeps it)" : "End session"
+        }
+        onClick={onClose}
+      >
+        <Icon name="X" size={13} />
+      </button>
     </div>
   );
 }

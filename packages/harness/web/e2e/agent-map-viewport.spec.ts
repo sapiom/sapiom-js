@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { selectSession } from "./mock-navigation";
 
 async function openProject(page: Page, project: string) {
   await page.getByTestId(`project-select-${project}`).click();
@@ -39,10 +40,8 @@ test("each project's pan and zoom survive another project and an agent Canvas", 
 
   await openProject(page, "acme-app");
   await expect.poll(() => transform(page)).toBe(acmeView);
-  await page
-    .getByTestId("workflow-leasing")
-    .locator(".workflow-item-trigger")
-    .click();
+  // A session's agent Canvas in between: the session bound to leasing.
+  await selectSession(page, "sess-boot");
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
   await expect(page.getByTestId("right-panel-board")).toBeVisible();
   await openProject(page, "acme-app");
@@ -72,7 +71,8 @@ test("Fit clears the saved manual view and keeps following pane size after retur
   await openProject(page, "polsia");
   await openProject(page, "acme-app");
   const normal = await transform(page);
-  await page.getByTestId("canvas-expand").click();
+  // The map fills the centre, so its pane follows the window: shrink it.
+  await page.setViewportSize({ width: 1100, height: 520 });
   await expect.poll(() => transform(page)).not.toBe(normal);
   await expect(page.getByTestId("agent-map-canvas")).toHaveAttribute(
     "data-layout-state",

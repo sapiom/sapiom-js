@@ -170,6 +170,9 @@ export interface HarnessStateHook {
      * it or refreshing the project catalog. This lets an explicit create own
      * its pending UI intent without guessing from same-cwd status events. */
     onCreated?: (session: HarnessSession) => void,
+    /** `select: false` leaves the selection alone; the caller selects the
+     *  session itself once it is ready to be seen. */
+    options?: { select?: boolean },
   ) => Promise<HarnessSession>;
   attachFile: (
     sessionId: string,
@@ -202,8 +205,20 @@ export interface HarnessStateHook {
     from: string;
   }) => Promise<HarnessSession>;
   resumeFromHistory: (summary: SessionSummary) => Promise<HarnessSession>;
-  /** Dismisses an exited session (DELETE): drops it from the list and, if it was active, falls back to another running session or clears the pane. */
-  closeSession: (id: string) => Promise<void>;
+  /**
+   * Ends a live session (DELETE kills its process; the server keeps the record
+   * as exited). The session stays in the list, wearing the exited mark, and
+   * stays SELECTED if it was: ending never jumps the centre to another
+   * session (flow-navigation.md Q4, D43).
+   */
+  endSession: (id: string) => Promise<void>;
+  /**
+   * Moves an agent's directory (`POST /api/agents/move`), then re-reads the
+   * sessions: the server remaps every session's cwd and binding in memory but
+   * announces only the workflow rescan, so without the re-read the map panel
+   * would list stale paths (design.md I7).
+   */
+  moveAgent: (from: string, to: string) => Promise<void>;
   connectWorkflow: (path: string) => Promise<WorkflowInfo>;
   /** Bulk discovery: POST /api/workflows/scan under a root, then
    *  refreshes the registry list so found agents join the rail at once. */
@@ -1527,6 +1542,7 @@ export function useHarnessState(): HarnessStateHook {
     async (
       req: CreateSessionRequest,
       onCreated?: (session: HarnessSession) => void,
+      options: { select?: boolean } = {},
     ): Promise<HarnessSession> => {
       const session = await api.createSession(req);
       // The response is the first unambiguous client-side correlation between
@@ -1544,7 +1560,9 @@ export function useHarnessState(): HarnessStateHook {
           ? { ...prev, sessions: [...prev.sessions, session] }
           : prev,
       );
-      selectSession(session.id);
+      // A caller that binds the session before showing it (Start chat on the
+      // map, design.md I6) selects it itself once the binding lands.
+      if (options.select !== false) selectSession(session.id);
 
       // Starting a session in a folder is opening it: the folder joins the
       // project list, and a project the user had removed comes back rather
@@ -1754,41 +1772,45 @@ export function useHarnessState(): HarnessStateHook {
     [state, resumeSession, rehydrateSession, selectSession],
   );
 
-  const closeSession = useCallback(
-    async (id: string): Promise<void> => {
-      try {
-        await api.killSession(id);
-      } catch (err) {
-        // Surface the failure as a toast and keep the user on the dead-session
-        // overlay: the re-throw below skips the local removal, so a failed kill
-        // never makes the session vanish from the UI as if it had succeeded.
-        setToast(
-          createToastMessage(
-            err instanceof ApiError && err.reason
-              ? err.reason
-              : (err as Error).message,
-          ),
-        );
-        throw err;
-      }
-      const remaining = (state?.sessions ?? []).filter(
-        (session) => session.id !== id,
+  const endSession = useCallback(async (id: string): Promise<void> => {
+    try {
+      await api.killSession(id);
+    } catch (err) {
+      // Surface the failure and leave the row as it was: a failed kill never
+      // makes a session read as ended.
+      setToast(
+        createToastMessage(
+          err instanceof ApiError && err.reason
+            ? err.reason
+            : (err as Error).message,
+        ),
       );
-      setState((prev) => (prev ? { ...prev, sessions: remaining } : prev));
-      if (activeSessionId === id) {
-        const closed = state?.sessions.find((session) => session.id === id);
-        const projectId = closed?.agentMapIdentity.projectId;
-        const nextRunning =
-          remaining.find(
-            (session) =>
-              session.status !== "exited" &&
-              projectId !== undefined &&
-              session.agentMapIdentity.projectId === projectId,
-          ) ?? remaining.find((session) => session.status !== "exited");
-        selectSession(nextRunning ? nextRunning.id : null);
-      }
+      throw err;
+    }
+    setState((prev) =>
+      prev
+        ? {
+            ...prev,
+            sessions: prev.sessions.map((session) =>
+              session.id === id
+                ? { ...session, status: "exited" as const }
+                : session,
+            ),
+          }
+        : prev,
+    );
+  }, []);
+
+  const moveAgent = useCallback(
+    async (from: string, to: string): Promise<void> => {
+      await api.moveAgent(from, to);
+      const [sessions] = await Promise.all([
+        api.listSessions(),
+        refreshWorkflows().catch(() => undefined),
+      ]);
+      setState((prev) => (prev ? { ...prev, sessions } : prev));
     },
-    [state, activeSessionId, selectSession],
+    [refreshWorkflows],
   );
 
   const connectWorkflow = useCallback(
@@ -2440,7 +2462,8 @@ export function useHarnessState(): HarnessStateHook {
     restartMcpSession,
     rehydrateSession,
     resumeFromHistory,
-    closeSession,
+    endSession,
+    moveAgent,
     connectWorkflow,
     scanWorkflows,
     refreshWorkflows,

@@ -145,50 +145,54 @@ async function evidence(page: Page) {
   return { ...result, legacy: [...legacyRequests.get(page)!] };
 }
 
+/*
+ * The centre's project view is keyed by the server-issued project id
+ * (design.md §1). There is no separate "identity unavailable" screen any more:
+ * a root whose scope carries an id opens its map from that id whatever the
+ * project catalog says, and a root with no id yet asks only for the catalog.
+ * Either way a project click never creates, resumes, binds or prompts a
+ * session, and never reads the retired system-graph routes.
+ */
 for (const identity of ["missing-id", "missing-project", "older-protocol"] as const) {
-  test(`project with ${identity} offers identity recovery without legacy fallback or session actions`, async ({
+  test(`a project with ${identity} reads only the catalog and never touches a session`, async ({
     page,
   }) => {
     await open(page, identity);
-    await expect(
-      page.getByTestId("agent-map-identity-unavailable"),
-    ).toBeVisible();
-    await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
     const before = await evidence(page);
     expect(before.legacy).toEqual([0, 0, 0]);
     expect(before.actions).toEqual([0, 0, 0, 0]);
     expect(before.session).toBe("sess-boot");
-
-    // The scope still cannot resolve: a retry reads the project catalog only.
-    await page.getByTestId("agent-map-reload-projects").click();
-    await expect(
-      page.getByTestId("agent-map-identity-unavailable"),
-    ).toBeVisible();
-    await page.evaluate(() => {
-      (window as TestWindow).__authority.identity = "ready";
-    });
-    await page.getByTestId("agent-map-reload-projects").click();
+    await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
+    if (identity === "missing-id") {
+      // No id to key a map by: the click re-reads the catalog and the centre
+      // stays where it was.
+      await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+      await expect
+        .poll(() => page.evaluate(() => (window as TestWindow).__authority.states))
+        .toBeGreaterThan(1);
+      await page.evaluate(async () => {
+        const probe = (window as TestWindow).__authority;
+        probe.identity = "ready";
+        await probe.reloadProjects();
+      });
+      await page.getByTestId("project-select-acme-app").click();
+    }
+    // The scope's own id is enough: the map opens from it.
     await expect(page.getByTestId("agent-map-live")).toBeVisible();
     expect(await evidence(page)).toEqual(before);
     await expect(page.getByTestId("workspace-graph-view")).toHaveCount(0);
   });
 }
 
-test("recovering another project cannot restore the active conversation's project over it", async ({
+test("opening another project's map never restores the active conversation's project over it", async ({
   page,
 }) => {
   await open(page, "missing-project", "polsia");
-  await expect(
-    page.getByTestId("agent-map-identity-unavailable"),
-  ).toBeVisible();
   const before = await evidence(page);
   expect(before.session).toBe("sess-boot");
-  const selectedId = await page.evaluate(() => {
-    const probe = (window as TestWindow).__authority;
-    probe.identity = "ready";
-    return probe.projects["polsia"];
-  });
-  await page.getByTestId("agent-map-reload-projects").click();
+  const selectedId = await page.evaluate(
+    () => (window as TestWindow).__authority.projects["polsia"],
+  );
   await expect(page.getByTestId("agent-map-live")).toHaveAttribute(
     "data-project-id",
     selectedId,
@@ -199,6 +203,7 @@ test("recovering another project cannot restore the active conversation's projec
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       ),
   );
+  // No per-project preference is read to decide what the centre shows.
   expect(
     await page.evaluate(
       () => (window as TestWindow).__authority.preferenceReads,
@@ -211,14 +216,12 @@ test("recovering another project cannot restore the active conversation's projec
   expect(await evidence(page)).toEqual(before);
 });
 
-for (const identity of ["missing-id", "missing-project", "older-protocol"] as const) {
-  test(`keyboard session selection matches the visible unresolved project's tabs with ${identity}`, async ({
+for (const identity of ["ready", "missing-project", "older-protocol"] as const) {
+  test(`Cmd/Ctrl+1 on a project's map selects that project's first rail session with ${identity}`, async ({
     page,
   }) => {
     await open(page, identity, "polsia");
-    await expect(
-      page.getByTestId("agent-map-identity-unavailable"),
-    ).toBeVisible();
+    await expect(page.getByTestId("agent-map-live")).toBeVisible();
     const before = await evidence(page);
     expect(before.session).toBe("sess-boot");
     await page.evaluate(() => {
@@ -235,8 +238,8 @@ for (const identity of ["missing-id", "missing-project", "older-protocol"] as co
           status: "running",
           exitCode: null,
           ready: true,
-          createdAt: "2026-08-01T10:00:00.000Z",
-          lastActiveAt: "2026-08-01T10:00:00.000Z",
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
           agentMapIdentity: {
             projectId: win.__authority.projects.polsia,
             userId: "user_mock",
@@ -245,26 +248,28 @@ for (const identity of ["missing-id", "missing-project", "older-protocol"] as co
         },
       });
     });
-    const firstTab = page.locator('[data-testid^="session-tab-main-"]').first();
-    await expect(firstTab).toBeVisible();
-    const sessionId = (await firstTab.getAttribute("data-testid"))!.replace(
-      "session-tab-main-",
-      "",
+    const firstRow = page
+      .getByTestId("rail-project-polsia")
+      .locator(".rail-session-row")
+      .first();
+    await expect(firstRow).toHaveAttribute(
+      "data-testid",
+      "rail-session-sess-authority-polsia",
     );
-    expect(sessionId).not.toBe("sess-boot");
     await page.keyboard.press("ControlOrMeta+1");
     await expect
       .poll(async () => (await evidence(page)).session)
-      .toBe(sessionId);
+      .toBe("sess-authority-polsia");
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
-      sessionId,
+      "sess-authority-polsia",
     );
-    await expect(
-      page.getByTestId("agent-map-identity-unavailable"),
-    ).toHaveCount(0);
-    // A session with no bundled Canvas document uses the normal collapsed
-    // pane. Its controls must still open that exact session's Canvas/Steps.
+    await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+    // Bound to rollup, so the right pane is that agent's Canvas/Steps.
+    await expect(page.locator(".right-pane")).not.toHaveAttribute(
+      "data-absent",
+      "true",
+    );
     const expand = page.getByRole("button", {
       name: "Expand canvas panel",
       exact: true,
@@ -278,7 +283,7 @@ for (const identity of ["missing-id", "missing-project", "older-protocol"] as co
   });
 }
 
-test("an established map keeps its exact identity and catalog retry after catalog loss", async ({
+test("an established map keeps its exact identity after catalog loss", async ({
   page,
 }) => {
   await open(page);
@@ -292,13 +297,15 @@ test("an established map keeps its exact identity and catalog retry after catalo
     probe.identity = "missing-project";
     await probe.reloadProjects();
   });
-  await expect(
-    page.getByTestId("agent-map-identity-unavailable"),
-  ).toBeVisible();
-  await page.evaluate(() => {
-    (window as TestWindow).__authority.identity = "ready";
+  await expect(page.getByTestId("agent-map-live")).toHaveAttribute(
+    "data-project-id",
+    projectId!,
+  );
+  await page.evaluate(async () => {
+    const probe = (window as TestWindow).__authority;
+    probe.identity = "ready";
+    await probe.reloadProjects();
   });
-  await page.getByTestId("agent-map-reload-projects").click();
   await expect(page.getByTestId("agent-map-live")).toHaveAttribute(
     "data-project-id",
     projectId!,
@@ -309,48 +316,53 @@ test("an established map keeps its exact identity and catalog retry after catalo
 test("an older failed catalog response cannot replace a newer successful retry", async ({
   page,
 }) => {
-  await open(page, "missing-project");
+  await open(page, "missing-id");
+  await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
   await page.evaluate(() => {
-    (window as TestWindow).__authority.holdStates = true;
+    const probe = (window as TestWindow).__authority;
+    probe.holdStates = true;
+    void probe.reloadProjects();
   });
-  await page.getByTestId("agent-map-reload-projects").click();
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as TestWindow).__authority.heldStates.length),
-    )
-    .toBe(1);
+  const held = () =>
+    page.evaluate(() => (window as TestWindow).__authority.heldStates.length);
+  await expect.poll(held).toBeGreaterThan(0);
+  const older = await held();
   await page.evaluate(() => {
-    (window as TestWindow).__authority.identity = "ready";
+    const probe = (window as TestWindow).__authority;
+    probe.identity = "ready";
+    void probe.reloadProjects();
   });
-  await page.getByTestId("agent-map-reload-projects").click();
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as TestWindow).__authority.heldStates.length),
-    )
-    .toBe(2);
-  await page.evaluate(() => {
-    (window as TestWindow).__authority.heldStates[1]!();
-  });
+  await expect.poll(held).toBeGreaterThan(older);
+  const newer = await held();
+  await page.evaluate(
+    ({ older, newer }) => {
+      const probe = (window as TestWindow).__authority;
+      probe.holdStates = false;
+      for (let i = older; i < newer; i++) probe.heldStates[i]!();
+    },
+    { older, newer },
+  );
+  await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
   const before = await evidence(page);
-  const completed = await page.evaluate(() => {
+  const completed = await page.evaluate((older) => {
     const probe = (window as TestWindow).__authority;
-    probe.heldStates[0]!();
+    for (let i = 0; i < older; i++) probe.heldStates[i]!();
     return probe.completedStates;
-  });
+  }, older);
   await expect
     .poll(() =>
       page.evaluate(() => (window as TestWindow).__authority.completedStates),
     )
-    .toBe(completed + 1);
-  await expect(page.getByTestId("agent-map-identity-unavailable")).toHaveCount(
-    0,
-  );
+    .toBe(completed + older);
+  // The late id-less answer did not take the project's identity back away.
+  await page.getByTestId("project-select-polsia").click();
+  await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();
   expect(await evidence(page)).toEqual(before);
 });
 
-test("durable map ignores old graph events and keeps exact navigation and sessions", async ({
+test("durable map ignores old graph events and opens the exact agent's panel without touching sessions", async ({
   page,
 }) => {
   await open(page);
@@ -384,8 +396,8 @@ test("durable map ignores old graph events and keeps exact navigation and sessio
   await page.getByTestId(`agent-map-info-${id}`).click();
   expect(await evidence(page)).toEqual(before);
   await page.getByTestId(`agent-map-node-${id}`).click();
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  await expect(page.getByTestId("right-panel-board")).toBeVisible();
+  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
   expect(await evidence(page)).toEqual(before);
   await page.getByTestId("project-select-acme-app").click();
   await expect(page.getByTestId("agent-map-live")).toBeVisible();

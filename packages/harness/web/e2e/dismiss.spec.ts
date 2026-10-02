@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
 
 test.describe("rail options menu", () => {
   test("closes on a click anywhere outside", async ({ page }) => {
-    await page.getByTestId("rail-options").click();
+    await page.getByTestId("history-trigger").click();
     const menu = page.getByTestId("rail-options-menu");
     await expect(menu).toBeVisible();
 
@@ -28,16 +28,16 @@ test.describe("rail options menu", () => {
   test("closes on Escape and returns focus to the trigger", async ({
     page,
   }) => {
-    await page.getByTestId("rail-options").click();
+    await page.getByTestId("history-trigger").click();
     await expect(page.getByTestId("rail-options-menu")).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("rail-options-menu")).toBeHidden();
-    await expect(page.getByTestId("rail-options")).toBeFocused();
+    await expect(page.getByTestId("history-trigger")).toBeFocused();
   });
 
   test("the trigger still toggles it closed", async ({ page }) => {
-    const trigger = page.getByTestId("rail-options");
+    const trigger = page.getByTestId("history-trigger");
     await trigger.click();
     await expect(page.getByTestId("rail-options-menu")).toBeVisible();
     await trigger.click();

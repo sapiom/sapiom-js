@@ -63,6 +63,21 @@ interface SessionBarProps {
   onToast: (message: string, tone?: ToastTone) => void;
   /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
   actions?: ReactNode;
+  /**
+   * Set while a project's Agent Map (or an agent's canvas entered from it) is
+   * the centre (flow-navigation.md 4.3, 4.4). The header reads
+   * `project · Agent Map`, or `← project · agent` with the way back, and
+   * carries New agent (Q11), over the agents it adds to.
+   */
+  projectView?: ProjectViewHeader | null;
+}
+
+export interface ProjectViewHeader {
+  label: string;
+  /** The agent whose canvas was entered from the map, if any. */
+  agentName: string | null;
+  onBackToMap: () => void;
+  onNewAgent: () => void;
 }
 
 /**
@@ -95,6 +110,7 @@ export function SessionBar({
   editorLabel,
   onToast,
   actions = null,
+  projectView = null,
 }: SessionBarProps): JSX.Element {
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -131,7 +147,47 @@ export function SessionBar({
         data-testid="session-context"
         data-session-id={activeSession?.id ?? ""}
       >
-        {overviewMode ? (
+        {projectView ? (
+          /* A project is selected: the centre is its Agent Map, or an agent's
+             canvas entered from it, with the way back. */
+          <div className="session-current session-current-static">
+            {projectView.agentName ? (
+              <button
+                type="button"
+                className="theme-toggle project-map-back"
+                data-testid="project-map-back"
+                aria-label={`Back to ${projectView.label}'s Agent Map`}
+                data-tooltip="Back to the Agent Map"
+                onClick={projectView.onBackToMap}
+              >
+                <Icon name="ArrowLeft" size={14} />
+              </button>
+            ) : (
+              <Icon name="Waypoints" size={14} />
+            )}
+            <span
+              className="session-context-title"
+              data-testid="session-context-title"
+            >
+              {projectView.label}
+            </span>
+            {projectView.agentName ? (
+              <span
+                className="session-project-chip"
+                data-testid="session-map-agent-chip"
+              >
+                {projectView.agentName}
+              </span>
+            ) : (
+              <span
+                className="session-project-chip"
+                data-testid="session-project-map-chip"
+              >
+                Agent Map
+              </span>
+            )}
+          </div>
+        ) : overviewMode ? (
           <div className="session-current session-current-static">
             <Icon name="Radio" size={13} />
             <span
@@ -346,6 +402,22 @@ export function SessionBar({
       )}
 
       {actions}
+
+      {projectView && (
+        <div className="project-view-actions">
+          {/* New agent, in the project view's header (Q11): the map is where
+              a project's agents are, so the verb that adds one sits over it. */}
+          <button
+            type="button"
+            className="btn-line project-map-new-agent"
+            data-testid="project-map-new-agent"
+            data-tooltip={`New agent in ${projectView.label}`}
+            onClick={projectView.onNewAgent}
+          >
+            <Icon name="Plus" size={13} /> New agent
+          </button>
+        </div>
+      )}
 
       {onExpandRight && (
         <button

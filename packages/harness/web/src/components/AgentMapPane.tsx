@@ -42,7 +42,16 @@ interface AgentMapPaneProps {
   >;
   workflows: readonly WorkflowInfo[];
   refreshWorkflows: () => Promise<WorkflowInfo[]>;
-  onOpenAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
+  /**
+   * Single click on an agent node: open its panel in place (flow-navigation.md
+   * 4.4, Q7). The map resolves the node to its registry agent first; the panel
+   * itself is the shell's, passed back as `agentPanel`.
+   */
+  onPickAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
+  /** Double click on an agent node: enter the agent's canvas in this centre. */
+  onEnterAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
+  /** The picked agent's panel, drawn in the inspector's slot; null closes it. */
+  agentPanel: JSX.Element | null;
   state: AgentMapWorkspacePaneState;
   initialization?: AgentMapInitializationStatus | null;
   onRetryGeneration?: () => void;
@@ -58,7 +67,9 @@ export function AgentMapPane({
   api,
   workflows,
   refreshWorkflows,
-  onOpenAgent,
+  onPickAgent,
+  onEnterAgent,
+  agentPanel,
   state,
   initialization,
   onRetryGeneration,
@@ -70,12 +81,18 @@ export function AgentMapPane({
   const value = state.status === "ready" ? state.value : null;
   const proposal = value?.proposal ?? null;
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
+  // The agent node whose panel is open. Held apart from `selected`, which is
+  // the inspector's: an agent's panel replaces the inspector in its slot.
+  const [picked, setPicked] = useState<PlanNodeId | null>(null);
+  useEffect(() => {
+    if (!agentPanel) setPicked(null);
+  }, [agentPanel]);
   const [pending, setPending] = useState<PlanNodeId | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const returnFocus = useRef<HTMLButtonElement | null>(null);
   const generation = useRef(0);
-  const current = useRef({ value, workflows, onOpenAgent, visible });
-  current.current = { value, workflows, onOpenAgent, visible };
+  const current = useRef({ value, workflows, visible });
+  current.current = { value, workflows, visible };
 
   // Deployment refreshes must not cancel an in-flight node navigation.
   const bindingGeneration = useRef(0);
@@ -164,9 +181,11 @@ export function AgentMapPane({
     setSelected(nodeId);
   };
 
-  const activate = async (
+  /** Resolve an agent node to its registry agent, then hand it to `open`. */
+  const resolveAgent = async (
     nodeId: PlanNodeId,
     control: HTMLButtonElement,
+    open: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void,
   ): Promise<void> => {
     const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
     if (!visible || !value || !node) return;
@@ -179,6 +198,7 @@ export function AgentMapPane({
       current.current.visible;
     returnFocus.current = control;
     setSelected(null);
+    setPicked(null);
     setOpenError(null);
     setPending(nodeId);
     try {
@@ -197,7 +217,8 @@ export function AgentMapPane({
         throw Object.assign(new Error(), { code: "target_not_found" });
       generation.current += 1;
       setPending(null);
-      current.current.onOpenAgent(workflow, target);
+      setPicked(nodeId);
+      open(workflow, target);
     } catch (error) {
       if (!isCurrent()) return;
       setPending(null);
@@ -288,8 +309,15 @@ export function AgentMapPane({
         selected={selected}
         deployments={deployments}
         onRetryStatus={() => setRetryStatus((revision) => revision + 1)}
-        onSelectNode={activate}
+        onSelectNode={(nodeId, control) =>
+          void resolveAgent(nodeId, control, onPickAgent)
+        }
+        onEnterNode={(nodeId, control) =>
+          void resolveAgent(nodeId, control, onEnterAgent)
+        }
         onInspectNode={inspect}
+        picked={picked}
+        agentPanel={agentPanel}
         pending={pending}
         openError={openError}
         onCloseInspector={closeInspector}
@@ -369,7 +397,10 @@ function PopulatedAgentMap({
   onRetryStatus,
   selected,
   onSelectNode,
+  onEnterNode,
   onInspectNode,
+  picked,
+  agentPanel,
   pending,
   openError,
   onCloseInspector,
@@ -380,7 +411,10 @@ function PopulatedAgentMap({
   onRetryStatus: () => void;
   selected: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  onEnterNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  picked: PlanNodeId | null;
+  agentPanel: JSX.Element | null;
   pending: PlanNodeId | null;
   openError: string | null;
   onCloseInspector: () => void;
@@ -430,11 +464,13 @@ function PopulatedAgentMap({
           viewportStore={viewportStore}
           proposal={proposal}
           deployments={deployments}
-          selectedNodeId={selected}
+          selectedNodeId={selected ?? (agentPanel ? picked : null)}
           onSelectNode={onSelectNode}
+          onEnterNode={onEnterNode}
           onInspectNode={onInspectNode}
           pendingNodeId={pending}
         />
+        {!selected && picked && agentPanel}
         {selected && (
           <AgentMapInspector
             snapshot={value}

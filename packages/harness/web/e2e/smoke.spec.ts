@@ -12,8 +12,10 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 import {
-  focusRfqAgent,
-  selectMockSessionFromPalette,
+  activeSessionId,
+  openProjectMap,
+  selectSession,
+  startChatWithRfq,
 } from "./mock-navigation";
 
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
@@ -169,9 +171,15 @@ test("auto-selects the running boot session on initial load", async ({
   await expect(page.locator(".terminal-empty")).toHaveCount(0);
   const header = page.getByTestId("session-context");
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
-  await expect(
-    page.getByTestId("session-tab-sess-boot").locator(".session-dot"),
-  ).toHaveAttribute("data-status", "running");
+  // Its rail row is selected and wears the live mark.
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-selected",
+    "true",
+  );
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-mark",
+    "live",
+  );
 });
 
 test("session header: compact identity (name only; path in the tooltip)", async ({
@@ -193,18 +201,17 @@ test("session header: compact identity (name only; path in the tooltip)", async 
   await page.screenshot({ path: "web/e2e/screenshots/session-header.png" });
 });
 
-test("Cmd/Ctrl+1..9 selects the nth tab of the focused agent", async ({
+test("Cmd/Ctrl+1..9 selects the nth rail row of the selected session's project", async ({
   page,
 }) => {
   const header = page.getByTestId("session-context");
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
 
-  // Leasing is focused on load and carries two tabs, oldest-first: boot is 1,
-  // the second leasing session is 2 — Cmd+2 jumps straight to it.
-  await page.keyboard.press("Meta+2");
+  // acme-app's rows, newest activity first: leasing-2 is 1, boot is 2.
+  await page.keyboard.press("Meta+1");
   await expect(header).toHaveAttribute("data-session-id", "sess-leasing-2");
 
-  await page.keyboard.press("Meta+1");
+  await page.keyboard.press("Meta+2");
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
 });
 
@@ -226,9 +233,9 @@ test("the active session shows a busy pulse that clears once output goes quiet",
       harnessSessionId: "sess-boot",
     });
   });
-  const busy = page.getByTestId("session-tab-busy-sess-boot");
+  const busy = page.getByTestId("session-busy");
   await expect(busy).toBeVisible({ timeout: 5_000 });
-  await page.screenshot({ path: "web/e2e/screenshots/session-tab-busy.png" });
+  await page.screenshot({ path: "web/e2e/screenshots/session-busy.png" });
 
   // The busy window (~3s) clears once no further activity arrives — the dot
   // returns to its plain live state.
@@ -273,7 +280,7 @@ test("Overview opens the introduction, and Escape returns to the session behind 
   );
 });
 
-test("creation IA: Add project is one folder question; the tab + starts a sibling directly", async ({
+test("creation IA: Add project is one folder question; a project's + starts a chat directly", async ({
   page,
 }) => {
   // Adding a folder is ONE question, asked once, with no detection, no doors
@@ -287,26 +294,30 @@ test("creation IA: Add project is one folder question; the tab + starts a siblin
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
 
-  // The workbench + means another conversation in this folder. The rail's
-  // New project remains the entry for a new project and its first agent.
-  const newBtn = page.getByTestId("session-tab-new");
-  await expect(newBtn).toHaveAttribute("aria-label", "New session on leasing");
+  // A project header's + means another conversation in this project. The
+  // rail's New project remains the entry for a new project and its agent.
+  const newBtn = page.getByTestId("project-new-chat-acme-app");
+  await expect(newBtn).toHaveAttribute("aria-label", "New chat in acme-app");
   await newBtn.click();
-  await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
-    3,
-  );
+  await expect(
+    page.getByTestId("rail-project-acme-app").locator(".rail-session-row"),
+  ).toHaveCount(6);
   await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
   await expect(page.getByTestId("project-folder-dialog")).toHaveCount(0);
 });
 
-test("workflows rail lists the fixtures and the FOCUSED one drives macro gating", async ({
+test("the selected session's bound agent drives macro gating", async ({
   page,
 }) => {
-  await expect(page.locator(".workflow-item")).toHaveCount(3);
+  // The rail lists sessions, not agents (flow-navigation.md Q3).
+  await expect(page.locator(".rail-workflows [data-testid^='workflow-']")).toHaveCount(0);
 
-  // "leasing" is deployed (has a definitionId) and is the focused agent /
-  // active tab's binding — action bar is live and Prod Run is enabled.
-  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+  // "leasing" is deployed (has a definitionId) and is the boot session's
+  // binding — action bar is live and Prod Run is enabled.
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-agent",
+    "leasing",
+  );
   await page.getByRole("button", { name: "Choose run target" }).click();
   const prodRun = page.getByTestId("session-step-run");
   await expect(prodRun).toBeEnabled();
@@ -316,21 +327,14 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
   // the deployed pill (→ dashboard) now lives in the canvas tab bar for deployed workflows.
   await expect(page.getByTestId("macro-open_prod")).toHaveCount(0);
 
-  // Focusing "rfq" (no live session) does NOT rebind the boot session or start
-  // one silently — the main panel shows the honest "start a session" state, so
-  // there is no action bar to gate yet.
-  await focusRfqAgent(page);
-  await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
-  await expect(page.getByTestId("open-agent-empty")).toContainText(
-    "No running session for rfq",
-  );
+  // Looking at "rfq" on its project's map starts nothing: the project view
+  // has no session, so there is no action bar to gate.
+  await openProjectMap(page, "rfq-agent");
   await expect(prodRun).toHaveCount(0);
 
-  // Starting the session binds rfq (undeployed) and brings the action bar live,
-  // now gated with a reason distinct from "no workflow selected".
-  await page.getByTestId("open-agent-start-session").click();
-  // The bound agent surfaces as the active session's label (rfq).
-  await expect(page.getByTestId("session-context-title")).toContainText("rfq");
+  // Start chat binds a new session to rfq (undeployed) and brings the action
+  // bar live, gated with a reason distinct from "no workflow selected".
+  await startChatWithRfq(page);
   await page.getByRole("button", { name: "Choose run target" }).click();
   await expect(prodRun).toBeDisabled();
   await expect(prodRun).toHaveAttribute("title", "Not deployed yet");
@@ -348,64 +352,41 @@ test("workflows rail lists the fixtures and the FOCUSED one drives macro gating"
 test("inject macros are enabled once the boot session and a deployed workflow are active", async ({
   page,
 }) => {
-  await expect(page.getByTestId("workflow-leasing")).toHaveClass(/is-focused/);
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+    "data-agent",
+    "leasing",
+  );
   await expect(page.getByTestId("session-step-local")).toBeEnabled();
   await expect(page.getByTestId("session-step-deploy")).toBeEnabled();
 });
 
-test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
-  test("Studio rail is project > agent only, with no session rows", async ({
+test.describe("three-zone IA (Project › Sessions rail, one centre, right pane)", () => {
+  test("Studio rail is project > sessions, with no agent rows", async ({
     page,
   }) => {
-    // Zone 1 is a pure explorer: project rows and agent rows, no sessions
-    // anywhere in the tree.
     await expect(page.getByTestId("workspace-group-acme-app")).toBeVisible();
     await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
-    // onboarding-flow is a known project (in recentDirs), so it files under its
-    // own project row rather than an outside-your-projects bucket.
+    // onboarding-flow is a known project (in recentDirs): header and + only.
     await expect(
       page.getByTestId("workspace-group-onboarding-flow"),
     ).toBeVisible();
-
-    // An AGENT row carries a deployed/draft cloud state; no session dot, no
-    // expander.
     await expect(
-      page.getByTestId("workflow-status-/Users/demo/acme-app/leasing"),
-    ).toHaveAttribute("data-deployed", "true");
-    await expect(
-      page.locator("[data-testid^='workflow-session-dot-']"),
+      page.getByTestId("rail-project-onboarding-flow").locator(".rail-session-row"),
     ).toHaveCount(0);
-    await expect(
-      page.locator("[data-testid^='workflow-expander-']"),
-    ).toHaveCount(0);
-    await expect(page.locator("[data-testid^='rail-session-']")).toHaveCount(0);
+    await expect(page.getByTestId("project-new-chat-onboarding-flow")).toBeVisible();
 
-    // `rfq-agent` is a project root that IS an agent, so it gets exactly ONE
-    // row — and a project row carries NO deploy glyph, however much of an agent
-    // it also is. Deployment is a per-agent fact; on a project row it read as a
-    // property of the project. (Retired with the Project axis, SAP-2928.)
-    const rfq = page.getByTestId("workflow-rfq");
-    await expect(rfq).toHaveCount(1);
-    await expect(rfq).toHaveClass(/workspace-row/);
-    await expect(
-      page.getByTestId("workflow-status-/Users/demo/rfq-agent"),
-    ).toHaveCount(0);
-
+    // No agent rows and no deploy glyphs in the rail: agents live on the map.
+    await expect(page.locator(".rail-workflows [data-testid^='workflow-']")).toHaveCount(0);
+    await expect(page.getByTestId("rail-session-sess-boot")).toBeVisible();
+    await expect(page.getByTestId("rail-session-sess-rfq")).toBeVisible();
     await expect(page.getByTestId("project-select-scratch")).toBeVisible();
-    // The scaffold action is a hover action on the row (D33), not a menu item:
-    // a Sparkles glyph acting on an AGENT beside an `×` acting on the PROJECT,
-    // same size, same reveal.
-    await expect(page.getByTestId("workspace-scaffold-scratch")).toBeVisible();
 
-    // Exactly one filled selection: the focused agent (leasing on load).
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
-      /is-focused/,
+    // Exactly one filled row: the selected session (boot on load).
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-selected",
+      "true",
     );
-    await expect(
-      page.locator(
-        ".rail-list .workflow-item.is-focused, .rail-list .workspace-row.is-selected",
-      ),
-    ).toHaveCount(1);
+    await expect(page.locator(".rail-list .workspace-row.is-selected")).toHaveCount(1);
 
     await page.screenshot({
       path: "web/e2e/screenshots/rail-explorer.png",
@@ -413,33 +394,26 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     });
   });
 
-  test("focusing an agent with sessions shows visible browser-style tabs", async ({
+  test("a project's sessions are rows under it, newest activity first, with no tab strip", async ({
     page,
   }) => {
-    // Leasing is focused on load and carries two live sessions, oldest first.
     const header = page.getByTestId("session-context");
     await expect(header).toHaveAttribute("data-session-id", "sess-boot");
-    const tabs = page.getByTestId("session-tabs").getByRole("tab");
-    await expect(tabs).toHaveCount(2);
-    await expect(tabs.nth(0)).toHaveText("acme-app");
-    await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
-    await expect(tabs.nth(1)).toHaveText("acme-app 2");
-    await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "false");
+    const rows = page.getByTestId("rail-project-acme-app").locator(".rail-session-row");
+    await expect(rows.nth(0)).toHaveAttribute("data-testid", "rail-session-sess-leasing-2");
+    await expect(rows.nth(1)).toHaveAttribute("data-testid", "rail-session-sess-boot");
+    await expect(rows.nth(1)).toHaveAttribute("data-selected", "true");
+    await expect(page.locator(".session-tabs")).toHaveCount(0);
     await expect(page.getByTestId("session-menu")).toBeVisible();
-    await expect(page.getByTestId("session-tab-new")).toBeVisible();
-    await page.screenshot({
-      path: "web/e2e/screenshots/session-tab-strip.png",
-      fullPage: true,
-    });
   });
 
   test("switching sessions makes the canvas follow the new session's content", async ({
     page,
   }) => {
-    // Zone 3 keys off the active session. sess-boot ships a bundled doc (board);
-    // the second leasing session ships none — so the canvas pane OPENS for the
-    // populated session and HIDES for the empty one, rather than swapping to an
-    // empty-state placeholder.
+    // The right pane is the selected session's bound agent. sess-boot ships a
+    // bundled doc (board); the second leasing session ships none, so its pane
+    // shows the empty state. The pane's open state is the user's, so it stays
+    // open across the switch.
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
       "sess-boot",
@@ -447,42 +421,31 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(page.locator(".canvas-iframe")).toBeVisible();
     await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
 
-    // Switch to the empty session — nothing to show, so the canvas hides.
-    await page.getByTestId("session-tab-main-sess-leasing-2").click();
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      "sess-leasing-2",
-    );
-    await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
+    await selectSession(page, "sess-leasing-2");
+    await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
+    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
 
-    // Switch back to the populated session — the canvas opens again.
-    await page.getByTestId("session-tab-main-sess-boot").click();
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      "sess-boot",
-    );
+    await selectSession(page, "sess-boot");
     await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/);
     await expect(page.locator(".canvas-iframe")).toBeVisible();
   });
 
-  test("the + starts a fresh same-folder session without opening the composer", async ({
+  test("a project's + starts a fresh session at its root without opening the composer", async ({
     page,
   }) => {
-    await page.getByTestId("session-tab-new").click();
-    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
-      3,
-    );
+    await page.getByTestId("project-new-chat-acme-app").click();
+    await expect(
+      page.getByTestId("rail-project-acme-app").locator(".rail-session-row"),
+    ).toHaveCount(6);
     await expect(page.getByTestId("new-session-composer")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
-      /is-focused/,
-    );
+    await expect.poll(() => activeSessionId(page)).not.toBe("sess-boot");
   });
 
-  test("ending the active session confirms, then falls back to another session", async ({
+  test("ending the active session confirms, then keeps it selected as exited", async ({
     page,
   }) => {
     // Ending a session kills a PTY, so the End action opens the shared confirm
-    // first — reached from the active session's ⋯ menu.
+    // first — reached from the session's title menu.
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
       "sess-boot",
@@ -493,114 +456,83 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
     await expect(confirm).toBeVisible();
     await expect(confirm).toContainText("kills the live terminal");
 
-    // Keep cancels — nothing dies, both live tabs remain.
+    // Keep cancels — nothing dies.
     await page.getByRole("button", { name: "Keep session" }).click();
     await expect(confirm).toHaveCount(0);
-    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
-      2,
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-mark",
+      "live",
     );
 
-    // Confirming ends the active session; the workbench falls back to the other
-    // leasing session, now active and the only live tab left.
+    // Confirming ends it; it stays selected, as ended (D43), on its dead pane.
     await page.getByTestId("session-menu").click();
     await page.getByTestId("session-end-btn").click();
     await page.getByTestId("end-session-confirm-btn").click();
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-mark",
+      "exited",
+    );
     await expect(page.getByTestId("session-context")).toHaveAttribute(
       "data-session-id",
-      "sess-leasing-2",
+      "sess-boot",
     );
-    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
-      1,
-    );
-    // Leasing stays focused throughout — ending a session never moves the rail.
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
-      /is-focused/,
-    );
+    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
   });
 
-  test("focusing an agent with no session shows the start empty state", async ({
+  test("an agent with no session is one Start chat away on its project's map", async ({
     page,
   }) => {
-    // rfq-agent has no live session in the fixtures, so focusing rfq cannot
-    // render a board (the canvas is served per session). The workbench names
-    // the absence and offers the one move; no tab strip renders.
-    await focusRfqAgent(page);
-    await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
-    // No session controls render for an agent with no live session.
-    await expect(page.getByTestId("session-menu")).toHaveCount(0);
-    await expect(page.getByTestId("session-tab-new")).toHaveCount(0);
+    // rfq has no live session. Its project's map lists it; its panel says it
+    // has none yet, and Start chat runs the create+bind path in rfq's OWN
+    // project (never borrowing the acme-app session).
+    await openProjectMap(page, "rfq-agent");
+    await page.getByTestId("map-agent-rfq").click();
+    await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", "rfq");
+    // The panel lists only rfq's own LIVE-or-recent bound sessions; the exited
+    // fixture session is unbound, so none.
+    await expect(page.getByTestId("map-agent-sessions-empty")).toBeVisible();
 
-    const start = page.getByTestId("open-agent-empty");
-    await expect(start).toContainText("No running session for rfq");
-    await expect(start).toContainText(
-      "Start a session to map, run, and inspect this agent.",
-    );
-    await expect(page.getByTestId("open-agent-start-session")).toBeVisible();
-
-    // The session bar names the same agent with an honest "no session" tag. The
-    // right pane no longer echoes that absence: since SAP-2931 the board is the
-    // rail SELECTION, served for an unsessioned agent by the workflow-keyed
-    // route, so what draws here is rfq's own board — never the boot session's.
-    await expect(page.getByTestId("session-context-title")).toHaveText("rfq");
-    await expect(page.getByTestId("session-status-tag")).toContainText(
-      "no session",
-    );
-    await expect(page.getByTestId("canvas-empty-no-session")).toHaveCount(0);
-    await expect(page.locator(".canvas-iframe")).toHaveAttribute(
-      "srcdoc",
-      /rfq — mock agent board/,
-    );
-
-    // Focusing rfq never touched the boot session's binding.
-    await expect(
-      page.locator(
-        ".rail-list .workflow-item.is-focused, .rail-list .workspace-row.is-selected",
-      ),
-    ).toHaveCount(1);
-
-    // Start runs the create+bind path in rfq's OWN folder (never borrowing the
-    // acme-app session), and the workbench goes live with the terminal. The
+    const id = await startChatWithRfq(page);
     // The session gets the folder's next default title: the exited fixture
     // session keeps "rfq-agent", so this one is "rfq-agent 2".
-    await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toHaveText(
       "rfq-agent 2",
     );
     await expect(page.locator(".harness-terminal")).toBeVisible();
-    await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
-      1,
-    );
+    // The right pane is rfq's: the boot session's board is not drawn there
+    // (rfq's new session has nothing generated yet).
+    await expect(page.locator(".canvas-iframe")).toHaveCount(0);
+    await expect(page.locator(".canvas-empty")).toContainText("Nothing generated yet");
+    await expect(page.getByTestId(`rail-session-${id}`)).toHaveAttribute("data-agent", "rfq");
   });
 
-  test("the mapping invariant: focused agent == active tab's agent == right-panel subject", async ({
+  test("the mapping invariant: selected session == its bound agent == right-pane subject", async ({
     page,
   }) => {
-    // On load: rail focuses leasing, the active tab is bound to leasing, and
-    // the right pane renders leasing's board.
-    await expect(page.getByTestId("workflow-leasing")).toHaveClass(
-      /is-focused/,
+    // On load: boot is selected, bound to leasing, and the right pane renders
+    // leasing's board.
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
+      "data-agent",
+      "leasing",
     );
     await expect(page.getByTestId("session-context-title")).toHaveText(
       "acme-app",
     );
     await expect(page.locator(".canvas-iframe")).toBeVisible();
 
-    // Focus rfq and start its session: all four move together to rfq.
-    await focusRfqAgent(page);
-    await page.getByTestId("open-agent-start-session").click();
-    await expect(page.getByTestId("workflow-rfq")).toHaveClass(/is-focused/);
-    await expect(page.getByTestId("workflow-leasing")).not.toHaveClass(
-      /is-focused/,
+    // Start a chat with rfq: the selection, the binding and the pane move
+    // together to rfq.
+    const id = await startChatWithRfq(page);
+    await expect(page.getByTestId(`rail-session-${id}`)).toHaveAttribute("data-selected", "true");
+    await expect(page.getByTestId("rail-session-sess-boot")).not.toHaveAttribute(
+      "data-selected",
+      "true",
     );
     await expect(page.getByTestId("session-context-title")).toHaveText(
       "rfq-agent 2",
     );
     // Still exactly one filled row.
-    await expect(
-      page.locator(
-        ".rail-list .workflow-item.is-focused, .rail-list .workspace-row.is-selected",
-      ),
-    ).toHaveCount(1);
+    await expect(page.locator(".rail-list .workspace-row.is-selected")).toHaveCount(1);
   });
 
   test("session naming: rename from the header menu, persisted across reloads", async ({
@@ -750,9 +682,15 @@ test("a past-session row opens the dead-session pane first; Resume is the explic
     "Build the leasing pipeline",
   );
 
-  // The resumed session is unbound and now lives as the active session in the
-  // workbench; sessions are not a rail concern, so no session rows in the rail.
-  await expect(page.locator("[data-testid^='rail-session-']")).toHaveCount(0);
+  // The resumed session is live again: its rail row is selected and live.
+  await expect(page.getByTestId("rail-session-sess-leasing")).toHaveAttribute(
+    "data-mark",
+    "live",
+  );
+  await expect(page.getByTestId("rail-session-sess-leasing")).toHaveAttribute(
+    "data-selected",
+    "true",
+  );
   await expect(header.getByTestId("session-context-title")).toContainText(
     "Build the leasing pipeline",
   );
@@ -761,9 +699,9 @@ test("a past-session row opens the dead-session pane first; Resume is the explic
 test("Past sessions is ONE merged list beside the rail, opened from the history glyph", async ({
   page,
 }) => {
-  // The options menu files the tree and holds nothing else (flow-creation.md
-  // §4.7, Q9): no Past sessions row, no count badge.
-  await page.getByTestId("rail-options").click();
+  // The options menu orders the projects and holds nothing else
+  // (flow-creation.md §4.7, Q9): no Past sessions row, no count badge.
+  await page.getByTestId("history-trigger").click();
   const menu = page.getByTestId("rail-options-menu");
   await expect(menu).toBeVisible();
   await expect(menu).not.toContainText("Past sessions");
@@ -909,55 +847,46 @@ test.describe("dead sessions never trap the user", () => {
     );
   });
 
-  test("Close on a dead session removes it and falls back to another running session", async ({
+  test("Close on a dead session hides it from the rail and shows its project's map; History keeps it", async ({
     page,
   }) => {
-    // The boot session is running, so falling back to it is always possible here.
     await page.getByTestId("rail-history").click();
     await page.getByTestId("exited-session-sess-leasing").click();
     await page.getByTestId("dead-session-close").click();
 
+    // Close on an ended session is the rail's × on its row (flow Q4): hidden
+    // from the rail, and the centre moves to its project's map.
     await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
-    await expect(page.locator(".terminal-empty")).toHaveCount(0);
-    await expect(page.getByTestId("session-context")).toHaveAttribute(
-      "data-session-id",
-      "sess-boot",
-    );
+    await expect(page.getByTestId("rail-session-sess-leasing")).toHaveCount(0);
+    await expect(page.getByTestId("project-map-pane")).toBeVisible();
 
     await page.getByTestId("rail-history").click();
     await expect(page.getByTestId("past-sessions-card")).toBeVisible();
-    await expect(page.getByTestId("exited-session-sess-leasing")).toHaveCount(
-      0,
-    );
+    await expect(page.getByTestId("exited-session-sess-leasing")).toBeVisible();
   });
 });
 
-test("the rail's filing panel offers Group by / Sort by as visible dropdowns", async ({
+test("the rail's options menu offers Sort by only: no Group axis", async ({
   page,
 }) => {
-  // The old projection toggle and the custom-groups view are gone; filing lives
-  // behind the settings ellipsis as two dropdowns that state their current value on
-  // the face of the control.
   await expect(page.getByTestId("rail-view-toggle")).toHaveCount(0);
   await expect(page.locator("[data-testid^='custom-group-']")).toHaveCount(0);
 
-  await page.getByTestId("rail-options").click();
+  await page.getByTestId("history-trigger").click();
   await expect(page.getByTestId("rail-options-menu")).toBeVisible();
-  await expect(page.getByTestId("filing-group-by")).toHaveValue("project");
-  await expect(page.getByTestId("filing-sort-by")).toHaveValue("recent");
-  // Deployment is RETIRED: it bucketed `definitionId != null`, a fact every
-  // agent row already prints as a cloud glyph, so it re-sorted the rail to tell
-  // you nothing new (SAP-2928).
-  await expect(page.getByTestId("group-deployment")).toHaveCount(0);
-  await expect(page.getByTestId("group-workspace")).toHaveCount(0);
+  // One axis now (flow-navigation.md Q8): Sort by, never Group by.
+  await expect(page.getByTestId("filing-group-by")).toHaveCount(0);
+  await expect(page.getByTestId("sort-recent")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("sort-name")).toHaveAttribute("aria-checked", "false");
+  await page.getByTestId("sort-name").click();
+  await expect(page.getByTestId("sort-name")).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
 
-  // Agents still render as first-class rows; onboarding-flow is a project root
-  // that IS an agent, so its one row carries the agent's identity.
+  // Projects are headers; agents are not rail rows.
   await expect(
     page.getByTestId("workspace-group-onboarding-flow"),
   ).toBeVisible();
-  await expect(page.getByTestId("workflow-onboarding-flow")).toBeVisible();
+  await expect(page.getByTestId("workflow-onboarding-flow")).toHaveCount(0);
 });
 
 test.describe("held arrangement", () => {
@@ -967,7 +896,7 @@ test.describe("held arrangement", () => {
     // Collapse through the dedicated disclosure. The project label is a
     // navigation target and must never fold the hierarchy as a side effect.
     await page.getByTestId("project-disclosure-acme-app").click();
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(0);
 
     // Pick the Steps tab.
     await page.getByTestId("right-tab-steps").click();
@@ -976,10 +905,8 @@ test.describe("held arrangement", () => {
     await expect(page.locator(".rail-workflows")).toBeVisible();
 
     // Restored: the project stays folded and the pane still remembers the Steps
-    // tab. The right pane's open/closed state is NOT a persisted arrangement —
-    // it follows the active session's board (a populated session shows it), so
-    // a fold does not survive a reload (the canvas auto-reveal contract).
-    await expect(page.getByTestId("workflow-leasing")).toHaveCount(0);
+    // tab.
+    await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(0);
     await expect(page.getByTestId("right-tab-steps")).toHaveAttribute(
       "aria-selected",
       "true",
@@ -990,10 +917,7 @@ test.describe("held arrangement", () => {
 test("rail tooltips fly to the right of the rail instead of covering sibling rows", async ({
   page,
 }) => {
-  await page
-    .getByTestId("workflow-leasing")
-    .locator(".workflow-item-trigger")
-    .hover();
+  await page.getByTestId("project-select-acme-app").hover();
   const tip = page.locator(".app-tooltip");
   await expect(tip).toHaveAttribute("data-show", "true");
 
@@ -1106,8 +1030,9 @@ test("canvas pane shows its empty state for a session with nothing generated yet
   page,
 }) => {
   // The boot session opens on its bundled board (first paint), so switch to
-  // the scratch session — no bundled doc — to see the honest empty state.
-  await selectMockSessionFromPalette(page, "scratch");
+  // the second leasing session — bound, no bundled doc — to see the honest
+  // empty state. (scratch is unbound, so it has no right pane at all.)
+  await selectSession(page, "sess-leasing-2");
   await expect(page.locator(".canvas-empty")).toContainText(
     "Nothing generated yet",
   );
@@ -1146,15 +1071,13 @@ test("settings popover: identity, telemetry toggle, and it persists across close
 });
 
 test.describe("workflow actions", () => {
-  test("agent rows carry no macro strip and show their full untruncated name", async ({
+  test("project headers carry no macro strip and show their full untruncated name", async ({
     page,
   }) => {
-    // The explorer row is [zap][name][cloud] only — no macro strip, no hover
-    // actions eating inline width. "onboarding-flow" is the longest fixture
-    // name; it must not clip to "onboarding-fl…".
-    const row = page.getByTestId("workflow-onboarding-flow");
+    // The rail lists no agent rows (Q3); a project header is [mark][name][+]
+    // only. "onboarding-flow" is the longest fixture name; it must not clip.
+    const row = page.getByTestId("workspace-group-onboarding-flow");
     await expect(row.getByTestId("workflow-macros")).toHaveCount(0);
-    await expect(row.locator(".workflow-row-actions")).toHaveCount(0);
     const name = row.locator(".tree-row-label");
     await expect(name).toHaveText("onboarding-flow");
     const overflowing = await name.evaluate(
@@ -1229,9 +1152,9 @@ test.describe("workflow actions", () => {
 test("canvas empty state explains itself — no manual render action", async ({
   page,
 }) => {
-  // The scratch session has no bundled doc, so its Canvas is the empty state
-  // (the boot session opens on its board).
-  await selectMockSessionFromPalette(page, "scratch");
+  // The second leasing session has no bundled doc, so its Canvas is the empty
+  // state (the boot session opens on its board).
+  await selectSession(page, "sess-leasing-2");
   await expect(page.locator(".canvas-empty")).toContainText(
     "Nothing generated yet",
   );
@@ -1252,12 +1175,10 @@ test("canvas empty state explains itself — no manual render action", async ({
 test("steps tab shows its own empty state (not canvas copy) before anything is rendered", async ({
   page,
 }) => {
-  // The scratch session has no generated canvas content, so the Steps tab hits
-  // the same early-return state as the board — but must talk about steps. (The
-  // boot session opens on its board, which does post a step graph.)
-  await selectMockSessionFromPalette(page, "scratch");
-  // Focusing the empty-board scratch session auto-collapses the right pane; reopen it to inspect the Steps tab.
-  await page.getByTestId("right-expand").click();
+  // The second leasing session has no generated canvas content, so the Steps
+  // tab hits the same early-return state as the board — but must talk about
+  // steps. (The boot session opens on its board, which does post a step graph.)
+  await selectSession(page, "sess-leasing-2");
   await page.getByTestId("right-tab-steps").click();
   const empty = page.locator(".canvas-empty");
   await expect(empty).toContainText("No steps yet");
@@ -1442,10 +1363,9 @@ test("a mock session without a bundled canvas doc shows the empty state and neve
   });
   await expect(page.locator(".canvas-iframe")).toBeVisible();
 
-  // Open rfq and start a session: same-workspace, so it starts in
-  // rfq-agent — a session with NO bundled demo document.
-  await focusRfqAgent(page);
-  await page.getByTestId("open-agent-start-session").click();
+  // Start a chat with rfq: it starts in rfq-agent — a session with NO bundled
+  // demo document.
+  await startChatWithRfq(page);
   await expect(page.getByTestId("session-context-title")).toContainText("rfq");
 
   // Honest absence, not a 404 in a frame: the empty state renders…
@@ -1592,11 +1512,10 @@ test.describe("background-task canvas states", () => {
     await publish(page, { ...baseTask, id: "task-2", status: "running" });
     await expect(page.getByTestId("canvas-task-activity")).toBeVisible();
 
-    // ...and switching the subject mid-run (open rfq, then start its session)
-    // hides it again: the rfq session's pane must not show leasing's
-    // enrichment progress.
-    await focusRfqAgent(page);
-    await page.getByTestId("open-agent-start-session").click();
+    // ...and switching the subject mid-run (Start chat with rfq) hides it
+    // again: the rfq session's pane must not show leasing's enrichment
+    // progress.
+    await startChatWithRfq(page);
     await expect(page.getByTestId("session-context-title")).toContainText(
       "rfq",
     );
@@ -1740,6 +1659,9 @@ test.describe("background-task canvas states", () => {
         ).__HARNESS_TEST__.lastMacroRun,
     );
     expect(lastRun?.id).toBe("visualize");
+    // The retry runs in the session already bound to the agent; it must not
+    // start a second session for it.
+    await expect.poll(() => activeSessionId(page)).toBe("sess-boot");
 
     // Dismiss hides the failure panel and returns the pane to its usual state
     // (the bound board, which sess-boot renders on first paint).
@@ -1809,14 +1731,10 @@ test.describe("agent action bar (status chip + right-anchored actions)", () => {
   test("undeployed workflow: no deployed pill, Deploy is primary, and Run is gated with the deploy reason", async ({
     page,
   }) => {
-    await focusRfqAgent(page);
-    await page.getByTestId("open-agent-start-session").click();
+    await startChatWithRfq(page);
     await expect(page.getByTestId("session-context-title")).toContainText(
       "rfq",
     );
-
-    // The rfq draft session has an empty canvas board, so starting it auto-collapses the right pane; reopen it.
-    await page.getByTestId("right-expand").click();
 
     // A Draft has no lifecycle pill: the deployed dashboard link is absent, and
     // Deploy is the filled primary CTA instead.
@@ -2195,7 +2113,7 @@ test.describe("canvas iframe theme", () => {
 test("end session: the header ⋯ menu opens a confirm dialog before ending the session", async ({
   page,
 }) => {
-  // Leasing is focused with sess-boot active — end it from the header menu.
+  // sess-boot is selected — end it from the header menu.
   const header = page.getByTestId("session-context");
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
 
@@ -2211,11 +2129,13 @@ test("end session: the header ⋯ menu opens a confirm dialog before ending the 
   await expect(confirm).toHaveCount(0);
   await expect(header).toHaveAttribute("data-session-id", "sess-boot");
 
-  // Confirming ends the session — the app falls back to another live one.
+  // Confirming ends the session; it stays selected, as ended (D43), rather
+  // than jumping the centre to another session.
   await page.getByTestId("session-menu").click();
   await page.getByTestId("session-end-btn").click();
   await page.getByTestId("end-session-confirm-btn").click();
-  await expect(header).not.toHaveAttribute("data-session-id", "sess-boot");
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await expect(header).toHaveAttribute("data-session-id", "sess-boot");
 });
 
 test.describe("session menu copy path", () => {
@@ -2245,8 +2165,8 @@ test("folder field: Enter fires the dialog's primary action", async ({
 
   await input.press("Enter");
   await expect(page.getByTestId("project-folder-dialog")).toBeHidden();
-  // rfq-agent's folder IS its agent, so it renders as the agent's own row.
-  await expect(page.getByTestId("workflow-rfq")).toBeVisible();
+  // The folder is a project header in the rail.
+  await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
 });
 
 test("canvas controls: the board widget zooms; the subheader's expand lifts the pane to an overlay", async ({
@@ -2618,14 +2538,12 @@ test("an observed run renders per-step status and latency in the steps tab", asy
 test("an observed run renders its real steps even before anything is visualized", async ({
   page,
 }) => {
-  // The scratch session ships no bundled doc, so nothing is visualized for it
-  // (no graph). A run announcement alone must still surface real per-step
-  // truth in the Steps tab instead of "No steps yet". (The boot
+  // The second leasing session ships no bundled doc, so nothing is visualized
+  // for it (no graph). A run announcement alone must still surface real
+  // per-step truth in the Steps tab instead of "No steps yet". (The boot
   // session opens on its board, which already posts a graph — the fallback is
   // exactly this no-graph path.)
-  await selectMockSessionFromPalette(page, "scratch");
-  // Focusing the empty-board scratch session auto-collapses the right pane; reopen it before reading the Steps tab.
-  await page.getByTestId("right-expand").click();
+  await selectSession(page, "sess-leasing-2");
   await page.evaluate(() => {
     (
       window as unknown as {
@@ -2633,7 +2551,7 @@ test("an observed run renders its real steps even before anything is visualized"
       }
     ).__HARNESS_TEST__.publish({
       type: "execution.started",
-      harnessSessionId: "sess-bg",
+      harnessSessionId: "sess-leasing-2",
       executionId: "exec-local-1",
       target: "local",
     });
