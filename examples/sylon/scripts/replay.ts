@@ -8,7 +8,8 @@
  * prints the steps for a person to post and only watches. `--watch-only` forces that mode.
  *
  * Flags: `--watch-only`, `--timeout <s>` (default 900), `--settle <s>`: stop after this long with
- * nothing new and no run in flight (default 150). Exits 1 if any Sylon run failed.
+ * nothing new and no run in flight (default 150). Exits 1 if any Sylon run failed or was still
+ * running at the deadline.
  *
  * Needs SAPIOM_API_KEY (an org key for the target org). Prints no secrets.
  */
@@ -112,8 +113,9 @@ async function postAsUser(
 
 // --- watching ---------------------------------------------------------------------------------
 
-interface ReceiptRow {
+export interface ReceiptRow {
   id: string;
+  receivedAt: string;
   eventType: string;
   outcome: string;
   triggerSlugs: string[];
@@ -141,6 +143,53 @@ const IN_PROGRESS = new Set([
 const finished = (f: Fire) =>
   UNFIRED.has(f.state) ||
   (!!f.execution && !IN_PROGRESS.has(f.execution.status));
+
+/**
+ * How a finished fire counts. `skipped` means the engine chose not to run it (no run, nothing
+ * wrong); `stale` means a matched run never started, which a demo must not hide.
+ */
+export function fireOutcome(f: Pick<Fire, "state" | "execution">): {
+  status: string;
+  failed: boolean;
+} {
+  if (f.state === "skipped") return { status: "skipped", failed: false };
+  const status = f.execution?.status ?? f.state;
+  return { status, failed: status !== "completed" };
+}
+
+/**
+ * Every receipt received at or after `since`, newest first. Pages with `offset` until it reaches an
+ * older receipt (or runs out), so a burst of more than one page between polls hides nothing.
+ */
+export async function receiptsSince(
+  get: (path: string) => Promise<ReceiptRow[]>,
+  since: Date,
+  pageSize = 50,
+): Promise<ReceiptRow[]> {
+  const out: ReceiptRow[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await get(`/receipts?limit=${pageSize}&offset=${offset}`);
+    for (const r of page) {
+      if (new Date(r.receivedAt) < since) return out;
+      out.push(r);
+    }
+    if (page.length < pageSize) return out;
+  }
+}
+
+/** The closing lines and exit status: success only when every receipt finished and none failed. */
+export function verdict(
+  failed: string[],
+  incomplete: string[],
+): { ok: boolean; lines: string[] } {
+  const lines: string[] = [];
+  if (failed.length) lines.push(`failed:\n- ${failed.join("\n- ")}`);
+  if (incomplete.length)
+    lines.push(`incomplete: still running\n- ${incomplete.join("\n- ")}`);
+  if (!lines.length) lines.push("no failed runs");
+  return { ok: !failed.length && !incomplete.length, lines };
+}
+
 const isSylon = (slug: string) => slug.startsWith("sylon-");
 
 class Watcher {
@@ -160,7 +209,14 @@ class Watcher {
   ) {}
 
   get inFlight(): number {
-    return [...this.receipts.values()].filter((r) => !r.done).length;
+    return this.incomplete().length;
+  }
+
+  /** Receipts with a Sylon fire whose run has not finished. */
+  incomplete(): string[] {
+    return [...this.receipts]
+      .filter(([, r]) => !r.done)
+      .map(([id, r]) => `receipt ${id} ${r.type}  ${EVENTS_PAGE}/${id}`);
   }
 
   private fresh(key: string): boolean {
@@ -175,7 +231,10 @@ class Watcher {
   }
 
   private async pollReceipts() {
-    const rows = await this.client.get<ReceiptRow[]>("/receipts?limit=50");
+    const rows = await receiptsSince(
+      (p) => this.client.get<ReceiptRow[]>(p),
+      this.since,
+    );
     for (const r of rows.reverse()) {
       if (Number(r.id) <= this.baselineReceipt) continue;
       if (!r.triggerSlugs.some(isSylon)) continue;
@@ -202,8 +261,8 @@ class Watcher {
         this.fires.add(key);
         if (f.executionId) this.executions.push(f.executionId);
         this.lastActivity = Date.now();
-        const status = f.execution?.status ?? f.state;
-        if (status !== "completed")
+        const { status, failed } = fireOutcome(f);
+        if (failed)
           this.failed.push(
             `${f.trigger.definitionSlug} run ${f.executionId ?? "(none)"} (receipt ${id}): ${status}`,
           );
@@ -243,11 +302,12 @@ class Watcher {
       id: string;
       number: number;
       status: string;
+      card_channel: string | null;
       card_ts: string | null;
       triage_root_ts: string | null;
       citations: unknown;
     }>(
-      `select d.id, i.number, d.status, d.card_ts, i.triage_root_ts, d.citations
+      `select d.id, i.number, d.status, d.card_channel, d.card_ts, i.triage_root_ts, d.citations
          from drafts d join issues i on i.id = d.issue_id
         where d.created_at >= $1 order by d.created_at`,
       [since],
@@ -257,8 +317,11 @@ class Watcher {
         const gap = d.triage_root_ts
           ? `, ${tsGap(d.triage_root_ts, d.card_ts)}s after the issue card`
           : "";
+        const card = d.card_channel
+          ? `  ${permalink(d.card_channel, d.card_ts, d.triage_root_ts ?? undefined)}`
+          : "";
         log(
-          `draft card for #${d.number} (cites ${JSON.stringify(d.citations)})${gap}`,
+          `draft card for #${d.number} (cites ${JSON.stringify(d.citations)})${gap}${card}`,
         );
       }
       if (d.status !== "pending" && this.fresh(`draft:${d.id}:${d.status}`))
@@ -375,10 +438,9 @@ async function main() {
     console.log(
       `\n${watcher.executions.length} Sylon run(s): ${watcher.executions.join(", ") || "none"}`,
     );
-    if (watcher.failed.length) {
-      console.log(`failed:\n- ${watcher.failed.join("\n- ")}`);
-      process.exitCode = 1;
-    } else console.log("no failed runs");
+    const { ok, lines } = verdict(watcher.failed, watcher.incomplete());
+    for (const line of lines) console.log(line);
+    if (!ok) process.exitCode = 1;
   } finally {
     await close();
   }
