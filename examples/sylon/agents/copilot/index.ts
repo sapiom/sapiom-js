@@ -304,41 +304,45 @@ async function draftReply(
         }),
       );
       if (!raw) {
-        // A concurrent delivery of this event, or a newer message, may have drafted while ours
-        // missed: then the thread has a card to act on and the note would be wrong.
-        const drafted =
-          (await draftForCausation(db, issue.id, trigger.causationId)) ??
-          (await newerPostedDraft(db, issue.id, trigger));
-        if (!drafted) await postDraftFailedNote(ctx, db, triageRootTs);
-        return terminate({
-          issueId: issue.id,
-          skipped: "no structured draft",
-          ...(drafted && { draftId: drafted.id }),
-        });
+        // A concurrent delivery of this event may have drafted while ours missed: publish its
+        // row below, as a retry would, so a card whose post failed or is in flight still lands.
+        draft = await draftForCausation(db, issue.id, trigger.causationId);
+        if (!draft) {
+          // A newer message's posted card is actionable; "reply by hand" next to it would be wrong.
+          const newer = await newerPostedDraft(db, issue.id, trigger);
+          if (!newer) await postDraftFailedNote(ctx, db, triageRootTs);
+          return terminate({
+            issueId: issue.id,
+            skipped: "no structured draft",
+            ...(newer && { draftId: newer.id }),
+          });
+        }
+        issue = await getIssue(db, issue.id);
+      } else {
+        const output = normalizeOutput(raw, KB);
+        confidence = output.confidence;
+        issue = await updateIssue(db, issue.id, { summary: output.summary });
+        // An empty reply means the model sees nothing to answer yet. A card would offer Approve
+        // on nothing, so there is none, and the older drafts stay as they are.
+        if (!output.reply)
+          return terminate({
+            issueId: issue.id,
+            skipped: "no reply needed",
+            summary: output.summary,
+            confidence,
+          });
+        // The unique (issue_id, causation_id) index makes this one row per event even when two
+        // deliveries race; the loser continues with the winner's row and publishes below.
+        draft = (
+          await createDraftOnce(db, {
+            issueId: issue.id,
+            text: output.reply,
+            citations: output.citations,
+            causationId: trigger.causationId,
+            confidence: output.confidence,
+          })
+        ).draft;
       }
-      const output = normalizeOutput(raw, KB);
-      confidence = output.confidence;
-      issue = await updateIssue(db, issue.id, { summary: output.summary });
-      // An empty reply means the model sees nothing to answer yet. A card would offer Approve
-      // on nothing, so there is none, and the older drafts stay as they are.
-      if (!output.reply)
-        return terminate({
-          issueId: issue.id,
-          skipped: "no reply needed",
-          summary: output.summary,
-          confidence,
-        });
-      // The unique (issue_id, causation_id) index makes this one row per event even when two
-      // deliveries race; the loser continues with the winner's row and publishes below.
-      draft = (
-        await createDraftOnce(db, {
-          issueId: issue.id,
-          text: output.reply,
-          citations: output.citations,
-          causationId: trigger.causationId,
-          confidence: output.confidence,
-        })
-      ).draft;
     }
 
     const triage = await getConfig(db, "channels.triage");

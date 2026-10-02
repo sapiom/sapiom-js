@@ -354,7 +354,7 @@ describe("draft path", () => {
     ).toMatchObject({ level: "warn" });
   });
 
-  it("no note when a concurrent delivery drafted this event while ours missed", async () => {
+  it("publishes, without a note, the draft a concurrent delivery stored while ours missed", async () => {
     const t = ctxFor("e");
     skipToolCall(t, 2);
     const llm = (
@@ -374,11 +374,17 @@ describe("draft path", () => {
       return response;
     };
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
-    expect(last(ds).output).toMatchObject({
-      skipped: "no structured draft",
-      draftId: expect.any(String),
+    // The other delivery's row has no card yet (its post failed or is in flight): ours posts it.
+    const out = last(ds).output!;
+    const draft = await getDraft(db, out.draftId as string);
+    expect(draft).toMatchObject({
+      text: "drafted by the other delivery",
+      status: "pending",
     });
-    expect(t.slack("chat.postMessage")).toHaveLength(0);
+    expect(out).toMatchObject({ cardTs: draft.cardTs, reused: false });
+    const posted = t.slack("chat.postMessage");
+    expect(posted).toHaveLength(1);
+    expect(posted[0].text).not.toBe(DRAFT_FAILED_NOTE);
   });
 
   it("concurrent deliveries of one event post exactly one card", async () => {
