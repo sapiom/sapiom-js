@@ -171,6 +171,18 @@ describe("decide", () => {
     );
   });
 
+  it("strips the footer in linear time on adversarial input", () => {
+    const spaces = `a${" ".repeat(100_000)}b`;
+    const footers = "*Sent using*<@".repeat(20_000);
+    const start = performance.now();
+    expect(stripClientFooter(spaces)).toBe(spaces);
+    expect(stripClientFooter(footers)).toBe(footers);
+    expect(stripClientFooter(`hi${" ".repeat(50_000)}*Sent using* <@U1>`)).toBe(
+      "hi",
+    );
+    expect(performance.now() - start).toBeLessThan(500);
+  });
+
   it("cuts a long title at a word, with an ellipsis", () => {
     const text =
       "Our webhook deliveries started failing this morning. Every POST to our endpoint is rejected";

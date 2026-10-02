@@ -81,8 +81,16 @@ const MAX_CANDIDATES = 10;
  * Slack integration among them) append to the poster's text. It is not part of the message.
  */
 export function stripClientFooter(text: string): string {
-  return text.replace(/\s*\*Sent using\*\s*<@[^>]*>\s*$/, "");
+  // `lastIndexOf` plus an anchored check on that tail only: one regex over the whole message would
+  // backtrack polynomially on long runs of spaces or repeated footers (CodeQL js/polynomial-redos).
+  const trimmed = text.trimEnd();
+  const at = trimmed.lastIndexOf(CLIENT_FOOTER);
+  if (at < 0 || !FOOTER_TAIL.test(trimmed.slice(at))) return text;
+  return trimmed.slice(0, at).trimEnd();
 }
+
+const CLIENT_FOOTER = "*Sent using*";
+const FOOTER_TAIL = /^\*Sent using\*\s*<@[^<>]*>$/;
 
 export const TITLE_MAX = 80;
 
