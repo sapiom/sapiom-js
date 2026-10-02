@@ -1157,7 +1157,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
     executions: new ExecutionClient(
       new Transport({
         apiKey: "stub",
-        coreBaseUrl: "http://stub.invalid",
+        coreBaseUrl: "https://stub.invalid",
         fetch: async () => {
           throw new ExecutionProtocolError(
             "Durable executions are unavailable in stub mode.",
