@@ -10,7 +10,7 @@
  *    Config comes from fleet.local.json (your workspace's ids, gitignored) merged over fleet.json,
  *    whose values are examples; setup stops if any workspace key is still an example.
  *    `--overwrite` resets every config key to those values.
- * 3. `build:kb`: regenerate `_shared/kb.generated.ts` when `kb/` changed.
+ * 3. Seed starter policy articles into an empty knowledge base (the Console edits it from there).
  * 4. Link and deploy each selected project (agent-core `link` / `deploy`). A project whose bundle
  *    hash and active build match `.sapiom/fleet-state.json` is left alone.
  * 5. Attach the fleet.json `triggers` that are missing, after listing the attached ones (cron
@@ -44,10 +44,10 @@ import {
   migrate,
   resolveConnectionString,
 } from "./_shared/db";
+import { seedStarters } from "./_shared/kb";
 import { listTools } from "./_shared/linear";
 import { exampleKeys, mergeConfig, seedFleet } from "./_shared/seed";
 import { SlackMethodError, replies, userInfo } from "./_shared/slack";
-import { KB_OUT, readKb, renderKb } from "./scripts/build-kb";
 import {
   bundleHash,
   connectorsFor,
@@ -203,20 +203,14 @@ async function database(
         `accounts: ${accounts.map((a) => `${a.name} (${a.slack_channel_id})`).join(", ")}`,
       );
     else say(`accounts: ${accounts.length}, unchanged`);
+    const starters = await seedStarters(db);
+    if (starters)
+      changed(
+        `knowledge base: ${starters} starter policies added (examples; edit or delete them in the Console)`,
+      );
+    else say("knowledge base: has articles, starters not added");
   } finally {
     await close();
-  }
-}
-
-function buildKb() {
-  console.log("kb");
-  const pages = readKb();
-  const next = renderKb(pages);
-  if (existsSync(KB_OUT) && readFileSync(KB_OUT, "utf8") === next)
-    say(`kb.generated.ts: up to date (${pages.length} pages)`);
-  else {
-    writeFileSync(KB_OUT, next);
-    changed(`kb.generated.ts rebuilt (${pages.length} pages)`);
   }
 }
 
@@ -343,7 +337,6 @@ async function main() {
 
   await preflight(selected, values);
   await database(values, args.overwrite);
-  buildKb();
   const client = createGatewayClient({ apiKey });
   const state = loadState();
   try {
