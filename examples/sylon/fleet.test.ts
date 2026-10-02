@@ -38,9 +38,11 @@ describe("fleet.json", () => {
     }
   });
 
-  it("has an index.ts for every smoke project", () => {
-    for (const p of fleet.projects.filter((x) => "smoke" in x))
+  it("has an index.ts and a package.json for every project", () => {
+    for (const p of fleet.projects) {
+      expect(existsSync(path.join(DIR, p.path, "package.json"))).toBe(true);
       expect(existsSync(path.join(DIR, p.path, "index.ts"))).toBe(true);
+    }
   });
 
   it("seeds config and accounts, twice without change", async () => {

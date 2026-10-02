@@ -10,9 +10,26 @@ import {
 } from "./events";
 
 const fixtures = loadFixtures();
+/** A cron fire's stored input has no event schema; its agent's own test covers it. */
+const events = fixtures.filter((f) => f.type !== "schedule_cron");
 
 describe("fixtures", () => {
-  it.each(fixtures.map((f) => [f.file, f] as const))(
+  it("loads every fixtures/<dir>/, agent fixtures included", () => {
+    const dirs = new Set(fixtures.map((f) => f.file.split("/")[0]));
+    for (const d of [
+      "slack",
+      "issue",
+      "intake",
+      "copilot",
+      "escalation",
+      "controller",
+      "urgent-pager",
+    ])
+      expect(dirs).toContain(d);
+    expect(fixtures.map((f) => f.file)).not.toContain("intake/jev.json");
+  });
+
+  it.each(events.map((f) => [f.file, f] as const))(
     "%s validates against its schema",
     (_file, f) => {
       expect(Object.keys(AllEvents)).toContain(f.type);
@@ -25,6 +42,7 @@ describe("fixtures", () => {
     const types = new Set(fixtures.map((f) => f.type));
     for (const t of Object.keys(Events)) expect(types).toContain(t);
     const actionIds = fixtures
+      .filter((f) => f.file.startsWith("slack/"))
       .filter((f) => f.type === "slack.block_actions")
       .map((f) => SlackBlockActions.parse(f.payload).actions[0].action_id);
     expect(actionIds.sort()).toEqual([

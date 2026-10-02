@@ -9,10 +9,13 @@
     "test": "vitest run",
     "setup": "tsx setup.ts",
     "build:kb": "tsx scripts/build-kb.ts",
-    "format": "prettier --write \"**/*.{ts,json,md}\""
+    "format": "prettier --write \"**/*.{ts,json,md}\"",
+    "replay": "tsx scripts/replay.ts",
+    "reset-demo": "tsx scripts/reset-demo.ts"
   },
   "dependencies": {
     "@sapiom/agent": "^0.14.5",
+    "@sapiom/agent-core": "^0.15.1",
     "@sapiom/tools": "^0.41.0",
     "pg-mem": "^3.0.14",
     "postgres": "^3.4.9",
