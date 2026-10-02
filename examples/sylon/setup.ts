@@ -5,6 +5,7 @@
  * Steps, each check-then-create, so a second run reports no changes and a rerun repairs a
  * partial install:
  * 1. Preflight the Slack and Linear connectors the selected projects need; stop if one is missing.
+ *    With urgent-pager selected, also check that `oncall.slack_id` resolves.
  * 2. Database: resolve or create `sylon`, apply migrations, seed missing config keys and accounts.
  *    Config comes from fleet.local.json (your workspace's ids, gitignored) merged over fleet.json,
  *    whose values are examples; setup stops if any workspace key is still an example.
@@ -13,7 +14,8 @@
  * 4. Link and deploy each selected project (agent-core `link` / `deploy`). A project whose bundle
  *    hash and active build match `.sapiom/fleet-state.json` is left alone.
  * 5. Attach the fleet.json `triggers` that are missing, after listing the attached ones (cron
- *    triggers are not deduped server-side). `smokeTriggers` are never attached.
+ *    triggers are not deduped server-side), and resume matching ones that are paused.
+ *    `smokeTriggers` are never attached.
  * 6. Write `.sapiom/fleet-state.json` (ids and hashes only).
  *
  * Selection: every project that is neither `optional` nor `smoke`; `--only <key>` acts on exactly
@@ -44,13 +46,14 @@ import {
 } from "./_shared/db";
 import { listTools } from "./_shared/linear";
 import { exampleKeys, mergeConfig, seedFleet } from "./_shared/seed";
-import { userInfo } from "./_shared/slack";
+import { SlackMethodError, replies, userInfo } from "./_shared/slack";
 import { KB_OUT, readKb, renderKb } from "./scripts/build-kb";
 import {
   bundleHash,
   connectorsFor,
   missingTriggers,
   parseArgs,
+  pausedToResume,
   sameTrigger,
   selectProjects,
   triggerBody,
@@ -109,12 +112,34 @@ const changed = (line: string) => {
 /** The script's own context for `_shared/slack.ts` and `_shared/linear.ts`: live, logged to the console. */
 const scriptCtx = { isLocalTrace: false, logger: console } as never;
 
-async function preflight(selected: FleetProject[], oncall: string) {
+/** A thread that cannot exist; asking for it costs nothing and posts nothing. */
+const PROBE_TS = "1000000000.000001";
+
+/**
+ * Slack is connected when Slack itself answers a read of the triage channel: `thread_not_found`
+ * for the probe thread proves the connector reaches Slack and the bot can read the channel. It
+ * does not depend on `oncall.slack_id`, which only the optional urgent-pager uses.
+ */
+async function probeSlack(triage: string) {
+  try {
+    await replies(scriptCtx, { channel: triage, ts: PROBE_TS });
+  } catch (err) {
+    if (err instanceof SlackMethodError && /thread_not_found/.test(err.detail))
+      return;
+    throw err;
+  }
+}
+
+async function preflight(
+  selected: FleetProject[],
+  values: ReturnType<typeof loadConfig>,
+) {
   console.log("connectors");
   const missing: string[] = [];
   for (const c of connectorsFor(selected)) {
     try {
-      if (c.provider === "slack") await userInfo(scriptCtx, oncall);
+      if (c.provider === "slack")
+        await probeSlack(values["channels.triage"] as string);
       else if (c.provider === "linear") await listTools(scriptCtx);
       else throw new Error(`setup has no preflight for '${c.provider}'`);
       say(`${c.provider}: connected`);
@@ -130,6 +155,16 @@ async function preflight(selected: FleetProject[], oncall: string) {
   }
   if (missing.length)
     throw new Error(`missing connectors:\n- ${missing.join("\n- ")}`);
+  if (selected.some((p) => p.key === "urgent-pager")) {
+    const oncall = values["oncall.slack_id"] as string;
+    await userInfo(scriptCtx, oncall).catch((err: unknown) => {
+      throw new Error(
+        `urgent-pager pages oncall.slack_id '${oncall}', which Slack cannot resolve: ` +
+          `${err instanceof Error ? err.message : String(err)}. Fix it in fleet.local.json, or leave urgent-pager out.`,
+      );
+    });
+    say(`oncall.slack_id: resolves`);
+  }
 }
 
 async function database(
@@ -271,8 +306,15 @@ async function triggers(
       `/definitions/${p.slug}/triggers`,
     );
     const missing = missingTriggers(mine, attached);
-    for (const t of mine.filter((m) => !missing.includes(m)))
+    const resume = pausedToResume(mine, attached);
+    for (const t of mine.filter(
+      (m) => !missing.includes(m) && !resume.some((r) => r.want === m),
+    ))
       say(`${triggerLabel(t)}: attached`);
+    for (const { want, trigger } of resume) {
+      await client.post(`/triggers/${trigger.id}/resume`, {});
+      changed(`${triggerLabel(want)}: resumed (trigger ${trigger.id})`);
+    }
     for (const t of missing) {
       const made = await client.post<{ id: string }>(
         `/definitions/${p.slug}/triggers`,
@@ -299,7 +341,7 @@ async function main() {
     throw new Error("set SAPIOM_API_KEY to an org key for the target org");
   console.log(`sylon setup: ${selected.map((p) => p.key).join(", ")}`);
 
-  await preflight(selected, values["oncall.slack_id"] as string);
+  await preflight(selected, values);
   await database(values, args.overwrite);
   buildKb();
   const client = createGatewayClient({ apiKey });

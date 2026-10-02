@@ -129,6 +129,23 @@ export function missingTriggers(
   return wanted.filter((w) => !attached.some((a) => sameTrigger(w, a)));
 }
 
+/**
+ * Paused triggers to resume: for each wanted trigger with no active match, a paused one that
+ * matches it. A pause (by the Console, or after repeated failures) would otherwise leave the agent
+ * quiet while setup reported its trigger as attached.
+ */
+export function pausedToResume(
+  wanted: FleetTrigger[],
+  attached: AttachedTrigger[],
+): { want: FleetTrigger; trigger: AttachedTrigger }[] {
+  return wanted.flatMap((want) => {
+    const matches = attached.filter((a) => sameTrigger(want, a));
+    if (matches.some((a) => a.status !== "paused")) return [];
+    const paused = matches.find((a) => a.status === "paused");
+    return paused ? [{ want, trigger: paused }] : [];
+  });
+}
+
 export function triggerLabel(t: FleetTrigger): string {
   return t.kind === "event"
     ? `${t.project} ← ${t.eventType}`

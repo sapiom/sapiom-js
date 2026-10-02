@@ -5,6 +5,7 @@ import {
   connectorsFor,
   missingTriggers,
   parseArgs,
+  pausedToResume,
   selectProjects,
   triggersFor,
   type AttachedTrigger,
@@ -114,6 +115,35 @@ describe("trigger dedup", () => {
         ],
       ),
     ).toEqual([cron, event]);
+  });
+});
+
+describe("paused triggers", () => {
+  const event = {
+    project: "intake",
+    kind: "event",
+    eventType: "slack.message.created",
+  } as const;
+  const paused = attached({
+    id: "7",
+    kind: "event",
+    eventType: "slack.message.created",
+    status: "paused",
+  });
+
+  it("resumes a paused trigger that matches fleet.json", () => {
+    expect(pausedToResume([event], [paused])).toEqual([
+      { want: event, trigger: paused },
+    ]);
+  });
+
+  it("leaves it alone when an active duplicate already serves the trigger", () => {
+    const active = attached({
+      kind: "event",
+      eventType: "slack.message.created",
+    });
+    expect(pausedToResume([event], [paused, active])).toEqual([]);
+    expect(pausedToResume([event], [active])).toEqual([]);
   });
 });
 
