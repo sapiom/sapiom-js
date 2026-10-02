@@ -1,5 +1,12 @@
 # @sapiom/sandbox-preview
 
+## 0.1.27
+
+### Patch Changes
+
+- Updated dependencies [772f154]
+  - @sapiom/tools@0.41.0
+
 ## 0.1.26
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @sapiom/agent-map
 
+## 0.2.1
+
+### Patch Changes
+
+- 173850f: Agent Studio: the server now issues a project identity for every published workspace scope and every session. `WorkspaceScopeSummary.projectId` is required (`unassignedScopes` is gone; unsafe or unresolvable roots are omitted rather than published project-less), `HarnessSession.agentMapIdentity` is required, and persisted sessions without one are migrated on load to the deepest open root that contains their folder — or dropped when no project can own them. Default session titles ("acme-app", "acme-app 2", …) are assigned once at creation and persisted, so ending a sibling session no longer renames the others.
+
+  Legacy sessions whose persisted identity metadata is malformed, or whose folder is not inside an open project root, are dropped on load; migration never creates a project for them.
+
 ## 0.2.0
 
 ### Minor Changes
