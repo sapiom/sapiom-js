@@ -60,16 +60,19 @@ import {
 import { KB } from "../../_shared/kb.generated";
 import { post, update, type SlackCtx } from "../../_shared/slack";
 import {
+  DRAFT_FAILED_NOTE,
   DraftOutput,
   OUTPUT_NAME,
   SUPERSEDED_BY,
   SYSTEM_PROMPT,
+  TOOL_REMINDER,
   VERB_DECISION,
   buildPrompt,
   cardText,
   copilotCard,
   normalizeOutput,
   outputSchema,
+  responseShape,
 } from "./draft";
 import { seedLocalFixtures } from "./local";
 
@@ -170,6 +173,72 @@ async function triggerTs(db: Db, draft: Draft): Promise<number | null> {
 }
 
 /**
+ * Covers thinking plus the forced tool call (SAP-3280): a routed label may think before it
+ * answers, and those tokens come out of the same cap.
+ */
+const DRAFT_MAX_TOKENS = 8192;
+
+/** Attempts per draft. A second identical step retry would only repeat the miss and its cost. */
+const DRAFT_ATTEMPTS = 2;
+
+/**
+ * The drafting call, retried once inside the step when the model answers without the forced
+ * `draft_reply` call. `run` forces `tool_choice` on every attempt; the retry also says so in the
+ * system prompt. Returns null when no attempt produced a valid draft. A cap that cuts the call
+ * short throws `LlmStructuredOutputTruncatedError` from `run` instead.
+ */
+async function requestDraft(
+  ctx: AgentExecutionContext<Record<string, unknown>>,
+  prompt: string,
+): Promise<DraftOutput | null> {
+  for (let attempt = 1; attempt <= DRAFT_ATTEMPTS; attempt++) {
+    const response = await ctx.sapiom.llm.run({
+      request: {
+        system:
+          attempt === 1
+            ? SYSTEM_PROMPT
+            : `${SYSTEM_PROMPT}\n\n${TOOL_REMINDER}`,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: DRAFT_MAX_TOKENS,
+      },
+      output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
+    });
+    const structured = ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME);
+    const parsed = DraftOutput.safeParse(structured);
+    if (parsed.success) return parsed.data;
+    // The run record does not keep the response; this line is the only trace of why it missed.
+    ctx.logger.warn("draft response has no structured output", {
+      attempt,
+      toolCall: structured === undefined ? "missing" : "invalid",
+      ...responseShape(response),
+    });
+  }
+  return null;
+}
+
+/**
+ * Tell the triage thread no draft is coming, so a teammate replies by hand. Never fails the run:
+ * a throw here would retry the step and pay for both LLM attempts again.
+ */
+async function postDraftFailedNote(
+  ctx: SlackCtx,
+  db: Db,
+  triageRootTs: string,
+): Promise<void> {
+  try {
+    await post(ctx, {
+      channel: await getConfig(db, "channels.triage"),
+      threadTs: triageRootTs,
+      text: DRAFT_FAILED_NOTE,
+    });
+  } catch (err) {
+    ctx.logger.warn("draft-failed note not posted; continuing", {
+      err: String(err),
+    });
+  }
+}
+
+/**
  * The drafting path, run inside the entry step: one step boundary fewer is about two seconds off
  * the 15 s card budget.
  *
@@ -214,28 +283,23 @@ async function draftReply(
         getAccount(db, issue.accountId),
         messagesForIssue(db, issue.id),
       ]);
-      const response = await ctx.sapiom.llm.run({
-        request: {
-          system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: buildPrompt({
-                issue,
-                account,
-                messages: withTriggerMessage(stored, trigger),
-                kb: KB,
-              }),
-            },
-          ],
-          max_tokens: 8192,
-        },
-        output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
-      });
-      const output = normalizeOutput(
-        DraftOutput.parse(ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME)),
-        KB,
+      const raw = await requestDraft(
+        ctx,
+        buildPrompt({
+          issue,
+          account,
+          messages: withTriggerMessage(stored, trigger),
+          kb: KB,
+        }),
       );
+      if (!raw) {
+        await postDraftFailedNote(ctx, db, triageRootTs);
+        return terminate({
+          issueId: issue.id,
+          skipped: "no structured draft",
+        });
+      }
+      const output = normalizeOutput(raw, KB);
       confidence = output.confidence;
       issue = await updateIssue(db, issue.id, { summary: output.summary });
       // An empty reply means the model sees nothing to answer yet. A card would offer Approve

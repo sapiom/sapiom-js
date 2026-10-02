@@ -21,6 +21,7 @@ import {
 import { KB } from "../../_shared/kb.generated";
 import { fakeCtx } from "../../_shared/test-ctx";
 import {
+  DRAFT_FAILED_NOTE,
   MAX_MESSAGE_CHARS,
   MAX_PROMPT_MESSAGES,
   buildPrompt,
@@ -28,6 +29,7 @@ import {
   normalizeOutput,
   outputSchema,
   promptMessages,
+  TOOL_REMINDER,
   type DraftOutput,
 } from "./draft";
 import { agent } from "./index";
@@ -267,6 +269,70 @@ describe("draft path", () => {
       runAgent(fixture("issue/created.json").payload, t.ctx),
     ).rejects.toThrow("model unavailable");
     expect((await getDraft(db, FIXTURE_DRAFT)).status).toBe("pending");
+    expect(t.slack("chat.update")).toHaveLength(0);
+  });
+
+  /** Answer in plain text, without the forced tool call, the first `misses` times. */
+  function skipToolCall(t: ReturnType<typeof ctxFor>, misses: number) {
+    const llm = (
+      t.ctx.sapiom as { llm: { run: (s: unknown) => Promise<unknown> } }
+    ).llm;
+    const run = llm.run.bind(llm);
+    let calls = 0;
+    llm.run = async (spec) => {
+      if (calls++ >= misses) return run(spec);
+      t.llmCalls.push(spec as Record<string, unknown>);
+      return {
+        stop_reason: "end_turn",
+        content: [
+          { type: "thinking", thinking: "..." },
+          { type: "text", text: "Here is a draft." },
+        ],
+      };
+    };
+  }
+  const systemOf = (spec: Record<string, unknown>) =>
+    (spec.request as { system: string }).system;
+
+  it("a response without the tool call is logged and retried once with a reminder", async () => {
+    const t = ctxFor("e");
+    skipToolCall(t, 1);
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    expect(t.llmCalls).toHaveLength(2);
+    expect(systemOf(t.llmCalls[0])).not.toContain(TOOL_REMINDER);
+    expect(systemOf(t.llmCalls[1])).toContain(TOOL_REMINDER);
+    expect(
+      t.logs.find((l) => l.msg === "draft response has no structured output"),
+    ).toMatchObject({
+      level: "warn",
+      data: {
+        attempt: 1,
+        stopReason: "end_turn",
+        blockTypes: ["thinking", "text"],
+      },
+    });
+    const draft = await getDraft(db, last(ds).output!.draftId as string);
+    expect(draft).toMatchObject({ status: "pending", text: DRAFTED.reply });
+    expect(t.slack("chat.postMessage")).toHaveLength(1);
+  });
+
+  it("two responses without the tool call end the run, note it in the triage thread, and keep the old draft", async () => {
+    const t = ctxFor("e");
+    skipToolCall(t, 2);
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    expect(ds.map((d) => d.kind)).toEqual(["terminate"]);
+    expect(last(ds).output).toMatchObject({ skipped: "no structured draft" });
+    expect(t.llmCalls).toHaveLength(2);
+    expect(t.slack("chat.postMessage")).toEqual([
+      expect.objectContaining({
+        channel: "C0TRIAGE001",
+        threadTs: "1790889400.000200",
+        text: DRAFT_FAILED_NOTE,
+      }),
+    ]);
+    expect((await pendingDrafts(db, FIXTURE_ISSUE)).map((d) => d.id)).toEqual([
+      FIXTURE_DRAFT,
+    ]);
     expect(t.slack("chat.update")).toHaveLength(0);
   });
 
