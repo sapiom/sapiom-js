@@ -6,8 +6,12 @@ import type { DecisionQuestion } from "@sapiom/tools";
 
 /** `is_issue` at or above this opens an issue. */
 export const IS_ISSUE_MIN = 0.6;
-/** A `linked_issue` pick other than `new` at or above this links the message to that issue. */
-export const LINK_MIN = 0.5;
+/**
+ * A `linked_issue` pick other than `new` at or above this links a message from another thread to
+ * that issue. High on purpose: a topic-only match (p = 0.63 for "SSO is broken" against an open
+ * "question about SSO") must open a new issue. Replies in an issue's own thread link structurally.
+ */
+export const LINK_MIN = 0.8;
 
 export const CATEGORIES = {
   bug: "Something in the product is broken or behaves wrongly",

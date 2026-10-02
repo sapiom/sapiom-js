@@ -101,13 +101,19 @@ describe("decide", () => {
 
   it("links on a Jev pick at the link threshold, not below, and never to `new`", () => {
     const key = optionKey(cand);
-    expect(decide({ ...base, jev: asJev(0.1, key, LINK_MIN) })).toEqual({
+    expect(LINK_MIN).toBe(0.8);
+    expect(decide({ ...base, jev: asJev(0.1, key, 0.8) })).toEqual({
       kind: "link",
       issueId: cand.issueId,
       reason: "jev",
     });
-    expect(decide({ ...base, jev: asJev(0.1, key, LINK_MIN - 0.01) })).toEqual({
+    expect(decide({ ...base, jev: asJev(0.1, key, 0.79) })).toEqual({
       kind: "ignore",
+    });
+    // A topic-only match on an actual issue opens a new one instead of linking.
+    expect(decide({ ...base, jev: asJev(0.99, key, 0.63) })).toEqual({
+      kind: "open",
+      reason: "jev",
     });
     expect(decide({ ...base, jev: asJev(0.9, "new", 1) }).kind).toBe("open");
     expect(decide({ ...base, jev: asJev(0.1, "issue_999", 1) }).kind).toBe(
