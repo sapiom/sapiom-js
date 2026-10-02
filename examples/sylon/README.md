@@ -76,5 +76,5 @@ The contract every agent builds against is `plans/sylon/interfaces.md` in the Sa
 ## Prerequisites in the target org
 
 A Slack connector with the bot in the customer and triage channels, a Linear connector (with
-`write`) discovered under the relay slug `linear`, and `@sapiom/tools` >= 0.40.0 (for
-`ctx.sapiom.events.emit`).
+`write`) discovered under the relay slug `linear`, and `@sapiom/tools` >= 0.41.0 (for
+`ctx.sapiom.events.emit` and the `connectors.slack` / `connectors.linear` clients).

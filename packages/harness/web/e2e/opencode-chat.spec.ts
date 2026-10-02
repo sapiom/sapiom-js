@@ -929,7 +929,15 @@ test("streams, disposes the old tab's connection, restores history, and sends a 
   await expect(
     page.getByRole("button", { name: "Send message" }),
   ).toBeDisabled();
-  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  // The rail's session rows: one click each, in any project.
+  const tabs = {
+    nth: (index: number) =>
+      page.getByTestId(
+        index === 0
+          ? "rail-session-select-sess-boot"
+          : "rail-session-select-sess-leasing-2",
+      ),
+  };
   await tabs.nth(1).click();
   await expect
     .poll(() => conversations.get("ses_sess_boot")!.streams.size)
@@ -961,7 +969,15 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
   const input = page.getByRole("textbox", { name: "Message Assistant" });
   await input.fill("First session draft");
 
-  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  // The rail's session rows: one click each, in any project.
+  const tabs = {
+    nth: (index: number) =>
+      page.getByTestId(
+        index === 0
+          ? "rail-session-select-sess-boot"
+          : "rail-session-select-sess-leasing-2",
+      ),
+  };
   await tabs.nth(1).click();
   await input.fill("Second session draft");
 
@@ -1017,10 +1033,15 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
   await expect(input).toHaveValue("First session draft");
 
-  // Closing an exited session is the deletion boundary for its draft. If a
-  // later server event reuses that Studio session id, no deleted text returns.
+  // Closing an exited session HIDES it from the rail (flow-navigation.md Q4):
+  // the record stays (History keeps it), so its draft is not a deleted
+  // session's draft. The centre moves to its project's map, and the other
+  // session is one click away.
   await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await page.getByTestId("dead-session-close").click();
+  await expect(page.getByTestId("rail-session-sess-boot")).toHaveCount(0);
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+  await page.getByTestId("rail-session-select-sess-leasing-2").click();
   await expect(page.getByTestId("session-context")).toHaveAttribute(
     "data-session-id",
     "sess-leasing-2",
@@ -1047,10 +1068,11 @@ test("keeps principal-scoped session drafts across centre-pane routes and exited
       },
     }),
   );
-  await page.getByTestId("session-tab-sess-boot").click();
+  await page.getByTestId("rail-session-select-sess-boot").click();
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
-  await expect(input).toHaveValue("");
-  await page.getByTestId("session-tab-sess-leasing-2").click();
+  // The session was hidden, never deleted, so its draft is still its own.
+  await expect(input).toHaveValue("First session draft");
+  await page.getByTestId("rail-session-select-sess-leasing-2").click();
   await expect(input).toHaveValue("Second session draft");
 
   // An auth barrier replaces the whole store. A newly verified principal can
@@ -1524,7 +1546,15 @@ test("reveals foreground Terminal input and preserves Assistant for background a
     .toBe(0);
   await assistant.click();
   await expect(input).toHaveValue("Keep this unsent draft");
-  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
+  // The rail's session rows: one click each, in any project.
+  const tabs = {
+    nth: (index: number) =>
+      page.getByTestId(
+        index === 0
+          ? "rail-session-select-sess-boot"
+          : "rail-session-select-sess-leasing-2",
+      ),
+  };
   await tabs.nth(1).click();
   await expect(input).toHaveValue("");
   await input.fill("A different tab's draft");

@@ -47,26 +47,25 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".harness-terminal")).toBeVisible();
 });
 
-test("keeps independent Assistant and Terminal activity on existing same-folder tabs", async ({
+test("keeps independent Assistant and Terminal activity per session as the rail switches between them", async ({
   page,
 }) => {
-  const tabs = page.getByRole("tablist", { name: "Sessions" }).getByRole("tab");
-  const count = await tabs.count();
+  const rows = page.locator(".rail-session-row");
+  const count = await rows.count();
   await publish(page, 1, [
     row("sess-boot"),
     row("sess-leasing-2", { pendingQuestions: 1 }),
     row("unknown-session"),
   ]);
+  // The header carries the selected session's Assistant state.
   await expect(indicator(page)).toHaveAttribute(
     "aria-label",
     "Assistant: Working",
   );
-  await expect(indicator(page, "sess-leasing-2")).toHaveAttribute(
-    "aria-label",
-    "Assistant: Waiting for input",
-  );
-  await expect(tabs).toHaveCount(count);
+  // An Assistant snapshot never adds or removes rail rows.
+  await expect(rows).toHaveCount(count);
   await expect(indicator(page, "unknown-session")).toHaveCount(0);
+  // Terminal activity is the session's own: the header's busy pulse.
   await page.evaluate(() =>
     (window as any).__HARNESS_TEST__.publish({
       type: "session.activity",
@@ -74,26 +73,28 @@ test("keeps independent Assistant and Terminal activity on existing same-folder 
       at: new Date().toISOString(),
     }),
   );
-  await expect(page.getByTestId("session-tab-busy-sess-boot")).toBeVisible();
-  await tabs.nth(1).click();
-  await expect(indicator(page)).toHaveAttribute(
+  await expect(page.getByTestId("session-busy")).toBeVisible();
+  // One click to the other session: its own Assistant state, not the first's.
+  await page.getByTestId("rail-session-select-sess-leasing-2").click();
+  await expect(indicator(page, "sess-leasing-2")).toHaveAttribute(
     "aria-label",
-    "Assistant: Working",
+    "Assistant: Waiting for input",
   );
   await publish(page, 2, [
     row("sess-boot", { activity: "idle" }),
     row("sess-leasing-2", { activity: "retry" }),
   ]);
-  await expect(indicator(page)).toHaveCount(0);
   await expect(indicator(page, "sess-leasing-2")).toHaveAttribute(
     "aria-label",
     "Assistant: Working",
   );
+  await page.getByTestId("rail-session-select-sess-boot").click();
+  await expect(indicator(page)).toHaveCount(0);
   await expect(
     page.getByRole("img", { name: /Assistant: (Finished|Success)/ }),
   ).toHaveCount(0);
   await page.screenshot({
-    path: test.info().outputPath("independent-assistant-tabs.png"),
+    path: test.info().outputPath("independent-assistant-sessions.png"),
   });
 });
 

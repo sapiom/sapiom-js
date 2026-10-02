@@ -133,10 +133,11 @@ for (const scenario of [
     const firstRequest = failed.createSessionCalls![0]!.req;
     expect(firstRequest.cwd).toBe(BLANK_PROJECT_ROOT);
     expect(failed.createOrder).toEqual([`scaffold:${BLANK_PROJECT_ROOT}/files`]);
-    // The agent is a row under its project already.
+    // The agent exists (scaffolded above); the rail lists sessions, not
+    // agents (flow-navigation.md Q3), and no session has started yet.
     await expect(
-      page.getByTestId("workspace-group-blank-slate").getByTestId("workflow-files"),
-    ).toBeVisible();
+      page.getByTestId("rail-project-blank-slate").locator(".rail-session-row"),
+    ).toHaveCount(0);
 
     await page.getByTestId("composer-send").click();
     await expect(composer).toHaveCount(0);
@@ -197,9 +198,14 @@ test("the screen stays mounted until a delayed first request is prepared", async
     )!;
     const observation = { detachedEarly: false, sawScaffold: false };
     testWindow.__COMPOSER_PREPARATION__ = observation;
-    const observer = new MutationObserver(() => {
+    // Sampled on every DOM mutation AND on a short timer: the scaffold no
+    // longer adds a rail row (the rail lists sessions, not agents), so it can
+    // land without any mutation before the session does.
+    let timer = 0;
+    const sample = (): void => {
       if (testWindow.__HARNESS_TEST__?.lastInitialInput) {
         observer.disconnect();
+        window.clearInterval(timer);
         return;
       }
       observation.detachedEarly ||= !composer.isConnected;
@@ -207,8 +213,10 @@ test("the screen stays mounted until a delayed first request is prepared", async
         testWindow.__HARNESS_TEST__?.createOrder?.some((entry) =>
           entry.startsWith("scaffold:"),
         ) ?? false;
-    });
+    };
+    const observer = new MutationObserver(sample);
     observer.observe(document.body, { childList: true, subtree: true });
+    timer = window.setInterval(sample, 20);
   });
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("composer-send")).toBeDisabled();

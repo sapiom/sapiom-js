@@ -144,8 +144,10 @@ test("a picked file reaches the first request, and the session is rooted at the 
   const createRequest = await lastCreateRequest(page);
   expect(createRequest?.cwd).toBe(BLANK_PROJECT_ROOT);
   await expect(
-    page.getByTestId("workspace-group-blank-slate").getByTestId("workflow-onboarding-flow"),
-  ).toBeVisible();
+    page
+      .getByTestId("rail-project-blank-slate")
+      .locator('.rail-session-row[data-agent="onboarding-flow"]'),
+  ).toHaveCount(1);
 });
 
 test("picker, drop, and pathless clipboard files reach one ordered first request", async ({
@@ -482,7 +484,11 @@ test("an upload failure keeps the screen and its queue; the retry reuses the cre
   await expect(page.getByTestId("composer-files")).toContainText(
     "retry-screenshot.png",
   );
-  await expect(page.getByTestId("workflow-screenshot")).toBeVisible();
+  // The rail lists sessions, not agents (flow-navigation.md Q3), and this
+  // one never started: nothing new under the project.
+  await expect(
+    page.getByTestId("rail-project-blank-slate").locator(".rail-session-row"),
+  ).toHaveCount(0);
 
   const failedProof = await page.evaluate(() => {
     const state = (
@@ -552,7 +558,9 @@ for (const agent of [
     // The session exists (workbench shown) but the prompt is HELD, not
     // injected, because the session never became ready.
     await expect(page.getByTestId("agent-view")).toBeVisible();
-    await expect(page.getByTestId(`workflow-${agent.name}`)).toBeVisible();
+    await expect(
+      page.locator(`.rail-session-row[data-agent="${agent.name}"]`),
+    ).toHaveCount(1);
     expect(await initialTaskText(page)).toMatch(
       new RegExp(`^${escapeRegExp(prompt)}\n\n`),
     );
@@ -593,38 +601,29 @@ for (const agent of [
   });
 }
 
-test("a new session opens terminal-only; the canvas stays hidden until it has content", async ({
+test("a new session's right pane is its new agent's, open or closed as the user left it", async ({
   page,
 }) => {
+  // design.md I3: the pane's open/closed state is written only by the user.
+  // The old terminal-first auto-collapse (and the auto-reveal on content)
+  // overwrote that choice, so neither runs any more.
   await page.getByTestId("composer-input").fill("Build a small thing.");
   await page.getByTestId("composer-send").click();
   await expect(page.getByTestId("agent-view")).toBeVisible();
-
-  // Terminal-only: a fresh mock session has no bundled doc, so the auto-reveal
-  // never fires and the pane stays collapsed — but the manual show is offered.
-  await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
-  await expect(page.getByTestId("right-expand")).toBeVisible();
-  // Manual override still works. The new session settles asynchronously (mock
-  // create → running/ready promotion), and an expand click landing inside that
-  // ~1s transition can be undone by the settle before it takes — a real CI
-  // flake, not a broken affordance (the trace shows the pane open for a frame
-  // then snap shut). The button stays offered, so retry until the pane holds
-  // open, exactly as a user would; once the session is settled it sticks.
-  await expect(async () => {
-    if (
-      (await page.locator(".right-pane").getAttribute("class"))?.includes(
-        "is-collapsed",
-      )
-    ) {
-      await page.getByTestId("right-expand").click();
-    }
-    await expect(page.locator(".right-pane")).not.toHaveClass(/is-collapsed/, {
-      timeout: 1_500,
-    });
-  }).toPass({ timeout: 10_000 });
+  const pane = page.locator(".right-pane");
+  await expect(pane).not.toHaveAttribute("data-absent", "true");
+  await expect(pane).not.toHaveClass(/is-collapsed/);
+  await page.getByTestId("right-collapse").click();
+  await expect(pane).toHaveClass(/is-collapsed/);
+  // The settle of the new session (mock running/ready promotion) does not
+  // reopen it.
+  await page.waitForTimeout(1500);
+  await expect(pane).toHaveClass(/is-collapsed/);
+  await page.getByTestId("right-expand").click();
+  await expect(pane).not.toHaveClass(/is-collapsed/);
 });
 
-test("the new agent appears in the rail under its project before the workbench settles", async ({
+test("the new chat lands in the rail under its project, bound to the new agent", async ({
   page,
 }) => {
   await page
@@ -632,12 +631,11 @@ test("the new agent appears in the rail under its project before the workbench s
     .fill("Diff competitor pricing pages every morning.");
   await page.getByTestId("composer-send").click();
 
-  // The server rescanned before answering the scaffold, so the row is there
-  // before the session POST resolves and the workbench settles.
-  const group = page.getByTestId("workspace-group-blank-slate");
-  await expect(group.getByTestId("workflow-diff-competitor")).toBeVisible();
+  const project = page.getByTestId("rail-project-blank-slate");
   await expect(page.getByTestId("agent-view")).toBeVisible();
-  await expect(group.getByTestId("workflow-diff-competitor")).toBeVisible();
+  const row = project.locator('.rail-session-row[data-agent="diff-competitor"]');
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute("data-selected", "true");
 });
 
 test("Back returns to the session the screen was opened over", async ({

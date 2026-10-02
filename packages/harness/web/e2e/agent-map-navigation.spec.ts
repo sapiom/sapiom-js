@@ -36,10 +36,20 @@ async function open(page: Page, query = "", project = "acme-app") {
   );
   await openMap(page, project);
 }
+/**
+ * What a map interaction must leave alone: the SELECTED session (the rail's
+ * filled row — the project view's header names the project, not a session)
+ * and every session-mutating call. A map click opens a panel; it never
+ * creates, resumes, binds or prompts anything (flow-navigation.md 4.3.2).
+ */
 async function evidence(page: Page) {
   const session = await page
-    .getByTestId("session-context")
-    .getAttribute("data-session-id");
+    .locator('.rail-session-row[data-selected="true"]')
+    .evaluateAll((rows) =>
+      rows.map((row) =>
+        (row.getAttribute("data-testid") ?? "").replace("rail-session-", ""),
+      ),
+    );
   return page.evaluate((session) => {
     const calls = (window as TestWindow).__HARNESS_TEST__;
     return {
@@ -168,19 +178,29 @@ async function updateSession(
     { id, patch },
   );
 }
-async function expectCanvas(page: Page, hasBoard = true) {
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  if (hasBoard) {
-    await expect(
-      page.locator('.canvas-frame-wrap[data-view="board"]'),
-    ).toBeVisible();
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
-  } else await expect(page.getByTestId("canvas-empty-exited")).toBeVisible();
-  await expect(page.getByTestId("right-tab-canvas")).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+/** Single click on an agent node: its panel in place, the map still there
+ *  (flow-navigation.md 4.4, Q7), naming the EXACT agent the node resolved to. */
+async function expectPanel(page: Page, path: string) {
+  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await expect(page.getByTestId("map-agent-panel-path")).toHaveText(path);
+  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
 }
+/** Open canvas on the panel: the agent's own board in the same centre. */
+async function expectAgentCanvas(page: Page) {
+  await page.getByTestId("map-agent-open-canvas").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute(
+    "data-view",
+    "agent",
+  );
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("project-map-pane")
+      .locator('.canvas-frame-wrap[data-view="board"]'),
+  ).toBeVisible();
+}
+const LEASING = "/Users/demo/acme-app/leasing";
 
 for (const mode of [
   "Claude",
@@ -198,7 +218,6 @@ for (const mode of [
           ? "mockNoLiveSessions=1"
           : "",
     );
-    let archivedSession: string | null = null;
     if (mode.startsWith("archived")) {
       await page.getByTestId("rail-history").click();
       await page
@@ -207,48 +226,30 @@ for (const mode of [
         )
         .click();
       await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-      archivedSession = (await evidence(page)).session;
       await openMap(page);
     } else if (mode === "Codex") {
-      await page.getByTestId("session-tab-main-sess-leasing-2").click();
+      await page.getByTestId("rail-session-select-sess-leasing-2").click();
       await updateSession(page, "sess-leasing-2", { boundWorkflowPath: null });
       await openMap(page);
     }
     await probe(page);
     const before = await evidence(page);
-    if (archivedSession) before.session = archivedSession;
-    if (mode === "Claude") await page.getByTestId("canvas-expand").click();
     await node(page).click();
-    // This archived fixture has no saved Canvas document; keep its existing empty state.
-    await expectCanvas(page, mode !== "archived Codex");
-    await expect(
-      page.locator('[data-agent-path="/Users/demo/acme-app/leasing"]'),
-    ).toHaveClass(/is-focused/);
+    await expectPanel(page, LEASING);
     expect(await evidence(page)).toEqual(before);
-    if (mode.startsWith("archived"))
-      await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-    expect((await calls(page)).writes).toBe(1);
-    if (mode === "Claude") {
-      await expect(
-        page.locator('.canvas-frame-wrap[data-view="board"]'),
-      ).toHaveClass(/is-expanded/);
-      await page.getByTestId("canvas-expand-exit").click();
-      await page.reload();
-      await expectCanvas(page);
-    }
-    await openMap(page);
-    expect(await evidence(page)).toEqual({
-      ...before,
-      session: archivedSession ? "" : before.session,
-    });
+    // Navigation is client state now: nothing is written to the server's
+    // per-project selection preference.
+    expect((await calls(page)).writes).toBe(0);
+    await expectAgentCanvas(page);
+    expect(await evidence(page)).toEqual(before);
+    await page.getByTestId("project-map-back").click();
+    await expect(page.getByTestId("agent-map-live")).toBeVisible();
+    expect(await evidence(page)).toEqual(before);
     if (mode.startsWith("archived")) {
+      // Another project's map is just as unable to move the session.
       await openMap(page, "polsia");
       await node(page).click();
-      await expectCanvas(page);
-      await expect(page.getByTestId("dead-session-pane")).toHaveCount(0);
-      await openMap(page);
-      await node(page).click();
-      await expectCanvas(page, mode !== "archived Codex");
+      await expect(page.getByTestId("map-agent-panel")).toBeVisible();
       expect(await evidence(page)).toEqual(before);
     }
   });
@@ -261,17 +262,10 @@ test("same-name agents use the exact ID and path; one refresh finds a newly disc
   await open(page, "flood=1", "polsia");
   await probe(page, { path, refresh: true });
   await publish(page, { type: "workflows.changed" });
-  await expect(page.locator(`[data-agent-path="${path}"]`)).toHaveCount(0);
   await node(page).click();
-  await expectCanvas(page);
-  await expect(page.locator(`[data-agent-path="${path}"]`)).toHaveClass(
-    /is-focused/,
-  );
-  await expect(
-    page.locator(
-      '[data-agent-path="/Users/demo/polsia/backend/src/pipelines/ingest"]',
-    ),
-  ).not.toHaveClass(/is-focused/);
+  // The panel names the exact path the node's id resolved to, not its
+  // same-named neighbour at /Users/demo/polsia/backend/src/pipelines/ingest.
+  await expectPanel(page, path);
   expect((await calls(page)).refreshes).toBe(2);
 });
 
@@ -295,6 +289,7 @@ test("Info and resource inspection preserve the map and return keyboard focus", 
     "No implementation is linked yet.",
   );
   await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+  await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
 });
 
 for (const [code, message] of [
@@ -309,6 +304,7 @@ for (const [code, message] of [
     const inspector = page.getByTestId("agent-map-inspector");
     await expect(inspector).toContainText(message);
     await expect(inspector).not.toContainText("private server detail");
+    await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
     expect((await calls(page)).writes).toBe(0);
   });
 }
@@ -319,10 +315,12 @@ for (const action of [
   "another node",
   "auth change",
   "map change",
-  "collapse",
+  "leaving the map",
   "refresh then Info",
 ]) {
-  test(`a delayed reply cannot navigate after ${action}`, async ({ page }) => {
+  test(`a delayed reply cannot open a panel after ${action}`, async ({
+    page,
+  }) => {
     await open(page, "", "polsia");
     const refreshing = action === "refresh then Info";
     const path = "/Users/demo/polsia/backend/src/agents/ads";
@@ -332,10 +330,7 @@ for (const action of [
         ? { path, refresh: true, delayRefresh: true }
         : { delay: true },
     );
-    if (refreshing) {
-      await publish(page, { type: "workflows.changed" });
-      await expect(page.locator(`[data-agent-path="${path}"]`)).toHaveCount(0);
-    }
+    if (refreshing) await publish(page, { type: "workflows.changed" });
     await node(page).click();
     await expect(node(page)).toHaveAttribute("aria-busy", "true");
     if (refreshing)
@@ -350,7 +345,7 @@ for (const action of [
     if (action === "another project") await openMap(page, "acme-app");
     if (action === "another node") {
       await node(page, 102).click();
-      await expectCanvas(page);
+      await expect(page.getByTestId("map-agent-panel")).toBeVisible();
     }
     if (action === "auth change")
       await publish(page, {
@@ -358,7 +353,8 @@ for (const action of [
         authenticated: false,
         organizationName: "Another account",
       });
-    if (action === "collapse") await page.getByTestId("right-collapse").click();
+    if (action === "leaving the map")
+      await page.getByTestId("rail-session-select-sess-boot").click();
     if (action === "map change")
       await publish(page, {
         type: "agent-map.proposal.changed",
@@ -382,57 +378,79 @@ for (const action of [
           acceptedAt: new Date().toISOString(),
         },
       });
-    const writes = (await calls(page)).writes;
+    const panelPath = page.getByTestId("map-agent-panel-path");
+    const panelBefore =
+      (await panelPath.count()) > 0 ? await panelPath.textContent() : null;
     await page.evaluate(() => (window as TestWindow).__navigation.release!());
     await expect
       .poll(async () => (await calls(page)).completed)
       .toBe(action === "another node" ? 2 : 1);
     if (refreshing)
       await expect.poll(async () => (await calls(page)).refreshes).toBe(2);
-    expect((await calls(page)).writes).toBe(writes);
-    if (action === "collapse")
-      await expect(page.locator(".right-pane")).toHaveClass(/is-collapsed/);
-    else if (action !== "another node")
+    expect((await calls(page)).writes).toBe(0);
+    if (action === "leaving the map") {
+      await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+      await expect(page.getByTestId("agent-view")).toBeVisible();
+    } else if (action === "another node") {
+      // The newer node's panel stands; the stale reply did not replace it.
+      await expect(page.getByTestId("map-agent-panel-path")).toHaveText(
+        panelBefore!,
+      );
+    } else {
       await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+      await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+    }
   });
 }
 
-test("mobile keyboard activation opens Canvas and closes the rail", async ({
+test("mobile keyboard activation opens the agent's panel, then its canvas, with the rail closed", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await open(page, "mockNoLiveSessions=1");
   const before = await evidence(page);
   await node(page).press("Space");
-  await expectCanvas(page);
+  await expect(page.getByTestId("map-agent-panel")).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
+  await expectAgentCanvas(page);
   expect(await evidence(page)).toEqual(before);
 });
 
-for (const boundWorkflowPath of ["/Users/demo/acme-app/leasing", null]) {
-  test(`ending a session retains its own Canvas with binding ${boundWorkflowPath}`, async ({
-    page,
-  }) => {
-    await page.goto("/?seed=0&mockStudioProjects=present");
-    await expect(page.getByTestId("session-context")).toBeVisible();
-    await updateSession(page, "sess-boot", { boundWorkflowPath });
-    await page.getByTestId("session-tab-main-sess-boot").click();
-    await expectCanvas(page);
-    const source = await page.locator(".canvas-iframe").getAttribute("src");
-    await updateSession(page, "sess-boot", {
-      boundWorkflowPath,
-      status: "exited",
-    });
-    await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-    await expectCanvas(page);
-    await expect(page.locator(".canvas-iframe")).toHaveAttribute(
-      "src",
-      source!,
-    );
+test("ending a bound session keeps its own Canvas in the right pane", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present");
+  await expect(page.getByTestId("session-context")).toBeVisible();
+  await page.getByTestId("rail-session-select-sess-boot").click();
+  const iframe = page.getByTestId("right-panel-board").locator(".canvas-iframe");
+  await expect(iframe).toBeVisible();
+  const source = await iframe.getAttribute("src");
+  await updateSession(page, "sess-boot", {
+    boundWorkflowPath: LEASING,
+    status: "exited",
   });
-}
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await expect(iframe).toHaveAttribute("src", source!);
+  await expect(page.locator(".right-pane")).not.toHaveAttribute("data-absent", "true");
+});
 
-test("deployment refresh preserves a pending node navigation", async ({ page }) => {
+test("an unbound session has no right pane, live or ended (design.md I3)", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present");
+  await expect(page.getByTestId("session-context")).toBeVisible();
+  await updateSession(page, "sess-boot", { boundWorkflowPath: null });
+  await page.getByTestId("rail-session-select-sess-boot").click();
+  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
+  await updateSession(page, "sess-boot", {
+    boundWorkflowPath: null,
+    status: "exited",
+  });
+  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
+  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
+});
+
+test("deployment refresh preserves a pending node resolution", async ({ page }) => {
   await open(page);
   await probe(page, { delay: true });
   const before = await evidence(page);
@@ -441,6 +459,6 @@ test("deployment refresh preserves a pending node navigation", async ({ page }) 
   await publish(page, { type: "workflows.changed" });
   await expect.poll(async () => (await calls(page)).refreshes).toBe(1);
   await page.evaluate(() => (window as TestWindow).__navigation.release!());
-  await expectCanvas(page);
+  await expectPanel(page, LEASING);
   expect(await evidence(page)).toEqual(before);
 });

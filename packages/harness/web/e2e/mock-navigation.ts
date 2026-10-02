@@ -1,27 +1,92 @@
 import { expect, type Page } from "@playwright/test";
 
 /**
- * A project whose root is also an agent has one rail row, and that row IS the
- * agent: clicking it focuses the agent.
- *
- * This helper used to be called `focusRfqAgentThroughProjectGraph`,
- * and the name was the defect's own fingerprint. The row's click used to belong to the
- * Project axis unconditionally, so it opened a dependency graph that had
- * exactly one node in it, and the only way to reach the agent was to click that
- * node. Eleven specs went the long way round, which is how a user-visible bug
- * ("I have to click that in order to see my agent") sat behind a green suite:
- * the detour had been written into the fixture's own vocabulary.
- *
- * The graph is still one click away, on the row's own map control.
+ * Navigation helpers for Project › Sessions (plans/studio-navigation/
+ * flow-navigation.md). The rail lists sessions, not agents; an agent is
+ * reached on its project's map, in the centre.
  */
-export async function focusRfqAgent(page: Page): Promise<void> {
-  const row = page.getByTestId("workflow-rfq");
-  await expect(row).toBeVisible();
-  await row.locator(".workspace-row-main").click();
-  await expect(row).toHaveClass(/is-focused/);
+
+/** The selected session, as the header states it. */
+export async function activeSessionId(page: Page): Promise<string | null> {
+  return page.getByTestId("session-context").getAttribute("data-session-id");
 }
 
-/** Bare-project labels now open graphs, so live sessions remain reachable through the finder. */
+/** One click on a session row selects it, from anywhere in the rail. */
+export async function selectSession(page: Page, id: string): Promise<void> {
+  await page.getByTestId(`rail-session-select-${id}`).click();
+  await expect.poll(() => activeSessionId(page)).toBe(id);
+}
+
+/** A project header's name: its Agent Map is the centre. */
+export async function openProjectMap(page: Page, label: string): Promise<void> {
+  await page.getByTestId(`project-select-${label}`).click();
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+}
+
+/**
+ * An agent's panel on its project's map. The default mock ships no drawn map,
+ * so the project's agents are cards (`map-agent-<name>`); a drawn map's node
+ * opens the same panel.
+ */
+export async function openAgentPanel(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<void> {
+  await openProjectMap(page, project);
+  await page.getByTestId(`map-agent-${agent}`).click();
+  await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", agent);
+}
+
+/** Open canvas on the agent's panel: its canvas in the same centre. */
+export async function openAgentCanvas(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<void> {
+  await openAgentPanel(page, project, agent);
+  await page.getByTestId("map-agent-open-canvas").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+}
+
+/**
+ * Start chat on the agent's panel: a NEW session bound to the agent, selected,
+ * with the agent's Canvas / Steps / Secrets in the right pane. Resolves to the
+ * new session's id. This is the path that replaced focusing an agent row and
+ * pressing its empty state's Start session.
+ */
+export async function startChatWithAgent(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<string> {
+  const before = await page
+    .getByTestId(`rail-project-${project}`)
+    .locator(".rail-session-row")
+    .count();
+  await openAgentPanel(page, project, agent);
+  await page.getByTestId("map-agent-start-chat").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
+  const rows = page.getByTestId(`rail-project-${project}`).locator(".rail-session-row");
+  await expect(rows).toHaveCount(before + 1);
+  const id = ((await rows.first().getAttribute("data-testid")) ?? "").replace("rail-session-", "");
+  await expect.poll(() => activeSessionId(page)).toBe(id);
+  await expect(rows.first()).toHaveAttribute("data-agent", agent);
+  return id;
+}
+
+/** The rfq agent bound into a fresh chat: its board is the right pane's. */
+export async function startChatWithRfq(page: Page): Promise<string> {
+  return startChatWithAgent(page, "rfq-agent", "rfq");
+}
+
+/** Remove from the rail: the project header's hover × opens the confirm. */
+export async function openRemoveProject(page: Page, label: string): Promise<void> {
+  await page.getByTestId(`workspace-group-${label}`).hover();
+  await page.getByTestId(`project-remove-${label}`).click();
+}
+
+/** The finder reaches any session, including one under no open project. */
 export async function selectMockSessionFromPalette(
   page: Page,
   name: string,
@@ -76,14 +141,19 @@ export async function openNewAgentScreen(
 }
 
 /**
- * NEW AGENT in a project you already have (§4.2, D33, D34): the row's
- * hover-revealed `+` lands on the same screen, scoped to that project.
+ * NEW AGENT in a project you already have: New agent in the project view's
+ * header (flow-navigation.md Q11). A project with no agents opens the same
+ * screen from its name alone (D36).
  */
 export async function openNewAgentInProject(
   page: Page,
   label: string,
 ): Promise<void> {
-  await page.getByTestId(`project-create-agent-${label}`).click();
-  await expect(page.getByTestId("new-session-composer")).toBeVisible();
+  await page.getByTestId(`project-select-${label}`).click();
+  const composer = page.getByTestId("new-session-composer");
+  const newAgent = page.getByTestId("project-map-new-agent");
+  await expect(composer.or(newAgent)).toBeVisible();
+  if (!(await composer.isVisible())) await newAgent.click();
+  await expect(composer).toBeVisible();
   await expect(page.getByTestId("new-agent-project")).toContainText(label);
 }
