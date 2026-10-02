@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { AttachedTrigger, ReceiptFire, ReceiptSummary } from "./logic";
 import {
   AGENTS,
+  costOf,
+  costSummary,
   cuesFromReplay,
+  dispatchDelays,
+  parseWindow,
+  percentile,
+  summarizeLatencies,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
@@ -297,5 +303,100 @@ describe("cues", () => {
       "Bug",
       "Follow up (reply in the bug thread)",
     ]);
+  });
+});
+
+describe("metrics", () => {
+  it("takes nearest-rank percentiles and ignores missing values", () => {
+    const v = [5, 1, null, 3, 2, 4, 10, 9, 8, 7, 6];
+    expect(percentile(v, 50)).toBe(5);
+    expect(percentile(v, 90)).toBe(9);
+    expect(percentile([], 50)).toBeNull();
+    expect(percentile([null], 90)).toBeNull();
+  });
+
+  it("parses the window, defaulting to 24h and refusing others", () => {
+    expect(parseWindow(null)).toBe("24h");
+    expect(parseWindow("7d")).toBe("7d");
+    expect(parseWindow("30d")).toBeNull();
+  });
+
+  it("summarizes each latency leg across issues", () => {
+    const leg = (m: number | null, d: number | null) => ({
+      messageToCard: m,
+      issueToDraft: null,
+      issueToDraftCard: d,
+      messageToDraftCard: m === null || d === null ? null : m + d,
+    });
+    const s = summarizeLatencies([leg(1, 10), leg(3, 20), leg(null, 30)]);
+    expect(s.messageToCard).toEqual({ n: 2, p50: 1, p90: 3 });
+    expect(s.issueToDraftCard.p50).toBe(20);
+    expect(s.messageToDraftCard.n).toBe(2);
+  });
+
+  it("times dispatch for fleet fires that have started", () => {
+    const fire = (
+      slug: string,
+      startedAt: string | null,
+      where = "execution",
+    ) =>
+      ({
+        trigger: { definitionSlug: slug },
+        [where]: startedAt ? { startedAt } : null,
+      }) as never;
+    const slug = AGENTS[0]!.slug;
+    expect(
+      dispatchDelays("2026-10-01T10:00:00Z", [
+        fire(slug, "2026-10-01T10:00:02.5Z"),
+        fire(slug, "2026-10-01T10:00:04Z", "run"),
+        fire(slug, null),
+        fire("someone-elses-agent", "2026-10-01T10:00:09Z"),
+        fire(slug, "2026-10-01T09:59:00Z"),
+      ]),
+    ).toEqual([2.5, 4]);
+  });
+
+  it("reads spend as numbers whether the API sends strings or numbers", () => {
+    expect(
+      costOf({
+        totalUsd: "0.42",
+        llm: { listUsd: 0.3 },
+        capability: { totalUsd: "0.12" },
+        compute: { sandboxSeconds: 90 },
+      }),
+    ).toEqual({
+      usd: 0.42,
+      llmUsd: 0.3,
+      capabilityUsd: 0.12,
+      sandboxSeconds: 90,
+    });
+    expect(costOf({ totalUsd: 1 })).toEqual({
+      usd: 1,
+      llmUsd: 0,
+      capabilityUsd: 0,
+      sandboxSeconds: 0,
+    });
+  });
+
+  it("prices only tickets with a counted run", () => {
+    const t = (usd: number, runsCounted: number) => ({
+      usd,
+      llmUsd: usd / 2,
+      capabilityUsd: usd / 4,
+      sandboxSeconds: 10,
+      runsCounted,
+      runsMissing: 0,
+    });
+    const s = costSummary([t(1, 2), t(3, 1), t(100, 0)]);
+    expect(s.tickets).toBe(2);
+    expect(s.unpriced).toBe(1);
+    expect(s.meanUsd).toBe(2);
+    expect(s.p90Usd).toBe(3);
+    expect(s.totalUsd).toBe(4);
+    expect(s.llmUsd).toBe(2);
+    expect(s.capabilityUsd).toBe(1);
+    expect(s.meanSandboxSeconds).toBe(10);
+    expect(s.pylonUsdPerTicket).toBe(3);
+    expect(costSummary([]).meanUsd).toBeNull();
   });
 });

@@ -117,6 +117,7 @@
         cursor: not-allowed;
       }
       input[type="password"],
+      select,
       input[type="text"] {
         font: inherit;
         font-size: 13px;
@@ -527,6 +528,18 @@
             </h2>
             <div id="timeline" class="muted">loading…</div>
           </section>
+          <section class="card">
+            <h2>
+              Metrics
+              <span class="row"
+                ><select id="mt-window" aria-label="Window">
+                  <option value="24h">24 hours</option>
+                  <option value="7d">7 days</option>
+                </select></span
+              >
+            </h2>
+            <div id="metrics" class="muted">loading…</div>
+          </section>
         </div>
 
         <div class="stack">
@@ -801,7 +814,14 @@
       }
 
       // --- summary strip -------------------------------------------------------------------
-      const S = { counts: null, fleet: null, latency: null, failed: null };
+      const S = {
+        counts: null,
+        fleet: null,
+        latency: null,
+        failed: null,
+        metrics: null,
+      };
+      const usd = (v) => (v == null ? "—" : `$${v.toFixed(v < 1 ? 3 : 2)}`);
       const secs = (v) => (v == null ? "—" : `${v.toFixed(1)} s`);
       function renderSummary() {
         const parts = [];
@@ -825,6 +845,10 @@
         if (S.latency)
           parts.push(
             `<span class="item muted">last ticket</span><span class="item">message → card <strong>${secs(S.latency.messageToCard)}</strong></span><span class="item">issue → draft card <strong>${secs(S.latency.issueToDraftCard)}</strong></span>`,
+          );
+        if (S.metrics && S.metrics.cost.meanUsd != null)
+          parts.push(
+            `<span class="item muted">${S.metrics.window}</span><span class="item">cost / ticket <strong>${usd(S.metrics.cost.meanUsd)}</strong></span><span class="item">message → draft p50 <strong>${secs(S.metrics.latency.messageToDraftCard.p50)}</strong></span>`,
           );
         if (S.failed)
           parts.push(
@@ -1035,6 +1059,58 @@
       }
       $("rcpt-refresh").onclick = refreshReceipts;
 
+      // --- metrics -------------------------------------------------------------------------
+      async function refreshMetrics() {
+        try {
+          const m = await get(`/api/metrics?window=${$("mt-window").value}`);
+          S.metrics = m;
+          renderSummary();
+          const spreadRow = (label, sp) =>
+            `<tr><td>${label}</td><td class="num">${secs(sp.p50)}</td><td class="num">${secs(sp.p90)}</td><td class="num muted">${sp.n}</td></tr>`;
+          const c = m.cost;
+          const versus =
+            c.meanUsd == null
+              ? ""
+              : c.meanUsd <= c.pylonUsdPerTicket
+                ? "ok"
+                : "bad";
+          $("metrics").className = "";
+          $("metrics").innerHTML = `
+            <div class="muted" style="margin-bottom:6px">${m.issues} ticket${m.issues === 1 ? "" : "s"} in the window${m.capped ? " (newest 50)" : ""}</div>
+            <table>
+              <tr><th></th><th class="num">p50</th><th class="num">p90</th><th class="num">tickets</th></tr>
+              ${spreadRow("Message → issue card", m.latency.messageToCard)}
+              ${spreadRow("Issue → first draft card", m.latency.issueToDraftCard)}
+              ${spreadRow("Message → first draft card", m.latency.messageToDraftCard)}
+              ${spreadRow("Event → run start", m.dispatch)}
+            </table>
+            <table style="margin-top:10px">
+              <tr><td>Cost per ticket</td><td class="num ${versus}">mean <strong>${usd(c.meanUsd)}</strong></td><td class="num">p90 <strong>${usd(c.p90Usd)}</strong></td></tr>
+              <tr><td>Total</td><td class="num"><strong>${usd(c.totalUsd)}</strong></td><td class="num muted">LLM ${usd(c.llmUsd)} · capability ${usd(c.capabilityUsd)}</td></tr>
+              <tr><td>Sandbox per ticket</td><td class="num">${c.meanSandboxSeconds == null ? "—" : `${c.meanSandboxSeconds.toFixed(0)} s`}</td><td></td></tr>
+              <tr><td>Pylon</td><td class="num muted">${usd(c.pylonUsdPerTicket)} per ticket</td><td></td></tr>
+            </table>
+            <div class="muted" style="font-size:12px;margin-top:6px">Sandbox compute may show $0 on internal orgs.${m.runsMissing ? ` ${m.runsMissing} run${m.runsMissing === 1 ? "" : "s"} not priced yet; reload to fill in.` : ""}${c.unpriced ? ` ${c.unpriced} ticket${c.unpriced === 1 ? "" : "s"} with no priced run are left out of the mean.` : ""}</div>
+            ${
+              m.perIssue.length
+                ? `<div class="scroll" style="margin-top:8px"><table>
+              <tr><th>#</th><th class="num">msg → card</th><th class="num">msg → draft</th><th class="num">cost</th></tr>
+              ${m.perIssue
+                .slice(0, 10)
+                .map(
+                  (i) =>
+                    `<tr><td class="num">#${i.number}</td><td class="num">${secs(i.messageToCard)}</td><td class="num">${secs(i.messageToDraftCard)}</td><td class="num">${usd(i.usd)}</td></tr>`,
+                )
+                .join("")}
+            </table></div>`
+                : ""
+            }`;
+        } catch (e) {
+          $("metrics").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("mt-window").onchange = refreshMetrics;
+
       // --- system --------------------------------------------------------------------------
       let systemLoaded = false;
       let systemAgents = [];
@@ -1149,6 +1225,7 @@
       refreshBoard();
       refreshTimeline();
       refreshReceipts();
+      refreshMetrics();
       loadCues().catch((e) => ($("cues").textContent = e.message));
       setInterval(() => {
         refreshBoard();
@@ -1156,6 +1233,7 @@
       }, 3000);
       setInterval(refreshFleet, 10000);
       setInterval(refreshReceipts, 20000);
+      setInterval(refreshMetrics, 60000);
     </script>
   </body>
 </html>

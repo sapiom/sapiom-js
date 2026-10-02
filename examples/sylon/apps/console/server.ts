@@ -35,22 +35,36 @@ import {
   LIVE_AGENT,
   TABLES,
   agentByKey,
+  METRIC_WINDOWS,
   agentPageUrl,
+  costOf,
+  costSummary,
   cuesFromReplay,
+  dispatchDelays,
   failedFleetReceipts,
   fleetWideKeys,
+  isFinalSpend,
   isOn,
   latencies,
   linearIssueUrl,
   listensTo,
+  parseWindow,
   planSwitch,
   receiptView,
   replayPlan,
   redact,
   slackChannelUrl,
+  spread,
+  summarizeLatencies,
+  toMs,
   triggerBody,
   triggerStates,
   type AttachedTrigger,
+  type Cost,
+  type ExecutionSpend,
+  type IssueCost,
+  type Latencies,
+  type TimedFire,
   type ReceiptFire,
   type ReceiptSummary,
 } from "./logic";
@@ -329,6 +343,183 @@ async function failedReceipts() {
   return failedFleetReceipts(receipts).map(receiptView);
 }
 
+// --- metrics ---------------------------------------------------------------------------------
+
+/** Issues priced and timed per request, newest first; bounds the API calls a page load can cost. */
+const METRIC_ISSUES = 50;
+/** Spend reads not already cached, per request; the rest are counted as missing and fill in on later loads. */
+const SPEND_CALLS = 150;
+const DETAIL_CALLS = 50;
+const CONCURRENCY = 8;
+
+/** Final spend by execution id: an execution that has settled never changes. */
+const spendCache = new Map<string, Cost>();
+/** Dispatch delays by receipt id, kept once every fleet fire of the receipt has a start time. */
+const dispatchCache = new Map<string, number[]>();
+
+/** `fn` over `items`, `CONCURRENCY` at a time; a failed item yields null rather than failing the page. */
+async function pooled<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+): Promise<(R | null)[]> {
+  const out: (R | null)[] = new Array(items.length).fill(null);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]!).catch(() => null);
+      }
+    }),
+  );
+  return out;
+}
+
+async function executionCosts(ids: string[]): Promise<Map<string, Cost>> {
+  const out = new Map<string, Cost>();
+  const todo: string[] = [];
+  for (const id of ids) {
+    const hit = spendCache.get(id);
+    if (hit) out.set(id, hit);
+    else todo.push(id);
+  }
+  const batch = todo.slice(0, SPEND_CALLS);
+  const spends = await pooled(batch, (id) =>
+    sapiom<ExecutionSpend>("GET", `/v1/workflows/executions/${id}/spend`),
+  );
+  batch.forEach((id, n) => {
+    const spend = spends[n];
+    if (!spend) return;
+    const cost = costOf(spend);
+    // A run still settling is shown now and read again next time.
+    if (isFinalSpend(spend)) spendCache.set(id, cost);
+    out.set(id, cost);
+  });
+  return out;
+}
+
+/** Receipt arrival → run start for each Sylon fire of the receipts received since `since`. */
+async function dispatchSeconds(since: number): Promise<number[]> {
+  const slugs = new Set(AGENTS.map((a) => a.slug));
+  const list = await sapiom<ReceiptSummary[]>(
+    "GET",
+    "/v1/workflows/receipts?limit=100",
+  );
+  const mine = list.filter(
+    (r) =>
+      (toMs(r.receivedAt) ?? 0) >= since &&
+      r.triggerSlugs.some((slug) => slugs.has(slug)),
+  );
+  const seen = new Map<string, number[]>();
+  const fresh = mine
+    .filter((r) => !dispatchCache.has(r.id))
+    .slice(0, DETAIL_CALLS);
+  const details = await pooled(fresh, (r) =>
+    sapiom<{ fires?: TimedFire[] }>("GET", `/v1/workflows/receipts/${r.id}`),
+  );
+  fresh.forEach((r, n) => {
+    const fires = details[n]?.fires;
+    if (!fires) return;
+    const delays = dispatchDelays(r.receivedAt, fires);
+    const ours = fires.filter(
+      (f) => f.trigger && slugs.has(f.trigger.definitionSlug),
+    );
+    seen.set(r.id, delays);
+    // Cached only once every fleet fire has started; an earlier read would freeze a partial list.
+    if (ours.length > 0 && delays.length === ours.length)
+      dispatchCache.set(r.id, delays);
+  });
+  return mine.flatMap((r) => dispatchCache.get(r.id) ?? seen.get(r.id) ?? []);
+}
+
+async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
+  const since = Date.now() - METRIC_WINDOWS[window];
+  const issues = await d.query<Record<string, unknown>>(
+    `select id, number, created_at, triage_root_ts from issues
+      where created_at >= $1 order by number desc limit ${METRIC_ISSUES}`,
+    [new Date(since).toISOString()],
+  );
+  const ids = issues.map((i) => i.id as string);
+  const [firstMessages, firstDrafts, runs] = ids.length
+    ? await Promise.all([
+        d.query<Record<string, unknown>>(
+          `select distinct on (issue_id) issue_id, ts from messages
+            where issue_id = any($1) and direction = 'customer' order by issue_id, created_at asc`,
+          [ids],
+        ),
+        d.query<Record<string, unknown>>(
+          `select distinct on (issue_id) issue_id, card_ts, created_at from drafts
+            where issue_id = any($1) order by issue_id, created_at asc`,
+          [ids],
+        ),
+        d.query<Record<string, unknown>>(
+          "select execution_id, issue_id from runs where issue_id = any($1)",
+          [ids],
+        ),
+      ])
+    : [[], [], []];
+  const messageOf = new Map(firstMessages.map((m) => [m.issue_id, m]));
+  const draftOf = new Map(firstDrafts.map((m) => [m.issue_id, m]));
+  const executions = [...new Set(runs.map((r) => r.execution_id as string))];
+
+  const [costs, dispatch] = await Promise.all([
+    executionCosts(executions),
+    dispatchSeconds(since).catch(() => [] as number[]),
+  ]);
+
+  const rows = issues.map((i) => {
+    const mine = runs
+      .filter((r) => r.issue_id === i.id)
+      .map((r) => r.execution_id as string);
+    const counted = mine.filter((id) => costs.has(id));
+    const total = counted.reduce<Cost>(
+      (t, id) => {
+        const c = costs.get(id)!;
+        return {
+          usd: t.usd + c.usd,
+          llmUsd: t.llmUsd + c.llmUsd,
+          capabilityUsd: t.capabilityUsd + c.capabilityUsd,
+          sandboxSeconds: t.sandboxSeconds + c.sandboxSeconds,
+        };
+      },
+      { usd: 0, llmUsd: 0, capabilityUsd: 0, sandboxSeconds: 0 },
+    );
+    const draft = draftOf.get(i.id);
+    const latency: Latencies = latencies({
+      customerTs: (messageOf.get(i.id)?.ts as string | undefined) ?? null,
+      triageRootTs: (i.triage_root_ts as string | null) ?? null,
+      issueCreatedAt: i.created_at as Date,
+      draftCreatedAt: (draft?.created_at as Date | undefined) ?? null,
+      draftCardTs: (draft?.card_ts as string | undefined) ?? null,
+    });
+    const cost: IssueCost = {
+      ...total,
+      runsCounted: counted.length,
+      runsMissing: mine.length - counted.length,
+    };
+    return { number: Number(i.number), latency, cost };
+  });
+
+  return {
+    window,
+    issues: rows.length,
+    capped: rows.length === METRIC_ISSUES,
+    latency: summarizeLatencies(rows.map((r) => r.latency)),
+    dispatch: spread(dispatch),
+    cost: costSummary(rows.map((r) => r.cost)),
+    runsMissing: rows.reduce((n, r) => n + r.cost.runsMissing, 0),
+    perIssue: rows.map((r) => ({
+      number: r.number,
+      ...r.latency,
+      usd: r.cost.runsCounted ? r.cost.usd : null,
+      llmUsd: r.cost.llmUsd,
+      capabilityUsd: r.cost.capabilityUsd,
+      sandboxSeconds: r.cost.sandboxSeconds,
+      runsMissing: r.cost.runsMissing,
+    })),
+  };
+}
+
 /**
  * The system map: channels, agents, tables and the Linear project, as ids, names and links only.
  * Slack names no team id in config, so it is read off the on-call user's profile; a lookup that
@@ -442,6 +633,14 @@ const GET: [RegExp, Handler][] = [
     },
   ],
   [/^\/api\/receipts\/failed$/, () => failedReceipts()],
+  [
+    /^\/api\/metrics$/,
+    (_, __, url) => {
+      const window = parseWindow(url.searchParams.get("window"));
+      if (!window) throw new HttpError(400, "window must be 24h or 7d");
+      return withConsoleDb((d) => metrics(d, window));
+    },
+  ],
   [/^\/api\/cues$/, async () => cuesFromReplay(replay)],
   [/^\/api\/system$/, () => withConsoleDb(system)],
 ];

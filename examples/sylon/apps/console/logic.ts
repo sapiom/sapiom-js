@@ -387,3 +387,150 @@ export function cuesFromReplay(replay: ReplayScript) {
     })),
   };
 }
+
+// --- metrics ---------------------------------------------------------------------------------
+
+export const METRIC_WINDOWS = { "24h": 24 * 3600_000, "7d": 7 * 24 * 3600_000 };
+export type MetricWindow = keyof typeof METRIC_WINDOWS;
+
+export function parseWindow(raw: string | null): MetricWindow | null {
+  if (raw === null) return "24h";
+  return raw in METRIC_WINDOWS ? (raw as MetricWindow) : null;
+}
+
+/** What the Console compares its cost per ticket against (Pylon's per-ticket price). */
+export const PYLON_USD_PER_TICKET = 3;
+
+/** Nearest-rank percentile (`p` in 0..100) of the finite numbers in `values`; null when none. */
+export function percentile(
+  values: (number | null | undefined)[],
+  p: number,
+): number | null {
+  const v = values
+    .filter((x): x is number => typeof x === "number" && Number.isFinite(x))
+    .sort((a, b) => a - b);
+  if (!v.length) return null;
+  return v[Math.max(0, Math.ceil((p / 100) * v.length) - 1)]!;
+}
+
+export interface Spread {
+  n: number;
+  p50: number | null;
+  p90: number | null;
+}
+
+export function spread(values: (number | null | undefined)[]): Spread {
+  return {
+    n: values.filter((x) => typeof x === "number" && Number.isFinite(x)).length,
+    p50: percentile(values, 50),
+    p90: percentile(values, 90),
+  };
+}
+
+/** p50 and p90 across issues of each latency leg. */
+export function summarizeLatencies(all: Latencies[]) {
+  return {
+    messageToCard: spread(all.map((l) => l.messageToCard)),
+    issueToDraftCard: spread(all.map((l) => l.issueToDraftCard)),
+    messageToDraftCard: spread(all.map((l) => l.messageToDraftCard)),
+  };
+}
+
+/** A fire of `GET /v1/workflows/receipts/<id>`, as far as dispatch timing reads it. */
+export interface TimedFire {
+  trigger: { definitionSlug: string } | null;
+  execution?: { startedAt?: string | null } | null;
+  run?: { startedAt?: string | null } | null;
+  startedAt?: string | null;
+}
+
+/** When the fire's run started; the API has put this on `execution`, `run` or the fire itself. */
+export function fireStartedAt(f: TimedFire): string | null {
+  return f.execution?.startedAt ?? f.run?.startedAt ?? f.startedAt ?? null;
+}
+
+/** Seconds from the receipt's arrival to each fleet fire's run start; fires not yet started are skipped. */
+export function dispatchDelays(
+  receivedAt: string,
+  fires: TimedFire[],
+  slugs: string[] = AGENTS.map((a) => a.slug),
+): number[] {
+  const ours = new Set(slugs);
+  const out: number[] = [];
+  for (const f of fires) {
+    if (!f.trigger || !ours.has(f.trigger.definitionSlug)) continue;
+    const s = secondsBetween(toMs(receivedAt), toMs(fireStartedAt(f)));
+    if (s !== null && s >= 0) out.push(s);
+  }
+  return out;
+}
+
+/** `GET /v1/workflows/executions/<id>/spend`. */
+export interface ExecutionSpend {
+  totalUsd: number | string;
+  settleState?: string;
+  llm?: { listUsd?: number | string | null } | null;
+  capability?: { totalUsd?: number | string | null } | null;
+  compute?: { sandboxSeconds?: number | string | null } | null;
+}
+
+export interface Cost {
+  usd: number;
+  llmUsd: number;
+  capabilityUsd: number;
+  sandboxSeconds: number;
+}
+
+const num = (v: unknown) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+export function costOf(s: ExecutionSpend): Cost {
+  return {
+    usd: num(s.totalUsd),
+    llmUsd: num(s.llm?.listUsd),
+    capabilityUsd: num(s.capability?.totalUsd),
+    sandboxSeconds: num(s.compute?.sandboxSeconds),
+  };
+}
+
+export const isFinalSpend = (s: ExecutionSpend) => s.settleState === "final";
+
+export function sumCosts(costs: Cost[]): Cost {
+  const t: Cost = { usd: 0, llmUsd: 0, capabilityUsd: 0, sandboxSeconds: 0 };
+  for (const c of costs) {
+    t.usd += c.usd;
+    t.llmUsd += c.llmUsd;
+    t.capabilityUsd += c.capabilityUsd;
+    t.sandboxSeconds += c.sandboxSeconds;
+  }
+  return t;
+}
+
+export interface IssueCost extends Cost {
+  /** Runs of the issue whose spend was read / not read (over the per-request call bound). */
+  runsCounted: number;
+  runsMissing: number;
+}
+
+/** Tickets with at least one counted run are priced; the rest are left out of the mean and p90. */
+export function costSummary(issues: IssueCost[]) {
+  const priced = issues.filter((i) => i.runsCounted > 0);
+  const total = sumCosts(priced);
+  const mean = (v: number) => (priced.length ? v / priced.length : null);
+  return {
+    tickets: priced.length,
+    unpriced: issues.length - priced.length,
+    meanUsd: mean(total.usd),
+    p90Usd: percentile(
+      priced.map((i) => i.usd),
+      90,
+    ),
+    totalUsd: total.usd,
+    llmUsd: total.llmUsd,
+    capabilityUsd: total.capabilityUsd,
+    meanSandboxSeconds: mean(total.sandboxSeconds),
+    pylonUsdPerTicket: PYLON_USD_PER_TICKET,
+  };
+}
