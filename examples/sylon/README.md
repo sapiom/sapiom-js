@@ -39,7 +39,8 @@ flowchart LR
   E -- issue.on_hold --> F[your next agent]
   K[controller<br/>cron] -- issue.nudged --> F
   E --> L[Linear]
-  I & P & E & K & U <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
+  W[watchdog<br/>cron] -- failed runs --> A[alerts channel]
+  I & P & E & K & U & W <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
 ```
 
 | Layer         | What lives there                                                                                                                                                                        |
@@ -57,6 +58,7 @@ flowchart LR
 | `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from `kb/`, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                                                      |
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in both threads, moves the issue On Hold.                                                                             |
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
+| `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other Sylon agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
 
 ## Quickstart
@@ -110,6 +112,21 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 `--skip <key>` leaves a project out, and `--only <key>` acts on exactly the named projects,
 including optional ones. `--no-triggers` deploys without attaching triggers. `--overwrite` resets config to `fleet.local.json` + `fleet.json`
 (normally a rerun keeps config that an onboarding flow changed).
+
+### Failure alerts (watchdog)
+
+No event fires when a run fails, so the watchdog polls `GET /v1/workflows/executions?status=failed`
+for every Sylon agent (itself and the smoke agents excluded) and posts one message per new failure.
+The first run looks back one hour; later runs start 30 minutes before the last successful poll, and
+`watchdog_reported` keeps each execution from being announced twice. More than 10 failures in one
+tick post 10 and one "and N more" line linking the Events page.
+
+- **Channel.** `alerts.channel` in `fleet.local.json` (or the `config` table). When unset, alerts go to
+  `channels.triage`.
+- **Credential.** That route needs `org.read`, which the per-run key behind `ctx.sapiom` does not hold.
+  Store an org API key with `org.read` in the tenant vault under ref `sylon-watchdog`, key
+  `SAPIOM_API_KEY` (dashboard, or `@sapiom/core` `VaultAPI`). The agent reads it with
+  `ctx.sapiom.vault.get`. Without it each tick fails with a message naming the missing secret.
 
 Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
 each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open

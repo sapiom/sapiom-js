@@ -22,6 +22,7 @@ describe("fleet.json", () => {
       "escalation",
       "controller",
       "urgent-pager",
+      "watchdog",
     ])
       expect(keys).toContain(k);
   });

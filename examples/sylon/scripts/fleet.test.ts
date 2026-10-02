@@ -29,6 +29,7 @@ describe("setup selection", () => {
       "copilot",
       "escalation",
       "controller",
+      "watchdog",
     ]);
   });
 
@@ -48,7 +49,7 @@ describe("setup selection", () => {
           parseArgs(["--skip", "controller", "--skip", "copilot"]),
         ),
       ),
-    ).toEqual(["intake", "escalation"]);
+    ).toEqual(["intake", "escalation", "watchdog"]);
     expect(
       keys(selectProjects(parseArgs(["--only", "intake,urgent-pager"]))),
     ).toEqual(["intake", "urgent-pager"]);

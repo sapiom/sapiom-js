@@ -4,11 +4,19 @@ import {
   MissingConfigError,
   customerChannel,
   getConfig,
+  getConfigOr,
   setConfig,
 } from "./config";
 import { memoryDb } from "./db";
 
 describe("config", () => {
+  it("getConfigOr returns the fallback only when the key is unset", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "alerts.channel", null)).toBeNull();
+    await setConfig(db, "alerts.channel", "C0ALERTS01", "test");
+    expect(await getConfigOr(db, "alerts.channel", null)).toBe("C0ALERTS01");
+  });
+
   it("throws a setup hint for a missing key", async () => {
     const db = await memoryDb();
     await expect(getConfig(db, "channels.triage")).rejects.toBeInstanceOf(

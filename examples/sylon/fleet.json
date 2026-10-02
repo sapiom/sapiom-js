@@ -16,7 +16,8 @@
         "copilot",
         "escalation",
         "controller",
-        "urgent-pager"
+        "urgent-pager",
+        "watchdog"
       ]
     },
     {
@@ -44,6 +45,11 @@
       "path": "agents/urgent-pager",
       "slug": "sylon-urgent-pager",
       "optional": true
+    },
+    {
+      "key": "watchdog",
+      "path": "agents/watchdog",
+      "slug": "sylon-watchdog"
     },
     {
       "key": "smoke-ingest",
@@ -87,7 +93,12 @@
     },
     { "project": "escalation", "kind": "event", "eventType": "issue.escalate" },
     { "project": "controller", "kind": "schedule_cron", "cron": "*/2 * * * *" },
-    { "project": "urgent-pager", "kind": "event", "eventType": "issue.created" }
+    {
+      "project": "urgent-pager",
+      "kind": "event",
+      "eventType": "issue.created"
+    },
+    { "project": "watchdog", "kind": "schedule_cron", "cron": "*/5 * * * *" }
   ],
   "smokeTriggers": [
     {

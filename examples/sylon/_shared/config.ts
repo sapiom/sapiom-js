@@ -10,12 +10,15 @@ export const ConfigSchemas = {
   "linear.team_id": z.string().min(1),
   "linear.project_id": z.string().min(1),
   "channels.triage": z.string().min(1),
+  "alerts.channel": z.string().min(1),
   "channels.customer": z.array(
     z.object({ channelId: z.string().min(1), accountName: z.string().min(1) }),
   ),
   "oncall.slack_id": z.string().min(1),
   "nudge.minutes": z.number().int().positive(),
 } as const;
+/** Keys fleet.json may leave out: seeding skips them, and readers use {@link getConfigOr}. */
+export const OPTIONAL_KEYS: readonly string[] = ["alerts.channel"];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
   (typeof ConfigSchemas)[K]
@@ -53,6 +56,20 @@ export async function getConfig<K extends ConfigKey>(
   const value = ConfigSchemas[key].parse(rows[0].value) as ConfigValue<K>;
   c.set(key, value);
   return value;
+}
+
+/** {@link getConfig}, or `fallback` when the key is not set. A stored value that fails its schema still throws. */
+export async function getConfigOr<K extends ConfigKey, F>(
+  db: Db,
+  key: K,
+  fallback: F,
+): Promise<ConfigValue<K> | F> {
+  try {
+    return await getConfig(db, key);
+  } catch (err) {
+    if (err instanceof MissingConfigError) return fallback;
+    throw err;
+  }
 }
 
 export async function setConfig<K extends ConfigKey>(
