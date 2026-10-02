@@ -1,0 +1,36 @@
+{
+  "description": "The scripted customer lines for the Sylon demo, in order. A person types each one in the customer channel: the Slack connector drops bot posts, so the Console never posts them. Same text as E7's scripts/replay.json; switch to that file once it is on main.",
+  "prefix": "[sylon test] [sylon demo]",
+  "steps": [
+    {
+      "id": "bug",
+      "label": "Bug report",
+      "text": "Our webhook deliveries started failing this morning. Every POST to our endpoint is rejected with a signature mismatch, and nothing changed on our side.",
+      "expect": "intake opens a bug issue and posts its card in triage; copilot posts a draft card citing the webhooks kb page"
+    },
+    {
+      "id": "follow-up",
+      "label": "Threaded follow-up (reply in the bug's thread)",
+      "text": "More detail: it is the order.created events, and clicking Redeliver gives the same mismatch.",
+      "expect": "intake links the reply to the bug issue (no new issue); copilot supersedes its draft with a new one"
+    },
+    {
+      "id": "outage",
+      "label": "Urgent outage",
+      "text": "URGENT: production is down for us. Every API call has returned 500 for the last 10 minutes and our checkout is blocked.",
+      "expect": "intake opens an urgent issue; urgent-pager (once added) DMs on-call"
+    },
+    {
+      "id": "question",
+      "label": "KB question",
+      "text": "Quick question: how long does a data export download link stay valid? The one we got last week no longer works.",
+      "expect": "intake opens a question issue; copilot drafts an answer from the exports kb page (links expire after 7 days)"
+    },
+    {
+      "id": "thanks",
+      "label": "Thanks",
+      "text": "Thanks, that fixed it!",
+      "expect": "no new issue: Jev reads it as a thank-you"
+    }
+  ]
+}

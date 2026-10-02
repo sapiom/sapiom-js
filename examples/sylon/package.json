@@ -9,6 +9,8 @@
     "test": "vitest run",
     "setup": "tsx setup.ts",
     "build:kb": "tsx scripts/build-kb.ts",
+    "console:build": "tsx apps/console/build.ts",
+    "console:publish": "tsx apps/console/publish.ts",
     "format": "prettier --write \"**/*.{ts,json,md}\""
   },
   "dependencies": {
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.0",
     "typescript": "^5.4.2",
     "vitest": "^3.2.4"
