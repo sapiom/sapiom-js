@@ -1,0 +1,22 @@
+{
+  "type": "slack.reaction_added",
+  "description": "A teammate adds :ticket: to the thank-you: forces an issue.",
+  "payload": {
+    "teamId": "T0EXAMPLE01",
+    "apiAppId": "A0SYLONAPP1",
+    "eventId": "Ev0INTAKETKT1",
+    "eventTime": 1790890300,
+    "event": {
+      "type": "reaction_added",
+      "user": "U0TEAMMATE1",
+      "reaction": "ticket",
+      "item": {
+        "type": "message",
+        "channel": "C0CUSTOMER1",
+        "ts": "1790890200.000300"
+      },
+      "item_user": "U0CUSTOMER1",
+      "event_ts": "1790890300.000400"
+    }
+  }
+}
