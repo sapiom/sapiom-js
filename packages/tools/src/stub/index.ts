@@ -32,6 +32,7 @@ import type {
 } from "../models/index.js";
 import { AGENTS_RESULT_SIGNAL, AgentDispatchError } from "../agents/index.js";
 import type { ExecutionStatus } from "../agents/index.js";
+import type { EmitEventResult } from "../events/index.js";
 import {
   LLM_ROUTE_RESULT_SIGNAL,
   LLM_SESSION_READY_SIGNAL,
@@ -138,6 +139,19 @@ import type {
   SendEmailResult,
 } from "../connectors/google/index.js";
 import type { GitHubRepo } from "../connectors/github/index.js";
+import type {
+  SlackPostEphemeralResult,
+  SlackPostMessageResult,
+  SlackReactionResult,
+  SlackRepliesResult,
+  SlackUpdateResult,
+  SlackUserInfoResult,
+} from "../connectors/slack/index.js";
+import type {
+  McpCallToolResult,
+  McpConnector,
+  McpTool,
+} from "../connectors/mcp/index.js";
 import { withNodeStreamBody } from "../connectors/core/node-stream-response.js";
 
 /**
@@ -1006,6 +1020,111 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
   ) =>
     resolve(overrides, paths, args, fallback, opts.calls, capabilityOverride);
 
+  // The override key a call resolved to, if any — read from the raw overrides so the lookup
+  // itself never counts as a use.
+  const matchedOverride = (paths: string[]) =>
+    paths.find((k) =>
+      Object.prototype.hasOwnProperty.call(opts.overrides ?? {}, k),
+    );
+
+  // A Slack method offline. An override must be a Slack response object; anything else is
+  // returned as given but reported, since step code would read `ts` / `user` off it.
+  const stubSlack = <T>(
+    method: string,
+    args: unknown,
+    fallback: () => T,
+  ): T => {
+    const key = `connectors.slack.${method}`;
+    const result = r(key, [args], fallback);
+    if (
+      matchedOverride([key]) &&
+      (result === null || typeof result !== "object" || Array.isArray(result))
+    ) {
+      opts.warnings?.add(
+        `'${key}' stub must be a Slack response object (e.g. { "ok": true, ... }); got ${describeShape(result)}.`,
+      );
+    }
+    return result as T;
+  };
+
+  // An MCP-relay connector offline. `connectors.<slug>.<op>` wins over the catch-all
+  // `connectors.mcp.<op>`. With no callTool override it answers like the relay: a tool the
+  // step has not seen in its latest `listTools()` for that slug (every tool, before any
+  // discovery) is an `isError` result, so a local run takes the deployed failure branch.
+  // The list is cached from the step's own tracked call — never re-read from the overrides,
+  // which would re-run a stateful override and bypass usedKeys / the calls sink.
+  const discoveredMcpTools = new Map<string, Set<string>>();
+  const stubMcp = (slug: string): McpConnector => {
+    const listKeys = [
+      `connectors.${slug}.listTools`,
+      "connectors.mcp.listTools",
+    ];
+    const callKeys = [`connectors.${slug}.callTool`, "connectors.mcp.callTool"];
+    return {
+      listTools: async () => {
+        const tools = await Promise.resolve(r(listKeys, [], () => []));
+        const key = matchedOverride(listKeys);
+        if (!Array.isArray(tools)) {
+          opts.warnings?.add(
+            `'${key}' stub must be an array of tools (e.g. [{ "name": "...", "inputSchema": {} }]); ` +
+              `got ${describeShape(tools)}. Returning an empty list.`,
+          );
+          discoveredMcpTools.set(slug, new Set());
+          return [];
+        }
+        discoveredMcpTools.set(
+          slug,
+          new Set(
+            tools
+              .map((t) => (t as { name?: unknown } | null)?.name)
+              .filter((n): n is string => typeof n === "string"),
+          ),
+        );
+        tools.forEach((tool, i) => {
+          if (typeof (tool as { name?: unknown } | null)?.name !== "string") {
+            opts.warnings?.add(
+              `'${key}'[${i}] is not a tool shape (expected { name, inputSchema }); got ${describeShape(tool)}.`,
+            );
+          }
+        });
+        return tools as McpTool[];
+      },
+      callTool: async (name, args) => {
+        let overridden = true;
+        const result = await Promise.resolve(
+          r(callKeys, [name, args], () => {
+            overridden = false;
+            return discoveredMcpTools.get(slug)?.has(name)
+              ? {
+                  content: [
+                    { type: "text", text: `stub result for ${slug}.${name}` },
+                  ],
+                  isError: false,
+                }
+              : {
+                  content: [
+                    { type: "text", text: "That tool is not available." },
+                  ],
+                  isError: true,
+                };
+          }),
+        );
+        if (
+          overridden &&
+          (result === null ||
+            typeof result !== "object" ||
+            !Array.isArray((result as { content?: unknown }).content))
+        ) {
+          opts.warnings?.add(
+            `'${callKeys[0]}' / '${callKeys[1]}' stub must be a CallToolResult ` +
+              `(e.g. { "content": [{ "type": "text", "text": "..." }] }); got ${describeShape(result)}.`,
+          );
+        }
+        return result as McpCallToolResult;
+      },
+    };
+  };
+
   // Per-client memory state: namespace → (id → record). See the `memory`
   // capability below for what is and isn't simulated.
   const memoryNamespaces = new Map<string, Map<string, StubMemoryRecord>>();
@@ -1287,6 +1406,17 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
               },
         );
       },
+    },
+    events: {
+      // `unmatched`: a local run deploys no other agent, so no trigger can match.
+      // `async` so a throwing override rejects instead of throwing at the call site.
+      emit: async (spec) =>
+        r("events.emit", [spec], () => ({
+          receiptId: `stub-receipt-${++launchSeq}`,
+          outcome: "unmatched",
+          duplicate: false,
+          fireIds: [],
+        })) as EmitEventResult,
     },
     llm: {
       run: <T = Record<string, unknown>>(spec: {
@@ -2131,7 +2261,7 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
           })) as ScopedKey,
         ),
     },
-    // Connection-backed third-party providers (Google, GitHub) — mirrors the
+    // Connection-backed third-party providers (Google, GitHub, Slack, MCP) — mirrors the
     // `connectors` grouping on the real client.
     connectors: {
       // A live Google credential is fetched server-side in production; the stub returns
@@ -2242,6 +2372,65 @@ export function createStubClient(opts: StubClientOptions = {}): Sapiom {
             },
           ]) as GitHubRepo[],
       },
+      // Slack methods run server-side in the gateway (the bot token is injected there) in
+      // production; the stub returns shape-faithful, obviously-fake Slack bodies so an
+      // offline run can exercise the call graph without a Slack connector or network call.
+      slack: {
+        postMessage: async (args) =>
+          stubSlack("postMessage", args, () => ({
+            ok: true,
+            channel: args.channel,
+            ts: "1700000000.000100",
+          })) as SlackPostMessageResult,
+        update: async (args) =>
+          stubSlack("update", args, () => ({
+            ok: true,
+            channel: args.channel,
+            ts: args.ts,
+            text: args.text,
+          })) as SlackUpdateResult,
+        postEphemeral: async (args) =>
+          stubSlack("postEphemeral", args, () => ({
+            ok: true,
+            message_ts: "1700000000.000200",
+          })) as SlackPostEphemeralResult,
+        addReaction: async (args) =>
+          stubSlack("addReaction", args, () => ({
+            ok: true,
+          })) as SlackReactionResult,
+        removeReaction: async (args) =>
+          stubSlack("removeReaction", args, () => ({
+            ok: true,
+          })) as SlackReactionResult,
+        replies: async (args) =>
+          stubSlack("replies", args, () => ({
+            ok: true,
+            messages: [
+              {
+                type: "message",
+                ts: args.ts,
+                user: "U0STUBUSER",
+                text: "stub thread parent",
+              },
+            ],
+            has_more: false,
+          })) as SlackRepliesResult,
+        userInfo: async (args) =>
+          stubSlack("userInfo", args, () => ({
+            ok: true,
+            user: {
+              id: args.user,
+              name: "stub-user",
+              real_name: "Stub User",
+              is_bot: false,
+              tz: "UTC",
+              profile: { display_name: "stub-user", real_name: "Stub User" },
+            },
+          })) as SlackUserInfoResult,
+      },
+      linear: stubMcp("linear"),
+      notion: stubMcp("notion"),
+      mcp: (slug) => stubMcp(slug),
     },
     speech: {
       textToSpeech: {

@@ -72,6 +72,13 @@ export { AGENTS_RESULT_SIGNAL } from "./agents/index.js";
 
 // schedules — create/manage cron + one-off triggers for a deployed agent.
 export * as schedules from "./schedules/index.js";
+
+export * as events from "./events/index.js";
+export type {
+  EmitEventSpec,
+  EmitEventResult,
+  EventOutcome,
+} from "./events/index.js";
 // The shape a step resumed from `pauseUntilSignal(agentHandle, …)` receives
 // as input — annotate the resumed step with it instead of hand-rolling the shape.
 export type { AgentRunResultPayload } from "./agents/index.js";
@@ -232,7 +239,7 @@ export * as keys from "./keys/index.js";
 export { KeysHttpError } from "./keys/index.js";
 export type { MintScopedInput, ScopedKey } from "./keys/index.js";
 
-// connectors — connection-backed third-party providers (Google, GitHub), grouped
+// connectors — connection-backed third-party providers (Google, GitHub, Slack, MCP), grouped
 // under one namespace: `import { connectors } from "@sapiom/tools"; connectors.google.fetch(...)`.
 export * as connectors from "./connectors/index.js";
 export type {
@@ -245,3 +252,28 @@ export type {
   SendEmailResult,
 } from "./connectors/google/index.js";
 export type { ListReposArgs, GitHubRepo } from "./connectors/github/index.js";
+export type {
+  SlackBlock,
+  SlackMessage,
+  SlackMessageContent,
+  SlackPostEphemeralArgs,
+  SlackPostEphemeralResult,
+  SlackPostMessageArgs,
+  SlackPostMessageResult,
+  SlackReactionArgs,
+  SlackReactionResult,
+  SlackRepliesArgs,
+  SlackRepliesResult,
+  SlackUpdateArgs,
+  SlackUpdateResult,
+  SlackUser,
+  SlackUserInfoArgs,
+  SlackUserInfoResult,
+} from "./connectors/slack/index.js";
+export { McpRelayError } from "./connectors/mcp/index.js";
+export type {
+  McpCallToolResult,
+  McpConnector,
+  McpContent,
+  McpTool,
+} from "./connectors/mcp/index.js";

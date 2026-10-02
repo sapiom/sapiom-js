@@ -109,6 +109,78 @@ describe("real Studio workspace wiring", () => {
     ).not.toContain(projectRoot);
   });
 
+  it("migrates a legacy session only into an open root and never mints a project for an orphaned cwd", async () => {
+    root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "studio-legacy-session-migration-"),
+    );
+    const projectRoot = path.join(root, "project");
+    const descendant = path.join(projectRoot, "src");
+    // Still on disk, but absent from recentDirs and the catalog: a project the
+    // user removed from Studio.
+    const deletedProject = path.join(root, "deleted-project");
+    await fs.mkdir(descendant, { recursive: true });
+    await fs.mkdir(deletedProject, { recursive: true });
+    const catalogPath = path.join(root, "studio-projects.json");
+    const project = (
+      await new StudioProjectCatalog(catalogPath).reconcile([
+        { workspaceKey: "open-project", cwd: projectRoot },
+      ])
+    ).projects[0]!;
+    await fs.writeFile(
+      path.join(root, "settings.json"),
+      JSON.stringify({ recentDirs: [projectRoot] }),
+    );
+    const legacy = (id: string, cwd: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code",
+      cwd,
+      title: id,
+      status: "exited",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    await fs.writeFile(
+      path.join(root, "sessions.json"),
+      JSON.stringify([
+        legacy("open-session", descendant),
+        legacy("orphan-session", deletedProject),
+      ]),
+    );
+
+    server = await startServer({
+      port: 0,
+      bootToken: "test-token",
+      telemetryOptIn: false,
+      adapters: {},
+      stateRoot: root,
+      launchDir: projectRoot,
+      autoCreateSession: false,
+      loadSystemPrompt: async () => "",
+    });
+
+    expect(server.sessionManager.list().map(({ id }) => id)).toEqual([
+      "open-session",
+    ]);
+    expect(
+      server.sessionManager.get("open-session")?.agentMapIdentity?.projectId,
+    ).toBe(project.projectId);
+    const projects = await new StudioProjectCatalog(catalogPath).list();
+    expect(projects.map(({ projectId }) => projectId)).toEqual([
+      project.projectId,
+    ]);
+    const state = (await (
+      await fetch(`http://127.0.0.1:${server.port}/api/state`, {
+        headers: { "X-Harness-Token": "test-token" },
+      })
+    ).json()) as AppState;
+    expect(state.workspaceScopes?.some(({ cwd }) => cwd === deletedProject))
+      .toBe(false);
+  });
+
   it("publishes opaque AppState bindings and restores one across a null-definition move and restart", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "studio-workspace-wiring-"));
     const stateRoot = path.join(root, "state");

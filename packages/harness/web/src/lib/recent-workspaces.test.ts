@@ -15,6 +15,7 @@ const session = (overrides: Partial<HarnessSession>): HarnessSession => ({
   harness: "claude-code",
   cwd: "/home/dev/app",
   title: "app",
+  agentMapIdentity: { projectId: "project_00000000-0000-4000-8000-000000000001", userId: "user_test", sessionId: "sess-1" },
   status: "running",
   createdAt: "2026-01-01T00:00:00.000Z",
   lastActiveAt: "2026-01-01T00:00:00.000Z",

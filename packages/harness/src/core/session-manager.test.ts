@@ -1,4 +1,3 @@
-import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +10,7 @@ import type {
   HarnessSession,
   SpawnSpec,
 } from "../shared/types.js";
+import type { FocusedSessionContextProjection } from "./focused-session-context.js";
 import { CodexAdapter } from "./adapters/codex.js";
 import {
   ExternalHarnessError,
@@ -133,6 +133,7 @@ describe("SessionManager", () => {
       buildLaunchOpts?: SessionManagerOptions["buildLaunchOpts"];
       currentCredentialGeneration?: SessionManagerOptions["currentCredentialGeneration"];
       resolveAgentMapIdentity?: SessionManagerOptions["resolveAgentMapIdentity"];
+      migrateAgentMapIdentity?: SessionManagerOptions["migrateAgentMapIdentity"];
       prepareProjectSession?: SessionManagerOptions["prepareProjectSession"];
       onAgentMapSessionExit?: SessionManagerOptions["onAgentMapSessionExit"];
       onTerminalInput?: SessionManagerOptions["onTerminalInput"];
@@ -176,7 +177,13 @@ describe("SessionManager", () => {
       loadSpawnPty: opts.loadSpawnPty,
       buildLaunchOpts: opts.buildLaunchOpts,
       currentCredentialGeneration: opts.currentCredentialGeneration,
-      resolveAgentMapIdentity: opts.resolveAgentMapIdentity,
+      resolveAgentMapIdentity:
+        opts.resolveAgentMapIdentity ??
+        (async (sessionId, _cwd, persisted) =>
+          persisted ?? { projectId: "project-test", userId: "user-test", sessionId }),
+      migrateAgentMapIdentity:
+        opts.migrateAgentMapIdentity ??
+        (async (sessionId) => ({ projectId: "project-test", userId: "user-test", sessionId })),
       prepareProjectSession: opts.prepareProjectSession,
       onAgentMapSessionExit: opts.onAgentMapSessionExit,
       onTerminalInput: opts.onTerminalInput,
@@ -386,7 +393,9 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
     });
@@ -413,6 +422,7 @@ describe("SessionManager", () => {
     expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
     expect(adapter.resume).not.toHaveBeenCalled();
     expect(spawns).toHaveLength(1);
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
   });
 
   it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
@@ -880,7 +890,7 @@ describe("SessionManager", () => {
     );
   });
 
-  it("resumes a session with rejected legacy metadata using freshly resolved scope", async () => {
+  it("drops malformed or conflicting legacy identity records from the registry on load", async () => {
     const malformed = {
       id: "malformed-session",
       agentSessionId: "provider-malformed",
@@ -933,42 +943,185 @@ describe("SessionManager", () => {
       "utf8",
     );
     const migrations = vi.fn();
-    const resolvedIdentity = (sessionId: string) => ({
-      projectId: "project-1",
-      userId: "current-user",
-      sessionId,
-    });
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
-      resolveAgentMapIdentity: async (sessionId) =>
-        resolvedIdentity(sessionId),
     });
 
     await manager.init();
 
-    expect(manager.list()).toHaveLength(2);
-    expect(manager.get(malformed.id)).toEqual(malformed);
-    expect(manager.get(conflicting.id)).toEqual(conflicting);
+    expect(manager.list()).toEqual([]);
     expect(migrations.mock.calls).toEqual([
-      [{ sessionId: malformed.id, outcome: "rejected" }],
-      [{ sessionId: conflicting.id, outcome: "rejected" }],
+      [{ sessionId: malformed.id, outcome: "dropped" }],
+      [{ sessionId: conflicting.id, outcome: "dropped" }],
     ]);
     const persisted = JSON.parse(
       await readFile(sessionsPath, "utf8"),
     ) as unknown[];
-    expect(persisted).toEqual([malformed, conflicting]);
-
-    await expect(manager.resume(malformed.id)).resolves.toMatchObject({
-      id: malformed.id,
-      status: "running",
-      agentMapIdentity: resolvedIdentity(malformed.id),
-    });
-    expect(manager.get(conflicting.id)).toEqual(conflicting);
-    expect(adapter.resume).toHaveBeenCalledOnce();
-    expect(spawns).toHaveLength(1);
+    expect(persisted).toEqual([]);
+    await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    await expect(manager.resume(conflicting.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(spawns).toEqual([]);
   });
 
-  it("resumes with present-but-malformed legacy planner and bootstrap records", async () => {
+  it("lists only sessions with a valid identity when the registry mixes valid and malformed records", async () => {
+    const record = (id: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code" as const,
+      cwd: `/tmp/project/${id}`,
+      title: id,
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    const valid = {
+      ...record("valid-session"),
+      agentMapIdentity: {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId: "valid-session",
+      },
+    };
+    const malformed = {
+      ...record("malformed-session"),
+      agentMapIdentity: { projectId: 42 },
+    };
+    await writeFile(sessionsPath, JSON.stringify([valid, malformed]), "utf8");
+    const migrateAgentMapIdentity = vi.fn(
+      async (sessionId: string): Promise<never> => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      },
+    );
+    const { manager } = makeManager({ migrateAgentMapIdentity });
+
+    await manager.init();
+
+    expect(manager.list().map(({ id }) => id)).toEqual([valid.id]);
+    expect(
+      manager.list().every((session) => session.agentMapIdentity !== undefined),
+    ).toBe(true);
+    expect(migrateAgentMapIdentity).not.toHaveBeenCalled();
+    await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+  });
+
+  it("migrates identity-less legacy sessions to the deepest open root, drops ones no project can own, and persists the result", async () => {
+    const legacy = (id: string, cwd: string) => ({
+      id,
+      agentSessionId: `provider-${id}`,
+      harness: "claude-code" as const,
+      cwd,
+      title: id,
+      status: "exited" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastActiveAt: "2026-01-01T00:00:00.000Z",
+      exitCode: 0,
+      boundWorkflowPath: null,
+      ready: false,
+    });
+    const outer = legacy("outer-session", "/tmp/monorepo/docs");
+    const inner = legacy("inner-session", "/tmp/monorepo/packages/app/src");
+    const orphan = legacy("orphan-session", "/tmp/nowhere");
+    await writeFile(sessionsPath, JSON.stringify([outer, inner, orphan]), "utf8");
+
+    // Two open roots, one nested in the other. The deeper root owns every cwd
+    // beneath it, exactly as the server resolver does for a live cwd.
+    const roots: Array<[string, string]> = [
+      ["/tmp/monorepo/packages/app", "project-app"],
+      ["/tmp/monorepo", "project-monorepo"],
+    ];
+    const migrateAgentMapIdentity = vi.fn(async (sessionId: string, cwd: string) => {
+      const owner = roots.find(([root]) => cwd === root || cwd.startsWith(`${root}/`));
+      if (!owner) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: owner[1], userId: "user-1", sessionId };
+    });
+    const migrations = vi.fn();
+    const resolveAgentMapIdentity = vi.fn();
+    const { manager } = makeManager({
+      migrateAgentMapIdentity,
+      resolveAgentMapIdentity,
+      onProjectAgentIdentityMigration: migrations,
+    });
+
+    await manager.init();
+
+    expect(manager.list().map(({ id }) => id).sort()).toEqual([inner.id, outer.id]);
+    expect(manager.get(outer.id)?.agentMapIdentity).toEqual({
+      projectId: "project-monorepo",
+      userId: "user-1",
+      sessionId: outer.id,
+    });
+    expect(manager.get(inner.id)?.agentMapIdentity).toEqual({
+      projectId: "project-app",
+      userId: "user-1",
+      sessionId: inner.id,
+    });
+    expect(migrations.mock.calls).toEqual([
+      [{ sessionId: outer.id, outcome: "migrated" }],
+      [{ sessionId: inner.id, outcome: "migrated" }],
+      [{ sessionId: orphan.id, outcome: "dropped" }],
+    ]);
+
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map(({ id }) => id)).toEqual([outer.id, inner.id]);
+    expect(persisted.every((session) => session.agentMapIdentity !== undefined)).toBe(true);
+
+    // Migration never goes through the create-time resolver, which may mint.
+    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
+
+    // A restart finds nothing left to migrate.
+    migrateAgentMapIdentity.mockClear();
+    const { manager: restarted } = makeManager({ migrateAgentMapIdentity });
+    await restarted.init();
+    expect(migrateAgentMapIdentity).not.toHaveBeenCalled();
+    expect(restarted.list()).toHaveLength(2);
+  });
+
+  it("assigns each session in a folder a default title once, and never renumbers it", async () => {
+    const { manager, spawns } = makeManager();
+    const first = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const second = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    const elsewhere = await manager.create({ cwd: "/tmp/other", harness: "claude-code" });
+    expect([first.title, second.title, elsewhere.title]).toEqual([
+      "proj",
+      "proj 2",
+      "other",
+    ]);
+
+    await manager.setAgentSessionId(first.id, "provider-first");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    expect(manager.get(second.id)?.title).toBe("proj 2");
+
+    const third = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
+    expect(third.title).toBe("proj 3");
+
+    await manager.resume(first.id);
+    expect(manager.get(first.id)?.title).toBe("proj");
+    expect(manager.get(second.id)?.title).toBe("proj 2");
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.map(({ title }) => title)).toEqual([
+      "proj",
+      "proj 2",
+      "other",
+      "proj 3",
+    ]);
+  });
+
+  it("drops a malformed legacy planner record with no identity and keeps a malformed bootstrap record that has one", async () => {
     const base = {
       agentSessionId: "provider-session",
       harness: "claude-code",
@@ -1003,35 +1156,47 @@ describe("SessionManager", () => {
       "utf8",
     );
     const migrations = vi.fn();
+    const resolvedIdentity = (sessionId: string) => ({
+      projectId: "project-current",
+      userId: "current-user",
+      sessionId,
+    });
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
+      resolvedIdentity(sessionId),
+    );
     const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
+      resolveAgentMapIdentity,
       onProjectBootstrapSession,
     });
 
     await manager.init();
 
-    expect(manager.list()).toHaveLength(2);
-    expect(manager.get(malformedPlanning.id)).toEqual(malformedPlanning);
-    expect(manager.get(malformedBootstrap.id)).toEqual(malformedBootstrap);
+    expect(manager.list()).toEqual([malformedBootstrap]);
     expect(migrations.mock.calls).toEqual([
-      [{ sessionId: malformedPlanning.id, outcome: "rejected" }],
+      [{ sessionId: malformedPlanning.id, outcome: "dropped" }],
       [{ sessionId: malformedBootstrap.id, outcome: "rejected" }],
     ]);
     expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
-      [malformedPlanning, malformedBootstrap],
+      [malformedBootstrap],
     );
 
-    await expect(manager.resume(malformedPlanning.id)).resolves.toMatchObject({
-      id: malformedPlanning.id,
-      status: "running",
-    });
+    await expect(manager.resume(malformedPlanning.id)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
     await expect(manager.resume(malformedBootstrap.id)).resolves.toMatchObject({
       id: malformedBootstrap.id,
       status: "running",
+      agentMapIdentity: resolvedIdentity(malformedBootstrap.id),
     });
-    expect(manager.get(malformedBootstrap.id)).not.toHaveProperty(
-      "agentMapIdentity",
+    expect(resolveAgentMapIdentity).toHaveBeenCalledWith(
+      malformedBootstrap.id,
+      malformedBootstrap.cwd,
+      undefined,
+    );
+    expect(manager.get(malformedBootstrap.id)?.agentMapIdentity).toEqual(
+      resolvedIdentity(malformedBootstrap.id),
     );
     expect(manager.get(malformedBootstrap.id)).not.toHaveProperty(
       "projectBootstrap",
@@ -1043,9 +1208,9 @@ describe("SessionManager", () => {
       persistedAfterResume.find(({ id }) => id === malformedBootstrap.id),
     ).not.toHaveProperty("projectBootstrap");
     expect(onProjectBootstrapSession).not.toHaveBeenCalled();
-    expect(adapter.canResume).toHaveBeenCalledTimes(2);
-    expect(adapter.resume).toHaveBeenCalledTimes(2);
-    expect(spawns).toHaveLength(2);
+    expect(adapter.canResume).toHaveBeenCalledOnce();
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(spawns).toHaveLength(1);
   });
 
   it("routes write() and resize() to the underlying pty", async () => {
@@ -2887,6 +3052,11 @@ describe("SessionManager", () => {
       harness: "claude-code" as const,
       cwd: "/tmp/first",
       title: "first",
+      agentMapIdentity: {
+        projectId: "project_00000000-0000-4000-8000-000000000001",
+        userId: "user-test",
+        sessionId: "z-first-in-file",
+      },
       status: "exited" as const,
       createdAt: "2026-01-01T00:00:00.000Z",
       lastActiveAt: "2026-01-01T00:00:00.000Z",
@@ -2899,6 +3069,7 @@ describe("SessionManager", () => {
       id: "a-later-in-file",
       cwd: "/tmp/later",
       title: "later",
+      agentMapIdentity: { ...first.agentMapIdentity, sessionId: "a-later-in-file" },
     } satisfies HarnessSession;
     await writeFile(sessionsPath, JSON.stringify([first, later], null, 2));
 
@@ -3039,6 +3210,9 @@ describe("SessionManager", () => {
     expect(buildLaunchOpts).toHaveBeenCalledWith(
       session.id,
       expect.objectContaining({ cwd: "/tmp/proj", harness: "claude-code" }),
+      expect.objectContaining({
+        agentMapIdentity: expect.objectContaining({ sessionId: session.id }),
+      }),
     );
     expect(adapter.launch).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3068,6 +3242,9 @@ describe("SessionManager", () => {
       session.id,
       expect.objectContaining({
         rehydrateFrom: "recorded-history-ancestor",
+      }),
+      expect.objectContaining({
+        agentMapIdentity: expect.objectContaining({ sessionId: session.id }),
       }),
     );
     expect(session.rehydratedFrom).toBe("queue-owning-predecessor");
@@ -3103,7 +3280,9 @@ describe("SessionManager", () => {
         userId: "user-1",
         sessionId,
       }))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const onAgentMapSessionExit = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
@@ -4401,13 +4580,11 @@ describe("SessionManager", () => {
 
     await expect(creating).rejects.toBeInstanceOf(SessionManagerClosingError);
     expect(spawnPty).not.toHaveBeenCalled();
-    expect(manager.list()).toEqual([
-      expect.objectContaining({ status: "exited" }),
-    ]);
+    expect(manager.list()).toEqual([]);
     await expect(
       manager.create({ cwd: "/tmp/second", harness: "claude-code" }),
     ).rejects.toBeInstanceOf(SessionManagerClosingError);
-    await expect(manager.resume(manager.list()[0]!.id)).rejects.toBeInstanceOf(
+    await expect(manager.resume("never-created")).rejects.toBeInstanceOf(
       SessionManagerClosingError,
     );
   });
@@ -4488,11 +4665,10 @@ describe("SessionManager", () => {
       () => createFakePty().pty as unknown as ReturnType<PtySpawnFn>,
     );
     let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: "project-1", userId: "user-1", sessionId };
+    });
     const onAgentMapSessionExit = vi.fn();
     const { manager, adapter } = makeManager({
       loadSpawnPty,
@@ -4815,11 +4991,10 @@ describe("SessionManager", () => {
       return loadCount === 1 ? spawnPty : resumeLoader.promise;
     });
     let inScope = true;
-    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
-      inScope
-        ? { projectId: "project-1", userId: "user-1", sessionId }
-        : undefined,
-    );
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (!inScope) throw new ProjectSessionScopeUnavailableError(sessionId);
+      return { projectId: "project-1", userId: "user-1", sessionId };
+    });
     const onAgentMapSessionExit = vi.fn();
     const { manager, adapter } = makeManager({
       loadSpawnPty,
@@ -5541,34 +5716,6 @@ describe("SessionManager", () => {
   );
 
 
-  it("rejects a focused overlay when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-
-    await expect(manager.create(
-      { cwd: "/tmp/proj", harness: "claude-code" },
-      { focusedContext: () => "bounded focused data" as FocusedSessionContextProjection },
-    )).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.launch).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
-    expect(manager.list()).toEqual([]);
-  });
-
-  it("rejects a focused overlay on resume when no project-agent identity resolves", async () => {
-    const adapter = createFakeAdapter();
-    const { manager, spawns } = makeManager({ adapter });
-    const session = await manager.create({ cwd: "/tmp/proj", harness: "claude-code" });
-    await manager.setAgentSessionId(session.id, "provider-session");
-    spawns[0]!.emitExit(0);
-    await manager.flush();
-
-    await expect(manager.resume(session.id, {
-      focusedContext: "bounded focused data" as FocusedSessionContextProjection,
-    })).rejects.toThrow("Focused project context requires a project-agent identity");
-    expect(adapter.resume).not.toHaveBeenCalled();
-    expect(manager.get(session.id)?.status).toBe("exited");
-  });
-
   it.each(["buildLaunchOpts", "adapter.resume"] as const)(
     "releases project launch authority when resume setup fails in $stage",
     async (stage) => {
@@ -5866,7 +6013,9 @@ describe("SessionManager", () => {
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
     });
@@ -5893,18 +6042,25 @@ describe("SessionManager", () => {
   });
 
 
-  it("removes bootstrap metadata when neutral project scope cannot be revalidated", async () => {
-    const identity = (sessionId: string) => ({
-      projectId: "project-1",
+  it("re-derives ordinary resume scope and removes stale bootstrap metadata", async () => {
+    const identity = (sessionId: string, projectId = "project-1") => ({
+      projectId,
       userId: "user-1",
       sessionId,
     });
-    const resolveAgentMapIdentity = vi
-      .fn()
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) =>
+      identity(sessionId, "project-2"),
+    );
+    resolveAgentMapIdentity
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
       .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockResolvedValueOnce(undefined);
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      })
+      .mockImplementationOnce(async (sessionId: string) =>
+        identity(sessionId, "project-2"),
+      );
     const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
@@ -5930,14 +6086,23 @@ describe("SessionManager", () => {
       id: session.id,
       agentSessionId: "provider-project-session",
       status: "running",
+      agentMapIdentity: identity(session.id, "project-2"),
     });
 
-    expect(resolveAgentMapIdentity).toHaveBeenLastCalledWith(
+    expect(resolveAgentMapIdentity).toHaveBeenNthCalledWith(
+      4,
       session.id,
       session.cwd,
       persistedIdentity,
     );
-    expect(manager.get(session.id)).not.toHaveProperty("agentMapIdentity");
+    expect(resolveAgentMapIdentity).toHaveBeenNthCalledWith(
+      5,
+      session.id,
+      session.cwd,
+    );
+    expect(manager.get(session.id)?.agentMapIdentity).toEqual(
+      identity(session.id, "project-2"),
+    );
     expect(manager.get(session.id)).not.toHaveProperty("projectBootstrap");
     const persisted = JSON.parse(
       await readFile(sessionsPath, "utf8"),
@@ -5948,6 +6113,69 @@ describe("SessionManager", () => {
     expect(onProjectBootstrapSession).not.toHaveBeenCalled();
     expect(adapter.resume).toHaveBeenCalledOnce();
     expect(spawns).toHaveLength(2);
+  });
+
+  it("falls back to current scope only for ordinary resumes", async () => {
+    let rejectNextResolution = false;
+    const resolveAgentMapIdentity = vi.fn(async (sessionId: string) => {
+      if (rejectNextResolution) {
+        rejectNextResolution = false;
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      }
+      return {
+        projectId: "project-1",
+        userId: "user-1",
+        sessionId,
+      };
+    });
+    const { manager, spawns } = makeManager({ resolveAgentMapIdentity });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-scope-fallback");
+    spawns[0]?.emitExit(0);
+    await manager.flush();
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+    const beforeOrdinaryResume = resolveAgentMapIdentity.mock.calls.length;
+    rejectNextResolution = true;
+
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      status: "running",
+      agentMapIdentity: persistedIdentity,
+    });
+
+    expect(resolveAgentMapIdentity.mock.calls[beforeOrdinaryResume]).toEqual([
+      session.id,
+      session.cwd,
+      persistedIdentity,
+    ]);
+    expect(resolveAgentMapIdentity.mock.calls[beforeOrdinaryResume + 1]).toEqual([
+      session.id,
+      session.cwd,
+    ]);
+
+    spawns[1]?.emitExit(0);
+    await manager.flush();
+    const beforeFocusedResume = resolveAgentMapIdentity.mock.calls.length;
+    rejectNextResolution = true;
+
+    await expect(
+      manager.resume(session.id, {
+        focusedContext:
+          "<focused-project-context>" as FocusedSessionContextProjection,
+      }),
+    ).rejects.toBeInstanceOf(ProjectSessionScopeUnavailableError);
+
+    expect(resolveAgentMapIdentity.mock.calls).toHaveLength(
+      beforeFocusedResume + 1,
+    );
+    expect(resolveAgentMapIdentity.mock.calls[beforeFocusedResume]).toEqual([
+      session.id,
+      session.cwd,
+      persistedIdentity,
+    ]);
   });
 
   it("restamps a resumed project identity to the currently resolved principal", async () => {

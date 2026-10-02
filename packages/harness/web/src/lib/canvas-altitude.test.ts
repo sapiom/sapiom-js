@@ -43,7 +43,11 @@ const POLSIA = `${HOME}/polsia`;
 const ADS = `${POLSIA}/backend/src/agents/ads`;
 
 const scopes: WorkspaceScopeSummary[] = [
-  { workspaceKey: "ws-polsia", cwd: POLSIA },
+  {
+    workspaceKey: "ws-polsia",
+    cwd: POLSIA,
+    projectId: "project_00000000-0000-4000-8000-000000000001",
+  },
 ];
 
 const polsia = { workspaceKey: "ws-polsia", root: POLSIA, label: "polsia" };

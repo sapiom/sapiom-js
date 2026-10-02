@@ -1,5 +1,11 @@
 # @sapiom/agent-studio
 
+## 0.1.29
+
+### Patch Changes
+
+- @sapiom/harness@0.18.1
+
 ## 0.1.28
 
 ### Patch Changes

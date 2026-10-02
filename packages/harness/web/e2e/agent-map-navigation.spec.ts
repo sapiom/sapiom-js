@@ -409,17 +409,6 @@ test("mobile keyboard activation opens Canvas and closes the rail", async ({
   expect(await evidence(page)).toEqual(before);
 });
 
-test("a live session without a project ID keeps its conversation on rail selection", async ({
-  page,
-}) => {
-  await open(page);
-  const before = await evidence(page);
-  await updateSession(page, "sess-boot", { agentMapIdentity: undefined });
-  await page.getByTestId("workflow-leasing").click();
-  await expectCanvas(page);
-  expect(await evidence(page)).toEqual(before);
-});
-
 for (const boundWorkflowPath of ["/Users/demo/acme-app/leasing", null]) {
   test(`ending a session retains its own Canvas with binding ${boundWorkflowPath}`, async ({
     page,

@@ -1,5 +1,82 @@
 # @sapiom/tools
 
+## 0.40.0
+
+### Minor Changes
+
+- 21f060b: Adopt opt-in execution delivery for the 14 original routed capabilities while preserving public result mapping, native media handles and legacy defaults. Memory and provisioning retain their existing gateway calls when delivery is legacy; selected execution calls never fall back after an ambiguous submission or rejected admission.
+- 0e4dce3: Add `client.executions.prepare`, `submit`, and `get`, also available through
+  `@sapiom/tools/executions`, for durable capability requests. Save a prepared
+  descriptor before submission to retain the request, idempotency key, and Core
+  origin when a response is lost. Requests have bounded timeouts, strict response
+  validation, typed errors, and origin checks when restoring saved descriptors.
+
+  Existing capability methods continue to use their current delivery behavior.
+
+- 97c2c61: Add the opt-in `capabilityDelivery: "executions"` client setting and a reviewed
+  eligibility gate for common capability helpers. Eligible calls preserve their
+  existing result mapping while submitting once and waiting for the saved result;
+  interrupted or uncertain calls never fall back to another synchronous invocation.
+  The default remains `"legacy"`, and no production capability is eligible yet.
+
+  Search, content generation, and key helpers now honor the client's `coreBaseUrl`
+  when no per-call base URL is provided.
+
+- 92ab6df: Add `client.executions.wait` and `executions.wait` to retrieve durable capability
+  results with bounded polling, retry backoff, and abort support. Resume a saved
+  execution handle in a fresh process without submitting another request. A local
+  timeout or abort stops waiting while the accepted execution continues; failed,
+  expired, and indeterminate outcomes remain distinct typed errors.
+- 06adb78: `@sapiom/tools`: new `events` capability. A step emits a tenant event with its own run
+  credential through `ctx.sapiom.events.emit({ type, payload, id? })` (also
+  `import { events } from "@sapiom/tools"`), which calls the gateway's
+  `POST /agents/v1/events` and resolves with the 202 receipt
+  `{ receiptId, outcome, duplicate, fireIds }`. Pass a stable `id` to make a retry safe.
+  The `run_local` stub answers `outcome: "unmatched"` unless overridden under `events.emit`.
+
+  `@sapiom/agent-core`: the authoring skill's trigger section names `ctx.sapiom.events.emit`.
+
+### Patch Changes
+
+- 3a22965: `agents` `wait()` (and so `run`) backs off on a transient status-read fault instead
+  of ending the wait on it (SAP-3615). The platform rate-limits the agents routes per
+  client IP and every sandbox shares one egress IP, so ~100 parents polling their
+  children every 3 s in lockstep were answered `429` — and each `429` failed a parent
+  run outright (236 of 413 runs in one incident).
+
+  A `429`/`408`, any `5xx`, or a transport error (`fetch failed`, `ECONNRESET`,
+  `ETIMEDOUT`) now makes the loop back off — 2 s, 4 s, 8 s, … capped at 30 s, with up
+  to 20% upward jitter — and read again. A `Retry-After` header (seconds or HTTP-date)
+  replaces the computed delay when the platform sends one. A successful read resets
+  the schedule to `pollMs`. `wait` gives up with `status: "unknown"` (carrying the last
+  fault) only after **12 consecutive** transient faults, up from 5 at a fixed `pollMs`
+  cadence; a permanent fault (`404`, `401`/`403`, a malformed body) still resolves
+  `"unknown"` at once. No back-off outlasts the caller's `timeoutMs`: the deadline is
+  checked before every sleep and a sleep is clamped to it, and a `"timed_out"` reached
+  mid-storm now carries the interrupting fault in `error.details` (previously `null`).
+
+  The schedule is tunable with a new optional `wait({ retry })` —
+  `{ initialBackoffMs, maxBackoffMs, maxConsecutiveFaults }`, exported from the root
+  as `AgentWaitRetryOptions`. `status()` retries a transient fault the same way but
+  only three times before throwing it; a permanent one still throws at once.
+
+  Internally, `TransportHttpError` gains `retryAfterMs` (parsed from `Retry-After`),
+  and a fault thrown as a plain `Error` in the transport's `… → 429 …` message shape
+  is classified by that status rather than treated as a socket fault.
+
+  From inside a step, `launch` + `pauseUntilSignal` remains the recommended way to
+  wait on a long child: it makes no poll calls at all, so it cannot be throttled.
+
+- 89d91d4: The platform-rules stamp is now written into a project's `AGENTS.md` when it is scaffolded, from the release constants in `@sapiom/agent-core`, instead of being hard-coded in every template and gallery example. Scaffold output is unchanged: a new project still carries a concrete `<!-- sapiom-authoring-rules release=… digest=… -->` and `sapiom_dev_agents_check` still warns when it differs from the served copy. Gallery examples, `examples/AUTHORING.md` and the `@sapiom/tools` JSDoc keep the pointer to the served rules but no longer record a release, so a content release touches the two constants and the four skill copies only.
+- c4411a0: Report execution HTTP requests separately from observed capability outcomes in
+  SDK telemetry. Repeated reads of a terminal execution share a bounded deduplication
+  cache across a client and its attributed views. Interrupted waits emit a separate
+  event without reporting that the server execution failed. Existing telemetry
+  opt-out settings remain supported.
+- 8a38f6d: Keep execution preparation independent of ambient credentials, preserve recovery identity
+  when waits stop, and record only validated completion telemetry. Honor normalized Core
+  origins across routed calls and preserve caller-safe memory validation error codes.
+
 ## 0.39.0
 
 ### Minor Changes
