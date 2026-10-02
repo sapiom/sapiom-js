@@ -44,14 +44,22 @@ export interface SetupArgs {
   only: string[];
   skip: string[];
   overwrite: boolean;
+  /** Deploy only: attach no triggers (a project kept quiet, such as the controller before a demo). */
+  noTriggers: boolean;
 }
 
 /** `--only <key>` and `--skip <key>` repeat; `--only a,b` also works. */
 export function parseArgs(argv: string[]): SetupArgs {
-  const out: SetupArgs = { only: [], skip: [], overwrite: false };
+  const out: SetupArgs = {
+    only: [],
+    skip: [],
+    overwrite: false,
+    noTriggers: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--overwrite") out.overwrite = true;
+    else if (a === "--no-triggers") out.noTriggers = true;
     else if (a === "--only" || a === "--skip") {
       const v = argv[++i];
       if (!v || v.startsWith("--")) throw new Error(`${a} needs a project key`);

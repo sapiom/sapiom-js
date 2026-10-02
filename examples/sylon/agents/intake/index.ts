@@ -76,11 +76,21 @@ const EYES = "eyes";
 const MAX_CANDIDATES = 10;
 
 /** First 80 chars of the message as plain text (mentions and links made inert). */
+/**
+ * Drop a trailing client footer such as `*Sent using* <@U…>`, which some Slack clients (the Claude
+ * Slack integration among them) append to the poster's text. It is not part of the message.
+ */
+export function stripClientFooter(text: string): string {
+  return text.replace(/\s*\*Sent using\*\s*<@[^>]*>\s*$/, "");
+}
+
 export const TITLE_MAX = 80;
 
 /** The message as one plain line, at most `TITLE_MAX` characters, cut at a word with an ellipsis. */
 export function titleOf(text: string): string {
-  const line = slackToPlain(text).replace(/\s+/g, " ").trim();
+  const line = slackToPlain(stripClientFooter(text))
+    .replace(/\s+/g, " ")
+    .trim();
   if (!line) return "(no text)";
   if (line.length <= TITLE_MAX) return line;
   const cut = line.slice(0, TITLE_MAX - 1);
@@ -631,7 +641,7 @@ const announce = defineStep({
         db,
         (await getIssue(db, input.issueId!)).accountId,
       );
-      const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(input.text)} ${mrkdwnLink(
+      const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(stripClientFooter(input.text))} ${mrkdwnLink(
         permalink(
           input.incoming.channel,
           input.incoming.ts,

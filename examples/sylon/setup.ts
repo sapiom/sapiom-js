@@ -18,6 +18,7 @@
  *
  * Selection: every project that is neither `optional` nor `smoke`; `--only <key>` acts on exactly
  * the named projects (optional ones included), `--skip <key>` leaves one out. Both repeat.
+ * `--no-triggers` deploys without attaching triggers (it never detaches one).
  *
  * Needs SAPIOM_API_KEY (an org key for the target org) in the environment. Prints no secrets.
  */
@@ -305,7 +306,8 @@ async function main() {
   const state = loadState();
   try {
     await projects(selected, client, state);
-    await triggers(selected, client, state);
+    if (args.noTriggers) console.log("triggers\n  skipped (--no-triggers)");
+    else await triggers(selected, client, state);
   } finally {
     state.updatedAt = new Date().toISOString();
     mkdirSync(path.dirname(STATE_FILE), { recursive: true });

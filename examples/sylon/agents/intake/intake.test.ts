@@ -24,7 +24,7 @@ import {
   type Candidate,
   type IntakeJev,
 } from "./decide";
-import { TITLE_MAX, agent, titleOf } from "./index";
+import { TITLE_MAX, agent, stripClientFooter, titleOf } from "./index";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const intakeFixture = (file: string) =>
@@ -156,6 +156,19 @@ describe("decide", () => {
       kind: "open",
       reason: "jev",
     });
+  });
+
+  it("drops a trailing client footer from titles and mirrored text", () => {
+    const posted =
+      "[sylon test] the Pellmark sync is stuck *Sent using* <@U09EXAMPLE1>";
+    expect(titleOf(posted)).toBe("[sylon test] the Pellmark sync is stuck");
+    expect(stripClientFooter("line one\n*Sent using* <@U1|Claude>\n")).toBe(
+      "line one",
+    );
+    // Only a trailing footer: the same words mid-message stay.
+    expect(stripClientFooter("*Sent using* <@U1> is a footer")).toBe(
+      "*Sent using* <@U1> is a footer",
+    );
   });
 
   it("cuts a long title at a word, with an ellipsis", () => {

@@ -63,6 +63,10 @@ describe("setup selection", () => {
     expect(() => selectProjects(parseArgs(["--only", "nope"]))).toThrow(
       /no project 'nope'/,
     );
+    expect(parseArgs(["--only", "controller", "--no-triggers"])).toMatchObject({
+      only: ["controller"],
+      noTriggers: true,
+    });
     expect(() => parseArgs(["--force"])).toThrow(/unknown argument/);
     expect(() => parseArgs(["--only"])).toThrow(/needs a project key/);
   });

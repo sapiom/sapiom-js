@@ -108,7 +108,7 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 6. Writes `.sapiom/fleet-state.json`: definition, build and trigger ids, with no keys.
 
 `--skip <key>` leaves a project out, and `--only <key>` acts on exactly the named projects,
-including optional ones. `--overwrite` resets config to `fleet.local.json` + `fleet.json`
+including optional ones. `--no-triggers` deploys without attaching triggers. `--overwrite` resets config to `fleet.local.json` + `fleet.json`
 (normally a rerun keeps config that an onboarding flow changed).
 
 Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
