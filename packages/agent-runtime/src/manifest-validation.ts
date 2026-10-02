@@ -11,9 +11,17 @@ import Ajv2020 from 'ajv/dist/2020.js';
  * We use `ajv/dist/2020` (JSON Schema 2020-12) because `z.toJSONSchema()` emits
  * the 2020-12 meta-schema. `strict: false` avoids noise from keywords the
  * pre-gate doesn't enforce.
+ *
+ * Each call compiles on a throwaway instance: Ajv caches every compiled schema
+ * by object identity and never frees it, and the normalized schema is a new
+ * object per call, so a shared instance would grow for the life of the process.
  */
 
-const ajv = new Ajv2020({ strict: false, allErrors: true });
+// `validateFormats: false`: no format is registered, so this only drops Ajv's "unknown format" warning.
+const AJV_OPTIONS = { strict: false, allErrors: true, validateFormats: false } as const;
+
+// Long-lived only to check schemas against the meta-schema, which stores nothing per user schema (SAP-3671).
+const schemaMetaValidator = new Ajv2020(AJV_OPTIONS);
 
 /**
  * Validate `input` against `schema`. Throws `StepInputValidationError` when
@@ -41,7 +49,10 @@ export function validateManifestStepInput(
     return;
   }
 
-  const validate = ajv.compile(normalizeInputJsonSchema(schema));
+  const normalized = normalizeInputJsonSchema(schema);
+  // Throws `schema is invalid: ...` for a malformed schema, as `compile()` did.
+  void schemaMetaValidator.validateSchema(normalized, true);
+  const validate = new Ajv2020({ ...AJV_OPTIONS, validateSchema: false }).compile(normalized);
   const valid = validate(input);
   if (!valid) {
     const issues = mapAjvErrors(validate.errors ?? []);
