@@ -83,6 +83,9 @@ export interface Draft {
   cardTs: string | null;
   text: string;
   citations: unknown;
+  /** The event that produced the draft (copilot); null for drafts made without one. */
+  causationId: string | null;
+  confidence: number | null;
   status: DraftStatus;
   decidedBy: string | null;
   decidedAt: Date | null;
@@ -173,6 +176,8 @@ const toDraft = (r: Row): Draft => ({
   cardTs: (r.card_ts as string | null) ?? null,
   text: r.text as string,
   citations: r.citations ?? null,
+  causationId: (r.causation_id as string | null) ?? null,
+  confidence: r.confidence == null ? null : Number(r.confidence),
   status: r.status as DraftStatus,
   decidedBy: (r.decided_by as string | null) ?? null,
   decidedAt: (r.decided_at as Date | null) ?? null,
@@ -579,20 +584,65 @@ export async function createDraft(
     citations?: unknown;
     cardChannel?: string;
     cardTs?: string;
+    causationId?: string;
+    confidence?: number;
   },
 ): Promise<Draft> {
   const rows = await db.query(
-    `insert into drafts (issue_id, text, citations, card_channel, card_ts, status)
-     values ($1, $2, $3::text::jsonb, $4, $5, 'pending') returning *`,
+    `insert into drafts (issue_id, text, citations, card_channel, card_ts, causation_id, confidence, status)
+     values ($1, $2, $3::text::jsonb, $4, $5, $6, $7, 'pending') returning *`,
     [
       input.issueId,
       input.text,
       json(input.citations),
       input.cardChannel ?? null,
       input.cardTs ?? null,
+      input.causationId ?? null,
+      input.confidence ?? null,
     ],
   );
   return toDraft(one(rows, "draft"));
+}
+
+/**
+ * Insert the draft for `causationId` once. Two concurrent runs for the same event both miss the
+ * pre-select; the unique `(issue_id, causation_id)` index lets one insert win, and the other gets
+ * the winner's row with `created: false`.
+ */
+export async function createDraftOnce(
+  db: Db,
+  input: {
+    issueId: string;
+    text: string;
+    citations?: unknown;
+    causationId: string;
+    confidence?: number;
+  },
+): Promise<{ draft: Draft; created: boolean }> {
+  // In a transaction so pg-mem (serialized transactions) agrees with Postgres under concurrency.
+  return db.transaction(async (tx) => {
+    const found = await draftForCausation(tx, input.issueId, input.causationId);
+    if (found) return { draft: found, created: false };
+    const rows = await tx.query(
+      `insert into drafts (issue_id, text, citations, causation_id, confidence, status)
+       values ($1, $2, $3::text::jsonb, $4, $5, 'pending')
+       on conflict (issue_id, causation_id) do nothing returning *`,
+      [
+        input.issueId,
+        input.text,
+        json(input.citations),
+        input.causationId,
+        input.confidence ?? null,
+      ],
+    );
+    if (rows[0]) return { draft: toDraft(rows[0]), created: true };
+    const winner = await draftForCausation(
+      tx,
+      input.issueId,
+      input.causationId,
+    );
+    return { draft: one(winner ? [winner] : [], "draft"), created: false };
+  });
 }
 
 /** Where the draft card was posted, once it has been. */
@@ -623,6 +673,22 @@ export async function pendingDrafts(db: Db, issueId: string): Promise<Draft[]> {
     [issueId],
   );
   return rows.map(toDraft);
+}
+
+/**
+ * The draft an event already produced, so a retried drafting step reuses it instead of adding a
+ * second card. Any status: a retry must not redraft what a teammate already decided.
+ */
+export async function draftForCausation(
+  db: Db,
+  issueId: string,
+  causationId: string,
+): Promise<Draft | null> {
+  const rows = await db.query(
+    "select * from drafts where issue_id = $1 and causation_id = $2 order by created_at desc limit 1",
+    [issueId, causationId],
+  );
+  return rows[0] ? toDraft(rows[0]) : null;
 }
 
 /**

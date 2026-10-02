@@ -4961,6 +4961,14 @@ button.rail-footer-card:hover {
   color: var(--brand-hover);
 }
 
+/* App Link chip (SAP-3255): the durable URL beside the local preview. Same
+   flat interactive tag, dim ink rather than brand: brand stays on what this
+   session is serving right now, and two brand chips side by side read as one
+   control twice. The word and the Link icon carry the difference. */
+.session-app-link-chip {
+  color: var(--text-dim);
+}
+
 /* Step detail sub-view: back + name + kind chip, then role/description and
    the real incoming/outgoing transitions, each a link deeper in. */
 .canvas-detail {

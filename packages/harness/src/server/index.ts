@@ -217,6 +217,7 @@ import { createRunsRouter } from "./runs.js";
 import { createTemplatesRouter } from "./templates.js";
 import { createAccountRouter } from "./account.js";
 import { createSecretsRouter } from "./secrets.js";
+import { createAppLinkRouter } from "./app-link.js";
 import { createPendingSecretsStore } from "../core/pending-secrets.js";
 import { createActionsRouter } from "./actions.js";
 import { createAuthRouter, createMutableAuthState } from "./auth-routes.js";
@@ -3548,6 +3549,17 @@ export const startServer = async (
     createSecretsRouter({
       apiKey: apiKeyProvider,
       pendingSecrets,
+      resolveWorkflow: (id) => {
+        const workflow = workflowsCache.find((w) => w.path === id);
+        return workflow ? { path: workflow.path } : null;
+      },
+    }),
+  );
+  // The session bar's durable App Link chip (SAP-3255): same key, same
+  // path-addressed agent resolution as the Secrets tab.
+  app.use(
+    createAppLinkRouter({
+      apiKey: apiKeyProvider,
       resolveWorkflow: (id) => {
         const workflow = workflowsCache.find((w) => w.path === id);
         return workflow ? { path: workflow.path } : null;

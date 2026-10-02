@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "setup": "tsx setup.ts",
+    "build:kb": "tsx scripts/build-kb.ts",
     "format": "prettier --write \"**/*.{ts,json,md}\""
   },
   "dependencies": {

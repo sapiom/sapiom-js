@@ -26,6 +26,9 @@ _shared/              inlined into every agent by the bundler (relative imports,
   linear.ts           Linear MCP relay (save_issue, get_issue)
   emit.ts             events.emit wrapper + events_log
   blocks.ts           Block Kit cards + action codec (<owner>.<verb>, value = row id)
+  kb.generated.ts     kb/*.md compiled for the copilot (pnpm run build:kb; committed)
+kb/                   the copilot's knowledge base, one markdown page per topic
+scripts/build-kb.ts   compiles kb/ into _shared/kb.generated.ts
 agents/<slug>/        one deployable project each (index.ts, package.json, sapiom.json)
 fixtures/             { type, description, payload } per event; payload is the run input
 ```

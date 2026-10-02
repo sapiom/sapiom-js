@@ -13,6 +13,7 @@ import type {
   AccountPlanView,
   AgentSecret,
   AgentSecretsView,
+  DefinitionAppLinkView,
   SecretWriteReport,
   AdoptSessionRequest,
   AgentScaffoldResponse,
@@ -485,6 +486,10 @@ export interface HarnessApi {
   /** The rail's plan card view, relayed by the server from core (key stays
    *  server-side). Never rejects on a degraded read — inspect `source`. */
   getAccountPlan(): Promise<AccountPlanView>;
+  /** The durable App Link bound to this agent's cloud definition, relayed by
+   *  the server from core. Answers `status: null` for every "nothing to show"
+   *  case (unlinked, no link, signed out, unreachable). */
+  getAppLink(workflowPath: string): Promise<DefinitionAppLinkView>;
   /**
    * This agent's credentials, by NAME and state. Never carries a value: the
    * platform's read is names-only by design and the local store's plaintext
@@ -870,6 +875,12 @@ class RealApi implements HarnessApi {
 
   getAccountPlan(): Promise<AccountPlanView> {
     return this.request<AccountPlanView>("/api/account/plan");
+  }
+
+  getAppLink(workflowPath: string): Promise<DefinitionAppLinkView> {
+    return this.request<DefinitionAppLinkView>(
+      `/api/workflows/${encodeURIComponent(workflowPath)}/app-link`,
+    );
   }
 
   /** `/api/workflows/<path>/secrets` — the path is the agent id, encoded the
@@ -3045,6 +3056,24 @@ export class MockApi implements HarnessApi {
   async getAccountPlan(): Promise<AccountPlanView> {
     await delay(150);
     return MOCK_ACCOUNT_PLAN;
+  }
+
+  /**
+   * No App Link, unless `?mockAppLink=live` opts in. A durable App Link does not
+   * exist in mock mode, so the default fixture renders the bar exactly as an
+   * agent without one; the opt-in exists only so a spec can pin the chip's
+   * anatomy. It is not evidence the feature works (SAP-3255).
+   */
+  async getAppLink(workflowPath: string): Promise<DefinitionAppLinkView> {
+    await delay(50);
+    if (typeof window !== "undefined") {
+      const mode = new URLSearchParams(window.location.search).get("mockAppLink");
+      if (mode === "live") {
+        const slug = basenameOf(workflowPath) || "agent";
+        return { url: `https://apps.sapiom.ai/mock-org/${slug}`, status: "live" };
+      }
+    }
+    return { url: null, status: null };
   }
 
   /**
