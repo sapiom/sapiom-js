@@ -45,6 +45,7 @@ import {
   getDraft,
   getIssue,
   linkMessage,
+  lockIssue,
   messageBySourceEventId,
   messagesForIssue,
   pendingDrafts,
@@ -230,55 +231,82 @@ async function draftReply(
           summary: output.summary,
           confidence,
         });
-      const inserted = await createDraftOnce(db, {
-        issueId: issue.id,
-        text: output.reply,
-        citations: output.citations,
-        causationId: trigger.causationId,
-        confidence: output.confidence,
-      });
-      // A concurrent delivery of the same event inserted first: it posts the card.
-      if (!inserted.created)
-        return terminate({
+      // The unique (issue_id, causation_id) index makes this one row per event even when two
+      // deliveries race; the loser continues with the winner's row and publishes below.
+      draft = (
+        await createDraftOnce(db, {
           issueId: issue.id,
-          draftId: inserted.draft.id,
-          skipped: "a concurrent run owns this draft",
-        });
-      draft = inserted.draft;
-    }
-    const reused = !!draft.cardTs;
-    if (!draft.cardTs) {
-      const posted = await post(ctx, {
-        channel: await getConfig(db, "channels.triage"),
-        threadTs: triageRootTs,
-        text: cardText(issue),
-        blocks: copilotCard(draft, issue, KB),
-      });
-      draft = await setDraftCard(db, draft.id, posted);
+          text: output.reply,
+          citations: output.citations,
+          causationId: trigger.causationId,
+          confidence: output.confidence,
+        })
+      ).draft;
     }
 
-    // Only now retire the older pending drafts. Runs on a retry too, so a crash after the post
-    // never leaves two actionable cards.
+    const triage = await getConfig(db, "channels.triage");
     const ours = Number(trigger.slack.ts);
-    for (const pending of await pendingDrafts(db, issue.id)) {
-      if (pending.id === draft.id) continue;
-      const theirs = await triggerTs(db, pending);
-      if (theirs !== null && theirs > ours) continue;
-      const decided = await decideDraft(
-        db,
-        pending.id,
-        "superseded",
-        SUPERSEDED_BY,
+    const current = issue;
+    const mine = draft;
+    // Publication is serialized per issue under the issue row lock: a second delivery of this
+    // event waits and finds the card posted, and two different events cannot both leave an
+    // actionable card. The lock is held across the Slack post on purpose.
+    const published = await db.transaction(async (tx) => {
+      await lockIssue(tx, current.id);
+      let own = await getDraft(tx, mine.id);
+      const others = (await pendingDrafts(tx, current.id)).filter(
+        (d) => d.id !== own.id,
       );
-      if (decided.changed) await updateCard(ctx, decided.draft, issue);
-    }
+      const newer: Draft[] = [];
+      const older: Draft[] = [];
+      for (const other of others) {
+        const theirs = await triggerTs(tx, other);
+        (theirs !== null && theirs > ours ? newer : older).push(other);
+      }
+      // A newer message's draft is already out (or being published): ours would be stale.
+      if (!own.cardTs && own.status === "pending" && newer.length > 0) {
+        own = (await decideDraft(tx, own.id, "superseded", SUPERSEDED_BY))
+          .draft;
+        return { own, retired: [] as Draft[], stale: true };
+      }
+      if (!own.cardTs && own.status === "pending") {
+        const posted = await post(ctx, {
+          channel: triage,
+          threadTs: triageRootTs,
+          text: cardText(current),
+          blocks: copilotCard(own, current, KB),
+        });
+        own = await setDraftCard(tx, own.id, posted);
+      }
+      // Retire the older pending drafts only now that ours is posted. Also runs on a retry, so a
+      // crash after the post never leaves two actionable cards.
+      const retired: Draft[] = [];
+      if (own.status === "pending")
+        for (const other of older) {
+          const decided = await decideDraft(
+            tx,
+            other.id,
+            "superseded",
+            SUPERSEDED_BY,
+          );
+          if (decided.changed) retired.push(decided.draft);
+        }
+      return { own, retired, stale: false };
+    });
+    for (const old of published.retired) await updateCard(ctx, old, issue);
+    if (published.stale)
+      return terminate({
+        issueId: issue.id,
+        draftId: published.own.id,
+        skipped: "a newer message already has a pending draft",
+      });
     return terminate({
       issueId: issue.id,
-      draftId: draft.id,
-      cardTs: draft.cardTs,
-      status: draft.status,
+      draftId: published.own.id,
+      cardTs: published.own.cardTs,
+      status: published.own.status,
       confidence,
-      reused,
+      reused: published.own.id === draft.id && !!draft.cardTs,
     });
   });
 }

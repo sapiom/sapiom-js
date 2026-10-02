@@ -291,6 +291,19 @@ export async function getIssue(db: Db, id: string): Promise<Issue> {
   );
 }
 
+/**
+ * Lock the issue row for the caller's transaction (`select … for update`), to serialize work on
+ * one issue across runs. Call it through the transaction's `tx`.
+ */
+export async function lockIssue(tx: Db, id: string): Promise<Issue> {
+  return toIssue(
+    one(
+      await tx.query("select * from issues where id = $1 for update", [id]),
+      `issue ${id}`,
+    ),
+  );
+}
+
 /** The issue whose customer thread is rooted at `rootTs` in `channel`, newest first. */
 export async function issueByCustomerThread(
   db: Db,

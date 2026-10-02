@@ -283,12 +283,75 @@ describe("draft path", () => {
     ];
     expect(posts).toHaveLength(1);
     const outs = [last(ra).output!, last(rb).output!];
-    expect(
-      outs.filter((o) => o.skipped === "a concurrent run owns this draft"),
-    ).toHaveLength(1);
     expect(outs[0].draftId).toBe(outs[1].draftId);
+    expect(outs[0].cardTs).toBe(outs[1].cardTs);
     expect((await pendingDrafts(db, FIXTURE_ISSUE)).map((d) => d.id)).toEqual([
       outs[0].draftId,
+    ]);
+  });
+
+  it("overlapping deliveries that both find the stored draft without a card post one card", async () => {
+    const stored = await createDraftOnce(db, {
+      issueId: FIXTURE_ISSUE,
+      text: "Stored by an earlier attempt.",
+      citations: [],
+      causationId: "Ev0EXAMPLE01",
+    });
+    const payload = fixture("issue/created.json").payload;
+    const a = ctxFor("exec-a");
+    const b = ctxFor("exec-b");
+    await Promise.all([runAgent(payload, a.ctx), runAgent(payload, b.ctx)]);
+    expect([
+      ...a.slack("chat.postMessage"),
+      ...b.slack("chat.postMessage"),
+    ]).toHaveLength(1);
+    expect(a.llmCalls.length + b.llmCalls.length).toBe(0);
+    expect((await getDraft(db, stored.draft.id)).cardTs).not.toBeNull();
+  });
+
+  it("an older event that publishes after a newer one retires its own draft instead of posting", async () => {
+    // A (the root message) passes the pending check, then B (a later follow-up) publishes first.
+    const a = ctxFor("exec-a");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const llm = (
+      a.ctx.sapiom as { llm: { run: (s: unknown) => Promise<unknown> } }
+    ).llm;
+    const run = llm.run.bind(llm);
+    llm.run = async (spec) => {
+      await gate;
+      return run(spec);
+    };
+    const pendingA = runAgent(fixture("issue/created.json").payload, a.ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    const b = ctxFor("exec-b");
+    await linkMessage(db, {
+      issueId: FIXTURE_ISSUE,
+      source: "slack",
+      sourceEventId: "Ev0SYLONREPLY1",
+      direction: "customer",
+      slack: {
+        channel: "C0CUSTOMER1",
+        ts: "1790889500.000300",
+        threadTs: "1790889355.981329",
+      },
+      userId: "U0CUSTOMER1",
+      text: "Following up: it still fails after a retry.",
+    });
+    const rb = await runAgent(
+      fixture("issue/message-added.json").payload,
+      b.ctx,
+    );
+    release();
+    const ra = await pendingA;
+    expect(last(ra).output).toMatchObject({
+      skipped: "a newer message already has a pending draft",
+    });
+    // A got past the pre-LLM check, so the publish step is what stopped it.
+    expect(a.llmCalls).toHaveLength(1);
+    expect(a.slack("chat.postMessage")).toHaveLength(0);
+    expect((await pendingDrafts(db, FIXTURE_ISSUE)).map((d) => d.id)).toEqual([
+      last(rb).output!.draftId,
     ]);
   });
 
