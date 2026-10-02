@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { WorkspaceKey, WorkspaceScopeSummary } from "../shared/workspace-scope.js";
+import type { WorkspaceKey, WorkspaceScopeInput } from "../shared/workspace-scope.js";
 import { canonicalGraphPath } from "@sapiom/agent-map/node/canonical-graph-path";
 
 export interface WorkspaceScope {
@@ -12,7 +12,7 @@ export interface WorkspaceScopeResolver {
 }
 
 export interface WorkspaceScopeCatalog extends WorkspaceScopeResolver {
-  list(): Promise<WorkspaceScopeSummary[]>;
+  list(): Promise<WorkspaceScopeInput[]>;
 }
 
 function workspaceKeyForRoot(root: string): WorkspaceKey {
@@ -30,8 +30,8 @@ export class LocalWorkspaceScopeCatalog implements WorkspaceScopeCatalog {
       | Promise<readonly string[]>,
   ) {}
 
-  async list(): Promise<WorkspaceScopeSummary[]> {
-    const byRoot = new Map<string, WorkspaceScopeSummary>();
+  async list(): Promise<WorkspaceScopeInput[]> {
+    const byRoot = new Map<string, WorkspaceScopeInput>();
     for (const root of await this.listRoots()) {
       const canonical = canonicalGraphPath(root);
       byRoot.set(canonical, {

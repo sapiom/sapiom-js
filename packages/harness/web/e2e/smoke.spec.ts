@@ -560,10 +560,11 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
 
     // Start runs the create+bind path in rfq's OWN folder (never borrowing the
     // acme-app session), and the workbench goes live with the terminal. The
-    // The session uses its folder-derived default label.
+    // The session gets the folder's next default title: the exited fixture
+    // session keeps "rfq-agent", so this one is "rfq-agent 2".
     await page.getByTestId("open-agent-start-session").click();
     await expect(page.getByTestId("session-context-title")).toHaveText(
-      "rfq-agent",
+      "rfq-agent 2",
     );
     await expect(page.locator(".harness-terminal")).toBeVisible();
     await expect(page.getByTestId("session-tabs").getByRole("tab")).toHaveCount(
@@ -592,7 +593,7 @@ test.describe("three-zone IA (rail explorer, tab strip, right pane)", () => {
       /is-focused/,
     );
     await expect(page.getByTestId("session-context-title")).toHaveText(
-      "rfq-agent",
+      "rfq-agent 2",
     );
     // Still exactly one filled row.
     await expect(
