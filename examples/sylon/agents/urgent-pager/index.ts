@@ -6,7 +6,9 @@
  * Trigger: event `issue.created`.
  *
  * The DM is stored in `messages` under `urgent-pager:<issueId>`, with no issue (it is not in the
- * issue's thread), so a retried run sees it and pages once.
+ * issue's thread). The check, the DM and that row share one transaction under the issue's row
+ * lock, so a retried or concurrent run pages once. A crash between Slack's 200 and the commit can
+ * still page twice (post then record, a known limitation).
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 
@@ -15,8 +17,8 @@ import { getConfig } from "../../_shared/config";
 import { withDb } from "../../_shared/db";
 import { Events } from "../../_shared/events";
 import {
-  getIssue,
   linkMessage,
+  lockIssue,
   messageBySourceEventId,
   recordRun,
 } from "../../_shared/issues";
@@ -35,26 +37,38 @@ const page = defineStep({
       return terminate({ outcome: "not_urgent", priority: input.priority });
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT, input.issueId);
-      if (await messageBySourceEventId(db, pageKey(input.issueId)))
-        return terminate({ outcome: "already_paged" });
-      const oncall = await getConfig(db, "oncall.slack_id");
-      // A local trace's fresh database lacks the fixture's issue; link the customer message then.
-      const issue = await getIssue(db, input.issueId).catch(() => null);
-      const link = issue?.triageRootTs
-        ? permalink(await getConfig(db, "channels.triage"), issue.triageRootTs)
-        : permalink(input.slack.channel, input.slack.ts, input.slack.threadTs);
-      const number = issue ? ` #${issue.number}` : "";
-      const text = `:rotating_light: Urgent issue${number}: ${escapeMrkdwn(slackToPlain(input.title))}\n${link}`;
-      const dm = await post(ctx, { channel: oncall, text });
-      await linkMessage(db, {
-        source: "slack",
-        sourceEventId: pageKey(input.issueId),
-        direction: "internal",
-        slack: { channel: dm.channel, ts: dm.ts },
-        userId: AGENT,
-        text,
+      // Check, post and record under the issue's row lock: an overlapping run (a redelivery beside
+      // a slow first attempt) waits here, then finds the stored page and sends nothing.
+      return db.transaction(async (tx) => {
+        // A local trace's fresh database lacks the fixture's issue; link the customer message then.
+        // The lock is a plain select, so a missing row aborts nothing.
+        const issue = await lockIssue(tx, input.issueId).catch(() => null);
+        if (await messageBySourceEventId(tx, pageKey(input.issueId)))
+          return terminate({ outcome: "already_paged" });
+        const oncall = await getConfig(tx, "oncall.slack_id");
+        const link = issue?.triageRootTs
+          ? permalink(
+              await getConfig(tx, "channels.triage"),
+              issue.triageRootTs,
+            )
+          : permalink(
+              input.slack.channel,
+              input.slack.ts,
+              input.slack.threadTs,
+            );
+        const number = issue ? ` #${issue.number}` : "";
+        const text = `:rotating_light: Urgent issue${number}: ${escapeMrkdwn(slackToPlain(input.title))}\n${link}`;
+        const dm = await post(ctx, { channel: oncall, text });
+        await linkMessage(tx, {
+          source: "slack",
+          sourceEventId: pageKey(input.issueId),
+          direction: "internal",
+          slack: { channel: dm.channel, ts: dm.ts },
+          userId: AGENT,
+          text,
+        });
+        return terminate({ outcome: "paged", oncall, ts: dm.ts, link });
       });
-      return terminate({ outcome: "paged", oncall, ts: dm.ts, link });
     });
   },
 });

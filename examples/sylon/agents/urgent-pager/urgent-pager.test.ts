@@ -78,6 +78,26 @@ describe("urgent-pager", () => {
     expect(dms(retry.logs)).toEqual([]);
   });
 
+  it("pages once when two runs for one issue overlap", async () => {
+    const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
+    const issue = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "urgent",
+      title: "Checkout down",
+      customer: { channel: "C0CUSTOMER1", ts: "1790889355.981329" },
+    });
+    const input = { ...urgent(), issueId: issue.id };
+    const a = fakeCtx({ isLocalTrace: true, executionId: "page-a" });
+    const b = fakeCtx({ isLocalTrace: true, executionId: "page-b" });
+    const outcomes = (
+      await Promise.all([run(input, a.ctx), run(input, b.ctx)])
+    ).map((d) => d.output?.outcome);
+    expect(outcomes.sort()).toEqual(["already_paged", "paged"]);
+    expect([...dms(a.logs), ...dms(b.logs)]).toHaveLength(1);
+  });
+
   it("links the customer message when the issue is not in the database", async () => {
     const { ctx, logs } = fakeCtx({ isLocalTrace: true });
     const done = await run(urgent(), ctx);
