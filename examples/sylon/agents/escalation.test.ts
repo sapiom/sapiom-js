@@ -370,6 +370,18 @@ describe("escalation against the relay (mocked fetch)", () => {
     );
   });
 
+  it("a deployed run for an unknown issue id fails before touching Linear or Slack", async () => {
+    const { ctx, emitted } = liveCtx();
+    await expect(
+      escalate(ctx as never, db, {
+        ...input(),
+        issueId: "a1b2c3d4-0000-4000-8000-0000000000ff",
+      }),
+    ).rejects.toThrow(/not found/);
+    expect(calls.filter((c) => c.method !== "users.info")).toEqual([]);
+    expect(emitted).toEqual([]);
+  });
+
   it("closed issues are linked but not moved", async () => {
     await setStatus(db, issueId, "closed");
     const { ctx, emitted } = liveCtx();
