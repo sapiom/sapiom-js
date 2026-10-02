@@ -39,6 +39,7 @@ import {
   fleetWideKeys,
   isOn,
   latencies,
+  linearIssueUrl,
   listensTo,
   planSwitch,
   receiptView,
@@ -182,8 +183,26 @@ async function withConsoleDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
 const triageLink = (triage: string, ts: string | null) =>
   ts ? permalink(triage, ts) : null;
 
+let projectPromise: Promise<{ name: string; url: string | null }> | undefined;
+
+/** The Linear project's name and URL. Static for the server's life; a failed lookup is retried. */
+function linearProject(d: Db) {
+  projectPromise ??= getConfig(d, "linear.project_id")
+    .then((query) => callTool("get_project", { query }))
+    .then((p) => ({
+      name: typeof p.name === "string" ? p.name : "Linear project",
+      url: typeof p.url === "string" ? p.url : null,
+    }))
+    .catch(() => {
+      projectPromise = undefined;
+      return { name: "Linear project", url: null };
+    });
+  return projectPromise;
+}
+
 async function board(d: Db) {
   const triage = await getConfig(d, "channels.triage");
+  const project = await linearProject(d);
   const counts = await d.query<{ status: string; n: string }>(
     "select status, count(*) as n from issues group by status",
   );
@@ -203,6 +222,10 @@ async function board(d: Db) {
       priority: r.priority,
       owner: r.owner_slack_id,
       linear: r.linear_identifier,
+      linearUrl: linearIssueUrl(
+        project.url,
+        r.linear_identifier as string | null,
+      ),
       createdAt: r.created_at,
       cardUrl: triageLink(triage, r.triage_root_ts as string | null),
     })),
@@ -300,11 +323,10 @@ async function failedReceipts() {
  * fails leaves its link out rather than failing the page.
  */
 async function system(d: Db) {
-  const [triage, customers, oncall, projectId] = await Promise.all([
+  const [triage, customers, oncall] = await Promise.all([
     getConfig(d, "channels.triage"),
     getConfig(d, "channels.customer"),
     getConfig(d, "oncall.slack_id"),
-    getConfig(d, "linear.project_id"),
   ]);
   const [teamId, project, definitions] = await Promise.all([
     connectors.slack
@@ -313,12 +335,7 @@ async function system(d: Db) {
         (r) => (r.user as { team_id?: string } | undefined)?.team_id ?? null,
       )
       .catch(() => null),
-    callTool("get_project", { query: projectId })
-      .then((p) => ({
-        name: typeof p.name === "string" ? p.name : "Linear project",
-        url: typeof p.url === "string" ? p.url : null,
-      }))
-      .catch(() => ({ name: "Linear project", url: null })),
+    linearProject(d),
     sapiom<{ id: string; slug: string }[]>(
       "GET",
       "/v1/workflows/definitions?limit=200",

@@ -203,6 +203,16 @@ export const TABLES: [string, string][] = [
 export const slackChannelUrl = (teamId: string, channelId: string) =>
   `https://app.slack.com/client/${teamId}/${channelId}`;
 
+/** An issue's Linear URL, from the project URL's workspace (`https://linear.app/<ws>/project/...`). */
+export function linearIssueUrl(
+  projectUrl: string | null,
+  identifier: string | null,
+): string | null {
+  if (!projectUrl || !identifier) return null;
+  const m = /^https:\/\/linear\.app\/([^/]+)\//.exec(projectUrl);
+  return m ? `https://linear.app/${m[1]}/issue/${identifier}` : null;
+}
+
 export const agentPageUrl = (definitionId: string) =>
   `https://app.sapiom.ai/agents/${definitionId}`;
 

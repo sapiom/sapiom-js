@@ -7,6 +7,7 @@ import {
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
+  linearIssueUrl,
   latencies,
   planSwitch,
   receiptView,
@@ -219,5 +220,18 @@ describe("route guard", () => {
   it("fails closed when no secret is configured", () => {
     expect(checkSecret(undefined, "anything")).toBe("unset");
     expect(checkSecret("", "")).toBe("unset");
+  });
+});
+
+describe("linear links", () => {
+  it("builds an issue URL from the project's workspace", () => {
+    expect(
+      linearIssueUrl(
+        "https://linear.app/acme/project/sylon-issues-9fa8692f54ff",
+        "SAP-3723",
+      ),
+    ).toBe("https://linear.app/acme/issue/SAP-3723");
+    expect(linearIssueUrl(null, "SAP-1")).toBeNull();
+    expect(linearIssueUrl("https://example.com/x", "SAP-1")).toBeNull();
   });
 });

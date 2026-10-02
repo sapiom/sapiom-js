@@ -6,35 +6,45 @@
     <title>Sylon Console</title>
     <style>
       :root {
-        --bg: #f6f6f4;
+        --bg: #f5f5f3;
         --panel: #ffffff;
-        --ink: #1d1d1b;
+        --ink: #1c1c1a;
         --muted: #6b6b66;
-        --line: #e2e2dc;
+        --line: #e3e3de;
+        --soft: #f0f0ec;
         --accent: #2f5bd3;
         --ok: #1f7a43;
         --warn: #a15c00;
         --bad: #b42318;
-        --chip: #efefea;
+        --s-new: #2f5bd3;
+        --s-on_you: #a15c00;
+        --s-on_customer: #6b46c1;
+        --s-on_hold: #6b6b66;
+        --s-closed: #1f7a43;
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #141413;
-          --panel: #1d1d1b;
+          --panel: #1c1c1a;
           --ink: #ecece6;
           --muted: #9a9a92;
           --line: #33332f;
+          --soft: #262623;
           --accent: #7d9bff;
           --ok: #5cc98a;
           --warn: #e0a24a;
           --bad: #f07a6e;
-          --chip: #2a2a27;
+          --s-new: #7d9bff;
+          --s-on_you: #e0a24a;
+          --s-on_customer: #b39bf0;
+          --s-on_hold: #9a9a92;
+          --s-closed: #5cc98a;
         }
       }
       * {
         box-sizing: border-box;
       }
-      /* main sets display: grid, which would otherwise beat the hidden attribute. */
+      /* Grid and flex containers set display, which would otherwise beat the hidden attribute. */
       [hidden] {
         display: none !important;
       }
@@ -47,58 +57,50 @@
           -apple-system,
           sans-serif;
       }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      code {
+        font:
+          12px ui-monospace,
+          monospace;
+      }
+      .wrap {
+        max-width: 1600px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
       header {
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+      }
+      header .wrap {
         display: flex;
         flex-wrap: wrap;
         gap: 8px 16px;
         align-items: center;
         justify-content: space-between;
-        padding: 12px 16px;
-        border-bottom: 1px solid var(--line);
-        background: var(--panel);
-        position: sticky;
-        top: 0;
-        z-index: 1;
+        padding-top: 10px;
+        padding-bottom: 10px;
       }
       header h1 {
-        font-size: 16px;
+        font-size: 15px;
         margin: 0;
-      }
-      main {
-        display: grid;
-        gap: 12px;
-        padding: 12px 16px 48px;
-        grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
-        max-width: 1400px;
-        margin: 0 auto;
-      }
-      section {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px 14px;
-        min-width: 0;
-      }
-      section h2 {
-        font-size: 13px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--muted);
-        margin: 0 0 8px;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: space-between;
-        gap: 8px;
-        align-items: center;
       }
       button {
         font: inherit;
+        font-size: 13px;
         border: 1px solid var(--line);
-        background: var(--chip);
+        background: var(--soft);
         color: var(--ink);
         border-radius: 6px;
-        padding: 5px 10px;
+        padding: 4px 10px;
         cursor: pointer;
+        white-space: nowrap;
       }
       button.primary {
         background: var(--accent);
@@ -108,15 +110,17 @@
       button.danger {
         border-color: var(--bad);
         color: var(--bad);
+        background: transparent;
       }
       button:disabled {
-        opacity: 0.5;
-        cursor: default;
+        opacity: 0.45;
+        cursor: not-allowed;
       }
       input[type="password"],
       input[type="text"] {
         font: inherit;
-        padding: 5px 8px;
+        font-size: 13px;
+        padding: 4px 8px;
         border: 1px solid var(--line);
         border-radius: 6px;
         background: var(--bg);
@@ -141,99 +145,287 @@
       .bad {
         color: var(--bad);
       }
-      .chip {
+      .num {
+        font-variant-numeric: tabular-nums;
+      }
+      .dot {
         display: inline-block;
-        background: var(--chip);
-        border-radius: 4px;
-        padding: 0 6px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.warn {
+        background: var(--warn);
+      }
+      .dot.bad {
+        background: var(--bad);
+      }
+      .pill {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 0 8px;
         font-size: 12px;
         white-space: nowrap;
+        border: 1px solid currentColor;
       }
-      code {
+      .lock {
         font-size: 12px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        background: var(--soft);
+      }
+
+      /* summary strip */
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 18px;
+        align-items: center;
+        padding: 10px 0;
+      }
+      .summary .item {
+        display: flex;
+        gap: 6px;
+        align-items: baseline;
+        white-space: nowrap;
+      }
+      .summary .sep {
+        width: 1px;
+        align-self: stretch;
+        background: var(--line);
+      }
+      .summary strong {
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* tabs */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 12px;
+      }
+      .tabs button {
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        background: transparent;
+        padding: 6px 12px;
+        color: var(--muted);
+      }
+      .tabs button[aria-selected="true"] {
+        border-bottom-color: var(--accent);
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+        min-width: 0;
+      }
+      .card h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin: 0 0 8px;
+        font-weight: 600;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .card h2 .row {
+        text-transform: none;
+        letter-spacing: 0;
+      }
+
+      /* console grid */
+      .console {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
+        gap: 12px;
+        align-items: start;
+        padding-bottom: 32px;
+      }
+      @media (max-width: 1000px) {
+        .console {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        /* On a phone the operator needs the switches before a 20-row board. */
+        .console > .stack:last-child {
+          order: -1;
+        }
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      /* board */
+      .scroll {
+        overflow-x: auto;
       }
       table {
         width: 100%;
         border-collapse: collapse;
       }
-      td,
-      th {
+      th,
+      td {
         text-align: left;
-        padding: 4px 6px 4px 0;
+        padding: 6px 10px 6px 0;
         border-top: 1px solid var(--line);
         vertical-align: top;
+        white-space: nowrap;
       }
       th {
+        font-size: 12px;
         font-weight: 500;
         color: var(--muted);
-        font-size: 12px;
         border-top: 0;
+        padding-top: 0;
       }
-      .scroll {
-        overflow-x: auto;
+      td.title {
+        white-space: normal;
+        width: 100%;
+        min-width: 180px;
       }
+      .clamp {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      /* fleet */
       .agent {
         display: flex;
-        justify-content: space-between;
         gap: 8px;
+        align-items: center;
         padding: 6px 0;
         border-top: 1px solid var(--line);
-        align-items: flex-start;
       }
-      .agent:first-of-type {
+      .agent:first-child {
         border-top: 0;
       }
-      .num {
-        font-variant-numeric: tabular-nums;
+      .agent .name {
+        flex: 1;
+        min-width: 0;
       }
-      .big {
-        font-size: 22px;
-        font-weight: 600;
+      .agent details {
+        font-size: 12px;
+        color: var(--muted);
       }
+      .agent summary {
+        cursor: pointer;
+      }
+      .agent ul {
+        margin: 4px 0 0;
+        padding-left: 16px;
+      }
+      .switch {
+        position: relative;
+        width: 34px;
+        height: 20px;
+        flex: none;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: var(--soft);
+        padding: 0;
+      }
+      .switch::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--muted);
+        transition: left 0.15s;
+      }
+      .switch[aria-checked="true"] {
+        background: var(--ok);
+        border-color: var(--ok);
+      }
+      .switch[aria-checked="true"]::after {
+        left: 16px;
+        background: #fff;
+      }
+      .beats {
+        display: grid;
+        gap: 8px;
+      }
+      .beats .label {
+        font-size: 12px;
+        color: var(--muted);
+        margin-right: 4px;
+      }
+      .confirm {
+        border: 1px solid var(--bad);
+        border-radius: 6px;
+        padding: 8px;
+      }
+
+      /* last ticket */
       .legs {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 8px;
-        margin-bottom: 8px;
+        margin: 8px 0;
       }
       .leg {
-        background: var(--chip);
+        background: var(--soft);
         border-radius: 6px;
-        padding: 6px 8px;
+        padding: 6px 10px;
       }
-      .cue {
-        border-top: 1px solid var(--line);
-        padding: 8px 0;
+      .leg .v {
+        font-size: 20px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
       }
-      .cue:first-of-type {
-        border-top: 0;
+      .sub {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+      .sub h3 {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--muted);
+        margin: 4px 0;
       }
       #log {
         font:
           12px/1.4 ui-monospace,
           monospace;
         white-space: pre-wrap;
-        max-height: 180px;
+        max-height: 160px;
         overflow: auto;
         margin: 0;
       }
-      .tabs {
-        display: flex;
-        gap: 4px;
-        padding: 8px 16px 0;
-        max-width: 1400px;
-        margin: 0 auto;
-      }
-      .tabs button[aria-selected="true"] {
-        background: var(--accent);
-        border-color: var(--accent);
-        color: #fff;
+
+      /* system */
+      .system {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+        gap: 12px;
+        align-items: start;
+        padding-bottom: 32px;
       }
       .flow {
         display: flex;
         flex-direction: column;
-        align-items: stretch;
-        gap: 0;
       }
       .box {
         border: 1px solid var(--line);
@@ -247,8 +439,8 @@
       .arrow {
         text-align: center;
         color: var(--muted);
-        line-height: 1;
         padding: 3px 0;
+        font-size: 12px;
       }
       .side {
         display: grid;
@@ -258,7 +450,7 @@
       dl.kv {
         margin: 4px 0 0;
         display: grid;
-        grid-template-columns: max-content 1fr;
+        grid-template-columns: max-content minmax(0, 1fr);
         gap: 2px 10px;
       }
       dl.kv dt {
@@ -266,194 +458,233 @@
       }
       dl.kv dd {
         margin: 0;
-        min-width: 0;
         overflow-wrap: anywhere;
       }
-      .confirm {
-        border: 1px solid var(--bad);
-        border-radius: 6px;
-        padding: 8px;
-        margin-top: 8px;
+      .sysagent {
+        padding: 8px 0;
+        border-top: 1px solid var(--line);
       }
-      a {
-        color: var(--accent);
+      .sysagent:first-child {
+        border-top: 0;
+      }
+
+      /* cues */
+      .cues {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+        gap: 12px;
+        padding-bottom: 32px;
+      }
+      .cue .text {
+        margin: 6px 0;
       }
     </style>
   </head>
   <body>
     <header>
-      <h1>Sylon Console</h1>
-      <div class="row" id="auth"></div>
+      <div class="wrap">
+        <h1>Sylon Console</h1>
+        <div class="row" id="auth"></div>
+      </div>
     </header>
-    <nav class="tabs" role="tablist">
-      <button role="tab" id="tab-operate" aria-selected="true">Operate</button>
-      <button role="tab" id="tab-system" aria-selected="false">System</button>
-    </nav>
-    <main id="operate">
-      <section id="fleet-panel">
-        <h2>
-          Fleet
-          <span class="row">
-            <button id="pause">Pause fleet</button>
-            <button id="resume">Resume fleet</button>
-          </span>
-        </h2>
-        <div id="fleet" class="muted">loading…</div>
-        <p class="muted" style="margin: 8px 0 0">
-          Pause and Resume leave urgent-pager alone.
-        </p>
-      </section>
 
-      <section>
-        <h2>Demo beats</h2>
-        <div class="row" style="margin-bottom: 8px">
-          <button id="add-pager" class="primary">Add urgent-pager live</button>
-          <span id="pager-state" class="muted"></span>
-        </div>
-        <div class="row">
-          <strong>Controller</strong>
-          <span id="ctl-state" class="muted"></span>
-          <button id="ctl-start">Start cron</button>
-          <button id="ctl-stop">Stop cron</button>
-          <button id="ctl-run">Run now</button>
-        </div>
-      </section>
+    <div class="wrap">
+      <div class="summary" id="summary">
+        <span class="muted">loading…</span>
+      </div>
 
-      <section>
-        <h2>
-          Board
-          <button id="reset" class="danger">Reset board</button>
-        </h2>
-        <div id="reset-confirm" hidden class="confirm">
-          <p style="margin: 0 0 6px">
-            Close <strong id="open-count">every open</strong> ticket and redraw
-            its card?
-          </p>
-          <div class="row">
-            <button id="reset-yes" class="danger">Yes, close them</button>
-            <button id="reset-no">Cancel</button>
-          </div>
-        </div>
-        <div id="counts" class="row" style="margin: 6px 0"></div>
-        <div class="scroll"><table id="board"></table></div>
-      </section>
-
-      <section>
-        <h2>
-          Last ticket
-          <span class="row"
-            ><input
-              id="tl-issue"
-              type="text"
-              inputmode="numeric"
-              placeholder="newest"
-              size="6"
-              aria-label="Issue number"
-          /></span>
-        </h2>
-        <div id="timeline" class="muted">loading…</div>
-      </section>
-
-      <section>
-        <h2>
-          Failed events
-          <button id="rcpt-refresh">Refresh</button>
-        </h2>
-        <div id="receipts" class="muted">loading…</div>
-      </section>
-
-      <section>
-        <h2>
+      <nav class="tabs" role="tablist">
+        <button role="tab" id="tab-console" aria-selected="true">
+          Console
+        </button>
+        <button role="tab" id="tab-system" aria-selected="false">System</button>
+        <button role="tab" id="tab-cues" aria-selected="false">
           Cue cards
-          <label class="row" style="text-transform: none; letter-spacing: 0"
-            ><input type="checkbox" id="cue-prefix" checked /> prefix</label
-          >
-        </h2>
-        <p class="muted" style="margin: 0 0 6px">
-          Type these in the customer channel as a person: the connector drops
-          bot posts.
-        </p>
-        <div id="cues"></div>
-      </section>
+        </button>
+      </nav>
 
-      <section>
-        <h2>Action log</h2>
-        <pre id="log" class="muted">nothing yet</pre>
-      </section>
-    </main>
-    <main id="system" hidden>
-      <section>
-        <h2>Channels</h2>
-        <div id="sys-channels" class="muted">loading…</div>
-      </section>
-
-      <section>
-        <h2>How events come in</h2>
-        <div class="flow">
-          <div class="side">
-            <div class="box">
-              <strong>Slack</strong>Events API (messages, reactions) and
-              interactivity (button clicks)
-            </div>
-            <div class="box">
-              <strong>Agents</strong
-              ><code>ctx.sapiom.events.emit</code> (<code>issue.*</code>), id
-              <code>&lt;type&gt;:&lt;causationId&gt;</code>
-            </div>
-          </div>
-          <div class="arrow">↓ Slack only</div>
-          <div class="box">
-            <strong>Sapiom Slack connector</strong>checks the Slack signature,
-            drops bot posts and edits, emits
-            <code>slack.message.created</code> /
-            <code>slack.reaction_added</code> /
-            <code>slack.block_actions</code>
-          </div>
-          <div class="arrow">↓ both</div>
-          <div class="box">
-            <strong>Engine receipt</strong>one per event, deduped on the Slack
-            event id, trigger id or emit id
-          </div>
-          <div class="arrow">↓</div>
-          <div class="box">
-            <strong>Trigger match</strong>by exact event type, one fire per
-            matching agent
-          </div>
-          <div class="arrow">↓</div>
-          <div class="box">
-            <strong>Outbox relay</strong>currently a 15 s poll (SAP-3716): most
-            of the wait between a receipt and its run
-          </div>
-          <div class="arrow">↓</div>
-          <div class="box">
-            <strong>Run</strong>the agent's steps, in a sandbox
-          </div>
-          <div class="arrow" style="margin-top: 8px">separately</div>
-          <div class="box">
-            <strong>Controller cron</strong><code>*/2 * * * *</code> starts a
-            run directly, no event involved
-          </div>
+      <!-- Console -->
+      <div id="console" class="console">
+        <div class="stack">
+          <section class="card">
+            <h2>Board <span class="muted" id="board-note"></span></h2>
+            <div class="scroll"><table id="board"></table></div>
+          </section>
+          <section class="card">
+            <h2>
+              Last ticket
+              <span class="row"
+                ><input
+                  id="tl-issue"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="newest"
+                  size="6"
+                  aria-label="Issue number"
+              /></span>
+            </h2>
+            <div id="timeline" class="muted">loading…</div>
+          </section>
         </div>
-      </section>
 
-      <section>
-        <h2>Agents</h2>
-        <div id="sys-agents" class="muted">loading…</div>
-      </section>
+        <div class="stack">
+          <section class="card">
+            <h2>
+              Fleet
+              <span class="row">
+                <button id="pause" class="mut">Pause</button>
+                <button id="resume" class="mut">Resume</button>
+              </span>
+            </h2>
+            <div id="fleet" class="muted">loading…</div>
+            <div class="muted" style="font-size: 12px; margin-top: 6px">
+              Pause and Resume leave urgent-pager alone.
+            </div>
+          </section>
 
-      <section>
-        <h2>Shared database <code>sylon</code></h2>
-        <div id="sys-tables" class="muted">loading…</div>
-      </section>
+          <section class="card">
+            <h2>Demo beats</h2>
+            <div class="beats">
+              <div class="row">
+                <button id="add-pager" class="mut primary">
+                  Add urgent-pager live
+                </button>
+                <span id="pager-state" class="muted"></span>
+              </div>
+              <div class="row">
+                <span class="label">Controller</span>
+                <span id="ctl-state" class="muted"></span>
+                <button id="ctl-start" class="mut">Start cron</button>
+                <button id="ctl-stop" class="mut">Stop cron</button>
+                <button id="ctl-run" class="mut">Run now</button>
+              </div>
+              <div class="row">
+                <button id="reset" class="mut danger">Reset board</button>
+                <span class="muted" style="font-size: 12px"
+                  >closes every open ticket</span
+                >
+              </div>
+              <div id="reset-confirm" hidden class="confirm">
+                <div style="margin-bottom: 6px">
+                  Close <strong id="open-count">every open</strong> ticket and
+                  redraw its card?
+                </div>
+                <div class="row">
+                  <button id="reset-yes" class="mut danger">
+                    Yes, close them
+                  </button>
+                  <button id="reset-no">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </section>
 
-      <section>
-        <h2>Linear</h2>
-        <div id="sys-linear" class="muted">loading…</div>
-      </section>
-    </main>
+          <section class="card">
+            <h2>
+              Failed events
+              <button id="rcpt-refresh">Refresh</button>
+            </h2>
+            <div id="receipts" class="muted">loading…</div>
+          </section>
+
+          <section class="card" id="log-card" hidden>
+            <h2>Action log</h2>
+            <pre id="log"></pre>
+          </section>
+        </div>
+      </div>
+
+      <!-- System -->
+      <div id="system" class="system" hidden>
+        <div class="stack">
+          <section class="card">
+            <h2>Channels</h2>
+            <div id="sys-channels" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>How events come in</h2>
+            <div class="flow">
+              <div class="side">
+                <div class="box">
+                  <strong>Slack</strong>Events API (messages, reactions) and
+                  interactivity (button clicks)
+                </div>
+                <div class="box">
+                  <strong>Agents</strong
+                  ><code>ctx.sapiom.events.emit</code> (<code>issue.*</code>),
+                  id <code>&lt;type&gt;:&lt;causationId&gt;</code>
+                </div>
+              </div>
+              <div class="arrow">↓ Slack only</div>
+              <div class="box">
+                <strong>Sapiom Slack connector</strong>checks the Slack
+                signature, drops bot posts and edits, emits
+                <code>slack.message.created</code> /
+                <code>slack.reaction_added</code> /
+                <code>slack.block_actions</code>
+              </div>
+              <div class="arrow">↓ both</div>
+              <div class="box">
+                <strong>Engine receipt</strong>one per event, deduped on the
+                Slack event id, trigger id or emit id
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Trigger match</strong>by exact event type, one fire per
+                matching agent
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Outbox relay</strong>currently a 15 s poll (SAP-3716):
+                most of the wait between a receipt and its run
+              </div>
+              <div class="arrow">↓</div>
+              <div class="box">
+                <strong>Run</strong>the agent's steps, in a sandbox
+              </div>
+              <div class="arrow" style="margin-top: 6px">separately</div>
+              <div class="box">
+                <strong>Controller cron</strong><code>*/2 * * * *</code> starts
+                a run directly, no event involved
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="stack">
+          <section class="card">
+            <h2>Agents</h2>
+            <div id="sys-agents" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>Shared database</h2>
+            <div id="sys-tables" class="muted">loading…</div>
+          </section>
+          <section class="card">
+            <h2>Linear</h2>
+            <div id="sys-linear" class="muted">loading…</div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Cue cards -->
+      <div id="cues-tab" hidden>
+        <div class="row" style="margin-bottom: 10px">
+          <span class="muted"
+            >Type these in the customer channel as a person: the connector drops
+            bot posts.</span
+          >
+          <label class="row"
+            ><input type="checkbox" id="cue-prefix" checked /> include the
+            <code id="cue-prefix-text"></code> prefix</label
+          >
+        </div>
+        <div id="cues" class="cues"></div>
+      </div>
+    </div>
 
     <script>
       const SECRET_KEY = "sylon-console-secret";
+      const TAB_KEY = "sylon-console-tab";
       const $ = (id) => document.getElementById(id);
       const esc = (s) =>
         String(s ?? "").replace(
@@ -467,30 +698,88 @@
               "'": "&#39;",
             })[c],
         );
+      const link = (url, text) =>
+        url
+          ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`
+          : esc(text);
+      const store = {
+        get(k) {
+          try {
+            return localStorage.getItem(k) || "";
+          } catch {
+            return "";
+          }
+        },
+        set(k, v) {
+          try {
+            v ? localStorage.setItem(k, v) : localStorage.removeItem(k);
+          } catch {}
+        },
+      };
 
-      function getSecret() {
-        try {
-          return localStorage.getItem(SECRET_KEY) || "";
-        } catch {
-          return "";
+      const STATUS = {
+        new: "New",
+        on_you: "On You",
+        on_customer: "On Customer",
+        on_hold: "On Hold",
+        closed: "Closed",
+      };
+      const statusPill = (s) =>
+        `<span class="pill" style="color:var(--s-${esc(s)})">${esc(STATUS[s] || s)}</span>`;
+
+      // --- secret and mutating buttons -----------------------------------------------------
+      let secret = store.get(SECRET_KEY);
+      const unlocked = () => Boolean(secret);
+
+      /** Mutating buttons carry .mut; each may also be disabled by state (data-off). */
+      function syncButtons() {
+        for (const b of document.querySelectorAll(".mut")) {
+          const off = b.dataset.off === "1";
+          b.disabled = !unlocked() || off;
+          b.title = unlocked() ? "" : "Unlock with the console secret first";
         }
       }
-      function setSecret(v) {
-        try {
-          v
-            ? localStorage.setItem(SECRET_KEY, v)
-            : localStorage.removeItem(SECRET_KEY);
-        } catch {}
-        memSecret = v;
+      function setOff(el, off) {
+        el.dataset.off = off ? "1" : "0";
       }
-      let memSecret = getSecret();
+
+      function renderAuth() {
+        const el = $("auth");
+        if (unlocked()) {
+          el.innerHTML = `<span class="lock ok">Unlocked</span><button id="lock">Lock</button>`;
+          $("lock").onclick = () => {
+            secret = "";
+            store.set(SECRET_KEY, "");
+            renderAuth();
+          };
+        } else {
+          el.innerHTML = `<span class="lock muted">Locked</span><input id="secret" type="password" placeholder="console secret" autocomplete="off" aria-label="Console secret" style="width:150px"><button id="unlock" class="primary">Unlock</button>`;
+          const go = async () => {
+            const v = $("secret").value.trim();
+            if (!v) return;
+            const r = await fetch("/api/auth", {
+              method: "POST",
+              headers: { "x-console-secret": v },
+            }).catch(() => null);
+            if (r && r.ok) {
+              secret = v;
+              store.set(SECRET_KEY, v);
+              log("controls unlocked");
+            } else {
+              log("unlock failed: wrong secret");
+            }
+            renderAuth();
+          };
+          $("unlock").onclick = go;
+          $("secret").onkeydown = (e) => e.key === "Enter" && go();
+        }
+        syncButtons();
+      }
 
       function log(line) {
-        const el = $("log");
+        $("log-card").hidden = false;
         const stamp = new Date().toLocaleTimeString();
-        el.textContent =
-          `${stamp}  ${line}\n` +
-          (el.textContent === "nothing yet" ? "" : el.textContent);
+        $("log").textContent = `${stamp}  ${line}\n` + $("log").textContent;
       }
 
       async function get(path) {
@@ -504,37 +793,18 @@
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-console-secret": memSecret,
+            "x-console-secret": secret,
           },
           body: JSON.stringify(body || {}),
         });
         const out = await r.json().catch(() => ({}));
         if (r.status === 403) {
-          setSecret("");
+          secret = "";
+          store.set(SECRET_KEY, "");
           renderAuth();
         }
         if (!r.ok) throw new Error(out.error || r.statusText);
         return out;
-      }
-
-      /** Run a mutating action: disable the button while it runs, log ids, refresh. */
-      async function act(btn, label, path, body) {
-        if (!memSecret) {
-          log(`${label}: enter the console secret first`);
-          return;
-        }
-        btn && (btn.disabled = true);
-        try {
-          const out = await post(path, body);
-          log(`${label}: ${summarize(out)}`);
-        } catch (e) {
-          log(`${label} FAILED: ${e.message}`);
-        } finally {
-          btn && (btn.disabled = false);
-          refreshFleet();
-          refreshBoard();
-          refreshTimeline();
-        }
       }
 
       function summarize(out) {
@@ -543,83 +813,115 @@
         if (out.key)
           return `${out.key} ${out.on ? "on" : "off"} (created [${out.created}] resumed [${out.resumed}] deleted [${out.deleted}])`;
         if (out.closed)
-          return `closed ${out.closed.length}: ${out.closed.map((c) => `#${c.number} ${c.card}`).join(", ") || "none open"}`;
+          return `closed ${out.closed.length}: ${out.closed.map((c) => `#${c.number} card ${c.card}`).join(", ") || "none open"}`;
         if (out.executionId || out.id)
           return `execution ${out.executionId || out.id}`;
         return JSON.stringify(out).slice(0, 300);
       }
 
-      function renderAuth() {
-        const el = $("auth");
-        if (memSecret) {
-          el.innerHTML = `<span class="ok">controls unlocked</span> <button id="lock">Lock</button>`;
-          $("lock").onclick = () => {
-            setSecret("");
-            renderAuth();
-          };
-        } else {
-          el.innerHTML = `<input id="secret" type="password" placeholder="console secret" autocomplete="off" aria-label="Console secret" style="width:160px;max-width:100%"> <button id="unlock" class="primary">Unlock</button>`;
-          const go = async () => {
-            const v = $("secret").value.trim();
-            if (!v) return;
-            memSecret = v;
-            try {
-              await post("/api/auth");
-              setSecret(v);
-              log("controls unlocked");
-            } catch (e) {
-              memSecret = "";
-              log(`unlock failed: ${e.message}`);
-            }
-            renderAuth();
-          };
-          $("unlock").onclick = go;
-          $("secret").onkeydown = (e) => e.key === "Enter" && go();
+      /** Run a mutating action: disable its button while it runs, log the ids, refresh. */
+      async function act(btn, label, path, body) {
+        if (!unlocked()) return;
+        btn.disabled = true;
+        try {
+          log(`${label}: ${summarize(await post(path, body))}`);
+        } catch (e) {
+          log(`${label} FAILED: ${e.message}`);
+        } finally {
+          await Promise.all([
+            refreshFleet(),
+            refreshBoard(),
+            refreshTimeline(),
+          ]);
+          syncButtons();
         }
       }
 
-      // --- fleet -------------------------------------------------------------------------
+      // --- summary strip -------------------------------------------------------------------
+      const S = { counts: null, fleet: null, latency: null, failed: null };
+      const secs = (v) => (v == null ? "—" : `${v.toFixed(1)} s`);
+      function renderSummary() {
+        const parts = [];
+        if (S.counts)
+          parts.push(
+            Object.keys(STATUS)
+              .map(
+                (k) =>
+                  `<span class="item"><span class="dot" style="background:var(--s-${k})"></span>${STATUS[k]} <strong>${S.counts[k] || 0}</strong></span>`,
+              )
+              .join(""),
+          );
+        if (S.fleet) {
+          const deployed = S.fleet.filter((a) => a.deployed);
+          const on = deployed.filter((a) => a.on).length;
+          const cls = on === deployed.length ? "ok" : on === 0 ? "bad" : "warn";
+          parts.push(
+            `<span class="item"><span class="dot ${cls}"></span><strong>${on}</strong> of ${deployed.length} agents on</span>`,
+          );
+        }
+        if (S.latency)
+          parts.push(
+            `<span class="item muted">last ticket</span><span class="item">message → card <strong>${secs(S.latency.messageToCard)}</strong></span><span class="item">issue → draft card <strong>${secs(S.latency.issueToDraftCard)}</strong></span>`,
+          );
+        if (S.failed)
+          parts.push(
+            `<span class="item"><span class="dot ${S.failed.length ? "bad" : "ok"}"></span><strong>${S.failed.length}</strong> failed events</span>`,
+          );
+        if (parts.length)
+          $("summary").innerHTML = parts.join('<span class="sep"></span>');
+      }
+
+      // --- fleet ---------------------------------------------------------------------------
       let fleet = [];
       async function refreshFleet() {
         try {
           fleet = await get("/api/fleet");
+          S.fleet = fleet;
           renderFleet();
           renderSystemAgents();
+          renderSummary();
         } catch (e) {
           $("fleet").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
         }
       }
+      const open = new Set();
       function renderFleet() {
         $("fleet").className = "";
         $("fleet").innerHTML = fleet
           .map((a) => {
-            const trig = a.triggers
+            if (!a.deployed)
+              return `<div class="agent"><span class="dot"></span><div class="name"><strong>${esc(a.key)}</strong><div class="warn" style="font-size:12px">not deployed: run <code>pnpm run setup --only ${esc(a.key)}</code></div></div></div>`;
+            const active = a.triggers.filter(
+              (t) => t.state === "active",
+            ).length;
+            const dot = a.on ? "ok" : active ? "warn" : "";
+            const list = a.triggers
               .map(
                 (t) =>
-                  `<span class="chip ${t.state === "active" ? "ok" : t.state === "paused" ? "warn" : "muted"}">${esc(t.label)}${t.id ? ` #${esc(t.id)}` : ""}${t.state === "active" ? "" : ` · ${t.state}`}</span>`,
+                  `<li><code>${esc(t.label)}</code> ${t.id ? `#${esc(t.id)}` : ""} <span class="${t.state === "active" ? "ok" : t.state === "paused" ? "warn" : ""}">${t.state}</span></li>`,
               )
-              .join(" ");
-            const right = a.deployed
-              ? `<button data-agent="${esc(a.key)}" data-on="${a.on ? "0" : "1"}" class="${a.on ? "" : "primary"}">${a.on ? "Turn off" : "Turn on"}</button>`
-              : "";
-            const state = a.deployed
-              ? `<span class="${a.on ? "ok" : "muted"}">${a.on ? "on" : "off"}</span>`
-              : `<span class="warn">not deployed: run <code>pnpm run setup --only ${esc(a.key)}</code></span>`;
-            return `<div class="agent"><div><strong>${esc(a.key)}</strong> ${state}<div class="row" style="margin-top:3px">${trig}</div></div>${right}</div>`;
+              .join("");
+            return `<div class="agent"><span class="dot ${dot}"></span><div class="name"><strong>${esc(a.key)}</strong>
+              <details data-key="${esc(a.key)}" ${open.has(a.key) ? "open" : ""}><summary>${active} of ${a.triggers.length} trigger${a.triggers.length === 1 ? "" : "s"}</summary><ul>${list}</ul></details></div>
+              <button class="switch mut" role="switch" aria-checked="${a.on}" aria-label="${esc(a.key)} ${a.on ? "on" : "off"}" data-agent="${esc(a.key)}"></button></div>`;
           })
           .join("");
+        for (const d of $("fleet").querySelectorAll("details"))
+          d.ontoggle = () =>
+            d.open ? open.add(d.dataset.key) : open.delete(d.dataset.key);
         for (const b of $("fleet").querySelectorAll("button[data-agent]")) {
+          const on = b.getAttribute("aria-checked") !== "true";
           b.onclick = () =>
             act(
               b,
-              `${b.dataset.on === "1" ? "on" : "off"} ${b.dataset.agent}`,
-              `/api/agents/${b.dataset.agent}/${b.dataset.on === "1" ? "on" : "off"}`,
+              `${on ? "on" : "off"} ${b.dataset.agent}`,
+              `/api/agents/${b.dataset.agent}/${on ? "on" : "off"}`,
             );
         }
         const pager = fleet.find((a) => a.key === "urgent-pager");
-        $("add-pager").disabled = !pager?.deployed || pager.on;
+        setOff($("add-pager"), !pager?.deployed || pager.on);
         $("pager-state").textContent = !pager?.deployed
-          ? "not deployed: run pnpm run setup --only urgent-pager"
+          ? "not deployed"
           : pager.on
             ? "attached"
             : "not attached";
@@ -629,9 +931,10 @@
           : ctl.on
             ? "cron on"
             : "cron off";
-        $("ctl-start").disabled = !ctl?.deployed || ctl.on;
-        $("ctl-stop").disabled = !ctl?.deployed || !ctl.on;
-        $("ctl-run").disabled = !ctl?.deployed;
+        setOff($("ctl-start"), !ctl?.deployed || ctl.on);
+        setOff($("ctl-stop"), !ctl?.deployed || !ctl.on);
+        setOff($("ctl-run"), !ctl?.deployed);
+        syncButtons();
       }
       $("pause").onclick = (e) =>
         act(e.target, "pause fleet", "/api/fleet/pause");
@@ -646,8 +949,7 @@
       $("ctl-run").onclick = (e) =>
         act(e.target, "controller run now", "/api/controller/run");
 
-      // --- board -------------------------------------------------------------------------
-      const STATUSES = ["new", "on_you", "on_customer", "on_hold", "closed"];
+      // --- board ---------------------------------------------------------------------------
       let openCount = 0;
       function age(t) {
         const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
@@ -659,24 +961,28 @@
       async function refreshBoard() {
         try {
           const b = await get("/api/board");
-          openCount = STATUSES.slice(0, 4).reduce(
+          S.counts = b.counts;
+          openCount = ["new", "on_you", "on_customer", "on_hold"].reduce(
             (n, s) => n + (b.counts[s] || 0),
             0,
           );
-          $("counts").innerHTML = STATUSES.map(
-            (s) =>
-              `<span class="chip">${s} <strong class="num">${b.counts[s] || 0}</strong></span>`,
-          ).join("");
+          setOff($("reset"), openCount === 0);
+          syncButtons();
+          renderSummary();
+          $("board-note").textContent = `newest ${b.issues.length}`;
           $("board").innerHTML =
-            `<tr><th>#</th><th>Account</th><th>Title</th><th>Status</th><th>Owner</th><th>Linear</th><th>Age</th></tr>` +
-            b.issues
-              .map(
-                (i) =>
-                  `<tr><td class="num">${i.cardUrl ? `<a href="${esc(i.cardUrl)}" target="_blank" rel="noopener">#${i.number}</a>` : `#${i.number}`}</td><td>${esc(i.account)}</td><td>${esc(i.title)}${i.priority === "urgent" ? ' <span class="chip bad">urgent</span>' : ""}</td><td>${esc(i.status)}</td><td>${esc(i.owner || "")}</td><td>${esc(i.linear || "")}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
-              )
-              .join("");
+            `<tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>Owner</th><th>Linear</th><th>Age</th></tr>` +
+            (b.issues.length
+              ? b.issues
+                  .map(
+                    (i) =>
+                      `<tr><td class="num">${link(i.cardUrl, `#${i.number}`)}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td>${esc(i.account)}</td><td>${statusPill(i.status)}</td><td class="${i.priority === "urgent" ? "bad" : "muted"}">${esc(i.priority || "")}</td><td class="muted">${esc(i.owner || "—")}</td><td>${i.linear ? link(i.linearUrl, i.linear) : '<span class="muted">—</span>'}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
+                  )
+                  .join("")
+              : `<tr><td colspan="8" class="muted">no tickets yet</td></tr>`);
         } catch (e) {
-          $("counts").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+          $("board").innerHTML =
+            `<tr><td class="bad">${esc(e.message)}</td></tr>`;
         }
       }
       $("reset").onclick = () => {
@@ -691,8 +997,7 @@
         });
       };
 
-      // --- timeline ----------------------------------------------------------------------
-      const secs = (v) => (v == null ? "—" : `${v.toFixed(1)} s`);
+      // --- last ticket ---------------------------------------------------------------------
       const clock = (t) => (t ? new Date(t).toLocaleTimeString() : "—");
       const tsClock = (ts) =>
         ts ? new Date(Number(ts) * 1000).toLocaleTimeString() : "—";
@@ -708,22 +1013,28 @@
               `<span class="muted">no tickets yet</span>`;
             return;
           }
+          if (!n) {
+            S.latency = t.latency;
+            renderSummary();
+          }
           const i = t.issue;
           const L = t.latency;
+          const rows = (list, f) =>
+            list.length
+              ? `<table>${list.map(f).join("")}</table>`
+              : `<span class="muted">none</span>`;
           $("timeline").innerHTML = `
-            <div style="margin-bottom:8px"><strong>${i.cardUrl ? `<a href="${esc(i.cardUrl)}" target="_blank" rel="noopener">#${i.number}</a>` : `#${i.number}`}</strong> ${esc(i.title)} <span class="chip">${esc(i.status)}</span></div>
+            <div class="row"><strong>${link(i.cardUrl, `#${i.number}`)}</strong> <span class="clamp" style="flex:1;min-width:0" title="${esc(i.title)}">${esc(i.title)}</span> ${statusPill(i.status)}</div>
             <div class="legs">
-              <div class="leg"><div class="muted">message → issue card</div><div class="big num">${secs(L.messageToCard)}</div><div class="muted num">${tsClock(i.customerTs)} → ${tsClock(i.triageRootTs)}</div></div>
-              <div class="leg"><div class="muted">issue → first draft card</div><div class="big num">${secs(L.issueToDraftCard)}</div><div class="muted num">draft row ${secs(L.issueToDraft)}</div></div>
-              <div class="leg"><div class="muted">message → first draft card</div><div class="big num">${secs(L.messageToDraftCard)}</div></div>
+              <div class="leg"><div class="muted">message → issue card</div><div class="v">${secs(L.messageToCard)}</div><div class="muted num">${tsClock(i.customerTs)} → ${tsClock(i.triageRootTs)}</div></div>
+              <div class="leg"><div class="muted">issue → first draft card</div><div class="v">${secs(L.issueToDraftCard)}</div><div class="muted">draft row ${secs(L.issueToDraft)}</div></div>
+              <div class="leg"><div class="muted">message → first draft card</div><div class="v">${secs(L.messageToDraftCard)}</div></div>
             </div>
-            <div class="muted" style="margin:6px 0 2px">Drafts</div>
-            ${t.drafts.length ? `<table>${t.drafts.map((d) => `<tr><td class="num">${clock(d.createdAt)}</td><td>${d.cardUrl ? `<a href="${esc(d.cardUrl)}" target="_blank" rel="noopener">card</a>` : "no card"}</td><td>${esc(d.status)}</td><td class="num muted">${d.confidence == null ? "" : d.confidence.toFixed(2)}</td></tr>`).join("")}</table>` : `<span class="muted">none yet</span>`}
-            <div class="muted" style="margin:6px 0 2px">Runs</div>
-            ${t.runs.length ? `<table>${t.runs.map((r) => `<tr><td class="num">${clock(r.startedAt)}</td><td>${esc(r.agent)}</td><td><code>${esc(r.executionId)}</code></td></tr>`).join("")}</table>` : `<span class="muted">none</span>`}
-            <div class="muted" style="margin:6px 0 2px">Events</div>
-            ${t.events.length ? `<table>${t.events.map((ev) => `<tr><td class="num">${clock(ev.createdAt)}</td><td>${esc(ev.type)}</td><td class="muted">${esc(ev.emittedBy)}</td><td><code>${esc(ev.receiptId ? `receipt ${ev.receiptId}` : "")}</code></td></tr>`).join("")}</table>` : `<span class="muted">none</span>`}
-          `;
+            <div class="sub">
+              <div><h3>Drafts</h3>${rows(t.drafts, (d) => `<tr><td class="num">${clock(d.createdAt)}</td><td>${link(d.cardUrl, d.cardUrl ? "card" : "no card")}</td><td>${esc(d.status)}</td><td class="num muted">${d.confidence == null ? "" : d.confidence.toFixed(2)}</td></tr>`)}</div>
+              <div><h3>Runs</h3>${rows(t.runs, (r) => `<tr><td class="num">${clock(r.startedAt)}</td><td>${esc(r.agent)}</td><td><code>${esc(r.executionId)}</code></td></tr>`)}</div>
+              <div><h3>Events</h3>${rows(t.events, (ev) => `<tr><td class="num">${clock(ev.createdAt)}</td><td>${esc(ev.type)}</td><td class="muted">${ev.receiptId ? `receipt ${esc(ev.receiptId)}` : ""}</td></tr>`)}</div>
+            </div>`;
         } catch (e) {
           $("timeline").innerHTML =
             `<span class="bad">${esc(e.message)}</span>`;
@@ -731,29 +1042,29 @@
       }
       $("tl-issue").onchange = refreshTimeline;
 
-      // --- receipts ----------------------------------------------------------------------
+      // --- failed events -------------------------------------------------------------------
       async function refreshReceipts() {
         try {
           const list = await get("/api/receipts/failed");
+          S.failed = list;
+          renderSummary();
           $("receipts").className = "";
           $("receipts").innerHTML = list.length
             ? `<table>${list
                 .map(
                   (r) =>
-                    `<tr><td class="num">${esc(r.id)}</td><td>${esc(r.eventType)}<div class="muted">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button data-replay="${esc(r.id)}">Replay</button></td></tr>`,
+                    `<tr><td class="num">${esc(r.id)}</td><td style="white-space:normal">${esc(r.eventType)}<div class="muted" style="font-size:12px">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button class="mut" data-replay="${esc(r.id)}">Replay</button></td></tr>`,
                 )
                 .join("")}</table>`
-            : `<span class="muted">no failed deliveries to Sylon agents</span>`;
-          for (const b of $("receipts").querySelectorAll(
-            "button[data-replay]",
-          )) {
+            : `<span class="muted">No failed deliveries to Sylon agents.</span>`;
+          for (const b of $("receipts").querySelectorAll("button[data-replay]"))
             b.onclick = () =>
               act(
                 b,
                 `replay receipt ${b.dataset.replay}`,
                 `/api/receipts/${b.dataset.replay}/replay`,
               ).then(refreshReceipts);
-          }
+          syncButtons();
         } catch (e) {
           $("receipts").innerHTML =
             `<span class="bad">${esc(e.message)}</span>`;
@@ -761,48 +1072,9 @@
       }
       $("rcpt-refresh").onclick = refreshReceipts;
 
-      // --- cues --------------------------------------------------------------------------
-      let cues = { prefix: "", steps: [] };
-      function cueText(c) {
-        return $("cue-prefix").checked && cues.prefix
-          ? `${cues.prefix} ${c.text}`
-          : c.text;
-      }
-      async function loadCues() {
-        cues = await get("/api/cues");
-        $("cues").innerHTML = cues.steps
-          .map(
-            (c, n) =>
-              `<div class="cue"><div class="row" style="justify-content:space-between"><strong>${n + 1}. ${esc(c.label)}</strong><button data-cue="${n}">Copy</button></div><div>${esc(c.text)}</div><div class="muted">${esc(c.expect)}</div></div>`,
-          )
-          .join("");
-        for (const b of $("cues").querySelectorAll("button[data-cue]")) {
-          b.onclick = async () => {
-            const text = cueText(cues.steps[Number(b.dataset.cue)]);
-            try {
-              await navigator.clipboard.writeText(text);
-              b.textContent = "Copied";
-            } catch {
-              // Clipboard blocked (insecure context, iframe): select the text instead.
-              const ta = document.createElement("textarea");
-              ta.value = text;
-              document.body.appendChild(ta);
-              ta.select();
-              document.execCommand("copy");
-              ta.remove();
-              b.textContent = "Copied";
-            }
-            setTimeout(() => (b.textContent = "Copy"), 1500);
-          };
-        }
-      }
-
-      // --- system ------------------------------------------------------------------------
-      const link = (url, text) =>
-        url
-          ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`
-          : esc(text);
+      // --- system --------------------------------------------------------------------------
       let systemLoaded = false;
+      let systemAgents = [];
       async function loadSystem() {
         try {
           const s = await get("/api/system");
@@ -810,18 +1082,21 @@
           const ch = (c, name) => link(c.url, `${name} (${c.channelId})`);
           $("sys-channels").className = "";
           $("sys-channels").innerHTML = `
+            <div class="flow" style="gap:6px">
             ${s.slack.customers
               .map(
                 (c) =>
-                  `<div class="box" style="margin-bottom:6px"><strong>${ch(c, "Customer channel")}</strong>Stands in for <em>${esc(c.accountName)}</em>'s shared Slack Connect channel. The customer posts here; the bot only reacts and posts the approved reply in the customer's thread.</div>`,
+                  `<div class="box"><strong>${ch(c, "Customer channel")}</strong>Stands in for <em>${esc(c.accountName)}</em>'s shared Slack Connect channel. The customer posts here; the bot only reacts and posts the approved reply in the customer's thread.</div>`,
               )
               .join("")}
             <div class="box"><strong>${ch(s.slack.triage, "Triage channel")}</strong>The team's internal channel: ticket cards, mirrored customer messages, AI drafts with Approve / Escalate / Dismiss, and nudges.</div>
+            </div>
             ${s.slack.teamId ? "" : `<p class="warn">Slack team id unavailable, so channels are not linked.</p>`}`;
-          renderSystemAgents(s.agents);
+          systemAgents = s.agents;
+          renderSystemAgents();
           $("sys-tables").className = "";
           $("sys-tables").innerHTML =
-            `<dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
+            `<div class="muted" style="margin-bottom:4px">Postgres, handle <code>sylon</code></div><dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
           $("sys-linear").className = "";
           $("sys-linear").innerHTML =
             `${link(s.linear.url, s.linear.name)}<div class="muted">escalation creates an issue here for each escalated ticket; its description starts <code>sylon:&lt;issueId&gt;</code></div>`;
@@ -830,9 +1105,7 @@
             `<span class="bad">${esc(e.message)}</span>`;
         }
       }
-      let systemAgents = [];
-      function renderSystemAgents(agents) {
-        if (agents) systemAgents = agents;
+      function renderSystemAgents() {
         if (!systemAgents.length) return;
         $("sys-agents").className = "";
         $("sys-agents").innerHTML = systemAgents
@@ -842,31 +1115,73 @@
               ? ""
               : !live.deployed
                 ? `<span class="warn">not deployed</span>`
-                : `<span class="${live.on ? "ok" : "muted"}">${live.on ? "on" : "off"}</span> ${live.triggers.map((t) => `<span class="chip ${t.state === "active" ? "ok" : t.state === "paused" ? "warn" : "muted"}">${esc(t.label)}${t.id ? ` #${esc(t.id)}` : ""}</span>`).join(" ")}`;
-            return `<div class="agent"><div style="min-width:0"><strong>${link(a.url, a.key)}</strong> ${state}
+                : `<span class="${live.on ? "ok" : "muted"}">${live.on ? "on" : "off"}</span>`;
+            const trig = (live?.triggers || [])
+              .map((t) => `${t.label}${t.id ? ` #${t.id}` : ""} (${t.state})`)
+              .join(", ");
+            return `<div class="sysagent"><div class="row"><span class="dot ${live?.on ? "ok" : ""}"></span><strong>${link(a.url, a.key)}</strong> ${state}</div>
               <dl class="kv">
                 <dt>listens</dt><dd>${a.listens.map((x) => `<code>${esc(x)}</code>`).join(", ") || "—"}</dd>
+                <dt>triggers</dt><dd class="muted">${esc(trig || "—")}</dd>
                 <dt>emits</dt><dd>${a.emits.map((x) => `<code>${esc(x)}</code>`).join(", ") || "nothing"}</dd>
                 <dt>writes</dt><dd>${esc(a.writes)}</dd>
                 <dt>agent</dt><dd><code>${esc(a.slug)}</code>${a.definitionId ? ` · definition ${esc(a.definitionId)}` : ""}</dd>
-              </dl></div></div>`;
+              </dl></div>`;
           })
           .join("");
       }
+
+      // --- cue cards -----------------------------------------------------------------------
+      let cues = { prefix: "", steps: [] };
+      const cueText = (c) =>
+        $("cue-prefix").checked && cues.prefix
+          ? `${cues.prefix} ${c.text}`
+          : c.text;
+      async function loadCues() {
+        cues = await get("/api/cues");
+        $("cue-prefix-text").textContent = cues.prefix;
+        $("cues").innerHTML = cues.steps
+          .map(
+            (c, n) =>
+              `<section class="card cue"><h2>${n + 1}. ${esc(c.label)} <button data-cue="${n}">Copy</button></h2><div class="text">${esc(c.text)}</div><div class="muted">${esc(c.expect)}</div></section>`,
+          )
+          .join("");
+        for (const b of $("cues").querySelectorAll("button[data-cue]")) {
+          b.onclick = async () => {
+            const text = cueText(cues.steps[Number(b.dataset.cue)]);
+            try {
+              await navigator.clipboard.writeText(text);
+            } catch {
+              // Clipboard blocked (insecure context, iframe): fall back to a selected textarea.
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+            }
+            b.textContent = "Copied";
+            setTimeout(() => (b.textContent = "Copy"), 1500);
+          };
+        }
+      }
+
+      // --- tabs ----------------------------------------------------------------------------
+      const TABS = { console: "console", system: "system", cues: "cues-tab" };
       function showTab(name) {
-        for (const t of ["operate", "system"]) {
-          $(t).hidden = t !== name;
+        if (!TABS[name]) name = "console";
+        for (const [t, panel] of Object.entries(TABS)) {
+          $(panel).hidden = t !== name;
           $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
         }
-        try {
-          localStorage.setItem("sylon-console-tab", name);
-        } catch {}
+        store.set(TAB_KEY, name);
         if (name === "system" && !systemLoaded) loadSystem();
       }
-      $("tab-operate").onclick = () => showTab("operate");
-      $("tab-system").onclick = () => showTab("system");
+      for (const t of Object.keys(TABS))
+        $(`tab-${t}`).onclick = () => showTab(t);
 
       renderAuth();
+      showTab(location.hash.slice(1) || store.get(TAB_KEY) || "console");
       refreshFleet();
       refreshBoard();
       refreshTimeline();
@@ -877,14 +1192,6 @@
         refreshTimeline();
       }, 3000);
       setInterval(refreshFleet, 10000);
-      try {
-        if (
-          location.hash === "#system" ||
-          (location.hash !== "#operate" &&
-            localStorage.getItem("sylon-console-tab") === "system")
-        )
-          showTab("system");
-      } catch {}
       setInterval(refreshReceipts, 20000);
     </script>
   </body>
