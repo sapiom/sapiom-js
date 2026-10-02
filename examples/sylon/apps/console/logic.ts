@@ -1,10 +1,9 @@
 /**
  * The pure half of the Sylon Console: what "on" means for an agent, which triggers a switch
  * creates, resumes or deletes, the latency arithmetic of the timeline, which receipts count as
- * failed, and the secret check on mutating routes. No I/O, so all of it is unit-tested.
+ * failed, and the scoping that keeps every mutating route on the fleet's own definitions (the
+ * server holds an org key). No I/O, so all of it is unit-tested.
  */
-import { timingSafeEqual } from "node:crypto";
-
 import fleet from "../../fleet.json";
 
 export interface FleetProject {
@@ -26,6 +25,7 @@ export interface AttachedTrigger {
   status: string;
   eventType: string | null;
   cron: string | null;
+  definitionSlug?: string;
 }
 
 /** The agents the Console operates: every fleet.json project except the smoke pair. */
@@ -113,8 +113,14 @@ export function planSwitch(
   attached: AttachedTrigger[],
 ): SwitchPlan {
   const plan: SwitchPlan = { create: [], resume: [], remove: [] };
+  const slug = agentByKey(key)?.slug;
+  if (!slug) return plan;
+  // Only the agent's own triggers, even if a listing ever returned another definition's.
+  const own = attached.filter(
+    (a) => a.definitionSlug === undefined || a.definitionSlug === slug,
+  );
   for (const w of wantedTriggers(key)) {
-    const hits = attached.filter((a) => sameTrigger(w, a));
+    const hits = own.filter((a) => sameTrigger(w, a));
     if (on) {
       const active = hits.find((h) => h.status === "active");
       if (active) continue;
@@ -307,26 +313,46 @@ export function receiptView(r: ReceiptSummary) {
   };
 }
 
-// --- route guard -----------------------------------------------------------------------------
+// --- replay scoping --------------------------------------------------------------------------
 
-export const SECRET_HEADER = "x-console-secret";
+/** One fire of `GET /v1/workflows/receipts/<id>`. */
+export interface ReceiptFire {
+  id: string;
+  state: string;
+  stale?: boolean;
+  trigger: { definitionSlug: string } | null;
+}
 
-export type GuardVerdict = "ok" | "unset" | "denied";
+export type ReplayPlan =
+  | { ok: true; fireIds: string[] }
+  | { ok: false; status: 403 | 409; reason: string };
 
 /**
- * Mutating routes need the shared secret. The preview URL an App Link redirects to carries a
- * one-hour bearer token and no viewer identity, so anyone holding that URL could otherwise
- * change triggers with the org key this server holds. Fails closed when no secret is configured.
+ * Which fires of a receipt the Console may re-drive. A receipt replay would re-fire every failed
+ * fire, and Slack events fan out to other workflows too (`backlog-nudge` shares
+ * `slack.block_actions`), so the Console replays fire by fire, only fires on a fleet slug. A
+ * receipt with no fleet fire is refused outright.
  */
-export function checkSecret(
-  expected: string | undefined,
-  given: string | string[] | undefined,
-): GuardVerdict {
-  if (!expected) return "unset";
-  if (typeof given !== "string") return "denied";
-  const a = Buffer.from(expected);
-  const b = Buffer.from(given);
-  return a.length === b.length && timingSafeEqual(a, b) ? "ok" : "denied";
+export function replayPlan(
+  fires: ReceiptFire[],
+  slugs: string[] = AGENTS.map((a) => a.slug),
+): ReplayPlan {
+  const ours = new Set(slugs);
+  const fleet = fires.filter(
+    (f) => f.trigger && ours.has(f.trigger.definitionSlug),
+  );
+  if (!fleet.length)
+    return { ok: false, status: 403, reason: "not a Sylon receipt" };
+  const failed = fleet.filter(
+    (f) => f.state === "failed" || (f.state === "claimed" && f.stale),
+  );
+  if (!failed.length)
+    return {
+      ok: false,
+      status: 409,
+      reason: "no failed Sylon delivery to replay",
+    };
+  return { ok: true, fireIds: failed.map((f) => f.id) };
 }
 
 /** Replace every occurrence of a secret in `text`, so an error message can never echo one. */

@@ -3,17 +3,12 @@
  * `sylon-console`. Running it again republishes to the same link.
  *
  * Three REST calls (create or update the link with its env map, upload the bundle, publish). The
- * env map carries SAPIOM_API_KEY, taken from this shell and never printed, and CONSOLE_SECRET,
- * which every mutating route requires. The secret is generated once into
- * `.sapiom/console-secret` (gitignored) and reused, because setting `env` replaces the whole map
- * and a republish must not lock out a page that already holds it. Type it into the page once.
+ * env map carries only SAPIOM_API_KEY, taken from this shell and never printed. Setting `env`
+ * replaces the whole map, so a key dropped here is gone from the next wake.
  *
  * Needs SAPIOM_API_KEY (an org key for the target org).
  */
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
 import { buildConsole } from "./build";
 
@@ -24,19 +19,6 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
   /\/+$/,
   "",
 );
-const SECRET_FILE = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../.sapiom/console-secret",
-);
-
-function consoleSecret(): string {
-  if (existsSync(SECRET_FILE)) return readFileSync(SECRET_FILE, "utf8").trim();
-  const secret = randomBytes(24).toString("base64url");
-  mkdirSync(path.dirname(SECRET_FILE), { recursive: true });
-  writeFileSync(SECRET_FILE, `${secret}\n`, { mode: 0o600 });
-  return secret;
-}
-
 interface AppLink {
   id: string;
   url: string;
@@ -79,7 +61,7 @@ async function main() {
     name: NAME,
     description:
       "Operate the Sylon demo: fleet switches, controller, board, latency timeline, failed events, cue cards.",
-    env: { SAPIOM_API_KEY: key, CONSOLE_SECRET: consoleSecret() },
+    env: { SAPIOM_API_KEY: key },
   });
   // The server holds an org key; it must never be reachable by anyone outside the org.
   if (link.visibility !== "organization")
@@ -100,9 +82,6 @@ async function main() {
   console.log(`app link ${published.id}, visibility ${published.visibility}`);
   console.log(
     `bundle ${published.bundleSha256} (${(code.length / 1024).toFixed(0)} KiB), env keys: ${published.bundleManifest?.envKeys?.join(", ") ?? "?"}`,
-  );
-  console.log(
-    `console secret: ${path.relative(process.cwd(), SECRET_FILE)} (type it into the page once)`,
   );
 }
 
