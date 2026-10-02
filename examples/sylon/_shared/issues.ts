@@ -491,6 +491,22 @@ export async function messageBySourceEventId(
   return rows[0] ? toMessage(rows[0]) : null;
 }
 
+/**
+ * The stored message at `ts` in `channel`, oldest first. A reaction names its message by
+ * channel and ts, never by the event id the message was stored under.
+ */
+export async function messageBySlackTs(
+  db: Db,
+  channel: string,
+  ts: string,
+): Promise<Message | null> {
+  const rows = await db.query(
+    "select * from messages where channel = $1 and ts = $2 order by created_at asc limit 1",
+    [channel, ts],
+  );
+  return rows[0] ? toMessage(rows[0]) : null;
+}
+
 /** Attach a message stored before its issue existed (intake persists first, then opens the issue). */
 export async function attachMessage(
   db: Db,
