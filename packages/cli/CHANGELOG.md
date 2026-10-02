@@ -1,5 +1,13 @@
 # @sapiom/cli
 
+## 18.0.0
+
+### Patch Changes
+
+- Updated dependencies [5a55a34]
+- Updated dependencies [a879a93]
+  - @sapiom/harness@0.19.0
+
 ## 17.1.0
 
 ### Minor Changes
