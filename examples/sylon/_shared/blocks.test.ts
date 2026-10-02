@@ -45,6 +45,8 @@ const draft: Draft = {
   cardTs: null,
   text: "Thanks, looking now.",
   citations: null,
+  causationId: null,
+  confidence: null,
   status: "pending",
   decidedBy: null,
   decidedAt: null,
