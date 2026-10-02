@@ -58,10 +58,10 @@ const own = (file: string) =>
   ).payload as Record<string, unknown>;
 
 const DRAFTED: DraftOutput = {
-  summary: "Webhook signatures fail since this morning.",
+  summary: "Deploys fail since this morning.",
   reply:
-    "Nothing changed on our side. Verify the signature against the raw body bytes.",
-  citations: ["webhooks", "not-a-page"],
+    "Nothing changed on our side. Read the Deploy failed message and hint, then deploy again.",
+  citations: ["troubleshooting-build-deploy-run", "not-a-page"],
   confidence: 0.8,
 };
 
@@ -148,10 +148,10 @@ describe("draft path", () => {
     expect(spec.model).toBeUndefined();
     expect(spec.request.max_tokens).toBeGreaterThanOrEqual(4096);
     expect(spec.request.messages[0].content).toContain(
-      "signature errors. Did something change?",
+      "never leaves Linked. Did something change?",
     );
     expect(spec.request.messages[0].content).toContain(
-      '<page slug="webhooks">',
+      '<page slug="troubleshooting-build-deploy-run">',
     );
 
     const old = await getDraft(db, FIXTURE_DRAFT);
@@ -169,7 +169,7 @@ describe("draft path", () => {
       status: "pending",
       text: DRAFTED.reply,
       cardChannel: "C0TRIAGE001",
-      citations: ["webhooks"],
+      citations: ["troubleshooting-build-deploy-run"],
       causationId: "Ev0EXAMPLE01",
       confidence: 0.8,
     });
@@ -552,7 +552,7 @@ describe("draft path", () => {
     const t = ctxFor("e");
     await runAgent(fixture("issue/created.json").payload, t.ctx);
     expect(JSON.stringify(t.llmCalls)).not.toContain("BLUEHERON");
-    expect(JSON.stringify(t.llmCalls)).toContain("signature errors");
+    expect(JSON.stringify(t.llmCalls)).toContain("never leaves Linked");
   });
 
   it("does not draft for a closed issue", async () => {
@@ -780,10 +780,14 @@ describe("draft helpers", () => {
   it("normalizeOutput drops unknown citations and clamps confidence", () => {
     expect(
       normalizeOutput(
-        { ...DRAFTED, confidence: 3, citations: ["x", "billing", "billing"] },
+        {
+          ...DRAFTED,
+          confidence: 3,
+          citations: ["x", "billing-and-credits", "billing-and-credits"],
+        },
         KB,
       ),
-    ).toMatchObject({ confidence: 1, citations: ["billing"] });
+    ).toMatchObject({ confidence: 1, citations: ["billing-and-credits"] });
   });
 
   it("promptMessages keeps the first customer message and the latest ones, never internal notes", () => {

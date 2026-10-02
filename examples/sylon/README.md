@@ -166,6 +166,20 @@ added to a running fleet with one deploy and one trigger.
 A new source works the same way: an adapter (say, a Read.ai meeting adapter) emits the existing
 `issue.*` events with a new `source`, and every domain agent picks it up unchanged.
 
+## Knowledge base
+
+`kb/*.md` is the copilot's knowledge base: 14 pages (13 converted from https://docs.sapiom.ai at
+docs-internal commit `ceb075b`, plus `billing-and-credits`), each starting with a `Source:` URL the copilot can link. The whole
+set goes into every draft prompt (about 99k characters, roughly 25k tokens), so keep additions small.
+
+To refresh: read each page from the docs repo (`git show origin/main:src/content/docs/<path>.mdx`),
+drop the MDX imports and components (keep their prose and code), keep the headings, put
+`Source: https://docs.sapiom.ai/<path>` under the title, then run `pnpm run build:kb` and commit
+`kb/` with `_shared/kb.generated.ts`. Update the commit above.
+
+Known gaps: there is no connectors page, and `billing-and-credits` restates only the pricing-page
+FAQ (https://sapiom.ai/pricing), because docs.sapiom.ai has no billing page.
+
 ## Layout
 
 ```
@@ -182,7 +196,7 @@ _shared/              inlined into every agent by the bundler (relative imports,
   emit.ts blocks.ts   events.emit + events_log; Block Kit cards and the button codec
   kb.generated.ts     kb/*.md compiled for the copilot (pnpm run build:kb; committed)
 agents/<key>/         one deployable project each (index.ts, package.json, gitignored sapiom.json)
-kb/                   the copilot's knowledge base, one markdown page per topic
+kb/                   the copilot's knowledge base: docs.sapiom.ai pages as markdown (see Knowledge base)
 fixtures/<dir>/       { type, description, payload } per event; payload is the run input
 scripts/              build-kb, fleet (setup's pure logic), replay, reset-demo
 docs/DEMO.md          rehearsal checklist and failure drill

@@ -17,9 +17,12 @@ describe("build-kb", () => {
     expect(new Function(`return ${match[1]}`)()).toBe(body);
   });
 
-  it("ships 3 to 5 pages, each with a title", () => {
-    expect(KB.length).toBeGreaterThanOrEqual(3);
-    expect(KB.length).toBeLessThanOrEqual(5);
-    for (const page of KB) expect(page.title).not.toBe(page.slug);
+  it("ships the docs.sapiom.ai pages, each with a title and a Source line", () => {
+    expect(KB.length).toBeGreaterThanOrEqual(10);
+    expect(KB.length).toBeLessThanOrEqual(20);
+    for (const page of KB) {
+      expect(page.title).not.toBe(page.slug);
+      expect(page.body).toMatch(/^# .+\n\nSource: https:\/\//);
+    }
   });
 });

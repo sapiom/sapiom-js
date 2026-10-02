@@ -8,73 +8,1540 @@ export interface KbPage {
 
 export const KB: readonly KbPage[] = [
   {
-    slug: "account-access",
-    title: "Account access",
-    body: `# Account access
+    slug: "app-links",
+    title: "App Links",
+    body: `# App Links
 
-- **Password reset:** use "Forgot password" on the sign-in page. The link is valid for 1 hour.
-  Workspaces with SSO enforced cannot reset a Relaybox password; sign in through the identity
-  provider instead.
-- **Locked out:** 10 failed sign-ins lock the account for 30 minutes.
-- **Two-factor authentication:** owners can require it for everyone under **Settings → Security**.
-  A user who lost their device can use a recovery code; otherwise a workspace owner can reset
-  their 2FA from the member list.
-- **Roles:** Owner (billing, security, delete workspace), Admin (members, integrations, exports),
-  Member. Only an owner can promote someone to owner.
-- **Removing a member** signs them out everywhere and revokes their API tokens immediately.
-- **Owner left the company:** support can transfer ownership after verifying a request from
-  another admin's verified email.`,
+Source: https://docs.sapiom.ai/capabilities/app-links
+
+An **App Link** is a durable Sapiom-hosted URL for a small web app — a dashboard, a demo, an internal tool, a workflow UI:
+
+\`\`\`
+https://apps.sapiom.ai/{your-org}/{your-app}
+\`\`\`
+
+The link is the durable thing, not the sandbox behind it. You publish a bundle once; the URL keeps working. When someone opens it, Sapiom checks who they are, wakes the app from the stored bundle if nothing is running, and hands them over to it. Sandboxes stay short-lived and disposable — the link outlives all of them.
+
+That is the difference from a sandbox preview URL, which lives and dies with its sandbox: when the TTL expires, the preview link stops resolving. See [Compute](/capabilities/compute) for sandboxes themselves.
+
+## Wake on demand
+
+Nothing runs between visits. That keeps an App Link cheap — you pay for the seconds an app is actually awake, not for idle hosting — and it is the main thing to understand before you share one:
+
+1. **A visit arrives.** Sapiom verifies the visitor may open this app.
+
+2. **If the app is already awake,** the visit is handed straight to it. This is fast.
+
+3. **If nothing is running,** the visitor sees a "Starting …" page while Sapiom creates a sandbox and deploys your bundle. **Expect tens of seconds.** The page redirects itself when the app is ready.
+   The first visit after a publish is always a cold start. So is the first visit after the app has been idle long enough for its sandbox to expire.
+
+> **Caution: This is durable sharing, not hosting.**
+> App Links are built for apps a handful of people open a few times a day. They are deliberately a poor fit for anything latency-sensitive or public-facing at volume — a cold start of tens of seconds is a normal outcome, not a fault. If you need always-on, use real hosting.
+
+## What the URL does
+
+An App Link is a **redirector, not a reverse proxy**. Under \`/{your-org}/{your-app}\` the host serves exactly three things, and forwards nothing else:
+
+| Path                    | What it answers                                                                                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| \`/{org}/{app}\`          | The link itself. A **302** to the preview URL currently serving the app — or, on a cold start, the "Starting …" page, which redirects itself once the wake finishes.                                                                 |
+| \`/{org}/{app}/__status\` | Wake status as JSON, for that page: \`{"status":"waking"}\`, \`{"status":"ready","url":"…"}\`, or \`{"status":"failed","error":"…"}\`. Same access rules as the link; a caller who is not signed in gets \`401 {"error":"login_required"}\`. |
+| \`/{org}/{app}/hook/…\`   | Inbound webhooks, when \`webhooksEnabled\` is on for the link (**off by default**) — forwarded to the app byte-exact with the prefix stripped. See [Webhooks](#webhooks).                                                              |
+
+Any other path under the link — \`/{org}/{app}/api/orders\`, say — is **not proxied**. It is a 404 from the host, and your app never sees the request.
+
+> **Caution: API calls must use the preview URL, not the link.**
+> This is the part that changes how you architect around an App Link. The
+> durable URL is for a **person opening the app in a browser**. Anything that
+> calls the app's own API — another service, a scheduled job, a health check —
+> has to talk to the preview URL the redirect landed on, not to a sub-path of
+> the link.
+>
+> From inside the app this costs you nothing: the browser is already on the
+> preview origin after the redirect, so relative paths (\`fetch("/api/orders")\`)
+> work as you would expect. It is calls from _outside_ the app that need the
+> preview address.
+
+### Getting the current preview address
+
+Do not hard-code it either, and do not store one you have resolved. The preview URL belongs to whichever sandbox is serving the app right now: a wake that has to recreate the sandbox produces a new one, and for an organization-scoped app the URL only works with a short-lived token (one hour) that Sapiom appends for the visitor. A URL you resolved and saved therefore stops working even without a new wake — the token expires under it. Re-resolve it per use. Two ways:
+
+- **Follow the redirect.** A \`GET\` of the link, with the visitor's credentials, comes back as a 302 whose \`Location\` is the tokenized preview URL. On a cold start you get the "Starting …" page instead, which polls until it can redirect.
+- **Read \`__status\`.** While a wake is in flight it answers \`waking\`; when the app is up it answers \`{"status":"ready","url":"…"}\` with that same tokenized URL. This is what the "Starting …" page itself polls.
+
+> **Caution: Both routes need a signed-in member, not an API key.**
+> \`__status\` runs the same access check as the link itself, deliberately — its
+> \`ready\` payload _is_ the tokenized preview URL, so it has to be exactly as hard
+> to reach as the link. That check reads the visitor's Sapiom session cookie. A
+> Sapiom API key does not open either route.
+>
+> So for an **organization-scoped** app, reaching the app's own API is a
+> browser-shaped operation. A server-side caller — a cron job, another service,
+> an agent holding an API key — has two supported routes and neither is the
+> preview URL:
+>
+> - **Publish the app \`public\`.** A public app's link and \`__status\` need no
+>   session at all, so a server-side caller uses the same two routes above — and
+>   the redirect is what wakes the app. Remember that public means anyone with
+>   the link can wake it and your organization pays.
+> - **Receive the traffic instead.** Turn on \`webhooksEnabled\` and let the caller
+>   POST to \`/hook/…\`. That path is the one thing the host forwards to a sleeping
+>   app, and it needs no session at all.
+
+\`GET /v1/app-links/{id}\` reports \`currentPreviewUrl\` and \`wakeStatus\`. Treat them as **inspection, not an address**: the field is null right after a publish (activating a bundle marks the binding stale and leaves the old values), it can point at a sandbox that has since expired, and reading it wakes nothing. For an organization-scoped app it also carries no token. Go through the link.
+
+## Publish an app
+
+A publish needs three things: the app's files as UTF-8 text, the command that starts it, and the port it listens on. \`start\` runs inside a fresh sandbox on every wake, so the bundle must be self-contained.
+
+Which surface you reach for depends on where the app already lives. From a project on disk, the local tool reads all three out of \`sapiom.json\` for you; the hosted MCP and REST take an explicit file map.
+**Agent Studio**
+
+In Agent Studio — or any coding agent on the local \`sapiom-dev\` MCP — call \`sapiom_dev_app_publish\`. It is the durable sibling of \`sapiom_dev_sandbox_preview\`: same project, same \`sapiom.json\` \`type: "sandbox"\` resource, different destination.
+
+\`\`\`json
+{
+  "slug": "quarterly-dashboard",
+  "name": "Quarterly dashboard"
+}
+\`\`\`
+
+There is no file map. The tool reads the source directory, \`start\`, \`port\`, and the optional \`build\` and \`env\` out of the sandbox resource you already configured with \`sapiom_dev_sandbox_configure\`, uploads that source as a stored bundle, and activates it. \`node_modules\`, \`.git\`, dotfiles, symlinks, and \`sapiom.json\` itself are never uploaded — install dependencies at wake with \`build\`.
+
+Add \`resource\` when the project defines more than one sandbox resource, \`dir\` when the project is not your working directory, and \`visibility\` with \`confirmPublic\` and \`dailySpendCapUsd\` to publish a public app. It returns \`{ url, appLinkId, bundleSha256, manifest }\`.
+
+The 10 MiB bundle cap and the text-only rule are both enforced locally, before any upload, so a bad bundle costs no round trip and never leaves a half-published link behind.
+
+> **Note: Tier and ttl do not travel.**
+> \`env\` from the sandbox resource follows the app and is stored encrypted. Its \`tier\` and \`ttl\` deliberately do not: how long the sandbox behind a wake lives is Sapiom's business, and not having to care about it is the point of publishing.
+> **Hosted MCP**
+
+From a coding agent connected to the hosted capability MCP (the \`sapiom-direct\` alias), call \`sapiom_app_publish\` with the files inline — useful when the app was generated in the conversation rather than checked out on disk:
+
+\`\`\`json
+{
+  "slug": "quarterly-dashboard",
+  "name": "Quarterly dashboard",
+  "files": {
+    "index.html": "<!doctype html><html>…</html>",
+    "server.js": "const { createServer } = require('node:http'); …"
+  },
+  "start": "node server.js",
+  "port": 3000
+}
+\`\`\`
+
+It returns the live URL, the app link id, and the bundle digest. Keep the file map small — the whole tool call has to fit the MCP transport's ~100 KB request body cap. For a bigger app, install dependencies at wake with \`build\` instead of bundling them, or publish over REST.
+**REST**
+
+Three calls: create or update the app, upload the bundle, publish it.
+
+\`\`\`bash
+# 1. create (or update) the app link
+curl -X POST https://api.sapiom.ai/v1/app-links \\
+-H "x-api-key: $SAPIOM_API_KEY" -H 'content-type: application/json' \\
+-d '{"slug":"quarterly-dashboard","name":"Quarterly dashboard"}'
+
+# 2. upload the bundle
+curl -X PUT https://api.sapiom.ai/v1/app-links/$APP_ID/bundle \\
+-H "x-api-key: $SAPIOM_API_KEY" -H 'content-type: application/json' \\
+-d '{"files":{"index.html":"<!doctype html>…"},"start":"node server.js","port":3000}'
+
+# 3. publish
+curl -X POST https://api.sapiom.ai/v1/app-links/$APP_ID/publish \\
+-H "x-api-key: $SAPIOM_API_KEY"
+\`\`\`
+
+The REST path accepts bundles up to 10 MiB, so use it for anything the MCP body cap rejects.
+**Workflow**
+
+A workflow step can publish its own output, so a scheduled run can keep a dashboard current at a link people already have. A step body calls the same REST API, using the credential the run already has — \`SAPIOM_API_KEY\` is injected into every step, so there is nothing extra to configure:
+
+\`\`\`typescript
+const api = process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai";
+const headers = {
+  "x-api-key": process.env.SAPIOM_API_KEY!,
+  "content-type": "application/json",
+};
+
+// upsert on (organization, slug) → stage the bundle → activate it
+const app = await fetch(\`\${api}/v1/app-links\`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    slug: "quarterly-dashboard",
+    name: "Quarterly dashboard",
+  }),
+}).then((r) => r.json());
+
+await fetch(\`\${api}/v1/app-links/\${app.id}/bundle\`, {
+  method: "PUT",
+  headers,
+  body: JSON.stringify({
+    files: { "index.html": renderDashboard(rows) },
+    start: "npx --yes serve -l 3000 .",
+    port: 3000,
+  }),
+});
+
+await fetch(\`\${api}/v1/app-links/\${app.id}/publish\`, {
+  method: "POST",
+  headers,
+});
+\`\`\`
+
+Publishing needs the narrow \`org.app_links.publish\` permission, which a run's default credential carries — a workflow does **not** need an organization-wide write key to publish. That credential can create a link and republish its bundle, name, description, and environment, but it cannot change how an existing link is exposed or what it may spend: visibility, spend cap, wake rate limit, and sandbox class are refused. Change those yourself with \`PATCH /v1/app-links/{id}\` using a key that carries \`org.write\`.
+
+### Republish in place
+
+Publishing to a slug you already own **replaces the app at the same URL**. That is how you ship an update: the link you shared last week keeps working and starts serving the new bundle on its next wake. Identity is the \`(organization, slug)\` pair, so a link is only ever replaced deliberately — nothing republishes as a side effect of an unrelated deploy.
+
+## Who can open it
+
+**Organization (default)**
+
+Only logged-in members of the organization that owns the app can open it. A visitor who is not signed in is sent to log in first, and one who is signed in but not a member does not get through.
+**Public**
+
+Anyone with the link can open it — and **your organization pays for every wake they cause.** Because of that, going public is not a single flag:
+
+- \`visibility: "public"\` must be accompanied by an explicit confirmation (\`confirmPublic: true\`) — a deliberate acknowledgement, not a default.
+- A **daily spend cap** (\`dailySpendCapUsd\`) is required. When the cap is reached, further wakes are refused, the app **flips back to organization-scoped**, and the owner is notified.
+- A per-app wake rate limit applies (10 wakes/hour by default).
+
+## Bundles
+
+- **Text only.** UTF-8 files — HTML, CSS, JS, JSON, TypeScript. Images, fonts, and archives are rejected at publish rather than silently corrupted. Inline small assets as SVG or data URLs, or fetch them from a CDN at runtime.
+- **Self-contained.** \`start\` has to work in a fresh sandbox. Use the optional \`build\` command (for example \`npm install\`) for dependencies — it runs on **every wake**, so keep it quick.
+- **Environment variables** are set on the app itself (the \`env\` map on \`sapiom_app_publish\`, or on \`POST /v1/app-links\`), injected into the process at wake, and stored encrypted — only the key names are ever read back. Setting \`env\` again replaces the whole map.
+- **No durable state inside the app.** Every wake is a fresh sandbox from the bundle, so anything written to its filesystem or held in memory is gone. Apps that need to remember something should use a [database](/capabilities/data).
+
+## Webhooks
+
+An App Link can also receive webhooks, which is what makes a Slack bot or a callback receiver practical on a sandbox that is usually asleep. Enable \`webhooksEnabled\` on the app, and everything under the link's \`/hook/\` path is forwarded to it:
+
+\`\`\`
+https://apps.sapiom.ai/{your-org}/{your-app}/hook/slack/events
+\`\`\`
+
+- The routing prefix is **stripped** — the app above sees \`/slack/events\`.
+- Bodies are forwarded **byte-exact**, so signature verification inside your app works (Slack, Stripe, and GitHub all sign the raw body). Body cap: 1 MB.
+- A request that arrives while the app is asleep is **held** while it wakes, up to 60 seconds, then forwarded.
+- Slack URL-verification challenges are answered without waking anything, so registering the endpoint always succeeds.
+
+> **Note: Cold starts and provider retries.**
+> Whether this is seamless depends on the caller. Providers that retry — Slack
+> events, Stripe — absorb a cold start for free: the first delivery times out
+> while the wake continues, and the retry lands on a warm app. Callers that do
+> not retry, like GitHub webhooks, will simply see the timeout. A Slack slash
+> command against a cold app also times out visibly the first time.
+>
+> These endpoints are reachable by anyone who knows the URL, exactly like any
+> other webhook receiver — verify signatures in your app.
+
+## What App Links are not
+
+- **Not always-on hosting.** Cold starts of tens of seconds are the design, not a bug.
+- **Not a reverse proxy.** The link redirects; it does not forward sub-paths. See [What the URL does](#what-the-url-does).
+- **Not a place for stateful apps.** Each wake redeploys from the bundle; use a database for anything that must persist.
+- **Not for binary assets.** Bundles are UTF-8 text.
+- **Not custom domains.** Apps are served under \`apps.sapiom.ai\`.
+
+> **Note.**
+> An App Link itself is free to hold. You pay for the sandbox time its wakes consume, billed to the owning organization like any other compute. See the [capability catalog](/capabilities) for current rates.`,
   },
   {
-    slug: "billing",
-    title: "Billing and plans",
-    body: `# Billing and plans
+    slug: "billing-and-credits",
+    title: "Billing and credits",
+    body: `# Billing and credits
 
-Plans: Free (3 seats), Team (per seat, monthly or annual) and Business (per seat, annual,
-adds SSO, audit log and scheduled exports).
+Source: https://sapiom.ai/pricing
 
-- Invoices are issued on the billing date and emailed to the billing contact. Past invoices are
-  under **Settings → Billing → Invoices**.
-- Adding a seat is prorated for the rest of the period. Removing a seat takes effect at the next
-  renewal; there are no partial refunds.
-- If a card payment fails, Relaybox retries for 14 days and emails the billing contact. The
-  workspace stays fully usable during that time, then drops to read-only until paid.
-- Changing the billing contact, VAT id or address: **Settings → Billing → Details**. Only
-  workspace owners can change billing.
-- Refunds for a duplicate or mistaken charge are handled by support; reply with the invoice
-  number.`,
+This page restates only the pricing-page FAQ. There is no billing or credits page in docs.sapiom.ai. For anything not stated here (invoices, refunds, credit balances, plan changes, payment methods), do not guess: say a teammate will confirm.
+
+## What runs for free?
+
+Developer is $0. Sign up by August 31 and you get 50 runs a day. That allotment stays on your account after the offer ends. After August 31, new Developer accounts include 10 runs a day. Additional runs are $1 each. Developer also includes Sapiom-hosted intelligence, included capabilities, account-level spending rules, run cost breakdown and receipts, and community support.
+
+## What is metered?
+
+Runs above your daily allotment are charged at the plan overage rate. Production capability calls inside a run are also metered by their published pricing unit when they execute.
+
+## How is usage attributed?
+
+Agent name, agent id, trace id, external trace id, and request metadata can travel with the client, so a transaction can be traced back to the work that produced it.
+
+## Do I need vendor accounts?
+
+No. Sapiom provides access to paid capabilities through one integration and meters their use back to your account.
+
+## When should I talk to your team?
+
+Talk to us about Scale when you need custom run volume, committed spend and inference, org-wide policies, SSO, telemetry export, multi-tenant management, SLAs, SOC 2, or dedicated engineering.`,
   },
   {
-    slug: "exports",
-    title: "Data exports",
-    body: `# Data exports
+    slug: "capabilities",
+    title: "Capabilities",
+    body: `# Capabilities
 
-Workspace admins can export data from **Settings → Data → Export**.
+Source: https://docs.sapiom.ai/capabilities
 
-- Formats: CSV (one file per table, zipped) and JSON Lines.
-- Exports run in the background. Small workspaces finish in minutes; very large ones can take a
-  few hours. The admin who started the export gets an email with a download link.
-- Download links expire after 7 days. Start a new export to get a fresh link.
-- Only one export per workspace runs at a time; a second request waits for the first.
-- Timestamps are UTC in ISO 8601. Deleted records are not included.
-- Scheduled exports (daily or weekly, to an S3 bucket) are available on the Business plan.`,
+Sapiom capabilities are cloud operations that a deployed agent can call without integrating each backing provider separately. Some calls are metered; check the signed-in dashboard for lifecycle and current price availability before depending on one.
+
+## Source of truth
+
+Every step receives a pre-authenticated capability client at \`ctx.sapiom\`. The declarations from the version of \`@sapiom/tools\` installed in the agent project are the authoritative contract. Use editor autocomplete and typecheck the exact method you call.
+
+Local Run replaces capability calls with configured stubs. A production run uses the real, tenant-scoped capability client.
+
+The [Agents capability catalog](https://app.sapiom.ai/agents/authoring#capabilities-inside-steps) is a platform-global projection of code-backed definitions. It can show intrinsic contracts, lifecycle, routing, and a live price when that join is available. It is **not an inventory of resources connected or provisioned for your organization**, and it does not report your observed spend or applied policy. Use a run's inspector and your transaction surfaces for observed execution data.
+
+## Capability guides
+
+- [Search the Web](https://docs.sapiom.ai/capabilities/search): Answers with sources, or raw results
+- [Web Scraping](https://docs.sapiom.ai/capabilities/scraping): Read pages as clean markdown or HTML
+- [AI Model Access](https://docs.sapiom.ai/capabilities/ai-models): Supported text models discovered at runtime
+- [Decisions](https://docs.sapiom.ai/capabilities/decisions): Calibrated probabilities over a fixed answer set
+- [Generate Images](https://docs.sapiom.ai/capabilities/images): Text-to-image with optional durable storage
+- [Generate Video](https://docs.sapiom.ai/capabilities/video): Short clips with optional native audio
+- [Audio Services](https://docs.sapiom.ai/capabilities/audio): Text-to-speech, sound effects, and voices
+- [Browser Automation](https://docs.sapiom.ai/capabilities/browser): Capture screenshots and connect to sessions
+- [Compute](https://docs.sapiom.ai/capabilities/compute): Provision and operate cloud sandboxes
+- [App Links](https://docs.sapiom.ai/capabilities/app-links): Publish an app to a durable URL that outlives its sandbox
+- [Data](https://docs.sapiom.ai/capabilities/data): Provision ephemeral Postgres databases
+- [File Storage](https://docs.sapiom.ai/capabilities/file-storage): Presigned transfers and controlled sharing
+- [Repositories](https://docs.sapiom.ai/capabilities/repositories): Agent-managed Git repositories
+- [Email Lookup](https://docs.sapiom.ai/capabilities/email-enrichment): Find and verify professional email addresses
+- [Domains & DNS](https://docs.sapiom.ai/capabilities/domains): Register domains and manage DNS
+
+## Availability
+
+The \`ctx.sapiom\` surface is finite and versioned. This curated guide covers supported product areas, but it is not an exhaustive API reference. If a method is absent from the installed declarations, it is not available to that agent project.
+
+## Next steps
+
+- [Build an Agent](https://docs.sapiom.ai/agents/quick-start): Scaffold, author steps, and deploy.
+- [Use Capabilities in a step](https://docs.sapiom.ai/agents/authoring#capabilities-inside-steps): Work from the typed ctx.sapiom contract.`,
   },
   {
-    slug: "webhooks",
-    title: "Webhooks",
-    body: `# Webhooks
+    slug: "configure-authentication-and-runtime-inputs",
+    title: "Configure authentication and runtime inputs",
+    body: `# Configure authentication and runtime inputs
 
-Relaybox sends a webhook for every event a workspace subscribes to under
-**Settings → Webhooks**. Each delivery is an HTTPS \`POST\` with a JSON body and an
-\`X-Relaybox-Signature\` header (HMAC-SHA256 of the raw body with the endpoint's signing secret).
+Source: https://docs.sapiom.ai/guides/configure-authentication-and-runtime-inputs
 
-- Your endpoint must answer \`2xx\` within 10 seconds. Anything else counts as a failure.
-- Failed deliveries retry 8 times with exponential backoff over about 24 hours.
-- After 50 consecutive failures the endpoint is paused and the workspace owner gets an email.
-  Fix the endpoint, then click **Resume** on the endpoint page; paused events are replayed.
-- **Redeliver** on any event in the delivery log sends it again immediately.
-- A signature mismatch is almost always a body that was parsed and re-serialized before
-  verification. Verify against the raw bytes.
-- Rotating the signing secret keeps the old secret valid for 24 hours.`,
+Authentication and agent configuration solve different problems:
+
+- **Your Sapiom sign-in** authorizes use of Agent Studio and Sapiom MCP. It is required for local authoring tools as well as link, deploy, run, inspect, signal, and schedule operations.
+- **Agent secrets** are write-only values injected into production step processes, such as \`SLACK_BOT_TOKEN\`.
+- **Runtime defaults** are readable, non-secret input values that the supported run path merges into the next execution.
+- **Caller input** belongs to one run and has the highest precedence.
+
+None of these belongs in \`sapiom.json\` or in committed source.
+
+## Sign in before using the authoring tools
+
+You must authenticate before using Agent Studio or Sapiom MCP to create, edit, check, or locally run an agent. Authentication identifies the user of the authoring surface; it does not determine where an operation executes or whether it creates capability spend.
+
+For Agent Studio launched with \`npx\`, either connect from the account menu after it opens or request browser sign-in before startup:
+
+\`\`\`bash
+npx @sapiom/agent-studio@latest --login
+\`\`\`
+
+With Sapiom MCP connected to Claude Code or Codex, ask your coding agent to connect your Sapiom account before the first project action. It opens browser sign-in and caches the credential. You can also ask which environment and account it is using, or ask it to disconnect.
+
+Both surfaces reuse the current environment's entry in \`~/.sapiom/credentials.json\`. The random token in Studio's local URL is different: it protects that one loopback Studio process and is not a Sapiom API key.
+
+## Add an agent secret
+
+Production steps receive configured secrets as environment variables. Local Run does not fetch them from Sapiom; local author code sees only the environment of the process that launched the run.
+
+1. **Open Setup**
+
+   Open the deployed agent in the [Agents dashboard](https://app.sapiom.ai/agents), then select **Settings**. The route still ends in \`/secrets\`, but the page groups **Secrets**, managed resources, and **Defaults**.
+
+2. **Add or replace the value**
+
+   In **Secrets**, choose **Connect** on the declared key and enter its value. For a hand-authored agent without template declarations, choose **Add credential** and enter the environment-variable name yourself.
+
+   Names use uppercase letters, numbers, and underscores in the dashboard. Start with a letter or underscore. Reserved runtime names, including \`PATH\`, \`SAPIOM_*\`, and \`WORKFLOWS_*\`, are rejected.
+
+3. **Verify presence, not value**
+
+   After saving, the dashboard can show that the key is set. It cannot read the value back. Replacing a value is another write; deleting a key removes it for future step dispatches.
+
+4. **Run again—do not redeploy**
+
+   The runtime resolves the definition's currently configured secrets at every cloud step dispatch. A save applies to subsequent dispatches without rebuilding the agent. It does not alter a step process that is already running.
+   If the same key is configured on another agent, the dashboard can offer to reuse it. Accepting the offer performs a server-side **copy**: the browser never receives the value, and the target gets its own copy. Rotating the source later does not rotate the target.
+
+## Set a non-secret runtime default
+
+Template-backed agents can declare configurable fields. In the agent's **Settings → Defaults** group:
+
+1. edit one or more fields;
+2. choose **Save change** or **Save changes**;
+3. start the next run from Agent Studio, Sapiom MCP, or **Run once** in the dashboard.
+
+The saved value is read for each supported start request, so it applies without a redeploy. **Reset** removes the user-set value and restores the template's declared default. Emptying a field in this form also resets it.
+
+Defaults are not secrets. Their values are readable in the dashboard and through the settings API, and they become part of recorded run input. Do not put credentials or private tokens there.
+
+> **Note: Custom agents have input defaults, but no public settings declaration yet.**
+> A hand-authored \`defineAgent\` build currently publishes the entry-step input schema, not template \`settings[]\`, \`requiredSecrets\`, or \`defaultInput\` declarations. Put a zero-input fallback in the entry Zod schema and pass per-run values from the caller. Do not add undocumented fields to \`defineAgent\` expecting the dashboard to render them.
+
+## Know which value wins
+
+For starts through Agent Studio **Prod Run**, Sapiom MCP, or dashboard **Run once**, Sapiom assembles entry input from lowest to highest precedence:
+
+1. template \`defaultInput\`;
+2. each template \`settings[].default\`;
+3. user-set values saved under **Defaults**;
+4. caller input supplied for this run.
+
+Nested defaults use dotted paths such as \`client.email\`. After the merge, the entry step's Zod schema still parses the whole value. A stored value cannot bypass the agent's input contract, and a Zod \`.default(...)\` still supplies a field that none of the four layers set.
+
+The current Studio **Prod Run** button supplies \`{}\` as caller input, so saved defaults and schema defaults are especially useful there. The dashboard form pre-fills effective values but still submits caller input; explicit submitted fields therefore win when the backend merges again.
+
+> **Caution: A saved default is not a universal definition mutation.**
+> Saved defaults are applied by the customer execution endpoint used by Studio, Sapiom MCP, and the dashboard. A schedule keeps the input captured when the trigger was created; changing **Defaults** does not rewrite an already-armed schedule.
+
+## Verify both environments
+
+Use two checks before launch:
+
+- While authenticated to Studio or Sapiom MCP, run locally without any production agent secret or real capability call. Confirm schema defaults work and remember that ordinary host environment variables, filesystem access, and network effects remain real.
+- Run the deployed build with a harmless canary secret and saved non-secret default. Confirm the key is listable but its value is not, then pass caller input and confirm it overrides the saved value. Delete the canary afterward.
+
+That is the same clean-room test used for this guide: a one-step agent saw no cloud secret locally, received the configured secret in production, picked up a changed saved default without redeploy, let caller input win, and returned to its code-level default after reset.
+
+- [Credentials and configuration reference](https://docs.sapiom.ai/reference/credentials-and-configuration): Storage, visibility, precedence, value types, and per-action authentication requirements.
+- [Local and cloud](https://docs.sapiom.ai/concepts/local-and-cloud): Understand which authoring operations stay on your machine.`,
+  },
+  {
+    slug: "credentials-and-configuration",
+    title: "Credentials and configuration",
+    body: `# Credentials and configuration
+
+Source: https://docs.sapiom.ai/reference/credentials-and-configuration
+
+## Credential boundaries
+
+| Credential or value        | Stored or supplied                                                | Visible after write                                                          | Used by                                                                    |
+| -------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Studio access token        | Random per launch; carried in the loopback URL and local requests | Printed only for CLI launches that do not open the browser                   | Protects one \`127.0.0.1\` Studio HTTP/WebSocket server                      |
+| Cached Sapiom sign-in      | Current environment entry in \`~/.sapiom/credentials.json\`         | Account identity is visible; protect the file because it contains an API key | Desktop Studio, \`npx\` Studio, and the local \`@sapiom/mcp\` authoring server |
+| Runtime-injected agent key | Supplied by Sapiom inside a production run                        | Not returned to agent source or stored in the project                        | The production step's \`ctx.sapiom\` client                                  |
+| Agent secret               | Written to one cloud agent definition                             | Key name only                                                                | Production step processes as \`process.env[KEY]\`                            |
+| Runtime default            | Stored separately on one cloud definition                         | Path and value are readable                                                  | Entry input for supported future run starts                                |
+| Caller input               | Sent by the run initiator                                         | Recorded as effective run input                                              | One execution                                                              |
+
+The Studio access token and the Sapiom API key are not interchangeable. \`sapiom.json\` contains project identity and resources, never either credential.
+
+## Studio and Sapiom MCP sign-in
+
+### \`npx\` launch behavior
+
+- With a cached credential, Studio reuses it without opening OAuth.
+- With no cache, the host can open before authentication completes, but Studio authoring and its session-scoped Sapiom MCP require you to connect an account.
+- \`--login\` starts browser OAuth only when no credential is cached; it does not force a fresh login.
+- \`--no-auth\` skips credential file and authentication network access during startup. It is a diagnostic launch option, not an unauthenticated authoring mode; use **Connect account** before using Studio or Sapiom MCP.
+
+The desktop app probes the same cache. On a clean non-test launch, it starts browser authentication as part of setup. If authentication is cancelled, times out, or is otherwise unavailable, retry **Connect account** before using Studio's authoring features.
+
+### Sapiom MCP tools
+
+| Tool                  | Effect                                                                         |
+| --------------------- | ------------------------------------------------------------------------------ |
+| \`sapiom_authenticate\` | Opens browser authentication and writes the current environment's cache entry. |
+| \`sapiom_status\`       | Reports the selected environment and whether a credential is available.        |
+| \`sapiom_logout\`       | Clears the cached credential for the selected environment.                     |
+
+Keep \`~/.sapiom/credentials.json\` private. Studio creates it with owner-only permissions, but backups, shell history, and copied diagnostics can still expose it. Never paste its contents into an issue or prompt.
+
+## Authentication by action
+
+| Action                                       | Sapiom sign-in required? | Notes                                                                                                                                                  |
+| -------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Open/edit through Agent Studio or Sapiom MCP | Yes                      | Coding-agent authentication is separate and belongs to Claude Code or Codex. Editing raw files outside Sapiom is outside this product access boundary. |
+| Check or Local Run                           | Yes                      | Authentication grants access to the authoring surface. The operation stays local; Local Run does not download cloud secrets or call real capabilities. |
+| Browse or use a template                     | Yes                      | The live gallery also reads Sapiom cloud state. Bundled starter source is local but remains part of the authenticated authoring workflow.              |
+| Link, deploy, or Prod Run                    | Yes                      | Deploy can use metered cloud build compute; production calls are live.                                                                                 |
+| Inspect, signal, or manage schedules         | Yes                      | These operate organization-owned cloud state.                                                                                                          |
+
+## Agent secrets
+
+Secrets are scoped to a cloud definition. The read contract is names-only: \`GET /v1/workflows/definitions/:id/secrets\` returns \`{ "keys": [...] }\`, while writes and deletes return no value. There is no supported read-back path.
+
+### Key contract
+
+- use a JavaScript environment identifier beginning with a letter or underscore;
+- the dashboard normalizes entry to uppercase \`A-Z\`, \`0-9\`, and \`_\`;
+- maximum key length is 256 characters;
+- \`PATH\`, names beginning \`SAPIOM_\` or \`WORKFLOWS_\`, and prototype-related keys are reserved;
+- one definition can configure at most 256 keys;
+- a value can contain up to 16,000 characters.
+
+The dashboard's \`.env\` import preserves each accepted secret value rather than trimming it. Invalid lines can be reported without echoing their value.
+
+At every production step dispatch, the runtime resolves that definition's configured values and injects them into the step process. An undeclared or unconfigured key is absent. Replacing or deleting a key affects later step dispatches; it does not mutate a process already running.
+
+Server-side reuse copies a value from one owned definition to another. It is not a live reference. Each copy must be rotated or deleted independently.
+
+## Runtime defaults
+
+Runtime defaults are non-secret values stored separately from agent secrets. The read endpoint returns only rows a user explicitly set, including each dotted path, value, and last-update time. An untouched declared default has no stored row.
+
+Supported stored value shapes are:
+
+- string, including email and cron text;
+- finite number;
+- boolean;
+- flat array of strings.
+
+A path is one or more JavaScript-identifier segments, such as \`deliverTo\` or \`client.email\`. Objects belong in the path structure, not in the stored value. Prototype-related path segments are rejected.
+
+Saving \`null\` or omitting a setting value resets that path by deleting its stored row. \`false\`, \`0\`, and a non-empty string are real stored values, not resets.
+
+### Merge precedence
+
+Supported customer run starts assemble input in this order, with later layers winning:
+
+\`\`\`text
+template defaultInput
+  → template settings[].default
+  → stored definition values
+  → caller input
+  → entry-step Zod parse
+\`\`\`
+
+Stored values are read at run start. They take effect on the next supported run without a deploy and do not modify an execution already started.
+
+> **Caution: Trigger coverage.**
+> This merge currently runs for the customer execution endpoint used by Agent Studio **Prod Run**, Sapiom MCP, and dashboard **Run once**. Schedules execute the input captured when the trigger was created, so re-arm a schedule to change what it sends.
+
+Template manifests can declare \`requiredSecrets\`, \`settings\`, and \`defaultInput\`. The current hand-authored \`defineAgent\` manifest does not export those declarations. Its entry Zod schema and caller input remain authoritative; do not invent \`defineAgent\` properties to configure the dashboard.`,
+  },
+  {
+    slug: "deploy",
+    title: "Deploy",
+    body: `# Deploy
+
+Source: https://docs.sapiom.ai/guides/deploy
+
+Deploy turns the source currently on your machine into an immutable cloud build. It does not start an agent run.
+
+Before deploying, make sure the project:
+
+- passes \`npm run typecheck\` and \`sapiom_dev_agents_check\`;
+- has a clean local test for the branch you intend to ship;
+- contains valid \`sapiom.json\` project metadata;
+- is a Git repository with at least one commit; and
+- is connected to a signed-in Sapiom account.
+
+> **Caution: Deploy ships the working tree, not Git HEAD.**
+> Deploy bundles current local source reachable from \`index.ts\`, including uncommitted edits and imported untracked source. It writes that bundle and a generated dependency manifest into a synthesized build tree. A commit is a precondition, but your current commit is not the deployed release identity. Use the returned build ID to identify what a production run used.
+
+## Deploy with Agent Studio or your coding agent
+
+**Agent Studio**
+
+Bind the intended session to the agent project and select **Deploy** in the action bar. Deploy is a direct product action: it does not prompt your coding agent or use its credits.
+
+Studio disables the action while signed out. On a project's first deploy, Studio resolves or creates the hosted agent by the definition name, writes its \`definitionId\` to \`sapiom.json\` when possible, then starts the build. The lifecycle chip moves through **Draft**, **Linked**, **Building**, and **Deployed**; a terminal failure reads **Deploy failed**.
+**Coding agent**
+
+Ask Claude Code or Codex:
+
+> Confirm which Sapiom account and environment I am using. Sign me in if needed, link this checked project to a cloud agent, and deploy its current working tree. Return the definition ID, build ID, and final build status.
+
+On first deploy, the project name is read from \`defineAgent(...)\` and the resolved definition ID is recorded in \`sapiom.json\`.
+A successful deploy returns stable fields in this shape:
+
+\`\`\`json
+{
+  "definitionId": "<definition-id>",
+  "buildRunId": "<build-id>",
+  "status": "ready"
+}
+\`\`\`
+
+Keep \`buildRunId\` when you need an exact deployment identity. The generated commit SHA visible in the dashboard describes the synthesized build repository; it is not proof that your local working tree was clean.
+
+## What happens during deploy
+
+1. **Validate local project state**
+
+   The deploy path requires a linked definition, readable project configuration, and a Git repository with at least one commit. It then bundles \`index.ts\` and its local imports against the installed package versions.
+
+2. **Push a synthesized source tree**
+
+   Sapiom mints a short-lived push credential. The client creates a temporary tree containing the bundled \`index.ts\` and generated \`package.json\`, commits that tree, and pushes it to the agent's managed build repository. The temporary tree is removed after the push.
+
+3. **Create the cloud build**
+
+   The cloud installs declared dependencies and validates the build artifact. Cloud builds can consume metered build compute. The authoring tool waits up to five minutes for \`ready\`, \`failed\`, \`cancelled\`, or \`superseded\`.
+
+4. **Record the ready build**
+
+   A \`ready\` build can serve production runs. Agents following latest resolve their newest ready build; a version pin keeps future runs on the selected ready build until you choose **Resume following latest** in the dashboard.
+
+## If deploy does not become ready
+
+- **Failed** means the cloud build returned an error. Read the returned build error, fix the local source or dependencies, run the local checks again, and redeploy.
+- **Superseded** means a newer deploy replaced this build while it was in flight. Inspect or wait for the newer build instead.
+- **Cancelled** is a terminal build state, but neither Agent Studio nor Sapiom MCP exposes a build-cancel control.
+- **Timed out locally** means the five-minute client wait expired; the build may still exist. Inspect it by \`buildRunId\` instead of starting duplicate deploys blindly.
+
+Redeploying creates a new build. It does not change the build recorded on a production run that already started.
+
+- [Run in production](https://docs.sapiom.ai/guides/run-in-production): Start a real cloud execution from the ready agent and keep its execution ID.
+- [Local and cloud](https://docs.sapiom.ai/concepts/local-and-cloud): Review the authentication, execution, and metering boundary.`,
+  },
+  {
+    slug: "how-sapiom-works",
+    title: "How Sapiom works",
+    body: `# How Sapiom works
+
+Source: https://docs.sapiom.ai/start/how-sapiom-works
+
+Sapiom separates **authoring an agent** from **running it in production**. Agent Studio and Sapiom MCP help you create and operate the project. The Sapiom runtime executes the deployed version, supplies capability credentials, and records what happens.
+
+\`\`\`text
+Author locally
+  Studio or Sapiom MCP
+           ↓
+Deploy agent version
+           ↓
+Start managed run
+           ↓
+Run steps
+  ├── Capabilities
+  └── Router (optional)
+           ↓
+Observe run + step activity
+
+Application ──→ Router (direct)
+\`\`\`
+
+## 1. Author locally
+
+An **agent project** is a local TypeScript source folder. Its definition declares an entry step, the steps that can run, accepted input, and transitions between steps.
+
+Use Agent Studio for an integrated workspace, or connect Sapiom MCP to Claude Code or Codex. Both interfaces work with the same project format and local tools.
+
+## 2. Test against capability stubs
+
+Local Run executes your real step code on your machine. Calls through \`ctx.sapiom\` return configured stubs instead of reaching real Sapiom capabilities.
+
+Using Agent Studio or Sapiom MCP requires Sapiom authentication, including for this local authoring step. The run itself stays on your machine and creates no Sapiom capability spend. It checks your graph, inputs, step code, and expected provider-shaped responses; it does not prove that a real provider will return the same data.
+
+## 3. Deploy a version
+
+Deployment sends the current project source to Sapiom and starts a cloud build. A successful build creates a ready version that a production run can use.
+
+The local project and hosted agent are related but distinct. Editing local files does not change production until you deploy another version, and a run keeps the exact version it started with.
+
+## 4. Start a production run
+
+A **run** is one invocation of the deployed agent. The runtime validates its input, begins at the declared entry step, and follows the directives returned by each step until the agent completes, fails, or waits for an external signal.
+
+For each step dispatch, Sapiom constructs the execution context. That context includes the typed \`ctx.sapiom\` client and execution attribution needed to associate managed activity with the current organization, run, and step.
+
+## 5. Use capabilities inside the run
+
+Capabilities give agent steps managed access to operations such as search, scraping, browser automation, compute, data, files, images, audio, repositories, email lookup, and domains.
+
+Production capability calls happen inside the Sapiom-managed run. The runtime provides the credential; the agent project does not store a general capability API key.
+
+## 6. Use Router where LLM inference belongs
+
+Router accepts provider-compatible LLM requests and selects available model infrastructure behind the requested Sapiom model label.
+
+There are two supported paths:
+
+- **Inside an agent run:** use Router as part of a step. The request can be attributed to that run and step alongside the rest of the automation.
+- **Direct from an application:** authenticate to Router with a Sapiom account credential. The request is observable as Router traffic but is not part of an agent graph or agent-run trace.
+
+Router's direct path is the exception. It does not make other Sapiom capabilities directly callable.
+
+See the [Router API reference](/router) for request formats, model IDs, lanes, and examples.
+
+## 7. Inspect what happened
+
+The agent run is the operational unit for multi-step work. Sapiom records its selected version, current state, step attempts, outputs, and available activity evidence. Capability and Router activity performed with the run's execution context can be connected to that execution.
+
+Direct Router calls retain Router-level request and usage observability, but there is no agent run or step to attach them to.
+
+## Core terms
+
+| Term          | Meaning                                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| Agent Studio  | Integrated local workspace for authoring, testing, deploying, and inspecting agents.         |
+| Sapiom MCP    | Project-aware authoring and operations tools used by a coding agent.                         |
+| Agent project | Local source folder containing the agent definition and supporting files.                    |
+| Agent         | Controlled, deployable multi-step automation owned by a Sapiom organization.                 |
+| Version       | Built source revision that can be selected for production runs when ready.                   |
+| Run           | One invocation of a deployed agent version. Lower-level interfaces may call it an execution. |
+| Step          | One unit of code in the agent graph, dispatched with run context.                            |
+| Capability    | Managed operation available to code running inside an agent run.                             |
+| Router        | Sapiom's LLM-routing product, usable directly or from an agent run.                          |
+
+## Continue
+
+- [Build your first agent](https://docs.sapiom.ai/agents/quick-start): Create, check, and run the shipped starter locally.
+- [Understand agents and projects](https://docs.sapiom.ai/concepts/agents-and-agent-projects): Learn how local source, hosted identity, versions, and runs relate.
+- [Explore capabilities](https://docs.sapiom.ai/capabilities): Choose the managed operations your deployed agent steps need.
+- [Inspect a production run](https://docs.sapiom.ai/guides/inspect): Read execution state and the evidence recorded for each step.`,
+  },
+  {
+    slug: "inspect",
+    title: "Inspect a run",
+    body: `# Inspect a run
+
+Source: https://docs.sapiom.ai/guides/inspect
+
+Inspection answers two separate questions: what the execution engine recorded, and what the dashboard's metering view charged at run grain. Sapiom MCP returns the execution audit; the Agents dashboard combines that audit with the separate run-charge read.
+
+## Open the execution
+
+**Coding agent**
+
+Ask Claude Code or Codex:
+
+> Inspect execution \`<execution-id>\` and wait for it to finish or pause for an external signal. If the bounded wait expires, continue inspecting until one of those states is reached.
+
+Sapiom MCP owns each bounded wait, which lasts up to 45 seconds by default. Advanced callers can change \`maxWaitSeconds\`, capped at 55 seconds. If the response says \`waiting: true\` because the window elapsed, your coding agent can inspect again. It should not add a shell sleep-and-poll loop.
+
+The wait returns early with \`done: false\` when a paused run needs an external human or webhook signal. It keeps waiting through known dispatched-capability pauses because those callbacks resume automatically.
+**Agents dashboard**
+
+Open **Agents**, select the agent, choose **Runs**, and open the execution. The canonical URL has both identities:
+
+\`\`\`text
+https://app.sapiom.ai/agents/<definition-id>/runs/<execution-id>
+\`\`\`
+
+A legacy \`/agents/runs/<execution-id>\` link resolves the run and forwards to that nested route when the execution has an owning definition.
+The MCP execution detail is cost-agnostic. It returns status, the pinned build ID, execution input and output/error, step attempts, redacted logs and capability events, shared-state snapshots, directives, and typed parent/child dispatch lineage. It does not silently fetch or fabricate spend.
+
+## Read the Run Inspector
+
+![The Sapiom Run Inspector showing a completed two-step production run, its exact pinned build, and selected step output.](/images/agents/run-inspector.png)
+
+The maintained image uses sanitized fixture identity and the exact logical output from the clean-room production run. It contains no account, organization, credential, or private workspace data.
+
+1. **Confirm status and pinned build**
+
+   The header shows the execution ID, agent name, **Build &lt;build-id&gt;**, terminal or live status, and elapsed time. Use the build ID—not the execution's numeric CAS \`version\`—when correlating a run to a deployment.
+
+2. **Walk the step timeline**
+
+   The left pane orders steps and collapses multiple attempts under the same step name. Select a row to see the current attempt's status, attempt number, and elapsed time without moving the timeline.
+
+3. **Inspect recorded evidence**
+
+   The evidence pane exposes **Input**, **Output** (or structured **Error**), **State**, and **Directive** for the selected attempt. **Logs** and **Events** appear only when the engine recorded them. Evidence is redacted and size-capped at the serve boundary; do not use the inspector as a secret store.
+
+4. **Follow child runs**
+
+   When a step dispatched another agent, the typed dispatch ledger opens a child-run tree below the workspace. Child and parent links use recorded execution lineage, not guessed correlation-ID strings. A leaf run has no tree.
+
+5. **Read the run-grain charge**
+
+   The dashboard requests the run's metered usage and settled overage separately. A non-zero or settling charge appears in the inspector header and footer. The current contract has no per-step, subtree, or cloud-build dollar attribution, so the UI does not assign a guessed cost to an individual step.
+
+## Know the agent routes
+
+| Route                                   | Dashboard section | What it shows                                                                                  |
+| --------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
+| \`/agents/<definition-id>\`               | Overview          | Active graph, operational summaries, and setup state.                                          |
+| \`/agents/<definition-id>/runs\`          | Runs              | Status/date-filtered, paged production executions.                                             |
+| \`/agents/<definition-id>/runs/<run-id>\` | Run Inspector     | Exact build, timeline, attempt evidence, lineage, and run-grain charge.                        |
+| \`/agents/<definition-id>/versions\`      | Versions          | Ready builds and recent synthesized commits, active state, rollback pin, and follow-latest.    |
+| \`/agents/<definition-id>/alerts\`        | Alerts            | The agent's alert policy and incidents.                                                        |
+| \`/agents/<definition-id>/secrets\`       | Settings          | Managed resources, write-only credential keys, and stored runtime settings for this one agent. |
+
+A rollback pin changes which ready build **future** runs select. It does not rewrite the pinned build on an existing execution. Choosing **Resume following latest** clears the explicit pin.
+
+> **Caution: Do not look for generic run controls.**
+> The public dashboard does not expose generic pause, resume, cancel, or retry controls for an arbitrary live run. A run that deliberately pauses for a manual signal can show its specific resume form; that is signal delivery, not a general operate control. Dispatched-capability callback pauses resume on their own.
+
+## Inspect a build instead
+
+When deploy returns a build ID but the client wait times out, call \`sapiom_dev_agents_inspect\` with the linked project:
+
+\`\`\`json
+{
+  "dir": "/absolute/path/to/hello-agent",
+  "buildRunId": "<build-id>"
+}
+\`\`\`
+
+Build inspection returns build status and its recorded error when present. It is distinct from an execution audit and does not create another build.
+
+- [Run in production](https://docs.sapiom.ai/guides/run-in-production): Start another cloud execution and preserve its returned execution ID.
+- [Test locally](https://docs.sapiom.ai/guides/test-locally): Reproduce a failed step with captured input and controlled capability stubs.`,
+  },
+  {
+    slug: "router",
+    title: "Router API reference",
+    body: `# Router API reference
+
+Source: https://docs.sapiom.ai/router
+
+Sapiom Router accepts LLM requests from your application using a Sapiom API key. Choose a model, then use the request format your application already understands.
+
+**Base URL:** \`https://router.sapiom.ai\`
+
+Open [Router in the dashboard](https://app.sapiom.ai/router) to inspect Router activity. For LLM calls inside a deployed Sapiom agent, see [Choose a call surface](/guides/choose-a-call-surface).
+
+## Authentication
+
+Set \`SAPIOM_API_KEY\` to your Sapiom API key in the environment where you run the examples. Send it in either \`Authorization: Bearer\` or \`x-api-key\`. Router authenticates your Sapiom account; you do not supply a provider API key.
+
+## Request formats
+
+| Format                  | Endpoint                    |
+| ----------------------- | --------------------------- |
+| OpenAI Chat Completions | \`POST /v1/chat/completions\` |
+| Anthropic Messages      | \`POST /v1/messages\`         |
+| OpenAI Responses        | \`POST /v1/responses\`        |
+
+Each endpoint accepts its named request format and returns that format's response. Router translates between formats when the selected provider uses a different one.
+
+For Responses requests translated to another format, \`previous_response_id\` is not supported. Include the conversation in \`input\` instead. Responses requests do not fall back to a different model class.
+
+## Models
+
+The models below were verified on September 15, 2026. Availability can change as Router configuration changes.
+
+Use the request ID in the JSON \`model\` field with any of the three formats.
+
+| Model             | Request ID      |
+| ----------------- | --------------- |
+| MiniMax M3        | \`m3\`            |
+| GLM 5.3 Priority  | \`glm-priority\`  |
+| GPT-5.6 Luna      | \`gpt-luna\`      |
+| Claude Opus 4.7   | \`claude-opus\`   |
+| Claude Sonnet 4.6 | \`claude-sonnet\` |
+
+## Lanes
+
+A lane selects the latency and capacity policy for your request.
+
+Set \`x-sapiom-lane\` in any request format. The default is \`run_now\`.
+
+| Lane       | Use                                                         |
+| ---------- | ----------------------------------------------------------- |
+| \`run_now\`  | Interactive work; prioritizes latency.                      |
+| \`standard\` | Less urgent work; balances latency and serving cost.        |
+| \`flex\`     | Delay-tolerant work; accepts slower performance under load. |
+
+\`run_now\` prioritizes latency for interactive work. When available, \`standard\` balances latency and serving cost, and \`flex\` accepts slower performance for delay-tolerant work. Lanes influence routing, capacity admission, and fallback budgets.
+
+\`flex\` uses the same request and streaming APIs. It does not submit an asynchronous job. A request can return HTTP \`429\` if capacity admission fails; a rejected request is not queued for later execution.
+
+## Example requests
+
+### OpenAI Chat Completions
+
+\`\`\`bash
+curl -sS https://router.sapiom.ai/v1/chat/completions \\
+  -H "Authorization: Bearer $SAPIOM_API_KEY" \\
+  -H 'Content-Type: application/json' \\
+  -H 'x-sapiom-lane: run_now' \\
+  -d '{
+    "model": "m3",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "Say hello."}]
+  }'
+\`\`\`
+
+### Anthropic Messages
+
+\`\`\`bash
+curl -sS https://router.sapiom.ai/v1/messages \\
+  -H "x-api-key: $SAPIOM_API_KEY" \\
+  -H 'anthropic-version: 2023-06-01' \\
+  -H 'Content-Type: application/json' \\
+  -d '{
+    "model": "claude-sonnet",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "Say hello."}]
+  }'
+\`\`\`
+
+### OpenAI Responses
+
+\`\`\`bash
+curl -sS https://router.sapiom.ai/v1/responses \\
+  -H "Authorization: Bearer $SAPIOM_API_KEY" \\
+  -H 'Content-Type: application/json' \\
+  -d '{
+    "model": "gpt-luna",
+    "max_output_tokens": 256,
+    "input": "Say hello."
+  }'
+\`\`\`
+
+For streaming, add \`"stream": true\` to the JSON body and \`-N\` to \`curl\`. Router returns a server-sent event stream in the selected request format.`,
+  },
+  {
+    slug: "run-in-production",
+    title: "Run in production",
+    body: `# Run in production
+
+Source: https://docs.sapiom.ai/guides/run-in-production
+
+A production run executes a linked agent's ready cloud build. It runs real author code, uses live \`ctx.sapiom\` capabilities instead of local stubs, and participates in cloud usage metering.
+
+You need a signed-in Sapiom account and a linked agent with a \`ready\` build. A definition ID alone is not enough: it can survive a failed first deploy without a runnable artifact.
+
+## Start the run
+
+**Agent Studio**
+
+Select the intended agent project and choose **Prod Run**. The action is enabled only when Studio can confirm a ready build and authentication. It is a direct product action: it does not prompt your coding agent or use its credits.
+
+The current Studio button sends \`{}\` as caller input. Use schema defaults for a no-input happy path, or use your coding agent or the dashboard when you need custom input.
+
+Saved non-secret defaults are merged before that \`{}\`. See [Configure authentication and runtime inputs](/guides/configure-authentication-and-runtime-inputs) for precedence and the trigger paths that apply them.
+**Coding agent**
+
+Ask Claude Code or Codex:
+
+> Start a production run of this linked agent with \`name\` set to \`Docs\`. Return the execution ID, then inspect it until it finishes or needs an external signal.
+
+An omitted \`input\` becomes \`{}\`. The entry step's schema parses the effective input in the cloud before author code receives it.
+**Agents dashboard**
+
+Open the deployed agent and choose **Run once**. The dashboard derives fields from the active entry-step input schema and offers a raw-JSON editor when the contract cannot be represented as simple fields. Submit the form to start the run and open its inspector.
+The start request returns after enqueueing the execution. Its durable handoff is:
+
+\`\`\`json
+{ "executionId": "<execution-id>" }
+\`\`\`
+
+This response is not the terminal agent output. Preserve the execution ID and inspect the run.
+
+## What changes from Local Run
+
+1. **The cloud uses the deployed artifact**
+
+   Production does not execute the mutable checkout on your machine. When the run starts, it records the exact \`buildRunId\` selected for that definition. A later deploy or version-pin change affects future runs, not the in-flight run.
+
+2. **Capability calls are live**
+
+   Calls through \`ctx.sapiom.*\` reach Sapiom services instead of \`.sapiom-dev/stubs.json\`. Direct \`fetch\`, third-party SDKs, and other author effects are also real inside the cloud runtime.
+
+3. **Usage is metered**
+
+   The run consumes the agent-run and runtime meters that apply to the account. Live capability calls can add their own usage. A successful HTTP start only proves the run was enqueued; read the terminal status and evidence before treating the outcome as successful.
+
+> **Note: Build identity is not the execution version counter.**
+> The run inspector labels the pinned artifact as **Build &lt;build-id&gt;**. An execution payload can also contain a numeric \`version\`; that number is an optimistic-lock counter for updates to the run row, not a deploy or release version.
+
+The dogfood journey for these guides deployed a two-step agent from a working tree with an uncommitted marker and ran it with \`{ "name": "Docs" }\`. The completed cloud output included:
+
+\`\`\`json
+{
+  "done": true,
+  "greeting": "hello from Sapiom, Docs",
+  "deployedFromWorkingTree": true
+}
+\`\`\`
+
+That marker verified both boundaries at once: deploy used current local source, and the production run used the resulting immutable build rather than rereading the checkout.
+
+- [Inspect a run](https://docs.sapiom.ai/guides/inspect): Wait for terminal state and read the pinned build, step evidence, lineage, and run-grain charge.
+- [Deploy](https://docs.sapiom.ai/guides/deploy): Create a new ready build before starting another run.`,
+  },
+  {
+    slug: "schedule",
+    title: "Schedule an agent",
+    body: `# Schedule an agent
+
+Source: https://docs.sapiom.ai/guides/schedule
+
+A schedule is a persisted cloud trigger attached to an already-deployed agent by its slug. Each occurrence starts an independent production run with the input object stored on the schedule.
+
+Manage schedules through **Sapiom MCP**, either from an Agent Studio coding session or from Claude Code or Codex with Sapiom MCP connected. Authenticate the MCP connection before using its authoring tools; schedule operations additionally read and change tenant-scoped cloud state.
+
+Before scheduling, [deploy the agent](/guides/deploy) and confirm it has a \`ready\` build. Sapiom can store a trigger independently of a build, but a fire cannot start the agent without a runnable build.
+
+> **Caution: Runtime input is not a trigger.**
+> Passing a field named \`schedule\` to an agent run does not create a schedule. Some gallery agents carry that field into their output as a cadence label. Create the persisted trigger with one of the operations on this page.
+
+## Preview recurring times
+
+Preview validates a five-field cron expression and IANA timezone and projects upcoming occurrences. It creates no trigger, but it still requires authentication because it reads the tenant-scoped scheduling service.
+
+Ask Claude Code or Codex to preview this cadence before creating it:
+
+> Using Sapiom MCP, preview the next three occurrences of \`0 9 * * 1-5\` in \`America/Los_Angeles\`.
+
+For an exact tool request, \`sapiom_dev_agents_cron_preview\` accepts:
+
+\`\`\`json
+{
+  "cron": "0 9 * * 1-5",
+  "timezone": "America/Los_Angeles",
+  "count": 3
+}
+\`\`\`
+
+The response echoes the cron and timezone and returns \`occurrences\` as ISO 8601 instants in UTC. Omitted timezone defaults to UTC, and omitted count defaults to five. Preview does not apply a schedule's optional bounds or jitter.
+
+## Create a recurring schedule
+
+Ask your coding agent to create a recurring schedule for the deployed agent. For example:
+
+> Schedule the deployed \`daily-research-brief\` agent for 9:00 AM every weekday in \`America/Los_Angeles\`. Pass \`{ "topic": "agent reliability" }\`, skip occurrences missed during downtime, and show me the next fire time before you finish.
+
+The corresponding \`sapiom_dev_agents_schedule\` input is:
+
+\`\`\`json
+{
+  "definition": "daily-research-brief",
+  "kind": "schedule_cron",
+  "cron": "0 9 * * 1-5",
+  "timezone": "America/Los_Angeles",
+  "input": { "topic": "agent reliability" },
+  "policy": { "catchupPolicy": "skip", "overlapPolicy": "allow" }
+}
+\`\`\`
+
+The cron is evaluated in \`timezone\`. Optional \`startAt\` and \`endAt\` ISO timestamps bound the recurring window. \`catchupPolicy: "skip"\` drops missed slots after downtime; \`"all"\` replays them one at a time until caught up. \`jitterMs\` can spread a fleet's starts by a deterministic offset of up to one hour. Overlapping runs are currently allowed, so the only accepted \`overlapPolicy\` is \`"allow"\`.
+
+Schedule timing is best effort. A due occurrence starts at or shortly after its recorded time; do not use it as a hard real-time clock.
+
+## Create a one-off schedule
+
+A one-off stores one future fire and completes after it starts that run:
+
+\`\`\`json
+{
+  "definition": "daily-research-brief",
+  "kind": "schedule_once",
+  "at": "<future-ISO-8601-timestamp>",
+  "input": { "topic": "launch readiness" }
+}
+\`\`\`
+
+Ask your coding agent to replace the placeholder and create a one-off schedule with that object. \`at\` must be a future ISO 8601 timestamp; the schedule input must be a JSON object accepted by the agent's entry schema when the run starts.
+
+## Inspect schedule state and fires
+
+1. **List an agent's schedules**
+
+   Call \`sapiom_dev_agents_schedule_inspect\` with the definition slug:
+
+   \`\`\`json
+   { "definition": "daily-research-brief" }
+   \`\`\`
+
+   Each summary includes \`id\`, \`kind\`, \`status\`, \`cron\`, \`timezone\`, and \`nextFireAt\`.
+
+2. **Inspect one schedule**
+
+   \`\`\`json
+   { "scheduleId": "<schedule-id>" }
+   \`\`\`
+
+   Detail adds the stored input, bounds, policy, and \`recentFires\`. Each fire record has its scheduled time, state, \`firedAt\` terminalization time, and the production \`executionId\` it started (or an error when it could not start one). A cancelled pending occurrence becomes \`skipped\`, so it has a \`firedAt\` timestamp but no execution ID.
+
+3. **Follow a fired run**
+
+   Copy a non-null \`recentFires[].executionId\` into \`sapiom_dev_agents_inspect\`, or open that execution under the agent's **Runs** page. The Agents dashboard observes scheduled executions like other production runs; it does not provide a schedule editor or schedule list.
+
+## Cancel future occurrences
+
+Call \`sapiom_dev_agents_schedule_cancel\`:
+
+\`\`\`json
+{ "scheduleId": "<schedule-id>" }
+\`\`\`
+
+Cancellation returns status \`disabled\`, marks a pending future occurrence \`skipped\`, and prevents a recurring schedule from re-arming. It does not cancel a run that already started. Cancellation is final; create a new schedule to reschedule.
+
+## Do not confuse schedules with delayed child dispatch
+
+| Operation                                               | Ownership                     | What happens later                     | Parent behavior                                                                           |
+| ------------------------------------------------------- | ----------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Schedule created through Sapiom MCP                     | Post-deployment cloud trigger | Starts an independent run of the agent | No parent is linked or resumed                                                            |
+| \`ctx.sapiom.agents.launch({ at })\` inside an agent step | Runtime parent/child dispatch | Starts one linked child run at \`at\`    | Returns a pause-only handle; the child's terminal result automatically resumes the parent |
+
+Delayed child dispatch stores parent lineage and an internal \`trigger-<id>\` correlation. Use its returned handle with \`pauseUntilSignal\`; do not recreate that correlation with an independent schedule.
+
+- [Use signals](https://docs.sapiom.ai/guides/use-signals): Declare a durable pause and deliver a human or webhook payload to the matching waiter.
+- [Inspect a run](https://docs.sapiom.ai/guides/inspect): Read the production execution started by a schedule fire.`,
+  },
+  {
+    slug: "troubleshooting-agent-studio",
+    title: "Troubleshoot Agent Studio",
+    body: `# Troubleshoot Agent Studio
+
+Source: https://docs.sapiom.ai/troubleshooting/agent-studio
+
+## Command-line launch
+
+### Node or a coding agent is missing
+
+The \`npx\` host exits when Node is older than 20 or no supported coding-agent executable is available. Install or update Node first, then install Claude Code or Codex:
+
+\`\`\`bash
+npm i -g @anthropic-ai/claude-code
+\`\`\`
+
+\`\`\`bash
+npm i -g @openai/codex
+\`\`\`
+
+Open a new terminal and verify Node plus at least one coding-agent command before retrying Studio:
+
+\`\`\`bash
+node --version
+claude --version
+codex --version
+\`\`\`
+
+If the selected command works in one shell but Studio reports “not found on PATH,” launch \`npx\` from that same shell and inspect the shell's \`PATH\`. A desktop app does not inherit every interactive-shell customization; when neither client is available, its first-launch setup tries a per-user Claude Code installation and re-runs the environment check.
+
+### Port 4100 is already in use
+
+Choose another numeric port:
+
+\`\`\`bash
+npx @sapiom/agent-studio@latest --port 4200
+\`\`\`
+
+The browser URL and boot token are specific to that launch. Do not reuse a URL printed by an earlier Studio process.
+
+### The browser did not open
+
+An operating-system browser-opener failure no longer terminates an otherwise healthy Studio server. Read the startup banner and open the complete URL it printed on the same machine. It has this shape:
+
+\`\`\`text
+http://localhost:4100/?token=<per-boot-token>
+\`\`\`
+
+Copy the whole URL. Opening bare \`http://localhost:4100\` omits the token and returns an unauthorized response. To make the manual flow intentional on the next launch, add \`--no-open\`.
+
+### Studio exits with a server-start error
+
+Read the final error after the doctor and consent output. Common causes are a port collision, an unreadable launch directory, or an unwritable state root. Retry with one known existing project directory and, when isolating state, one writable scratch directory:
+
+\`\`\`bash
+npx @sapiom/agent-studio@latest /absolute/path/to/project --state-root /absolute/path/to/scratch-state --no-telemetry --no-open
+\`\`\`
+
+\`--dev\` is a repository diagnostic that tolerates server-start failure after checking the pre-server flow; it is not a remedy for normal product use.
+
+## Desktop first launch
+
+The desktop host supplies its own Node/npm runtime. It accepts an installed Claude Code or Codex executable. When neither is found, it installs Claude Code into the app's per-user npm prefix, checks again, and falls back to a retryable setup screen.
+
+If automatic setup reports an npm failure:
+
+1. Keep the setup window open and read its final error detail.
+2. Confirm the machine has network access to npm.
+3. If needed, install Claude Code manually with \`npm i -g @anthropic-ai/claude-code\` in a terminal.
+4. Choose **Retry** in the setup window so the desktop host re-runs its environment check.
+   On macOS, if the operating system blocks the app itself, open **System Settings → Privacy & Security**, inspect the named Sapiom app warning, and allow the app only if it is the release you intended to install. Current release signing and platform availability are recorded on [Install Agent Studio](/agent-studio/install).
+
+## A session is running but not ready
+
+**Running** means the terminal process exists. **Ready** means Studio has observed a coding-agent state where programmatic input is safe. A new session can stay running but not ready while the visible terminal is asking you to:
+
+- trust the working directory;
+- authenticate the coding agent;
+- complete its first-run flow; or
+- dismiss another blocking prompt.
+
+Answer the prompt in the terminal. Studio actions that type into the coding agent remain disabled until readiness is detected; direct **Local Run**, **Deploy**, and **Prod Run** do not depend on coding-agent readiness. All require Studio's Sapiom authentication, while the two cloud actions have additional deployment and hosted-state gates.
+
+## Sapiom sign-in
+
+### Studio is waiting for Sapiom sign-in
+
+Use **Connect account** and complete browser sign-in before using Studio or starting an MCP-backed coding-agent session. A cached credential is reused automatically; \`--login\` only opens browser sign-in when the cache is absent. Signed-out agent authoring is not a supported state.
+
+If browser sign-in does not finish, return to Studio and retry **Connect account**. Do not substitute the local boot token for a Sapiom API key. The local token protects one loopback Studio process; the cached Sapiom credential authorizes Studio, Sapiom MCP, and organization-owned cloud actions.
+
+### “Unauthorized” on Deploy or Prod Run
+
+Connect the Sapiom account and retry the action. If Studio still shows the wrong account, choose **Disconnect**, connect again, and confirm the organization name in the menu. Local Run still requires that Studio authentication, although its step execution and capability stubs stay local.
+
+See [Configure authentication and runtime inputs](/guides/configure-authentication-and-runtime-inputs) for action-by-action requirements.
+
+## Template gallery is degraded
+
+Studio can display bundled starter metadata when the live gallery cannot load and states why:
+
+- signed out: **“Sign in to Sapiom to browse the template gallery. The bundled starters below remain available.”**
+- gallery unreachable: **“The template gallery is unreachable right now. The bundled starters below remain available.”**
+
+Connecting an account is required before using either source. For an unreachable gallery, verify network access and retry the Templates destination later. A bundled starter is local source, but its MCP-backed setup still requires Sapiom authentication and can need npm access to install project dependencies; “bundled” does not mean the entire setup is network-free.
+
+## History, Resume, and Continue here
+
+### Expected history is missing
+
+History is a union of Studio's session registry and the selected coding agent's history store for each exact working directory. Check these boundaries:
+
+1. Open History from the same directory where the conversation ran. Symlinked launch paths are resolved as well as checked in their original form.
+2. A session that ended before its first prompt may have a Studio row but no nonempty native conversation.
+3. Studio's compact record and the coding agent's native history are independent; deleting either removes only the continuation mode it supports.
+4. If one history source is unreadable, Studio logs that source failure and continues with its registry and any other healthy source. It cannot show a transcript that the owner no longer exposes.
+
+Large Claude Code transcripts are read through bounded head/tail windows. Codex rollout metadata is read through bounded head windows. Studio's own indexed turn count can still populate a registry row; an absent count does not by itself mean the conversation is empty.
+
+### Resume shows “Checking…”
+
+This is the verification state, not a disabled Resume promise. Studio does not offer **Resume** until it confirms that the original coding agent still has a nonempty conversation for the recorded ID and directory. Wait for the check to settle:
+
+- **Resume** uses the coding agent's native conversation when verification succeeds.
+- **Continue here** appears when the coding agent cannot resume but Studio has a recorded reconstruction.
+- a disabled Resume plus an explanation appears when neither source can continue the session.
+
+If a native Resume fails after verification, re-open History to refresh the check. A transcript can be removed or become unreadable between verification and launch.
+
+### Continue here lacks old context
+
+Portable continuation is deliberately bounded. It opens a new conversation with the same coding agent, injects a recent-turn briefing, and tells the new session to inspect the repository. It does not restore model context, terminal state, or unlimited scrollback.
+
+For a Studio-tracked source in the same directory, the recorded agent-project binding carries forward. A transcript-only row has no Studio binding to preserve. Confirm the active tab and bound agent before a direct action in either case.
+
+If Studio cannot assemble any record, it does not label the fresh session as a continuation. Background summaries can improve the briefing, but they are optional and ephemeral; turning them off never disables the recent-turn fallback.
+
+### Resume reports a context-file error
+
+Before spawning the coding agent, Studio validates \`.sapiom/harness-context.json\`. It keeps a valid current file, migrates the valid legacy keys, and atomically reconstructs a missing, malformed, or mixed-schema file. Unlike ordinary best-effort context refreshes, this resume preparation fails closed so the coding agent cannot launch with a prompt that disagrees with the file.
+
+Check that the session directory and its \`.sapiom/\` directory are writable, that the path is a regular file rather than a directory or symlink to an unexpected target, and that no other process is locking replacement. Retry Resume after correcting the filesystem issue.
+
+## Canvas and Steps
+
+### Nothing generated yet
+
+Confirm all three facts:
+
+- a live session is selected;
+- that session is bound to the intended agent project; and
+- the project dependencies are installed so Studio can extract the typed agent definition.
+
+The Canvas is a deterministic projection and refreshes on binding, session start, and relevant code changes. Waiting for or prompting a coding agent is not required merely to render valid source.
+
+### Render failed
+
+The error panel is the honest result of graph extraction. Open **Details** for the recorded reason. **Retry** invokes the deterministic **Visualize** render again without asking a coding agent; use it after installing dependencies or fixing the type/definition error. **Ask coding agent to fix** sends the failure reason into the active Claude Code or Codex session and therefore requires that session to be ready.
+
+An automatic refresh preserves an existing render when a new extraction fails, so a transient clone/install state does not erase the last usable board. An explicit Retry does not preserve stale success: if extraction still fails, it writes and shows the error panel you requested.
+
+If the render file cannot be written, check write access to \`<session-directory>/.sapiom/canvas/renders/\`. Studio logs the write failure and cannot refresh the iframe until it can replace that file.
+
+### Canvas looks stale after a code change
+
+Verify the session binding first. A session's Canvas follows its bound agent, not whichever rail row was most recently focused. Then choose **Retry** to invalidate the extraction cache and render again. If the iframe loading skeleton remains after a bad or legacy document, Studio removes the opaque overlay after four seconds so the underlying board and its error state stay usable.
+
+> **Note: Custom Canvas fallback.**
+> Deterministic agent renders live under \`.sapiom/canvas/renders/\`. The sibling \`.sapiom/canvas/index.html\` is the unbound placeholder and optional custom Canvas. Studio seeds it only when missing and does not overwrite an existing custom file during deterministic rendering.
+
+- [Agent Studio reference](https://docs.sapiom.ai/reference/agent-studio): Check exact flags, paths, retention, and keyboard shortcuts.
+- [Build, deploy, and run failures](https://docs.sapiom.ai/troubleshooting/build-deploy-run): Diagnose agent checks, local execution, cloud builds, production starts, and inspection.`,
+  },
+  {
+    slug: "troubleshooting-build-deploy-run",
+    title: "Troubleshoot build, deploy, and run",
+    body: `# Troubleshoot build, deploy, and run
+
+Source: https://docs.sapiom.ai/troubleshooting/build-deploy-run
+
+Start at the earliest failing boundary. A clean Local Run cannot repair a cloud build, and a new deploy cannot explain a local type error. Preserve the exact project directory, build ID, or execution ID returned at each transition.
+
+\`\`\`text
+discover → prepare → check → Local Run → link/build → Prod Run → inspect
+\`\`\`
+
+## Agent project is not discovered
+
+Studio recognizes an agent project by a \`sapiom.json\` file directly inside its directory. The marker must parse as a top-level JSON object; an array, primitive, malformed file, or nested marker at the wrong scan depth is not a valid project.
+
+Check the path you opened:
+
+- **Open this agent** expects the selected folder itself to contain \`sapiom.json\`.
+- **Find agents in this folder** scans the root plus three nested directory levels, skips \`node_modules\`, \`.git\`, \`.sapiom\`, \`dist\`, \`build\`, and \`.next\`, and does not follow symbolic links.
+- \`index.ts\`, \`package.json\`, and \`sapiom.json\` must belong to the same project root used for checks and deploys.
+
+If a scaffold completed but Studio still shows a plain folder, confirm that the coding agent called \`sapiom_dev_agents_scaffold\` in the intended destination rather than a child or sibling directory. Re-scan that exact parent after the marker exists.
+
+## Install, typecheck, or check fails
+
+1. **Confirm project setup.** Scaffold attempts dependency installation and reports \`dependenciesInstalled\`. If it is \`false\`, ask the coding agent to repair package setup in the exact project directory before retrying the full check. Gallery clones likewise need their checked-in package-manager metadata prepared before validation.
+
+2. **Fix installed-API errors.** Import authoring primitives from \`@sapiom/agent\`, typed capability handles from \`@sapiom/tools\`, and Zod from \`zod/v4\`. Do not substitute remembered methods for the installed TypeScript surface.
+
+3. **Run the full check.** Ask your coding agent to check the absolute project directory. The Sapiom MCP check typechecks, bundles and imports \`index.ts\`, finds exactly one exported agent definition, derives its manifest, and validates the graph.
+
+4. **Read the failing layer.** A type error is different from a bundle/import error, missing or multiple definitions, a nonserializable manifest, or an invalid transition. Fix the first concrete error, then rerun both typecheck and check.
+   The check imports bundled author code on your machine. Top-level network calls, file writes, environment reads, or process launches can therefore fail or produce side effects before any step runs. Move effects into step bodies unless import-time execution is intentional.
+
+### Canvas works but check fails
+
+This is possible. Deterministic **Visualize** favors a fast graph extraction and can skip the full TypeScript gate. Treat \`npm run typecheck\` plus \`sapiom_dev_agents_check\` as the authoring gate; a rendered diagram is not build evidence.
+
+## Local Run fails
+
+### Studio button rejects the input
+
+The current **Local Run** button sends \`{}\`. If the entry schema has required fields without defaults, use \`sapiom_dev_agents_run_local\` with explicit input or add an intentional schema default; do not weaken a genuinely required production contract only to satisfy the button.
+
+### The trace says \`failed\`
+
+A Local Run failure is an execution outcome, not necessarily an HTTP or child-process crash. Read, in order:
+
+1. the run-level \`error\`;
+2. every step attempt's parsed input, output/error, and logs;
+3. captured Sapiom calls; and
+4. \`unusedStubs\` and \`stubWarnings\`.
+
+Local and cloud execution default to three total attempts for one step, including the first. A \`retry()\` directive can therefore produce several trace rows before the terminal failure. Raising the local \`maxAttemptsPerStep\` is a test override only; it does not change the cloud ceiling.
+
+### A capability result is unexpected
+
+Local Run never calls the live Sapiom capability service. Resolution precedence is:
+
+\`\`\`text
+explicit stubs argument → .sapiom-dev/stubs.json → typed built-in defaults
+\`\`\`
+
+An explicit object replaces the project file rather than merging with it. Scope an override by the step name that makes the call, then the exact capability or singular-handle method path. Treat nonempty \`unusedStubs\` or \`stubWarnings\` as a failed test even if the agent reached \`terminate(...)\`.
+
+### Local Run caused a real side effect
+
+Only \`ctx.sapiom.*\` is replaced by stubs. Your step code runs as an ordinary child process on your machine and inherits the launch environment. Direct \`fetch\`, filesystem access, subprocesses, database SDKs, and third-party clients are real. It does not download cloud definition secrets. Remove or isolate the author-code effect before rerunning.
+
+Agent Studio and Sapiom MCP require Sapiom authentication before they can start Local Run. After sign-in, the run itself makes no real Sapiom capability request and creates no Sapiom capability spend. If Local Run reports an authentication failure, reconnect the Sapiom account and retry.
+
+## Deploy is disabled
+
+Studio provides the disabled reason on the action:
+
+| Reason                             | Remedy                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Connect your account first**     | Connect a Sapiom account from the account menu, then retry.                                                  |
+| No bound agent/project             | Select the correct live tab and bind the intended discovered project.                                        |
+| An earlier action is still pending | Wait for the one in-flight deploy to settle; Studio reuses the same in-flight operation for repeated clicks. |
+
+Coding-agent readiness does not gate direct Deploy. Trust or authentication prompts inside Claude Code or Codex matter for prompt-driven authoring, not for this direct product action.
+
+## Deploy fails
+
+Before retrying, verify the checked project has:
+
+- valid readable \`sapiom.json\` metadata;
+- a Git repository with at least one commit;
+- installed dependencies sufficient to bundle \`index.ts\` and its local imports; and
+- a connected Sapiom account with access to the target organization.
+
+### “Couldn't create the agent”
+
+The failure occurred during first-link resolution or creation, before the cloud build phase. Fix the returned authentication, name, network, or service error and retry Deploy. If the link succeeded but writing \`definitionId\` back to \`sapiom.json\` failed, Studio reports a warning; correct local file permissions so later tools can reuse the identity instead of resolving it again.
+
+### “Deploy failed”
+
+The local project linked and the cloud build returned a terminal error. Read both the message and hint. Re-run local typecheck/check after correcting source or dependency declarations, then deploy again. A failed first build can still leave a valid \`definitionId\`; that means **Linked**, not runnable.
+
+Deploy streams lifecycle lines over one HTTP response. The response can begin successfully and still end with \`{ "phase": "error", ... }\`. The terminal NDJSON line, not HTTP status alone, determines the build outcome. Studio persists the last failure after its toast is dismissed and labels the lifecycle **Deploy failed** until a later deploy succeeds.
+
+### Build wait timed out or was superseded
+
+- A local wait timeout does not prove the cloud build disappeared. Preserve \`buildRunId\` and inspect that build rather than immediately creating a duplicate.
+- **Superseded** means a newer deploy replaced this build while it was in flight; follow the newer build.
+- **Cancelled** is terminal, but Agent Studio and Sapiom MCP do not provide a public build-cancel action.
+
+Every successful redeploy creates a new immutable build. It does not rewrite the build pinned to an execution already started.
+
+## Prod Run is disabled or will not start
+
+| Gate           | Evidence and remedy                                                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication | Connect the Sapiom account. The local boot token cannot authorize a cloud run.                                                                     |
+| Project link   | A \`definitionId\` must be present for the intended project. Deploy handles first link when needed.                                                  |
+| Ready build    | Only an active cloud build whose projected status is \`ready\` enables **Prod Run**. **Linked**, **Building**, or **Deploy failed** is not runnable. |
+| Input          | Studio sends \`{}\`. Supply required custom input through \`sapiom_dev_agents_run\` or dashboard **Run once**, or define intentional defaults.         |
+
+The production-start response \`{ "executionId": "..." }\` proves only that the execution was enqueued. It is not agent output. Preserve the ID and inspect the run to terminal state or an external-signal pause.
+
+If start itself returns an error, use its service-provided reason before deploying again. A new deploy helps only when the problem is the selected build; it does not fix authorization, invalid effective input, quota, or a service outage.
+
+## Studio run inspection stops updating
+
+Studio polls the run-state endpoint every two seconds, never overlaps requests for the same poller, and resets its failure count after a successful response. One or two transient failures are retried without discarding the last stored snapshot. After three consecutive failures, Studio stops that poller and shows:
+
+> Run inspection is temporarily unavailable. Open the run in the Sapiom dashboard or start a new Prod Run to retry.
+
+For an already-started execution, open the dashboard using the same definition ID and execution ID. Starting a new Prod Run creates another live, potentially metered execution; it is not a read-only retry of the existing one.
+
+The dashboard route has this shape:
+
+\`\`\`text
+https://app.sapiom.ai/agents/<definition-id>/runs/<execution-id>
+\`\`\`
+
+If you used Claude Code or Codex, ask it to inspect the execution and wait for a final state. Sapiom MCP's bounded wait can expire; ask it to continue rather than wrapping the request in an unbounded shell polling loop.
+
+## Production run fails
+
+Use the inspector to separate these identities:
+
+- \`buildRunId\`: the immutable artifact this execution pinned;
+- execution \`version\`: an optimistic-lock counter, not a deploy version;
+- step attempt: the exact parsed input, output/error, logs, capability events, shared state, and directive for that try; and
+- run-grain charge: fetched separately by the dashboard, not attributed to one step.
+
+Reproduce the failing step locally only after capturing its effective input and replacing each live Sapiom call with a deliberate stub. A passing stubbed reproduction still does not prove provider availability, production secrets, or cloud runtime behavior.
+
+> **Caution: No generic operate controls.**
+> Do not look for general pause, resume, cancel, or retry buttons for an arbitrary production run. A run deliberately waiting for a human/webhook signal can expose its specific **Resume run** form; dispatched-capability callbacks resume automatically. Neither is a generic run-control surface.
+
+- [Build](https://docs.sapiom.ai/guides/build): Review the typed definition, full check, graph rules, and stable result fields.
+- [Test locally](https://docs.sapiom.ai/guides/test-locally): Control stubs and interpret local trace evidence before crossing the cloud boundary.
+- [Deploy](https://docs.sapiom.ai/guides/deploy): Understand linking, synthesized source, build states, and immutable build identity.
+- [Inspect](https://docs.sapiom.ai/guides/inspect): Read a cloud execution's pinned build, evidence, lineage, and run-grain charge.`,
+  },
+  {
+    slug: "troubleshooting-sapiom-mcp",
+    title: "Troubleshoot Sapiom MCP",
+    body: `# Troubleshoot Sapiom MCP
+
+Source: https://docs.sapiom.ai/troubleshooting/sapiom-mcp
+
+Start at the earliest boundary that failed. Preserve the exact project directory and any definition, build, execution, or schedule ID already returned; retrying a later operation can create duplicate hosted work without fixing the original problem.
+
+\`\`\`text
+connection → authentication → project → check → Local Run → link → deploy → run → inspect
+\`\`\`
+
+## Tools are missing or disconnected
+
+Inspect the coding-agent connection named \`sapiom-project\`. It should be enabled and start local package \`@sapiom/mcp\` through \`npx\`. If the connection was added after the coding-agent session started, restart that session so it refreshes \`tools/list\`.
+
+The first uncached start needs Node.js 18 or newer and npm registry access. If the process exits immediately, run the coding-agent client's own MCP inspection command and read the process error before changing project files. Follow the exact [connection commands](/guides/connect-claude-code-with-mcp); the alias is a client label and tool approvals still use names such as \`sapiom_dev_agents_check\`.
+
+## Authentication does not complete
+
+Ask the coding agent to call \`sapiom_status\` first. It reports whether the process's selected environment has a cached credential and, when authenticated, the organization and tenant. The current result does not echo the environment name; read that from the MCP launch configuration when you need to distinguish environments.
+
+- If signed out, call \`sapiom_authenticate\`, complete the browser flow, then call status again.
+- If the browser opened but the tool timed out, finish or restart sign-in rather than assuming a late browser success reached the MCP process.
+- If status names the wrong organization, or the launch configuration selects the wrong environment, sign out with \`sapiom_logout\`, select the intended environment, and authenticate again.
+- If a project tool reports \`NOT_AUTHENTICATED\`, authenticate in the same machine and environment where that MCP process is running. Credentials on another computer or isolated coding-agent environment are not visible here.
+
+Sapiom authentication is required before every supported project action, including scaffold, check, Local Run, and local preview configuration.
+
+## The wrong project is used
+
+Most project tools default \`dir\` to the MCP process's current working directory. Ask the coding agent to use the intended absolute directory when several projects or nested checkouts are open.
+
+A Sapiom agent project has \`index.ts\`, \`package.json\`, and \`sapiom.json\` at the same project root. A missing, malformed, or misplaced \`sapiom.json\` prevents project discovery and hosted lifecycle operations. Do not copy a \`definitionId\` from another checkout to make an error disappear; link the intended project deliberately.
+
+For scaffold and clone, the destination must be new or empty except for Agent Studio's reserved \`.sapiom\` directory. \`DIR_NOT_EMPTY\` protects existing work from being overwritten.
+
+## Scaffold succeeded but check cannot resolve packages
+
+\`sapiom_dev_agents_scaffold\` attempts dependency installation. Read its \`dependenciesInstalled\` result:
+
+- \`true\` means the best-effort install completed.
+- \`false\` means project creation still succeeded, but npm was missing, offline, timed out, or returned an error.
+
+Ask the coding agent to diagnose and repair dependency installation in that project, then rerun the full check. Do not discard and recreate a correct scaffold merely because the soft install step failed.
+
+Gallery and fork clones materialize source but do not promise an installed dependency tree. Let the coding agent read the cloned \`AGENTS.md\` and package manager metadata, prepare the checkout, and verify it before editing.
+
+## Check fails or has unexpected side effects
+
+\`sapiom_dev_agents_check\` typechecks, bundles, imports \`index.ts\`, finds one agent definition, derives its manifest, and validates the graph. Classify the first error before retrying:
+
+| Layer                 | Typical evidence                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| Dependencies or types | Missing package, export, or TypeScript diagnostic.                                             |
+| Bundle or import      | Module resolution, syntax, or top-level runtime error.                                         |
+| Definition            | Zero or multiple exported agents, or invalid schema/manifest data.                             |
+| Graph                 | Missing transition target, invalid terminal/failure declaration, or other graph warning/error. |
+
+Importing the definition executes top-level author code locally. Move accidental network calls, file writes, subprocesses, and environment-dependent initialization into step bodies before checking again.
+
+## Local Run returns the wrong result
+
+Read the domain result, not only the MCP transport:
+
+1. Check run-level \`outcome\`, \`output\`, and \`error\`.
+2. Inspect every step attempt and the effective parsed input.
+3. Check captured Sapiom calls when present.
+4. Require both \`unusedStubs\` and \`stubWarnings\` to be empty.
+
+An explicit \`stubs\` argument replaces \`.sapiom-dev/stubs.json\`; it does not merge with the file. Stub by the step that makes the call and the exact capability path. A completed run with a nonempty diagnostic list is not a clean test.
+
+> **Caution: Author code remains real.**
+> Local Run stubs \`ctx.sapiom.*\`, not direct \`fetch\`, filesystem operations, child processes, environment reads, database libraries, or third-party SDKs. Those effects and charges can still occur on your machine.
+
+Use the deeper [Local Run guide](/guides/test-locally) for stub precedence, retries, pauses, and the 1,000-advance guard.
+
+## Link resolves the wrong identity
+
+By default, \`sapiom_dev_agents_link\` reads the name from the checked \`defineAgent\` export. Use an explicit name only when that difference is intentional. With \`create: true\`, link can create a hosted agent; without it, a missing name is an error rather than implicit creation.
+
+After success, inspect the same project's \`sapiom.json\` for the returned \`definitionId\`. If hosted resolution succeeded but the local write failed, fix file permissions before deploy so later tools do not lose the identity.
+
+## Deploy fails or the wait ends
+
+Before deploy, confirm the project is linked, checks cleanly, and belongs to a Git repository with at least one commit. Deploy packages the current working tree, including reachable uncommitted source; it does not push Git HEAD as the release identity.
+
+Preserve \`buildRunId\` from every started deploy:
+
+- A terminal failed build needs its build message and hint.
+- A local wait timeout does not prove the build stopped. Call \`sapiom_dev_agents_inspect\` with \`buildRunId\` and the linked project directory.
+- A newer deploy can supersede an earlier build. Follow the newer identity instead of trying to cancel through an unavailable control.
+
+The full [build, deploy, and run troubleshooting guide](/troubleshooting/build-deploy-run) separates local bundle failures, link failures, terminal builds, and production readiness.
+
+## Production start has no final output
+
+This is expected. \`sapiom_dev_agents_run\` returns an \`executionId\` and \`webappUrl\` after enqueueing a run. Call \`sapiom_dev_agents_inspect\` with that execution ID to read its state.
+
+Use \`wait: true\` for bounded polling. A wait lasts 45 seconds by default and is capped at 55 seconds. If the response says \`waiting: true\`, call inspect again with \`wait: true\`; do not wrap the tool in an unbounded sleep loop.
+
+## Inspect omits a step's input, output, or logs
+
+Execution inspection is compact by default. The step summary includes \`has\` flags and \`sizes\` for omitted heavy evidence. Select one step by name or order and request only the necessary fields with \`include\`, such as \`input\`, \`error\`, or \`logs\`. Add \`attempt\` when a retried step has several attempts.
+
+Each expanded field has a character budget. A truncation marker points to the returned \`webappUrl\`, where the full recorded value can be inspected. See [Inspect](/guides/inspect) for the exact field set and evidence boundaries.
+
+## A schedule is missing or fires incorrectly
+
+Use \`sapiom_dev_agents_cron_preview\` with the intended IANA timezone before creating a recurring schedule. It validates and calculates occurrences without persisting anything.
+
+- \`sapiom_dev_agents_schedule\` needs a deployed agent slug and fields consistent with \`kind\`.
+- \`sapiom_dev_agents_schedule_inspect\` needs either \`scheduleId\` for one schedule or \`definition\` for a list.
+- Recent fire entries can contain an \`executionId\`; inspect that production run to debug a failed occurrence.
+- \`sapiom_dev_agents_schedule_cancel\` disables future fires only. It does not cancel a run already started.
+
+## A released web-app preview tool appears
+
+The \`0.14.0\` inventory contains three preview tools, but their direct hosted sequence is not a supported public workflow while preview execution bypasses the agent-run capability boundary. Do not invoke or retry that sequence based on its presence in an approval prompt.
+
+If an older session already called \`sapiom_dev_sandbox_preview\`, preserve its result for diagnosis. It can successfully return a preview result whose domain \`status\` is \`"failed"\`, so returned build/start logs remain evidence even when the MCP transport succeeded. Do not interpret that response contract as approval for continued direct use.
+
+## A result looks like JSON inside text
+
+That is the released MCP result contract. Most tools put formatted JSON in the first text content item; account and feedback tools can return prose. Operational errors normally set the MCP error flag and encode \`{ "error": { "code", "message", "hint" } }\` in that text.
+
+Do not confuse transport success with domain success. Local Run can return \`outcome: "failed"\`, and preview can return \`status: "failed"\`, without a malformed MCP response. The [tool reference](/reference/sapiom-mcp-tools) lists the expected result for each exact tool.
+
+- [Sapiom MCP overview](https://docs.sapiom.ai/mcp/overview): Return to the task map, execution boundaries, and supported lifecycle.
+- [Exact tool reference](https://docs.sapiom.ai/reference/sapiom-mcp-tools): Check released inputs, constraints, reviewed effects, returns, and failures.`,
   },
 ];

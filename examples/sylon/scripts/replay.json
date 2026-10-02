@@ -4,14 +4,14 @@
   "steps": [
     {
       "id": "bug",
-      "text": "Our webhook deliveries started failing this morning. Every POST to our endpoint is rejected with a signature mismatch, and nothing changed on our side.",
-      "expect": "intake opens a bug issue and posts its card in triage; copilot posts a draft card citing the webhooks kb page",
+      "text": "Our deploys started failing this morning. Deploy ends with \"Deploy failed\" and the agent never leaves Linked, and nothing changed on our side.",
+      "expect": "intake opens a bug issue and posts its card in triage; copilot posts a draft card citing the troubleshooting-build-deploy-run kb page",
       "pauseSeconds": 40
     },
     {
       "id": "follow-up",
       "threadOf": "bug",
-      "text": "More detail: it is the order.created events, and clicking Redeliver gives the same mismatch.",
+      "text": "More detail: it is the first deploy of this project, and clicking Deploy again gives the same error.",
       "expect": "intake links the reply to the bug issue (no new issue); copilot supersedes its draft with a new one",
       "pauseSeconds": 40
     },
@@ -23,8 +23,8 @@
     },
     {
       "id": "question",
-      "text": "Quick question: how long does a data export download link stay valid? The one we got last week no longer works.",
-      "expect": "intake opens a question issue; copilot drafts an answer from the exports kb page (links expire after 7 days)",
+      "text": "Quick question: if our scheduled agent misses a run during downtime, does Sapiom run it later or skip it?",
+      "expect": "intake opens a question issue; copilot drafts an answer from the schedule kb page (catchupPolicy skip drops missed slots, all replays them)",
       "pauseSeconds": 40
     },
     {

@@ -33,7 +33,7 @@ export async function seedLocalFixtures(db: Db): Promise<void> {
   if (!account) return;
   await db.query(
     `insert into issues (id, account_id, source, status, category, priority, title, customer_channel, customer_root_ts, triage_root_ts)
-     values ($1, $2, 'slack', 'new', 'question', 'normal', 'Webhook deliveries failing', $3, $4, $5)`,
+     values ($1, $2, 'slack', 'new', 'question', 'normal', 'Deploys failing', $3, $4, $5)`,
     [
       FIXTURE_ISSUE,
       account.id,
@@ -50,7 +50,7 @@ export async function seedLocalFixtures(db: Db): Promise<void> {
       FIXTURE_ISSUE,
       CUSTOMER_CHANNEL,
       CUSTOMER_ROOT_TS,
-      "Our webhook deliveries started failing this morning with signature errors. Did something change?",
+      "Our deploys started failing this morning and the agent never leaves Linked. Did something change?",
     ],
   );
   await db.query(
@@ -60,8 +60,8 @@ export async function seedLocalFixtures(db: Db): Promise<void> {
       FIXTURE_DRAFT,
       FIXTURE_ISSUE,
       TRIAGE_CHANNEL,
-      "Nothing changed on our side. Signature errors usually mean the body was re-serialized before verification; verify against the raw bytes.",
-      JSON.stringify(["webhooks"]),
+      "Nothing changed on our side. A failed first build leaves the agent Linked, not runnable; read the Deploy failed message and hint, fix the source, and deploy again.",
+      JSON.stringify(["troubleshooting-build-deploy-run"]),
     ],
   );
   await db.query(
