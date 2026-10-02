@@ -353,3 +353,25 @@ test("a project with no agents opens the new-agent screen from its header (D36)"
   await expect(page.getByTestId("session-project-chip")).toContainText("scratch");
   await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
 });
+
+test("a drawn map opens in full view from the project header and Escape unwinds it", async ({
+  page,
+}) => {
+  await page.goto("/?seed=0&mockStudioProjects=present&mockAgentMapGolden=1");
+  await page.getByTestId("project-select-acme-app").click();
+  await expect(page.getByTestId("agent-map-live")).toBeVisible();
+  await expect(page.getByTestId("canvas-expand")).toHaveCount(1);
+  await page.getByTestId("canvas-expand").click();
+  await expect(page.getByTestId("agent-map-frame")).toHaveClass(/is-expanded/);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("agent-map-frame")).not.toHaveClass(/is-expanded/);
+  await page.getByTestId("canvas-expand").click();
+  await page.getByTestId("canvas-expand-exit").click();
+  await expect(page.getByTestId("agent-map-frame")).not.toHaveClass(/is-expanded/);
+  // Leaving the map leaves its full view behind; the session's canvas is not
+  // handed an expanded frame.
+  await page.getByTestId("canvas-expand").click();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("rail-session-select-sess-boot").click();
+  await expect(page.locator(".canvas-frame-wrap.is-expanded")).toHaveCount(0);
+});

@@ -547,6 +547,12 @@ export const App = (): JSX.Element => {
     setView({ kind: "project", projectId });
   }, [pendingProject, harness.state?.workspaceScopes]);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
+  /** The centre map's full view. Its own flag, so leaving the map can never
+   *  hand an expanded frame to the right pane's canvas. */
+  const [mapExpanded, setMapExpanded] = useState(false);
+  useEffect(() => {
+    if (view.kind !== "project") setMapExpanded(false);
+  }, [view.kind]);
   const agentMapEntry = useAgentMapEntry({
     projectId: viewProjectId,
     api: harness.api,
@@ -1635,6 +1641,12 @@ export const App = (): JSX.Element => {
           onBackToMap: () => backToMap(shownProject),
           onNewAgent: () =>
             handleCreateAgentInProject(shownScope.cwd, projectLabelOf(shownProject)),
+          onExpandMap:
+            mapMode?.kind === "map" &&
+            agentMapEntry.state.workspace.status === "ready" &&
+            (agentMapEntry.state.workspace.value.proposal?.nodes.length ?? 0) > 0
+              ? () => setMapExpanded(true)
+              : null,
         }
       : null;
 
@@ -2666,8 +2678,8 @@ export const App = (): JSX.Element => {
                       onRetry={agentMapEntry.retryWorkspace}
                       initialization={agentMapEntry.initialization}
                       onRetryGeneration={agentMapEntry.retryGeneration}
-                      expanded={false}
-                      onToggleExpanded={() => {}}
+                      expanded={mapExpanded}
+                      onToggleExpanded={() => setMapExpanded((value) => !value)}
                     />
                   ) : (
                     <ProjectAgentGrid
@@ -2985,20 +2997,24 @@ export const App = (): JSX.Element => {
                       )}
                     </a>
                   )}
-                <button
-                  className="theme-toggle"
-                  data-testid="canvas-expand"
-                  hidden={canvasExpanded}
-                  aria-label={
-                    shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
-                  }
-                  title={
-                    shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
-                  }
-                  onClick={toggleCanvasExpanded}
-                >
-                  <Icon name="Maximize2" size={15} />
-                </button>
+                {/* Only with a pane to expand: the project view's header
+                    carries the map's own full view under the same testid. */}
+                {rightPaneExists && (
+                  <button
+                    className="theme-toggle"
+                    data-testid="canvas-expand"
+                    hidden={canvasExpanded}
+                    aria-label={
+                      shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
+                    }
+                    title={
+                      shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
+                    }
+                    onClick={toggleCanvasExpanded}
+                  >
+                    <Icon name="Maximize2" size={15} />
+                  </button>
+                )}
                 <button
                   className="theme-toggle right-pane-collapse"
                   data-testid="right-collapse"
