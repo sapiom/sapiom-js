@@ -26,7 +26,7 @@ import {
 import { callTool } from "../../_shared/linear";
 import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
-import cues from "./cues.json";
+import replay from "../../scripts/replay.json";
 import page from "./index.html";
 import {
   AGENTS,
@@ -36,6 +36,7 @@ import {
   TABLES,
   agentByKey,
   agentPageUrl,
+  cuesFromReplay,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
@@ -441,7 +442,7 @@ const GET: [RegExp, Handler][] = [
     },
   ],
   [/^\/api\/receipts\/failed$/, () => failedReceipts()],
-  [/^\/api\/cues$/, async () => cues],
+  [/^\/api\/cues$/, async () => cuesFromReplay(replay)],
   [/^\/api\/system$/, () => withConsoleDb(system)],
 ];
 

@@ -361,3 +361,29 @@ export function redact(text: string, secrets: (string | undefined)[]): string {
   for (const s of secrets) if (s) out = out.split(s).join("[redacted]");
   return out;
 }
+
+// --- cues ------------------------------------------------------------------------------------
+
+export interface ReplayScript {
+  prefix: string;
+  steps: { id: string; text: string; expect: string; threadOf?: string }[];
+}
+
+/** The customer lines for the Cues tab, from `scripts/replay.json`, the one script of them. */
+export function cuesFromReplay(replay: ReplayScript) {
+  const words = (id: string) => {
+    const w = id.replace(/-/g, " ");
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  };
+  return {
+    prefix: replay.prefix,
+    steps: replay.steps.map((s) => ({
+      id: s.id,
+      label: s.threadOf
+        ? `${words(s.id)} (reply in the ${s.threadOf} thread)`
+        : words(s.id),
+      text: s.text,
+      expect: s.expect,
+    })),
+  };
+}

@@ -10,11 +10,8 @@
  */
 import { createClient } from "@sapiom/tools";
 
-import { issueCard, issueCardText } from "../_shared/blocks";
-import { getConfig } from "../_shared/config";
 import { connectPostgres, resolveConnectionString } from "../_shared/db";
-import { OPEN_STATUSES, getAccount, setStatus } from "../_shared/issues";
-import { update } from "../_shared/slack";
+import { resetBoard } from "../_shared/reset";
 
 const scriptCtx = { isLocalTrace: false, logger: console } as never;
 
@@ -28,45 +25,14 @@ async function main() {
     await resolveConnectionString({ sapiom } as never),
   );
   try {
-    const open = await db.query<{
-      id: string;
-      number: number;
-      status: string;
-      title: string;
-    }>(
-      "select id, number, status, title from issues where status = any($1) order by number",
-      [[...OPEN_STATUSES]],
-    );
-    if (!open.length) {
-      console.log("no open issues");
-      return;
-    }
-    const triage = await getConfig(db, "channels.triage");
-    for (const row of open) {
-      if (dryRun) {
-        console.log(`would close #${row.number} (${row.status}): ${row.title}`);
-        continue;
-      }
-      const issue = await setStatus(db, row.id, "closed");
-      let card = "no card";
-      if (issue.triageRootTs) {
-        const account = await getAccount(db, issue.accountId);
-        // A card that cannot be redrawn (deleted message, other channel) does not block the reset.
-        card = await update(scriptCtx, {
-          channel: triage,
-          ts: issue.triageRootTs,
-          text: issueCardText(issue, account),
-          blocks: issueCard(issue, account),
-        }).then(
-          () => "card redrawn",
-          (err: unknown) =>
-            `card not redrawn: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+    const outcomes = await resetBoard(db, scriptCtx, { dryRun });
+    if (!outcomes.length) console.log("no open issues");
+    for (const o of outcomes)
       console.log(
-        `closed #${row.number} (was ${row.status}, ${card}): ${row.title}`,
+        dryRun
+          ? `would close #${o.number} (${o.was}): ${o.title}`
+          : `closed #${o.number} (was ${o.was}, ${o.card}): ${o.title}`,
       );
-    }
   } finally {
     await close();
   }

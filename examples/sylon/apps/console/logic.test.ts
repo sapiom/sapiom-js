@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AttachedTrigger, ReceiptFire, ReceiptSummary } from "./logic";
 import {
   AGENTS,
+  cuesFromReplay,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
@@ -279,5 +280,22 @@ describe("linear links", () => {
     ).toBe("https://linear.app/acme/issue/SAP-3723");
     expect(linearIssueUrl(null, "SAP-1")).toBeNull();
     expect(linearIssueUrl("https://example.com/x", "SAP-1")).toBeNull();
+  });
+});
+
+describe("cues", () => {
+  it("are labelled from the replay script's step ids", () => {
+    const cues = cuesFromReplay({
+      prefix: "[t]",
+      steps: [
+        { id: "bug", text: "a", expect: "x" },
+        { id: "follow-up", threadOf: "bug", text: "b", expect: "y" },
+      ],
+    });
+    expect(cues.prefix).toBe("[t]");
+    expect(cues.steps.map((c) => c.label)).toEqual([
+      "Bug",
+      "Follow up (reply in the bug thread)",
+    ]);
   });
 });
