@@ -43,7 +43,7 @@ describe("ui-prefs hiddenSessionIds", () => {
   });
 
   it("reads prefs stored before the field existed as nothing hidden", () => {
-    store.set(KEY, JSON.stringify({ rightCollapsed: true, railAxis: "group" }));
+    store.set(KEY, JSON.stringify({ rightCollapsed: true, collapsedCwds: ["/x"] }));
     const prefs = loadUiPrefs();
     expect(prefs.hiddenSessionIds).toBeUndefined();
     expect(new Set(prefs.hiddenSessionIds ?? []).size).toBe(0);

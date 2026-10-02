@@ -165,7 +165,7 @@ export type LifecycleVerb = "prod" | "test" | "run" | "deploy";
 export interface GatedWorkflow extends SubjectWorkflow, DeployableWorkflow {}
 
 export interface VerbGateInput<W extends GatedWorkflow> {
-  /** The rail selection — the ONLY thing a verb may act on. */
+  /** The agent the pane is about — the ONLY thing a verb may act on. */
   subject: W | null;
   /** Whether the user is signed in (gates the two cloud verbs). */
   authenticated: boolean;

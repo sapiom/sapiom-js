@@ -151,7 +151,6 @@ describe("rootContains", () => {
  * visual: a unit test on a pure function cannot show that `App.tsx` calls it.
  */
 
-const SIDEQUEST = `${HOME}/sidequest`;
 const OUTREACH = `${POLSIA}/backend/src/agents/outreach`;
 
 interface ScopedSession {

@@ -137,6 +137,8 @@ describe("sessionsForAgent: the agent panel's list is the rail's, narrowed", () 
   it("lists only sessions bound to the agent, in rail order", () => {
     const rows = [
       session("other", { boundWorkflowPath: "/p/other" }),
+      // An unbound chat at the root is the project's, not this agent's.
+      session("unbound", { boundWorkflowPath: null, lastActiveAt: minutesAgo(0) }),
       session("mine-old", { boundWorkflowPath: "/p/mine", lastActiveAt: minutesAgo(9) }),
       session("mine-new", { boundWorkflowPath: "/p/mine", lastActiveAt: minutesAgo(1) }),
       session("mine-stale", { boundWorkflowPath: "/p/mine", status: "exited", lastActiveAt: daysAgo(30) }),
