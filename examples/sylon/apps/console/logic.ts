@@ -212,6 +212,17 @@ export function failedFleetReceipts(
   );
 }
 
+/** What the page shows of a receipt: no sender ip, user agent or payload detail. */
+export function receiptView(r: ReceiptSummary) {
+  return {
+    id: r.id,
+    eventType: r.eventType,
+    receivedAt: r.receivedAt,
+    failed: r.deliveries.failed,
+    failedTriggerSlugs: r.failedTriggerSlugs,
+  };
+}
+
 // --- route guard -----------------------------------------------------------------------------
 
 export const SECRET_HEADER = "x-console-secret";
@@ -232,4 +243,11 @@ export function checkSecret(
   const a = Buffer.from(expected);
   const b = Buffer.from(given);
   return a.length === b.length && timingSafeEqual(a, b) ? "ok" : "denied";
+}
+
+/** Replace every occurrence of a secret in `text`, so an error message can never echo one. */
+export function redact(text: string, secrets: (string | undefined)[]): string {
+  let out = text;
+  for (const s of secrets) if (s) out = out.split(s).join("[redacted]");
+  return out;
 }

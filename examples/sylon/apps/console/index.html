@@ -378,7 +378,7 @@
           body: JSON.stringify(body || {}),
         });
         const out = await r.json().catch(() => ({}));
-        if (r.status === 401) {
+        if (r.status === 403) {
           setSecret("");
           renderAuth();
         }
