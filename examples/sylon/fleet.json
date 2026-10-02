@@ -1,0 +1,114 @@
+{
+  "fleetVersion": 1,
+  "id": "sylon",
+  "resources": [
+    {
+      "kind": "postgres",
+      "handle": "sylon",
+      "migrations": "_shared/migrations"
+    }
+  ],
+  "connectors": [
+    {
+      "provider": "slack",
+      "requiredBy": [
+        "intake",
+        "copilot",
+        "escalation",
+        "controller",
+        "urgent-pager"
+      ]
+    },
+    {
+      "provider": "linear",
+      "relaySlug": "linear",
+      "discover": true,
+      "requiredBy": ["escalation"]
+    }
+  ],
+  "projects": [
+    { "key": "intake", "path": "agents/intake", "slug": "sylon-intake" },
+    { "key": "copilot", "path": "agents/copilot", "slug": "sylon-copilot" },
+    {
+      "key": "escalation",
+      "path": "agents/escalation",
+      "slug": "sylon-escalation"
+    },
+    {
+      "key": "controller",
+      "path": "agents/controller",
+      "slug": "sylon-controller"
+    },
+    {
+      "key": "urgent-pager",
+      "path": "agents/urgent-pager",
+      "slug": "sylon-urgent-pager",
+      "optional": true
+    },
+    {
+      "key": "smoke-ingest",
+      "path": "agents/smoke-ingest",
+      "slug": "sylon-smoke-ingest",
+      "smoke": true
+    },
+    {
+      "key": "smoke-consume",
+      "path": "agents/smoke-consume",
+      "slug": "sylon-smoke-consume",
+      "smoke": true
+    }
+  ],
+  "triggers": [
+    {
+      "project": "intake",
+      "kind": "event",
+      "eventType": "slack.message.created"
+    },
+    {
+      "project": "intake",
+      "kind": "event",
+      "eventType": "slack.reaction_added"
+    },
+    {
+      "project": "intake",
+      "kind": "event",
+      "eventType": "slack.block_actions"
+    },
+    { "project": "copilot", "kind": "event", "eventType": "issue.created" },
+    {
+      "project": "copilot",
+      "kind": "event",
+      "eventType": "issue.message_added"
+    },
+    {
+      "project": "copilot",
+      "kind": "event",
+      "eventType": "slack.block_actions"
+    },
+    { "project": "escalation", "kind": "event", "eventType": "issue.escalate" },
+    { "project": "controller", "kind": "schedule_cron", "cron": "*/2 * * * *" },
+    { "project": "urgent-pager", "kind": "event", "eventType": "issue.created" }
+  ],
+  "smokeTriggers": [
+    {
+      "project": "smoke-ingest",
+      "kind": "event",
+      "eventType": "slack.message.created"
+    },
+    {
+      "project": "smoke-consume",
+      "kind": "event",
+      "eventType": "issue.created"
+    }
+  ],
+  "config": {
+    "linear.team_id": "example-linear-team-id",
+    "linear.project_id": "example-linear-project-id",
+    "channels.triage": "C0TRIAGE001",
+    "channels.customer": [
+      { "channelId": "C0CUSTOMER1", "accountName": "Example Customer" }
+    ],
+    "oncall.slack_id": "U0ONCALL001",
+    "nudge.minutes": 5
+  }
+}
