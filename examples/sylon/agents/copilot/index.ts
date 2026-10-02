@@ -60,16 +60,19 @@ import {
 import { KB } from "../../_shared/kb.generated";
 import { post, update, type SlackCtx } from "../../_shared/slack";
 import {
+  DRAFT_FAILED_NOTE,
   DraftOutput,
   OUTPUT_NAME,
   SUPERSEDED_BY,
   SYSTEM_PROMPT,
+  TOOL_REMINDER,
   VERB_DECISION,
   buildPrompt,
   cardText,
   copilotCard,
   normalizeOutput,
   outputSchema,
+  responseShape,
 } from "./draft";
 import { seedLocalFixtures } from "./local";
 
@@ -169,6 +172,86 @@ async function triggerTs(db: Db, draft: Draft): Promise<number | null> {
   return message?.ts ? Number(message.ts) : null;
 }
 
+/** A pending draft with a posted card that answers a newer customer message than the trigger's. */
+async function newerPostedDraft(
+  db: Db,
+  issueId: string,
+  trigger: DraftTrigger,
+): Promise<Draft | undefined> {
+  const ours = Number(trigger.slack.ts);
+  for (const pending of await pendingDrafts(db, issueId)) {
+    const theirs = await triggerTs(db, pending);
+    if (pending.cardTs && theirs !== null && theirs > ours) return pending;
+  }
+  return undefined;
+}
+
+/**
+ * Covers thinking plus the forced tool call (SAP-3280): a routed label may think before it
+ * answers, and those tokens come out of the same cap.
+ */
+const DRAFT_MAX_TOKENS = 8192;
+
+/** Attempts per draft. A second identical step retry would only repeat the miss and its cost. */
+const DRAFT_ATTEMPTS = 2;
+
+/**
+ * The drafting call, retried once inside the step when the model answers without the forced
+ * `draft_reply` call. `run` forces `tool_choice` on every attempt; the retry also says so in the
+ * system prompt. Returns null when no attempt produced a valid draft. A cap that cuts the call
+ * short throws `LlmStructuredOutputTruncatedError` from `run` instead.
+ */
+async function requestDraft(
+  ctx: AgentExecutionContext<Record<string, unknown>>,
+  prompt: string,
+): Promise<DraftOutput | null> {
+  for (let attempt = 1; attempt <= DRAFT_ATTEMPTS; attempt++) {
+    const response = await ctx.sapiom.llm.run({
+      request: {
+        system:
+          attempt === 1
+            ? SYSTEM_PROMPT
+            : `${SYSTEM_PROMPT}\n\n${TOOL_REMINDER}`,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: DRAFT_MAX_TOKENS,
+      },
+      output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
+    });
+    const structured = ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME);
+    const parsed = DraftOutput.safeParse(structured);
+    if (parsed.success) return parsed.data;
+    // The run record does not keep the response; this line is the only trace of why it missed.
+    ctx.logger.warn("draft response has no structured output", {
+      attempt,
+      toolCall: structured === undefined ? "missing" : "invalid",
+      ...responseShape(response),
+    });
+  }
+  return null;
+}
+
+/**
+ * Tell the triage thread no draft is coming, so a teammate replies by hand. Never fails the run:
+ * a throw here would retry the step and pay for both LLM attempts again.
+ */
+async function postDraftFailedNote(
+  ctx: SlackCtx,
+  db: Db,
+  triageRootTs: string,
+): Promise<void> {
+  try {
+    await post(ctx, {
+      channel: await getConfig(db, "channels.triage"),
+      threadTs: triageRootTs,
+      text: DRAFT_FAILED_NOTE,
+    });
+  } catch (err) {
+    ctx.logger.warn("draft-failed note not posted; continuing", {
+      err: String(err),
+    });
+  }
+}
+
 /**
  * The drafting path, run inside the entry step: one step boundary fewer is about two seconds off
  * the 15 s card budget.
@@ -199,65 +282,67 @@ async function draftReply(
       // A late event must not replace the posted draft for a newer customer message. A newer
       // draft without a card (its post failed or is in flight) does not stop us: if ours were
       // dropped too, the customer could be left with no actionable reply.
-      const ours = Number(trigger.slack.ts);
-      for (const pending of await pendingDrafts(db, issue.id)) {
-        const theirs = await triggerTs(db, pending);
-        if (pending.cardTs && theirs !== null && theirs > ours)
-          return terminate({
-            issueId: issue.id,
-            skipped: "a newer message already has a pending draft",
-            draftId: pending.id,
-          });
-      }
+      const newer = await newerPostedDraft(db, issue.id, trigger);
+      if (newer)
+        return terminate({
+          issueId: issue.id,
+          skipped: "a newer message already has a pending draft",
+          draftId: newer.id,
+        });
 
       const [account, stored] = await Promise.all([
         getAccount(db, issue.accountId),
         messagesForIssue(db, issue.id),
       ]);
-      const response = await ctx.sapiom.llm.run({
-        request: {
-          system: SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: buildPrompt({
-                issue,
-                account,
-                messages: withTriggerMessage(stored, trigger),
-                kb: KB,
-              }),
-            },
-          ],
-          max_tokens: 8192,
-        },
-        output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
-      });
-      const output = normalizeOutput(
-        DraftOutput.parse(ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME)),
-        KB,
+      const raw = await requestDraft(
+        ctx,
+        buildPrompt({
+          issue,
+          account,
+          messages: withTriggerMessage(stored, trigger),
+          kb: KB,
+        }),
       );
-      confidence = output.confidence;
-      issue = await updateIssue(db, issue.id, { summary: output.summary });
-      // An empty reply means the model sees nothing to answer yet. A card would offer Approve
-      // on nothing, so there is none, and the older drafts stay as they are.
-      if (!output.reply)
-        return terminate({
-          issueId: issue.id,
-          skipped: "no reply needed",
-          summary: output.summary,
-          confidence,
-        });
-      // The unique (issue_id, causation_id) index makes this one row per event even when two
-      // deliveries race; the loser continues with the winner's row and publishes below.
-      draft = (
-        await createDraftOnce(db, {
-          issueId: issue.id,
-          text: output.reply,
-          citations: output.citations,
-          causationId: trigger.causationId,
-          confidence: output.confidence,
-        })
-      ).draft;
+      if (!raw) {
+        // A concurrent delivery of this event may have drafted while ours missed: publish its
+        // row below, as a retry would, so a card whose post failed or is in flight still lands.
+        draft = await draftForCausation(db, issue.id, trigger.causationId);
+        if (!draft) {
+          // A newer message's posted card is actionable; "reply by hand" next to it would be wrong.
+          const newer = await newerPostedDraft(db, issue.id, trigger);
+          if (!newer) await postDraftFailedNote(ctx, db, triageRootTs);
+          return terminate({
+            issueId: issue.id,
+            skipped: "no structured draft",
+            ...(newer && { draftId: newer.id }),
+          });
+        }
+        issue = await getIssue(db, issue.id);
+      } else {
+        const output = normalizeOutput(raw, KB);
+        confidence = output.confidence;
+        issue = await updateIssue(db, issue.id, { summary: output.summary });
+        // An empty reply means the model sees nothing to answer yet. A card would offer Approve
+        // on nothing, so there is none, and the older drafts stay as they are.
+        if (!output.reply)
+          return terminate({
+            issueId: issue.id,
+            skipped: "no reply needed",
+            summary: output.summary,
+            confidence,
+          });
+        // The unique (issue_id, causation_id) index makes this one row per event even when two
+        // deliveries race; the loser continues with the winner's row and publishes below.
+        draft = (
+          await createDraftOnce(db, {
+            issueId: issue.id,
+            text: output.reply,
+            citations: output.citations,
+            causationId: trigger.causationId,
+            confidence: output.confidence,
+          })
+        ).draft;
+      }
     }
 
     const triage = await getConfig(db, "channels.triage");
