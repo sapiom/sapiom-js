@@ -531,8 +531,14 @@ export const App = (): JSX.Element => {
    */
   const [pendingProject, setPendingProject] = useState<{
     root: string;
+    label: string;
     generation: number;
   } | null>(null);
+  // The project-header door, reached from this effect above the loading
+  // guard; assigned below it, where `state` exists.
+  const selectProjectRef = useRef<((project: RailProject) => void) | null>(
+    null,
+  );
   useEffect(() => {
     if (!pendingProject) return;
     if (pendingProject.generation !== navGenerationRef.current) {
@@ -544,7 +550,13 @@ export const App = (): JSX.Element => {
     )?.projectId;
     if (!projectId) return;
     setPendingProject(null);
-    setView({ kind: "project", projectId });
+    // Through the same door a click takes, so an empty project still lands
+    // on the new-agent screen (D36) rather than an empty map.
+    selectProjectRef.current?.({
+      root: pendingProject.root,
+      label: pendingProject.label,
+      projectId,
+    });
   }, [pendingProject, harness.state?.workspaceScopes]);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
   /** The centre map's full view. Its own flag, so leaving the map can never
@@ -880,7 +892,10 @@ export const App = (): JSX.Element => {
       }
       if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
         const target = sessionForShortcut(Number(e.key), {
-          sessions: harness.state?.sessions ?? [],
+          // A Start chat still binding is not in the rail, so not countable.
+          sessions: (harness.state?.sessions ?? []).filter(
+            (session) => !pendingBindIds.has(session.id),
+          ),
           hidden: hiddenSessionIds,
           now: Date.now(),
           shownProjectId: viewProjectId,
@@ -898,6 +913,7 @@ export const App = (): JSX.Element => {
     harness.state?.sessions,
     harness.activeSessionId,
     hiddenSessionIds,
+    pendingBindIds,
     viewProjectId,
     isMobile,
     rightCollapsed,
@@ -1355,7 +1371,11 @@ export const App = (): JSX.Element => {
     if (!project.projectId) {
       // The folder is in the rail but its durable identity has not reached
       // the scope catalog yet; its map opens once the refresh brings it.
-      setPendingProject({ root: project.root, generation });
+      setPendingProject({
+        root: project.root,
+        label: project.label,
+        generation,
+      });
       void harness.refreshWorkspaceScopes().catch(() => {
         harness.showToast("Studio couldn't identify this project. Try again.");
       });
@@ -1415,6 +1435,8 @@ export const App = (): JSX.Element => {
     }
     await harness.removeProject(root);
   };
+
+  selectProjectRef.current = handleSelectProject;
 
   /** Back to the project's map from an agent's canvas entered on it. */
   const backToMap = (projectId: string): void => {
@@ -1643,8 +1665,7 @@ export const App = (): JSX.Element => {
             handleCreateAgentInProject(shownScope.cwd, projectLabelOf(shownProject)),
           onExpandMap:
             mapMode?.kind === "map" &&
-            agentMapEntry.state.workspace.status === "ready" &&
-            (agentMapEntry.state.workspace.value.proposal?.nodes.length ?? 0) > 0
+            agentMapEntry.state.workspace.status === "ready"
               ? () => setMapExpanded(true)
               : null,
         }

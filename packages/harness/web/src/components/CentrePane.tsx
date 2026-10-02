@@ -29,6 +29,13 @@ export function ProjectView({
   );
 }
 
+const drawsAnAgent = (value: {
+  proposal?: { nodes: readonly { kind: string }[] } | null;
+}): boolean =>
+  (value.proposal?.nodes ?? []).some(
+    (node) => node.kind === "agent" || node.kind === "subagent",
+  );
+
 /** What the project view draws: the map pane, or the agents as cards with a
  *  word on where the map is. */
 export type ProjectMapMode =
@@ -57,14 +64,16 @@ export function projectMapMode(input: {
   durable: boolean;
   initialization: { status: string } | null | undefined;
 }): ProjectMapMode {
-  // A drawn map is the map, whatever the catalog says about the project.
-  if (
-    input.state.status === "ready" &&
-    (input.state.value.proposal?.nodes.length ?? 0) > 0
-  )
+  // A drawn map is the map, whatever the catalog says about the project, but
+  // only once it draws an AGENT: a map of resources alone has nothing to
+  // click, and cards hidden behind it would leave every agent unreachable
+  // (flow 4.3.3: the project view shows its agents).
+  if (input.state.status === "ready" && drawsAnAgent(input.state.value))
     return { kind: "map" };
   if (!input.durable) return { kind: "cards", map: "not-drawn" };
   if (input.unavailable || input.state.status !== "ready") return { kind: "map" };
+  if ((input.state.value.proposal?.nodes.length ?? 0) > 0)
+    return { kind: "cards", map: "not-drawn" };
   const generation = input.initialization?.status;
   if (generation === "queued" || generation === "running")
     return { kind: "cards", map: "generating" };

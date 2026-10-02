@@ -74,10 +74,9 @@ export function ProjectAgentGrid({
         role="list"
       >
         {agents.map((agent) => (
+          <div key={agent.path} role="listitem" className="project-agent-grid-item">
           <button
-            key={agent.path}
             type="button"
-            role="listitem"
             className={
               "project-agent-card" +
               (agent.path === selectedPath ? " is-selected" : "")
@@ -96,6 +95,7 @@ export function ProjectAgentGrid({
               {agent.definitionId != null ? "deployed" : "draft"}
             </span>
           </button>
+          </div>
         ))}
       </div>
       {panel && <div className="project-agent-grid-panel">{panel}</div>}

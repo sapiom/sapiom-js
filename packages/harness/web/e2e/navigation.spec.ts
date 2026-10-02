@@ -375,3 +375,20 @@ test("a drawn map opens in full view from the project header and Escape unwinds 
   await page.getByTestId("rail-session-select-sess-boot").click();
   await expect(page.locator(".canvas-frame-wrap.is-expanded")).toHaveCount(0);
 });
+
+test("a session row's × is reachable by keyboard, and agent cards keep their button role", async ({
+  page,
+}) => {
+  await page.getByTestId("rail-session-select-sess-leasing").focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByTestId("rail-session-close-sess-leasing")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("rail-session-sess-leasing")).toHaveCount(0);
+
+  await page.getByTestId("project-select-acme-app").click();
+  await expect(page.getByRole("button", { name: /leasing/ }).and(page.getByTestId("map-agent-leasing"))).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.getByTestId("project-agent-grid").getByRole("listitem")).toHaveCount(1);
+});

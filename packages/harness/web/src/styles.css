@@ -10359,7 +10359,7 @@ button.rail-footer-card:hover {
 }
 
 .rail-session-row:hover .rail-session-close,
-.rail-session-close:focus-visible {
+.rail-session-row:focus-within .rail-session-close {
   display: flex;
   opacity: 1;
 }
@@ -10619,7 +10619,13 @@ button.rail-footer-card:hover {
   gap: var(--sp2, 8px);
 }
 
+.project-agent-grid-item {
+  display: flex;
+  min-width: 0;
+}
+
 .project-agent-card {
+  flex: 1;
   display: grid;
   gap: 2px;
   min-width: 0;

@@ -1804,11 +1804,25 @@ export function useHarnessState(): HarnessStateHook {
   const moveAgent = useCallback(
     async (from: string, to: string): Promise<void> => {
       await api.moveAgent(from, to);
-      const [sessions] = await Promise.all([
-        api.listSessions(),
-        refreshWorkflows().catch(() => undefined),
-      ]);
-      setState((prev) => (prev ? { ...prev, sessions } : prev));
+      void refreshWorkflows().catch(() => undefined);
+      // Best-effort, and only the two fields a move changes: the move already
+      // happened, and a status frame newer than this snapshot must survive it.
+      const moved = new Map(
+        (await api.listSessions().catch(() => [])).map((s) => [s.id, s]),
+      );
+      setState((prev) =>
+        prev
+          ? {
+              ...prev,
+              sessions: prev.sessions.map((session) => {
+                const fresh = moved.get(session.id);
+                return fresh
+                  ? { ...session, cwd: fresh.cwd, boundWorkflowPath: fresh.boundWorkflowPath }
+                  : session;
+              }),
+            }
+          : prev,
+      );
     },
     [refreshWorkflows],
   );
