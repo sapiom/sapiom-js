@@ -278,7 +278,7 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(JSON.stringify(card.args.blocks)).toContain("*Linear:* SAP-900");
   });
 
-  it("two concurrent runs create one Linear issue", async () => {
+  it("two concurrent runs create one Linear issue, one reply per thread, and one emit", async () => {
     const a = liveCtx();
     const b = liveCtx();
     const [x, y] = await Promise.all([
@@ -287,9 +287,18 @@ describe("escalation against the relay (mocked fetch)", () => {
     ]);
     expect(calls.filter((c) => c.tool === "save_issue")).toHaveLength(1);
     expect([x.made, y.made].sort()).toEqual(["created", "existing"]);
-    expect(
-      calls.filter((c) => c.method === "chat.postMessage").length,
-    ).toBeLessThanOrEqual(3);
+    const posts = calls.filter((c) => c.method === "chat.postMessage");
+    expect(posts.map((p) => p.args.channel)).toEqual([
+      "C0TRIAGE001",
+      "C0CUSTOMER1",
+    ]);
+    expect([...a.emitted, ...b.emitted].map((e) => e.type)).toEqual([
+      "issue.on_hold",
+    ]);
+    expect([x.outcome, y.outcome].sort()).toEqual([
+      "already_escalated",
+      "escalated",
+    ]);
   });
 
   it("a retry after Linear created the issue but before the DB write adopts it", async () => {
@@ -336,17 +345,26 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(emitted).toEqual([]);
   });
 
-  it("a retry of the tail re-sends the same emit id and posts no second reply", async () => {
+  it("a failed emit rolls back the move to On Hold; the retry does both and posts no second reply", async () => {
     const { ctx, emitted } = liveCtx();
-    await escalate(ctx as never, db, input());
-    // As if the step failed after the emit: the issue is linked but not yet On Hold.
-    await db.query("update issues set status = 'new' where id = $1", [issueId]);
+    const events = (ctx.sapiom as { events: { emit: (s: never) => unknown } })
+      .events;
+    const realEmit = events.emit;
+    events.emit = async () => {
+      throw new Error("events api down");
+    };
+    await expect(escalate(ctx as never, db, input())).rejects.toThrow(
+      "events api down",
+    );
+    // Link and replies committed in the first transaction; the status move did not.
+    expect(await getIssue(db, issueId)).toMatchObject({
+      status: "new",
+      linearIdentifier: "SAP-900",
+    });
+    events.emit = realEmit;
     const out = await escalate(ctx as never, db, input());
-    expect(out).toMatchObject({ outcome: "escalated", made: "existing" });
-    expect(emitted.map((e) => e.id)).toEqual([
-      "issue.on_hold:1790889700.1004",
-      "issue.on_hold:1790889700.1004",
-    ]);
+    expect(out).toMatchObject({ outcome: "escalated", status: "on_hold" });
+    expect(emitted.map((e) => e.id)).toEqual(["issue.on_hold:1790889700.1004"]);
     expect(calls.filter((c) => c.method === "chat.postMessage")).toHaveLength(
       2,
     );

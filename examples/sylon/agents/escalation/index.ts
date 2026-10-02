@@ -5,17 +5,18 @@
  *
  * Trigger: event `issue.escalate`.
  *
- * One Linear issue per Sylon issue:
- * - Check, create and record run in one transaction holding the issue row lock, so a concurrent
- *   second run waits, then sees the link.
+ * One Linear issue per Sylon issue, and one reply per thread:
+ * - Check, create, record and both replies run in one transaction holding the issue row lock, so
+ *   a concurrent second run waits, then sees the link and the stored reply keys.
  * - Each Linear issue's description starts with `sylon:<issueId>`. With no link recorded, the run
  *   looks for that marker among the project's issues of the last 7 days before creating, so a
  *   retry after Linear created the issue but before the commit adopts it instead of opening a
  *   second.
- * - The tail (replies, emit, status) is idempotent: replies are keyed in `messages`, the emit
- *   dedups on its id, and the status move is a no-op when repeated. An issue that is linked, has
- *   its customer reply, and is On Hold (or Closed) is already escalated: the run replies with the
- *   existing identifier in triage and emits nothing.
+ * - Replies are keyed in `messages`, so a retry posts only what was not recorded. An issue that is
+ *   linked, has its customer reply, and is On Hold (or Closed) is already escalated: the run
+ *   replies with the existing identifier in triage and emits nothing.
+ * - The move to On Hold and the `issue.on_hold` emit share a second locked transaction: a failed
+ *   emit rolls the move back, and a closed or already On Hold issue emits nothing.
  * - Every run that ends with the issue linked redraws the triage card from the row.
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
@@ -27,7 +28,6 @@ import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit, type EmitCtx } from "../../_shared/emit";
 import { Events } from "../../_shared/events";
 import {
-  IllegalTransitionError,
   accountByChannel,
   ensureAccount,
   getAccount,
@@ -245,131 +245,141 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   const triageChannel = await getConfig(db, "channels.triage");
   const requester = await userInfo(ctx, input.requestedBy);
 
-  const link = await db.transaction(async (tx) => {
-    const issue = await lockIssue(tx, issueId);
-    if (issue.linearIssueId && issue.linearIdentifier)
-      return { issue, linear: null, made: "existing" as const };
-    const account = await getAccount(tx, issue.accountId);
-    const found = await findByMarker(ctx, { teamId, projectId, issueId });
-    const linear =
-      found ??
-      (await createIssue(ctx, {
-        teamId,
-        projectId,
-        title: issue.title || `Sylon #${issue.number}`,
-        description: linearDescription({
-          issue,
-          accountName: account.name,
-          summary: input.summary,
-          requestedBy: { id: requester.id, name: requester.name },
-          threadUrl: threadUrl(issue),
-        }),
-        priority: issue.priority ? LINEAR_PRIORITY[issue.priority] : undefined,
-        links: threadUrl(issue)
-          ? [{ url: threadUrl(issue)!, title: "Customer thread (Slack)" }]
-          : undefined,
-      }));
-    const recorded = await updateIssue(tx, issueId, {
-      linearIssueId: linear.id,
-      linearIdentifier: linear.identifier,
-    });
-    return {
-      issue: recorded,
-      linear,
-      made: found ? ("adopted" as const) : ("created" as const),
-    };
-  });
+  // 1. Link and reply, under the row lock: a concurrent run waits here, then finds the link and
+  // the stored reply keys, so it neither creates nor posts.
+  const linked = await db.transaction(async (tx) => {
+    let issue = await lockIssue(tx, issueId);
+    let made: "existing" | "adopted" | "created" = "existing";
+    let url = "";
+    if (!issue.linearIssueId || !issue.linearIdentifier) {
+      const account = await getAccount(tx, issue.accountId);
+      const found = await findByMarker(ctx, { teamId, projectId, issueId });
+      const linear =
+        found ??
+        (await createIssue(ctx, {
+          teamId,
+          projectId,
+          title: issue.title || `Sylon #${issue.number}`,
+          description: linearDescription({
+            issue,
+            accountName: account.name,
+            summary: input.summary,
+            requestedBy: { id: requester.id, name: requester.name },
+            threadUrl: threadUrl(issue),
+          }),
+          priority: issue.priority
+            ? LINEAR_PRIORITY[issue.priority]
+            : undefined,
+          links: threadUrl(issue)
+            ? [{ url: threadUrl(issue)!, title: "Customer thread (Slack)" }]
+            : undefined,
+        }));
+      issue = await updateIssue(tx, issueId, {
+        linearIssueId: linear.id,
+        linearIdentifier: linear.identifier,
+      });
+      made = found ? "adopted" : "created";
+      url = linear.url;
+    }
+    const identifier = issue.linearIdentifier!;
+    url =
+      url ||
+      (await getLinearIssue(ctx, identifier)).url ||
+      `(no url for ${identifier})`;
+    const base = { issueId, linearIdentifier: identifier, url, made };
 
-  let issue = link.issue;
-  const identifier = issue.linearIdentifier!;
-  const url =
-    link.linear?.url ||
-    (await getLinearIssue(ctx, identifier)).url ||
-    `(no url for ${identifier})`;
-  const text = `Tracked as ${identifier}: ${url}`;
-  const base = { issueId, linearIdentifier: identifier, url, made: link.made };
+    const replied = await messageBySourceEventId(tx, customerReplyKey(issueId));
+    if (
+      made === "existing" &&
+      replied &&
+      (issue.status === "on_hold" || issue.status === "closed")
+    ) {
+      await replyOnce(ctx, tx, {
+        key: `escalation:${issueId}:${input.causationId}`,
+        channel: triageChannel,
+        threadTs: issue.triageRootTs,
+        text: `Already tracked as ${identifier}: ${url}`,
+        direction: "internal",
+        issueId,
+      });
+      return { issue, base, already: true as const };
+    }
 
-  const replied = await messageBySourceEventId(db, customerReplyKey(issueId));
-  if (
-    link.made === "existing" &&
-    replied &&
-    (issue.status === "on_hold" || issue.status === "closed")
-  ) {
-    await replyOnce(ctx, db, {
-      key: `escalation:${issueId}:${input.causationId}`,
+    const text = `Tracked as ${identifier}: ${url}`;
+    const triageTs = await replyOnce(ctx, tx, {
+      key: triageReplyKey(issueId),
       channel: triageChannel,
       threadTs: issue.triageRootTs,
-      text: `Already tracked as ${identifier}: ${url}`,
+      text,
       direction: "internal",
       issueId,
     });
-    await redrawCard(ctx, db, triageChannel, issue);
-    return { ...base, outcome: "already_escalated", status: issue.status };
-  }
-
-  const triageTs = await replyOnce(ctx, db, {
-    key: triageReplyKey(issueId),
-    channel: triageChannel,
-    threadTs: issue.triageRootTs,
-    text,
-    direction: "internal",
-    issueId,
+    const customerTs = await replyOnce(ctx, tx, {
+      key: customerReplyKey(issueId),
+      channel: issue.customerChannel ?? input.slack.channel,
+      threadTs: issue.customerRootTs,
+      text,
+      direction: "agent",
+      issueId,
+    });
+    return { issue, base, already: false as const, triageTs, customerTs };
   });
-  const customerTs = await replyOnce(ctx, db, {
-    key: customerReplyKey(issueId),
-    channel: issue.customerChannel ?? input.slack.channel,
-    threadTs: issue.customerRootTs,
-    text,
-    direction: "agent",
-    issueId,
-  });
-  const replies = { triageTs, customerTs };
 
-  if (issue.status === "closed") {
-    // closed → on_hold is not a legal move; the link and replies stand, and the output says so.
-    await redrawCard(ctx, db, triageChannel, issue);
+  if (linked.already) {
+    await redrawCard(ctx, db, triageChannel, linked.issue);
     return {
-      ...base,
+      ...linked.base,
+      outcome: "already_escalated",
+      status: linked.issue.status,
+    };
+  }
+  const replies = { triageTs: linked.triageTs, customerTs: linked.customerTs };
+
+  // 2. Status, then emit, in one locked transaction: a failed emit rolls the status move back, so
+  // On Hold means the event went out. A run that finds the issue already On Hold (a concurrent
+  // run got here first) or closed emits nothing.
+  const parked = await db.transaction(async (tx) => {
+    const issue = await lockIssue(tx, issueId);
+    if (issue.status === "closed" || issue.status === "on_hold")
+      return { issue, receipt: null };
+    const moved = await setStatus(tx, issueId, "on_hold");
+    const receipt = await emit(ctx, tx, "issue.on_hold", {
+      issueId,
+      accountId: moved.accountId,
+      source: "slack",
+      causationId: input.causationId,
+      slack: input.slack,
+      linearIdentifier: moved.linearIdentifier!,
+    });
+    return { issue: moved, receipt };
+  });
+
+  await redrawCard(ctx, db, triageChannel, parked.issue);
+  if (parked.issue.status === "closed") {
+    // closed → on_hold is not a legal move; the link and replies stand, and the output says so.
+    return {
+      ...linked.base,
       ...replies,
       outcome: "linked_closed",
-      status: issue.status,
+      status: parked.issue.status,
       note: "issue is closed; linked to Linear but not moved to on_hold",
     };
   }
-
-  // Emit before the status move: a retry after the emit re-sends the same id (deduped), while
-  // an issue already On Hold would be read as finished and lose its event.
-  const receipt = await emit(ctx, db, "issue.on_hold", {
-    issueId,
-    accountId: issue.accountId,
-    source: "slack",
-    causationId: input.causationId,
-    slack: input.slack,
-    linearIdentifier: identifier,
-  });
-  try {
-    issue = await setStatus(db, issueId, "on_hold");
-  } catch (err) {
-    if (!(err instanceof IllegalTransitionError)) throw err;
-    // Closed between the lock and here.
-    await redrawCard(ctx, db, triageChannel, await getIssue(db, issueId));
+  if (!parked.receipt) {
     return {
-      ...base,
+      ...linked.base,
       ...replies,
-      outcome: "linked_closed",
-      status: err.from,
-      receiptId: receipt.receiptId,
-      note: "issue was closed during escalation; not moved to on_hold",
+      outcome: "already_escalated",
+      status: parked.issue.status,
     };
   }
-  await redrawCard(ctx, db, triageChannel, issue);
   return {
-    ...base,
+    ...linked.base,
     ...replies,
     outcome: "escalated",
-    status: issue.status,
-    receiptId: receipt.receiptId,
-    duplicate: receipt.duplicate,
+    status: parked.issue.status,
+    receiptId: parked.receipt.receiptId,
+    duplicate: parked.receipt.duplicate,
   };
 }
 
