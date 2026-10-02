@@ -249,7 +249,7 @@ describe("StudioWorkspacePreferenceStore", () => {
     ).rejects.toMatchObject({ code: "malformed_state" });
   });
 
-  it("isolates users, keeps transient absence in memory, and durably repairs proven deletion", async () => {
+  it("shares project preferences across users and durably repairs proven deletion", async () => {
     const value = await fixture();
     const projectRoot = path.join(value.root, "project");
     const store = new StudioWorkspacePreferenceStore(value.file);
@@ -282,8 +282,48 @@ describe("StudioWorkspacePreferenceStore", () => {
           true,
         )
       ).selection.kind,
-    ).toBe("agent-map");
+    ).toBe("agent");
 
+    await store.put(
+      "user-b",
+      value.projectId,
+      { kind: "agent-map", projectId: value.projectId },
+      [projectRoot],
+      value.workflows,
+      true,
+    );
+    const persisted = JSON.parse(await fs.readFile(value.file, "utf8")) as {
+      preferences: Array<{ userId: string; projectId: string }>;
+    };
+    expect(persisted.preferences).toHaveLength(1);
+    expect(persisted.preferences[0]).toMatchObject({
+      userId: "user-b",
+      projectId: value.projectId,
+    });
+
+    expect(
+      (
+        await store.current(
+          "user-a",
+          value.projectId,
+          [projectRoot],
+          value.workflows,
+          true,
+        )
+      ).selection.kind,
+    ).toBe("agent-map");
+    await store.put(
+      "user-a",
+      value.projectId,
+      {
+        kind: "agent",
+        projectId: value.projectId,
+        agentId: current.agents[0]!.agentId,
+      },
+      [projectRoot],
+      value.workflows,
+      true,
+    );
     expect(
       await store.current("user-a", value.projectId, [projectRoot], [], false),
     ).toMatchObject({ repaired: false, selection: { kind: "agent-map" } });

@@ -195,7 +195,8 @@ export function parsePersistedProjectBootstrapState(
       value.schemaVersion !== 2 &&
       value.schemaVersion !== 3) ||
     projectId !== expected.projectId ||
-    userId !== expected.userId ||
+    typeof userId !== "string" ||
+    userId.length === 0 ||
     targetSessionId !== expected.targetSessionId ||
     !Array.isArray(metadata.queuedInputIds) ||
     !metadata.queuedInputIds.every((id) => typeof id === "string") ||
@@ -830,12 +831,7 @@ export class ProjectBootstrapStore {
     return this.serialize(`project:${projectId}`, async () => {
       this.assertOpen();
       const existing = await this.readIntent(projectId);
-      if (existing) {
-        if (existing.userId !== userId) {
-          throw new ProjectBootstrapDispatchForbiddenError();
-        }
-        return false;
-      }
+      if (existing) return false;
       const timestamp = this.now();
       await this.writeIntent(this.projectIntentFile(projectId), {
         schemaVersion: 1,
@@ -899,14 +895,11 @@ export class ProjectBootstrapStore {
   }
 
   /** Whether a scheduled project still needs its one ordinary first session. */
-  needsProjectSession(projectId: string, userId: string): Promise<boolean> {
+  needsProjectSession(projectId: string, _userId: string): Promise<boolean> {
     return this.serialize(`project:${projectId}`, async () => {
       this.assertOpen();
       const intent = await this.readIntent(projectId);
       if (!intent) return false;
-      if (intent.userId !== userId) {
-        throw new ProjectBootstrapDispatchForbiddenError();
-      }
       if (intent.status === "scheduled") return true;
       const target = intent.targetSessionId
         ? this.storageOptions.sessionManager.get(intent.targetSessionId)
@@ -937,9 +930,6 @@ export class ProjectBootstrapStore {
       this.assertOpen();
       const intent = await this.readIntent(identity.projectId);
       if (!intent) return null;
-      if (intent.userId !== identity.userId) {
-        throw new ProjectBootstrapDispatchForbiddenError();
-      }
       if (
         intent.status === "claimed" &&
         intent.targetSessionId !== identity.sessionId

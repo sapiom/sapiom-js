@@ -421,10 +421,28 @@ describe("initialization eligibility and ownership", () => {
     const previous = f.create({ concurrency: 0 });
     await previous.schedule(projectId);
     await previous.close();
+    f.project.userId = "user-after-account-switch";
     const next = f.create();
     await next.schedule(projectId);
     await finished(next);
     expect(f.infer).toHaveBeenCalledOnce();
+  });
+  it("keeps an in-flight initialization valid after an account change", async () => {
+    const f = await fixture();
+    let release!: (value: unknown) => void;
+    const infer = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const c = f.create({ infer });
+    await c.schedule(projectId);
+    await vi.waitFor(() => expect(infer).toHaveBeenCalledOnce());
+    f.project.userId = "user-after-account-switch";
+    release(output());
+    await finished(c);
+    expect(infer).toHaveBeenCalledOnce();
   });
   it("runs at most two projects concurrently and starts the third when a slot opens", async () => {
     const f = await fixture();

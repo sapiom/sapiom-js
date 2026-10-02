@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StudioProjectCatalog } from "@sapiom/agent-map/node/studio-project-catalog";
 
 const authFixture = vi.hoisted(() => ({
   credentialsPath: "/tmp/sapiom-test-credentials.json",
@@ -112,6 +113,7 @@ interface CapturedLaunch {
     url: string;
     headers?: Record<string, string>;
   };
+  agentMapMcp?: LaunchOpts["agentMapMcp"];
   spec?: SpawnSpec;
 }
 
@@ -129,7 +131,12 @@ function capturingCodexAdapter(
     const config = JSON.parse(readFileSync(opts.mcpConfigFile!, "utf8")) as {
       mcpServers: { sapiom: CapturedLaunch["remote"] };
     };
-    captures.push({ kind, remote: config.mcpServers.sapiom, spec });
+    captures.push({
+      kind,
+      remote: config.mcpServers.sapiom,
+      agentMapMcp: opts.agentMapMcp,
+      spec,
+    });
     return { ...spec, command: "bash", args: [] };
   };
   return {
@@ -153,7 +160,11 @@ function capturingAdapter(
     const config = JSON.parse(readFileSync(opts.mcpConfigFile, "utf-8")) as {
       mcpServers: { sapiom: CapturedLaunch["remote"] };
     };
-    captures.push({ kind, remote: config.mcpServers.sapiom });
+    captures.push({
+      kind,
+      remote: config.mcpServers.sapiom,
+      agentMapMcp: opts.agentMapMcp,
+    });
   };
   const interactiveSpec = (
     kind: "create" | "resume",
@@ -264,7 +275,7 @@ describe("Agent Studio MCP authentication wiring", () => {
   async function boot(
     options: Pick<
       Parameters<typeof startServer>[0],
-      "identity" | "authMode" | "adapters" | "codexHomeDir"
+      "identity" | "authMode" | "adapters" | "codexHomeDir" | "machineId"
     > = {},
   ): Promise<HarnessServer> {
     server = await startServer({
@@ -346,9 +357,10 @@ describe("Agent Studio MCP authentication wiring", () => {
     expect(injectedKey(captures[0])).toBe("browser-key");
   });
 
-  it("resumes a Studio project session after reconnecting under a new principal", async () => {
+  it("resumes a Studio project session with its persisted identity after switching accounts", async () => {
     authFixture.credential = credential("key-a");
     await boot({
+      machineId: "machine-test",
       identity: {
         userId: "test-tenant",
         tenantId: "test-tenant",
@@ -385,14 +397,23 @@ describe("Agent Studio MCP authentication wiring", () => {
       cwd: projectRoot,
       harness: "claude-code",
     });
+    const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
     expect(session.agentMapIdentity).toMatchObject({
       projectId: project.projectId,
-      userId: "test-tenant",
+      userId: "local:machine-test",
     });
+    // Existing sessions retain their recorded attribution across account
+    // changes, even when it came from the former account-scoped format.
+    session.agentMapIdentity = {
+      ...session.agentMapIdentity!,
+      userId: "test-tenant",
+    };
     await server!.sessionManager.setAgentSessionId(
       session.id,
       "agent-session-reconnect",
     );
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+    reconcile.mockClear();
     const initialRuntime = server!.sessionManager.getRuntimeEpoch(session.id)!;
 
     expect((await post("/api/auth/disconnect")).status).toBe(200);
@@ -407,8 +428,18 @@ describe("Agent Studio MCP authentication wiring", () => {
     );
     expect(captures.at(-1)).toMatchObject({ kind: "resume" });
     expect(injectedKey(captures.at(-1)!)).toBeUndefined();
+    authFixture.browserResult = {
+      apiKey: "key-b",
+      tenantId: "account-b",
+      organizationName: "Account B",
+      apiKeyId: "key-b-id",
+    };
     expect((await post("/api/auth/start")).status).toBe(200);
     await waitForAuthenticated();
+    expect(authFixture.credential?.tenantId).toBe("account-b");
+    expect(server!.sessionManager.get(session.id)?.agentMapIdentity).toEqual(
+      persistedIdentity,
+    );
 
     await server!.sessionManager.kill(session.id);
     const resume = await post(`/api/sessions/${session.id}/resume`);
@@ -419,6 +450,44 @@ describe("Agent Studio MCP authentication wiring", () => {
     ).toMatchObject({
       status: 200,
       body: { id: session.id, status: "running" },
+    });
+    expect(server!.sessionManager.get(session.id)?.agentMapIdentity).toEqual(
+      persistedIdentity,
+    );
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("keeps a keyless session's Agent Map capability across an account change", async () => {
+    await boot({ machineId: "machine-test" });
+    const session = await server!.sessionManager.create({
+      cwd: projectRoot,
+      harness: "claude-code",
+    });
+    const capability = captures.at(-1)?.agentMapMcp;
+    expect(capability).toBeDefined();
+    const hostContextUrl = `${capability!.url}/host-context`;
+    const headers = {
+      Authorization: `Bearer ${capability!.bearerToken}`,
+    };
+
+    const before = await fetch(hostContextUrl, { headers });
+    expect(before.status).toBe(200);
+
+    authFixture.browserResult = {
+      apiKey: "account-b-key",
+      tenantId: "account-b",
+      organizationName: "Account B",
+      apiKeyId: "account-b-key-id",
+    };
+    expect((await post("/api/auth/start")).status).toBe(200);
+    await waitForAuthenticated();
+
+    const after = await fetch(hostContextUrl, { headers });
+    expect(after.status).toBe(200);
+    expect(await after.json()).toMatchObject({
+      sessionId: session.id,
+      projectId: session.agentMapIdentity!.projectId,
+      userId: "local:machine-test",
     });
   });
 

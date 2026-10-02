@@ -6,7 +6,6 @@ import {
   buildFocusedProjectContext,
   isProjectSessionDispatchAuthorized,
   isWithinCurrentProject,
-  localProjectPrincipal,
 } from "./project-session.js";
 import type { StudioProjectIdentity } from "@sapiom/agent-map/node/studio-project-catalog";
 
@@ -55,11 +54,6 @@ function session(id: string): HarnessSession {
 }
 
 describe("role-neutral project session", () => {
-  it("uses the authenticated user or a stable machine-local principal", () => {
-    expect(localProjectPrincipal("user-1", "machine-1")).toBe("user-1");
-    expect(localProjectPrincipal(null, "machine-1")).toBe("local:machine-1");
-  });
-
   it("accepts only active project roots and their descendants", () => {
     const withMissingBinding: StudioProjectIdentity = {
       ...project,
@@ -110,32 +104,36 @@ describe("role-neutral project session", () => {
     ).toBe(false);
   });
 
-  it("authorizes only the exact neutral principal inside its project", async () => {
+  it("authorizes a scoped session regardless of attribution", async () => {
     const ordinary = session("ordinary");
     await expect(isProjectSessionDispatchAuthorized({
       session: ordinary,
-      currentPrincipal: () => "user-1",
       resolveProject: async () => project,
     })).resolves.toBe(true);
+    ordinary.agentMapIdentity = {
+      projectId,
+      sessionId: ordinary.id,
+      userId: "previous-account",
+    };
     await expect(isProjectSessionDispatchAuthorized({
       session: ordinary,
-      currentPrincipal: () => "user-2",
       resolveProject: async () => project,
-    })).resolves.toBe(false);
+    })).resolves.toBe(true);
   });
 
-  it("rechecks principal and session identity after project lookup", async () => {
-    let userId = "user-1";
+  it("rechecks project and session identity after project lookup", async () => {
     const ordinary = session("race");
     let resolve!: (value: StudioProjectIdentity | null) => void;
     const authorization = isProjectSessionDispatchAuthorized({
       session: ordinary,
-      currentPrincipal: () => userId,
       resolveProject: () => new Promise((done) => { resolve = done; }),
     });
     await Promise.resolve();
-    userId = "user-2";
-    ordinary.agentMapIdentity = { projectId, sessionId: ordinary.id, userId };
+    ordinary.agentMapIdentity = {
+      projectId: "different-project",
+      sessionId: ordinary.id,
+      userId: "user-2",
+    };
     resolve(project);
     await expect(authorization).resolves.toBe(false);
   });

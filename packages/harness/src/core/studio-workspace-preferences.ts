@@ -298,7 +298,7 @@ export class StudioWorkspacePreferenceStore {
       );
       const preference = reconciled.state.preferences.find(
         (candidate) =>
-          candidate.userId === userId && candidate.projectId === projectId,
+          candidate.projectId === projectId,
       );
       const requested = preference?.selection;
       const valid =
@@ -404,8 +404,7 @@ export class StudioWorkspacePreferenceStore {
             }
           : { kind: "agent-map", projectId: requested.projectId };
       const index = reconciled.state.preferences.findIndex(
-        (candidate) =>
-          candidate.userId === userId && candidate.projectId === projectId,
+        (candidate) => candidate.projectId === projectId,
       );
       const sameProject = normalized.projectId === projectId;
       const visibleAgent =

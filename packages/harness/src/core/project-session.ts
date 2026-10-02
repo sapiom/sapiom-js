@@ -24,13 +24,6 @@ export interface FocusedProjectContextDetails {
   warnings?: readonly string[];
 }
 
-export function localProjectPrincipal(
-  userId: string | null,
-  machineId: string,
-): string {
-  return userId ?? `local:${machineId}`;
-}
-
 function isWithinRoot(root: string, candidate: string): boolean {
   if (root.trim() === "" || candidate.trim() === "") return false;
   try {
@@ -62,14 +55,12 @@ function samePrincipal(
   return Boolean(
     identity &&
       identity.projectId === expected.projectId &&
-      identity.userId === expected.userId &&
       identity.sessionId === expected.sessionId,
   );
 }
 
 export async function isProjectSessionDispatchAuthorized(input: {
   session: HarnessSession;
-  currentPrincipal: () => string;
   resolveProject: (
     projectId: StudioProjectId,
   ) => Promise<StudioProjectIdentity | null>;
@@ -81,7 +72,6 @@ export async function isProjectSessionDispatchAuthorized(input: {
     sessionId: identity.sessionId,
     userId: identity.userId,
   };
-  if (input.currentPrincipal() !== expected.userId) return false;
   let project: StudioProjectIdentity | null;
   try {
     project = await input.resolveProject(expected.projectId);
@@ -90,7 +80,6 @@ export async function isProjectSessionDispatchAuthorized(input: {
   }
   return Boolean(
     project &&
-      input.currentPrincipal() === expected.userId &&
       input.session.id === expected.sessionId &&
       samePrincipal(input.session.agentMapIdentity, expected) &&
       isWithinCurrentProject(project, input.session.cwd),

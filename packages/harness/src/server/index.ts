@@ -180,7 +180,7 @@ import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
 import {
   isProjectSessionDispatchAuthorized,
-  localProjectPrincipal,
+  isWithinCurrentProject,
 } from "../core/project-session.js";
 import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-migration.js";
 import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
@@ -746,10 +746,7 @@ export const startServer = async (
   let agentMapMcp: AgentMapMcpRouter | null = null;
   const machineId =
     options.machineId ?? (await getOrCreateMachineId(statePaths.machineId));
-  // Authentication may change in-app without restarting Studio. Keep the
-  // planning principal live and server-private; browser auth DTOs expose only
-  // their existing boolean/organization fields.
-  let projectUserId = identity?.userId ?? null;
+  const projectPrincipal = `local:${machineId}`;
 
   // One-way identity migration: seed ~/.sapiom/analytics.json from the
   // legacy harness machine-id so existing installs keep the same anonymous_id
@@ -1494,40 +1491,31 @@ export const startServer = async (
       mayMintForCwd,
     }: { persisted?: ProjectAgentSession; mayMintForCwd: boolean },
   ): Promise<ProjectAgentSession> => {
-    const userId = localProjectPrincipal(projectUserId, machineId);
     return serializeProjectScopeResolution(async () => {
-      const assertPrincipal = (): void => {
-        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-          throw new ProjectSessionScopeUnavailableError(sessionId);
-        }
-      };
       const identityFor = (projectId: string): ProjectAgentSession => ({
         projectId,
         sessionId,
-        userId,
+        userId: projectPrincipal,
       });
-      assertPrincipal();
-      if (persisted && persisted.sessionId !== sessionId) {
-        throw new ProjectSessionScopeUnavailableError(sessionId);
-      }
-
-      // Resume/final-spawn validation is read-only. In particular, never add
-      // a descendant cwd as a candidate root before proving that the current
-      // durable project still owns it.
-      let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
-      assertPrincipal();
       if (persisted) {
-        if (!project) throw new ProjectSessionScopeUnavailableError(sessionId);
-        return identityFor(project.projectId);
+        if (persisted.sessionId !== sessionId) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        const project = await studioProjectCatalog.resolveIdentity(
+          persisted.projectId,
+        );
+        if (!project || !isWithinCurrentProject(project, cwd)) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        return structuredClone(persisted);
       }
 
+      let project = await studioProjectCatalog.resolveIdentityForPath(cwd);
       if (project) return identityFor(project.projectId);
 
-      assertPrincipal();
       await studioProjectCatalog.reconcile(
         await studioWorkspaceScopeCatalog.list(),
       );
-      assertPrincipal();
       project = await studioProjectCatalog.resolveIdentityForPath(cwd);
 
       if (!project && mayMintForCwd) {
@@ -1536,13 +1524,11 @@ export const startServer = async (
           await studioProjectCatalog.reconcile(
             await studioWorkspaceScopeCatalog.list(),
           );
-          assertPrincipal();
           project = await studioProjectCatalog.resolveIdentityForPath(cwd);
         } finally {
           pendingProjectCwds.delete(cwd);
         }
       }
-      assertPrincipal();
       if (!project) throw new ProjectSessionScopeUnavailableError(sessionId);
       return identityFor(project.projectId);
     });
@@ -1571,13 +1557,7 @@ export const startServer = async (
     // ONE SESSION TYPE, ALWAYS (flow-creation.md §4.4 step 2, Q5). A project
     // session is an ordinary session: no bootstrap claim, no "Plan Agents"
     // title, no metadata that would make its first turn the coordinator's.
-    // The principal check stays: it is the scope guard, not the bootstrap.
-    prepareProjectSession: async (identity) => {
-      if (localProjectPrincipal(projectUserId, machineId) !== identity.userId) {
-        throw new ProjectSessionScopeUnavailableError(identity.sessionId);
-      }
-      return {};
-    },
+    prepareProjectSession: async () => ({}),
     onTerminalInput: (sessionId, context) =>
       projectBootstrap?.onTerminalInput(sessionId, context),
     onRuntimeEpochTransition: async (session, runtimeEpoch) => {
@@ -2882,14 +2862,11 @@ export const startServer = async (
       if (
         !session ||
         !session.agentMapIdentity ||
-        localProjectPrincipal(event.userId, event.machineId) !==
-          session.agentMapIdentity.userId ||
         (runtimeEpoch !== undefined &&
           !sessionManager.acceptsIngestRuntimeEpoch(session.id, runtimeEpoch))
       ) return null;
       const authorized = await isProjectSessionDispatchAuthorized({
         session,
-        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
         resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
       });
       if (
@@ -3071,9 +3048,8 @@ export const startServer = async (
         const session = sessionManager.get(scope.sessionId);
         const current = session?.agentMapIdentity;
         if (!session || session.status === "exited" ||
-          current?.projectId !== scope.projectId || current.userId !== scope.userId ||
-          current.sessionId !== scope.sessionId ||
-          localProjectPrincipal(projectUserId, machineId) !== scope.userId) {
+          current?.projectId !== scope.projectId ||
+          current.sessionId !== scope.sessionId) {
           throw new AgentMapMcpProjectUnavailableError();
         }
         return session;
@@ -3173,7 +3149,7 @@ export const startServer = async (
       available.includes(session.harness) && (session.harness === "claude-code" || session.harness === "codex"))
       .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))[0];
     const preferred = recent?.harness ?? options.defaultHarnessKind ?? "claude-code";
-    return { userId: localProjectPrincipal(projectUserId, machineId), available: roots.length > 0,
+    return { userId: projectPrincipal, available: roots.length > 0,
       discoveryComplete: inventory.discoveryComplete, agents, provider: available.includes(preferred) ? preferred : null };
   };
   agentMapInitialization = new AgentMapInitializationCoordinator({
@@ -3229,7 +3205,6 @@ export const startServer = async (
     canDispatch: (session) =>
       isProjectSessionDispatchAuthorized({
         session,
-        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
         resolveProject: (projectId) =>
           studioProjectCatalog.resolveIdentity(projectId),
       }),
@@ -3274,19 +3249,12 @@ export const startServer = async (
   const initializeOpenedProject = async (
     requestedRoot: string,
   ): Promise<void> => {
-    const userId = localProjectPrincipal(projectUserId, machineId);
     pendingProjectCwds.add(requestedRoot);
     try {
       await serializeProjectScopeResolution(async () => {
-        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-          throw new ProjectSessionScopeUnavailableError("unclaimed");
-        }
         await studioProjectCatalog.reconcile(
           await studioWorkspaceScopeCatalog.list(),
         );
-        if (localProjectPrincipal(projectUserId, machineId) !== userId) {
-          throw new ProjectSessionScopeUnavailableError("unclaimed");
-        }
       });
     } finally {
       pendingProjectCwds.delete(requestedRoot);
@@ -3340,7 +3308,6 @@ export const startServer = async (
       const session = sessionManager.get(id);
       if (!session || !(await isProjectSessionDispatchAuthorized({
         session,
-        currentPrincipal: () => localProjectPrincipal(projectUserId, machineId),
         resolveProject: (projectId) => studioProjectCatalog.resolveIdentity(projectId),
       }))) return null;
       return { harnessSessionId: id, cwd: session.cwd };
@@ -3454,7 +3421,7 @@ export const startServer = async (
       initialization: agentMapInitialization,
       store: agentMapWorkspaceStore,
       preferences: studioWorkspacePreferences,
-      currentUserId: () => localProjectPrincipal(projectUserId, machineId),
+      currentUserId: () => projectPrincipal,
       listWorkflows: () => workflowsCache,
       isWorkflowScanComplete,
       listWorkspaceScopes: () => studioWorkspaceScopeCatalog.list(),
@@ -3733,15 +3700,10 @@ export const startServer = async (
       bus,
       authEnabled,
       environment: process.env.SAPIOM_ENVIRONMENT,
-      onProjectUserChanged: (userId) => {
+      onProjectUserChanged: () => {
         assistantAccess.clear();
         void assistantAccess.refresh();
         deploymentAuthChanged();
-        projectUserId = userId;
-        for (const session of sessionManager.list()) {
-          agentMapCapabilities.revokeSession(session.id);
-          void agentMapMcp?.revokeSession(session.id);
-        }
       },
       onCredentialRemoved: reconcileCredentialRemoval,
     }),

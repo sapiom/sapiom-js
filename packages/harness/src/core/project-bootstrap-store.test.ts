@@ -10,7 +10,6 @@ import type {
 import type { HarnessSession } from "../shared/types.js";
 import {
   ProjectBootstrapStore,
-  ProjectBootstrapDispatchForbiddenError,
   type ProjectBootstrapStoreOptions,
 } from "./project-bootstrap-store.js";
 
@@ -262,18 +261,27 @@ describe("ProjectBootstrapStore", () => {
     ).toMatchObject({ targetSessionId: racing.id });
   });
 
-  it("rejects a foreign project-intent claimant and can recover a missing claimed target", async () => {
+  it("allows a different account to claim a project intent and recover a missing target", async () => {
     const coordinator = new TestBootstrapStore({
       root,
       sessionManager: manager,
     });
     await coordinator.scheduleProject(PROJECT_ID, USER_ID);
+    await expect(coordinator.scheduleProject(PROJECT_ID, "foreign-user"))
+      .resolves.toBe(false);
+    await expect(
+      coordinator.needsProjectSession(PROJECT_ID, "foreign-user"),
+    ).resolves.toBe(true);
     await expect(
       coordinator.claimProject({
         ...session.agentMapIdentity!,
         userId: "foreign-user",
       }),
-    ).rejects.toBeInstanceOf(ProjectBootstrapDispatchForbiddenError);
+    ).resolves.toMatchObject({
+      projectId: PROJECT_ID,
+      userId: "foreign-user",
+      targetSessionId: session.id,
+    });
 
     const first = await coordinator.claimProject(session.agentMapIdentity!);
     session.projectBootstrap = first!;

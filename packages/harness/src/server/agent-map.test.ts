@@ -521,7 +521,7 @@ describe("createAgentMapRouter", () => {
     });
   });
 
-  it("isolates durable selection when the trusted principal changes live", async () => {
+  it("shares durable selection when the trusted principal changes live", async () => {
     const fixture = await start();
     const route = `${fixture.baseUrl}/api/projects/${fixture.project.projectId}/current-workspace`;
     const headers = {
@@ -549,7 +549,7 @@ describe("createAgentMapRouter", () => {
 
     fixture.setCurrentUserId("user-other");
     expect(await (await fetch(route, { headers })).json()).toMatchObject({
-      selection: { kind: "agent-map" },
+      selection: { kind: "agent", agentId },
     });
 
     fixture.setCurrentUserId("user-test");

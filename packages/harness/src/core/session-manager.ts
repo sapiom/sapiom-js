@@ -107,7 +107,6 @@ function sameProjectAgent(
 ): boolean {
   return (
     left.projectId === right.projectId &&
-    left.userId === right.userId &&
     left.sessionId === right.sessionId
   );
 }
@@ -1535,8 +1534,7 @@ export class SessionManager {
     trusted: TrustedSessionResumeOptions = {},
   ): Promise<HarnessSession> {
     if (this.closing) throw new SessionManagerClosingError();
-    const rejectedMetadata = this.rejectedProjectSessionMetadata.has(id);
-    if (rejectedMetadata && !this.sessions.has(id)) {
+    if (this.rejectedProjectSessionMetadata.has(id)) {
       throw new ProjectSessionScopeUnavailableError(id);
     }
     const session = this.sessions.get(id);
@@ -1593,25 +1591,11 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
-    const trustedIdentity = rejectedMetadata ? undefined : session.agentMapIdentity;
-    let agentMapIdentity: ProjectAgentSession;
-    try {
-      agentMapIdentity = await this.resolveAgentMapIdentity(
-        id,
-        session.cwd,
-        trustedIdentity,
-      );
-    } catch (error) {
-      if (
-        !(error instanceof ProjectSessionScopeUnavailableError) ||
-        bindingTransition ||
-        trusted.focusedContext ||
-        trustedIdentity === undefined
-      ) {
-        throw error;
-      }
-      agentMapIdentity = await this.resolveAgentMapIdentity(id, session.cwd);
-    }
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      session.cwd,
+      session.agentMapIdentity,
+    );
     if (bindingTransition && agentMapIdentity.projectId !== bindingTransition.next.projectId) {
       throw new ProjectSessionScopeUnavailableError(id);
     }
@@ -1630,16 +1614,6 @@ export class SessionManager {
       }
     }
     session.agentMapIdentity = structuredClone(agentMapIdentity);
-    const bootstrap = session.projectBootstrap as unknown;
-    if (
-      bootstrap !== undefined &&
-      (rejectedMetadata ||
-        !isRecord(bootstrap) ||
-        bootstrap.projectId !== agentMapIdentity.projectId ||
-        bootstrap.targetSessionId !== id)
-    ) {
-      delete session.projectBootstrap;
-    }
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
     // they must see this lifecycle as starting, not schedule cleanup against
