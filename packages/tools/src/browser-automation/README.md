@@ -193,3 +193,52 @@ exceed it, which can cause settlement to fail.
 Sessions expire at the configured maximum duration, but expiry does not guarantee payment
 settlement. Always close sessions when finished. `withSession` attempts to close the session;
 use `sessions.close` directly and check `settled` when you must verify settlement success.
+
+## Managed tasks
+
+Managed tasks require the `/v1/browser` gateway API. Deploy that gateway before using these methods. The gateway uses the existing direct browser path. It selects the provider agent internally.
+
+`sessions.createManaged` creates a session for `tasks`. Treat `sessionId`, `taskId`, `profileId`, and connection URLs as secrets. Possession of a resource ID authorizes access; the calling application must enforce user and conversation access. The session also has a CDP connection. It has no permanent driver mode. Existing `sessions.create`, `createWithIdentity`, `close`, and `withSession` keep their current behavior. Use `closeManaged` for managed session cleanup and the session's CDP connection for screenshots.
+
+```typescript
+const browser = sapiom.browserAutomation;
+// Save each mutation key before sending. Keep it for retries with the same input.
+const createKey = crypto.randomUUID();
+const taskKey = crypto.randomUUID();
+const session = await browser.sessions.createManaged({
+  idempotencyKey: createKey,
+  recording: false,
+  maxDurationMinutes: 20,
+  idleTimeoutMinutes: 5,
+});
+
+try {
+  const task = await browser.tasks.start({
+    idempotencyKey: taskKey,
+    sessionId: session.sessionId,
+    instructions: "Read the public page title.",
+    url: "https://example.com",
+    maxSteps: 10,
+    outputSchema: { type: "object", properties: { title: { type: "string" } } },
+  });
+  let current = await browser.tasks.get(task.taskId);
+  while (["queued", "running"].includes(current.status)) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    current = await browser.tasks.get(task.taskId);
+  }
+  // Handle completed, failed, canceled, paused, or waiting_for_input here.
+  console.log(current.status);
+} finally {
+  const closed = await browser.sessions.closeManaged(session.sessionId);
+  // Persist a cleanup job and retry closeManaged if settlement is pending.
+  console.log(closed.settlement);
+}
+```
+
+Use `tasks.pause({ taskId, idempotencyKey })`, then read task state until it confirms pause before a CDP client or person acts. Use `tasks.interventions(taskId)` to read input requests. Reply with `tasks.respond({ taskId, idempotencyKey, requestId, response })`. Stop client CDP actions before `tasks.resume({ taskId, idempotencyKey })`. A stale task ID cannot control a newer task. The caller must prevent concurrent actions through a direct CDP connection.
+
+Task states are `queued`, `running`, `paused`, `waiting_for_input`, `completed`, `failed`, and `canceled`. `result` and `error` are optional. `completed` means execution ended; inspect `result` to confirm that the task achieved its objective. Protected fields use `protectedValues`. They require `recording: false` and no persistent profile. Structured intervention responses have the same restriction.
+
+After a lost response, retry the same operation with its original key and input. Do not create a new key for an uncertain operation. A completed session creation retry returns its connection URLs without another payment. For an uncertain creation, use `sessions.recover(createKey)` with the same API key used for creation, even if no tags were supplied. A rotated API key cannot recover the old creation. Direct HTTP clients using a payment proof must preserve that same proof for recovery. A `cleanup_only` result permits `closeManaged` but does not permit tasks or return connection URLs. `unknown` means recovery has not confirmed a resource. `sessions.get(sessionId)` reads session state. There is no session-list endpoint; save returned session IDs in your application. To restore a profile, supply its secret `profileId` when creating a session.
+
+Local Run has matching stub methods. Default stub tasks complete immediately. Use stub overrides to test waiting, failure, and cleanup paths.
