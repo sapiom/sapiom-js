@@ -6,7 +6,7 @@
  * an agent with new buttons touches no existing agent.
  */
 import type { Account, Draft, Issue, IssueStatus } from "./issues";
-import type { Block } from "./slack";
+import { permalink, type Block } from "./slack";
 
 export const ACTION_OWNERS = ["issue", "draft"] as const;
 export type ActionOwner = (typeof ACTION_OWNERS)[number];
@@ -78,6 +78,21 @@ export function escapeMrkdwn(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
+/**
+ * A Slack mrkdwn link. `text` must already be escaped ({@link escapeMrkdwn}); the URLs Sylon links
+ * (Slack permalinks, Linear issue URLs) never contain `|` or `>`.
+ */
+export function mrkdwnLink(url: string, text: string): string {
+  return `<${url}|${text}>`;
+}
+
+/** The customer message that opened the issue, when the row knows it. */
+function customerLink(issue: Issue): string | null {
+  return issue.customerChannel && issue.customerRootTs
+    ? permalink(issue.customerChannel, issue.customerRootTs)
+    : null;
+}
+
 function button(
   owner: ActionOwner,
   verb: string,
@@ -102,7 +117,10 @@ export function issueCardText(issue: Issue, account: Account): string {
   return `#${issue.number} ${account.name}: ${issue.title ?? "(untitled)"} [${statusLabel(issue.status)}]`;
 }
 
-/** The triage card for an issue: number, account, classification, status, owner; Take and Close. */
+/**
+ * The triage card for an issue: number, account, classification, status, owner; Take and Close.
+ * The title links to the customer message and the Linear identifier to the Linear issue.
+ */
 export function issueCard(issue: Issue, account: Account): Block[] {
   const facts = [
     `*Status:* ${statusLabel(issue.status)}`,
@@ -110,14 +128,21 @@ export function issueCard(issue: Issue, account: Account): Block[] {
     `*Priority:* ${issue.priority ?? "none"}`,
     `*Owner:* ${issue.ownerSlackId ? mention(issue.ownerSlackId) : "unassigned"}`,
   ];
-  if (issue.linearIdentifier) facts.push(`*Linear:* ${issue.linearIdentifier}`);
+  if (issue.linearIdentifier) {
+    const id = escapeMrkdwn(issue.linearIdentifier);
+    facts.push(
+      `*Linear:* ${issue.linearUrl ? mrkdwnLink(issue.linearUrl, id) : id}`,
+    );
+  }
+  const title = escapeMrkdwn(issue.title ?? "(untitled)");
+  const customer = customerLink(issue);
   const blocks: Block[] = [
     {
       type: "section",
       block_id: "issue.header",
       text: {
         type: "mrkdwn",
-        text: `*#${issue.number} · ${escapeMrkdwn(account.name)}*\n${escapeMrkdwn(issue.title ?? "(untitled)")}`,
+        text: `*#${issue.number} · ${escapeMrkdwn(account.name)}*\n${customer ? mrkdwnLink(customer, title) : title}`,
       },
     },
     {
@@ -147,13 +172,20 @@ const DRAFT_OUTCOME: Record<Exclude<Draft["status"], "pending">, string> = {
   superseded: "Superseded by a newer draft",
 };
 
-/** The draft reply card in the triage thread: Approve, Escalate, Dismiss while pending; the outcome after. */
+/**
+ * The draft reply card in the triage thread: Approve, Escalate, Dismiss while pending; the outcome
+ * after. The header links to the customer thread the reply would go to.
+ */
 export function draftCard(draft: Draft, issue: Issue): Block[] {
+  const customer = customerLink(issue);
   const blocks: Block[] = [
     {
       type: "section",
       block_id: "draft.header",
-      text: { type: "mrkdwn", text: `*Draft reply for #${issue.number}*` },
+      text: {
+        type: "mrkdwn",
+        text: `*Draft reply for #${issue.number}*${customer ? ` · ${mrkdwnLink(customer, "customer thread")}` : ""}`,
+      },
     },
     {
       type: "section",
@@ -191,21 +223,32 @@ const NUDGE_TEXT: Record<string, string> = {
   no_owner: "No owner yet",
 };
 
-/** A controller ping in the triage thread. Mentions the owner if set; offers Take when unowned. */
+/**
+ * A controller ping in the triage thread. Mentions the owner if set; offers Take when unowned.
+ * With `triageChannel`, `#n` links to the issue's card (the row does not store the channel).
+ */
 export function nudge(
   issue: Issue,
   kind: string,
   ownerSlackId?: string | null,
+  opts: { triageChannel?: string } = {},
 ): Block[] {
   const owner = ownerSlackId ?? issue.ownerSlackId;
   const label = NUDGE_TEXT[kind] ?? kind;
+  const ref =
+    opts.triageChannel && issue.triageRootTs
+      ? mrkdwnLink(
+          permalink(opts.triageChannel, issue.triageRootTs),
+          `#${issue.number}`,
+        )
+      : `#${issue.number}`;
   const blocks: Block[] = [
     {
       type: "section",
       block_id: `nudge.${kind}`,
       text: {
         type: "mrkdwn",
-        text: `${owner ? `${mention(owner)} ` : ""}*${label}* on #${issue.number}`,
+        text: `${owner ? `${mention(owner)} ` : ""}*${label}* on ${ref}`,
       },
     },
   ];

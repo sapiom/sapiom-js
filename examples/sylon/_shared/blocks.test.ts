@@ -6,6 +6,7 @@ import {
   draftCard,
   encodeAction,
   issueCard,
+  mrkdwnLink,
   nudge,
   slackToPlain,
 } from "./blocks";
@@ -34,6 +35,7 @@ const issue: Issue = {
   ownerSlackId: null,
   linearIssueId: null,
   linearIdentifier: null,
+  linearUrl: null,
   createdAt: now,
   updatedAt: now,
   closedAt: null,
@@ -54,6 +56,12 @@ const draft: Draft = {
 };
 
 type Btn = { action_id: string; value: string };
+/** The mrkdwn text of the block with this `block_id` (a section's text, or a context's first element). */
+const textOf = (blocks: Record<string, unknown>[], id: string): string => {
+  const b = blocks.find((x) => x.block_id === id) as
+    { text?: { text: string }; elements?: { text: string }[] } | undefined;
+  return b?.text?.text ?? b?.elements?.[0]?.text ?? "";
+};
 const buttons = (blocks: Record<string, unknown>[]): Btn[] =>
   blocks
     .filter((b) => b.type === "actions")
@@ -113,6 +121,30 @@ describe("issueCard", () => {
     expect(text).toContain("Acme &lt;Corp&gt;");
     expect(text).toContain("Login &amp; SSO fail");
   });
+
+  it("links the title to the customer message, with the title still escaped", () => {
+    expect(textOf(issueCard(issue, account), "issue.header")).toBe(
+      "*#7 · Acme &lt;Corp&gt;*\n<https://slack.com/archives/C1/p10|Login &amp; SSO fail>",
+    );
+    const noThread = { ...issue, customerChannel: null, customerRootTs: null };
+    expect(textOf(issueCard(noThread, account), "issue.header")).toBe(
+      "*#7 · Acme &lt;Corp&gt;*\nLogin &amp; SSO fail",
+    );
+  });
+
+  it("links the Linear identifier when the URL is stored, and shows it bare otherwise", () => {
+    const linked = {
+      ...issue,
+      linearIdentifier: "SAP-12",
+      linearUrl: "https://linear.app/acme/issue/SAP-12/login",
+    };
+    expect(textOf(issueCard(linked, account), "issue.facts")).toContain(
+      "*Linear:* <https://linear.app/acme/issue/SAP-12/login|SAP-12>",
+    );
+    expect(
+      textOf(issueCard({ ...linked, linearUrl: null }, account), "issue.facts"),
+    ).toContain("*Linear:* SAP-12");
+  });
 });
 
 describe("draftCard", () => {
@@ -132,6 +164,18 @@ describe("draftCard", () => {
     expect(buttons(decided)).toEqual([]);
     expect(JSON.stringify(decided)).toContain("Approved and sent by <@U9>");
   });
+
+  it("links the header to the customer thread", () => {
+    expect(textOf(draftCard(draft, issue), "draft.header")).toBe(
+      "*Draft reply for #7* · <https://slack.com/archives/C1/p10|customer thread>",
+    );
+    expect(
+      textOf(
+        draftCard(draft, { ...issue, customerChannel: null }),
+        "draft.header",
+      ),
+    ).toBe("*Draft reply for #7*");
+  });
 });
 
 describe("nudge", () => {
@@ -142,6 +186,29 @@ describe("nudge", () => {
     const owned = nudge(issue, "draft_pending", "U5");
     expect(buttons(owned)).toEqual([]);
     expect(JSON.stringify(owned)).toContain("<@U5>");
+  });
+
+  it("links #n to the ticket card when given the triage channel", () => {
+    const carded = { ...issue, triageRootTs: "1790889400.000200" };
+    expect(
+      textOf(
+        nudge(carded, "no_draft", null, { triageChannel: "C0T" }),
+        "nudge.no_draft",
+      ),
+    ).toBe(
+      "*No draft yet* on <https://slack.com/archives/C0T/p1790889400000200|#7>",
+    );
+    expect(textOf(nudge(carded, "no_draft"), "nudge.no_draft")).toBe(
+      "*No draft yet* on #7",
+    );
+  });
+});
+
+describe("mrkdwnLink", () => {
+  it("wraps already-escaped text", () => {
+    expect(mrkdwnLink("https://x.test/a", "a &amp; b")).toBe(
+      "<https://x.test/a|a &amp; b>",
+    );
   });
 });
 

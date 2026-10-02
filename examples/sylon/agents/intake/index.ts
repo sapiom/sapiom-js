@@ -14,6 +14,7 @@ import {
   escapeMrkdwn,
   issueCard,
   issueCardText,
+  mrkdwnLink,
   slackToPlain,
 } from "../../_shared/blocks";
 import { customerChannel, getConfig } from "../../_shared/config";
@@ -49,6 +50,7 @@ import {
   type Issue,
 } from "../../_shared/issues";
 import {
+  permalink,
   post,
   react,
   replies,
@@ -74,10 +76,37 @@ const EYES = "eyes";
 const MAX_CANDIDATES = 10;
 
 /** First 80 chars of the message as plain text (mentions and links made inert). */
+/**
+ * Drop a trailing client footer such as `*Sent using* <@U…>`, which some Slack clients (the Claude
+ * Slack integration among them) append to the poster's text. It is not part of the message.
+ */
+export function stripClientFooter(text: string): string {
+  // `lastIndexOf` plus an anchored check on that tail only: one regex over the whole message would
+  // backtrack polynomially on long runs of spaces or repeated footers (CodeQL js/polynomial-redos).
+  const trimmed = text.trimEnd();
+  const at = trimmed.lastIndexOf(CLIENT_FOOTER);
+  if (at < 0 || !FOOTER_TAIL.test(trimmed.slice(at))) return text;
+  return trimmed.slice(0, at).trimEnd();
+}
+
+const CLIENT_FOOTER = "*Sent using*";
+const FOOTER_TAIL = /^\*Sent using\*\s*<@[^<>]*>$/;
+
+export const TITLE_MAX = 80;
+
+/** The message as one plain line, at most `TITLE_MAX` characters, cut at a word with an ellipsis. */
 export function titleOf(text: string): string {
-  return (
-    slackToPlain(text).replace(/\s+/g, " ").trim().slice(0, 80) || "(no text)"
-  );
+  const line = slackToPlain(stripClientFooter(text))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!line) return "(no text)";
+  if (line.length <= TITLE_MAX) return line;
+  const cut = line.slice(0, TITLE_MAX - 1);
+  // Cut back to the last whole word, unless the cut already ends one; a single long word (a URL)
+  // is cut mid-word rather than reduced to a stub.
+  const space = line[cut.length] === " " ? cut.length : cut.lastIndexOf(" ");
+  const head = space > TITLE_MAX / 2 ? cut.slice(0, space) : cut;
+  return `${head.replace(/[\s.,;:!?-]+$/, "")}…`;
 }
 
 const plain = (text: string) => escapeMrkdwn(slackToPlain(text));
@@ -620,7 +649,14 @@ const announce = defineStep({
         db,
         (await getIssue(db, input.issueId!)).accountId,
       );
-      const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(input.text)}`;
+      const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(stripClientFooter(input.text))} ${mrkdwnLink(
+        permalink(
+          input.incoming.channel,
+          input.incoming.ts,
+          input.incoming.threadTs,
+        ),
+        "view",
+      )}`;
       // Overlapping runs for one issue (a retry beside a slow first attempt, or two messages at once)
       // both see no card on an unlocked read; under the row lock only the first posts one.
       const { issue, carded } = await db.transaction(async (tx) => {

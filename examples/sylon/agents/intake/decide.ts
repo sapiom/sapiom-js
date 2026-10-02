@@ -44,6 +44,11 @@ export interface Candidate {
 /** Option key for a candidate: Jev answers with keys, code maps them back to ids. */
 export const optionKey = (c: Pick<Candidate, "number">) => `issue_${c.number}`;
 
+/**
+ * The Jev questions for one message. `linked_issue` is asked only when the account has open
+ * issues: a choice needs at least two options, and with no candidates `new` would be the only one
+ * (the decisions API rejects that with a 400, which left every first message unclassified).
+ */
 export function questions(candidates: Candidate[]) {
   const linkCriteria: Record<string, string | null> = {
     [NEW_ISSUE]:
@@ -52,7 +57,7 @@ export function questions(candidates: Candidate[]) {
   for (const c of candidates)
     linkCriteria[optionKey(c)] =
       `#${c.number} ${c.title}${c.lastMessage ? ` (last message: ${c.lastMessage})` : ""}`;
-  return {
+  const base = {
     is_issue: {
       type: "noul",
       instructions:
@@ -73,6 +78,10 @@ export function questions(candidates: Candidate[]) {
       instructions: "How urgent is `message` for the customer?",
       criteria: { ...PRIORITIES },
     },
+  } satisfies Record<string, DecisionQuestion>;
+  if (candidates.length === 0) return base;
+  return {
+    ...base,
     linked_issue: {
       type: "choice",
       instructions:
@@ -87,7 +96,8 @@ export interface IntakeJev {
   is_issue: { noul: number };
   category: { choice: string; probabilities: Record<string, number> };
   priority: { choice: string; probabilities: Record<string, number> };
-  linked_issue: { choice: string; probabilities: Record<string, number> };
+  /** Absent when the account had no open issues to link to. */
+  linked_issue?: { choice: string; probabilities: Record<string, number> };
 }
 
 export type Decision =
@@ -112,10 +122,10 @@ export function decide(input: {
   if (input.forced) return { kind: "open", reason: "ticket" };
   const jev = input.jev;
   if (!jev) return { kind: "open", reason: "unclassified" };
-  const pick = jev.linked_issue.choice;
+  const pick = jev.linked_issue?.choice ?? NEW_ISSUE;
   if (
     pick !== NEW_ISSUE &&
-    (jev.linked_issue.probabilities[pick] ?? 0) >= LINK_MIN
+    (jev.linked_issue?.probabilities[pick] ?? 0) >= LINK_MIN
   ) {
     const target = input.candidates.find((c) => optionKey(c) === pick);
     if (target) return { kind: "link", issueId: target.issueId, reason: "jev" };

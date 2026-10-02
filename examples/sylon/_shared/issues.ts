@@ -55,6 +55,8 @@ export interface Issue {
   ownerSlackId: string | null;
   linearIssueId: string | null;
   linearIdentifier: string | null;
+  /** 050_linear_url: null for issues escalated before it, and on Linear replies without a URL. */
+  linearUrl: string | null;
   createdAt: Date;
   updatedAt: Date;
   closedAt: Date | null;
@@ -148,6 +150,7 @@ const toIssue = (r: Row): Issue => ({
   ownerSlackId: (r.owner_slack_id as string | null) ?? null,
   linearIssueId: (r.linear_issue_id as string | null) ?? null,
   linearIdentifier: (r.linear_identifier as string | null) ?? null,
+  linearUrl: (r.linear_url as string | null) ?? null,
   createdAt: r.created_at as Date,
   updatedAt: r.updated_at as Date,
   closedAt: (r.closed_at as Date | null) ?? null,
@@ -399,6 +402,7 @@ export type IssueFields = Partial<
     | "summary"
     | "linearIssueId"
     | "linearIdentifier"
+    | "linearUrl"
   >
 >;
 
@@ -409,6 +413,7 @@ const FIELD_COLUMNS: Record<keyof IssueFields, string> = {
   summary: "summary",
   linearIssueId: "linear_issue_id",
   linearIdentifier: "linear_identifier",
+  linearUrl: "linear_url",
 };
 
 /** Classification, the copilot's summary, and the Linear link. Status changes go through {@link setStatus}. */
