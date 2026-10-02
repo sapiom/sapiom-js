@@ -75,4 +75,16 @@ export async function seedLocalFixtures(db: Db): Promise<void> {
       JSON.stringify([]),
     ],
   );
+  // Its reply went out, so the card reads "Approved and sent".
+  await db.query(
+    `insert into messages (issue_id, source, source_event_id, channel, ts, thread_ts, user_id, direction, text)
+     values ($1, 'slack', $2, $3, '1790889470.000270', $4, 'U0TEAMMATE2', 'agent', $5)`,
+    [
+      FIXTURE_ISSUE,
+      `draft:${FIXTURE_DECIDED_DRAFT}`,
+      CUSTOMER_CHANNEL,
+      CUSTOMER_ROOT_TS,
+      "An earlier reply that a teammate already approved.",
+    ],
+  );
 }

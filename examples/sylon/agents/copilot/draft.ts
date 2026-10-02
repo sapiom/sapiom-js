@@ -176,8 +176,11 @@ export function copilotCard(
   issue: Issue,
   kb: readonly KbPage[],
   note?: string,
-  /** Replaces `draftCard`'s outcome line, when the decision alone would mislead. */
-  outcome?: string,
+  /**
+   * For an approved draft: whether its reply reached the customer (the `draft:<id>` message is
+   * stored). `false` replaces "Approved and sent", which would otherwise claim a delivery.
+   */
+  replySent?: boolean,
 ): Block[] {
   // A superseded draft was decided by the copilot, not a person: say so without a broken mention.
   const shown =
@@ -201,12 +204,18 @@ export function copilotCard(
     block_id: "draft.meta",
     elements: [{ type: "mrkdwn", text: facts.join("   ") }],
   });
-  if (outcome) {
+  if (draft.status === "approved" && replySent === false) {
     const i = blocks.findIndex((b) => b.block_id === "draft.outcome");
+    const by = draft.decidedBy ? `<@${draft.decidedBy}>` : "a teammate";
     const line: Block = {
       type: "context",
       block_id: "draft.outcome",
-      elements: [{ type: "mrkdwn", text: outcome }],
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `Approved by ${by}; issue closed before sending, reply not sent`,
+        },
+      ],
     };
     if (i >= 0) blocks[i] = line;
     else blocks.push(line);

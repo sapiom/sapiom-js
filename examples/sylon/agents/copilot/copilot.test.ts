@@ -534,6 +534,40 @@ describe("click path", () => {
     expect(card).not.toContain("Approved and sent");
   });
 
+  it("a stale click after an unsent approval still says the reply was not sent", async () => {
+    const click = fixture("slack/block-actions.draft-approve.json").payload;
+    const t = ctxFor("e");
+    const decided = await step("decide").run(click, t.ctx);
+    await setStatus(db, FIXTURE_ISSUE, "closed");
+    await step("apply").run(decided.input, t.ctx);
+    const notSent =
+      "Approved by <@U0TEAMMATE1>; issue closed before sending, reply not sent";
+    // A stale click while the issue is still closed.
+    const t1 = ctxFor("e1");
+    await runAgent({ ...click, trigger_id: "1790889800.2000" }, t1.ctx);
+    expect(JSON.stringify(t1.slack("chat.update")[0].blocks)).toContain(
+      notSent,
+    );
+    expect((await getDraft(db, FIXTURE_DRAFT)).status).toBe("approved");
+    // Reopened, so the second click takes the already-decided path rather than the closed one.
+    await setStatus(db, FIXTURE_ISSUE, "on_you");
+    const t2 = ctxFor("e2");
+    const again = await runAgent(
+      { ...click, trigger_id: "1790889800.2001" },
+      t2.ctx,
+    );
+    expect(last(again).output).toMatchObject({
+      changed: false,
+      status: "approved",
+    });
+    const card = JSON.stringify(t2.slack("chat.update")[0].blocks);
+    expect(card).toContain(
+      "Approved by <@U0TEAMMATE1>; issue closed before sending, reply not sent",
+    );
+    expect(card).not.toContain("Approved and sent");
+    expect(t2.slack("chat.postMessage")).toHaveLength(0);
+  });
+
   it("a retry after the reply went out still reports it sent, even if the issue closed since", async () => {
     const t = ctxFor("e");
     const ds = await runAgent(

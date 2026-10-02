@@ -97,13 +97,18 @@ function db<R>(ctx: DbCtx, fn: (db: Db) => Promise<R>): Promise<R> {
   });
 }
 
+/**
+ * Redraw a draft card from persisted state. For an approved draft the outcome line comes from
+ * whether its `draft:<id>` message exists, so every redraw (apply, a stale click, a supersede)
+ * tells the same truth about delivery.
+ */
 async function updateCard(
   ctx: SlackCtx,
+  db: Db,
   draft: Draft,
   issue: Issue,
   note?: string,
   fallback?: { channel?: string; ts?: string },
-  outcome?: string,
 ): Promise<void> {
   const channel = draft.cardChannel ?? fallback?.channel;
   const ts = draft.cardTs ?? fallback?.ts;
@@ -115,7 +120,15 @@ async function updateCard(
     channel,
     ts,
     text: cardText(issue),
-    blocks: copilotCard(draft, issue, KB, note, outcome),
+    blocks: copilotCard(
+      draft,
+      issue,
+      KB,
+      note,
+      draft.status === "approved"
+        ? !!(await messageBySourceEventId(db, `draft:${draft.id}`))
+        : undefined,
+    ),
   });
 }
 
@@ -301,7 +314,7 @@ async function draftReply(
         }
       return { own, retired, stale: false, posted };
     });
-    for (const old of published.retired) await updateCard(ctx, old, issue);
+    for (const old of published.retired) await updateCard(ctx, db, old, issue);
     if (published.stale)
       return terminate({
         issueId: issue.id,
@@ -375,6 +388,7 @@ const decide = defineStep({
         );
         await updateCard(
           ctx,
+          db,
           dismissed.draft,
           issueNow,
           dismissed.changed ? "Issue is closed; reply not sent." : undefined,
@@ -400,7 +414,7 @@ const decide = defineStep({
       if (!changed) {
         // Someone (or a superseding draft) decided first: show that, do nothing else.
         const issue = await getIssue(db, draft.issueId);
-        await updateCard(ctx, draft, issue, undefined, {
+        await updateCard(ctx, db, draft, issue, undefined, {
           channel: click.container?.channel_id,
           ts: click.container?.message_ts,
         });
@@ -432,8 +446,6 @@ const apply = defineStep({
         status: draft.status,
       };
       let note: string | undefined;
-
-      let outcome: string | undefined;
 
       if (draft.status === "approved") {
         if (!issue.customerChannel || !issue.customerRootTs)
@@ -472,8 +484,8 @@ const apply = defineStep({
         });
         issue = await getIssue(db, issue.id);
         if (!sent) {
-          // The click happened, so the decision stays approved; the card says nothing went out.
-          outcome = `Approved by <@${clicker}>; issue closed before sending, reply not sent`;
+          // The click happened, so the decision stays approved; the redraw below reads the
+          // missing message and says nothing went out.
           out.replySent = false;
         } else {
           out.replyTs = sent.ts;
@@ -502,17 +514,10 @@ const apply = defineStep({
         out.duplicate = receipt.duplicate;
       }
 
-      await updateCard(
-        ctx,
-        draft,
-        issue,
-        note,
-        {
-          channel: click.container?.channel_id,
-          ts: click.container?.message_ts,
-        },
-        outcome,
-      );
+      await updateCard(ctx, db, draft, issue, note, {
+        channel: click.container?.channel_id,
+        ts: click.container?.message_ts,
+      });
       return terminate(out);
     });
   },
