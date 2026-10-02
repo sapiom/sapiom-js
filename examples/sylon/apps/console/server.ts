@@ -6,8 +6,11 @@
  * this file, the page and the `_shared` code into one `dist/server.mjs` that needs no install.
  *
  * Env: SAPIOM_API_KEY (an org key: it lists and changes triggers, starts runs, replays receipts,
- * and resolves the database), CONSOLE_SECRET (required by every POST; see `checkSecret`),
- * PORT (default 3000), SAPIOM_API_URL (default production).
+ * and resolves the database), PORT (default 3000), SAPIOM_API_URL (default production).
+ *
+ * There is no login of its own: the App Link admits only signed-in org members, and its preview
+ * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
+ * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  */
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -31,10 +34,8 @@ import {
   CONTROLLER,
   LIVE_AGENT,
   TABLES,
-  SECRET_HEADER,
   agentByKey,
   agentPageUrl,
-  checkSecret,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
@@ -43,11 +44,13 @@ import {
   listensTo,
   planSwitch,
   receiptView,
+  replayPlan,
   redact,
   slackChannelUrl,
   triggerBody,
   triggerStates,
   type AttachedTrigger,
+  type ReceiptFire,
   type ReceiptSummary,
 } from "./logic";
 
@@ -57,7 +60,6 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
   "",
 );
 const API_KEY = process.env.SAPIOM_API_KEY ?? "";
-const SECRET = process.env.CONSOLE_SECRET;
 
 class HttpError extends Error {
   constructor(
@@ -140,7 +142,7 @@ async function fleetState() {
 /** Turn one agent on or off; returns the trigger ids it created, resumed and deleted. */
 async function setAgent(key: string, on: boolean) {
   const agent = agentByKey(key);
-  if (!agent) throw new HttpError(404, `no agent '${key}' in fleet.json`);
+  if (!agent) throw new HttpError(403, `'${key}' is not a Sylon agent`);
   const attached = await attachedTriggers(agent.slug);
   if (!attached)
     throw new HttpError(
@@ -378,6 +380,22 @@ async function system(d: Db) {
   };
 }
 
+/** Re-drive a receipt's failed fleet fires, one by one; see `replayPlan`. */
+async function replayReceipt(id: string) {
+  const receipt = await sapiom<{ fires?: ReceiptFire[] }>(
+    "GET",
+    `/v1/workflows/receipts/${id}`,
+  );
+  const plan = replayPlan(receipt.fires ?? []);
+  if (!plan.ok) throw new HttpError(plan.status, plan.reason);
+  const replayed = [];
+  for (const fireId of plan.fireIds)
+    replayed.push(
+      await sapiom("POST", `/v1/workflows/fires/${fireId}/replay`, {}),
+    );
+  return { receiptId: id, fireIds: plan.fireIds, replayed };
+}
+
 // --- HTTP ------------------------------------------------------------------------------------
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -427,9 +445,8 @@ const GET: [RegExp, Handler][] = [
   [/^\/api\/system$/, () => withConsoleDb(system)],
 ];
 
-/** Every POST changes state and passes the secret check first. */
+/** Every POST changes state, and each is scoped to the fleet. */
 const POST: [RegExp, Handler][] = [
-  [/^\/api\/auth$/, async () => ({ ok: true })],
   [/^\/api\/agents\/([a-z-]+)\/on$/, ([key]) => setAgent(key!, true)],
   [/^\/api\/agents\/([a-z-]+)\/off$/, ([key]) => setAgent(key!, false)],
   [
@@ -468,10 +485,7 @@ const POST: [RegExp, Handler][] = [
       return { closed: await withConsoleDb((d) => resetBoard(d, ctx)) };
     },
   ],
-  [
-    /^\/api\/receipts\/(\d+)\/replay$/,
-    ([id]) => sapiom("POST", `/v1/workflows/receipts/${id}/replay`),
-  ],
+  [/^\/api\/receipts\/(\d+)\/replay$/, ([id]) => replayReceipt(id!)],
 ];
 
 function route(table: [RegExp, Handler][], path: string) {
@@ -498,15 +512,6 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     req.method === "GET" ? GET : req.method === "POST" ? POST : null;
   const hit = table && route(table, path);
   if (!hit) return send(res, 404, { error: "not found" });
-  if (req.method === "POST") {
-    const verdict = checkSecret(SECRET, req.headers[SECRET_HEADER]);
-    if (verdict === "unset")
-      return send(res, 503, {
-        error: "CONSOLE_SECRET is not set; mutations are off",
-      });
-    // No detail: a caller probing the guard learns nothing about why it failed.
-    if (verdict === "denied") return send(res, 403, { error: "forbidden" });
-  }
   const body = req.method === "POST" ? await readJson(req) : {};
   return send(res, 200, await hit.handler(hit.params, body, url));
 }
@@ -516,7 +521,6 @@ createServer((req, res) => {
     const status = err instanceof HttpError ? err.status : 500;
     const raw = redact(err instanceof Error ? err.message : String(err), [
       API_KEY,
-      SECRET,
     ]);
     if (status >= 500) console.error(`${req.method} ${req.url}: ${raw}`);
     // Only our own HttpError messages reach the page; a driver or network error could name a

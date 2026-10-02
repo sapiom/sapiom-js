@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { AttachedTrigger, ReceiptSummary } from "./logic";
+import type { AttachedTrigger, ReceiptFire, ReceiptSummary } from "./logic";
 import {
   AGENTS,
-  checkSecret,
   failedFleetReceipts,
   fleetWideKeys,
   isOn,
@@ -12,6 +11,7 @@ import {
   planSwitch,
   receiptView,
   redact,
+  replayPlan,
   secondsBetween,
   slackTsToMs,
   triggerStates,
@@ -198,28 +198,74 @@ describe("failed receipts", () => {
   });
 });
 
-describe("route guard", () => {
-  it("accepts only the exact secret", () => {
-    expect(checkSecret("s3cret-value", "s3cret-value")).toBe("ok");
-    expect(checkSecret("s3cret-value", "s3cret-valuf")).toBe("denied");
-    expect(checkSecret("s3cret-value", "short")).toBe("denied");
-    expect(checkSecret("s3cret-value", undefined)).toBe("denied");
-    expect(checkSecret("s3cret-value", ["s3cret-value"])).toBe("denied");
+describe("scoping", () => {
+  it("never plans for a definition outside the fleet", () => {
+    for (const key of ["backlog-nudge", "smoke-ingest", "smoke-consume"])
+      expect(planSwitch(key, false, [ev("1", "slack.block_actions")])).toEqual({
+        create: [],
+        resume: [],
+        remove: [],
+      });
   });
 
-  it("redacts the key and the secret from error text", () => {
+  it("ignores a listed trigger that belongs to another definition", () => {
+    const foreign = {
+      ...ev("9", "issue.escalate"),
+      definitionSlug: "backlog-nudge",
+    };
+    expect(planSwitch("escalation", false, [foreign]).remove).toEqual([]);
+    expect(planSwitch("escalation", true, [foreign]).create).toHaveLength(1);
+    const own = {
+      ...ev("8", "issue.escalate"),
+      definitionSlug: "sylon-escalation",
+    };
+    expect(planSwitch("escalation", false, [own, foreign]).remove).toEqual([
+      "8",
+    ]);
+  });
+
+  const fire = (
+    id: string,
+    slug: string,
+    state: string,
+    stale = false,
+  ): ReceiptFire => ({ id, state, stale, trigger: { definitionSlug: slug } });
+
+  it("refuses a receipt with no Sylon fire", () => {
+    expect(replayPlan([fire("1", "backlog-nudge", "failed")])).toEqual({
+      ok: false,
+      status: 403,
+      reason: "not a Sylon receipt",
+    });
+    expect(replayPlan([])).toMatchObject({ ok: false, status: 403 });
     expect(
-      redact("bad key sk_live_abc and sk_live_abc, secret s3", [
-        "sk_live_abc",
-        "s3",
-        undefined,
-      ]),
-    ).toBe("bad key [redacted] and [redacted], secret [redacted]");
+      replayPlan([{ id: "2", state: "failed", trigger: null }]),
+    ).toMatchObject({ ok: false, status: 403 });
   });
 
-  it("fails closed when no secret is configured", () => {
-    expect(checkSecret(undefined, "anything")).toBe("unset");
-    expect(checkSecret("", "")).toBe("unset");
+  it("replays only the failed fires on fleet slugs", () => {
+    expect(
+      replayPlan([
+        fire("1", "backlog-nudge", "failed"),
+        fire("2", "sylon-copilot", "failed"),
+        fire("3", "sylon-intake", "succeeded"),
+        fire("4", "sylon-intake", "claimed", true),
+        fire("5", "sylon-intake", "claimed"),
+      ]),
+    ).toEqual({ ok: true, fireIds: ["2", "4"] });
+  });
+
+  it("has nothing to do when every Sylon fire succeeded", () => {
+    expect(replayPlan([fire("3", "sylon-intake", "succeeded")])).toMatchObject({
+      ok: false,
+      status: 409,
+    });
+  });
+
+  it("redacts the key from error text", () => {
+    expect(
+      redact("bad key sk_live_abc and sk_live_abc", ["sk_live_abc", undefined]),
+    ).toBe("bad key [redacted] and [redacted]");
   });
 });
 
