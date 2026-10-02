@@ -699,5 +699,26 @@
     "pattern": "Workflow engines like Temporal|Cloudflare Workflows",
     "occurrences": 2,
     "reason": "The captured run's built site, verbatim: the model's research prose naming third-party products (Temporal-style engines, Cloudflare Workflows), not Sapiom copy."
+  },
+  {
+    "id": "proposal-generator-dashboard-runs-list-route",
+    "path": "examples/proposal-generator/app/server.mjs",
+    "pattern": "^/v1/workflows/executions\\?$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that lists an agent's runs. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "proposal-generator-dashboard-run-detail-route",
+    "path": "examples/proposal-generator/app/server.mjs",
+    "pattern": "^/v1/workflows/executions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that reads one agent run's output. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "proposal-generator-dashboard-sample-run-drafted-prose",
+    "path": "examples/proposal-generator/app/sample-run.json",
+    "pattern": "support workflow|confirmation workflow",
+    "occurrences": 2,
+    "reason": "The captured run's drafted proposal, verbatim: the model's scope and line-item prose about the client's own support process, not Sapiom copy."
   }
 ]
