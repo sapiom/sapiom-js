@@ -5,6 +5,7 @@
  * server holds an org key). No I/O, so all of it is unit-tested.
  */
 import fleet from "../../fleet.json";
+import { KB_KINDS, type KbInput } from "../../_shared/kb";
 
 export interface FleetProject {
   key: string;
@@ -156,7 +157,7 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
   copilot: {
     emits: ["issue.escalate"],
     writes:
-      "drafts, messages, issues (status, summary), runs, events_log; posts draft cards in triage and the approved reply in the customer thread",
+      "drafts, messages, issues (status, summary), doc_cache, runs, events_log; reads kb_articles and docs.sapiom.ai; posts draft cards in triage and the approved reply in the customer thread",
   },
   escalation: {
     emits: ["issue.on_hold"],
@@ -195,6 +196,11 @@ export const TABLES: [string, string][] = [
     "follow-ups the controller already sent, one per issue and condition",
   ],
   ["runs", "each agent execution and the issue it worked on"],
+  [
+    "kb_articles",
+    "the team's policies and answers the copilot drafts from, edited in the Knowledge tab",
+  ],
+  ["doc_cache", "docs.sapiom.ai pages the copilot fetched, kept for an hour"],
   [
     "events_log",
     "every domain event an agent emitted, with its engine receipt id",
@@ -533,4 +539,54 @@ export function costSummary(issues: IssueCost[]) {
     meanSandboxSeconds: mean(total.sandboxSeconds),
     pylonUsdPerTicket: PYLON_USD_PER_TICKET,
   };
+}
+
+// --- knowledge base --------------------------------------------------------------------------
+
+export const KB_TITLE_MAX = 200;
+export const KB_BODY_MAX = 8000;
+
+export type KbParse =
+  { ok: true; value: Partial<KbInput> } | { ok: false; error: string };
+
+/**
+ * Validate a Knowledge tab request body. Create needs kind, title and body; update takes any
+ * subset but at least one field. Strings are trimmed and may not be empty. Other keys are ignored,
+ * so a request can never set `updated_by` or an id.
+ */
+export function parseKbInput(
+  body: Record<string, unknown>,
+  mode: "create" | "update",
+): KbParse {
+  const value: Partial<KbInput> = {};
+  if (body.kind !== undefined) {
+    if (!(KB_KINDS as readonly unknown[]).includes(body.kind))
+      return { ok: false, error: `kind must be ${KB_KINDS.join(" or ")}` };
+    value.kind = body.kind as KbInput["kind"];
+  }
+  for (const [key, max] of [
+    ["title", KB_TITLE_MAX],
+    ["body", KB_BODY_MAX],
+  ] as const) {
+    const raw = body[key];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string" || !raw.trim())
+      return { ok: false, error: `${key} must be non-empty text` };
+    if (raw.trim().length > max)
+      return { ok: false, error: `${key} is over ${max} characters` };
+    value[key] = raw.trim();
+  }
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean")
+      return { ok: false, error: "enabled must be true or false" };
+    value.enabled = body.enabled;
+  }
+  if (mode === "create") {
+    for (const key of ["kind", "title", "body"] as const)
+      if (value[key] === undefined)
+        return { ok: false, error: `${key} is required` };
+  } else if (Object.keys(value).length === 0) {
+    return { ok: false, error: "nothing to update" };
+  }
+  return { ok: true, value };
 }

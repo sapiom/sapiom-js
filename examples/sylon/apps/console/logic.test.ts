@@ -14,7 +14,10 @@ import {
   fleetWideKeys,
   isOn,
   linearIssueUrl,
+  KB_BODY_MAX,
+  KB_TITLE_MAX,
   latencies,
+  parseKbInput,
   planSwitch,
   receiptView,
   redact,
@@ -398,5 +401,48 @@ describe("metrics", () => {
     expect(s.meanSandboxSeconds).toBe(10);
     expect(s.pylonUsdPerTicket).toBe(3);
     expect(costSummary([]).meanUsd).toBeNull();
+  });
+});
+
+describe("parseKbInput", () => {
+  const ok = { kind: "policy", title: "  Refunds ", body: "Never promise." };
+
+  it("creates from kind, title and body, trimmed, enabled optional", () => {
+    expect(parseKbInput(ok, "create")).toEqual({
+      ok: true,
+      value: { kind: "policy", title: "Refunds", body: "Never promise." },
+    });
+    expect(parseKbInput({ ...ok, enabled: false }, "create")).toMatchObject({
+      ok: true,
+      value: { enabled: false },
+    });
+  });
+
+  it.each([
+    [{ ...ok, kind: undefined }, "kind is required"],
+    [{ ...ok, title: undefined }, "title is required"],
+    [{ ...ok, body: undefined }, "body is required"],
+    [{ ...ok, kind: "memo" }, "kind must be policy or answer"],
+    [{ ...ok, title: "   " }, "title must be non-empty text"],
+    [{ ...ok, body: 5 }, "body must be non-empty text"],
+    [{ ...ok, enabled: "yes" }, "enabled must be true or false"],
+    [{ ...ok, title: "t".repeat(KB_TITLE_MAX + 1) }, "title is over"],
+    [{ ...ok, body: "b".repeat(KB_BODY_MAX + 1) }, "body is over"],
+  ])("rejects an invalid create body (%#)", (body, message) => {
+    const out = parseKbInput(body as Record<string, unknown>, "create");
+    expect(out).toMatchObject({ ok: false });
+    expect((out as { error: string }).error).toContain(message);
+  });
+
+  it("update takes any subset but not nothing, and ignores other keys", () => {
+    expect(parseKbInput({ enabled: false }, "update")).toEqual({
+      ok: true,
+      value: { enabled: false },
+    });
+    expect(parseKbInput({ id: "x", updated_by: "me" }, "update")).toEqual({
+      ok: false,
+      error: "nothing to update",
+    });
+    expect(parseKbInput({ title: "" }, "update")).toMatchObject({ ok: false });
   });
 });
