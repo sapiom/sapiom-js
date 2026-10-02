@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sylon Console</title>
+    <style>
+      :root {
+        --bg: #f6f6f4;
+        --panel: #ffffff;
+        --ink: #1d1d1b;
+        --muted: #6b6b66;
+        --line: #e2e2dc;
+        --accent: #2f5bd3;
+        --ok: #1f7a43;
+        --warn: #a15c00;
+        --bad: #b42318;
+        --chip: #efefea;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #141413;
+          --panel: #1d1d1b;
+          --ink: #ecece6;
+          --muted: #9a9a92;
+          --line: #33332f;
+          --accent: #7d9bff;
+          --ok: #5cc98a;
+          --warn: #e0a24a;
+          --bad: #f07a6e;
+          --chip: #2a2a27;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }
+      header h1 {
+        font-size: 16px;
+        margin: 0;
+      }
+      main {
+        display: grid;
+        gap: 12px;
+        padding: 12px 16px 48px;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+        min-width: 0;
+      }
+      section h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin: 0 0 8px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+      }
+      button {
+        font: inherit;
+        border: 1px solid var(--line);
+        background: var(--chip);
+        color: var(--ink);
+        border-radius: 6px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button.danger {
+        border-color: var(--bad);
+        color: var(--bad);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      input[type="password"],
+      input[type="text"] {
+        font: inherit;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--ink);
+        min-width: 0;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .warn {
+        color: var(--warn);
+      }
+      .bad {
+        color: var(--bad);
+      }
+      .chip {
+        display: inline-block;
+        background: var(--chip);
+        border-radius: 4px;
+        padding: 0 6px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      code {
+        font-size: 12px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        text-align: left;
+        padding: 4px 6px 4px 0;
+        border-top: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th {
+        font-weight: 500;
+        color: var(--muted);
+        font-size: 12px;
+        border-top: 0;
+      }
+      .scroll {
+        overflow-x: auto;
+      }
+      .agent {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 0;
+        border-top: 1px solid var(--line);
+        align-items: flex-start;
+      }
+      .agent:first-of-type {
+        border-top: 0;
+      }
+      .num {
+        font-variant-numeric: tabular-nums;
+      }
+      .big {
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .legs {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .leg {
+        background: var(--chip);
+        border-radius: 6px;
+        padding: 6px 8px;
+      }
+      .cue {
+        border-top: 1px solid var(--line);
+        padding: 8px 0;
+      }
+      .cue:first-of-type {
+        border-top: 0;
+      }
+      #log {
+        font:
+          12px/1.4 ui-monospace,
+          monospace;
+        white-space: pre-wrap;
+        max-height: 180px;
+        overflow: auto;
+        margin: 0;
+      }
+      .confirm {
+        border: 1px solid var(--bad);
+        border-radius: 6px;
+        padding: 8px;
+        margin-top: 8px;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Sylon Console</h1>
+      <div class="row" id="auth"></div>
+    </header>
+    <main>
+      <section id="fleet-panel">
+        <h2>
+          Fleet
+          <span class="row">
+            <button id="pause">Pause fleet</button>
+            <button id="resume">Resume fleet</button>
+          </span>
+        </h2>
+        <div id="fleet" class="muted">loading…</div>
+        <p class="muted" style="margin: 8px 0 0">
+          Pause and Resume leave urgent-pager alone.
+        </p>
+      </section>
+
+      <section>
+        <h2>Demo beats</h2>
+        <div class="row" style="margin-bottom: 8px">
+          <button id="add-pager" class="primary">Add urgent-pager live</button>
+          <span id="pager-state" class="muted"></span>
+        </div>
+        <div class="row">
+          <strong>Controller</strong>
+          <span id="ctl-state" class="muted"></span>
+          <button id="ctl-start">Start cron</button>
+          <button id="ctl-stop">Stop cron</button>
+          <button id="ctl-run">Run now</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>
+          Board
+          <button id="reset" class="danger">Reset board</button>
+        </h2>
+        <div id="reset-confirm" hidden class="confirm">
+          <p style="margin: 0 0 6px">
+            Close <strong id="open-count">every open</strong> ticket and redraw
+            its card?
+          </p>
+          <div class="row">
+            <button id="reset-yes" class="danger">Yes, close them</button>
+            <button id="reset-no">Cancel</button>
+          </div>
+        </div>
+        <div id="counts" class="row" style="margin: 6px 0"></div>
+        <div class="scroll"><table id="board"></table></div>
+      </section>
+
+      <section>
+        <h2>
+          Last ticket
+          <span class="row"
+            ><input
+              id="tl-issue"
+              type="text"
+              inputmode="numeric"
+              placeholder="newest"
+              size="6"
+              aria-label="Issue number"
+          /></span>
+        </h2>
+        <div id="timeline" class="muted">loading…</div>
+      </section>
+
+      <section>
+        <h2>
+          Failed events
+          <button id="rcpt-refresh">Refresh</button>
+        </h2>
+        <div id="receipts" class="muted">loading…</div>
+      </section>
+
+      <section>
+        <h2>
+          Cue cards
+          <label class="row" style="text-transform: none; letter-spacing: 0"
+            ><input type="checkbox" id="cue-prefix" checked /> prefix</label
+          >
+        </h2>
+        <p class="muted" style="margin: 0 0 6px">
+          Type these in the customer channel as a person: the connector drops
+          bot posts.
+        </p>
+        <div id="cues"></div>
+      </section>
+
+      <section>
+        <h2>Action log</h2>
+        <pre id="log" class="muted">nothing yet</pre>
+      </section>
+    </main>
+
+    <script>
+      const SECRET_KEY = "sylon-console-secret";
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      function getSecret() {
+        try {
+          return localStorage.getItem(SECRET_KEY) || "";
+        } catch {
+          return "";
+        }
+      }
+      function setSecret(v) {
+        try {
+          v
+            ? localStorage.setItem(SECRET_KEY, v)
+            : localStorage.removeItem(SECRET_KEY);
+        } catch {}
+        memSecret = v;
+      }
+      let memSecret = getSecret();
+
+      function log(line) {
+        const el = $("log");
+        const stamp = new Date().toLocaleTimeString();
+        el.textContent =
+          `${stamp}  ${line}\n` +
+          (el.textContent === "nothing yet" ? "" : el.textContent);
+      }
+
+      async function get(path) {
+        const r = await fetch(path, { cache: "no-store" });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || r.statusText);
+        return body;
+      }
+      async function post(path, body) {
+        const r = await fetch(path, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-console-secret": memSecret,
+          },
+          body: JSON.stringify(body || {}),
+        });
+        const out = await r.json().catch(() => ({}));
+        if (r.status === 401) {
+          setSecret("");
+          renderAuth();
+        }
+        if (!r.ok) throw new Error(out.error || r.statusText);
+        return out;
+      }
+
+      /** Run a mutating action: disable the button while it runs, log ids, refresh. */
+      async function act(btn, label, path, body) {
+        if (!memSecret) {
+          log(`${label}: enter the console secret first`);
+          return;
+        }
+        btn && (btn.disabled = true);
+        try {
+          const out = await post(path, body);
+          log(`${label}: ${summarize(out)}`);
+        } catch (e) {
+          log(`${label} FAILED: ${e.message}`);
+        } finally {
+          btn && (btn.disabled = false);
+          refreshFleet();
+          refreshBoard();
+          refreshTimeline();
+        }
+      }
+
+      function summarize(out) {
+        if (out.agents)
+          return out.agents.map(summarize).join("; ") || "nothing to do";
+        if (out.key)
+          return `${out.key} ${out.on ? "on" : "off"} (created [${out.created}] resumed [${out.resumed}] deleted [${out.deleted}])`;
+        if (out.closed)
+          return `closed ${out.closed.length}: ${out.closed.map((c) => `#${c.number} ${c.card}`).join(", ") || "none open"}`;
+        if (out.executionId || out.id)
+          return `execution ${out.executionId || out.id}`;
+        return JSON.stringify(out).slice(0, 300);
+      }
+
+      function renderAuth() {
+        const el = $("auth");
+        if (memSecret) {
+          el.innerHTML = `<span class="ok">controls unlocked</span> <button id="lock">Lock</button>`;
+          $("lock").onclick = () => {
+            setSecret("");
+            renderAuth();
+          };
+        } else {
+          el.innerHTML = `<input id="secret" type="password" placeholder="console secret" autocomplete="off" aria-label="Console secret"> <button id="unlock" class="primary">Unlock</button>`;
+          const go = async () => {
+            const v = $("secret").value.trim();
+            if (!v) return;
+            memSecret = v;
+            try {
+              await post("/api/auth");
+              setSecret(v);
+              log("controls unlocked");
+            } catch (e) {
+              memSecret = "";
+              log(`unlock failed: ${e.message}`);
+            }
+            renderAuth();
+          };
+          $("unlock").onclick = go;
+          $("secret").onkeydown = (e) => e.key === "Enter" && go();
+        }
+      }
+
+      // --- fleet -------------------------------------------------------------------------
+      let fleet = [];
+      async function refreshFleet() {
+        try {
+          fleet = await get("/api/fleet");
+          renderFleet();
+        } catch (e) {
+          $("fleet").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      function renderFleet() {
+        $("fleet").className = "";
+        $("fleet").innerHTML = fleet
+          .map((a) => {
+            const trig = a.triggers
+              .map(
+                (t) =>
+                  `<span class="chip ${t.state === "active" ? "ok" : t.state === "paused" ? "warn" : "muted"}">${esc(t.label)}${t.id ? ` #${esc(t.id)}` : ""}${t.state === "active" ? "" : ` · ${t.state}`}</span>`,
+              )
+              .join(" ");
+            const right = a.deployed
+              ? `<button data-agent="${esc(a.key)}" data-on="${a.on ? "0" : "1"}" class="${a.on ? "" : "primary"}">${a.on ? "Turn off" : "Turn on"}</button>`
+              : "";
+            const state = a.deployed
+              ? `<span class="${a.on ? "ok" : "muted"}">${a.on ? "on" : "off"}</span>`
+              : `<span class="warn">not deployed: run <code>pnpm run setup --only ${esc(a.key)}</code></span>`;
+            return `<div class="agent"><div><strong>${esc(a.key)}</strong> ${state}<div class="row" style="margin-top:3px">${trig}</div></div>${right}</div>`;
+          })
+          .join("");
+        for (const b of $("fleet").querySelectorAll("button[data-agent]")) {
+          b.onclick = () =>
+            act(
+              b,
+              `${b.dataset.on === "1" ? "on" : "off"} ${b.dataset.agent}`,
+              `/api/agents/${b.dataset.agent}/${b.dataset.on === "1" ? "on" : "off"}`,
+            );
+        }
+        const pager = fleet.find((a) => a.key === "urgent-pager");
+        $("add-pager").disabled = !pager?.deployed || pager.on;
+        $("pager-state").textContent = !pager?.deployed
+          ? "not deployed: run pnpm run setup --only urgent-pager"
+          : pager.on
+            ? "attached"
+            : "not attached";
+        const ctl = fleet.find((a) => a.key === "controller");
+        $("ctl-state").textContent = !ctl?.deployed
+          ? "not deployed"
+          : ctl.on
+            ? "cron on"
+            : "cron off";
+        $("ctl-start").disabled = !ctl?.deployed || ctl.on;
+        $("ctl-stop").disabled = !ctl?.deployed || !ctl.on;
+        $("ctl-run").disabled = !ctl?.deployed;
+      }
+      $("pause").onclick = (e) =>
+        act(e.target, "pause fleet", "/api/fleet/pause");
+      $("resume").onclick = (e) =>
+        act(e.target, "resume fleet", "/api/fleet/resume");
+      $("add-pager").onclick = (e) =>
+        act(e.target, "add urgent-pager", "/api/agents/urgent-pager/on");
+      $("ctl-start").onclick = (e) =>
+        act(e.target, "controller cron start", "/api/agents/controller/on");
+      $("ctl-stop").onclick = (e) =>
+        act(e.target, "controller cron stop", "/api/agents/controller/off");
+      $("ctl-run").onclick = (e) =>
+        act(e.target, "controller run now", "/api/controller/run");
+
+      // --- board -------------------------------------------------------------------------
+      const STATUSES = ["new", "on_you", "on_customer", "on_hold", "closed"];
+      let openCount = 0;
+      function age(t) {
+        const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
+        if (s < 90) return `${Math.round(s)}s`;
+        if (s < 5400) return `${Math.round(s / 60)}m`;
+        if (s < 129600) return `${Math.round(s / 3600)}h`;
+        return `${Math.round(s / 86400)}d`;
+      }
+      async function refreshBoard() {
+        try {
+          const b = await get("/api/board");
+          openCount = STATUSES.slice(0, 4).reduce(
+            (n, s) => n + (b.counts[s] || 0),
+            0,
+          );
+          $("counts").innerHTML = STATUSES.map(
+            (s) =>
+              `<span class="chip">${s} <strong class="num">${b.counts[s] || 0}</strong></span>`,
+          ).join("");
+          $("board").innerHTML =
+            `<tr><th>#</th><th>Account</th><th>Title</th><th>Status</th><th>Owner</th><th>Linear</th><th>Age</th></tr>` +
+            b.issues
+              .map(
+                (i) =>
+                  `<tr><td class="num">${i.cardUrl ? `<a href="${esc(i.cardUrl)}" target="_blank" rel="noopener">#${i.number}</a>` : `#${i.number}`}</td><td>${esc(i.account)}</td><td>${esc(i.title)}${i.priority === "urgent" ? ' <span class="chip bad">urgent</span>' : ""}</td><td>${esc(i.status)}</td><td>${esc(i.owner || "")}</td><td>${esc(i.linear || "")}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
+              )
+              .join("");
+        } catch (e) {
+          $("counts").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("reset").onclick = () => {
+        $("open-count").textContent = `${openCount} open`;
+        $("reset-confirm").hidden = false;
+      };
+      $("reset-no").onclick = () => ($("reset-confirm").hidden = true);
+      $("reset-yes").onclick = async (e) => {
+        $("reset-confirm").hidden = true;
+        await act(e.target, "reset board", "/api/board/reset", {
+          confirm: "reset",
+        });
+      };
+
+      // --- timeline ----------------------------------------------------------------------
+      const secs = (v) => (v == null ? "—" : `${v.toFixed(1)} s`);
+      const clock = (t) => (t ? new Date(t).toLocaleTimeString() : "—");
+      const tsClock = (ts) =>
+        ts ? new Date(Number(ts) * 1000).toLocaleTimeString() : "—";
+      async function refreshTimeline() {
+        const n = $("tl-issue").value.trim();
+        try {
+          const t = await get(
+            `/api/timeline${/^\d+$/.test(n) ? `?issue=${n}` : ""}`,
+          );
+          $("timeline").className = "";
+          if (!t.issue) {
+            $("timeline").innerHTML =
+              `<span class="muted">no tickets yet</span>`;
+            return;
+          }
+          const i = t.issue;
+          const L = t.latency;
+          $("timeline").innerHTML = `
+            <div style="margin-bottom:8px"><strong>${i.cardUrl ? `<a href="${esc(i.cardUrl)}" target="_blank" rel="noopener">#${i.number}</a>` : `#${i.number}`}</strong> ${esc(i.title)} <span class="chip">${esc(i.status)}</span></div>
+            <div class="legs">
+              <div class="leg"><div class="muted">message → issue card</div><div class="big num">${secs(L.messageToCard)}</div><div class="muted num">${tsClock(i.customerTs)} → ${tsClock(i.triageRootTs)}</div></div>
+              <div class="leg"><div class="muted">issue → first draft card</div><div class="big num">${secs(L.issueToDraftCard)}</div><div class="muted num">draft row ${secs(L.issueToDraft)}</div></div>
+              <div class="leg"><div class="muted">message → first draft card</div><div class="big num">${secs(L.messageToDraftCard)}</div></div>
+            </div>
+            <div class="muted" style="margin:6px 0 2px">Drafts</div>
+            ${t.drafts.length ? `<table>${t.drafts.map((d) => `<tr><td class="num">${clock(d.createdAt)}</td><td>${d.cardUrl ? `<a href="${esc(d.cardUrl)}" target="_blank" rel="noopener">card</a>` : "no card"}</td><td>${esc(d.status)}</td><td class="num muted">${d.confidence == null ? "" : d.confidence.toFixed(2)}</td></tr>`).join("")}</table>` : `<span class="muted">none yet</span>`}
+            <div class="muted" style="margin:6px 0 2px">Runs</div>
+            ${t.runs.length ? `<table>${t.runs.map((r) => `<tr><td class="num">${clock(r.startedAt)}</td><td>${esc(r.agent)}</td><td><code>${esc(r.executionId)}</code></td></tr>`).join("")}</table>` : `<span class="muted">none</span>`}
+            <div class="muted" style="margin:6px 0 2px">Events</div>
+            ${t.events.length ? `<table>${t.events.map((ev) => `<tr><td class="num">${clock(ev.createdAt)}</td><td>${esc(ev.type)}</td><td class="muted">${esc(ev.emittedBy)}</td><td><code>${esc(ev.receiptId ? `receipt ${ev.receiptId}` : "")}</code></td></tr>`).join("")}</table>` : `<span class="muted">none</span>`}
+          `;
+        } catch (e) {
+          $("timeline").innerHTML =
+            `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("tl-issue").onchange = refreshTimeline;
+
+      // --- receipts ----------------------------------------------------------------------
+      async function refreshReceipts() {
+        try {
+          const list = await get("/api/receipts/failed");
+          $("receipts").className = "";
+          $("receipts").innerHTML = list.length
+            ? `<table>${list
+                .map(
+                  (r) =>
+                    `<tr><td class="num">${esc(r.id)}</td><td>${esc(r.eventType)}<div class="muted">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button data-replay="${esc(r.id)}">Replay</button></td></tr>`,
+                )
+                .join("")}</table>`
+            : `<span class="muted">no failed deliveries to Sylon agents</span>`;
+          for (const b of $("receipts").querySelectorAll(
+            "button[data-replay]",
+          )) {
+            b.onclick = () =>
+              act(
+                b,
+                `replay receipt ${b.dataset.replay}`,
+                `/api/receipts/${b.dataset.replay}/replay`,
+              ).then(refreshReceipts);
+          }
+        } catch (e) {
+          $("receipts").innerHTML =
+            `<span class="bad">${esc(e.message)}</span>`;
+        }
+      }
+      $("rcpt-refresh").onclick = refreshReceipts;
+
+      // --- cues --------------------------------------------------------------------------
+      let cues = { prefix: "", steps: [] };
+      function cueText(c) {
+        return $("cue-prefix").checked && cues.prefix
+          ? `${cues.prefix} ${c.text}`
+          : c.text;
+      }
+      async function loadCues() {
+        cues = await get("/api/cues");
+        $("cues").innerHTML = cues.steps
+          .map(
+            (c, n) =>
+              `<div class="cue"><div class="row" style="justify-content:space-between"><strong>${n + 1}. ${esc(c.label)}</strong><button data-cue="${n}">Copy</button></div><div>${esc(c.text)}</div><div class="muted">${esc(c.expect)}</div></div>`,
+          )
+          .join("");
+        for (const b of $("cues").querySelectorAll("button[data-cue]")) {
+          b.onclick = async () => {
+            const text = cueText(cues.steps[Number(b.dataset.cue)]);
+            try {
+              await navigator.clipboard.writeText(text);
+              b.textContent = "Copied";
+            } catch {
+              // Clipboard blocked (insecure context, iframe): select the text instead.
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+              b.textContent = "Copied";
+            }
+            setTimeout(() => (b.textContent = "Copy"), 1500);
+          };
+        }
+      }
+
+      renderAuth();
+      refreshFleet();
+      refreshBoard();
+      refreshTimeline();
+      refreshReceipts();
+      loadCues().catch((e) => ($("cues").textContent = e.message));
+      setInterval(() => {
+        refreshBoard();
+        refreshTimeline();
+      }, 3000);
+      setInterval(refreshFleet, 10000);
+      setInterval(refreshReceipts, 20000);
+    </script>
+  </body>
+</html>
