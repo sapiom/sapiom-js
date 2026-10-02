@@ -600,6 +600,23 @@ export async function pendingDrafts(db: Db, issueId: string): Promise<Draft[]> {
 }
 
 /**
+ * The draft an event already produced, when its `citations` object carries `causationId` (the
+ * copilot writes `{ causationId, ... }`), so a retried drafting step reuses it instead of adding a
+ * second card. Any status: a retry must not redraft what a teammate already decided.
+ */
+export async function draftForCausation(
+  db: Db,
+  issueId: string,
+  causationId: string,
+): Promise<Draft | null> {
+  const rows = await db.query(
+    "select * from drafts where issue_id = $1 and citations ->> 'causationId' = $2 order by created_at desc limit 1",
+    [issueId, causationId],
+  );
+  return rows[0] ? toDraft(rows[0]) : null;
+}
+
+/**
  * Decide a pending draft under a row lock. Two quick clicks are two runs; the second sees a
  * non-pending row and gets `changed: false` with the first decision, so it does nothing.
  */
