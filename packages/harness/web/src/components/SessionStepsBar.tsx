@@ -14,6 +14,7 @@ import {
 import { track } from "../lib/track";
 import { agentUrl } from "../lib/urls";
 import { workflowDeploymentState } from "../lib/workflow-deployment";
+import { useDefinitionAppLink } from "../lib/use-definition-app-link";
 import { RunTargetMenu } from "./RunTargetMenu";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -39,6 +40,16 @@ interface SessionStepsBarProps {
    *  "prod" ↔ Run), or null. Tied to the real run status (not the brief pending
    *  ring), so the acting button pulses for the run's whole duration. */
   runningTarget: RunTarget | null;
+}
+
+/** Host + path, no scheme: what a screen reader needs to tell two links apart. */
+function appLinkLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname.replace(/\/$/, "")}`;
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -72,6 +83,15 @@ export function SessionStepsBar({
   const macroFor = (id: string): MacroDef | undefined => macros.find((m) => m.id === id);
   const deploymentState = workflowDeploymentState(workflow, lastDeployError);
   const runnable = deploymentState === "ready";
+  // The subject's published App Link (SAP-3255). It belongs to the definition,
+  // not the session, so it shows with or without a detected port; null renders
+  // the bar exactly as an agent without one.
+  const appLinkUrl = useDefinitionAppLink(
+    workflow.path,
+    workflow.definitionId,
+    deploymentState,
+    authenticated,
+  );
 
   // Launched-but-not-durable feedback: a clicked action shows a dotted
   // "in flight" ring until a durable signal lands. The ring clears on ANY
@@ -173,6 +193,26 @@ export function SessionStepsBar({
         >
           <Icon name="ExternalLink" size={12} />
           <span className="session-preview-label">{"Preview "}</span>:{preview.port}
+        </a>
+      )}
+
+      {/* The durable App Link beside the local preview. Same flat tag recipe,
+          told apart by word and icon rather than colour alone: the preview dies
+          with the sandbox, the App Link outlives it. `Link`, not `Globe` —
+          the globe below is the Prod shortcut to a different URL. No wake time
+          or availability claim here; the wake page owns that. */}
+      {appLinkUrl && (
+        <a
+          className="status-tag status-tag-action session-app-link-chip"
+          data-testid="session-app-link-chip"
+          href={appLinkUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open App Link ${appLinkLabel(appLinkUrl)}`}
+          data-tooltip={`Your published App Link. It stays up after this session ends and starts when someone opens it. Opens ${appLinkUrl}`}
+        >
+          <Icon name="Link" size={12} />
+          <span className="session-app-link-label">App Link</span>
         </a>
       )}
 

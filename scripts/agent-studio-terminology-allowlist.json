@@ -304,7 +304,7 @@
     "id": "web-api-local-workflow-routes",
     "path": "packages/harness/web/src/lib/api.ts",
     "pattern": "^/api/workflows(?:/(?:connect|scan)?)?$",
-    "occurrences": 7,
+    "occurrences": 8,
     "reason": "Studio localhost API routes remain stable for existing clients."
   },
   {
@@ -488,6 +488,20 @@
     "pattern": "^/api/workflows/:id/secrets(?:/(?:import|flush|:key))?$",
     "occurrences": 5,
     "reason": "Studio localhost API routes remain stable for existing clients, and these sit beside the existing /api/workflows/:id/deploy family."
+  },
+  {
+    "id": "core-definition-app-link-route",
+    "path": "packages/harness/src/core/definition-app-link.ts",
+    "pattern": "^/v1/workflows/definitions/$",
+    "occurrences": 1,
+    "reason": "The Sapiom core endpoint that reads the App Link bound to an agent's definition. The path is the platform's, not ours to rename."
+  },
+  {
+    "id": "server-app-link-local-route",
+    "path": "packages/harness/src/server/app-link.ts",
+    "pattern": "^/api/workflows/:id/app-link$",
+    "occurrences": 1,
+    "reason": "Studio localhost API route, beside the existing /api/workflows/:id/secrets and /api/workflows/:id/deploy family."
   },
   {
     "id": "legacy-proposal-actor-decoder",
