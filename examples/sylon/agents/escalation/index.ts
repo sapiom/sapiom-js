@@ -277,15 +277,17 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       issue = await updateIssue(tx, issueId, {
         linearIssueId: linear.id,
         linearIdentifier: linear.identifier,
+        linearUrl: linear.url || undefined,
       });
       made = found ? "adopted" : "created";
       url = linear.url;
     }
     const identifier = issue.linearIdentifier!;
-    url =
-      url ||
-      (await getLinearIssue(ctx, identifier)).url ||
-      `(no url for ${identifier})`;
+    url = url || issue.linearUrl || (await getLinearIssue(ctx, identifier)).url;
+    // An issue linked before 050_linear_url gets its URL now, so the redrawn card can link it.
+    if (url && !issue.linearUrl)
+      issue = await updateIssue(tx, issueId, { linearUrl: url });
+    url ||= `(no url for ${identifier})`;
     const base = { issueId, linearIdentifier: identifier, url, made };
 
     const replied = await messageBySourceEventId(tx, customerReplyKey(issueId));

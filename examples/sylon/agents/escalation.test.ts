@@ -257,6 +257,7 @@ describe("escalation against the relay (mocked fetch)", () => {
       status: "on_hold",
       linearIssueId: "u-900",
       linearIdentifier: "SAP-900",
+      linearUrl: "https://linear.app/x/issue/SAP-900",
     });
     // Both replies belong to the issue, so copilot and controller see them.
     expect(
@@ -275,7 +276,9 @@ describe("escalation against the relay (mocked fetch)", () => {
       ts: "1790889356.000100",
     });
     expect(card.args.text).toContain("[On Hold]");
-    expect(JSON.stringify(card.args.blocks)).toContain("*Linear:* SAP-900");
+    expect(JSON.stringify(card.args.blocks)).toContain(
+      "*Linear:* <https://linear.app/x/issue/SAP-900|SAP-900>",
+    );
   });
 
   it("two concurrent runs create one Linear issue, one reply per thread, and one emit", async () => {
@@ -391,7 +394,9 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect((await getIssue(db, issueId)).linearIdentifier).toBe("SAP-900");
     const card = calls.find((c) => c.method === "chat.update")!;
     expect(card.args.text).toContain("[Closed]");
-    expect(JSON.stringify(card.args.blocks)).toContain("*Linear:* SAP-900");
+    expect(JSON.stringify(card.args.blocks)).toContain(
+      "*Linear:* <https://linear.app/x/issue/SAP-900|SAP-900>",
+    );
   });
 });
 

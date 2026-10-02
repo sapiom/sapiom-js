@@ -148,6 +148,10 @@ describe("controller", () => {
     for (const p of first.posts) {
       expect(p.channel).toBe("C0TRIAGE001");
       expect(p.threadTs).toMatch(/^1790100/);
+      // ... and links #n back to the ticket card (the thread root).
+      expect(JSON.stringify(p.blocks)).toContain(
+        `<https://slack.com/archives/C0TRIAGE001/p${String(p.threadTs).replace(".", "")}|#`,
+      );
     }
     expect(first.emitted.map((e) => e.type)).toEqual(
       Array(6).fill("issue.nudged"),

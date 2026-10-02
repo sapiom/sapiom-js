@@ -14,6 +14,7 @@ import {
   escapeMrkdwn,
   issueCard,
   issueCardText,
+  mrkdwnLink,
   slackToPlain,
 } from "../../_shared/blocks";
 import { customerChannel, getConfig } from "../../_shared/config";
@@ -49,6 +50,7 @@ import {
   type Issue,
 } from "../../_shared/issues";
 import {
+  permalink,
   post,
   react,
   replies,
@@ -629,7 +631,14 @@ const announce = defineStep({
         db,
         (await getIssue(db, input.issueId!)).accountId,
       );
-      const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(input.text)}`;
+      const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(input.text)} ${mrkdwnLink(
+        permalink(
+          input.incoming.channel,
+          input.incoming.ts,
+          input.incoming.threadTs,
+        ),
+        "view",
+      )}`;
       // Overlapping runs for one issue (a retry beside a slow first attempt, or two messages at once)
       // both see no card on an unlocked read; under the row lock only the first posts one.
       const { issue, carded } = await db.transaction(async (tx) => {

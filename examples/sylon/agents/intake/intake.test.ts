@@ -201,6 +201,10 @@ describe("intake agent", () => {
     const mirror = posts.find((p) => p.threadTs) as { text: string };
     expect(mirror.text).toContain("@here");
     expect(mirror.text).not.toContain("<!here>");
+    // The mirror ends with a link to the customer message.
+    expect(mirror.text).toMatch(
+      /<https:\/\/slack\.com\/archives\/C0CUSTOMER1\/p1790890000000100\|view>$/,
+    );
     expect(bug.emitted.map((e) => e.id)).toEqual([
       "issue.created:Ev0INTAKEBUG1",
     ]);
