@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Quote review dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --surface: #fcfcfb;
+        --card: #ffffff;
+        --line: #e6e5e1;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --text-3: #7c7b77;
+        --accent: #2a78d6;
+        --accent-bg: #e8f0fb;
+        --chip: #f3f2ef;
+        --track: #eeede9;
+        --pass: #1f8a4c;
+        --pass-bg: #e7f4ec;
+        --wait: #b8620b;
+        --wait-bg: #fbefe1;
+        --stop: #b3261e;
+        --stop-bg: #fbe9e7;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --surface: #1a1a19;
+          --card: #222221;
+          --line: #34342f;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --text-3: #8f8e86;
+          --accent: #3987e5;
+          --accent-bg: #1c2a3d;
+          --chip: #2a2a28;
+          --track: #34342f;
+          --pass: #4cc27d;
+          --pass-bg: #1d3326;
+          --wait: #f0a04b;
+          --wait-bg: #3a2a18;
+          --stop: #f2867d;
+          --stop-bg: #3b1f1c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+        font:
+          14px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      a {
+        color: var(--accent);
+      }
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px 24px 28px;
+      }
+      header.top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        margin: 0 0 2px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        margin: 0;
+        font-weight: 650;
+      }
+      .facts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 60%;
+      }
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: var(--text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+      }
+      .chip b {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+        min-width: 0;
+      }
+      .kpi .label {
+        font-size: 12px;
+        color: var(--text-2);
+        margin: 0 0 6px;
+      }
+      .kpi .value {
+        font-size: 20px;
+        font-weight: 650;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+        font-variant-numeric: tabular-nums;
+      }
+      .kpi .sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .pass {
+        color: var(--pass);
+      }
+      .wait {
+        color: var(--wait);
+      }
+      .stop {
+        color: var(--stop);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+      }
+      @media (max-width: 860px) {
+        .kpis {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .facts {
+          max-width: 100%;
+          justify-content: flex-start;
+        }
+      }
+      h2 {
+        font-size: 13px;
+        margin: 0 0 10px;
+        color: var(--text-2);
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      h3 {
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+      .card-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .badge {
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .badge.pass {
+        background: var(--pass-bg);
+      }
+      .badge.wait {
+        background: var(--wait-bg);
+      }
+      .badge.stop {
+        background: var(--stop-bg);
+      }
+      .title {
+        margin: 2px 0 6px;
+        font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+        font-size: 21px;
+        line-height: 1.3;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .summary {
+        margin: 0 0 14px;
+        font-size: 13px;
+        color: var(--text-2);
+        overflow-wrap: anywhere;
+      }
+      table.items {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .items th {
+        text-align: left;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-3);
+        font-weight: 600;
+        padding: 0 0 6px;
+        border-bottom: 1px solid var(--line);
+      }
+      .items td {
+        padding: 7px 0;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      .items th.num,
+      .items td.num {
+        text-align: right;
+        white-space: nowrap;
+        padding-left: 12px;
+      }
+      .items td.desc {
+        overflow-wrap: anywhere;
+      }
+      .share {
+        height: 4px;
+        border-radius: 999px;
+        background: var(--track);
+        margin-top: 5px;
+        overflow: hidden;
+      }
+      .share span {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        border-radius: 999px;
+      }
+      .items tfoot td {
+        border-bottom: none;
+        padding: 5px 0 0;
+        color: var(--text-2);
+      }
+      .items tfoot tr.total td {
+        color: var(--text);
+        font-weight: 650;
+        font-size: 14px;
+        padding-top: 8px;
+      }
+      ol.steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .steps li {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+      }
+      .dot {
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .dot.pass {
+        background: var(--pass-bg);
+      }
+      .dot.wait {
+        background: var(--wait-bg);
+      }
+      .dot.stop {
+        background: var(--stop-bg);
+      }
+      .dot.off {
+        background: var(--track);
+        color: var(--text-3);
+      }
+      .steps b {
+        display: block;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .steps small {
+        display: block;
+        color: var(--text-3);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .note {
+        margin: 14px 0 0;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .prose {
+        margin: 0 0 12px;
+        font-size: 13px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .prose:last-child {
+        margin-bottom: 0;
+      }
+      .clamp {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 7;
+        overflow: hidden;
+      }
+      ul.scope {
+        margin: 0 0 12px;
+        padding-left: 18px;
+        font-size: 13px;
+      }
+      .scope li {
+        margin-bottom: 6px;
+        overflow-wrap: anywhere;
+      }
+      .tag {
+        font-size: 11px;
+        color: var(--text-3);
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 400;
+      }
+      .source {
+        margin: 14px 0 0;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .source b {
+        color: var(--text-2);
+        font-weight: 600;
+      }
+      .muted {
+        color: var(--text-3);
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Client Proposal Generator</p>
+          <h1>Quote review dashboard</h1>
+        </div>
+        <div class="facts" id="facts"></div>
+      </header>
+
+      <section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+      <div class="grid">
+        <section class="card" aria-labelledby="proposal-h">
+          <div class="card-head">
+            <h2 id="proposal-h">The drafted proposal</h2>
+            <span id="badge"></span>
+          </div>
+          <div id="proposal"></div>
+        </section>
+        <div class="stack">
+          <section class="card" aria-labelledby="gate-h">
+            <h2 id="gate-h">Where it stands</h2>
+            <div id="gate"></div>
+          </section>
+          <section class="card" aria-labelledby="request-h">
+            <h2 id="request-h">What it was asked to quote</h2>
+            <div id="request"></div>
+          </section>
+          <section class="card" aria-labelledby="terms-h">
+            <h2 id="terms-h">Scope and terms</h2>
+            <div id="terms"></div>
+          </section>
+        </div>
+      </div>
+
+      <p class="source" id="source"></p>
+    </div>
+
+    <script>
+      // Everything below renders `/api/run`, the agent's own terminal output
+      // plus the proposal its `draft` step left in the run's shared state, into
+      // the page. The only things computed here are each line's amount
+      // (quantity × unit price, as the agent computes it) and its share of the
+      // subtotal; the subtotal, tax and total are the run's own.
+
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+
+      /** Inline markdown on an already-escaped line: code and bold. */
+      const inline = (text) =>
+        text
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
+      const fmtWhen = (iso) => {
+        if (!iso) return "—";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return esc(iso);
+        return d.toLocaleString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+      };
+      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+
+      /** Money in the quote's own currency; an unknown code falls back to "XYZ 1,234.00". */
+      function moneyFormatter(currency) {
+        try {
+          const f = new Intl.NumberFormat("en-US", {
+            style: "currency",
+            currency,
+          });
+          return (v) => (v === null ? "—" : f.format(v));
+        } catch {
+          const f = new Intl.NumberFormat("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          return (v) => (v === null ? "—" : `${currency} ${f.format(v)}`);
+        }
+      }
+
+      /**
+       * What happened to the quote, read from the run's `outcome`. Each entry is
+       * the label, its tone, and a line on what did and did not reach anyone.
+       */
+      const OUTCOMES = {
+        "pending-approval": {
+          label: "Waiting for sign-off",
+          tone: "wait",
+          sub: "no approver set, so nothing was emailed",
+        },
+        sent: {
+          label: "Sent to the client",
+          tone: "pass",
+          sub: "approved, then emailed with the PDF link",
+        },
+        "approved-dry-run": {
+          label: "Approved (dry run)",
+          tone: "pass",
+          sub: "approved; the client email was skipped",
+        },
+        "approved-no-recipient": {
+          label: "Approved, not sent",
+          tone: "wait",
+          sub: "no client email to send it to",
+        },
+        rejected: {
+          label: "Rejected",
+          tone: "stop",
+          sub: "nothing went to the client",
+        },
+      };
+
+      function kpi(label, value, sub) {
+        return `<article class="card kpi"><p class="label">${label}</p><div class="value">${value}</div>${
+          sub ? `<p class="sub">${sub}</p>` : ""
+        }</article>`;
+      }
+
+      function step(tone, mark, title, detail) {
+        return `<li><span class="dot ${tone}">${mark}</span><div><b>${title}</b><small>${detail}</small></div></li>`;
+      }
+
+      const party = (p) =>
+        [p?.company, p?.name]
+          .filter((x) => typeof x === "string" && x)
+          .join(" · ");
+
+      function render({ source, output, quote }) {
+        const o = output ?? {};
+        const src = source ?? {};
+        const q = quote ?? {};
+        const d = q.draft;
+        const money = moneyFormatter(String(q.currency || "USD"));
+        const items = d?.lineItems ?? [];
+        const amounts = items.map((li) => li.quantity * li.unitPrice);
+        const subtotal = num(q.totals?.subtotal);
+        const tax = num(q.totals?.tax);
+        const total = num(q.totals?.total ?? o.total);
+        const status = OUTCOMES[o.outcome] ?? {
+          label: o.outcome ? String(o.outcome) : "Unknown",
+          tone: "wait",
+          sub: "",
+        };
+        const pdf = q.pdfUrl;
+        const pdfName = q.quoteNumber ? `${q.quoteNumber}.pdf` : "proposal.pdf";
+
+        document.getElementById("facts").innerHTML = [
+          q.quoteNumber
+            ? `<span class="chip">Quote <b class="mono">${esc(q.quoteNumber)}</b></span>`
+            : "",
+          `<span class="chip">Request <b>${q.sampleRequest ? "built-in sample" : "your own"}</b></span>`,
+          party(q.client)
+            ? `<span class="chip">For <b>${esc(party(q.client))}</b></span>`
+            : "",
+          `<span class="chip">Finished <b>${fmtWhen(src.finishedAt)}</b></span>`,
+        ].join("");
+
+        const largest = amounts.length ? Math.max(...amounts) : null;
+        document.getElementById("kpis").innerHTML = [
+          kpi(
+            "Quote total",
+            esc(money(total)),
+            tax
+              ? `${esc(money(subtotal))} + ${esc(money(tax))} tax at ${(q.taxRate * 100).toFixed(1).replace(/\.0$/, "")}%`
+              : total === null
+                ? ""
+                : "no tax line · totalled in code, not by the model",
+          ),
+          kpi(
+            "Line items",
+            String(items.length),
+            largest === null || !subtotal
+              ? ""
+              : `largest ${esc(money(largest))}, ${Math.round((largest / subtotal) * 100)}% of the subtotal`,
+          ),
+          kpi(
+            "Sign-off",
+            `<span class="${status.tone}">${esc(status.label)}</span>`,
+            esc(status.sub),
+          ),
+          kpi(
+            "PDF",
+            o.fileId || pdf ? "Rendered" : `<span class="muted">None</span>`,
+            pdf
+              ? `<a href="${esc(pdf)}" target="_blank" rel="noopener">Open ${esc(pdfName)}</a>`
+              : o.fileId
+                ? "stored; no link on this run"
+                : "this run stopped before rendering",
+          ),
+        ].join("");
+
+        document.getElementById("badge").innerHTML =
+          `<span class="badge ${status.tone}">${esc(status.label)}</span>`;
+
+        if (!d) {
+          document.getElementById("proposal").innerHTML =
+            `<p class="muted">This run drafted no proposal.</p>` +
+            (o.notes ? `<p class="note">${inline(esc(o.notes))}</p>` : "");
+        } else {
+          const rows = items
+            .map((li, i) => {
+              const share = subtotal ? (amounts[i] / subtotal) * 100 : 0;
+              return `<tr>
+                <td class="desc">${esc(li.description)}<div class="share" aria-hidden="true"><span style="width:${Math.min(100, Math.max(0, share)).toFixed(1)}%"></span></div></td>
+                <td class="num">${esc(String(li.quantity))}</td>
+                <td class="num">${esc(money(li.unitPrice))}</td>
+                <td class="num">${esc(money(amounts[i]))}</td>
+              </tr>`;
+            })
+            .join("");
+          document.getElementById("proposal").innerHTML = `
+            <p class="title">${esc(d.title ?? o.title ?? "Untitled proposal")}</p>
+            ${d.summary ? `<p class="summary">${esc(d.summary)}</p>` : ""}
+            ${
+              items.length
+                ? `<table class="items">
+                    <thead><tr><th>Line item</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                    <tfoot>
+                      <tr><td colspan="3">Subtotal</td><td class="num">${esc(money(subtotal))}</td></tr>
+                      ${tax ? `<tr><td colspan="3">Tax</td><td class="num">${esc(money(tax))}</td></tr>` : ""}
+                      <tr class="total"><td colspan="3">Total</td><td class="num">${esc(money(total))}</td></tr>
+                    </tfoot>
+                  </table>`
+                : `<p class="muted">The draft has no priced line items.</p>`
+            }
+            ${o.note ? `<p class="note">${inline(esc(o.note))}</p>` : ""}`;
+        }
+
+        // The run's path through the graph, read from what it left behind:
+        // a draft, a stored PDF, an approver (or none), and the outcome.
+        const approved = [
+          "sent",
+          "approved-dry-run",
+          "approved-no-recipient",
+        ].includes(o.outcome);
+        // A run rejected before drafting (an empty request) never reached the
+        // gate, whoever the approver would have been.
+        const gate = !d
+          ? step("off", "–", "Sign-off gate", "not reached")
+          : q.approver
+            ? o.outcome === "rejected"
+              ? step(
+                  "stop",
+                  "✕",
+                  "Rejected at review",
+                  `by the approver, ${esc(q.approver)}`,
+                )
+              : approved
+                ? step(
+                    "pass",
+                    "✓",
+                    "Approved",
+                    `emailed to ${esc(q.approver)} for sign-off`,
+                  )
+                : step(
+                    "wait",
+                    "…",
+                    "Sent for sign-off",
+                    `emailed to ${esc(q.approver)}`,
+                  )
+            : step(
+                "wait",
+                "–",
+                "Sign-off gate",
+                "no approver set, so the run stopped here holding the draft",
+              );
+        const client =
+          o.outcome === "sent"
+            ? step(
+                "pass",
+                "✓",
+                "Emailed to the client",
+                esc(q.recipientEmail ?? "client"),
+              )
+            : step(
+                "off",
+                "–",
+                "Client email",
+                o.outcome === "approved-dry-run"
+                  ? "skipped: dry run"
+                  : o.outcome === "approved-no-recipient"
+                    ? "skipped: no client email set"
+                    : "not sent",
+              );
+        document.getElementById("gate").innerHTML = `<ol class="steps">
+          ${
+            d
+              ? step(
+                  "pass",
+                  "✓",
+                  "Drafted and priced",
+                  `${items.length} line items, ${esc(money(total))}`,
+                )
+              : step(
+                  "stop",
+                  "✕",
+                  "Not drafted",
+                  inline(esc(o.notes ?? "the run stopped before drafting")),
+                )
+          }
+          ${
+            o.fileId || q.pdfUrl
+              ? step(
+                  "pass",
+                  "✓",
+                  "Rendered to PDF",
+                  pdf
+                    ? `<a href="${esc(pdf)}" target="_blank" rel="noopener">${esc(pdfName)}</a>`
+                    : "stored in file storage",
+                )
+              : step("off", "–", "PDF", "not rendered")
+          }
+          ${gate}
+          ${client}
+        </ol>`;
+
+        document.getElementById("request").innerHTML = q.request
+          ? `<h3>Request ${q.sampleRequest ? `<span class="tag">· built-in sample</span>` : ""}</h3>
+             <p class="prose clamp" title="${esc(q.request)}">${esc(q.request)}</p>`
+          : `<p class="muted">This run's request is not on record.</p>`;
+
+        const scope = d?.scope ?? [];
+        document.getElementById("terms").innerHTML =
+          (scope.length
+            ? `<h3>Scope</h3><ul class="scope">${scope.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`
+            : "") +
+            (d?.terms
+              ? `<h3>Terms</h3><p class="prose">${esc(d.terms)}</p>`
+              : "") || `<p class="muted">The draft has no scope or terms.</p>`;
+
+        const where =
+          src.kind === "live"
+            ? `Live — latest completed run`
+            : `Captured zero-setup run`;
+        document.getElementById("source").innerHTML =
+          `<b>${where}</b> · agent run <span class="mono">#${esc(src.executionId ?? "?")}</span> · finished ${fmtWhen(src.finishedAt)}` +
+          (src.kind === "live"
+            ? ""
+            : ` · PDF re-rendered from the run's draft with the template's own layout script`) +
+          (src.liveError
+            ? ` · <span class="muted">live read failed (${esc(src.liveError)}); showing the captured run</span>`
+            : "");
+      }
+
+      fetch("/api/run", { cache: "no-store" })
+        .then((r) => r.json())
+        .then(render)
+        .catch((err) => {
+          document.getElementById("proposal").innerHTML =
+            `<p class="muted">Could not load the run: ${esc(err?.message ?? err)}</p>`;
+        })
+        .finally(() => {
+          document.body.dataset.ready = "true";
+        });
+    </script>
+  </body>
+</html>
