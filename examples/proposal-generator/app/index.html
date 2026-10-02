@@ -468,6 +468,10 @@
           const f = new Intl.NumberFormat("en-US", {
             style: "currency",
             currency,
+            // The agent rounds and prints every currency to two places, so the
+            // page does too, rather than the currency's own precision (JPY: 0).
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
           });
           return (v) => (v === null ? "—" : f.format(v));
         } catch {
@@ -625,7 +629,13 @@
                   </table>`
                 : `<p class="muted">The draft has no priced line items.</p>`
             }
-            ${o.note ? `<p class="note">${inline(esc(o.note))}</p>` : ""}`;
+            ${
+              // `note` is the pending branch's own account; `notes` is the
+              // approver's free text on a sent or rejected quote.
+              o.note || o.notes
+                ? `<p class="note">${inline(esc(o.note || o.notes))}</p>`
+                : ""
+            }`;
         }
 
         // The run's path through the graph, read from what it left behind:

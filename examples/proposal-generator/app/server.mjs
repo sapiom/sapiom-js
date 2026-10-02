@@ -250,16 +250,19 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === SAMPLE_PDF_ROUTE) {
+      // Read before the headers go out, so a failed read can still be a 500.
+      const pdf = await samplePdf;
       res.writeHead(200, {
         "content-type": "application/pdf",
         "content-disposition": `inline; filename="${SAMPLE_PDF}"`,
       });
-      res.end(await samplePdf);
+      res.end(pdf);
       return;
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
+      const html = await page;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(await page);
+      res.end(html);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
