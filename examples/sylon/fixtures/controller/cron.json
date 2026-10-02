@@ -1,0 +1,5 @@
+{
+  "type": "schedule_cron",
+  "description": "A scheduled controller fire: the cron trigger's stored input, with the Jev check on.",
+  "payload": { "jevCheck": true }
+}
