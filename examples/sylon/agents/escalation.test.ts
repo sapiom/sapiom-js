@@ -190,6 +190,12 @@ describe("escalation against the relay (mocked fetch)", () => {
         }
         const method = url.split("/methods/")[1];
         calls.push({ method, args: body });
+        if (method === "users.info")
+          return new Response(
+            JSON.stringify({
+              user: { id: body.user, profile: { display_name: "Dana" } },
+            }),
+          );
         return new Response(
           JSON.stringify({ channel: body.channel, ts: `1790900000.00${++ts}` }),
         );
@@ -243,12 +249,33 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(posts[0].args.text).toBe(
       "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
     );
+    expect(save.args.description).toContain(
+      "**Requested by:** Dana (U0TEAMMATE1)",
+    );
     expect(emitted.map((e) => e.type)).toEqual(["issue.on_hold"]);
     expect(await getIssue(db, issueId)).toMatchObject({
       status: "on_hold",
       linearIssueId: "u-900",
       linearIdentifier: "SAP-900",
     });
+    // Both replies belong to the issue, so copilot and controller see them.
+    expect(
+      (await messagesForIssue(db, issueId)).map((m) => [
+        m.sourceEventId,
+        m.direction,
+      ]),
+    ).toEqual([
+      [`escalation:${issueId}:triage`, "internal"],
+      [customerReplyKey(issueId), "agent"],
+    ]);
+    // The triage card is redrawn from the updated row.
+    const card = calls.find((c) => c.method === "chat.update")!;
+    expect(card.args).toMatchObject({
+      channel: "C0TRIAGE001",
+      ts: "1790889356.000100",
+    });
+    expect(card.args.text).toContain("[On Hold]");
+    expect(JSON.stringify(card.args.blocks)).toContain("*Linear:* SAP-900");
   });
 
   it("two concurrent runs create one Linear issue", async () => {
@@ -301,7 +328,11 @@ describe("escalation against the relay (mocked fetch)", () => {
       linearIdentifier: null,
     });
     expect(await messagesForIssue(db, issueId)).toEqual([]);
-    expect(calls.filter((c) => c.method === "chat.postMessage")).toEqual([]);
+    expect(
+      calls.filter((c) =>
+        ["chat.postMessage", "chat.update"].includes(c.method),
+      ),
+    ).toEqual([]);
     expect(emitted).toEqual([]);
   });
 
@@ -328,6 +359,9 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(out).toMatchObject({ outcome: "linked_closed", status: "closed" });
     expect(emitted).toEqual([]);
     expect((await getIssue(db, issueId)).linearIdentifier).toBe("SAP-900");
+    const card = calls.find((c) => c.method === "chat.update")!;
+    expect(card.args.text).toContain("[Closed]");
+    expect(JSON.stringify(card.args.blocks)).toContain("*Linear:* SAP-900");
   });
 });
 
@@ -337,10 +371,11 @@ describe("linearDescription", () => {
       issue: { id: "i-1", number: 7 } as never,
       accountName: "Acme",
       summary: "Webhooks drop.",
-      requestedBy: "U1",
+      requestedBy: { id: "U1", name: "Dana" },
       threadUrl: "https://slack.com/archives/C1/p1",
     });
     expect(text).toContain("**Account:** Acme");
+    expect(text).toContain("**Requested by:** Dana (U1)");
     expect(text).toContain(
       "[Customer thread in Slack](https://slack.com/archives/C1/p1)",
     );

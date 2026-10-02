@@ -16,10 +16,12 @@
  *   dedups on its id, and the status move is a no-op when repeated. An issue that is linked, has
  *   its customer reply, and is On Hold (or Closed) is already escalated: the run replies with the
  *   existing identifier in triage and emits nothing.
+ * - Every run that ends with the issue linked redraws the triage card from the row.
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { issueCard, issueCardText } from "../../_shared/blocks";
 import { getConfig } from "../../_shared/config";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit, type EmitCtx } from "../../_shared/emit";
@@ -48,7 +50,7 @@ import {
   toLinearIssue,
   type LinearIssue,
 } from "../../_shared/linear";
-import { permalink, post } from "../../_shared/slack";
+import { permalink, post, update, userInfo } from "../../_shared/slack";
 
 export const AGENT = "sylon-escalation";
 
@@ -90,7 +92,8 @@ export function linearDescription(input: {
   issue: Issue;
   accountName: string;
   summary: string;
-  requestedBy: string;
+  /** The clicker: Slack user id, and display name when known. */
+  requestedBy: { id: string; name?: string };
   threadUrl: string | null;
 }): string {
   return [
@@ -98,7 +101,11 @@ export function linearDescription(input: {
     `Sylon issue #${input.issue.number} · ${marker(input.issue.id)}`,
     "",
     `**Account:** ${input.accountName}`,
-    `**Requested by:** Slack user ${input.requestedBy}`,
+    `**Requested by:** ${
+      input.requestedBy.name && input.requestedBy.name !== input.requestedBy.id
+        ? `${input.requestedBy.name} (${input.requestedBy.id})`
+        : `Slack user ${input.requestedBy.id}`
+    }`,
     "",
     input.summary,
     "",
@@ -236,6 +243,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   const teamId = await getConfig(db, "linear.team_id");
   const projectId = await getConfig(db, "linear.project_id");
   const triageChannel = await getConfig(db, "channels.triage");
+  const requester = await userInfo(ctx, input.requestedBy);
 
   const link = await db.transaction(async (tx) => {
     const issue = await lockIssue(tx, issueId);
@@ -253,7 +261,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
           issue,
           accountName: account.name,
           summary: input.summary,
-          requestedBy: input.requestedBy,
+          requestedBy: { id: requester.id, name: requester.name },
           threadUrl: threadUrl(issue),
         }),
         priority: issue.priority ? LINEAR_PRIORITY[issue.priority] : undefined,
@@ -293,7 +301,9 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       threadTs: issue.triageRootTs,
       text: `Already tracked as ${identifier}: ${url}`,
       direction: "internal",
+      issueId,
     });
+    await redrawCard(ctx, db, triageChannel, issue);
     return { ...base, outcome: "already_escalated", status: issue.status };
   }
 
@@ -303,6 +313,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     threadTs: issue.triageRootTs,
     text,
     direction: "internal",
+    issueId,
   });
   const customerTs = await replyOnce(ctx, db, {
     key: customerReplyKey(issueId),
@@ -316,6 +327,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
 
   if (issue.status === "closed") {
     // closed → on_hold is not a legal move; the link and replies stand, and the output says so.
+    await redrawCard(ctx, db, triageChannel, issue);
     return {
       ...base,
       ...replies,
@@ -340,6 +352,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   } catch (err) {
     if (!(err instanceof IllegalTransitionError)) throw err;
     // Closed between the lock and here.
+    await redrawCard(ctx, db, triageChannel, await getIssue(db, issueId));
     return {
       ...base,
       ...replies,
@@ -349,6 +362,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       note: "issue was closed during escalation; not moved to on_hold",
     };
   }
+  await redrawCard(ctx, db, triageChannel, issue);
   return {
     ...base,
     ...replies,
@@ -357,6 +371,23 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     receiptId: receipt.receiptId,
     duplicate: receipt.duplicate,
   };
+}
+
+/** Redraw the triage card from the row; the card is a pure function of the issue and its account. */
+async function redrawCard(
+  ctx: Ctx,
+  db: Db,
+  triageChannel: string,
+  issue: Issue,
+): Promise<void> {
+  if (!issue.triageRootTs) return;
+  const account = await getAccount(db, issue.accountId);
+  await update(ctx, {
+    channel: triageChannel,
+    ts: issue.triageRootTs,
+    text: issueCardText(issue, account),
+    blocks: issueCard(issue, account),
+  });
 }
 
 function threadUrl(issue: Issue): string | null {
