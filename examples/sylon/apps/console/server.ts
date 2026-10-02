@@ -36,6 +36,8 @@ import {
   isOn,
   latencies,
   planSwitch,
+  receiptView,
+  redact,
   triggerBody,
   triggerStates,
   type AttachedTrigger,
@@ -188,7 +190,6 @@ async function board(d: Db) {
   return {
     counts: Object.fromEntries(counts.map((c) => [c.status, Number(c.n)])),
     issues: recent.map((r) => ({
-      id: r.id,
       number: Number(r.number),
       account: r.account,
       title: r.title,
@@ -284,7 +285,7 @@ async function failedReceipts() {
     "GET",
     "/v1/workflows/receipts?attention=true&limit=100",
   );
-  return failedFleetReceipts(receipts);
+  return failedFleetReceipts(receipts).map(receiptView);
 }
 
 // --- HTTP ------------------------------------------------------------------------------------
@@ -408,8 +409,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return send(res, 503, {
         error: "CONSOLE_SECRET is not set; mutations are off",
       });
-    if (verdict === "denied")
-      return send(res, 401, { error: "wrong console secret" });
+    // No detail: a caller probing the guard learns nothing about why it failed.
+    if (verdict === "denied") return send(res, 403, { error: "forbidden" });
   }
   const body = req.method === "POST" ? await readJson(req) : {};
   return send(res, 200, await hit.handler(hit.params, body, url));
@@ -418,8 +419,14 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
 createServer((req, res) => {
   handle(req, res).catch((err: unknown) => {
     const status = err instanceof HttpError ? err.status : 500;
-    const message = err instanceof Error ? err.message : String(err);
-    if (status >= 500) console.error(`${req.method} ${req.url}: ${message}`);
+    const raw = redact(err instanceof Error ? err.message : String(err), [
+      API_KEY,
+      SECRET,
+    ]);
+    if (status >= 500) console.error(`${req.method} ${req.url}: ${raw}`);
+    // Only our own HttpError messages reach the page; a driver or network error could name a
+    // host or carry a connection detail, so it stays in the server log.
+    const message = err instanceof HttpError ? raw : "internal error";
     if (!res.headersSent) send(res, status, { error: message });
     else res.end();
   });

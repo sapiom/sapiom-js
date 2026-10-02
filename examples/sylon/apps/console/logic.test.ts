@@ -9,6 +9,8 @@ import {
   isOn,
   latencies,
   planSwitch,
+  receiptView,
+  redact,
   secondsBetween,
   slackTsToMs,
   triggerStates,
@@ -182,6 +184,17 @@ describe("failed receipts", () => {
     ]);
     expect(out.map((x) => x.id)).toEqual(["1"]);
   });
+
+  it("shows the page no sender detail", () => {
+    const raw = { ...r("1", 1, ["sylon-copilot"]), ip: "10.0.0.1" };
+    expect(receiptView(raw)).toEqual({
+      id: "1",
+      eventType: "issue.created",
+      receivedAt: "2026-10-02T07:00:00.000Z",
+      failed: 1,
+      failedTriggerSlugs: ["sylon-copilot"],
+    });
+  });
 });
 
 describe("route guard", () => {
@@ -191,6 +204,16 @@ describe("route guard", () => {
     expect(checkSecret("s3cret-value", "short")).toBe("denied");
     expect(checkSecret("s3cret-value", undefined)).toBe("denied");
     expect(checkSecret("s3cret-value", ["s3cret-value"])).toBe("denied");
+  });
+
+  it("redacts the key and the secret from error text", () => {
+    expect(
+      redact("bad key sk_live_abc and sk_live_abc, secret s3", [
+        "sk_live_abc",
+        "s3",
+        undefined,
+      ]),
+    ).toBe("bad key [redacted] and [redacted], secret [redacted]");
   });
 
   it("fails closed when no secret is configured", () => {
