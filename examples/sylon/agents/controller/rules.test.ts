@@ -36,6 +36,7 @@ const message = (over: Partial<MessageRow> = {}): MessageRow => ({
   issueId: "issue-1",
   direction: "customer",
   text: "it is still broken",
+  ts: null,
   createdAt: ago(AT_THRESHOLD),
   ...over,
 });
@@ -204,6 +205,50 @@ describe("customer_waiting", () => {
         messages: [message()],
       }),
     ).toEqual([]);
+  });
+
+  it("with the Jev check off, a skip verdict no longer silences it; a sent nudge still does", () => {
+    const skipped = [
+      { issueId: "issue-1", kind: skipKey("customer_waiting", "msg-1") },
+    ];
+    const base = { issues: [owned], drafts: drafted, messages: [message()] };
+    expect(keys({ ...base, sent: skipped, jevCheck: false })).toEqual([
+      "customer_waiting:msg-1",
+    ]);
+    expect(
+      keys({
+        ...base,
+        sent: [{ issueId: "issue-1", kind: "customer_waiting:msg-1" }],
+        jevCheck: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("orders the thread by Slack ts, so a customer message stored late does not jump ahead of the reply", () => {
+    const messages = [
+      // Posted first, stored last (a delayed or replayed event).
+      message({ ts: "1790000000.000100", createdAt: ago(6 * 60_000) }),
+      message({
+        id: "msg-2",
+        direction: "agent",
+        ts: "1790000060.000100",
+        createdAt: ago(10 * 60_000),
+      }),
+    ];
+    expect(keys({ issues: [owned], drafts: drafted, messages })).toEqual([]);
+  });
+
+  it("falls back to the insert time for a message without a ts", () => {
+    const messages = [
+      message({ ts: "1790000000.000100", createdAt: ago(20 * 60_000) }),
+      message({
+        id: "msg-2",
+        direction: "agent",
+        ts: null,
+        createdAt: new Date(1_790_000_060_000),
+      }),
+    ];
+    expect(keys({ issues: [owned], drafts: drafted, messages })).toEqual([]);
   });
 });
 

@@ -30,6 +30,7 @@ import {
 import { post } from "../../_shared/slack";
 
 import {
+  byThreadOrder,
   dueNudges,
   NUDGE_KINDS,
   skipKey,
@@ -68,20 +69,29 @@ interface Snapshot {
   now: Date;
 }
 
-/** Everything the rules need for the open issues, plus the database's clock. */
-export async function snapshot(db: Db): Promise<Snapshot> {
+/**
+ * Everything the rules need for the open issues (or for one, inside `send`), plus the database's
+ * clock. With `issueId`, the issue row is locked, so a status change waits for the nudge.
+ */
+export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
+  const where = issueId ? `${OPEN} and i.id = $1` : OPEN;
+  const params = issueId ? [issueId] : [];
   const [issues, drafts, messages, sent, clock] = [
     await db.query(
-      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.created_at from issues i where ${OPEN}`,
+      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.created_at from issues i where ${where}${issueId ? " for update" : ""}`,
+      params,
     ),
     await db.query(
-      `select d.id, d.issue_id, d.status, d.created_at from drafts d join issues i on i.id = d.issue_id where ${OPEN}`,
+      `select d.id, d.issue_id, d.status, d.created_at from drafts d join issues i on i.id = d.issue_id where ${where}`,
+      params,
     ),
     await db.query(
-      `select m.id, m.issue_id, m.direction, m.text, m.created_at from messages m join issues i on i.id = m.issue_id where ${OPEN}`,
+      `select m.id, m.issue_id, m.direction, m.text, m.ts, m.created_at from messages m join issues i on i.id = m.issue_id where ${where}`,
+      params,
     ),
     await db.query(
-      `select n.issue_id, n.kind from nudges n join issues i on i.id = n.issue_id where ${OPEN}`,
+      `select n.issue_id, n.kind from nudges n join issues i on i.id = n.issue_id where ${where}`,
+      params,
     ),
     await db.query<{ now: Date }>("select now() as now"),
   ];
@@ -104,6 +114,7 @@ export async function snapshot(db: Db): Promise<Snapshot> {
       issueId: r.issue_id as string,
       direction: r.direction as Direction,
       text: (r.text as string | null) ?? null,
+      ts: (r.ts as string | null) ?? null,
       createdAt: new Date(r.created_at as Date),
     })),
     sent: sent.map((r: Row) => ({
@@ -160,7 +171,7 @@ const scan = defineStep({
       await recordRun(db, ctx, AGENT);
       const minutes = await getConfig(db, "nudge.minutes");
       const snap = await snapshot(db);
-      const candidates = dueNudges({ ...snap, minutes });
+      const candidates = dueNudges({ ...snap, minutes, jevCheck });
 
       const nudges: Nudge[] = [];
       const skipped: { issueId: string; key: string; expectsReply: number }[] =
@@ -172,7 +183,7 @@ const scan = defineStep({
         }
         const thread = snap.messages
           .filter((m) => m.issueId === n.issueId && m.direction !== "internal")
-          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+          .sort(byThreadOrder);
         let p: number;
         try {
           p = await expectsReply(ctx, thread);
@@ -207,7 +218,8 @@ const scan = defineStep({
 });
 
 /**
- * Post and record each nudge in one transaction: insert the `nudges` row, post in the triage
+ * Post and record each nudge in one transaction: lock the issue and recheck that the nudge is
+ * still due on its current rows, insert the `nudges` row, post in the triage
  * thread, emit `issue.nudged`, commit. A failed post or emit rolls the row back, so the retry (or
  * the next cron run) sends it again: nothing is lost. A second run racing this one blocks on the
  * uncommitted row and then sees it, so it never posts the same nudge. The only duplicate is a
@@ -223,12 +235,24 @@ const send = defineStep({
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
       const triage = await getConfig(db, "channels.triage");
+      const minutes = await getConfig(db, "nudge.minutes");
       const nudged: { issueId: string; key: string; ts: string }[] = [];
       const notSent: string[] = [];
+      const resolved: string[] = [];
       for (const n of input.nudges) {
         const sent = await db.transaction(async (tx) => {
+          // The issue may have moved since scan (taken, drafted, answered, held, closed): rerun the
+          // rules on its current rows and post only if this nudge is still due. Jev already passed
+          // this candidate in scan, so its skip records do not apply here.
+          const fresh = await snapshot(tx, n.issueId);
+          const stillDue = dueNudges({
+            ...fresh,
+            sent: [],
+            minutes,
+            jevCheck: false,
+          }).some((d) => d.key === n.key);
           const issue = await getIssue(tx, n.issueId);
-          if (issue.status === "closed" || !issue.triageRootTs) return null;
+          if (!stillDue || !issue.triageRootTs) return "resolved" as const;
           if (!(await recordNudge(tx, n.issueId, n.key))) return null;
           const card = await post(ctx, {
             channel: triage,
@@ -249,12 +273,15 @@ const send = defineStep({
           });
           return card.ts;
         });
-        if (sent) nudged.push({ issueId: n.issueId, key: n.key, ts: sent });
+        if (sent === "resolved") resolved.push(n.key);
+        else if (sent)
+          nudged.push({ issueId: n.issueId, key: n.key, ts: sent });
         else notSent.push(n.key);
       }
       return terminate({
         nudged,
         notSent,
+        resolved,
         skipped: input.skipped ?? [],
         jevCheck: input.jevCheck ?? true,
       });

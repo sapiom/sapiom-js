@@ -37,6 +37,9 @@ export interface MessageRow {
   issueId: string;
   direction: Direction;
   text: string | null;
+  /** Slack `ts`: when the message was posted, which a delayed or replayed event cannot move. */
+  ts: string | null;
+  /** When it was stored; the clock for how long it has waited. */
   createdAt: Date;
 }
 
@@ -73,6 +76,11 @@ export interface RuleInput {
   now: Date;
   /** `nudge.minutes`: how long a condition must hold before it is nudged. */
   minutes: number;
+  /**
+   * Whether Jev verdicts count (default true). With the check off, a `skip:` record no longer
+   * silences `customer_waiting`; keys of nudges actually sent always do.
+   */
+  jevCheck?: boolean;
 }
 
 function groupBy<T extends { issueId: string }>(rows: T[]): Map<string, T[]> {
@@ -93,6 +101,18 @@ const newest = <T extends { createdAt: Date }>(rows: T[]): T | undefined =>
   );
 
 /**
+ * Thread order: by Slack `ts`, so an event stored late still sorts where it was posted. Falls back
+ * to the insert time only for a message without a `ts`.
+ */
+export function postedAt(m: MessageRow): number {
+  const ts = m.ts === null ? NaN : Number(m.ts);
+  return Number.isFinite(ts) ? ts * 1000 : m.createdAt.getTime();
+}
+
+export const byThreadOrder = (a: MessageRow, b: MessageRow): number =>
+  postedAt(a) - postedAt(b);
+
+/**
  * Every nudge due at `now` and not yet sent. A condition is due once it has held for at least
  * `minutes`. Closed issues and issues without a triage card (nowhere to post) get none; on-hold
  * issues get no `draft_pending` or `customer_waiting`, since engineering owns the next move.
@@ -103,6 +123,7 @@ export function dueNudges(input: RuleInput): Nudge[] {
   const drafts = groupBy(input.drafts);
   const messages = groupBy(input.messages);
   const sent = new Set(input.sent.map((s) => `${s.issueId} ${s.kind}`));
+  const jevCheck = input.jevCheck ?? true;
   const due: Nudge[] = [];
 
   for (const issue of input.issues) {
@@ -110,7 +131,7 @@ export function dueNudges(input: RuleInput): Nudge[] {
     const add = (kind: NudgeKind, refId: string) => {
       const key = nudgeKey(kind, refId);
       if (sent.has(`${issue.id} ${key}`)) return;
-      if (sent.has(`${issue.id} ${skipKey(kind, refId)}`)) return;
+      if (jevCheck && sent.has(`${issue.id} ${skipKey(kind, refId)}`)) return;
       due.push({ issueId: issue.id, kind, refId, key });
     };
     const onHold = issue.status === "on_hold";
@@ -126,9 +147,10 @@ export function dueNudges(input: RuleInput): Nudge[] {
       add("draft_pending", pending.id);
 
     // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
-    const last = newest(
-      (messages.get(issue.id) ?? []).filter((m) => m.direction !== "internal"),
-    );
+    const last = (messages.get(issue.id) ?? [])
+      .filter((m) => m.direction !== "internal")
+      .sort(byThreadOrder)
+      .at(-1);
     if (!onHold && last?.direction === "customer" && old(last.createdAt))
       add("customer_waiting", last.id);
   }

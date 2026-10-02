@@ -211,6 +211,25 @@ describe("controller", () => {
     ).toContain("customer_waiting");
   });
 
+  it("drops a nudge whose condition resolved between scan and send", async () => {
+    const issue = await seedIssue(db, { title: "drafted late" });
+    await backdate(db);
+    const c = ctxWithJev("exec-1");
+    const scanned = await step("scan").run({}, c.ctx);
+    // The copilot drafts after the scan queued no_draft.
+    await createDraft(db, { issueId: issue.id, text: "Here is a fix." });
+    const out = await step("send").run(scanned.input, c.ctx);
+    expect(out.output!.resolved).toEqual([`no_draft:${issue.id}`]);
+    expect((out.output!.nudged as { key: string }[]).map((n) => n.key)).toEqual(
+      [`no_owner:${issue.id}`],
+    );
+    const recorded = await db.query<{ kind: string }>(
+      "select kind from nudges where issue_id = $1",
+      [issue.id],
+    );
+    expect(recorded.map((r) => r.kind)).toEqual([`no_owner:${issue.id}`]);
+  });
+
   it("a retried send step posts nothing twice", async () => {
     await seedIssue(db, { title: "retry" });
     await backdate(db);
