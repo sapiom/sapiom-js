@@ -578,6 +578,47 @@ export async function createDraft(
   return toDraft(one(rows, "draft"));
 }
 
+/**
+ * Insert the draft for `causationId` once. Two concurrent runs for the same event both miss the
+ * pre-select; the unique `(issue_id, causation_id)` index lets one insert win, and the other gets
+ * the winner's row with `created: false`.
+ */
+export async function createDraftOnce(
+  db: Db,
+  input: {
+    issueId: string;
+    text: string;
+    citations?: unknown;
+    causationId: string;
+    confidence?: number;
+  },
+): Promise<{ draft: Draft; created: boolean }> {
+  // In a transaction so pg-mem (serialized transactions) agrees with Postgres under concurrency.
+  return db.transaction(async (tx) => {
+    const found = await draftForCausation(tx, input.issueId, input.causationId);
+    if (found) return { draft: found, created: false };
+    const rows = await tx.query(
+      `insert into drafts (issue_id, text, citations, causation_id, confidence, status)
+       values ($1, $2, $3::text::jsonb, $4, $5, 'pending')
+       on conflict (issue_id, causation_id) do nothing returning *`,
+      [
+        input.issueId,
+        input.text,
+        json(input.citations),
+        input.causationId,
+        input.confidence ?? null,
+      ],
+    );
+    if (rows[0]) return { draft: toDraft(rows[0]), created: true };
+    const winner = await draftForCausation(
+      tx,
+      input.issueId,
+      input.causationId,
+    );
+    return { draft: one(winner ? [winner] : [], "draft"), created: false };
+  });
+}
+
 /** Where the draft card was posted, once it has been. */
 export async function setDraftCard(
   db: Db,

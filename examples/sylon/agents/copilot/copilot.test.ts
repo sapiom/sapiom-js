@@ -9,8 +9,10 @@ import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
 import {
   createDraft,
+  createDraftOnce,
   getDraft,
   getIssue,
+  linkMessage,
   messageBySourceEventId,
   pendingDrafts,
   setStatus,
@@ -18,9 +20,13 @@ import {
 import { KB } from "../../_shared/kb.generated";
 import { fakeCtx } from "../../_shared/test-ctx";
 import {
+  MAX_MESSAGE_CHARS,
+  MAX_PROMPT_MESSAGES,
+  buildPrompt,
   copilotCard,
   normalizeOutput,
   outputSchema,
+  promptMessages,
   type DraftOutput,
 } from "./draft";
 import { agent } from "./index";
@@ -238,13 +244,97 @@ describe("draft path", () => {
     );
   });
 
-  it("an empty reply stores the summary but posts no card", async () => {
+  it("an empty reply stores the summary, posts no card, and leaves the old draft actionable", async () => {
     const t = ctxFor("e", { ...DRAFTED, reply: "  " });
     const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
     expect(last(ds).output).toMatchObject({ skipped: "no reply needed" });
     expect(t.slack("chat.postMessage")).toHaveLength(0);
-    expect(await pendingDrafts(db, FIXTURE_ISSUE)).toHaveLength(0);
+    expect(t.slack("chat.update")).toHaveLength(0);
+    expect((await pendingDrafts(db, FIXTURE_ISSUE)).map((d) => d.id)).toEqual([
+      FIXTURE_DRAFT,
+    ]);
     expect((await getIssue(db, FIXTURE_ISSUE)).summary).toBe(DRAFTED.summary);
+  });
+
+  it("a model error leaves the old draft actionable", async () => {
+    const t = ctxFor("e");
+    (t.ctx.sapiom as { llm: { run: () => Promise<never> } }).llm.run =
+      async () => {
+        throw new Error("model unavailable");
+      };
+    await expect(
+      runAgent(fixture("issue/created.json").payload, t.ctx),
+    ).rejects.toThrow("model unavailable");
+    expect((await getDraft(db, FIXTURE_DRAFT)).status).toBe("pending");
+    expect(t.slack("chat.update")).toHaveLength(0);
+  });
+
+  it("concurrent deliveries of one event post exactly one card", async () => {
+    const payload = fixture("issue/created.json").payload;
+    const a = ctxFor("exec-a");
+    const b = ctxFor("exec-b");
+    const [ra, rb] = await Promise.all([
+      runAgent(payload, a.ctx),
+      runAgent(payload, b.ctx),
+    ]);
+    const posts = [
+      ...a.slack("chat.postMessage"),
+      ...b.slack("chat.postMessage"),
+    ];
+    expect(posts).toHaveLength(1);
+    const outs = [last(ra).output!, last(rb).output!];
+    expect(
+      outs.filter((o) => o.skipped === "a concurrent run owns this draft"),
+    ).toHaveLength(1);
+    expect(outs[0].draftId).toBe(outs[1].draftId);
+    expect((await pendingDrafts(db, FIXTURE_ISSUE)).map((d) => d.id)).toEqual([
+      outs[0].draftId,
+    ]);
+  });
+
+  it("a late event does not replace the draft for a newer customer message", async () => {
+    await linkMessage(db, {
+      issueId: FIXTURE_ISSUE,
+      source: "slack",
+      sourceEventId: "Ev0NEWER0001",
+      direction: "customer",
+      slack: {
+        channel: "C0CUSTOMER1",
+        ts: "1790889999.000100",
+        threadTs: "1790889355.981329",
+      },
+      userId: "U0CUSTOMER1",
+      text: "A newer follow-up.",
+    });
+    const newer = await createDraftOnce(db, {
+      issueId: FIXTURE_ISSUE,
+      text: "Reply to the newer follow-up.",
+      causationId: "Ev0NEWER0001",
+    });
+    const t = ctxFor("e");
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    expect(last(ds).output).toMatchObject({
+      skipped: "a newer message already has a pending draft",
+      draftId: newer.draft.id,
+    });
+    expect(t.llmCalls).toHaveLength(0);
+    expect((await getDraft(db, newer.draft.id)).status).toBe("pending");
+  });
+
+  it("internal notes never reach the model", async () => {
+    await linkMessage(db, {
+      issueId: FIXTURE_ISSUE,
+      source: "slack",
+      sourceEventId: "Ev0INTERNAL1",
+      direction: "internal",
+      slack: { channel: "C0TRIAGE001", ts: "1790889420.000100" },
+      userId: "U0TEAMMATE1",
+      text: "Internal: codename BLUEHERON, do not tell the customer.",
+    });
+    const t = ctxFor("e");
+    await runAgent(fixture("issue/created.json").payload, t.ctx);
+    expect(JSON.stringify(t.llmCalls)).not.toContain("BLUEHERON");
+    expect(JSON.stringify(t.llmCalls)).toContain("signature errors");
   });
 
   it("does not draft for a closed issue", async () => {
@@ -294,6 +384,30 @@ describe("click path", () => {
     });
     expect(t2.slack("chat.postMessage")).toHaveLength(0);
     expect(t2.slack("chat.update")).toHaveLength(1);
+  });
+
+  it("Approve on a closed issue sends nothing and dismisses the draft", async () => {
+    await setStatus(db, FIXTURE_ISSUE, "closed");
+    const t = ctxFor("e");
+    const ds = await runAgent(
+      fixture("slack/block-actions.draft-approve.json").payload,
+      t.ctx,
+    );
+    expect(last(ds).output).toMatchObject({
+      skipped: "issue is closed",
+      status: "dismissed",
+    });
+    expect(t.slack("chat.postMessage")).toHaveLength(0);
+    expect(
+      await messageBySourceEventId(db, `draft:${FIXTURE_DRAFT}`),
+    ).toBeNull();
+    expect(await getDraft(db, FIXTURE_DRAFT)).toMatchObject({
+      status: "dismissed",
+      decidedBy: "U0TEAMMATE1",
+    });
+    expect(JSON.stringify(t.slack("chat.update")[0].blocks)).toContain(
+      "Issue is closed; reply not sent.",
+    );
   });
 
   it("a retried apply step does not post the reply twice", async () => {
@@ -381,6 +495,34 @@ describe("draft helpers", () => {
         KB,
       ),
     ).toMatchObject({ confidence: 1, citations: ["billing"] });
+  });
+
+  it("promptMessages keeps the first customer message and the latest ones, never internal notes", () => {
+    const msg = (i: number, direction: "customer" | "agent" | "internal") =>
+      ({ id: `m${i}`, direction, text: `t${i}` }) as never;
+    const all = [
+      msg(0, "customer"),
+      ...Array.from({ length: 30 }, (_, i) =>
+        msg(i + 1, i % 3 === 0 ? "internal" : "customer"),
+      ),
+    ];
+    const kept = promptMessages(all) as { id: string; direction: string }[];
+    expect(kept).toHaveLength(MAX_PROMPT_MESSAGES);
+    expect(kept[0].id).toBe("m0");
+    expect(kept.at(-1)!.id).toBe("m30");
+    expect(kept.some((m) => m.direction === "internal")).toBe(false);
+  });
+
+  it("buildPrompt truncates long messages", () => {
+    const long = "x".repeat(MAX_MESSAGE_CHARS + 500);
+    const prompt = buildPrompt({
+      issue: { number: 1, status: "new", title: "t" } as never,
+      account: { name: "A" } as never,
+      messages: [{ id: "m", direction: "customer", text: long } as never],
+      kb: KB,
+    });
+    expect(prompt).toContain("[truncated]");
+    expect(prompt).not.toContain("x".repeat(MAX_MESSAGE_CHARS + 1));
   });
 
   it("the output schema limits citations to kb slugs", () => {

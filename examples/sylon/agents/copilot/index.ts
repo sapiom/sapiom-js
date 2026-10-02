@@ -38,7 +38,7 @@ import { emit } from "../../_shared/emit";
 import { Envelope, SlackBlockActions } from "../../_shared/events";
 import {
   canTransition,
-  createDraft,
+  createDraftOnce,
   decideDraft,
   draftForCausation,
   getAccount,
@@ -147,9 +147,19 @@ function withTriggerMessage(
   ];
 }
 
+/** The Slack ts of the customer message that triggered a draft, when it is stored. */
+async function triggerTs(db: Db, draft: Draft): Promise<number | null> {
+  if (!draft.causationId) return null;
+  const message = await messageBySourceEventId(db, draft.causationId);
+  return message?.ts ? Number(message.ts) : null;
+}
+
 /**
  * The drafting path, run inside the entry step: one step boundary fewer is about two seconds off
  * the 15 s card budget.
+ *
+ * Order matters: the new card is posted before any older pending draft is superseded, so a model
+ * error, an empty reply or a failed post leaves the old cards actionable.
  */
 async function draftReply(
   trigger: DraftTrigger,
@@ -167,48 +177,44 @@ async function draftReply(
       throw new Error(`issue ${issue.id} has no triage card yet`);
 
     // A retried step or a redelivered event finds the draft it already produced, so it never
-    // pays for a second LLM call or posts a second card.
+    // pays for a second LLM call.
     let draft = await draftForCausation(db, issue.id, trigger.causationId);
     let confidence: number | null = null;
     if (!draft) {
-      const superseded: Draft[] = [];
+      // A late event must not replace the draft for a newer customer message.
+      const ours = Number(trigger.slack.ts);
       for (const pending of await pendingDrafts(db, issue.id)) {
-        const decided = await decideDraft(
-          db,
-          pending.id,
-          "superseded",
-          SUPERSEDED_BY,
-        );
-        if (decided.changed) superseded.push(decided.draft);
+        const theirs = await triggerTs(db, pending);
+        if (theirs !== null && theirs > ours)
+          return terminate({
+            issueId: issue.id,
+            skipped: "a newer message already has a pending draft",
+            draftId: pending.id,
+          });
       }
+
       const [account, stored] = await Promise.all([
         getAccount(db, issue.accountId),
         messagesForIssue(db, issue.id),
       ]);
-      const messages = withTriggerMessage(stored, trigger);
-      const current = issue;
-      // The old cards update while the model drafts; neither waits on the other.
-      const [response] = await Promise.all([
-        ctx.sapiom.llm.run({
-          request: {
-            system: SYSTEM_PROMPT,
-            messages: [
-              {
-                role: "user",
-                content: buildPrompt({
-                  issue: current,
-                  account,
-                  messages,
-                  kb: KB,
-                }),
-              },
-            ],
-            max_tokens: 8192,
-          },
-          output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
-        }),
-        ...superseded.map((d) => updateCard(ctx, d, current)),
-      ]);
+      const response = await ctx.sapiom.llm.run({
+        request: {
+          system: SYSTEM_PROMPT,
+          messages: [
+            {
+              role: "user",
+              content: buildPrompt({
+                issue,
+                account,
+                messages: withTriggerMessage(stored, trigger),
+                kb: KB,
+              }),
+            },
+          ],
+          max_tokens: 8192,
+        },
+        output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
+      });
       const output = normalizeOutput(
         DraftOutput.parse(ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME)),
         KB,
@@ -216,7 +222,7 @@ async function draftReply(
       confidence = output.confidence;
       issue = await updateIssue(db, issue.id, { summary: output.summary });
       // An empty reply means the model sees nothing to answer yet. A card would offer Approve
-      // on nothing, so there is none; the next customer message drafts again.
+      // on nothing, so there is none, and the older drafts stay as they are.
       if (!output.reply)
         return terminate({
           issueId: issue.id,
@@ -224,13 +230,21 @@ async function draftReply(
           summary: output.summary,
           confidence,
         });
-      draft = await createDraft(db, {
+      const inserted = await createDraftOnce(db, {
         issueId: issue.id,
         text: output.reply,
         citations: output.citations,
         causationId: trigger.causationId,
         confidence: output.confidence,
       });
+      // A concurrent delivery of the same event inserted first: it posts the card.
+      if (!inserted.created)
+        return terminate({
+          issueId: issue.id,
+          draftId: inserted.draft.id,
+          skipped: "a concurrent run owns this draft",
+        });
+      draft = inserted.draft;
     }
     const reused = !!draft.cardTs;
     if (!draft.cardTs) {
@@ -241,6 +255,22 @@ async function draftReply(
         blocks: copilotCard(draft, issue, KB),
       });
       draft = await setDraftCard(db, draft.id, posted);
+    }
+
+    // Only now retire the older pending drafts. Runs on a retry too, so a crash after the post
+    // never leaves two actionable cards.
+    const ours = Number(trigger.slack.ts);
+    for (const pending of await pendingDrafts(db, issue.id)) {
+      if (pending.id === draft.id) continue;
+      const theirs = await triggerTs(db, pending);
+      if (theirs !== null && theirs > ours) continue;
+      const decided = await decideDraft(
+        db,
+        pending.id,
+        "superseded",
+        SUPERSEDED_BY,
+      );
+      if (decided.changed) await updateCard(ctx, decided.draft, issue);
     }
     return terminate({
       issueId: issue.id,
@@ -296,6 +326,34 @@ const decide = defineStep({
       const found = await getDraft(db, draftId.data).catch(() => null);
       if (!found) return terminate({ skipped: "draft not found" });
       await recordRun(db, ctx, AGENT, found.issueId);
+      // A reply drafted before the issue closed must not reach the customer: Approve on a closed
+      // issue dismisses the draft instead.
+      const issueNow = await getIssue(db, found.issueId);
+      if (verb === "approve" && issueNow.status === "closed") {
+        const dismissed = await decideDraft(
+          db,
+          found.id,
+          "dismissed",
+          click.user.id,
+        );
+        await updateCard(
+          ctx,
+          dismissed.draft,
+          issueNow,
+          dismissed.changed ? "Issue is closed; reply not sent." : undefined,
+          {
+            channel: click.container?.channel_id,
+            ts: click.container?.message_ts,
+          },
+        );
+        return terminate({
+          draftId: dismissed.draft.id,
+          changed: dismissed.changed,
+          status: dismissed.draft.status,
+          decidedBy: dismissed.draft.decidedBy,
+          skipped: "issue is closed",
+        });
+      }
       const { draft, changed } = await decideDraft(
         db,
         found.id,
@@ -338,7 +396,11 @@ const apply = defineStep({
       };
       let note: string | undefined;
 
-      if (draft.status === "approved") {
+      if (draft.status === "approved" && issue.status === "closed") {
+        // Closed between the decision and this step.
+        note = "Issue is closed; reply not sent.";
+        out.issueStatus = issue.status;
+      } else if (draft.status === "approved") {
         if (!issue.customerChannel || !issue.customerRootTs)
           throw new Error(`issue ${issue.id} has no customer thread`);
         // Keyed on the draft, so a retry after the post never sends the reply twice.
