@@ -931,7 +931,6 @@ describe("intake agent", () => {
     take.actions[0].block_id = "nudge.actions";
     take.message.blocks = structuredClone(NUDGE_BLOCKS);
     const t = makeCtx("exec-take-missing");
-    await setConfig(db, "channels.triage", "C0TRIAGE001");
     expect((await run(take, t.ctx)).output).toMatchObject({
       skipped: expect.stringContaining("not found"),
     });
