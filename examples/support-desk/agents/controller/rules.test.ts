@@ -403,6 +403,23 @@ describe("repeat rounds", () => {
         sent,
       }),
     ).toEqual([]);
+    const owned = issue({ ownerSlackId: "U1" });
+    const draftSent = [sentAgo("draft_pending:draft-1:1", 100 * H)];
+    expect(
+      keys({
+        issues: [owned],
+        drafts: [draft({ status: "approved" })],
+        sent: draftSent,
+      }),
+    ).toEqual([]);
+    expect(
+      keys({
+        issues: [{ ...owned, status: "on_hold" }],
+        drafts: [draft()],
+        messages: [message()],
+        sent: [...draftSent, sentAgo("customer_waiting:msg-1:1", 100 * H)],
+      }),
+    ).toEqual([]);
   });
 
   it("restarts at round 1 on a new ref", () => {
