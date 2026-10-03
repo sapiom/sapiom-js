@@ -8,11 +8,14 @@ import type { Block } from "../../_shared/slack";
 /** First run: how far back to look when there is no cursor. */
 export const FIRST_LOOKBACK_MS = 60 * 60 * 1000;
 /**
- * Later runs start this far before the cursor. The list filters on start time, so a run that
- * started before the cursor and failed after it would otherwise be missed. The reported set
- * makes the overlap harmless.
+ * Later runs start this far before the cursor. The list filters on start time and has no
+ * finish-time filter, so a run that started before the cursor and failed after it is only seen if
+ * the window reaches back past its start. This must exceed the longest plausible run; the
+ * reported set makes the overlap harmless.
  */
-export const OVERLAP_MS = 30 * 60 * 1000;
+export const OVERLAP_MS = 6 * 60 * 60 * 1000;
+/** A "cannot poll" alert for the same problem repeats no more often than this. */
+export const PROBLEM_REPEAT_MS = 60 * 60 * 1000;
 /** Failures posted in one tick; the rest become a single "and N more" line. */
 export const MAX_POSTS = 10;
 export const ERROR_MAX = 300;
@@ -194,7 +197,7 @@ export function actionItems(
       "Check the copilot step logs for the model output (SAP-3726).",
     );
   }
-  if (/model_not_available|llm\.services\.sapiom\.ai.*→ 4\d\d/i.test(e)) {
+  if (/model_not_available|llm\.services\.sapiom\.ai.*→ (400|404)\b/i.test(e)) {
     items.push(
       "The LLM gateway rejected the model: pass a routing label it serves (sonnet, opus, haiku) as `model`, not a model id, then redeploy the agent.",
     );
@@ -245,7 +248,10 @@ export function failureMessage(f: Failure): { text: string; blocks: Block[] } {
     .join("\n");
   const head = `:rotating_light: ${f.slug} failed at ${f.step}${attempt}`;
   return {
-    text: `${head}: ${truncate(slackToPlain(f.error), 120)}`,
+    // The fallback is read as mrkdwn too, so the run's error cannot carry a live mention.
+    text: escapeMrkdwn(
+      `${slackToPlain(head)}: ${truncate(slackToPlain(f.error), 120)}`,
+    ),
     blocks: [
       {
         type: "section",
@@ -273,4 +279,9 @@ export function failureMessage(f: Failure): { text: string; blocks: Block[] } {
 
 export function moreMessage(n: number): string {
   return `and ${n} more failed ${n === 1 ? "run" : "runs"}: ${mrkdwnLink(EVENTS_URL, "see the Events page")}`;
+}
+
+/** The line posted when the watchdog itself cannot read the API, so its own outage is not silent. */
+export function cannotPollMessage(problem: string): string {
+  return `:warning: Sylon watchdog cannot poll: ${escapeMrkdwn(truncate(slackToPlain(problem)))}. Run \`pnpm run setup --only watchdog\` to re-provision its key.`;
 }

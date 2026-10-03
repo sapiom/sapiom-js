@@ -100,6 +100,25 @@ describe("actionItems", () => {
     },
   );
 
+  it("gives only the transient advice for a gateway 429", () => {
+    const items = actionItems(
+      "sylon-copilot",
+      "draft",
+      "POST https://llm.services.sapiom.ai/v2/anthropic/v1/messages → 429 rate limited",
+    );
+    expect(items.some((i) => /routing label/.test(i))).toBe(false);
+    expect(items.filter((i) => /transient/.test(i))).toHaveLength(1);
+  });
+
+  it("still advises on a gateway 400", () => {
+    const items = actionItems(
+      "sylon-copilot",
+      "draft",
+      "POST https://llm.services.sapiom.ai/v2/anthropic/v1/messages → 400 bad model",
+    );
+    expect(items.some((i) => /routing label/.test(i))).toBe(true);
+  });
+
   it("falls back to the step log and a replay", () => {
     const items = actionItems("sylon-intake", "classify", "boom");
     expect(items).toEqual([
@@ -325,6 +344,146 @@ describe("tick", () => {
     expect(
       r.logs.some((l) => JSON.stringify(l.data).includes(`#${number}`)),
     ).toBe(true);
+  });
+});
+
+describe("tick hardening", () => {
+  let db: Db;
+  beforeEach(async () => {
+    db = await memoryDb();
+    await setConfig(db, "channels.triage", "C0TRIAGE001", "test");
+  });
+  const run = (fetch: Deps["fetch"], executionId = "wd-1") => {
+    const c = fakeCtx({ isLocalTrace: true, executionId });
+    return { ...c, done: tick(c.ctx, db, { fetch, apiKey: "k" }) };
+  };
+  const denied = () => stubFetch(() => new Error("forbidden")).fetch;
+
+  it("posts one deduped 'cannot poll' line when the key is rejected", async () => {
+    const first = run(denied());
+    await expect(first.done).rejects.toThrow();
+    const sent = posts(first.logs);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].channel).toBe("C0TRIAGE001");
+    expect(sent[0].text).toContain("Sylon watchdog cannot poll");
+    expect(sent[0].text).toContain("pnpm run setup --only watchdog");
+
+    const second = run(denied(), "wd-2");
+    await expect(second.done).rejects.toThrow();
+    expect(posts(second.logs)).toEqual([]);
+  });
+
+  it("alerts when a watched agent's list call fails, then throws", async () => {
+    const { fetch } = stubFetch((url) =>
+      url.pathname === "/v1/workflows/definitions" ? DEFS : new Error("down"),
+    );
+    const r = run(fetch);
+    await expect(r.done).rejects.toThrow(/tick incomplete/);
+    expect(posts(r.logs)[0].text).toContain("list sylon-copilot");
+  });
+
+  it("alerts again once the hour has passed", async () => {
+    await expect(run(denied()).done).rejects.toThrow();
+    await db.query(
+      "update watchdog_alerted set alerted_at = now() - interval '2 hours'",
+    );
+    const again = run(denied(), "wd-2");
+    await expect(again.done).rejects.toThrow();
+    expect(posts(again.logs)).toHaveLength(1);
+  });
+
+  it("pages until a short page and keeps the cursor when the cap is hit", async () => {
+    const full = Array.from({ length: 500 }, (_, i) => exec(String(1000 + i)));
+    let pages = 0;
+    const { fetch } = stubFetch((url) => {
+      if (url.pathname === "/v1/workflows/definitions") return DEFS;
+      if (url.pathname === "/v1/workflows/executions") {
+        if (url.searchParams.get("definitionId") !== "def-copilot") return [];
+        pages++;
+        return full.map((f) => ({ ...f, id: `${f.id}-${pages}` }));
+      }
+      return {};
+    });
+    const out = await run(fetch).done;
+    expect(pages).toBe(20);
+    expect(out).toMatchObject({ incomplete: ["sylon-copilot"] });
+    expect(await db.query("select * from watchdog_state")).toEqual([]);
+  });
+
+  it("reads past the old four-page limit when the pages end short", async () => {
+    let pages = 0;
+    const { fetch } = stubFetch((url) => {
+      if (url.pathname === "/v1/workflows/definitions") return DEFS;
+      if (url.pathname === "/v1/workflows/executions") {
+        if (url.searchParams.get("definitionId") !== "def-copilot") return [];
+        pages++;
+        return pages < 6
+          ? Array.from({ length: 500 }, (_, i) => exec(`p${pages}-${i}`))
+          : [];
+      }
+      return {};
+    });
+    const out = await run(fetch).done;
+    expect(pages).toBe(6);
+    expect(out).not.toHaveProperty("incomplete");
+    expect(await db.query("select * from watchdog_state")).toHaveLength(1);
+  });
+
+  it("finds a run that started before the cursor and failed after it", async () => {
+    // The cursor is 45 minutes old and the run started 3 hours ago: only a lookback of hours
+    // reaches its start time.
+    const cursor = new Date(Date.now() - 45 * 60_000).toISOString();
+    await db.query("insert into watchdog_state (id, cursor) values (1, $1)", [
+      cursor,
+    ]);
+    const startedAt = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    const { fetch } = stubFetch((url) => {
+      if (url.pathname === "/v1/workflows/definitions") return DEFS;
+      if (url.pathname === "/v1/workflows/executions") {
+        const from = Date.parse(url.searchParams.get("from")!);
+        return url.searchParams.get("definitionId") === "def-copilot" &&
+          Date.parse(startedAt) >= from
+          ? [exec("11", { startedAt })]
+          : [];
+      }
+      return {};
+    });
+    const r = run(fetch);
+    expect((await r.done).posted).toEqual(["11"]);
+  });
+
+  it("skips a tick while another holds the lock", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const held = db.tryLock("sylon.watchdog.tick", () => gate);
+    const other = await db.tryLock("sylon.watchdog.tick", async () => 1);
+    expect(other).toEqual({ held: false });
+    release();
+    await held;
+    expect(await db.tryLock("sylon.watchdog.tick", async () => 1)).toEqual({
+      held: true,
+      value: 1,
+    });
+  });
+
+  it("neutralises a broadcast mention in the notification text", async () => {
+    const { fetch } = stubFetch((url) => {
+      if (url.pathname === "/v1/workflows/definitions") return DEFS;
+      if (url.pathname === "/v1/workflows/executions")
+        return url.searchParams.get("definitionId") === "def-copilot"
+          ? [exec("11")]
+          : [];
+      return {
+        ...exec("11"),
+        error: "bad <!channel> & <!here|x>",
+        steps: [],
+      };
+    });
+    const r = run(fetch);
+    await r.done;
+    const text = posts(r.logs)[0].text;
+    expect(text).not.toContain("<!");
+    expect(text).not.toContain("<");
   });
 });
 

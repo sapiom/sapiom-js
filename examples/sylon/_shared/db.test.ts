@@ -30,6 +30,7 @@ describe("db", () => {
       { id: "020_copilot" },
       { id: "050_linear_url" },
       { id: "060_watchdog" },
+      { id: "063_watchdog_alerted" },
     ]);
   });
 
