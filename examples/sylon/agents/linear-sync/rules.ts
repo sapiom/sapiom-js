@@ -21,9 +21,13 @@ export function resolution(
   return null;
 }
 
-/** Key of the triage post for one resolution of one Linear issue; the base of every dedup key. */
+/**
+ * Key of the triage post for one resolution of one Linear issue; the base of every dedup key.
+ * `generation` is the issue's `on_hold_at` (epoch ms), so each escalation of the same issue is keyed apart.
+ */
 export const syncKey = (
   issueId: string,
   identifier: string,
   r: Resolution,
-): string => `linear-sync:${issueId}:${identifier}:${r}`;
+  generation: number,
+): string => `linear-sync:${issueId}:${identifier}:${generation}:${r}`;

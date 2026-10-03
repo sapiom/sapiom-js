@@ -1,6 +1,8 @@
 /** The linear-sync agent: the pure state mapping, and the live path against a mocked Linear relay. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { connectors } from "@sapiom/tools";
+
 import { fixture } from "../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../_shared/db";
 import { setConfig } from "../_shared/config";
@@ -96,7 +98,11 @@ describe("linear-sync against the relay (mocked fetch)", () => {
         if (url.includes("/connectors/v1/linear/mcp")) {
           const name = body.params.name as string;
           const id = body.params.arguments.id as string;
-          calls.push({ tool: name, method: "mcp", args: body.params.arguments });
+          calls.push({
+            tool: name,
+            method: "mcp",
+            args: body.params.arguments,
+          });
           const identifier = id.replace(/^uuid-/, "");
           const state = states[identifier];
           if (!state)
@@ -139,6 +145,21 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     vi.unstubAllEnvs();
   });
 
+  const keyOf = async (
+    id: string,
+    identifier: string,
+    r: "done" | "canceled",
+  ) => syncKey(id, identifier, r, (await getIssue(db, id)).onHoldAt!.getTime());
+  /** A live ctx whose Slack connector is `connectors.slack` with some methods replaced. */
+  const withSlack = (overrides: Record<string, unknown>) => {
+    const out = fakeCtx({ isLocalTrace: false });
+    const ctx = out.ctx as unknown as Record<string, unknown>;
+    ctx.sapiom = {
+      ...(ctx.sapiom as object),
+      connectors: { slack: { ...connectors.slack, ...overrides } },
+    };
+    return out;
+  };
   const live = () => fakeCtx({ isLocalTrace: false });
   const posts = () => calls.filter((c) => c.method === "chat.postMessage");
 
@@ -170,7 +191,7 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({
       type: "issue.engineering_resolved",
-      id: `issue.engineering_resolved:${syncKey(id, "SAP-1", "done")}`,
+      id: `issue.engineering_resolved:${await keyOf(id, "SAP-1", "done")}`,
       payload: {
         issueId: id,
         linearIdentifier: "SAP-1",
@@ -178,7 +199,7 @@ describe("linear-sync against the relay (mocked fetch)", () => {
       },
     });
     expect(
-      await messageBySourceEventId(db, syncKey(id, "SAP-1", "done")),
+      await messageBySourceEventId(db, await keyOf(id, "SAP-1", "done")),
     ).toMatchObject({ issueId: id, direction: "internal" });
 
     const before = calls.length;
@@ -287,7 +308,7 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     expect(
       await messageBySourceEventId(
         db,
-        `${syncKey(id, "SAP-2", "done")}:customer`,
+        `${await keyOf(id, "SAP-2", "done")}:customer`,
       ),
     ).toMatchObject({ direction: "agent" });
   });
@@ -321,5 +342,84 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     calls.length = 0;
     await sync(live().ctx as never, db, 2);
     expect(read()).toEqual(["uuid-SAP-3", "uuid-SAP-1"]);
+  });
+
+  it("keeps the triage post when the customer post fails, and does not repost it on the next tick", async () => {
+    const id = await newOnHold(1);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    await setConfig(db, "linear_sync.notify_customer", true, "test");
+    let failCustomer = true;
+    const flaky = () =>
+      withSlack({
+        postMessage: async (a: { channel: string }) => {
+          if (failCustomer && a.channel === "C0CUSTOMER1")
+            throw new Error("slack down");
+          return connectors.slack.postMessage(a as never);
+        },
+      });
+    const first = await sync(flaky().ctx as never, db);
+    expect(first.failed).toHaveLength(1);
+    expect((await getIssue(db, id)).status).toBe("on_hold");
+    expect(
+      await messageBySourceEventId(db, await keyOf(id, "SAP-1", "done")),
+    ).not.toBeNull();
+
+    failCustomer = false;
+    calls.length = 0;
+    const second = await sync(flaky().ctx as never, db);
+    expect(second.resolved).toHaveLength(1);
+    expect(posts().map((p) => p.args.channel)).toEqual(["C0CUSTOMER1"]);
+  });
+
+  it("retries a failed card redraw on the next tick, after the issue has left On Hold", async () => {
+    const id = await newOnHold(1);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    let failUpdate = true;
+    const flaky = () =>
+      withSlack({
+        update: async (a: unknown) => {
+          if (failUpdate) throw new Error("slack down");
+          return connectors.slack.update(a as never);
+        },
+      });
+    await sync(flaky().ctx as never, db);
+    expect((await getIssue(db, id)).status).toBe("on_you");
+    expect((await getIssue(db, id)).cardDirty).toBe(true);
+
+    failUpdate = false;
+    calls.length = 0;
+    await sync(flaky().ctx as never, db);
+    expect(calls.filter((c) => c.method === "chat.update")).toHaveLength(1);
+    expect((await getIssue(db, id)).cardDirty).toBe(false);
+
+    calls.length = 0;
+    await sync(live().ctx as never, db);
+    expect(calls.filter((c) => c.method === "chat.update")).toHaveLength(0);
+  });
+
+  it("posts the notice top-level in the triage channel when the issue has no triage thread", async () => {
+    const id = await newOnHold(1);
+    await db.query("update issues set triage_root_ts = null where id = $1", [
+      id,
+    ]);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    await sync(live().ctx as never, db);
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].args.channel).toBe("C0TRIAGE001");
+    expect(posts()[0].args.threadTs).toBeUndefined();
+    expect((await getIssue(db, id)).status).toBe("on_you");
+  });
+
+  it("keys a repeat escalation of the same issue and Linear identifier apart", async () => {
+    const id = await newOnHold(1);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    const { ctx, emitted } = live();
+    await sync(ctx as never, db);
+    await new Promise((r) => setTimeout(r, 5));
+    await setStatus(db, id, "on_hold");
+    await sync(ctx as never, db);
+    expect(posts()).toHaveLength(2);
+    expect(emitted).toHaveLength(2);
+    expect(new Set(emitted.map((e) => e.id)).size).toBe(2);
   });
 });

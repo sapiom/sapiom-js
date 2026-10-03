@@ -12,11 +12,14 @@
  * goes on with the rest.
  *
  * Idempotent across retries and overlapping runs, under the issue row lock:
- * - Posts are keyed in `messages` (`linear-sync:<issueId>:<identifier>:<done|canceled>`, the
- *   customer message with `:customer`) and committed before the move, so a retry after a failed
- *   move posts nothing twice.
- * - The move and the emit share a second locked transaction: a failed emit rolls the move back,
- *   and an issue that is no longer On Hold is left alone, so a second run does nothing.
+ * - Posts are keyed in `messages` (`linear-sync:<issueId>:<identifier>:<on_hold_at>:<done|canceled>`,
+ *   the customer message with `:customer`), each committed in its own transaction before the move,
+ *   so a retry after a failed move or a failed later post posts nothing twice. `on_hold_at` is the
+ *   escalation generation: a repeat escalation of the issue gets fresh keys. With no triage
+ *   thread the notice goes top-level in the triage channel.
+ * - The move, the emit and `card_dirty` share a locked transaction: a failed emit rolls the move
+ *   back, and an issue that is no longer On Hold is left alone, so a second run does nothing.
+ *   `card_dirty` is cleared after the card redraw; every tick first redraws the dirty cards.
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
@@ -34,10 +37,12 @@ import {
   getAccount,
   linkMessage,
   lockIssue,
+  cardDirty,
   markLinearChecked,
   messageBySourceEventId,
   onHoldLinked,
   recordRun,
+  setCardDirty,
   setStatus,
   type Direction,
   type Issue,
@@ -81,13 +86,13 @@ async function postOnce(
   },
 ): Promise<boolean> {
   if (await messageBySourceEventId(db, input.key)) return false;
-  if (!input.channel || !input.threadTs) {
-    ctx.logger.warn("no thread to post in; skipped", { key: input.key });
+  if (!input.channel) {
+    ctx.logger.warn("no channel to post in; skipped", { key: input.key });
     return false;
   }
   const posted = await post(ctx, {
     channel: input.channel,
-    threadTs: input.threadTs,
+    ...(input.threadTs ? { threadTs: input.threadTs } : {}),
     text: input.text,
   });
   await linkMessage(db, {
@@ -98,7 +103,7 @@ async function postOnce(
     slack: {
       channel: posted.channel,
       ts: posted.ts,
-      threadTs: input.threadTs,
+      threadTs: input.threadTs ?? undefined,
     },
     userId: AGENT,
     text: input.text,
@@ -106,11 +111,7 @@ async function postOnce(
   return true;
 }
 
-function triageText(
-  url: string,
-  r: Resolution,
-  identifier: string,
-): string {
+function triageText(url: string, r: Resolution, identifier: string): string {
   const id = escapeMrkdwn(identifier);
   const link = url ? mrkdwnLink(url, id) : id;
   return r === "done"
@@ -134,17 +135,23 @@ export async function resolveIssue(
     resolution: Resolution;
   },
 ): Promise<Issue | null> {
-  const key = syncKey(input.issueId, input.identifier, input.resolution);
   const notifyCustomer =
     input.resolution === "done" &&
     (await getConfigOr(db, "linear_sync.notify_customer", false));
 
-  // 1. Posts, committed before the move, so a retry after a failed move does not repost.
-  const posted = await db.transaction(async (tx) => {
+  // 1. Each post is its own committed write, so a later failed post or move never rolls back the
+  // record of one that went out. With no triage thread the notice goes top-level in the channel.
+  const key = await db.transaction(async (tx) => {
     const issue = await lockIssue(tx, input.issueId);
-    if (issue.status !== "on_hold") return false;
+    if (issue.status !== "on_hold") return null;
+    const k = syncKey(
+      input.issueId,
+      input.identifier,
+      input.resolution,
+      issue.onHoldAt?.getTime() ?? 0,
+    );
     await postOnce(ctx, tx, {
-      key,
+      key: k,
       issueId: issue.id,
       channel: triageChannel,
       threadTs: issue.triageRootTs,
@@ -155,7 +162,13 @@ export async function resolveIssue(
       ),
       direction: "internal",
     });
-    if (notifyCustomer)
+    return k;
+  });
+  if (!key) return null;
+  if (notifyCustomer) {
+    await db.transaction(async (tx) => {
+      const issue = await lockIssue(tx, input.issueId);
+      if (issue.status !== "on_hold") return;
       await postOnce(ctx, tx, {
         key: `${key}:customer`,
         issueId: issue.id,
@@ -164,15 +177,16 @@ export async function resolveIssue(
         text: CUSTOMER_MESSAGE,
         direction: "agent",
       });
-    return true;
-  });
-  if (!posted) return null;
+    });
+  }
 
   // 2. Move, then emit, in one locked transaction: a failed emit rolls the move back.
   return db.transaction(async (tx) => {
     const issue = await lockIssue(tx, input.issueId);
     if (issue.status !== "on_hold") return null;
     const moved = await setStatus(tx, input.issueId, "on_you");
+    // Committed with the move, so a failed redraw is retried by a later tick.
+    await setCardDirty(tx, input.issueId, true);
     if (input.resolution === "done") {
       await emit(ctx, tx, "issue.engineering_resolved", {
         issueId: moved.id,
@@ -198,19 +212,31 @@ async function redrawCard(
   triageChannel: string,
   issue: Issue,
 ): Promise<void> {
-  if (!issue.triageRootTs) return;
-  const account = await getAccount(db, issue.accountId);
-  await update(ctx, {
-    channel: triageChannel,
-    ts: issue.triageRootTs,
-    text: issueCardText(issue, account),
-    blocks: issueCard(issue, account),
-  });
+  if (issue.triageRootTs) {
+    const account = await getAccount(db, issue.accountId);
+    await update(ctx, {
+      channel: triageChannel,
+      ts: issue.triageRootTs,
+      text: issueCardText(issue, account),
+      blocks: issueCard(issue, account),
+    });
+  }
+  await setCardDirty(db, issue.id, false);
 }
 
 export async function sync(ctx: Ctx, db: Db, limit: number = READ_CAP) {
   await recordRun(db, ctx, AGENT);
   const triageChannel = await getConfig(db, "channels.triage");
+
+  // Cards left stale by a failed redraw on an earlier tick; these issues are no longer On Hold.
+  for (const issue of await cardDirty(db, READ_CAP))
+    await redrawCard(ctx, db, triageChannel, issue).catch((err) =>
+      ctx.logger.warn("card redraw failed", {
+        issueId: issue.id,
+        err: String(err),
+      }),
+    );
+
   const candidates = await onHoldLinked(db, Math.min(limit, READ_CAP));
 
   const resolved: Resolved[] = [];
@@ -218,7 +244,10 @@ export async function sync(ctx: Ctx, db: Db, limit: number = READ_CAP) {
   for (const issue of candidates) {
     const identifier = issue.linearIdentifier!;
     try {
-      const linear = await getLinearIssue(ctx, issue.linearIssueId ?? identifier);
+      const linear = await getLinearIssue(
+        ctx,
+        issue.linearIssueId ?? identifier,
+      );
       // Stamped on a failed read too, so one broken issue does not pin the front of the queue.
       await markLinearChecked(db, issue.id);
       const r = resolution(linear);

@@ -30,6 +30,7 @@ describe("db", () => {
       { id: "020_copilot" },
       { id: "050_linear_url" },
       { id: "061_linear_sync" },
+      { id: "062_escalation_generation" },
     ]);
   });
 
