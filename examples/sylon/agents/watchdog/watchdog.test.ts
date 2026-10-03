@@ -16,6 +16,7 @@ import {
   OVERLAP_MS,
   splitBatch,
   type Execution,
+  describeFailure,
 } from "./logic";
 
 const exec = (id: string, extra: Partial<Execution> = {}): Execution => ({
@@ -152,7 +153,7 @@ describe("failureMessage", () => {
       issueNumber: 42,
     });
     const body = JSON.stringify(blocks);
-    expect(text).toContain("sylon-copilot failed at draft (attempt 2)");
+    expect(text).toContain("sylon-copilot failed at draft (attempt 3)");
     expect(body).not.toContain("<!channel>");
     expect(body).not.toContain("x".repeat(301));
     expect(body).toContain("https://app.sapiom.ai/agents/def-copilot/runs/e1");
@@ -345,5 +346,46 @@ describe("requireKey", () => {
 
   it("tells the operator to run setup when the secret is missing", () => {
     expect(() => requireKey({})).toThrow(/pnpm run setup --only watchdog/);
+  });
+});
+
+describe("describeFailure", () => {
+  it("names the failed step by stepName and reports its own error, not the retry-cap summary", () => {
+    const row = {
+      id: "848858",
+      definitionId: "905",
+      status: "failed",
+      currentStep: "receive",
+      currentStepAttempt: 2,
+      startedAt: "2026-10-03T00:23:50Z",
+      finishedAt: "2026-10-03T00:29:48Z",
+    };
+    const f = describeFailure(
+      "sylon-copilot",
+      row as never,
+      {
+        ...row,
+        error: {
+          message:
+            "Step 'receive' exceeded retry cap (attempted 3 of 3); fault: workload",
+        },
+        steps: [
+          {
+            stepName: "receive",
+            attempt: 2,
+            status: "failed",
+            faultClass: "workload",
+            error: {
+              message:
+                "POST https://llm.services.sapiom.ai/v2/anthropic/v1/messages → 400 model_not_available",
+            },
+          },
+        ],
+      } as never,
+      33,
+    );
+    expect(f.step).toBe("receive");
+    expect(f.error).toContain("model_not_available");
+    expect(actionItems(f.slug, f.step, f.error)[0]).toMatch(/routing label/);
   });
 });

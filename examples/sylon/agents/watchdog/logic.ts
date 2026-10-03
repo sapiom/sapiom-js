@@ -44,7 +44,9 @@ export interface Execution {
 }
 
 export interface StepRecord {
-  name: string;
+  /** The REST detail names it `stepName`; `name` is kept for older shapes. */
+  stepName?: string;
+  name?: string;
   attempt?: number | null;
   status: string;
   error?: unknown;
@@ -129,13 +131,20 @@ export function describeFailure(
     executionId: row.id,
     slug,
     definitionId: row.definitionId,
-    step: failed?.name ?? detail?.currentStep ?? row.currentStep ?? "unknown",
+    step:
+      failed?.stepName ??
+      failed?.name ??
+      detail?.currentStep ??
+      row.currentStep ??
+      "unknown",
     attempt:
       failed?.attempt ??
       detail?.currentStepAttempt ??
       row.currentStepAttempt ??
       null,
-    error: text(detail?.error) || text(failed?.error) || "no error recorded",
+    // The step's own error names the cause (a 400 from a provider, a Slack error code); the run's
+    // error is usually only "exceeded retry cap", so it is the fallback.
+    error: text(failed?.error) || text(detail?.error) || "no error recorded",
     faultClass: failed?.faultClass ?? null,
     startedAt: row.startedAt ?? null,
     finishedAt: row.finishedAt ?? null,
@@ -185,6 +194,11 @@ export function actionItems(
       "Check the copilot step logs for the model output (SAP-3726).",
     );
   }
+  if (/model_not_available|llm\.services\.sapiom\.ai.*→ 4\d\d/i.test(e)) {
+    items.push(
+      "The LLM gateway rejected the model: pass a routing label it serves (sonnet, opus, haiku) as `model`, not a model id, then redeploy the agent.",
+    );
+  }
   if (/MissingConfigError|config key '.*' is not set/i.test(e)) {
     items.push(
       "Run `pnpm run setup` in examples/sylon to seed the missing config key.",
@@ -223,7 +237,8 @@ const clock = (iso: string | null) =>
 /** The one message per failed execution: Block Kit with a plain-text fallback. */
 export function failureMessage(f: Failure): { text: string; blocks: Block[] } {
   const error = escapeMrkdwn(truncate(slackToPlain(f.error)));
-  const attempt = f.attempt != null ? ` (attempt ${f.attempt})` : "";
+  // Attempts are 0-based on the API; people count from 1.
+  const attempt = f.attempt != null ? ` (attempt ${f.attempt + 1})` : "";
   const issue = f.issueNumber != null ? `\nIssue: #${f.issueNumber}` : "";
   const items = actionItems(f.slug, f.step, f.error, f.faultClass)
     .map((i) => `• ${escapeMrkdwn(i)}`)
