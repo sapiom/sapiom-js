@@ -3,6 +3,7 @@
  * the Slack message. No I/O, so every rule here is unit-tested without a network or a database.
  */
 import { escapeMrkdwn, mrkdwnLink, slackToPlain } from "../../_shared/blocks";
+import { agentSlug } from "../../_shared/fleet-id";
 import type { Block } from "../../_shared/slack";
 
 /** First run: how far back to look when there is no cursor. */
@@ -26,13 +27,13 @@ export const runUrl = (definitionId: string, executionId: string) =>
   `${APP_URL}/agents/${definitionId}/runs/${executionId}`;
 
 /** Slugs the watchdog polls: the fleet minus itself and the smoke agents. */
-export const WATCHED_SLUGS = [
-  "sylon-intake",
-  "sylon-copilot",
-  "sylon-escalation",
-  "sylon-controller",
-  "sylon-urgent-pager",
-] as const;
+export const WATCHED_SLUGS: readonly string[] = [
+  "intake",
+  "copilot",
+  "escalation",
+  "controller",
+  "urgent-pager",
+].map((key) => agentSlug(key));
 
 /** A row of `GET /v1/workflows/executions`. */
 export interface Execution {
@@ -204,12 +205,12 @@ export function actionItems(
   }
   if (/MissingConfigError|config key '.*' is not set/i.test(e)) {
     items.push(
-      "Run `pnpm run setup` in examples/sylon to seed the missing config key.",
+      "Run `pnpm run setup` in examples/support-desk to seed the missing config key.",
     );
   }
   if (DATABASE.test(e) && !/MissingConfigError/.test(e)) {
     items.push(
-      "Check the sylon Postgres resource is up.",
+      "Check the fleet Postgres resource is up.",
       "Run `pnpm run setup` to apply pending migrations if a table or column is missing.",
     );
   }
@@ -283,5 +284,5 @@ export function moreMessage(n: number): string {
 
 /** The line posted when the watchdog itself cannot read the API, so its own outage is not silent. */
 export function cannotPollMessage(problem: string): string {
-  return `:warning: Sylon watchdog cannot poll: ${escapeMrkdwn(truncate(slackToPlain(problem)))}. Run \`pnpm run setup --only watchdog\` to re-provision its key.`;
+  return `:warning: Support desk watchdog cannot poll: ${escapeMrkdwn(truncate(slackToPlain(problem)))}. Run \`pnpm run setup --only watchdog\` to re-provision its key.`;
 }

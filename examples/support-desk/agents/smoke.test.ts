@@ -6,6 +6,7 @@ import { localFleetDb, setLocalDb, withDb } from "../_shared/db";
 import { fakeCtx } from "../_shared/test-ctx";
 import { agent as consume } from "./smoke-consume/index";
 import { agent as ingest } from "./smoke-ingest/index";
+import { agentSlug } from "../_shared/fleet-id";
 
 type Directive = {
   kind: string;
@@ -71,8 +72,8 @@ describe("smoke agents", () => {
       db.query("select execution_id, agent from runs order by execution_id"),
     );
     expect(runs).toEqual([
-      { execution_id: "exec-consume", agent: "sylon-smoke-consume" },
-      { execution_id: "exec-ingest", agent: "sylon-smoke-ingest" },
+      { execution_id: "exec-consume", agent: agentSlug("smoke-consume") },
+      { execution_id: "exec-ingest", agent: agentSlug("smoke-ingest") },
     ]);
   });
 

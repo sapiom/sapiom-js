@@ -23,7 +23,7 @@ export function encodeAction(owner: ActionOwner, verb: string): string {
   return `${owner}.${verb}`;
 }
 
-/** `null` for any action id Sylon does not own, so a handler can exit early. */
+/** `null` for any action id the support desk does not own, so a handler can exit early. */
 export function decodeAction(
   actionId: string,
 ): { owner: ActionOwner; verb: string } | null {
@@ -79,7 +79,7 @@ export function escapeMrkdwn(text: string): string {
 }
 
 /**
- * A Slack mrkdwn link. `text` must already be escaped ({@link escapeMrkdwn}); the URLs Sylon links
+ * A Slack mrkdwn link. `text` must already be escaped ({@link escapeMrkdwn}); the URLs the support desk links
  * (Slack permalinks, Linear issue URLs) never contain `|` or `>`.
  */
 export function mrkdwnLink(url: string, text: string): string {

@@ -15,6 +15,7 @@ import {
 } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import { nudge, slackToPlain } from "../../_shared/blocks";
 import { getConfigOr } from "../../_shared/config";
 import { withDb, type Db, type Row } from "../../_shared/db";
@@ -41,7 +42,7 @@ import {
   type Nudge,
 } from "./rules";
 
-export const AGENT = "sylon-controller";
+export const AGENT = agentSlug("controller");
 
 /** Below this Jev probability that the customer expects a reply, `customer_waiting` is skipped. */
 export const EXPECTS_REPLY_MIN = 0.5;
@@ -311,7 +312,7 @@ const send = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon controller: a cron that pings the triage thread once per stale condition (no owner, no draft, draft pending, customer waiting).",
+    "Support desk controller: a cron that pings the triage thread once per stale condition (no owner, no draft, draft pending, customer waiting).",
   entry: "scan",
   steps: { scan, send },
 });

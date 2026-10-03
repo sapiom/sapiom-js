@@ -83,7 +83,7 @@ describe("action codec", () => {
     }
   });
 
-  it("returns null for ids Sylon does not own", () => {
+  it("returns null for ids the support desk does not own", () => {
     for (const id of [
       "meeting.slot",
       "draft",

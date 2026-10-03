@@ -6,11 +6,12 @@
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import { withDb } from "../../_shared/db";
 import { Events } from "../../_shared/events";
 import { getIssue, recordRun } from "../../_shared/issues";
 
-export const AGENT = "sylon-smoke-consume";
+export const AGENT = agentSlug("smoke-consume");
 
 const record = defineStep({
   name: "record",
@@ -38,7 +39,7 @@ const record = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon E2 smoke: consumes issue.created and records its run against the issue.",
+    "Support desk E2 smoke: consumes issue.created and records its run against the issue.",
   entry: "record",
   steps: { record },
 });

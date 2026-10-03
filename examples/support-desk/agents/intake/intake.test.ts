@@ -165,8 +165,8 @@ describe("decide", () => {
 
   it("drops a trailing client footer from titles and mirrored text", () => {
     const posted =
-      "[sylon test] the Pellmark sync is stuck *Sent using* <@U09EXAMPLE1>";
-    expect(titleOf(posted)).toBe("[sylon test] the Pellmark sync is stuck");
+      "[test] the Pellmark sync is stuck *Sent using* <@U09EXAMPLE1>";
+    expect(titleOf(posted)).toBe("[test] the Pellmark sync is stuck");
     expect(stripClientFooter("line one\n*Sent using* <@U1|Claude>\n")).toBe(
       "line one",
     );

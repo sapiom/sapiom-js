@@ -1,5 +1,5 @@
 /**
- * The shared Sylon database: one Sapiom Postgres addressed by the handle `sylon`.
+ * The shared fleet database: one Sapiom Postgres addressed by `DB_HANDLE`, which derives from the fleet id.
  *
  * `Db` is the narrow surface `issues.ts` and `config.ts` need (parameterized query + transaction),
  * so the same SQL runs against the real database when deployed and against pg-mem in unit tests
@@ -9,9 +9,10 @@ import { randomUUID } from "node:crypto";
 
 import type { AgentExecutionContext } from "@sapiom/agent";
 
+import { DB_HANDLE, FLEET_ID } from "./fleet-id";
 import { MIGRATIONS } from "./migrations/index";
 
-export const DB_HANDLE = "sylon";
+export { DB_HANDLE };
 
 export type Row = Record<string, unknown>;
 
@@ -216,7 +217,8 @@ export async function migrate(db: Db, through?: string): Promise<string[]> {
       // Two agents cold-starting at once would both try 001; the advisory lock serializes them.
       if (tx.kind === "postgres")
         await tx.query(
-          "select pg_advisory_xact_lock(hashtext('sylon.migrations'))",
+          "select pg_advisory_xact_lock(hashtext($1))",
+          [`${FLEET_ID}.migrations`],
         );
       const seen = await tx.query(
         "select 1 from schema_migrations where id = $1",
@@ -261,7 +263,7 @@ export async function localFleetDb(): Promise<Db> {
   return db;
 }
 
-/** Resolve the `sylon` handle to a connection string, creating the database only when it does not exist. */
+/** Resolve the {@link DB_HANDLE} handle to a connection string, creating the database only when it does not exist. */
 export async function resolveConnectionString(
   ctx: Pick<DbCtx, "sapiom">,
 ): Promise<string> {

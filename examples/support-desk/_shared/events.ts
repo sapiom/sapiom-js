@@ -1,5 +1,5 @@
 /**
- * The Sylon event catalog: raw Slack events from the connector and the domain `issue.*` events
+ * The support desk event catalog: raw Slack events from the connector and the domain `issue.*` events
  * the agents emit to each other.
  *
  * Every schema is a loose `z.object()`. The engine hands a run the whole event payload, and a
@@ -150,7 +150,7 @@ export const Events = {
 export type EventType = keyof typeof Events;
 export type EventPayload<T extends EventType> = z.infer<(typeof Events)[T]>;
 
-/** Every event type a Sylon run can be started by, raw or domain. */
+/** Every event type a support desk run can be started by, raw or domain. */
 export const AllEvents = { ...SlackEvents, ...Events } as const;
 export type AnyEventType = keyof typeof AllEvents;
 

@@ -8,8 +8,10 @@
  */
 import { AgentOperationError, type GatewayClient } from "@sapiom/agent-core";
 
-export const WATCHDOG_SECRET = "SYLON_WATCHDOG_API_KEY";
-export const WATCHDOG_KEY_NAME = "sylon-watchdog (read runs)";
+import { agentSlug } from "../_shared/fleet-id";
+
+export const WATCHDOG_SECRET = "WATCHDOG_API_KEY";
+export const WATCHDOG_KEY_NAME = `${agentSlug("watchdog")} (read runs)`;
 export const WATCHDOG_PERMISSIONS = ["org.read"];
 
 type SecretsClient = Pick<GatewayClient, "get" | "post" | "postAtHostRoot">;
@@ -28,7 +30,7 @@ export class SecretProvisionError extends Error {
       `cannot provision ${WATCHDOG_SECRET} for the watchdog: ${detail}. ` +
         `The key running setup needs org.api_keys.write (to mint) and org.write (to set the secret). ` +
         `Or set it by hand: create an API key with only org.read, then add it as ${WATCHDOG_SECRET} ` +
-        `in the sylon-watchdog agent's Secrets tab, and rerun setup.`,
+        `in the ${agentSlug("watchdog")} agent's Secrets tab, and rerun setup.`,
     );
     this.name = "SecretProvisionError";
   }
@@ -51,7 +53,7 @@ export async function ensureWatchdogKey(
   try {
     minted = await client.postAtHostRoot("/v1/api-keys/scoped", {
       name: WATCHDOG_KEY_NAME,
-      description: "Lets the Sylon watchdog list failed runs. Read-only.",
+      description: "Lets the support desk watchdog list failed runs. Read-only.",
       permissions: WATCHDOG_PERMISSIONS,
     });
   } catch (err) {

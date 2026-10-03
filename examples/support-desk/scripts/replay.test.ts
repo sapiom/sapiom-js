@@ -9,6 +9,7 @@ import {
   verdict,
   type ReceiptRow,
 } from "./replay";
+import { agentSlug } from "../_shared/fleet-id";
 
 describe("replay.json", () => {
   const replay = loadReplay();
@@ -46,7 +47,7 @@ describe("replay watcher", () => {
     receivedAt: at,
     eventType: "issue.created",
     outcome: "matched",
-    triggerSlugs: ["sylon-copilot"],
+    triggerSlugs: [agentSlug("copilot")],
   });
 
   it("pages receipts until one is older than the replay's start", async () => {

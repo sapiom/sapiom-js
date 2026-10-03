@@ -1,11 +1,11 @@
-# Sylon
+# Support desk
 
 A Slack support desk you can clone, built from a fleet of Sapiom agents.
 
-Pylon quoted us about \$3 a ticket, with a 500-ticket monthly minimum. The core of what a B2B
+Hosted support desks charge about \$3 a ticket, often with a monthly minimum. The core of what a B2B
 support tool does is small: turn customer Slack messages into issues, triage them, draft replies,
 escalate bugs to Linear, and follow up on what has stalled. We didn't want to pay \$1,500 a month
-for that, so we built Sylon on Sapiom. Clone it for free and pay only for your own agent runs.
+for that, so we built this on Sapiom. Clone it for free and pay only for your own agent runs.
 
 What it does:
 
@@ -45,7 +45,7 @@ flowchart LR
   L -. state read .-> S[linear-sync<br/>cron]
   S -- issue.engineering_resolved --> F
   W[watchdog<br/>cron] -- failed runs --> A[alerts channel]
-  I & P & E & K & U & S & W <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
+  I & P & E & K & U & S & W <--> DB[(fleet Postgres<br/>issues · messages · drafts<br/>nudges · config)]
 ```
 
 | Layer         | What lives there                                                                                                                                                                        |
@@ -53,7 +53,7 @@ flowchart LR
 | Adapters      | `intake` reads `slack.*` and is the only agent that knows Slack message shapes. A later adapter (Read.ai, email) emits the same `issue.*`.                                              |
 | Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged`, `issue.engineering_resolved` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
 | Domain agents | copilot, escalation, controller, linear-sync, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                   |
-| Shared state  | One Postgres (`sylon`), written only through `_shared/issues.ts`; desks (`_shared/desks.ts`) and runtime config in its `desks` and `config` tables.                                    |
+| Shared state  | One Postgres (handle `support_desk`), written only through `_shared/issues.ts`; desks (`_shared/desks.ts`) and runtime config in its `desks` and `config` tables.                                    |
 
 ## Agents
 
@@ -64,7 +64,7 @@ flowchart LR
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in both threads, moves the issue On Hold.                                                                             |
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
-| `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other Sylon agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
+| `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other fleet agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
 
 ### linear-sync and customer messages
@@ -145,6 +145,48 @@ unset (so a live fleet needs no re-seed):
 | `customers.test_user_ids` | `[]`                                        | Slack user ids always treated as the customer, even from our workspace. Lets one person test with two accounts in the same workspace.                                                                  |
 | `intake.reactions`        | `true`                                      | `false` stops intake adding or removing 👀 and 🎫 on customer messages, so a shadow pilot leaves no visible footprint.                                                                                 |
 
+## Fleet identity
+
+`fleetId` in `fleet.json` (default `support-desk`) names everything the fleet deploys. Set it in
+`fleet.local.json` to override it:
+
+| Derived from `fleetId`       | Default `support-desk`     | `fleetId: "helpdesk"`  |
+| ---------------------------- | -------------------------- | ---------------------- |
+| Agent slug `<id>-<key>`      | `support-desk-intake`, ... | `helpdesk-intake`, ... |
+| Postgres handle (`-` to `_`) | `support_desk`             | `helpdesk`             |
+| Console App Link slug        | `support-desk-console`     | `helpdesk-console`     |
+| Console App Link name        | `Support Desk Console`     | `Helpdesk Console`     |
+| Linear issue marker          | `support-desk:<issueId>`   | `helpdesk:<issueId>`   |
+
+The id is lowercase words joined by hyphens, starting with a letter. There is no separate
+database-handle setting: the handle is always the id with hyphens as underscores, so
+`acme-help-desk` uses `acme_help_desk`.
+
+Deployed steps need the id at runtime (for their run records, the watchdog's watched slugs and the
+Linear marker), and a step has no config file. `pnpm run setup` and `pnpm run console:build` first
+run `scripts/sync-fleet-id.ts`, which writes the resolved id to `_shared/fleet-id.generated.ts`;
+that file is bundled into every agent and the Console. It is committed with the default, so it
+shows as modified in git when your `fleet.local.json` sets another id. Run the setup and Console
+scripts through `pnpm run` so the file is current; they stop if it is not.
+
+Changing `fleetId` on an install that is already deployed creates a second fleet (new agents, a
+new database, new triggers) and leaves the old one running.
+
+### Renaming an existing install
+
+An install deployed under another id keeps working when its `fleet.local.json` sets that id. For
+an install deployed as `helpdesk`:
+
+```json
+{ "fleetId": "helpdesk" }
+```
+
+Then run `pnpm run setup` (it redeploys each agent from the new code under the same slugs, finds
+the existing triggers and database, and provisions the `WATCHDOG_API_KEY` secret on the watchdog)
+and `pnpm run console:publish` (the Console reads `CONSOLE_API_KEY` now, so republish to set it).
+An older watchdog secret named `<PREFIX>_WATCHDOG_API_KEY`, from before the rename, and its API
+key are no longer read; delete them when convenient.
+
 ## Desks
 
 A desk is the unit that keeps test traffic and real traffic apart while they share agents and code.
@@ -184,7 +226,7 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 `no changes: the fleet is installed`:
 
 1. Probes the Slack and Linear connectors, and stops with what to connect if one is missing.
-2. Resolves or creates the `sylon` database, applies migrations, seeds missing desks, config and accounts.
+2. Resolves or creates the fleet database (`support_desk` by default), applies migrations, seeds missing desks, config and accounts.
 3. Adds three starter policy articles when the knowledge base is empty.
 4. Links and deploys each project, skipping one whose bundle is already the live build.
 5. Lists each agent's triggers and attaches only the missing ones. The server dedups event
@@ -198,7 +240,7 @@ including optional ones. `--no-triggers` deploys without attaching triggers. `--
 ### Failure alerts (watchdog)
 
 No event fires when a run fails, so the watchdog polls `GET /v1/workflows/executions?status=failed`
-for every Sylon agent (itself and the smoke agents excluded) and posts one message per new failure.
+for every fleet agent (itself and the smoke agents excluded) and posts one message per new failure.
 The first run looks back one hour; later runs start 30 minutes before the last successful poll, and
 `watchdog_reported` keeps each execution from being announced twice. More than 10 failures in one
 tick post 10 and one "and N more" line linking the Events page.
@@ -207,7 +249,7 @@ tick post 10 and one "and N more" line linking the Events page.
   the default desk's triage channel.
 - **Credential.** That route needs `org.read`, which the per-run key behind `ctx.sapiom` does not
   hold. `pnpm run setup` provisions it: it mints a child key with only `org.read` and stores it as
-  the watchdog's secret `SYLON_WATCHDOG_API_KEY`, which Sapiom injects into the agent as an
+  the watchdog's secret `WATCHDOG_API_KEY`, which Sapiom injects into the agent as an
   environment variable. A rerun finds the secret and does nothing. The key running setup needs
   `org.api_keys.write` and `org.write`; without them setup stops and tells you to create an
   `org.read` key yourself and add it in the agent's Secrets tab. The key is never printed or
@@ -244,14 +286,14 @@ the Console. To load more at once, insert rows into `kb_articles` with `kind` `p
 
 ## Console
 
-The Console is an App Link (`sylon-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, and cue cards. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes the board, timeline, metrics, failed events and Knowledge tab to one desk; Reset board closes only that desk's open tickets. Dispatch timing in the metrics is fleet-wide, and a failed event that carries no issue (a raw Slack event) shows on every desk. The System tab lists the desks with their triage channel and Linear project. Its state lives in the `sylon` database and the Sapiom API.
+The Console is an App Link (`support-desk-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, and cue cards. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes the board, timeline, metrics, failed events and Knowledge tab to one desk; Reset board closes only that desk's open tickets. Dispatch timing in the metrics is fleet-wide, and a failed event that carries no issue (a raw Slack event) shows on every desk. The System tab lists the desks with their triage channel and Linear project. Its state lives in the fleet database and the Sapiom API.
 
 ```bash
 pnpm run console:build     # bundle apps/console into apps/console/dist/server.mjs
 pnpm run console:publish   # build, then create or update the org-only App Link and publish it
 ```
 
-`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, replays receipts and redraws Slack cards). The key is stored in the link's env as `SYLON_CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
+`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, replays receipts and redraws Slack cards). The key is stored in the link's env as `CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
 
 ## Add your own agent
 
@@ -330,14 +372,14 @@ docs/DEMO.md          rehearsal checklist and failure drill
 `run_local` gives each execution its own in-memory database seeded from `fleet.json`, so two agents
 run locally one after another do not share issues. To follow one issue through several agents
 offline, use a vitest test with one shared database (`setLocalDb`, as in `agents/smoke.test.ts`).
-The deployed agents always share the `sylon` database.
+The deployed agents always share the fleet database.
 
 ## Known limitations
 
 | Limitation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Why                                                                                                                     |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | **Post, then record.** If Slack accepts a post and the next database write fails, a retry posts again (a duplicate card or reply).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Slack's Web API has no idempotency key. The window is the gap between Slack's 200 and the next write.                   |
-| **Linear adoption window.** A retry more than 7 days after a crash between creating the Linear issue and recording it creates a second one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `save_issue` has no idempotency key; escalation adopts by a `sylon:<issueId>` marker over the last 7 days.              |
+| **Linear adoption window.** A retry more than 7 days after a crash between creating the Linear issue and recording it creates a second one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `save_issue` has no idempotency key; escalation adopts by a `<fleetId>:<issueId>` marker over the last 7 days.              |
 | **A desk's triage channel is looked up, not stored per issue.** Changing a desk's `triageChannel` strands that desk's existing cards. | Persisting the channel on the issue is left for an onboarding flow. |
 | **Intake links by content.** A new top-level message joins any open issue Jev judges to be the same problem (p ≥ 0.8). Leftover open issues capture new messages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Run `pnpm run reset-demo` before a demo.                                                                                |
 | **Latency.** Dispatch takes about 65–100 ms. The intake run takes about 24 s, roughly 3 s per step. A customer message reaches its draft card in about 35 s. A click shows a working state in about 2 s. | The time goes to the steps, not the engine: intake makes a Jev call and several Slack calls, and each step starts a fresh sandbox call. |

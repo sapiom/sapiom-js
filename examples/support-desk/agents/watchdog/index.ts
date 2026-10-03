@@ -1,5 +1,5 @@
 /**
- * watchdog: the failure alarm. Every tick it lists the failed runs of the Sylon agents (itself
+ * watchdog: the failure alarm. Every tick it lists the failed runs of the support desk agents (itself
  * and the smoke agents excluded) and posts one Slack message per new failure: which agent and
  * step, the error, a link, and what to do about it.
  *
@@ -8,7 +8,7 @@
  *
  * Credential: that route needs `org.read`, which the per-run key behind `ctx.sapiom` does not
  * hold. `pnpm run setup` mints a read-only key and stores it as this agent's secret
- * `SYLON_WATCHDOG_API_KEY`, which the engine injects as an environment variable. Channel:
+ * `WATCHDOG_API_KEY`, which the engine injects as an environment variable. Channel:
  * `alerts.channel`, else the default desk's triage channel.
  *
  * State: `watchdog_reported` holds every execution already announced (the dedup) and
@@ -24,6 +24,7 @@ import {
 } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { FLEET_ID, agentSlug } from "../../_shared/fleet-id";
 import { getConfigOr } from "../../_shared/config";
 import { defaultDesk, NoDeskError } from "../../_shared/desks";
 import { withDb, type Db } from "../../_shared/db";
@@ -43,14 +44,14 @@ import {
   type ExecutionDetail,
 } from "./logic";
 
-export const AGENT = "sylon-watchdog";
-export const KEY_ENV = "SYLON_WATCHDOG_API_KEY";
+export const AGENT = agentSlug("watchdog");
+export const KEY_ENV = "WATCHDOG_API_KEY";
 
 const API_URL = "https://api.sapiom.ai";
 const PAGE = 500;
 /** A hard stop on one agent's paging; hitting it leaves the cursor where it was. */
 const MAX_PAGES = 20;
-const LOCK = "sylon.watchdog.tick";
+const LOCK = `${FLEET_ID}.watchdog.tick`;
 /** Reported ids older than this are dropped; the poll window never reaches back that far. */
 const KEEP_REPORTED_DAYS = 7;
 
@@ -200,7 +201,7 @@ export async function tick(ctx: TickCtx, db: Db, deps: Deps) {
     throw err;
   }
   const watched = defs.filter((d) =>
-    (WATCHED_SLUGS as readonly string[]).includes(d.slug),
+    WATCHED_SLUGS.includes(d.slug),
   );
   const slugOf = new Map(watched.map((d) => [String(d.id), d.slug]));
 
@@ -317,7 +318,7 @@ export function requireKey(env: Record<string, string | undefined>): string {
   const key = env[KEY_ENV];
   if (!key)
     throw new Error(
-      `${KEY_ENV} is not set; run \`pnpm run setup --only watchdog\` in examples/sylon to provision it`,
+      `${KEY_ENV} is not set; run \`pnpm run setup --only watchdog\` in examples/support-desk to provision it`,
     );
   return key;
 }
@@ -343,7 +344,7 @@ const scan = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon watchdog: a cron that posts each failed Sylon run to Slack with the failed step, the error and what to do.",
+    "Support desk watchdog: a cron that posts each failed support desk run to Slack with the failed step, the error and what to do.",
   entry: "scan",
   steps: { scan },
 });

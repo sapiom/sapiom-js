@@ -1,6 +1,6 @@
 {
   "type": "slack.block_actions",
-  "description": "A click on a button Sylon does not ship; the copilot exits in route.",
+  "description": "A click on a button the support desk does not ship; the copilot exits in route.",
   "payload": {
     "type": "block_actions",
     "user": {
@@ -9,7 +9,7 @@
       "name": "teammate",
       "team_id": "T0EXAMPLE01"
     },
-    "api_app_id": "A0SYLONAPP1",
+    "api_app_id": "A0DESKAPP1",
     "trigger_id": "1790889900.1007",
     "team": {
       "id": "T0EXAMPLE01",
@@ -25,12 +25,12 @@
     },
     "channel": {
       "id": "C0TRIAGE001",
-      "name": "sylon-triage"
+      "name": "support-triage"
     },
     "message": {
       "type": "message",
-      "user": "U0SYLONBOT1",
-      "bot_id": "B0SYLONBOT1",
+      "user": "U0DESKBOT1",
+      "bot_id": "B0DESKBOT1",
       "ts": "1790889450.000250",
       "text": "Approve",
       "blocks": [],

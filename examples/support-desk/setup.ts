@@ -7,7 +7,7 @@
  * 1. Preflight the Slack and Linear connectors the selected projects need; stop if one is missing.
  *    Every desk's triage channel is probed. With urgent-pager selected, also check that each
  *    desk's `oncallSlackId` resolves.
- * 2. Database: resolve or create `sylon`, apply migrations, seed missing desks, config keys and
+ * 2. Database: resolve or create the fleet database (`DB_HANDLE`), apply migrations, seed missing desks, config keys and
  *    accounts. Desks and config come from fleet.local.json (your workspace's ids, gitignored)
  *    over fleet.json, whose values are examples; setup stops if any workspace value is still an
  *    example. A local `desks` list replaces fleet.json's whole. `--overwrite` resets every desk
@@ -46,6 +46,7 @@ import {
   migrate,
   resolveConnectionString,
 } from "./_shared/db";
+import { FLEET_ID } from "./_shared/fleet-id";
 import { seedStarters } from "./_shared/kb";
 import { listTools } from "./_shared/linear";
 import {
@@ -57,6 +58,7 @@ import {
   type FleetDesk,
 } from "./_shared/seed";
 import { SlackMethodError, replies, userInfo } from "./_shared/slack";
+import { assertFleetIdSynced } from "./scripts/fleet-id";
 import { WATCHDOG_SECRET, ensureWatchdogKey } from "./scripts/secrets";
 import {
   bundleHash,
@@ -107,7 +109,7 @@ function loadState(): FleetState {
   if (existsSync(STATE_FILE))
     return JSON.parse(readFileSync(STATE_FILE, "utf8")) as FleetState;
   return {
-    fleet: "sylon",
+    fleet: FLEET_ID,
     updatedAt: "",
     database: { handle: DB_HANDLE },
     projects: {},
@@ -378,13 +380,14 @@ async function secrets(
 }
 
 async function main() {
+  assertFleetIdSynced(FLEET_ID);
   const args = parseArgs(process.argv.slice(2));
   const selected = selectProjects(args);
   const config = loadConfig();
   const apiKey = process.env.SAPIOM_API_KEY;
   if (!apiKey)
     throw new Error("set SAPIOM_API_KEY to an org key for the target org");
-  console.log(`sylon setup: ${selected.map((p) => p.key).join(", ")}`);
+  console.log(`${FLEET_ID} setup: ${selected.map((p) => p.key).join(", ")}`);
 
   await preflight(selected, config.desks);
   await database(config, args.overwrite);

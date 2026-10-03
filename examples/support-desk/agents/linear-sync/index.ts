@@ -1,7 +1,7 @@
 /**
  * linear-sync: the cron that brings an escalated issue back when engineering finishes with it.
  * Each run reads the Linear state of the On Hold issues that have a Linear link; when the Linear
- * issue is Done or Canceled, it posts in the triage thread, moves the Sylon issue to On You, and
+ * issue is Done or Canceled, it posts in the triage thread, moves the support desk issue to On You, and
  * for Done emits `issue.engineering_resolved`. With `linear_sync.notify_customer` on, a Done also
  * tells the customer; it defaults to off so a shadow install never shows customers anything.
  *
@@ -24,6 +24,7 @@
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import {
   issueCard,
   issueCardText,
@@ -53,7 +54,7 @@ import { post, update } from "../../_shared/slack";
 
 import { resolution, syncKey, type Resolution } from "./rules";
 
-export const AGENT = "sylon-linear-sync";
+export const AGENT = agentSlug("linear-sync");
 
 /** Linear reads per run; the least recently checked issues go first. */
 export const READ_CAP = 25;
@@ -319,7 +320,7 @@ const syncStep = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon linear-sync: a cron that moves On Hold issues back to On You when their Linear issue is Done or Canceled, and emits issue.engineering_resolved on Done.",
+    "Support desk linear-sync: a cron that moves On Hold issues back to On You when their Linear issue is Done or Canceled, and emits issue.engineering_resolved on Done.",
   entry: "sync",
   steps: { sync: syncStep },
 });

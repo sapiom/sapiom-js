@@ -24,6 +24,7 @@ import {
 } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import {
   ACTIONS,
   decodeAction,
@@ -90,7 +91,7 @@ import {
 } from "./knowledge";
 import { seedLocalFixtures } from "./local";
 
-export const AGENT = "sylon-copilot";
+export const AGENT = agentSlug("copilot");
 
 /** `issue.created` or `issue.message_added` (which adds `messageId` and `text`). */
 const DraftTrigger = Envelope.extend({
@@ -670,7 +671,7 @@ async function refreshIssueCard(
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon copilot: drafts a reply card for each issue event and handles Approve / Escalate / Dismiss.",
+    "Support desk copilot: drafts a reply card for each issue event and handles Approve / Escalate / Dismiss.",
   entry: "receive",
   steps: { receive, decide, apply },
 });

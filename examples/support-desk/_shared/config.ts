@@ -56,7 +56,7 @@ export type ConfigValue<K extends ConfigKey> = z.infer<
 export class MissingConfigError extends Error {
   constructor(readonly key: string) {
     super(
-      `config key '${key}' is not set in the sylon database; run \`pnpm run setup\` in examples/sylon`,
+      `config key '${key}' is not set in the fleet database; run \`pnpm run setup\` in examples/support-desk`,
     );
     this.name = "MissingConfigError";
   }

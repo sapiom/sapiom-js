@@ -1,5 +1,5 @@
 /**
- * The only writer of the Sylon tables (except `config`, which `config.ts` owns).
+ * The only writer of the support desk tables (except `config`, which `config.ts` owns).
  *
  * Every insert sets `source`. Idempotent inserts select first, then insert with
  * `on conflict do nothing` and reselect when no row came back. Never a caught unique violation:

@@ -1,10 +1,11 @@
 /**
- * The pure half of the Sylon Console: what "on" means for an agent, which triggers a switch
+ * The pure half of the Console: what "on" means for an agent, which triggers a switch
  * creates, resumes or deletes, the latency arithmetic of the timeline, which receipts count as
  * failed, and the scoping that keeps every mutating route on the fleet's own definitions (the
  * server holds an org key). No I/O, so all of it is unit-tested.
  */
 import fleet from "../../fleet.json";
+import { agentSlug } from "../../_shared/fleet-id";
 import { KB_KINDS, UUID, type KbInput } from "../../_shared/kb";
 
 export interface FleetProject {
@@ -30,9 +31,9 @@ export interface AttachedTrigger {
 }
 
 /** The agents the Console operates: every fleet.json project except the smoke pair. */
-export const AGENTS = (fleet.projects as FleetProject[]).filter(
-  (p) => !p.smoke,
-);
+export const AGENTS: FleetProject[] = (fleet.projects as Omit<FleetProject, "slug">[])
+  .map((p) => ({ ...p, slug: agentSlug(p.key) }))
+  .filter((p) => !p.smoke);
 /** `triggers` only. `smokeTriggers` are never attached from the Console. */
 export const TRIGGERS = fleet.triggers as FleetTrigger[];
 
@@ -234,7 +235,7 @@ export function listensTo(key: string): string[] {
   return wantedTriggers(key).map(triggerLabel);
 }
 
-/** The `sylon` database's tables, one line each. */
+/** The fleet database's tables, one line each. */
 export const TABLES: [string, string][] = [
   [
     "desks",
@@ -396,7 +397,7 @@ export async function pageReceipts(
   return { receipts, truncated: true };
 }
 
-/** Receipts with a failed delivery to a Sylon agent; other workflows' failures are not ours to replay. */
+/** Receipts with a failed delivery to a fleet agent; other workflows' failures are not ours to replay. */
 export function failedFleetReceipts(
   receipts: ReceiptSummary[],
   slugs: string[] = AGENTS.map((a) => a.slug),
@@ -448,7 +449,7 @@ export function replayPlan(
     (f) => f.trigger && ours.has(f.trigger.definitionSlug),
   );
   if (!fleet.length)
-    return { ok: false, status: 403, reason: "not a Sylon receipt" };
+    return { ok: false, status: 403, reason: "not a fleet receipt" };
   const failed = fleet.filter(
     (f) => f.state === "failed" || (f.state === "claimed" && f.stale),
   );
@@ -456,7 +457,7 @@ export function replayPlan(
     return {
       ok: false,
       status: 409,
-      reason: "no failed Sylon delivery to replay",
+      reason: "no failed fleet delivery to replay",
     };
   return { ok: true, fireIds: failed.map((f) => f.id) };
 }
@@ -504,8 +505,8 @@ export function parseWindow(raw: string | null): MetricWindow | null {
   return raw in METRIC_WINDOWS ? (raw as MetricWindow) : null;
 }
 
-/** What the Console compares its cost per ticket against (Pylon's per-ticket price). */
-export const PYLON_USD_PER_TICKET = 3;
+/** What the Console compares its cost per ticket against (a hosted support desk's per-ticket price). */
+export const TARGET_USD_PER_TICKET = 3;
 
 /** Nearest-rank percentile (`p` in 0..100) of the finite numbers in `values`; null when none. */
 export function percentile(
@@ -637,7 +638,7 @@ export function costSummary(issues: IssueCost[]) {
     llmUsd: total.llmUsd,
     capabilityUsd: total.capabilityUsd,
     meanSandboxSeconds: mean(total.sandboxSeconds),
-    pylonUsdPerTicket: PYLON_USD_PER_TICKET,
+    targetUsdPerTicket: TARGET_USD_PER_TICKET,
   };
 }
 

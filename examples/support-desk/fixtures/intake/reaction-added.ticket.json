@@ -3,7 +3,7 @@
   "description": "A teammate adds :ticket: to the thank-you: forces an issue.",
   "payload": {
     "teamId": "T0EXAMPLE01",
-    "apiAppId": "A0SYLONAPP1",
+    "apiAppId": "A0DESKAPP1",
     "eventId": "Ev0INTAKETKT1",
     "eventTime": 1790890300,
     "event": {

@@ -1,6 +1,6 @@
 {
-  "description": "The Sylon demo conversation, posted by a test customer in the customer channel. Each step names what the fleet should do with it.",
-  "prefix": "[sylon test]",
+  "description": "The support desk demo conversation, posted by a test customer in the customer channel. Each step names what the fleet should do with it.",
+  "prefix": "[test]",
   "steps": [
     {
       "id": "bug",

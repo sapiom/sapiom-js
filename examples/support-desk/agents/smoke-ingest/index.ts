@@ -7,6 +7,7 @@
  */
 import { defineAgent, defineStep, goto, terminate } from "@sapiom/agent";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import {
   escapeMrkdwn,
   issueCard,
@@ -28,7 +29,7 @@ import {
 } from "../../_shared/issues";
 import { post } from "../../_shared/slack";
 
-export const AGENT = "sylon-smoke-ingest";
+export const AGENT = agentSlug("smoke-ingest");
 
 /** First 80 chars of the message as plain text (mentions and links made inert). */
 export function titleOf(text: string): string {
@@ -138,7 +139,7 @@ const ingest = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon E2 smoke: a customer-channel message becomes an issue row, a triage card, and an issue.created event.",
+    "Support desk E2 smoke: a customer-channel message becomes an issue row, a triage card, and an issue.created event.",
   entry: "guard",
   steps: { guard, ingest },
 });

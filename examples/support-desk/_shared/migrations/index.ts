@@ -10,7 +10,7 @@ export interface Migration {
 export const MIGRATIONS: readonly Migration[] = [
   {
     id: "001_init",
-    sql: `-- Sylon M1 schema. Only _shared/issues.ts (and _shared/config.ts for \`config\`) write these tables.
+    sql: `-- Support desk M1 schema. Only _shared/issues.ts (and _shared/config.ts for \`config\`) write these tables.
 -- Applied once per database by _shared/db.ts \`migrate\`, tracked in schema_migrations.
 
 create table accounts (

@@ -1,4 +1,4 @@
-/** Pure mapping from a Linear issue's state to what Sylon does about it. */
+/** Pure mapping from a Linear issue's state to what the support desk does about it. */
 import type { LinearIssue } from "../../_shared/linear";
 
 export type Resolution = "done" | "canceled";

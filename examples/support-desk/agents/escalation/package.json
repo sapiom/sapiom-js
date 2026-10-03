@@ -1,9 +1,9 @@
 {
-  "name": "sylon-escalation",
+  "name": "support-desk-escalation",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Sylon agent escalation. Dependencies resolve from examples/sylon/package.json.",
+  "description": "Support desk agent escalation. Dependencies resolve from examples/support-desk/package.json.",
   "dependencies": {
     "@sapiom/agent": "^0.14.5",
     "@sapiom/tools": "^0.41.0",

@@ -1,6 +1,6 @@
 {
   "type": "slack.block_actions",
-  "description": "A click on Close on the issue card in #sylon-triage. Shape: Slack interaction minus token and response_url; value = the row id.",
+  "description": "A click on Close on the issue card in #support-triage. Shape: Slack interaction minus token and response_url; value = the row id.",
   "payload": {
     "type": "block_actions",
     "user": {
@@ -9,7 +9,7 @@
       "name": "teammate",
       "team_id": "T0EXAMPLE01"
     },
-    "api_app_id": "A0SYLONAPP1",
+    "api_app_id": "A0DESKAPP1",
     "trigger_id": "1790889700.1002",
     "team": {
       "id": "T0EXAMPLE01",
@@ -25,12 +25,12 @@
     },
     "channel": {
       "id": "C0TRIAGE001",
-      "name": "sylon-triage"
+      "name": "support-triage"
     },
     "message": {
       "type": "message",
-      "user": "U0SYLONBOT1",
-      "bot_id": "B0SYLONBOT1",
+      "user": "U0DESKBOT1",
+      "bot_id": "B0DESKBOT1",
       "ts": "1790889400.000200",
       "text": "Close",
       "blocks": []

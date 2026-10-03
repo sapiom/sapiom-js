@@ -19,6 +19,7 @@ import {
   type Execution,
   describeFailure,
 } from "./logic";
+import { FLEET_ID, agentSlug } from "../../_shared/fleet-id";
 
 const exec = (id: string, extra: Partial<Execution> = {}): Execution => ({
   id,
@@ -34,7 +35,7 @@ describe("actionItems", () => {
 
   it("reconnects Linear on an auth or scope error from the relay", () => {
     const items = actionItems(
-      "sylon-escalation",
+      agentSlug("escalation"),
       "escalate",
       "linear MCP relay 401 unauthorized",
     );
@@ -46,7 +47,7 @@ describe("actionItems", () => {
     "invites the bot on %s",
     (code) => {
       const items = actionItems(
-        "sylon-intake",
+        agentSlug("intake"),
         "classify",
         `slack chat.postMessage failed (200): ${code}`,
       );
@@ -57,7 +58,7 @@ describe("actionItems", () => {
   it.each(["missing_scope", "invalid_auth"])(
     "reconnects Slack on %s",
     (code) => {
-      const items = actionItems("sylon-intake", "classify", `slack: ${code}`);
+      const items = actionItems(agentSlug("intake"), "classify", `slack: ${code}`);
       expect(has(items, /reconnect Slack/)).toBe(true);
       expect(has(items, /Reconnect Linear/)).toBe(false);
     },
@@ -65,7 +66,7 @@ describe("actionItems", () => {
 
   it("tells the team to reply by hand when the copilot has no draft", () => {
     const items = actionItems(
-      "sylon-copilot",
+      agentSlug("copilot"),
       "draft",
       "copilot: no structured draft in the model output",
     );
@@ -75,9 +76,9 @@ describe("actionItems", () => {
 
   it("points a missing config key at setup", () => {
     const items = actionItems(
-      "sylon-controller",
+      agentSlug("controller"),
       "scan",
-      "MissingConfigError: config key 'nudge.minutes' is not set in the sylon database",
+      "MissingConfigError: config key 'nudge.minutes' is not set in the fleet database",
     );
     expect(has(items, /pnpm run setup/)).toBe(true);
     expect(has(items, /Postgres/)).toBe(false);
@@ -85,7 +86,7 @@ describe("actionItems", () => {
 
   it("checks the database on a connection or schema error", () => {
     const items = actionItems(
-      "sylon-intake",
+      agentSlug("intake"),
       "classify",
       'relation "issues" does not exist',
     );
@@ -95,7 +96,7 @@ describe("actionItems", () => {
   it.each(["decisions evaluate failed (429)", "upstream 503 bad gateway"])(
     "calls %s transient",
     (error) => {
-      const items = actionItems("sylon-controller", "scan", error);
+      const items = actionItems(agentSlug("controller"), "scan", error);
       expect(has(items, /transient/)).toBe(true);
       expect(has(items, /Replay/)).toBe(true);
     },
@@ -103,7 +104,7 @@ describe("actionItems", () => {
 
   it("gives only the transient advice for a gateway 429", () => {
     const items = actionItems(
-      "sylon-copilot",
+      agentSlug("copilot"),
       "draft",
       "POST https://llm.services.sapiom.ai/v2/anthropic/v1/messages → 429 rate limited",
     );
@@ -113,7 +114,7 @@ describe("actionItems", () => {
 
   it("still advises on a gateway 400", () => {
     const items = actionItems(
-      "sylon-copilot",
+      agentSlug("copilot"),
       "draft",
       "POST https://llm.services.sapiom.ai/v2/anthropic/v1/messages → 400 bad model",
     );
@@ -121,7 +122,7 @@ describe("actionItems", () => {
   });
 
   it("falls back to the step log and a replay", () => {
-    const items = actionItems("sylon-intake", "classify", "boom");
+    const items = actionItems(agentSlug("intake"), "classify", "boom");
     expect(items).toEqual([
       "Open the run and read the classify step log.",
       "Fix the cause named in the error.",
@@ -162,7 +163,7 @@ describe("failureMessage", () => {
   it("escapes and truncates the error and links the failed run", () => {
     const { text, blocks } = failureMessage({
       executionId: "e1",
-      slug: "sylon-copilot",
+      slug: agentSlug("copilot"),
       definitionId: "def-copilot",
       step: "draft",
       attempt: 2,
@@ -173,7 +174,7 @@ describe("failureMessage", () => {
       issueNumber: 42,
     });
     const body = JSON.stringify(blocks);
-    expect(text).toContain("sylon-copilot failed at draft (attempt 3)");
+    expect(text).toContain(`${agentSlug("copilot")} failed at draft (attempt 3)`);
     expect(body).not.toContain("<!channel>");
     expect(body).not.toContain("x".repeat(301));
     expect(body).toContain("https://app.sapiom.ai/agents/def-copilot/runs/e1");
@@ -200,9 +201,9 @@ function stubFetch(handler: Handler) {
 }
 
 const DEFS = [
-  { id: "def-copilot", slug: "sylon-copilot" },
-  { id: "def-watchdog", slug: "sylon-watchdog" },
-  { id: "def-smoke", slug: "sylon-smoke-ingest" },
+  { id: "def-copilot", slug: agentSlug("copilot") },
+  { id: "def-watchdog", slug: agentSlug("watchdog") },
+  { id: "def-smoke", slug: agentSlug("smoke-ingest") },
 ];
 
 function api(failed: Execution[]) {
@@ -247,7 +248,7 @@ describe("tick", () => {
       "C0TRIAGE001",
     ]);
     expect(posts(first.logs)[0].text).toContain(
-      "sylon-copilot failed at draft",
+      `${agentSlug("copilot")} failed at draft`,
     );
     // Only the watched definitions are polled: not itself, not the smoke agents.
     expect(
@@ -347,7 +348,7 @@ describe("tick", () => {
     );
     await db.query(
       `insert into runs (execution_id, issue_id, agent)
-       select '11', id, 'sylon-copilot' from issues limit 1`,
+       select '11', id, '${agentSlug("copilot")}' from issues limit 1`,
     );
     const [{ number }] = await db.query<{ number: number }>(
       "select number from issues",
@@ -386,7 +387,7 @@ describe("tick hardening", () => {
     const sent = posts(first.logs);
     expect(sent).toHaveLength(1);
     expect(sent[0].channel).toBe("C0TRIAGE001");
-    expect(sent[0].text).toContain("Sylon watchdog cannot poll");
+    expect(sent[0].text).toContain("Support desk watchdog cannot poll");
     expect(sent[0].text).toContain("pnpm run setup --only watchdog");
 
     const second = run(denied(), "wd-2");
@@ -400,7 +401,7 @@ describe("tick hardening", () => {
     );
     const r = run(fetch);
     await expect(r.done).rejects.toThrow(/tick incomplete/);
-    expect(posts(r.logs)[0].text).toContain("list sylon-copilot");
+    expect(posts(r.logs)[0].text).toContain(`list ${agentSlug("copilot")}`);
   });
 
   it("alerts again once the hour has passed", async () => {
@@ -427,7 +428,7 @@ describe("tick hardening", () => {
     });
     const out = await small(fetch).done;
     expect(pages).toBe(4);
-    expect(out).toMatchObject({ incomplete: ["sylon-copilot"] });
+    expect(out).toMatchObject({ incomplete: [agentSlug("copilot")] });
     expect(await db.query("select * from watchdog_state")).toEqual([]);
   });
 
@@ -476,12 +477,12 @@ describe("tick hardening", () => {
   it("skips a tick while another holds the lock", async () => {
     let release!: () => void;
     const gate = new Promise<void>((res) => (release = res));
-    const held = db.tryLock("sylon.watchdog.tick", () => gate);
-    const other = await db.tryLock("sylon.watchdog.tick", async () => 1);
+    const held = db.tryLock(`${FLEET_ID}.watchdog.tick`, () => gate);
+    const other = await db.tryLock(`${FLEET_ID}.watchdog.tick`, async () => 1);
     expect(other).toEqual({ held: false });
     release();
     await held;
-    expect(await db.tryLock("sylon.watchdog.tick", async () => 1)).toEqual({
+    expect(await db.tryLock(`${FLEET_ID}.watchdog.tick`, async () => 1)).toEqual({
       held: true,
       value: 1,
     });
@@ -521,7 +522,7 @@ describe("watchdog step", () => {
 
 describe("requireKey", () => {
   it("returns the injected key", () => {
-    expect(requireKey({ SYLON_WATCHDOG_API_KEY: "k" })).toBe("k");
+    expect(requireKey({ WATCHDOG_API_KEY: "k" })).toBe("k");
   });
 
   it("tells the operator to run setup when the secret is missing", () => {
@@ -541,7 +542,7 @@ describe("describeFailure", () => {
       finishedAt: "2026-10-03T00:29:48Z",
     };
     const f = describeFailure(
-      "sylon-copilot",
+      agentSlug("copilot"),
       row as never,
       {
         ...row,

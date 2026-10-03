@@ -9,6 +9,7 @@
 import { defineAgent, defineStep, goto, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import {
   decodeAction,
   escapeMrkdwn,
@@ -85,7 +86,7 @@ import {
 } from "./decide";
 import { classifyPoster } from "./poster";
 
-export const AGENT = "sylon-intake";
+export const AGENT = agentSlug("intake");
 const TICKET = "ticket";
 const EYES = "eyes";
 /** `decided_by` on a draft that a teammate's own reply made moot. */
@@ -1092,7 +1093,7 @@ const button = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close and the ticket reaction.",
+    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close and the ticket reaction.",
   entry: "guard",
   steps: {
     guard,

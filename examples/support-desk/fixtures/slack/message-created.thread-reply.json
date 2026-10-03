@@ -31,8 +31,8 @@
       "thread_ts": "1790889355.981329"
     },
     "teamId": "T0EXAMPLE01",
-    "eventId": "Ev0SYLONREPLY1",
-    "apiAppId": "A0SYLONAPP1",
+    "eventId": "Ev0DESKREPLY1",
+    "apiAppId": "A0DESKAPP1",
     "eventTime": 1790889500
   }
 }

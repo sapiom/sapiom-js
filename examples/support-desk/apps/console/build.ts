@@ -7,10 +7,15 @@ import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
 
+import { FLEET_ID } from "../../_shared/fleet-id";
+import { assertFleetIdSynced } from "../../scripts/fleet-id";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const OUT_FILE = path.join(HERE, "dist", "server.mjs");
 
 export async function buildConsole(): Promise<string> {
+  // The bundle inlines the generated fleet id; a stale one would publish to the wrong fleet.
+  assertFleetIdSynced(FLEET_ID);
   await build({
     entryPoints: [path.join(HERE, "server.ts")],
     outfile: OUT_FILE,

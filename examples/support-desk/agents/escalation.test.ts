@@ -31,6 +31,7 @@ import {
   marker,
   type EscalateInput,
 } from "./escalation/index";
+import { FLEET_ID, agentSlug } from "../_shared/fleet-id";
 
 type Directive = { kind: string; output?: Record<string, unknown> };
 const run = (input: unknown, ctx: unknown) =>
@@ -398,7 +399,7 @@ describe("escalation against the relay (mocked fetch)", () => {
         id: "SAP-900",
         uuid: "u-900",
         url: "https://linear.app/x/issue/SAP-900",
-        description: `Sylon issue #1 · ${marker(issueId)}\n\n…`,
+        description: `Support desk issue #1 · ${marker(issueId)}\n\n…`,
       },
     ];
     const { ctx } = liveCtx();
@@ -501,7 +502,7 @@ describe("escalation against the relay (mocked fetch)", () => {
       sourceEventId: customerReplyKey(issueId),
       direction: "agent",
       slack: { channel: "C0CUSTOMER1", ts: "1790889400.1" },
-      userId: "sylon-escalation",
+      userId: agentSlug("escalation"),
       text: "Tracked as SAP-5: https://linear.app/x/issue/SAP-5",
     });
     const { ctx, emitted } = first;
@@ -541,6 +542,6 @@ describe("linearDescription", () => {
     expect(text).toContain(
       "[Customer thread in Slack](https://slack.com/archives/C1/p1)",
     );
-    expect(text).toContain("sylon:i-1");
+    expect(text).toContain(`${FLEET_ID}:i-1`);
   });
 });

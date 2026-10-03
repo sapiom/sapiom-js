@@ -1,15 +1,15 @@
 {
-  "name": "@sapiom/example-sylon",
+  "name": "@sapiom/example-support-desk",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Sylon: a clone-able Slack support desk built from a fleet of Sapiom agents that meet only through events and one shared Postgres.",
+  "description": "A clone-able Slack support desk built from a fleet of Sapiom agents that meet only through events and one shared Postgres.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "setup": "tsx setup.ts",
-    "console:build": "tsx apps/console/build.ts",
-    "console:publish": "tsx apps/console/publish.ts",
+    "setup": "tsx scripts/sync-fleet-id.ts && tsx setup.ts",
+    "console:build": "tsx scripts/sync-fleet-id.ts && tsx apps/console/build.ts",
+    "console:publish": "tsx scripts/sync-fleet-id.ts && tsx apps/console/publish.ts",
     "format": "prettier --write \"**/*.{ts,json,md}\"",
     "replay": "tsx scripts/replay.ts",
     "reset-demo": "tsx scripts/reset-demo.ts"

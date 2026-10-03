@@ -30,6 +30,7 @@ import {
   slackTsToMs,
   triggerStates,
 } from "./logic";
+import { agentSlug } from "../../_shared/fleet-id";
 
 const ev = (
   id: string,
@@ -191,13 +192,13 @@ describe("failed receipts", () => {
     outcome: "matched",
     receivedAt: "2026-10-02T07:00:00.000Z",
     deliveries: { total: 2, failed },
-    triggerSlugs: ["sylon-copilot", "backlog-nudge"],
+    triggerSlugs: [agentSlug("copilot"), "backlog-nudge"],
     failedTriggerSlugs,
   });
 
-  it("keeps receipts whose failed delivery went to a Sylon agent", () => {
+  it("keeps receipts whose failed delivery went to a fleet agent", () => {
     const out = failedFleetReceipts([
-      r("1", 1, ["sylon-copilot"]),
+      r("1", 1, [agentSlug("copilot")]),
       r("2", 1, ["backlog-nudge"]),
       r("3", 0, []),
     ]);
@@ -205,13 +206,13 @@ describe("failed receipts", () => {
   });
 
   it("shows the page no sender detail", () => {
-    const raw = { ...r("1", 1, ["sylon-copilot"]), ip: "10.0.0.1" };
+    const raw = { ...r("1", 1, [agentSlug("copilot")]), ip: "10.0.0.1" };
     expect(receiptView(raw)).toEqual({
       id: "1",
       eventType: "issue.created",
       receivedAt: "2026-10-02T07:00:00.000Z",
       failed: 1,
-      failedTriggerSlugs: ["sylon-copilot"],
+      failedTriggerSlugs: [agentSlug("copilot")],
     });
   });
 });
@@ -235,7 +236,7 @@ describe("scoping", () => {
     expect(planSwitch("escalation", true, [foreign]).create).toHaveLength(1);
     const own = {
       ...ev("8", "issue.escalate"),
-      definitionSlug: "sylon-escalation",
+      definitionSlug: agentSlug("escalation"),
     };
     expect(planSwitch("escalation", false, [own, foreign]).remove).toEqual([
       "8",
@@ -249,11 +250,11 @@ describe("scoping", () => {
     stale = false,
   ): ReceiptFire => ({ id, state, stale, trigger: { definitionSlug: slug } });
 
-  it("refuses a receipt with no Sylon fire", () => {
+  it("refuses a receipt with no fleet fire", () => {
     expect(replayPlan([fire("1", "backlog-nudge", "failed")])).toEqual({
       ok: false,
       status: 403,
-      reason: "not a Sylon receipt",
+      reason: "not a fleet receipt",
     });
     expect(replayPlan([])).toMatchObject({ ok: false, status: 403 });
     expect(
@@ -265,16 +266,16 @@ describe("scoping", () => {
     expect(
       replayPlan([
         fire("1", "backlog-nudge", "failed"),
-        fire("2", "sylon-copilot", "failed"),
-        fire("3", "sylon-intake", "succeeded"),
-        fire("4", "sylon-intake", "claimed", true),
-        fire("5", "sylon-intake", "claimed"),
+        fire("2", agentSlug("copilot"), "failed"),
+        fire("3", agentSlug("intake"), "succeeded"),
+        fire("4", agentSlug("intake"), "claimed", true),
+        fire("5", agentSlug("intake"), "claimed"),
       ]),
     ).toEqual({ ok: true, fireIds: ["2", "4"] });
   });
 
-  it("has nothing to do when every Sylon fire succeeded", () => {
-    expect(replayPlan([fire("3", "sylon-intake", "succeeded")])).toMatchObject({
+  it("has nothing to do when every fleet fire succeeded", () => {
+    expect(replayPlan([fire("3", agentSlug("intake"), "succeeded")])).toMatchObject({
       ok: false,
       status: 409,
     });
@@ -291,7 +292,7 @@ describe("linear links", () => {
   it("builds an issue URL from the project's workspace", () => {
     expect(
       linearIssueUrl(
-        "https://linear.app/acme/project/sylon-issues-9fa8692f54ff",
+        "https://linear.app/acme/project/support-issues-9fa8692f54ff",
         "ENG-123",
       ),
     ).toBe("https://linear.app/acme/issue/ENG-123");
@@ -407,7 +408,7 @@ describe("metrics", () => {
     expect(s.llmUsd).toBe(2);
     expect(s.capabilityUsd).toBe(1);
     expect(s.meanSandboxSeconds).toBe(10);
-    expect(s.pylonUsdPerTicket).toBe(3);
+    expect(s.targetUsdPerTicket).toBe(3);
     expect(costSummary([]).meanUsd).toBeNull();
   });
 });

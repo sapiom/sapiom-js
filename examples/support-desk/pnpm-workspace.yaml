@@ -1,4 +1,4 @@
-# Sylon is its own install root, outside the sapiom-js workspace: every agent under
+# The support desk example is its own install root, outside the sapiom-js workspace: every agent under
 # agents/ resolves its npm packages from this directory's node_modules.
 packages: []
 onlyBuiltDependencies:

@@ -1,14 +1,14 @@
 /**
- * escalation: on `issue.escalate`, open one Linear issue for the Sylon issue, record it on the
+ * escalation: on `issue.escalate`, open one Linear issue for the support desk issue, record it on the
  * issue, reply "Tracked as SAP-n: <url>" in the customer and triage threads, emit `issue.on_hold`,
  * and move the issue On Hold.
  *
  * Trigger: event `issue.escalate`.
  *
- * One Linear issue per Sylon issue, and one reply per thread:
+ * One Linear issue per support desk issue, and one reply per thread:
  * - Check, create, record and both replies run in one transaction holding the issue row lock, so
  *   a concurrent second run waits, then sees the link and the stored reply keys.
- * - Each Linear issue's description starts with `sylon:<issueId>`. With no link recorded, the run
+ * - Each Linear issue's description starts with `<fleetId>:<issueId>`. With no link recorded, the run
  *   looks for that marker among the project's issues of the last 7 days before creating, so a
  *   retry after Linear created the issue but before the commit adopts it instead of opening a
  *   second.
@@ -22,6 +22,7 @@
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import { agentSlug, issueMarker } from "../../_shared/fleet-id";
 import { issueCard, issueCardText } from "../../_shared/blocks";
 import { MissingConfigError } from "../../_shared/config";
 import { deskForIssue, linearTarget } from "../../_shared/desks";
@@ -54,12 +55,12 @@ import {
 import { resolution } from "../linear-sync/rules";
 import { permalink, post, update, userInfo } from "../../_shared/slack";
 
-export const AGENT = "sylon-escalation";
+export const AGENT = agentSlug("escalation");
 
 /** Linear MCP tool used to find an issue a crashed attempt already created. */
 export const LIST_ISSUES_TOOL = "list_issues";
 
-/** Sylon priority → Linear priority (1 urgent, 2 high, 3 medium, 4 low). */
+/** Support desk priority → Linear priority (1 urgent, 2 high, 3 medium, 4 low). */
 export const LINEAR_PRIORITY: Record<string, number> = {
   urgent: 1,
   high: 2,
@@ -68,7 +69,7 @@ export const LINEAR_PRIORITY: Record<string, number> = {
 };
 
 /** Written into every Linear description; the key a retry searches for. */
-export const marker = (issueId: string) => `sylon:${issueId}`;
+export const marker = (issueId: string) => issueMarker(issueId);
 
 /** Key of the customer-thread reply in `messages`; its presence means the replies went out. */
 export const customerReplyKey = (issueId: string) => `escalation:${issueId}`;
@@ -119,7 +120,7 @@ export function linearDescription(input: {
 }): string {
   return [
     // First, so it falls inside the description preview `list_issues` returns.
-    `Sylon issue #${input.issue.number} · ${marker(input.issue.id)}`,
+    `Support desk issue #${input.issue.number} · ${marker(input.issue.id)}`,
     "",
     `**Account:** ${input.accountName}`,
     `**Requested by:** ${
@@ -296,7 +297,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
         (await createIssue(ctx, {
           teamId,
           projectId,
-          title: issue.title || `Sylon #${issue.number}`,
+          title: issue.title || `Ticket #${issue.number}`,
           description: linearDescription({
             issue,
             accountName: account.name,
@@ -458,7 +459,7 @@ const escalateStep = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon escalation: on issue.escalate, opens one Linear issue, replies 'Tracked as SAP-n' in both threads, emits issue.on_hold, and moves the issue On Hold.",
+    "Support desk escalation: on issue.escalate, opens one Linear issue, replies 'Tracked as SAP-n' in both threads, emits issue.on_hold, and moves the issue On Hold.",
   entry: "escalate",
   steps: { escalate: escalateStep },
 });

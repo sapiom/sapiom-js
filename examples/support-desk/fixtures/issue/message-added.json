@@ -5,7 +5,7 @@
     "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
     "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
     "source": "slack",
-    "causationId": "Ev0SYLONREPLY1",
+    "causationId": "Ev0DESKREPLY1",
     "slack": {
       "channel": "C0CUSTOMER1",
       "ts": "1790889500.000300",

@@ -143,7 +143,7 @@ describe("receive", () => {
     expect(d.stepName).toBe(target);
   });
 
-  it("exits on issue.* clicks (intake's) and buttons Sylon does not ship", async () => {
+  it("exits on issue.* clicks (intake's) and buttons the support desk does not ship", async () => {
     for (const payload of [
       fixture("slack/block-actions.issue-take.json").payload,
       fixture("slack/block-actions.issue-close.json").payload,
@@ -470,7 +470,7 @@ describe("draft path", () => {
     await linkMessage(db, {
       issueId: FIXTURE_ISSUE,
       source: "slack",
-      sourceEventId: "Ev0SYLONREPLY1",
+      sourceEventId: "Ev0DESKREPLY1",
       direction: "customer",
       slack: {
         channel: "C0CUSTOMER1",

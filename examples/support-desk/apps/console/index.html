@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sylon Console</title>
+    <title>Support Desk Console</title>
     <style>
       :root {
         --bg: #f5f5f3;
@@ -506,7 +506,7 @@
   <body>
     <header>
       <div class="wrap">
-        <h1>Sylon Console</h1>
+        <h1>Support Desk Console</h1>
         <label class="row"
           >Desk<select id="desk" aria-label="Desk"></select
         ></label>
@@ -767,7 +767,7 @@
     </div>
 
     <script>
-      const TAB_KEY = "sylon-console-tab";
+      const TAB_KEY = "console-tab";
       const $ = (id) => document.getElementById(id);
       const esc = (s) =>
         String(s ?? "").replace(
@@ -1169,7 +1169,7 @@
                     `<tr><td class="num">${esc(r.id)}</td><td style="white-space:normal">${esc(r.eventType)}${r.fleetWide ? ` <span class="muted" title="Raised before any ticket existed, so it cannot be tied to a desk; it shows on every desk.">(fleet-wide)</span>` : ""}<div class="muted" style="font-size:12px">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button class="mut" data-replay="${esc(r.id)}">Replay</button></td></tr>`,
                 )
                 .join("")}</table>`
-            : `<span class="muted">No failed deliveries to Sylon agents.</span>`;
+            : `<span class="muted">No failed deliveries to fleet agents.</span>`;
           if (truncated)
             $("receipts").innerHTML +=
               `<div class="muted" style="margin-top:6px">Truncated: only the newest receipts were read; older failures may be missing.</div>`;
@@ -1202,7 +1202,7 @@
           const versus =
             c.meanUsd == null
               ? ""
-              : c.meanUsd <= c.pylonUsdPerTicket
+              : c.meanUsd <= c.targetUsdPerTicket
                 ? "ok"
                 : "bad";
           $("metrics").className = "";
@@ -1219,7 +1219,7 @@
               <tr><td>Cost per ticket</td><td class="num ${versus}">mean <strong>${usd(c.meanUsd)}</strong></td><td class="num">p90 <strong>${usd(c.p90Usd)}</strong></td></tr>
               <tr><td>Total</td><td class="num"><strong>${usd(c.totalUsd)}</strong></td><td class="num muted">LLM ${usd(c.llmUsd)} · capability ${usd(c.capabilityUsd)}</td></tr>
               <tr><td>Sandbox per ticket</td><td class="num">${c.meanSandboxSeconds == null ? "—" : `${c.meanSandboxSeconds.toFixed(0)} s`}</td><td></td></tr>
-              <tr><td>Pylon</td><td class="num muted">${usd(c.pylonUsdPerTicket)} per ticket</td><td></td></tr>
+              <tr><td>Target</td><td class="num muted">${usd(c.targetUsdPerTicket)} / ticket</td><td></td></tr>
             </table>
             <div class="muted" style="font-size:12px;margin-top:6px">Sandbox compute may show $0 on internal orgs.${m.runsMissing ? ` ${m.runsMissing} run${m.runsMissing === 1 ? "" : "s"} not priced yet; reload to fill in.` : ""}${c.unpriced ? ` ${c.unpriced} ticket${c.unpriced === 1 ? "" : "s"} with no priced run are left out of the mean.` : ""}</div>
             ${
@@ -1271,7 +1271,7 @@
           renderSystemAgents();
           $("sys-tables").className = "";
           $("sys-tables").innerHTML =
-            `<div class="muted" style="margin-bottom:4px">Postgres, handle <code>sylon</code></div><dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
+            `<div class="muted" style="margin-bottom:4px">Postgres, handle <code>${esc(s.dbHandle)}</code></div><dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
           $("sys-linear").className = "";
           $("sys-linear").innerHTML =
             s.desks
@@ -1280,7 +1280,7 @@
                   `<div>${esc(d.name)}: ${link(d.linear.url, d.linear.name)}</div>`,
               )
               .join("") +
-            `<div class="muted">escalation creates an issue in the ticket's desk's project for each escalated ticket; its description starts <code>sylon:&lt;issueId&gt;</code></div>`;
+            `<div class="muted">escalation creates an issue in the ticket's desk's project for each escalated ticket; its description starts <code>${esc(s.escalationMarker)}&lt;issueId&gt;</code></div>`;
         } catch (e) {
           $("sys-channels").innerHTML =
             `<span class="bad">${esc(e.message)}</span>`;

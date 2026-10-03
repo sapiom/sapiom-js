@@ -12,6 +12,7 @@
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 
+import { agentSlug } from "../../_shared/fleet-id";
 import { escapeMrkdwn, slackToPlain } from "../../_shared/blocks";
 import { MissingConfigError } from "../../_shared/config";
 import {
@@ -29,7 +30,7 @@ import {
 } from "../../_shared/issues";
 import { permalink, post } from "../../_shared/slack";
 
-export const AGENT = "sylon-urgent-pager";
+export const AGENT = agentSlug("urgent-pager");
 
 export const pageKey = (issueId: string) => `urgent-pager:${issueId}`;
 
@@ -83,7 +84,7 @@ const page = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Sylon urgent-pager: on issue.created with priority urgent, DMs the on-call user the title and a triage link.",
+    "Support desk urgent-pager: on issue.created with priority urgent, DMs the on-call user the title and a triage link.",
   entry: "page",
   steps: { page },
 });

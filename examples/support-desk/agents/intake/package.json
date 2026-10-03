@@ -1,9 +1,9 @@
 {
-  "name": "sylon-intake",
+  "name": "support-desk-intake",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Sylon agent intake. Dependencies resolve from examples/sylon/package.json.",
+  "description": "Support desk agent intake. Dependencies resolve from examples/support-desk/package.json.",
   "dependencies": {
     "@sapiom/agent": "^0.14.5",
     "@sapiom/tools": "^0.41.0",

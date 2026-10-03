@@ -6,6 +6,7 @@ import {
   WATCHDOG_SECRET,
   ensureWatchdogKey,
 } from "./secrets";
+import { agentSlug } from "../_shared/fleet-id";
 
 const SECRET_VALUE = "sk_live_minted";
 
@@ -39,7 +40,10 @@ describe("ensureWatchdogKey", () => {
     expect(out).toEqual({ outcome: "provisioned", keyId: "key-1" });
     expect(calls[1]).toMatchObject({
       path: "/v1/api-keys/scoped",
-      body: { permissions: ["org.read"], name: "sylon-watchdog (read runs)" },
+      body: {
+        permissions: ["org.read"],
+        name: `${agentSlug("watchdog")} (read runs)`,
+      },
     });
     expect(calls[2]).toEqual({
       method: "POST",

@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 
 import fleet from "../fleet.json";
+import { agentSlug } from "../_shared/fleet-id";
 
 export interface FleetProject {
   key: string;
@@ -36,7 +37,11 @@ export interface AttachedTrigger {
   cron: string | null;
 }
 
-export const PROJECTS = fleet.projects as FleetProject[];
+/** fleet.json's projects, each with its deployed slug: `<fleetId>-<key>`. */
+export const PROJECTS: FleetProject[] = fleet.projects.map((p) => ({
+  ...(p as Omit<FleetProject, "slug">),
+  slug: agentSlug(p.key),
+}));
 export const TRIGGERS = fleet.triggers as FleetTrigger[];
 export const CONNECTORS = fleet.connectors as FleetConnector[];
 

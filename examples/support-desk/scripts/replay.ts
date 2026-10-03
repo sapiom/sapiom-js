@@ -8,7 +8,7 @@
  * prints the steps for a person to post and only watches. `--watch-only` forces that mode.
  *
  * Flags: `--watch-only`, `--timeout <s>` (default 900), `--settle <s>`: stop after this long with
- * nothing new and no run in flight (default 150). Exits 1 if any Sylon run failed or was still
+ * nothing new and no run in flight (default 150). Exits 1 if any support desk run failed or was still
  * running at the deadline.
  *
  * Needs SAPIOM_API_KEY (an org key for the target org). Prints no secrets.
@@ -26,6 +26,7 @@ import { z } from "zod/v4";
 
 import { getConfigOr } from "../_shared/config";
 import { defaultDesk, deskBySlug } from "../_shared/desks";
+import { FLEET_ID } from "../_shared/fleet-id";
 import {
   connectPostgres,
   resolveConnectionString,
@@ -191,7 +192,7 @@ export function verdict(
   return { ok: !failed.length && !incomplete.length, lines };
 }
 
-const isSylon = (slug: string) => slug.startsWith("sylon-");
+const isFleet = (slug: string) => slug.startsWith(`${FLEET_ID}-`);
 
 class Watcher {
   private receipts = new Map<string, { type: string; done: boolean }>();
@@ -213,7 +214,7 @@ class Watcher {
     return this.incomplete().length;
   }
 
-  /** Receipts with a Sylon fire whose run has not finished. */
+  /** Receipts with a support desk fire whose run has not finished. */
   incomplete(): string[] {
     return [...this.receipts]
       .filter(([, r]) => !r.done)
@@ -238,12 +239,12 @@ class Watcher {
     );
     for (const r of rows.reverse()) {
       if (Number(r.id) <= this.baselineReceipt) continue;
-      if (!r.triggerSlugs.some(isSylon)) continue;
+      if (!r.triggerSlugs.some(isFleet)) continue;
       if (!this.receipts.has(r.id)) {
         this.receipts.set(r.id, { type: r.eventType, done: false });
         this.lastActivity = Date.now();
         log(
-          `receipt ${r.id} ${r.eventType} → ${r.triggerSlugs.filter(isSylon).join(", ")}  ${EVENTS_PAGE}/${r.id}`,
+          `receipt ${r.id} ${r.eventType} → ${r.triggerSlugs.filter(isFleet).join(", ")}  ${EVENTS_PAGE}/${r.id}`,
         );
       }
     }
@@ -253,7 +254,7 @@ class Watcher {
         `/receipts/${id}`,
       );
       const mine = detail.fires.filter((f) =>
-        isSylon(f.trigger.definitionSlug),
+        isFleet(f.trigger.definitionSlug),
       );
       for (const f of mine) {
         if (!finished(f)) continue;
@@ -448,7 +449,7 @@ async function main() {
     await steps;
 
     console.log(
-      `\n${watcher.executions.length} Sylon run(s): ${watcher.executions.join(", ") || "none"}`,
+      `\n${watcher.executions.length} support desk run(s): ${watcher.executions.join(", ") || "none"}`,
     );
     const { ok, lines } = verdict(watcher.failed, watcher.incomplete());
     for (const line of lines) console.log(line);

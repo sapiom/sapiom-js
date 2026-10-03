@@ -1,4 +1,4 @@
--- Sylon M1 schema. Only _shared/issues.ts (and _shared/config.ts for `config`) write these tables.
+-- Support desk M1 schema. Only _shared/issues.ts (and _shared/config.ts for `config`) write these tables.
 -- Applied once per database by _shared/db.ts `migrate`, tracked in schema_migrations.
 
 create table accounts (

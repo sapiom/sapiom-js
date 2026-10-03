@@ -1,15 +1,15 @@
 /**
- * The Sylon Console server: one page and a few JSON routes from which the demo is operated.
+ * The Console server: one page and a few JSON routes from which the demo is operated.
  *
- * Every piece of state lives in the `sylon` database or the Sapiom API; the server keeps none, so
+ * Every piece of state lives in the fleet database or the Sapiom API; the server keeps none, so
  * a fresh App Link wake shows exactly what a running one would. `pnpm run console:build` bundles
  * this file, the page and the `_shared` code into one `dist/server.mjs` that needs no install.
  *
- * Env: SYLON_CONSOLE_API_KEY (the operator's org key, set by `console:publish`: it lists and
+ * Env: CONSOLE_API_KEY (the operator's org key, set by `console:publish`: it lists and
  * changes triggers, starts runs, replays receipts, redraws Slack cards and resolves the database),
  * PORT (default 3000), SAPIOM_API_URL (default production). SAPIOM_API_KEY is the org.read key the
  * platform injects into every App Link; it is only a fallback and cannot write, so a 403 from a
- * switch, Run now, Replay or Reset board means SYLON_CONSOLE_API_KEY is missing or lacks write.
+ * switch, Run now, Replay or Reset board means CONSOLE_API_KEY is missing or lacks write.
  *
  * There is no login of its own: the App Link admits only signed-in org members, and its preview
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
@@ -26,10 +26,12 @@ import { createClient } from "@sapiom/tools";
 
 import { getConfigOr } from "../../_shared/config";
 import {
+  DB_HANDLE,
   connectPostgres,
   resolveConnectionString,
   type Db,
 } from "../../_shared/db";
+import { issueMarker } from "../../_shared/fleet-id";
 import {
   getDesk,
   linearTarget,
@@ -109,7 +111,7 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
 );
 /** The operator's key from publish; the platform's own read-only runtime key is the fallback. */
 const API_KEY =
-  process.env.SYLON_CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
+  process.env.CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
 
 /** The operator-keyed client for calls that go through `@sapiom/tools` rather than `sapiom()`. */
 const operatorClient = () => createClient({ apiKey: API_KEY });
@@ -195,7 +197,7 @@ async function fleetState() {
 /** Turn one agent on or off; returns the trigger ids it created, resumed and deleted. */
 async function setAgent(key: string, on: boolean) {
   const agent = agentByKey(key);
-  if (!agent) throw new HttpError(403, `'${key}' is not a Sylon agent`);
+  if (!agent) throw new HttpError(403, `'${key}' is not a fleet agent`);
   const attached = await attachedTriggers(agent.slug);
   if (!attached)
     throw new HttpError(
@@ -456,7 +458,7 @@ async function executionCosts(ids: string[]): Promise<Map<string, Cost>> {
   return out;
 }
 
-/** Receipt arrival → run start for each Sylon fire of the receipts received since `since`. */
+/** Receipt arrival → run start for each fleet fire of the receipts received since `since`. */
 async function dispatchSeconds(
   since: number,
 ): Promise<{ delays: number[]; truncated: boolean }> {
@@ -649,6 +651,8 @@ async function system(d: Db) {
         writes: AGENT_ROLES[a.key]?.writes ?? "",
       };
     }),
+    dbHandle: DB_HANDLE,
+    escalationMarker: issueMarker(""),
     tables: TABLES.map(([name, role]) => ({ name, role })),
   };
 }
@@ -914,4 +918,4 @@ createServer((req, res) => {
     if (!res.headersSent) send(res, status, { error: message });
     else res.end();
   });
-}).listen(PORT, () => console.log(`sylon console on :${PORT}`));
+}).listen(PORT, () => console.log(`console on :${PORT}`));

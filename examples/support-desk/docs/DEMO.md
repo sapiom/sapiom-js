@@ -1,6 +1,6 @@
-# Sylon demo: rehearsal checklist and failure drill
+# Support desk demo: rehearsal checklist and failure drill
 
-Every command runs from `examples/sylon` with `SAPIOM_API_KEY` set to the org key. Times are from
+Every command runs from `examples/support-desk` with `SAPIOM_API_KEY` set to the org key. Times are from
 our own runs on 2026-10-02.
 
 ## Before the demo (T-30 min)
@@ -16,17 +16,17 @@ our own runs on 2026-10-02.
    `issue.created` trigger (`DELETE /v1/workflows/triggers/<id>`; the id is in
    `.sapiom/fleet-state.json`). setup re-attaches it.
 4. **Prepare the replay.** Set `scripts/replay.json` `prefix` to `""` for the live show (rehearsals
-   keep `[sylon test]`). For the script to post itself, export
+   keep `[test]`). For the script to post itself, export
    `SLACK_REPLAY_USER_TOKEN`, a user token (`xoxp-...`) of the test customer with `chat:write`.
    Without it, someone posts each step by hand as the customer while the script watches.
 5. **Open the tabs:** the customer channel, the triage channel, the on-call user's DMs with the
-   Sylon bot, the Sapiom Events page (`https://app.sapiom.ai/agents/events`), and Linear
-   (Sylon Issues).
+   support desk bot, the Sapiom Events page (`https://app.sapiom.ai/agents/events`), and Linear
+   (your desk's issues).
 
 ## Run the demo
 
 1. `pnpm run replay`. It prints the steps (watch-only) or posts them, then prints each receipt,
-   run, issue card, draft card, reply and nudge with links. It exits 1 if any Sylon run fails.
+   run, issue card, draft card, reply and nudge with links. It exits 1 if any fleet run fails.
 2. **Bug report.** The issue card appears in triage about 30 s after the post; the draft card,
    about 20 s after that. It cites a docs page or team article only if one applies; webhooks are
    not in the public docs, so expect a low-confidence draft that asks for ids and timestamps.
@@ -41,7 +41,7 @@ our own runs on 2026-10-02.
    show a team edit changing the next draft with no redeploy.
    Click **Approve**: the reply lands in the customer thread and the card shows who sent it.
 7. **Thank-you.** No card: Jev's `is_issue` came back 0.04 in both rehearsals.
-8. **Escalate.** Click **Escalate** on the bug's draft card. One Linear issue appears in Sylon
+8. **Escalate.** Click **Escalate** on the bug's draft card. One Linear issue appears in your desk's
    Issues, and both threads get "Tracked as SAP-n". The card shows On Hold and the Linear id.
 9. **Nudges.** After the desk's `nudgeMinutes` (5 in the demo), the controller posts "No owner yet", "Draft waiting
    for a decision" and "Customer is waiting for a reply" in the triage threads. To show it on demand, run
