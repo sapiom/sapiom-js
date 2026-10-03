@@ -4,6 +4,8 @@ import {
   memoryDb,
   resolveConnectionString,
   ensureMigrated,
+  resetSharedDb,
+  withDb,
   type Db,
 } from "./db";
 
@@ -140,7 +142,10 @@ describe("ensureMigrated", () => {
       query: async (text: string) => {
         seen.push(text);
         if (text === "select id from schema_migrations")
-          throw new Error('relation "schema_migrations" does not exist');
+          throw Object.assign(
+            new Error('relation "schema_migrations" does not exist'),
+            { code: "42P01" },
+          );
         if (text.startsWith("select 1 from schema_migrations")) return [{}];
         return [];
       },
@@ -148,5 +153,72 @@ describe("ensureMigrated", () => {
     } as unknown as Db;
     expect(await ensureMigrated(stub)).toEqual([]);
     expect(seen[1]).toMatch(/^create table if not exists schema_migrations/);
+  });
+});
+
+describe("withDb on a deployed step", () => {
+  const conn = { connection: { connectionString: "postgresql://x" } };
+
+  /** A step context whose database lookup is counted; isLocalTrace false takes the shared pool. */
+  const deployedCtx = (lookups: { n: number }) =>
+    ({
+      isLocalTrace: false,
+      executionId: "exec-1",
+      sapiom: {
+        database: {
+          get: async () => {
+            lookups.n++;
+            return conn;
+          },
+          create: async () => conn,
+        },
+      },
+    }) as never;
+
+  it("shares one connection across concurrent calls and migrates once", async () => {
+    const lookups = { n: 0 };
+    let connects = 0;
+    const db = await memoryDb();
+    const queries: string[] = [];
+    await resetSharedDb(async () => {
+      connects++;
+      const counted = {
+        ...db,
+        query: (text: string, params?: unknown[]) => {
+          queries.push(text);
+          return db.query(text, params as never);
+        },
+      } as Db;
+      return { db: counted, close: async () => {} };
+    });
+    const ctx = deployedCtx(lookups);
+    const results = await Promise.all([
+      withDb(ctx, async (d) => d.query("select 1 as one")),
+      withDb(ctx, async (d) => d.query("select 1 as one")),
+      withDb(ctx, async (d) => d.query("select 1 as one")),
+    ]);
+    expect(results).toHaveLength(3);
+    expect(lookups.n).toBe(1);
+    expect(connects).toBe(1);
+    expect(
+      queries.filter((q) => q === "select id from schema_migrations"),
+    ).toHaveLength(1);
+    await resetSharedDb();
+  });
+
+  it("does not cache a failed connect: the next call connects again", async () => {
+    const lookups = { n: 0 };
+    let attempts = 0;
+    const db = await memoryDb();
+    await resetSharedDb(async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("connect ECONNRESET");
+      return { db, close: async () => {} };
+    });
+    const ctx = deployedCtx(lookups);
+    await expect(withDb(ctx, async () => "x")).rejects.toThrow("ECONNRESET");
+    expect(await withDb(ctx, async () => "ok")).toBe("ok");
+    expect(attempts).toBe(2);
+    await resetSharedDb();
   });
 });
