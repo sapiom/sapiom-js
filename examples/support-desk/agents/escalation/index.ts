@@ -1,7 +1,7 @@
 /**
  * escalation: on `issue.escalate`, open one Linear issue for the support desk issue, record it on the
- * issue, reply "Tracked as SAP-n: <url>" in the customer and triage threads, emit `issue.on_hold`,
- * and move the issue On Hold.
+ * issue, reply "Tracked as SAP-n: <url>" in the triage thread and a neutral line (no identifier or
+ * link) in the customer thread, emit `issue.on_hold`, and move the issue On Hold.
  *
  * Trigger: event `issue.escalate`.
  *
@@ -75,18 +75,27 @@ export const marker = (issueId: string) => issueMarker(issueId);
 export const customerReplyKey = (issueId: string) => `escalation:${issueId}`;
 const triageReplyKey = (issueId: string) => `escalation:${issueId}:triage`;
 
+/** The customer-thread reply: tracking identifiers and links stay in the internal triage thread. */
+export const CUSTOMER_REPLY =
+  "I've passed this to our engineering team and will follow up in this thread.";
+
 /**
  * The reply keys for the issue's current Linear link. The first link uses the bare keys; a link
  * made after an earlier one resolved (a repeat escalation) adds its identifier, so its replies are
  * not mistaken for the first escalation's.
  */
 async function replyKeys(db: Db, issueId: string, identifier: string) {
-  const first = await messageBySourceEventId(db, customerReplyKey(issueId));
-  const text = first?.text ?? "";
-  const bare =
-    !first ||
+  // The triage reply carries the identifier. Rows written before the customer reply went neutral
+  // carry it in the customer reply instead, so that one counts too.
+  const stored = [
+    await messageBySourceEventId(db, triageReplyKey(issueId)),
+    await messageBySourceEventId(db, customerReplyKey(issueId)),
+  ].filter((m) => m !== null && m !== undefined);
+  const tracked = (text: string) =>
     text.includes(`Tracked as ${identifier}:`) ||
     text.endsWith(`Tracked as ${identifier}`);
+  const bare =
+    stored.length === 0 || stored.some((m) => tracked(m.text ?? ""));
   const suffix = bare ? "" : `:${identifier}`;
   return {
     customer: `${customerReplyKey(issueId)}${suffix}`,
@@ -250,6 +259,15 @@ async function seedLocalIssue(db: Db, input: EscalateInput): Promise<string> {
       direction: "agent",
       slack: { channel: input.slack.channel, ts: "1790000000.000002" },
       userId: AGENT,
+      text: CUSTOMER_REPLY,
+    });
+    await linkMessage(db, {
+      issueId: issue.id,
+      source: "slack",
+      sourceEventId: triageReplyKey(issue.id),
+      direction: "internal",
+      slack: { channel: input.slack.channel, ts: "1790000000.000003" },
+      userId: AGENT,
       text: `Tracked as ${seed.linearIdentifier}`,
     });
     if (seed.status !== "closed") await setStatus(db, issue.id, "on_hold");
@@ -346,12 +364,11 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       return { issue, base, already: true as const };
     }
 
-    const text = `Tracked as ${identifier}: ${url}`;
     const triageTs = await replyOnce(ctx, tx, {
       key: keys.triage,
       channel: triageChannel,
       threadTs: issue.triageRootTs,
-      text,
+      text: `Tracked as ${identifier}: ${url}`,
       direction: "internal",
       issueId,
     });
@@ -359,7 +376,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       key: keys.customer,
       channel: issue.customerChannel ?? input.slack.channel,
       threadTs: issue.customerRootTs,
-      text,
+      text: CUSTOMER_REPLY,
       direction: "agent",
       issueId,
     });
@@ -459,7 +476,7 @@ const escalateStep = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk escalation: on issue.escalate, opens one Linear issue, replies 'Tracked as SAP-n' in both threads, emits issue.on_hold, and moves the issue On Hold.",
+    "Support desk escalation: on issue.escalate, opens one Linear issue, replies 'Tracked as SAP-n' in the triage thread and a neutral line in the customer thread, emits issue.on_hold, and moves the issue On Hold.",
   entry: "escalate",
   steps: { escalate: escalateStep },
 });
