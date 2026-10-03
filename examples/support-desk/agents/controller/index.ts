@@ -1,7 +1,8 @@
 /**
  * controller: the follow-up cron. Every run reads the open issues, applies the rules in
- * `rules.ts`, and posts each due nudge once in the issue's triage thread: no owner, no draft, a
- * draft waiting for a decision, or a customer waiting for a reply.
+ * `rules.ts`, and posts each due nudge in the issue's triage thread, repeating on a backoff
+ * (`nudge.repeat_minutes`) while it holds: no owner, no draft, a draft waiting for a decision, or a
+ * customer waiting for a reply.
  *
  * Trigger: `schedule_cron` (`*\/2 * * * *` in fleet.json). The trigger's stored `input` may carry
  * `jevCheck: false` to skip the Jev "does this expect a reply?" check on `customer_waiting`.
@@ -40,6 +41,7 @@ import {
   type IssueRow,
   type MessageRow,
   type Nudge,
+  type SentRow,
 } from "./rules";
 
 export const AGENT = agentSlug("controller");
@@ -55,6 +57,7 @@ const NudgeSchema = z.object({
   issueId: z.string(),
   kind: z.enum(NUDGE_KINDS),
   refId: z.string(),
+  n: z.number().int().positive(),
   key: z.string(),
 });
 const SendInput = z.object({ nudges: z.array(NudgeSchema) });
@@ -67,14 +70,18 @@ interface Snapshot {
   issues: IssueRow[];
   drafts: DraftRow[];
   messages: MessageRow[];
-  sent: { issueId: string; kind: string }[];
+  sent: SentRow[];
   now: Date;
 }
 
-/** Thresholds for `dueNudges`: each desk's own, and the pre-desk `nudge.minutes` for an issue with none. */
+/**
+ * Thresholds for `dueNudges`: each desk's own, the pre-desk `nudge.minutes` for an issue with none,
+ * and the repeat gaps after round 1.
+ */
 async function thresholds(db: Db) {
   return {
     minutes: await getConfigOr(db, "nudge.minutes", 30),
+    repeatMinutes: await getConfigOr(db, "nudge.repeat_minutes", [60, 240]),
     deskMinutes: Object.fromEntries(
       (await listDesks(db)).map((d) => [d.id, d.nudgeMinutes]),
     ),
@@ -102,7 +109,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
       params,
     ),
     await db.query(
-      `select n.issue_id, n.kind from nudges n join issues i on i.id = n.issue_id where ${where}`,
+      `select n.issue_id, n.kind, n.sent_at from nudges n join issues i on i.id = n.issue_id where ${where}`,
       params,
     ),
     await db.query<{ now: Date }>("select now() as now"),
@@ -133,6 +140,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
     sent: sent.map((r: Row) => ({
       issueId: r.issue_id as string,
       kind: r.kind as string,
+      sentAt: new Date(r.sent_at as Date),
     })),
     // The database clock, so a laptop or sandbox with drift cannot move a threshold.
     now: new Date(clock[0].now),
@@ -193,7 +201,8 @@ const scan = defineStep({
       const skipped: { issueId: string; key: string; expectsReply: number }[] =
         [];
       for (const n of candidates) {
-        if (n.kind !== "customer_waiting" || !jevCheck) {
+        // A later round is about a message Jev already passed in round 1.
+        if (n.kind !== "customer_waiting" || n.n > 1 || !jevCheck) {
           nudges.push(n);
           continue;
         }
@@ -260,11 +269,12 @@ const send = defineStep({
         const sent = await db.transaction(async (tx) => {
           // The issue may have moved since scan (taken, drafted, answered, held, closed): rerun the
           // rules on its current rows and post only if this nudge is still due. Jev already passed
-          // this candidate in scan, so its skip records do not apply here.
+          // this candidate in scan, so its skip records do not apply here. Its own key is left out
+          // so a retried send reaches recordNudge, which refuses the duplicate.
           const fresh = await snapshot(tx, n.issueId);
           const stillDue = dueNudges({
             ...fresh,
-            sent: [],
+            sent: fresh.sent.filter((s) => s.kind !== n.key),
             ...limits,
             jevCheck: false,
           }).some((d) => d.key === n.key);
@@ -312,7 +322,7 @@ const send = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk controller: a cron that pings the triage thread once per stale condition (no owner, no draft, draft pending, customer waiting).",
+    "Support desk controller: a cron that pings the triage thread on a backoff while a condition stays stale (no owner, no draft, draft pending, customer waiting).",
   entry: "scan",
   steps: { scan, send },
 });

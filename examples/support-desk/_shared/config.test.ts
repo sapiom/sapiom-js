@@ -8,6 +8,7 @@ import {
   setConfig,
 } from "./config";
 import { memoryDb } from "./db";
+import { seedFleet } from "./seed";
 
 describe("config", () => {
   it("getConfigOr returns the fallback only when the key is unset", async () => {
@@ -88,5 +89,19 @@ describe("config", () => {
   it("rejects a value of the wrong shape", async () => {
     const db = await memoryDb();
     await expect(setConfig(db, "nudge.minutes", -1, "test")).rejects.toThrow();
+  });
+
+  it("nudge.repeat_minutes takes positive whole minutes, and setup leaves it unset by default", async () => {
+    const db = await memoryDb();
+    await seedFleet(db, "test");
+    expect(await getConfigOr(db, "nudge.repeat_minutes", null)).toBeNull();
+    for (const ok of [[], [60, 240]]) {
+      await setConfig(db, "nudge.repeat_minutes", ok, "test");
+      expect(await getConfig(db, "nudge.repeat_minutes")).toEqual(ok);
+    }
+    for (const bad of [[0], [-5], [1.5]])
+      await expect(
+        setConfig(db, "nudge.repeat_minutes", bad, "test"),
+      ).rejects.toThrow();
   });
 });

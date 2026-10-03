@@ -1,6 +1,7 @@
 /** The controller on a local trace: real step code and SQL on pg-mem, Jev stubbed, no Slack. */
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { setConfig } from "../../_shared/config";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
 import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
@@ -137,12 +138,12 @@ describe("controller", () => {
       .sort();
     expect(nudged).toEqual(
       [
-        `no_owner:${waiting.id}`,
-        `customer_waiting:${(await db.query<{ id: string }>("select id from messages where issue_id = $1", [waiting.id]))[0].id}`,
-        `draft_pending:${(await db.query<{ id: string }>("select id from drafts where issue_id = $1", [waiting.id]))[0].id}`,
-        `no_owner:${thanked.id}`,
-        `no_draft:${thanked.id}`,
-        `no_owner:${held.id}`,
+        `no_owner:${waiting.id}:1`,
+        `customer_waiting:${(await db.query<{ id: string }>("select id from messages where issue_id = $1", [waiting.id]))[0].id}:1`,
+        `draft_pending:${(await db.query<{ id: string }>("select id from drafts where issue_id = $1", [waiting.id]))[0].id}:1`,
+        `no_owner:${thanked.id}:1`,
+        `no_draft:${thanked.id}:1`,
+        `no_owner:${held.id}:1`,
       ].sort(),
     );
     // Every nudge is a reply in its issue's triage thread.
@@ -225,15 +226,15 @@ describe("controller", () => {
     // The copilot drafts after the scan queued no_draft.
     await createDraft(db, { issueId: issue.id, text: "Here is a fix." });
     const out = await step("send").run(scanned.input, c.ctx);
-    expect(out.output!.resolved).toEqual([`no_draft:${issue.id}`]);
+    expect(out.output!.resolved).toEqual([`no_draft:${issue.id}:1`]);
     expect((out.output!.nudged as { key: string }[]).map((n) => n.key)).toEqual(
-      [`no_owner:${issue.id}`],
+      [`no_owner:${issue.id}:1`],
     );
     const recorded = await db.query<{ kind: string }>(
       "select kind from nudges where issue_id = $1",
       [issue.id],
     );
-    expect(recorded.map((r) => r.kind)).toEqual([`no_owner:${issue.id}`]);
+    expect(recorded.map((r) => r.kind)).toEqual([`no_owner:${issue.id}:1`]);
   });
 
   it("a retried send step posts nothing twice", async () => {
@@ -246,6 +247,60 @@ describe("controller", () => {
     expect(out.output!.nudged).toEqual([]);
     expect(out.output!.notSent).toHaveLength(2);
     expect(retry.emitted).toHaveLength(0);
+  });
+
+  it("repeats each held nudge after the gap, without asking Jev again", async () => {
+    const waiting = await seedIssue(db, {
+      title: "still waiting",
+      customerText: "it is still broken",
+      pendingDraft: true,
+    });
+    await backdate(db);
+    const first = await runController("exec-1");
+    const firstKeys = (first.done.output!.nudged as { key: string }[]).map(
+      (n) => n.key,
+    );
+    expect(firstKeys).toHaveLength(3);
+    expect(firstKeys.every((k) => k.endsWith(":1"))).toBe(true);
+    expect(first.asked).toEqual(["it is still broken"]);
+
+    const between = await runController("exec-2");
+    expect(between.scanned.kind).toBe("terminate");
+    expect(between.posts).toHaveLength(0);
+
+    // Test-only: age round 1 past the default 60-minute gap.
+    await db.query(
+      "update nudges set sent_at = now() - interval '61 minutes' where issue_id = $1",
+      [waiting.id],
+    );
+    const second = await runController("exec-3");
+    const secondKeys = (second.done.output!.nudged as { key: string }[])
+      .map((n) => n.key)
+      .sort();
+    expect(secondKeys).toEqual(
+      firstKeys.map((k) => k.replace(/:1$/, ":2")).sort(),
+    );
+    expect(second.asked).toEqual([]);
+    expect(second.posts).toHaveLength(3);
+    for (const p of second.posts) expect(p.threadTs).toBe(waiting.triageRootTs);
+    expect(second.emitted.map((e) => e.type)).toEqual(
+      Array(3).fill("issue.nudged"),
+    );
+    for (const e of second.emitted) expect(e.id).toMatch(/:2$/);
+  });
+
+  it("with nudge.repeat_minutes set to [], nudges once", async () => {
+    const issue = await seedIssue(db, { title: "once" });
+    await setConfig(db, "nudge.repeat_minutes", [], "test");
+    await backdate(db);
+    await runController("exec-1");
+    await db.query(
+      "update nudges set sent_at = now() - interval '100 hours' where issue_id = $1",
+      [issue.id],
+    );
+    const again = await runController("exec-2");
+    expect(again.scanned.kind).toBe("terminate");
+    expect(again.posts).toHaveLength(0);
   });
 
   describe("desks", () => {

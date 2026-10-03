@@ -26,6 +26,8 @@ export const ConfigSchemas = {
   "oncall.slack_id": z.string().min(1),
   /** Superseded by `desks.nudge_minutes`. */
   "nudge.minutes": z.number().int().positive(),
+  /** Controller gaps between repeat nudges: after round n, entry n-1; the last one repeats, `[]` nudges once. */
+  "nudge.repeat_minutes": z.array(z.number().int().positive()),
   /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
   "team.slack_team_ids": z.array(z.string().min(1)),
   /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
@@ -47,6 +49,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "channels.triage",
   "oncall.slack_id",
   "nudge.minutes",
+  "nudge.repeat_minutes",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
