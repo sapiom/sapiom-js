@@ -24,7 +24,8 @@ import {
 import { createClient } from "@sapiom/tools";
 import { z } from "zod/v4";
 
-import { getConfig, getConfigOr } from "../_shared/config";
+import { getConfigOr } from "../_shared/config";
+import { defaultDesk, deskBySlug } from "../_shared/desks";
 import {
   connectPostgres,
   resolveConnectionString,
@@ -377,7 +378,14 @@ async function main() {
       throw new Error(
         "replay posts in the first channel of `channels.customer`; list one in fleet.local.json",
       );
-    const triage = await getConfig(db, "channels.triage");
+    const desk = customer.desk
+      ? await deskBySlug(db, customer.desk)
+      : await defaultDesk(db);
+    if (!desk)
+      throw new Error(
+        `no desk for customer channel ${customer.channelId}; define "desks" in fleet.local.json`,
+      );
+    const triage = desk.triageChannel;
     const [latest] = await client.get<ReceiptRow[]>("/receipts?limit=1");
     const since = new Date();
     const watcher = new Watcher(

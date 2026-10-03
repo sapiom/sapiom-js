@@ -5,11 +5,13 @@
  * Steps, each check-then-create, so a second run reports no changes and a rerun repairs a
  * partial install:
  * 1. Preflight the Slack and Linear connectors the selected projects need; stop if one is missing.
- *    With urgent-pager selected, also check that `oncall.slack_id` resolves.
- * 2. Database: resolve or create `sylon`, apply migrations, seed missing config keys and accounts.
- *    Config comes from fleet.local.json (your workspace's ids, gitignored) merged over fleet.json,
- *    whose values are examples; setup stops if any workspace key is still an example.
- *    `--overwrite` resets every config key to those values.
+ *    Every desk's triage channel is probed. With urgent-pager selected, also check that each
+ *    desk's `oncallSlackId` resolves.
+ * 2. Database: resolve or create `sylon`, apply migrations, seed missing desks, config keys and
+ *    accounts. Desks and config come from fleet.local.json (your workspace's ids, gitignored)
+ *    over fleet.json, whose values are examples; setup stops if any workspace value is still an
+ *    example. A local `desks` list replaces fleet.json's whole. `--overwrite` resets every desk
+ *    and config key to those values.
  * 3. Seed starter policy articles into an empty knowledge base (the Console edits it from there).
  * 4. Link and deploy each selected project (agent-core `link` / `deploy`). A project whose bundle
  *    hash and active build match `.sapiom/fleet-state.json` is left alone.
@@ -46,7 +48,14 @@ import {
 } from "./_shared/db";
 import { seedStarters } from "./_shared/kb";
 import { listTools } from "./_shared/linear";
-import { exampleKeys, mergeConfig, seedFleet } from "./_shared/seed";
+import {
+  assertDistinctTriageChannels,
+  exampleKeys,
+  mergeConfig,
+  mergeDesks,
+  seedFleet,
+  type FleetDesk,
+} from "./_shared/seed";
 import { SlackMethodError, replies, userInfo } from "./_shared/slack";
 import { WATCHDOG_SECRET, ensureWatchdogKey } from "./scripts/secrets";
 import {
@@ -70,24 +79,28 @@ const LOCAL_FILE = path.join(ROOT, "fleet.local.json");
 const STATE_FILE = path.join(ROOT, ".sapiom", "fleet-state.json");
 const CONNECTORS_PAGE = "https://app.sapiom.ai/connectors";
 
-/** Your workspace's ids: fleet.local.json `{ "config": { ... } }` over fleet.json's examples. */
+/**
+ * Your workspace's ids: fleet.local.json `{ "desks": [...], "config": { ... } }` over fleet.json's
+ * examples.
+ */
 function loadConfig() {
   const local = existsSync(LOCAL_FILE)
-    ? (
-        JSON.parse(readFileSync(LOCAL_FILE, "utf8")) as {
-          config?: Record<string, unknown>;
-        }
-      ).config
+    ? (JSON.parse(readFileSync(LOCAL_FILE, "utf8")) as {
+        desks?: FleetDesk[];
+        config?: Record<string, unknown>;
+      })
     : undefined;
-  const values = mergeConfig(local);
-  const unset = exampleKeys(values);
+  const values = mergeConfig(local?.config);
+  const desks = mergeDesks(local?.desks, local?.config);
+  assertDistinctTriageChannels(desks);
+  const unset = exampleKeys(values, desks);
   if (unset.length > 0) {
     throw new Error(
-      `these config keys still hold fleet.json's example values: ${unset.join(", ")}. ` +
-        `Put your workspace's ids in fleet.local.json (gitignored), as { "config": { "<key>": <value> } }.`,
+      `these values still hold fleet.json's examples: ${unset.join(", ")}. ` +
+        `Put your workspace's ids in fleet.local.json (gitignored), as { "desks": [{ "slug": ..., "triageChannel": ... }], "config": { "<key>": <value> } }.`,
     );
   }
-  return values;
+  return { values, desks };
 }
 
 function loadState(): FleetState {
@@ -119,7 +132,7 @@ const PROBE_TS = "1000000000.000001";
 /**
  * Slack is connected when Slack itself answers a read of the triage channel: `thread_not_found`
  * for the probe thread proves the connector reaches Slack and the bot can read the channel. It
- * does not depend on `oncall.slack_id`, which only the optional urgent-pager uses.
+ * does not depend on the on-call user, which only the optional urgent-pager uses.
  */
 async function probeSlack(triage: string) {
   try {
@@ -133,14 +146,14 @@ async function probeSlack(triage: string) {
 
 async function preflight(
   selected: FleetProject[],
-  values: ReturnType<typeof loadConfig>,
+  desks: readonly FleetDesk[],
 ) {
   console.log("connectors");
   const missing: string[] = [];
   for (const c of connectorsFor(selected)) {
     try {
       if (c.provider === "slack")
-        await probeSlack(values["channels.triage"] as string);
+        for (const d of desks) await probeSlack(d.triageChannel);
       else if (c.provider === "linear") await listTools(scriptCtx);
       else throw new Error(`setup has no preflight for '${c.provider}'`);
       say(`${c.provider}: connected`);
@@ -157,19 +170,22 @@ async function preflight(
   if (missing.length)
     throw new Error(`missing connectors:\n- ${missing.join("\n- ")}`);
   if (selected.some((p) => p.key === "urgent-pager")) {
-    const oncall = values["oncall.slack_id"] as string;
-    await userInfo(scriptCtx, oncall).catch((err: unknown) => {
-      throw new Error(
-        `urgent-pager pages oncall.slack_id '${oncall}', which Slack cannot resolve: ` +
-          `${err instanceof Error ? err.message : String(err)}. Fix it in fleet.local.json, or leave urgent-pager out.`,
-      );
-    });
-    say(`oncall.slack_id: resolves`);
+    for (const d of desks) {
+      if (!d.oncallSlackId) continue;
+      const oncall = d.oncallSlackId;
+      await userInfo(scriptCtx, oncall).catch((err: unknown) => {
+        throw new Error(
+          `urgent-pager pages desk '${d.slug}' oncallSlackId '${oncall}', which Slack cannot resolve: ` +
+            `${err instanceof Error ? err.message : String(err)}. Fix it in fleet.local.json, or leave urgent-pager out.`,
+        );
+      });
+      say(`desk ${d.slug} oncallSlackId: resolves`);
+    }
   }
 }
 
 async function database(
-  values: ReturnType<typeof loadConfig>,
+  { values, desks }: ReturnType<typeof loadConfig>,
   overwrite: boolean,
 ) {
   console.log("database");
@@ -193,10 +209,13 @@ async function database(
     const accountsBefore = await db.query<{ n: string }>(
       "select count(*)::text as n from accounts",
     );
-    const { set, kept, removed } = await seedFleet(db, "setup", {
-      overwrite,
-      values,
-    });
+    const { set, kept, removed, desksSet, desksKept } = await seedFleet(
+      db,
+      "setup",
+      { overwrite, values, desks },
+    );
+    if (desksSet.length) changed(`desks set: ${desksSet.join(", ")}`);
+    if (desksKept.length) say(`desks kept: ${desksKept.join(", ")}`);
     if (set.length) changed(`config set: ${set.join(", ")}`);
     if (removed.length) changed(`config removed: ${removed.join(", ")}`);
     if (kept.length) say(`config kept: ${kept.join(", ")}`);
@@ -361,14 +380,14 @@ async function secrets(
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const selected = selectProjects(args);
-  const values = loadConfig();
+  const config = loadConfig();
   const apiKey = process.env.SAPIOM_API_KEY;
   if (!apiKey)
     throw new Error("set SAPIOM_API_KEY to an org key for the target org");
   console.log(`sylon setup: ${selected.map((p) => p.key).join(", ")}`);
 
-  await preflight(selected, values);
-  await database(values, args.overwrite);
+  await preflight(selected, config.desks);
+  await database(config, args.overwrite);
   const client = createGatewayClient({ apiKey });
   const state = loadState();
   try {

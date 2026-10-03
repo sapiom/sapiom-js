@@ -20,10 +20,12 @@ import {
   KB_TITLE_MAX,
   latencies,
   parseKbInput,
+  pickDesk,
   planSwitch,
   receiptView,
   redact,
   replayPlan,
+  scopeReceipts,
   secondsBetween,
   slackTsToMs,
   triggerStates,
@@ -290,11 +292,11 @@ describe("linear links", () => {
     expect(
       linearIssueUrl(
         "https://linear.app/acme/project/sylon-issues-9fa8692f54ff",
-        "SAP-3723",
+        "ENG-123",
       ),
-    ).toBe("https://linear.app/acme/issue/SAP-3723");
-    expect(linearIssueUrl(null, "SAP-1")).toBeNull();
-    expect(linearIssueUrl("https://example.com/x", "SAP-1")).toBeNull();
+    ).toBe("https://linear.app/acme/issue/ENG-123");
+    expect(linearIssueUrl(null, "ENG-1")).toBeNull();
+    expect(linearIssueUrl("https://example.com/x", "ENG-1")).toBeNull();
   });
 });
 
@@ -524,5 +526,80 @@ describe("draftTimes", () => {
 
   it("returns nulls with no drafts", () => {
     expect(draftTimes([])).toEqual({ draftCreatedAt: null, draftCardTs: null });
+  });
+});
+
+describe("pickDesk", () => {
+  const desks = [
+    { slug: "test", isDefault: false },
+    { slug: "support", isDefault: true },
+  ];
+
+  it("takes the named desk, else the default desk", () => {
+    expect(pickDesk(desks, "test")).toEqual({ ok: true, desk: desks[0] });
+    expect(pickDesk(desks, null)).toEqual({ ok: true, desk: desks[1] });
+    expect(pickDesk([desks[0]!], null)).toEqual({ ok: true, desk: desks[0] });
+  });
+
+  it("refuses an unknown slug rather than showing another desk, and an empty list", () => {
+    expect(pickDesk(desks, "nope")).toEqual({
+      ok: false,
+      status: 404,
+      reason: "no desk 'nope'",
+    });
+    expect(pickDesk([], null)).toMatchObject({ ok: false, status: 409 });
+  });
+});
+
+describe("scopeReceipts", () => {
+  const receipts = [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }];
+  const owners = new Map<string, string | null>([
+    ["1", "desk-a"],
+    ["2", "desk-b"],
+    ["3", null],
+  ]);
+
+  it("keeps the desk's own receipts and the ones no desk can be named for", () => {
+    expect(scopeReceipts(receipts, owners, "desk-a").map((r) => r.id)).toEqual([
+      "1",
+      "3",
+      "4",
+    ]);
+    expect(scopeReceipts(receipts, owners, "desk-b").map((r) => r.id)).toEqual([
+      "2",
+      "3",
+      "4",
+    ]);
+  });
+});
+
+describe("parseKbInput desk", () => {
+  const ok = { kind: "policy", title: "T", body: "B" };
+  const id = "a1b2c3d4-0000-4000-8000-0000000000a1";
+
+  it("accepts a desk id or null (all desks), and rejects anything else", () => {
+    expect(parseKbInput({ ...ok, deskId: id }, "create")).toMatchObject({
+      ok: true,
+      value: { deskId: id },
+    });
+    expect(parseKbInput({ ...ok, deskId: null }, "create")).toMatchObject({
+      ok: true,
+      value: { deskId: null },
+    });
+    expect(parseKbInput({ ...ok }, "create")).toMatchObject({
+      ok: true,
+      value: { kind: "policy" },
+    });
+    for (const deskId of ["test", 3, ""])
+      expect(parseKbInput({ ...ok, deskId }, "create")).toMatchObject({
+        ok: false,
+      });
+  });
+
+  it("an update can move an article to all desks", () => {
+    expect(parseKbInput({ deskId: null }, "update")).toEqual({
+      ok: true,
+      value: { deskId: null },
+    });
   });
 });

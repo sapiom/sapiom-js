@@ -22,6 +22,8 @@ export interface IssueRow {
   status: IssueStatus;
   ownerSlackId: string | null;
   triageRootTs: string | null;
+  /** The issue's desk, which sets its threshold in `RuleInput.deskMinutes`. */
+  deskId?: string | null;
   createdAt: Date;
 }
 
@@ -74,8 +76,10 @@ export interface RuleInput {
   messages: MessageRow[];
   sent: SentRow[];
   now: Date;
-  /** `nudge.minutes`: how long a condition must hold before it is nudged. */
+  /** How long a condition must hold before it is nudged, for an issue whose desk is not in `deskMinutes`. */
   minutes: number;
+  /** Each desk's `nudge_minutes`, by desk id. */
+  deskMinutes?: Readonly<Record<string, number>>;
   /**
    * Whether Jev verdicts count (default true). With the check off, a `skip:` record no longer
    * silences `customer_waiting`; keys of nudges actually sent always do.
@@ -114,12 +118,10 @@ export const byThreadOrder = (a: MessageRow, b: MessageRow): number =>
 
 /**
  * Every nudge due at `now` and not yet sent. A condition is due once it has held for at least
- * `minutes`. Closed issues and issues without a triage card (nowhere to post) get none; on-hold
+ * its desk's `nudge_minutes`. Closed issues and issues without a triage card (nowhere to post) get none; on-hold
  * issues get no `draft_pending` or `customer_waiting`, since engineering owns the next move.
  */
 export function dueNudges(input: RuleInput): Nudge[] {
-  const thresholdMs = input.minutes * 60_000;
-  const old = (t: Date) => input.now.getTime() - t.getTime() >= thresholdMs;
   const drafts = groupBy(input.drafts);
   const messages = groupBy(input.messages);
   const sent = new Set(input.sent.map((s) => `${s.issueId} ${s.kind}`));
@@ -128,6 +130,10 @@ export function dueNudges(input: RuleInput): Nudge[] {
 
   for (const issue of input.issues) {
     if (issue.status === "closed" || !issue.triageRootTs) continue;
+    const thresholdMs =
+      ((issue.deskId ? input.deskMinutes?.[issue.deskId] : undefined) ??
+        input.minutes) * 60_000;
+    const old = (t: Date) => input.now.getTime() - t.getTime() >= thresholdMs;
     const add = (kind: NudgeKind, refId: string) => {
       const key = nudgeKey(kind, refId);
       if (sent.has(`${issue.id} ${key}`)) return;

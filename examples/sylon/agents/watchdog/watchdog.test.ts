@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { fixture } from "../../fixtures/index";
 import { setConfig } from "../../_shared/config";
 import { memoryDb, type Db } from "../../_shared/db";
+import { upsertDesk } from "../../_shared/desks";
 import { fakeCtx } from "../../_shared/test-ctx";
 import { agent, requireKey, tick, type Deps } from "./index";
 import {
@@ -69,7 +70,7 @@ describe("actionItems", () => {
       "copilot: no structured draft in the model output",
     );
     expect(has(items, /Reply to the customer by hand/)).toBe(true);
-    expect(has(items, /SAP-3726/)).toBe(true);
+    expect(has(items, /copilot step logs/)).toBe(true);
   });
 
   it("points a missing config key at setup", () => {
@@ -263,6 +264,18 @@ describe("tick", () => {
     const r = run(api([exec("11")]).fetch);
     await r.done;
     expect(posts(r.logs)[0].channel).toBe("C0ALERTS01");
+  });
+
+  it("prefers the default desk's triage channel to the legacy channels.triage", async () => {
+    await upsertDesk(db, {
+      slug: "support",
+      name: "Support",
+      triageChannel: "C0DESKTRI01",
+      isDefault: true,
+    });
+    const r = run(api([exec("11")]).fetch);
+    await r.done;
+    expect(posts(r.logs)[0].channel).toBe("C0DESKTRI01");
   });
 
   it("looks back one hour first, then from the stored cursor", async () => {

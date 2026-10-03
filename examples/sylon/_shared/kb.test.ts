@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Db } from "./db";
 import { memoryDb } from "./db";
+import { upsertDesk } from "./desks";
 import {
   STARTER_POLICIES,
   articleTitles,
@@ -87,7 +88,7 @@ describe("kb articles", () => {
       "t",
     );
     await updateArticle(db, a.id, { enabled: false }, "t");
-    expect(await listEnabled(db)).toHaveLength(0);
+    expect(await listEnabled(db, null)).toHaveLength(0);
     expect(await listArticles(db)).toHaveLength(1);
   });
 
@@ -129,5 +130,52 @@ describe("kb articles", () => {
     expect((await listArticles(db)).every((a) => a.updatedBy === "setup")).toBe(
       true,
     );
+  });
+});
+
+describe("kb articles per desk", () => {
+  it("scopes reads to the desk's articles plus the all-desks ones", async () => {
+    const mk = async (slug: string) =>
+      (await upsertDesk(db, { slug, name: slug, triageChannel: `C0${slug}` }))
+        .desk;
+    const test = await mk("test");
+    const support = await mk("support");
+    const article = (title: string, deskId: string | null) =>
+      createArticle(db, { kind: "policy", title, body: "b", deskId }, "t");
+    await article("everyone", null);
+    await article("test only", test.id);
+    await article("support only", support.id);
+
+    const titles = async (deskId: string | null) =>
+      (await listEnabled(db, deskId)).map((a) => a.title).sort();
+    expect(await titles(test.id)).toEqual(["everyone", "test only"]);
+    expect(await titles(support.id)).toEqual(["everyone", "support only"]);
+    expect(await titles(null)).toEqual(["everyone"]);
+    expect(
+      (await listArticles(db, { deskId: support.id }))
+        .map((a) => a.title)
+        .sort(),
+    ).toEqual(["everyone", "support only"]);
+    expect(await listArticles(db)).toHaveLength(3);
+  });
+
+  it("moves an article between a desk and all desks on update", async () => {
+    const { desk } = await upsertDesk(db, {
+      slug: "test",
+      name: "Test",
+      triageChannel: "C0T",
+    });
+    const a = await createArticle(
+      db,
+      { kind: "answer", title: "A", body: "b" },
+      "t",
+    );
+    expect(a.deskId).toBeNull();
+    expect(
+      (await updateArticle(db, a.id, { deskId: desk.id }, "t"))?.deskId,
+    ).toBe(desk.id);
+    expect(
+      (await updateArticle(db, a.id, { deskId: null }, "t"))?.deskId,
+    ).toBeNull();
   });
 });

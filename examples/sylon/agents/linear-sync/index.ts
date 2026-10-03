@@ -30,7 +30,8 @@ import {
   mrkdwnLink,
   escapeMrkdwn,
 } from "../../_shared/blocks";
-import { getConfig, getConfigOr } from "../../_shared/config";
+import { getConfigOr } from "../../_shared/config";
+import { listDesks } from "../../_shared/desks";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit, type EmitCtx } from "../../_shared/emit";
 import {
@@ -226,16 +227,28 @@ async function redrawCard(
 
 export async function sync(ctx: Ctx, db: Db, limit: number = READ_CAP) {
   await recordRun(db, ctx, AGENT);
-  const triageChannel = await getConfig(db, "channels.triage");
+  // Each issue posts in its own desk's triage channel; an issue with no desk uses the default's.
+  const desks = await listDesks(db);
+  const channelFor = (issue: Issue): string | null =>
+    (desks.find((d) => d.id === issue.deskId) ?? desks.find((d) => d.isDefault))
+      ?.triageChannel ?? null;
 
   // Cards left stale by a failed redraw on an earlier tick; these issues are no longer On Hold.
-  for (const issue of await cardDirty(db, READ_CAP))
-    await redrawCard(ctx, db, triageChannel, issue).catch((err) =>
+  for (const issue of await cardDirty(db, READ_CAP)) {
+    const channel = channelFor(issue);
+    if (!channel) {
+      ctx.logger.warn("no desk for issue; card not redrawn", {
+        issueId: issue.id,
+      });
+      continue;
+    }
+    await redrawCard(ctx, db, channel, issue).catch((err) =>
       ctx.logger.warn("card redraw failed", {
         issueId: issue.id,
         err: String(err),
       }),
     );
+  }
 
   const candidates = await onHoldLinked(db, Math.min(limit, READ_CAP));
 
@@ -243,6 +256,11 @@ export async function sync(ctx: Ctx, db: Db, limit: number = READ_CAP) {
   const failed: { issueId: string; error: string }[] = [];
   for (const issue of candidates) {
     const identifier = issue.linearIdentifier!;
+    const triageChannel = channelFor(issue);
+    if (!triageChannel) {
+      ctx.logger.warn("no desk for issue; not checked", { issueId: issue.id });
+      continue;
+    }
     try {
       const linear = await getLinearIssue(
         ctx,

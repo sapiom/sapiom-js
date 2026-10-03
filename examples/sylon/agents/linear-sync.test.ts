@@ -6,6 +6,7 @@ import { connectors } from "@sapiom/tools";
 import { fixture } from "../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../_shared/db";
 import { setConfig } from "../_shared/config";
+import { upsertDesk } from "../_shared/desks";
 import {
   accountByChannel,
   getIssue,
@@ -408,6 +409,33 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     expect(posts()[0].args.channel).toBe("C0TRIAGE001");
     expect(posts()[0].args.threadTs).toBeUndefined();
     expect((await getIssue(db, id)).status).toBe("on_you");
+  });
+
+  it("posts and redraws each issue in its own desk's triage channel", async () => {
+    const onSupport = await newOnHold(1);
+    const test = (
+      await upsertDesk(db, {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C0TESTTRI01",
+      })
+    ).desk;
+    const onTest = await newOnHold(2);
+    await db.query("update issues set desk_id = $1 where id = $2", [
+      test.id,
+      onTest,
+    ]);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    states["SAP-2"] = { status: "Done", statusType: "completed" };
+    await sync(live().ctx as never, db);
+    const channelOf = (ts: string) =>
+      [...posts(), ...calls.filter((c) => c.method === "chat.update")]
+        .filter((c) => c.args.threadTs === ts || c.args.ts === ts)
+        .map((c) => c.args.channel);
+    expect(channelOf("1790889356.001")).toEqual(["C0TRIAGE001", "C0TRIAGE001"]);
+    expect(channelOf("1790889356.002")).toEqual(["C0TESTTRI01", "C0TESTTRI01"]);
+    expect((await getIssue(db, onSupport)).status).toBe("on_you");
+    expect((await getIssue(db, onTest)).status).toBe("on_you");
   });
 
   it("keys a repeat escalation of the same issue and Linear identifier apart", async () => {

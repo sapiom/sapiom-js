@@ -7,14 +7,24 @@ import { z } from "zod/v4";
 import type { Db } from "./db";
 
 export const ConfigSchemas = {
+  /** Superseded by the desk's own value (`desks.linear_team_id`); read only when the desk has none. */
   "linear.team_id": z.string().min(1),
+  /** Superseded by `desks.linear_project_id`. */
   "linear.project_id": z.string().min(1),
+  /** Superseded by `desks.triage_channel`; the watchdog still falls back to it for alerts. */
   "channels.triage": z.string().min(1),
   "alerts.channel": z.string().min(1),
+  /** `desk` is a desk slug; unlisted channels, and listed ones without it, get the default desk. */
   "channels.customer": z.array(
-    z.object({ channelId: z.string().min(1), accountName: z.string().min(1) }),
+    z.object({
+      channelId: z.string().min(1),
+      accountName: z.string().min(1),
+      desk: z.string().min(1).optional(),
+    }),
   ),
+  /** Superseded by `desks.oncall_slack_id`. */
   "oncall.slack_id": z.string().min(1),
+  /** Superseded by `desks.nudge_minutes`. */
   "nudge.minutes": z.number().int().positive(),
   /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
   "team.slack_team_ids": z.array(z.string().min(1)),
@@ -31,6 +41,12 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "team.slack_team_ids",
   "channels.customer",
   "alerts.channel",
+  // Desk-owned now; a database installed before desks keeps them as fallbacks.
+  "linear.team_id",
+  "linear.project_id",
+  "channels.triage",
+  "oncall.slack_id",
+  "nudge.minutes",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
@@ -114,7 +130,7 @@ export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
 export async function customerChannel(
   db: Db,
   channelId: string,
-): Promise<{ channelId: string; accountName: string } | null> {
+): Promise<{ channelId: string; accountName: string; desk?: string } | null> {
   const channels = await getConfigOr(db, "channels.customer", []);
   return channels.find((c) => c.channelId === channelId) ?? null;
 }

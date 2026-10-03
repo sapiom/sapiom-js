@@ -23,7 +23,8 @@ import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
 import { issueCard, issueCardText } from "../../_shared/blocks";
-import { getConfig } from "../../_shared/config";
+import { MissingConfigError } from "../../_shared/config";
+import { deskForIssue, linearTarget } from "../../_shared/desks";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit, type EmitCtx } from "../../_shared/emit";
 import { Events } from "../../_shared/events";
@@ -260,9 +261,12 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     ? await seedLocalIssue(db, input)
     : input.issueId;
   await recordRun(db, ctx, AGENT, issueId);
-  const teamId = await getConfig(db, "linear.team_id");
-  const projectId = await getConfig(db, "linear.project_id");
-  const triageChannel = await getConfig(db, "channels.triage");
+  const desk = await deskForIssue(db, await getIssue(db, issueId));
+  const target = await linearTarget(db, desk);
+  if (!target)
+    throw new MissingConfigError(`desks.${desk.slug}.linearProjectId`);
+  const { teamId, projectId } = target;
+  const triageChannel = desk.triageChannel;
   const requester = await userInfo(ctx, input.requestedBy);
 
   // 1. Link and reply, under the row lock: a concurrent run waits here, then finds the link and

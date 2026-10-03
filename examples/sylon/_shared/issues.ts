@@ -7,6 +7,7 @@
  * since its `on conflict do nothing returning` wrongly returns the existing row.
  */
 import type { Db, Row } from "./db";
+import { defaultDesk } from "./desks";
 import type { SlackRef } from "./events";
 
 export type IssueStatus =
@@ -36,6 +37,8 @@ export interface Account {
   id: string;
   name: string;
   slackChannelId: string;
+  /** 080_desks: the desk this account's issues belong to. */
+  deskId: string | null;
   createdAt: Date;
 }
 
@@ -43,6 +46,8 @@ export interface Issue {
   id: string;
   number: number;
   accountId: string;
+  /** 080_desks: set from the account when the issue opens. */
+  deskId: string | null;
   source: IssueSource;
   status: IssueStatus;
   category: string | null;
@@ -135,6 +140,7 @@ const toAccount = (r: Row): Account => ({
   id: r.id as string,
   name: r.name as string,
   slackChannelId: r.slack_channel_id as string,
+  deskId: (r.desk_id as string | null) ?? null,
   createdAt: r.created_at as Date,
 });
 
@@ -142,6 +148,7 @@ const toIssue = (r: Row): Issue => ({
   id: r.id as string,
   number: Number(r.number),
   accountId: r.account_id as string,
+  deskId: (r.desk_id as string | null) ?? null,
   source: r.source as IssueSource,
   status: r.status as IssueStatus,
   category: (r.category as string | null) ?? null,
@@ -205,18 +212,20 @@ function one<T>(rows: T[], what: string): T {
 // --- accounts --------------------------------------------------------------------------------
 
 /**
- * Create the account for a channel if there is none; never renames. Setup uses this, so a rerun
- * keeps names an onboarding flow has changed. Safe under concurrent first sightings.
+ * Create the account for a channel if there is none; never renames or moves desks. Setup uses
+ * this, so a rerun keeps what an onboarding flow has changed. A new account without a `deskId`
+ * joins the default desk. Safe under concurrent first sightings.
  */
 export async function ensureAccount(
   db: Db,
-  input: { name: string; slackChannelId: string },
+  input: { name: string; slackChannelId: string; deskId?: string },
 ): Promise<Account> {
   const found = await accountByChannel(db, input.slackChannelId);
   if (found) return found;
+  const deskId = input.deskId ?? (await defaultDesk(db))?.id ?? null;
   await db.query(
-    "insert into accounts (name, slack_channel_id) values ($1, $2) on conflict (slack_channel_id) do nothing",
-    [input.name, input.slackChannelId],
+    "insert into accounts (name, slack_channel_id, desk_id) values ($1, $2, $3) on conflict (slack_channel_id) do nothing",
+    [input.name, input.slackChannelId, deskId],
   );
   return one(
     [await accountByChannel(db, input.slackChannelId)].filter(
@@ -229,7 +238,7 @@ export async function ensureAccount(
 /** Onboarding: create the account, or rename it when it exists. */
 export async function upsertAccount(
   db: Db,
-  input: { name: string; slackChannelId: string },
+  input: { name: string; slackChannelId: string; deskId?: string },
 ): Promise<Account> {
   const account = await ensureAccount(db, input);
   if (account.name === input.name) return account;
@@ -264,6 +273,8 @@ export async function getAccount(db: Db, id: string): Promise<Account> {
 
 export interface OpenIssueInput {
   accountId: string;
+  /** Defaults to the account's desk. */
+  deskId?: string | null;
   source: IssueSource;
   category: string;
   priority: string;
@@ -274,9 +285,16 @@ export interface OpenIssueInput {
 }
 
 export async function openIssue(db: Db, input: OpenIssueInput): Promise<Issue> {
+  // Accounts made before desks may have none; the default desk then owns the issue.
+  const deskId =
+    input.deskId !== undefined
+      ? input.deskId
+      : ((await getAccount(db, input.accountId)).deskId ??
+        (await defaultDesk(db))?.id ??
+        null);
   const rows = await db.query(
-    `insert into issues (account_id, source, status, category, priority, title, customer_channel, customer_root_ts, triage_root_ts)
-     values ($1, $2, 'new', $3, $4, $5, $6, $7, $8) returning *`,
+    `insert into issues (account_id, desk_id, source, status, category, priority, title, customer_channel, customer_root_ts, triage_root_ts)
+     values ($1, $9, $2, 'new', $3, $4, $5, $6, $7, $8) returning *`,
     [
       input.accountId,
       input.source,
@@ -286,6 +304,7 @@ export async function openIssue(db: Db, input: OpenIssueInput): Promise<Issue> {
       input.customer.channel,
       input.customer.threadTs ?? input.customer.ts,
       input.triageRootTs ?? null,
+      deskId,
     ],
   );
   return toIssue(one(rows, "issue"));

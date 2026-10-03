@@ -41,6 +41,8 @@ describe("db", () => {
       { id: "062_escalation_generation" },
       { id: "063_watchdog_alerted" },
       { id: "070_knowledge" },
+      { id: "080_desks" },
+      { id: "081_desk_triage_unique" },
     ]);
   });
 

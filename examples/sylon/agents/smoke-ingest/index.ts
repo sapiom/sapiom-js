@@ -13,7 +13,8 @@ import {
   issueCardText,
   slackToPlain,
 } from "../../_shared/blocks";
-import { customerChannel, getConfig } from "../../_shared/config";
+import { customerChannel } from "../../_shared/config";
+import { defaultDesk, deskBySlug } from "../../_shared/desks";
 import { withDb } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import { SlackMessageCreated } from "../../_shared/events";
@@ -62,13 +63,18 @@ const ingest = defineStep({
     const e = input.event;
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
-      const triageChannel = await getConfig(db, "channels.triage");
       const customer = await customerChannel(db, e.channel);
+      const desk = customer?.desk
+        ? await deskBySlug(db, customer.desk)
+        : await defaultDesk(db);
+      if (!desk) return terminate({ skipped: `no desk for ${e.channel}` });
+      const triageChannel = desk.triageChannel;
       const account =
         (await accountByChannel(db, e.channel)) ??
         (await upsertAccount(db, {
           name: customer?.accountName ?? e.channel,
           slackChannelId: e.channel,
+          deskId: desk.id,
         }));
 
       // A step re-runs from the top on retry: the message row (keyed on the Slack event id) says

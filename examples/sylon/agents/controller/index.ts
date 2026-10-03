@@ -16,8 +16,9 @@ import {
 import { z } from "zod/v4";
 
 import { nudge, slackToPlain } from "../../_shared/blocks";
-import { getConfig } from "../../_shared/config";
+import { getConfigOr } from "../../_shared/config";
 import { withDb, type Db, type Row } from "../../_shared/db";
+import { listDesks } from "../../_shared/desks";
 import { emit } from "../../_shared/emit";
 import {
   getIssue,
@@ -69,6 +70,16 @@ interface Snapshot {
   now: Date;
 }
 
+/** Thresholds for `dueNudges`: each desk's own, and the pre-desk `nudge.minutes` for an issue with none. */
+async function thresholds(db: Db) {
+  return {
+    minutes: await getConfigOr(db, "nudge.minutes", 30),
+    deskMinutes: Object.fromEntries(
+      (await listDesks(db)).map((d) => [d.id, d.nudgeMinutes]),
+    ),
+  };
+}
+
 /**
  * Everything the rules need for the open issues (or for one, inside `send`), plus the database's
  * clock. With `issueId`, the issue row is locked, so a status change waits for the nudge.
@@ -78,7 +89,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
   const params = issueId ? [issueId] : [];
   const [issues, drafts, messages, sent, clock] = [
     await db.query(
-      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.created_at from issues i where ${where}${issueId ? " for update" : ""}`,
+      `select i.id, i.status, i.owner_slack_id, i.triage_root_ts, i.desk_id, i.created_at from issues i where ${where}${issueId ? " for update" : ""}`,
       params,
     ),
     await db.query(
@@ -101,6 +112,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
       status: r.status as IssueStatus,
       ownerSlackId: (r.owner_slack_id as string | null) ?? null,
       triageRootTs: (r.triage_root_ts as string | null) ?? null,
+      deskId: (r.desk_id as string | null) ?? null,
       createdAt: new Date(r.created_at as Date),
     })),
     drafts: drafts.map((r: Row) => ({
@@ -169,9 +181,12 @@ const scan = defineStep({
     const jevCheck = input.jevCheck ?? true;
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
-      const minutes = await getConfig(db, "nudge.minutes");
       const snap = await snapshot(db);
-      const candidates = dueNudges({ ...snap, minutes, jevCheck });
+      const candidates = dueNudges({
+        ...snap,
+        ...(await thresholds(db)),
+        jevCheck,
+      });
 
       const nudges: Nudge[] = [];
       const skipped: { issueId: string; key: string; expectsReply: number }[] =
@@ -234,8 +249,9 @@ const send = defineStep({
   }),
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
-      const triage = await getConfig(db, "channels.triage");
-      const minutes = await getConfig(db, "nudge.minutes");
+      const limits = await thresholds(db);
+      const desks = await listDesks(db);
+      const fallbackDesk = desks.find((d) => d.isDefault);
       const nudged: { issueId: string; key: string; ts: string }[] = [];
       const notSent: string[] = [];
       const resolved: string[] = [];
@@ -248,11 +264,14 @@ const send = defineStep({
           const stillDue = dueNudges({
             ...fresh,
             sent: [],
-            minutes,
+            ...limits,
             jevCheck: false,
           }).some((d) => d.key === n.key);
           const issue = await getIssue(tx, n.issueId);
           if (!stillDue || !issue.triageRootTs) return "resolved" as const;
+          const desk = desks.find((d) => d.id === issue.deskId) ?? fallbackDesk;
+          if (!desk) return "resolved" as const;
+          const triage = desk.triageChannel;
           if (!(await recordNudge(tx, n.issueId, n.key))) return null;
           const card = await post(ctx, {
             channel: triage,

@@ -18,12 +18,14 @@ const account: Account = {
   id: "acc",
   name: "Acme <Corp>",
   slackChannelId: "C1",
+  deskId: null,
   createdAt: now,
 };
 const issue: Issue = {
   id: "iss-1",
   number: 7,
   accountId: "acc",
+  deskId: null,
   source: "slack",
   status: "new",
   category: "bug",

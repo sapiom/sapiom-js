@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { localFleetDb } from "./db";
+import { upsertDesk } from "./desks";
 import {
   accountByChannel,
+  ensureAccount,
   getIssue,
   openIssue,
   setStatus,
@@ -73,5 +75,53 @@ describe("resetBoard", () => {
     });
     expect(out.map((o) => o.card)).toEqual(["dry run", "dry run"]);
     expect((await getIssue(db, carded.id)).status).toBe("new");
+  });
+
+  it("resets only the given desk, redrawing in that desk's triage channel", async () => {
+    const { db, carded, bare } = await seeded();
+    const other = (
+      await upsertDesk(db, {
+        slug: "other",
+        name: "Other",
+        triageChannel: "C0OTHER",
+      })
+    ).desk;
+    const account = await ensureAccount(db, {
+      name: "Other co",
+      slackChannelId: "C0OTHERCUST",
+      deskId: other.id,
+    });
+    const theirs = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "normal",
+      title: "other desk",
+      customer: { channel: "C0OTHERCUST", ts: "1790000005.000100" },
+    });
+    await setTriageRoot(db, theirs.id, "1790000006.000100");
+
+    const updates: Record<string, unknown>[] = [];
+    const { ctx } = fakeCtx();
+    (ctx as { sapiom: unknown }).sapiom = {
+      connectors: {
+        slack: {
+          update: async (args: Record<string, unknown>) => {
+            updates.push(args);
+            return { ok: true };
+          },
+        },
+      },
+    };
+    const out = await resetBoard(db, ctx, { deskId: other.id });
+    expect(out.map((o) => o.issueId)).toEqual([theirs.id]);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      channel: "C0OTHER",
+      ts: "1790000006.000100",
+    });
+    expect((await getIssue(db, theirs.id)).status).toBe("closed");
+    expect((await getIssue(db, carded.id)).status).toBe("new");
+    expect((await getIssue(db, bare.id)).status).toBe("on_customer");
   });
 });

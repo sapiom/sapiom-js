@@ -19,7 +19,13 @@ import {
   replaceActions,
   workingCard,
 } from "../../_shared/blocks";
-import { customerChannel, getConfig, getConfigOr } from "../../_shared/config";
+import { customerChannel, getConfigOr } from "../../_shared/config";
+import {
+  defaultDesk,
+  deskBySlug,
+  deskByTriageChannel,
+  deskForIssue,
+} from "../../_shared/desks";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import {
@@ -256,8 +262,7 @@ const guard = defineStep({
       // an outsider posting in any of them is a customer. The connector has no conversations.info, so
       // we cannot ask Slack whether a channel is shared; the poster's workspace decides instead.
       const route = await withDb(ctx, async (db) => {
-        if ((await getConfig(db, "channels.triage")) === e.channel)
-          return "triage";
+        if (await deskByTriageChannel(db, e.channel)) return "triage";
         const poster = classifyPoster({
           user: e.user,
           userTeam: e.user_team,
@@ -307,7 +312,10 @@ const internal = defineStep({
     return withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
       const root = e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null;
-      const issue = root ? await issueByTriageRoot(db, root) : null;
+      // A thread in one desk's triage channel never attaches to another desk's issue.
+      const desk = await deskByTriageChannel(db, e.channel);
+      const found = root ? await issueByTriageRoot(db, root) : null;
+      const issue = found && found.deskId === desk?.id ? found : null;
       const { message, duplicate } = await linkMessage(db, {
         issueId: issue?.id,
         source: "slack",
@@ -409,8 +417,8 @@ const team = defineStep({
           await decideDraft(db, draft.id, "superseded", SUPERSEDED_BY);
       await recordRun(db, ctx, AGENT, issue.id);
 
-      const triageChannel = await getConfig(db, "channels.triage");
       if (issue.triageRootTs) {
+        const triageChannel = (await deskForIssue(db, issue)).triageChannel;
         await refreshCard(
           ctx,
           triageChannel,
@@ -468,13 +476,23 @@ async function knownChannel(db: Db, channel: string): Promise<boolean> {
   );
 }
 
-async function accountFor(db: Db, channel: string): Promise<Account> {
+/**
+ * The channel's account, created on first sight under the desk its `channels.customer` entry
+ * names, else the default desk. Null when no desk applies (an unknown slug, or no default desk):
+ * the message is skipped, never filed on a desk nobody chose.
+ */
+async function accountFor(db: Db, channel: string): Promise<Account | null> {
   const found = await accountByChannel(db, channel);
   if (found) return found;
   const customer = await customerChannel(db, channel);
+  const desk = customer?.desk
+    ? await deskBySlug(db, customer.desk)
+    : await defaultDesk(db);
+  if (!desk) return null;
   return ensureAccount(db, {
     name: customer?.accountName ?? channel,
     slackChannelId: channel,
+    deskId: desk.id,
   });
 }
 
@@ -521,6 +539,7 @@ const context = defineStep({
     const found = await withDb(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
       const account = await accountFor(db, input.channel);
+      if (!account) return null;
       const stored =
         input.trigger === "reaction"
           ? await messageBySlackTs(db, input.channel, input.ts)
@@ -534,6 +553,20 @@ const context = defineStep({
       const candidates = await candidatesFor(db, account.id);
       return { account, stored, threadIssueId, candidates };
     });
+
+    if (!found) {
+      ctx.logger.warn("no desk for customer channel; skipped", {
+        channel: input.channel,
+      });
+      return goto("settle", {
+        incoming: input,
+        outcome: "no desk for channel",
+        issueId: null,
+        number: null,
+        opened: false,
+        receiptId: null,
+      } satisfies Settle);
+    }
 
     // A 🎫 on a message that already belongs to an issue: nothing to open.
     if (found.stored?.issueId) {
@@ -802,11 +835,9 @@ const announce = defineStep({
   inputSchema: Persisted,
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
-      const triageChannel = await getConfig(db, "channels.triage");
-      const account = await getAccount(
-        db,
-        (await getIssue(db, input.issueId!)).accountId,
-      );
+      const current = await getIssue(db, input.issueId!);
+      const triageChannel = (await deskForIssue(db, current)).triageChannel;
+      const account = await getAccount(db, current.accountId);
       const mirror = `*${escapeMrkdwn(input.userName)}*: ${plain(stripClientFooter(input.text))} ${mrkdwnLink(
         permalink(
           input.incoming.channel,
@@ -958,9 +989,9 @@ const button = defineStep({
     return withDb(ctx, async (db) => {
       // Issue cards and nudges live only in the triage channel. A click from anywhere else (say a
       // customer replaying a payload with a guessed issue id) is ignored before any write.
-      const triageChannel = await getConfig(db, "channels.triage");
       const from = input.container?.channel_id;
-      if (from !== triageChannel) {
+      const desk = from ? await deskByTriageChannel(db, from) : null;
+      if (!desk) {
         ctx.logger.warn("issue action outside the triage channel; ignored", {
           actionId: action.action_id,
           channel: from ?? null,
@@ -972,13 +1003,34 @@ const button = defineStep({
         });
       }
       await recordRun(db, ctx, AGENT);
-      const rows = await db.query("select 1 from issues where id = $1", [
-        issueId.data,
-      ]);
+      const rows = await db.query<{ desk_id: string | null }>(
+        "select desk_id from issues where id = $1",
+        [issueId.data],
+      );
       if (rows.length === 0) {
         await restoreClicked(ctx, input);
         return terminate({ skipped: `issue ${issueId.data} not found` });
       }
+      // A card lives in its own desk's triage channel: a click from another desk's channel is not
+      // a decision on this issue.
+      const owner = await deskForIssue(db, { deskId: rows[0].desk_id });
+      if (owner.id !== desk.id) {
+        ctx.logger.warn(
+          "issue action from another desk's triage channel; ignored",
+          {
+            actionId: action.action_id,
+            channel: from,
+            desk: desk.slug,
+            issueDesk: owner.slug,
+            user: clicker,
+          },
+        );
+        await restoreClicked(ctx, input);
+        return terminate({
+          skipped: `issue ${issueId.data} belongs to desk ${owner.slug}, not ${desk.slug}`,
+        });
+      }
+      const triageChannel = desk.triageChannel;
       await recordRun(db, ctx, AGENT, issueId.data);
       if (verb !== "take" && verb !== "close")
         return terminate({

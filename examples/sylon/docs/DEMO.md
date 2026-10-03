@@ -1,7 +1,7 @@
 # Sylon demo: rehearsal checklist and failure drill
 
 Every command runs from `examples/sylon` with `SAPIOM_API_KEY` set to the org key. Times are from
-the Sapiom Internal runs on 2026-10-02.
+our own runs on 2026-10-02.
 
 ## Before the demo (T-30 min)
 
@@ -43,7 +43,7 @@ the Sapiom Internal runs on 2026-10-02.
 7. **Thank-you.** No card: Jev's `is_issue` came back 0.04 in both rehearsals.
 8. **Escalate.** Click **Escalate** on the bug's draft card. One Linear issue appears in Sylon
    Issues, and both threads get "Tracked as SAP-n". The card shows On Hold and the Linear id.
-9. **Nudges.** After `nudge.minutes` (5), the controller posts "No owner yet", "Draft waiting
+9. **Nudges.** After the desk's `nudgeMinutes` (5 in the demo), the controller posts "No owner yet", "Draft waiting
    for a decision" and "Customer is waiting for a reply" in the triage threads. To show it on demand, run
    `sapiom agents run --input '{"jevCheck":true}'` in `agents/controller`.
 

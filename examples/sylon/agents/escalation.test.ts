@@ -6,9 +6,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../fixtures/index";
+import { setConfig } from "../_shared/config";
 import { localFleetDb, setLocalDb, withDb, type Db } from "../_shared/db";
+import { upsertDesk } from "../_shared/desks";
 import {
   accountByChannel,
+  ensureAccount,
   getIssue,
   linkMessage,
   messageBySourceEventId,
@@ -292,6 +295,77 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(JSON.stringify(card.args.blocks)).toContain(
       "*Linear:* <https://linear.app/x/issue/SAP-900|SAP-900>",
     );
+  });
+
+  /** An issue on a second desk, with that desk's own triage channel and (optionally) Linear target. */
+  async function issueOnDesk(linear: { team?: string; project?: string }) {
+    const desk = (
+      await upsertDesk(db, {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C0TESTTRI01",
+        linearTeamId: linear.team,
+        linearProjectId: linear.project,
+      })
+    ).desk;
+    const account = await ensureAccount(db, {
+      name: "Test co",
+      slackChannelId: "C0TESTCUST1",
+      deskId: desk.id,
+    });
+    return openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "high",
+      title: "Test desk issue",
+      customer: { channel: "C0TESTCUST1", ts: "1790889365.981329" },
+      triageRootTs: "1790889366.000100",
+    });
+  }
+
+  it("files the issue in its desk's Linear team and project and replies in its desk's triage channel", async () => {
+    const issue = await issueOnDesk({
+      team: "test-team",
+      project: "test-proj",
+    });
+    const { ctx } = liveCtx();
+    await escalate(ctx as never, db, { ...input(), issueId: issue.id });
+    const save = calls.find((c) => c.tool === "save_issue")!;
+    expect(save.args).toMatchObject({
+      team: "test-team",
+      project: "test-proj",
+    });
+    const posts = calls.filter((c) => c.method === "chat.postMessage");
+    expect(posts[0].args).toMatchObject({
+      channel: "C0TESTTRI01",
+      threadTs: "1790889366.000100",
+    });
+    expect(calls.find((c) => c.method === "chat.update")?.args).toMatchObject({
+      channel: "C0TESTTRI01",
+    });
+  });
+
+  it("falls back to the global Linear keys only when the desk names none", async () => {
+    await setConfig(db, "linear.team_id", "global-team", "t");
+    await setConfig(db, "linear.project_id", "global-proj", "t");
+    const issue = await issueOnDesk({});
+    await escalate(liveCtx().ctx as never, db, {
+      ...input(),
+      issueId: issue.id,
+    });
+    expect(calls.find((c) => c.tool === "save_issue")!.args).toMatchObject({
+      team: "global-team",
+      project: "global-proj",
+    });
+  });
+
+  it("fails before touching Linear when neither the desk nor the config names a target", async () => {
+    const issue = await issueOnDesk({});
+    await expect(
+      escalate(liveCtx().ctx as never, db, { ...input(), issueId: issue.id }),
+    ).rejects.toThrow(/not set/);
+    expect(calls.filter((c) => c.tool === "save_issue")).toHaveLength(0);
   });
 
   it("two concurrent runs create one Linear issue, one reply per thread, and one emit", async () => {

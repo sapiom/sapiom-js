@@ -15,18 +15,28 @@
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
+ *
+ * Desks: the board, timeline, metrics, failed events and Knowledge tab are scoped to one desk,
+ * named by `?desk=<slug>` (default: the default desk). Reset board closes only that desk's issues.
  */
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { createClient } from "@sapiom/tools";
 
-import { getConfig } from "../../_shared/config";
+import { getConfigOr } from "../../_shared/config";
 import {
   connectPostgres,
   resolveConnectionString,
   type Db,
 } from "../../_shared/db";
+import {
+  getDesk,
+  linearTarget,
+  listDesks,
+  oncallFor,
+  type Desk,
+} from "../../_shared/desks";
 import {
   UUID,
   createArticle,
@@ -39,6 +49,13 @@ import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
 import replay from "../../scripts/replay.json";
 import page from "./index.html";
+import {
+  deskIssue,
+  metricIssues,
+  receiptDesks,
+  recentIssues,
+  statusCounts,
+} from "./queries";
 import {
   AGENTS,
   AGENT_ROLES,
@@ -61,10 +78,12 @@ import {
   listensTo,
   parseKbInput,
   parseWindow,
+  pickDesk,
   planSwitch,
   receiptView,
   replayPlan,
   redact,
+  scopeReceipts,
   slackChannelUrl,
   spread,
   summarizeLatencies,
@@ -230,46 +249,49 @@ async function withConsoleDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
 const triageLink = (triage: string, ts: string | null) =>
   ts ? permalink(triage, ts) : null;
 
-let projectPromise: Promise<{ name: string; url: string | null }> | undefined;
-let projectAt = 0;
-const PROJECT_TTL_MS = 5 * 60_000;
-
-/** The Linear project's name and URL, looked up at most every five minutes; a failed lookup is retried. */
-function linearProject(d: Db) {
-  if (projectPromise && Date.now() - projectAt > PROJECT_TTL_MS)
-    projectPromise = undefined;
-  if (!projectPromise) projectAt = Date.now();
-  projectPromise ??= getConfig(d, "linear.project_id")
-    .then((query) =>
-      callTool("get_project", { query }, {
-        sapiom: operatorClient(),
-      } as never),
-    )
-    .then((p) => ({
-      name: typeof p.name === "string" ? p.name : "Linear project",
-      url: typeof p.url === "string" ? p.url : null,
-    }))
-    .catch(() => {
-      projectPromise = undefined;
-      return { name: "Linear project", url: null };
-    });
-  return projectPromise;
+/** The selected desk, from `?desk=<slug>`, else the default desk. */
+async function deskOf(d: Db, url: URL): Promise<Desk> {
+  const pick = pickDesk(await listDesks(d), url.searchParams.get("desk"));
+  if (!pick.ok) throw new HttpError(pick.status, pick.reason);
+  return pick.desk;
 }
 
-async function board(d: Db) {
-  const triage = await getConfig(d, "channels.triage");
-  const project = await linearProject(d);
-  const counts = await d.query<{ status: string; n: string }>(
-    "select status, count(*) as n from issues group by status",
-  );
-  const recent = await d.query<Record<string, unknown>>(
-    `select i.id, i.number, a.name as account, i.title, i.status, i.priority, i.owner_slack_id,
-            i.linear_identifier, i.triage_root_ts, i.created_at
-       from issues i join accounts a on a.id = i.account_id
-      order by i.number desc limit 20`,
-  );
+const projects = new Map<
+  string,
+  { at: number; project: Promise<{ name: string; url: string | null }> }
+>();
+const PROJECT_TTL_MS = 5 * 60_000;
+const NO_PROJECT = { name: "Linear project", url: null };
+
+/** The desk's Linear project name and URL, looked up at most every five minutes per project; a failed lookup is retried. */
+function linearProject(d: Db, desk: Desk) {
+  const cached = projects.get(desk.id);
+  if (cached && Date.now() - cached.at <= PROJECT_TTL_MS) return cached.project;
+  const project = linearTarget(d, desk)
+    .then((target) => {
+      if (!target) return NO_PROJECT;
+      return callTool("get_project", { query: target.projectId }, {
+        sapiom: operatorClient(),
+      } as never).then((p) => ({
+        name: typeof p.name === "string" ? p.name : "Linear project",
+        url: typeof p.url === "string" ? p.url : null,
+      }));
+    })
+    .catch(() => {
+      projects.delete(desk.id);
+      return NO_PROJECT;
+    });
+  projects.set(desk.id, { at: Date.now(), project });
+  return project;
+}
+
+async function board(d: Db, desk: Desk) {
+  const triage = desk.triageChannel;
+  const project = await linearProject(d, desk);
+  const recent = await recentIssues(d, desk.id);
   return {
-    counts: Object.fromEntries(counts.map((c) => [c.status, Number(c.n)])),
+    desk: desk.slug,
+    counts: await statusCounts(d, desk.id),
     issues: recent.map((r) => ({
       number: Number(r.number),
       account: r.account,
@@ -288,16 +310,10 @@ async function board(d: Db) {
   };
 }
 
-/** The newest issue (or issue `number`), with its latency legs, runs and event receipts. */
-async function timeline(d: Db, number?: number) {
-  const triage = await getConfig(d, "channels.triage");
-  const issues = await d.query<Record<string, unknown>>(
-    number === undefined
-      ? "select * from issues order by number desc limit 1"
-      : "select * from issues where number = $1",
-    number === undefined ? [] : [number],
-  );
-  const issue = issues[0];
+/** The desk's newest issue (or its issue `number`), with its latency legs, runs and event receipts. */
+async function timeline(d: Db, desk: Desk, number?: number) {
+  const triage = desk.triageChannel;
+  const issue = await deskIssue(d, desk.id, number);
   if (!issue) return { issue: null };
   const id = issue.id as string;
   const [firstMessage] = await d.query<Record<string, unknown>>(
@@ -363,15 +379,24 @@ async function timeline(d: Db, number?: number) {
   };
 }
 
-async function failedReceipts() {
+async function failedReceipts(d: Db, desk: Desk) {
   const { receipts, truncated } = await pageReceipts((offset, limit) =>
     sapiom<ReceiptSummary[]>(
       "GET",
       `/v1/workflows/receipts?attention=true&limit=${limit}&offset=${offset}`,
     ),
   );
+  const failed = failedFleetReceipts(receipts);
+  const owners = await receiptDesks(
+    d,
+    failed.map((r) => r.id),
+  );
   return {
-    receipts: failedFleetReceipts(receipts).map(receiptView),
+    // A receipt with no issue (a raw Slack event) is on every desk; say so rather than imply it is this desk's.
+    receipts: scopeReceipts(failed, owners, desk.id).map((r) => ({
+      ...receiptView(r),
+      fleetWide: !owners.get(r.id),
+    })),
     truncated,
   };
 }
@@ -476,13 +501,9 @@ async function dispatchSeconds(
   };
 }
 
-async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
+async function metrics(d: Db, desk: Desk, window: keyof typeof METRIC_WINDOWS) {
   const since = Date.now() - METRIC_WINDOWS[window];
-  const issues = await d.query<Record<string, unknown>>(
-    `select id, number, created_at, triage_root_ts from issues
-      where created_at >= $1 order by number desc limit ${METRIC_ISSUES}`,
-    [new Date(since).toISOString()],
-  );
+  const issues = await metricIssues(d, desk.id, since, METRIC_ISSUES);
   const ids = issues.map((i) => i.id as string);
   const [firstMessages, draftRows, runs] = ids.length
     ? await Promise.all([
@@ -547,11 +568,14 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
   });
 
   return {
+    desk: desk.slug,
     window,
     issues: rows.length,
     capped: rows.length === METRIC_ISSUES,
     latency: summarizeLatencies(rows.map((r) => r.latency)),
+    // Receipts name no desk, so dispatch timing covers the whole fleet.
     dispatch: spread(dispatch.delays),
+    dispatchScope: "fleet" as const,
     dispatchTruncated: dispatch.truncated,
     cost: costSummary(rows.map((r) => r.cost)),
     runsMissing: rows.reduce((n, r) => n + r.cost.runsMissing, 0),
@@ -568,24 +592,27 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
 }
 
 /**
- * The system map: channels, agents, tables and the Linear project, as ids, names and links only.
- * Slack names no team id in config, so it is read off the on-call user's profile; a lookup that
- * fails leaves its link out rather than failing the page.
+ * The system map: desks, channels, agents, tables and each desk's Linear project, as ids, names
+ * and links only. Slack names no team id in config, so it is read off the first on-call user's
+ * profile; a lookup that fails leaves its link out rather than failing the page.
  */
 async function system(d: Db) {
-  const [triage, customers, oncall] = await Promise.all([
-    getConfig(d, "channels.triage"),
-    getConfig(d, "channels.customer"),
-    getConfig(d, "oncall.slack_id"),
-  ]);
-  const [teamId, project, definitions] = await Promise.all([
-    operatorClient()
-      .connectors.slack.userInfo({ user: oncall })
-      .then(
-        (r) => (r.user as { team_id?: string } | undefined)?.team_id ?? null,
-      )
-      .catch(() => null),
-    linearProject(d),
+  const desks = await listDesks(d);
+  const customers = await getConfigOr(d, "channels.customer", []);
+  const oncall = (
+    await Promise.all(desks.map((desk) => oncallFor(d, desk)))
+  ).find((id): id is string => !!id);
+  const [teamId, projectsByDesk, definitions] = await Promise.all([
+    oncall
+      ? operatorClient()
+          .connectors.slack.userInfo({ user: oncall })
+          .then(
+            (r) =>
+              (r.user as { team_id?: string } | undefined)?.team_id ?? null,
+          )
+          .catch(() => null)
+      : null,
+    Promise.all(desks.map((desk) => linearProject(d, desk))),
     definitionIds().catch(() => new Map<string, string>()),
   ]);
   const channel = (channelId: string) => ({
@@ -596,13 +623,20 @@ async function system(d: Db) {
   return {
     slack: {
       teamId,
-      triage: channel(triage),
       customers: customers.map((c) => ({
         ...channel(c.channelId),
         accountName: c.accountName,
+        desk: c.desk ?? null,
       })),
     },
-    linear: project,
+    desks: desks.map((desk, n) => ({
+      slug: desk.slug,
+      name: desk.name,
+      isDefault: desk.isDefault,
+      nudgeMinutes: desk.nudgeMinutes,
+      triage: channel(desk.triageChannel),
+      linear: projectsByDesk[n],
+    })),
     agents: AGENTS.map((a) => {
       const definitionId = ids.get(a.slug) ?? null;
       return {
@@ -671,26 +705,55 @@ type Handler = (
 
 const GET: [RegExp, Handler][] = [
   [/^\/api\/fleet$/, () => fleetState()],
-  [/^\/api\/board$/, () => withConsoleDb(board)],
+  [
+    /^\/api\/desks$/,
+    () =>
+      withConsoleDb(async (d) => ({
+        desks: (await listDesks(d)).map((x) => ({
+          id: x.id,
+          slug: x.slug,
+          name: x.name,
+          isDefault: x.isDefault,
+        })),
+      })),
+  ],
+  [
+    /^\/api\/board$/,
+    (_, __, url) => withConsoleDb(async (d) => board(d, await deskOf(d, url))),
+  ],
   [
     /^\/api\/timeline$/,
     (_, __, url) => {
       const n = url.searchParams.get("issue");
-      return withConsoleDb((d) => timeline(d, n ? Number(n) : undefined));
+      return withConsoleDb(async (d) =>
+        timeline(d, await deskOf(d, url), n ? Number(n) : undefined),
+      );
     },
   ],
-  [/^\/api\/receipts\/failed$/, () => failedReceipts()],
+  [
+    /^\/api\/receipts\/failed$/,
+    (_, __, url) =>
+      withConsoleDb(async (d) => failedReceipts(d, await deskOf(d, url))),
+  ],
   [
     /^\/api\/metrics$/,
     (_, __, url) => {
       const window = parseWindow(url.searchParams.get("window"));
       if (!window) throw new HttpError(400, "window must be 24h or 7d");
-      return withConsoleDb((d) => metrics(d, window));
+      return withConsoleDb(async (d) =>
+        metrics(d, await deskOf(d, url), window),
+      );
     },
   ],
   [/^\/api\/cues$/, async () => cuesFromReplay(replay)],
   [/^\/api\/system$/, () => withConsoleDb(system)],
-  [/^\/api\/kb$/, () => withConsoleDb(listArticles)],
+  [
+    /^\/api\/kb$/,
+    (_, __, url) =>
+      withConsoleDb(async (d) =>
+        listArticles(d, { deskId: (await deskOf(d, url)).id }),
+      ),
+  ],
 ];
 
 /** Every POST changes state, and each is scoped to the fleet. */
@@ -725,7 +788,7 @@ const POST: [RegExp, Handler][] = [
   ],
   [
     /^\/api\/board\/reset$/,
-    async (_, body) => {
+    async (_, body, url) => {
       // The page's confirm step sends this; a stray POST closes nothing.
       if (body.confirm !== "reset")
         throw new HttpError(400, 'send { "confirm": "reset" }');
@@ -736,7 +799,14 @@ const POST: [RegExp, Handler][] = [
         logger: console,
         sapiom: operatorClient(),
       } as never;
-      return { closed: await withConsoleDb((d) => resetBoard(d, ctx)) };
+      // Only the selected desk: the other desks' boards are somebody else's live traffic.
+      return withConsoleDb(async (d) => {
+        const desk = await deskOf(d, url);
+        return {
+          desk: desk.slug,
+          closed: await resetBoard(d, ctx, { deskId: desk.id }),
+        };
+      });
     },
   ],
   [/^\/api\/receipts\/(\d+)\/replay$/, ([id]) => replayReceipt(id!)],
@@ -746,21 +816,35 @@ const POST: [RegExp, Handler][] = [
 /** Knowledge base writes touch only `kb_articles`, and record the Console as the editor. */
 const KB_EDITOR = "console";
 
+/** A desk id in a request body must name a desk; null and undefined (all desks, or unchanged) pass. */
+async function requireDesk(d: Db, deskId: string | null | undefined) {
+  if (!deskId) return;
+  await getDesk(d, deskId).catch(() => {
+    throw new HttpError(400, "deskId names no desk");
+  });
+}
+
 async function createKbArticle(body: Record<string, unknown>) {
   const parsed = parseKbInput(body, "create");
   if (!parsed.ok) throw new HttpError(400, parsed.error);
-  return withConsoleDb((d) =>
-    createArticle(d, parsed.value as Required<typeof parsed.value>, KB_EDITOR),
-  );
+  return withConsoleDb(async (d) => {
+    await requireDesk(d, parsed.value.deskId);
+    return createArticle(
+      d,
+      parsed.value as Required<typeof parsed.value>,
+      KB_EDITOR,
+    );
+  });
 }
 
 async function updateKbArticle(id: string, body: Record<string, unknown>) {
   if (!UUID.test(id)) throw new HttpError(404, "article not found");
   const parsed = parseKbInput(body, "update");
   if (!parsed.ok) throw new HttpError(400, parsed.error);
-  const article = await withConsoleDb((d) =>
-    updateArticle(d, id, parsed.value, KB_EDITOR),
-  );
+  const article = await withConsoleDb(async (d) => {
+    await requireDesk(d, parsed.value.deskId);
+    return updateArticle(d, id, parsed.value, KB_EDITOR);
+  });
   if (!article) throw new HttpError(404, "article not found");
   return article;
 }
