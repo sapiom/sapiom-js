@@ -507,6 +507,9 @@
     <header>
       <div class="wrap">
         <h1>Sylon Console</h1>
+        <label class="row"
+          >Desk<select id="desk" aria-label="Desk"></select
+        ></label>
         <div id="toast" class="toast" hidden role="status"></div>
       </div>
     </header>
@@ -597,13 +600,13 @@
               <div class="row">
                 <button id="reset" class="mut danger">Reset board</button>
                 <span class="muted" style="font-size: 12px"
-                  >closes every open ticket</span
+                  >closes every open ticket on this desk</span
                 >
               </div>
               <div id="reset-confirm" hidden class="confirm">
                 <div style="margin-bottom: 6px">
-                  Close <strong id="open-count">every open</strong> ticket and
-                  redraw its card?
+                  Close <strong id="open-count">every open</strong> ticket on
+                  desk <strong id="reset-desk"></strong> and redraw its card?
                 </div>
                 <div class="row">
                   <button id="reset-yes" class="mut danger">
@@ -716,8 +719,10 @@
           <p class="muted" style="margin-top: 0">
             The copilot reads these on every draft. A <strong>policy</strong> is
             a rule it always follows; an <strong>answer</strong> is a Q&amp;A it
-            may quote. Public docs are fetched live from docs.sapiom.ai and are
-            not edited here. Changes apply to the next draft.
+            may quote. An article is for one desk or for all desks; this tab
+            lists the selected desk's articles and the all-desks ones. Public
+            docs are fetched live from docs.sapiom.ai and are not edited here.
+            Changes apply to the next draft.
           </p>
           <div id="kb-form" class="kb-form" hidden>
             <label
@@ -726,6 +731,7 @@
                 <option value="answer">answer</option>
               </select></label
             >
+            <label>Applies to<select id="kb-desk"></select></label>
             <label
               >Title<input id="kb-title" type="text" maxlength="200"
             /></label>
@@ -827,6 +833,55 @@
         const stamp = new Date().toLocaleTimeString();
         $("log").textContent = `${stamp}  ${line}\n` + $("log").textContent;
       }
+
+      // --- desks ---------------------------------------------------------------------------
+      /** The selected desk's slug, kept in the query string so a link opens on the same desk. */
+      let desk = new URLSearchParams(location.search).get("desk") || "";
+      let desks = [];
+      const deskName = (slug) =>
+        desks.find((d) => d.slug === slug)?.name || slug;
+      /** `path` scoped to the selected desk. */
+      const scoped = (path) =>
+        desk
+          ? `${path}${path.includes("?") ? "&" : "?"}desk=${encodeURIComponent(desk)}`
+          : path;
+      async function loadDesks() {
+        try {
+          desks = (await get("/api/desks")).desks;
+        } catch (e) {
+          log(`desks FAILED: ${e.message}`);
+          return;
+        }
+        if (!desks.some((d) => d.slug === desk))
+          desk = (desks.find((d) => d.isDefault) || desks[0] || {}).slug || "";
+        $("desk").innerHTML = desks
+          .map(
+            (d) =>
+              `<option value="${esc(d.slug)}">${esc(d.name)}${d.isDefault ? " (default)" : ""}</option>`,
+          )
+          .join("");
+        $("desk").value = desk;
+        $("reset-desk").textContent = deskName(desk);
+      }
+      $("desk").onchange = () => {
+        desk = $("desk").value;
+        history.replaceState(null, "", `?desk=${encodeURIComponent(desk)}`);
+        $("reset-desk").textContent = deskName(desk);
+        $("reset-confirm").hidden = true;
+        $("tl-issue").value = "";
+        Object.assign(S, {
+          counts: null,
+          latency: null,
+          failed: null,
+          metrics: null,
+        });
+        refreshBoard();
+        refreshTimeline();
+        refreshReceipts();
+        refreshMetrics();
+        if (!$("kb-tab").hidden) loadKb();
+        closeKbForm();
+      };
 
       async function get(path) {
         const r = await fetch(path, { cache: "no-store" });
@@ -1010,7 +1065,7 @@
       }
       async function refreshBoard() {
         try {
-          const b = await get("/api/board");
+          const b = await get(scoped("/api/board"));
           S.counts = b.counts;
           openCount = ["new", "on_you", "on_customer", "on_hold"].reduce(
             (n, s) => n + (b.counts[s] || 0),
@@ -1042,9 +1097,14 @@
       $("reset-no").onclick = () => ($("reset-confirm").hidden = true);
       $("reset-yes").onclick = async (e) => {
         $("reset-confirm").hidden = true;
-        await act(e.target, "reset board", "/api/board/reset", {
-          confirm: "reset",
-        });
+        await act(
+          e.target,
+          `reset board (${deskName(desk)})`,
+          scoped("/api/board/reset"),
+          {
+            confirm: "reset",
+          },
+        );
       };
 
       // --- last ticket ---------------------------------------------------------------------
@@ -1055,7 +1115,7 @@
         const n = $("tl-issue").value.trim();
         try {
           const t = await get(
-            `/api/timeline${/^\d+$/.test(n) ? `?issue=${n}` : ""}`,
+            scoped(`/api/timeline${/^\d+$/.test(n) ? `?issue=${n}` : ""}`),
           );
           $("timeline").className = "";
           if (!t.issue) {
@@ -1096,7 +1156,7 @@
       async function refreshReceipts() {
         try {
           const { receipts: list, truncated } = await get(
-            "/api/receipts/failed",
+            scoped("/api/receipts/failed"),
           );
           S.failed = list;
           renderSummary();
@@ -1130,7 +1190,9 @@
       // --- metrics -------------------------------------------------------------------------
       async function refreshMetrics() {
         try {
-          const m = await get(`/api/metrics?window=${$("mt-window").value}`);
+          const m = await get(
+            scoped(`/api/metrics?window=${$("mt-window").value}`),
+          );
           S.metrics = m;
           renderSummary();
           const spreadRow = (label, sp) =>
@@ -1193,10 +1255,15 @@
             ${s.slack.customers
               .map(
                 (c) =>
-                  `<div class="box"><strong>${ch(c, "Customer channel")}</strong>Stands in for <em>${esc(c.accountName)}</em>'s shared Slack Connect channel. The customer posts here; the bot only reacts and posts the approved reply in the customer's thread.</div>`,
+                  `<div class="box"><strong>${ch(c, "Customer channel")}</strong>Stands in for <em>${esc(c.accountName)}</em>'s shared Slack Connect channel (desk <code>${esc(c.desk || "default")}</code>). The customer posts here; the bot only reacts and posts the approved reply in the customer's thread.</div>`,
               )
               .join("")}
-            <div class="box"><strong>${ch(s.slack.triage, "Triage channel")}</strong>The team's internal channel: ticket cards, mirrored customer messages, AI drafts with Approve / Escalate / Dismiss, and nudges.</div>
+            ${s.desks
+              .map(
+                (d) =>
+                  `<div class="box"><strong>${ch(d.triage, `${d.name} triage`)}</strong>Desk <code>${esc(d.slug)}</code>${d.isDefault ? " (default)" : ""}: ticket cards, mirrored customer messages, AI drafts with Approve / Escalate / Dismiss, and nudges after ${esc(d.nudgeMinutes)} min.</div>`,
+              )
+              .join("")}
             </div>
             ${s.slack.teamId ? "" : `<p class="warn">Slack team id unavailable, so channels are not linked.</p>`}`;
           systemAgents = s.agents;
@@ -1206,7 +1273,13 @@
             `<div class="muted" style="margin-bottom:4px">Postgres, handle <code>sylon</code></div><dl class="kv">${s.tables.map((t) => `<dt><code>${esc(t.name)}</code></dt><dd>${esc(t.role)}</dd>`).join("")}</dl>`;
           $("sys-linear").className = "";
           $("sys-linear").innerHTML =
-            `${link(s.linear.url, s.linear.name)}<div class="muted">escalation creates an issue here for each escalated ticket; its description starts <code>sylon:&lt;issueId&gt;</code></div>`;
+            s.desks
+              .map(
+                (d) =>
+                  `<div>${esc(d.name)}: ${link(d.linear.url, d.linear.name)}</div>`,
+              )
+              .join("") +
+            `<div class="muted">escalation creates an issue in the ticket's desk's project for each escalated ticket; its description starts <code>sylon:&lt;issueId&gt;</code></div>`;
         } catch (e) {
           $("sys-channels").innerHTML =
             `<span class="bad">${esc(e.message)}</span>`;
@@ -1279,18 +1352,20 @@
       let kbConfirm = null; // the id whose Delete awaits a second click
       async function loadKb() {
         try {
-          kbArticles = await get("/api/kb");
+          kbArticles = await get(scoped("/api/kb"));
           renderKb();
         } catch (e) {
           $("kb-list").textContent = e.message;
         }
       }
+      const deskSlugById = (id) => desks.find((d) => d.id === id)?.slug || id;
       function renderKb() {
         const rows = kbArticles.map((a) => {
           const confirming = kbConfirm === a.id;
           return `<tr class="${a.enabled ? "" : "kb-off"}">
             <td>${esc(a.kind)}</td>
             <td style="white-space:normal">${esc(a.title)}</td>
+            <td>${a.deskId ? esc(deskName(deskSlugById(a.deskId))) : '<span class="muted">all desks</span>'}</td>
             <td>${a.enabled ? "on" : "off"}</td>
             <td title="${esc(a.updatedBy || "")}">${esc(age(a.updatedAt))} ago</td>
             <td><div class="row">
@@ -1301,13 +1376,22 @@
         });
         $("kb-list").className = "";
         $("kb-list").innerHTML = rows.length
-          ? `<table><tr><th>Kind</th><th>Title</th><th>Enabled</th><th>Updated</th><th></th></tr>${rows.join("")}</table>`
+          ? `<table><tr><th>Kind</th><th>Title</th><th>Desk</th><th>Enabled</th><th>Updated</th><th></th></tr>${rows.join("")}</table>`
           : '<div class="muted">No articles yet. The copilot answers from the public docs alone.</div>';
         syncButtons();
       }
       function openKbForm(article) {
         kbEditing = article ? article.id : "new";
         $("kb-kind").value = article ? article.kind : "policy";
+        // A new article starts on the selected desk; an existing one keeps its scope.
+        $("kb-desk").innerHTML =
+          `<option value="">All desks</option>` +
+          desks
+            .map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`)
+            .join("");
+        $("kb-desk").value = article
+          ? article.deskId || ""
+          : desks.find((d) => d.slug === desk)?.id || "";
         $("kb-title").value = article ? article.title : "";
         $("kb-body").value = article ? article.body : "";
         $("kb-error").textContent = "";
@@ -1334,6 +1418,7 @@
       $("kb-save").onclick = async () => {
         const body = {
           kind: $("kb-kind").value,
+          deskId: $("kb-desk").value || null,
           title: $("kb-title").value,
           body: $("kb-body").value,
         };
@@ -1401,10 +1486,14 @@
       syncButtons();
       showTab(location.hash.slice(1) || store.get(TAB_KEY) || "console");
       refreshFleet();
-      refreshBoard();
-      refreshTimeline();
-      refreshReceipts();
-      refreshMetrics();
+      // The desk is known before the first scoped request, so nothing renders the wrong desk.
+      loadDesks().then(() => {
+        refreshBoard();
+        refreshTimeline();
+        refreshReceipts();
+        refreshMetrics();
+        if (!$("kb-tab").hidden) loadKb();
+      });
       loadCues().catch((e) => ($("cues").textContent = e.message));
       setInterval(() => {
         refreshBoard();

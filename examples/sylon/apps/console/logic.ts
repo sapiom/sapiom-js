@@ -5,7 +5,7 @@
  * server holds an org key). No I/O, so all of it is unit-tested.
  */
 import fleet from "../../fleet.json";
-import { KB_KINDS, type KbInput } from "../../_shared/kb";
+import { KB_KINDS, UUID, type KbInput } from "../../_shared/kb";
 
 export interface FleetProject {
   key: string;
@@ -139,6 +139,51 @@ export function fleetWideKeys(): string[] {
   return AGENTS.filter((a) => a.key !== LIVE_AGENT).map((a) => a.key);
 }
 
+// --- desks -----------------------------------------------------------------------------------
+
+export type DeskPick<D> =
+  | { ok: true; desk: D }
+  | { ok: false; status: 404 | 409; reason: string };
+
+/**
+ * The desk a request is about: the one named by `?desk=<slug>`, else the default desk. A page
+ * never silently shows another desk than the one it asked for, so an unknown slug is a 404.
+ */
+export function pickDesk<D extends { slug: string; isDefault: boolean }>(
+  desks: readonly D[],
+  slug: string | null,
+): DeskPick<D> {
+  if (!desks.length)
+    return {
+      ok: false,
+      status: 409,
+      reason: "no desks yet; run `pnpm run setup`",
+    };
+  if (slug) {
+    const named = desks.find((d) => d.slug === slug);
+    return named
+      ? { ok: true, desk: named }
+      : { ok: false, status: 404, reason: `no desk '${slug}'` };
+  }
+  return { ok: true, desk: desks.find((d) => d.isDefault) ?? desks[0]! };
+}
+
+/**
+ * Failed receipts for one desk. A receipt that carries an issue (a domain event) belongs to that
+ * issue's desk. One that does not (a raw Slack event, which fires before any issue exists) cannot
+ * be attributed, so it shows on every desk rather than being hidden from the one it broke.
+ */
+export function scopeReceipts<T extends { id: string }>(
+  receipts: readonly T[],
+  deskOf: ReadonlyMap<string, string | null>,
+  deskId: string,
+): T[] {
+  return receipts.filter((r) => {
+    const owner = deskOf.get(r.id);
+    return owner === undefined || owner === null || owner === deskId;
+  });
+}
+
 // --- system map ----------------------------------------------------------------------------
 
 export interface AgentRole {
@@ -191,10 +236,14 @@ export function listensTo(key: string): string[] {
 
 /** The `sylon` database's tables, one line each. */
 export const TABLES: [string, string][] = [
-  ["accounts", "one row per customer channel (name, Slack channel id)"],
+  [
+    "desks",
+    "isolated support desks: triage channel, Linear team and project, on-call, nudge minutes",
+  ],
+  ["accounts", "one row per customer channel (name, Slack channel id, desk)"],
   [
     "issues",
-    "the tickets: status, category, priority, owner, both Slack threads, Linear link",
+    "the tickets: desk, status, category, priority, owner, both Slack threads, Linear link",
   ],
   [
     "messages",
@@ -208,7 +257,7 @@ export const TABLES: [string, string][] = [
   ["runs", "each agent execution and the issue it worked on"],
   [
     "kb_articles",
-    "the team's policies and answers the copilot drafts from, edited in the Knowledge tab",
+    "the team's policies and answers the copilot drafts from (one desk's or all desks'), edited in the Knowledge tab",
   ],
   ["doc_cache", "docs.sapiom.ai pages the copilot fetched, kept for an hour"],
   [
@@ -217,7 +266,7 @@ export const TABLES: [string, string][] = [
   ],
   [
     "config",
-    "runtime config: channels, on-call, Linear team and project, nudge minutes",
+    "runtime config: customer channels, alerts channel, switches (desk settings live in desks)",
   ],
   ["schema_migrations", "applied migrations"],
 ];
@@ -630,6 +679,15 @@ export function parseKbInput(
     if (raw.trim().length > max)
       return { ok: false, error: `${key} is over ${max} characters` };
     value[key] = raw.trim();
+  }
+  // `deskId`: a desk's id, or null for an article that applies to every desk.
+  if (body.deskId !== undefined) {
+    if (
+      body.deskId !== null &&
+      !(typeof body.deskId === "string" && UUID.test(body.deskId))
+    )
+      return { ok: false, error: "deskId must be a desk id or null" };
+    value.deskId = body.deskId;
   }
   if (body.enabled !== undefined) {
     if (typeof body.enabled !== "boolean")
