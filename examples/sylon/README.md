@@ -39,15 +39,17 @@ flowchart LR
   E -- issue.on_hold --> F[your next agent]
   K[controller<br/>cron] -- issue.nudged --> F
   E --> L[Linear]
+  L -. state read .-> S[linear-sync<br/>cron]
+  S -- issue.engineering_resolved --> F
   W[watchdog<br/>cron] -- failed runs --> A[alerts channel]
-  I & P & E & K & U & W <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
+  I & P & E & K & U & S & W <--> DB[(sylon Postgres<br/>issues · messages · drafts<br/>nudges · config)]
 ```
 
 | Layer         | What lives there                                                                                                                                                                        |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Adapters      | `intake` reads `slack.*` and is the only agent that knows Slack message shapes. A later adapter (Read.ai, email) emits the same `issue.*`.                                              |
-| Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
-| Domain agents | copilot, escalation, controller, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                   |
+| Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged`, `issue.engineering_resolved` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
+| Domain agents | copilot, escalation, controller, linear-sync, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                   |
 | Shared state  | One Postgres (`sylon`), written only through `_shared/issues.ts`; runtime config in its `config` table.                                                                                 |
 
 ## Agents
@@ -58,14 +60,23 @@ flowchart LR
 | `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from `kb/`, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                                                      |
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in both threads, moves the issue On Hold.                                                                             |
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
+| `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
 | `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other Sylon agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
+
+### linear-sync and customer messages
+
+`linear-sync` always posts in the triage thread. It posts in the customer thread ("Our engineering
+team has shipped a fix for this. ...") only when the config key `linear_sync.notify_customer` is
+`true`. It is `false` in `fleet.json`, so a shadow install shows customers nothing. Turn it on with
+`setConfig(db, "linear_sync.notify_customer", true, "you")` or by editing the `config` row; a
+database seeded before this key existed behaves as `false`.
 
 ## Quickstart
 
 Prerequisites in your Sapiom org:
 
-- A **Slack** connector, with the bot invited to your customer and triage channels.
+- A **Slack** connector, with the bot invited to the triage channel and to any customer channel. The invite is the control: the bot only sees channels it is in, and a message from anyone outside your Slack workspace in one of them is a customer's. No per-channel config is needed.
 - A **Linear** connector with write access, discovered under the MCP relay slug `linear`.
 - An org API key in `SAPIOM_API_KEY`.
 
@@ -84,13 +95,19 @@ setup stops if a Slack or Linear id is still an example:
     "linear.team_id": "<Linear team id or key>",
     "linear.project_id": "<Linear project id>",
     "channels.triage": "<triage channel id>",
-    "channels.customer": [
-      { "channelId": "<customer channel id>", "accountName": "Acme" }
-    ],
+    "channels.customer": [],
     "oncall.slack_id": "<Slack user id>"
   }
 }
 ```
+
+`channels.customer` is optional and only names accounts: a listed channel gets its account at setup under the given name, any other channel gets one on the first outside message, named by its channel id. Leave the example entry out (`[]`) or setup stops. Other optional keys are read with a default when unset (so a live fleet needs no re-seed):
+
+| Key                       | Default                                     | Effect                                                                                                                                                                                                 |
+| ------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `team.slack_team_ids`     | the workspace the connector is installed in | Slack workspace ids whose members are our team. A customer-channel message from one of them is a team message: stored, never opened as an issue; a reply in an issue's thread moves it to On Customer. |
+| `customers.test_user_ids` | `[]`                                        | Slack user ids always treated as the customer, even from our workspace. Lets one person test with two accounts in the same workspace.                                                                  |
+| `intake.reactions`        | `true`                                      | `false` stops intake adding or removing 👀 and 🎫 on customer messages, so a shadow pilot leaves no visible footprint.                                                                                 |
 
 Then install the fleet:
 
@@ -215,14 +232,14 @@ The deployed agents always share the `sylon` database.
 
 ## Known limitations
 
-| Limitation                                                                                                                                                        | Why                                                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Post, then record.** If Slack accepts a post and the next database write fails, a retry posts again (a duplicate card or reply).                                | Slack's Web API has no idempotency key. The window is the gap between Slack's 200 and the next write.                   |
-| **Linear adoption window.** A retry more than 7 days after a crash between creating the Linear issue and recording it creates a second one.                       | `save_issue` has no idempotency key; escalation adopts by a `sylon:<issueId>` marker over the last 7 days.              |
-| **Triage channel is not stored per issue.** Changing `channels.triage` on a live fleet strands existing cards.                                                    | Persisting it is a schema change left for an onboarding flow.                                                           |
-| **Intake links by content.** A new top-level message joins any open issue Jev judges to be the same problem (p ≥ 0.8). Leftover open issues capture new messages. | Run `pnpm run reset-demo` before a demo.                                                                                |
-| **Latency.** Customer post to triage card takes 25–36 s; issue card to draft card about 20 s.                                                                     | Each event waits up to about 15 s for the engine's dispatch cycle, and intake makes a Jev call and several Slack calls. |
-| **Deploy detection is local.** setup skips a deploy when the bundle hash in `.sapiom/fleet-state.json` matches the live build; a fresh clone redeploys once.      | The server does not expose a content hash for a build.                                                                  |
-| **One Slack workspace, one Linear team.** No Slack Connect hardening, SLAs, email intake or board.                                                                | Out of scope for this example.                                                                                          |
+| Limitation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Why                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Post, then record.** If Slack accepts a post and the next database write fails, a retry posts again (a duplicate card or reply).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Slack's Web API has no idempotency key. The window is the gap between Slack's 200 and the next write.                   |
+| **Linear adoption window.** A retry more than 7 days after a crash between creating the Linear issue and recording it creates a second one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `save_issue` has no idempotency key; escalation adopts by a `sylon:<issueId>` marker over the last 7 days.              |
+| **Triage channel is not stored per issue.** Changing `channels.triage` on a live fleet strands existing cards.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Persisting it is a schema change left for an onboarding flow.                                                           |
+| **Intake links by content.** A new top-level message joins any open issue Jev judges to be the same problem (p ≥ 0.8). Leftover open issues capture new messages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Run `pnpm run reset-demo` before a demo.                                                                                |
+| **Latency.** Customer post to triage card takes 25–36 s; issue card to draft card about 20 s.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Each event waits up to about 15 s for the engine's dispatch cycle, and intake makes a Jev call and several Slack calls. |
+| **Deploy detection is local.** setup skips a deploy when the bundle hash in `.sapiom/fleet-state.json` matches the live build; a fresh clone redeploys once.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | The server does not expose a content hash for a build.                                                                  |
+| **One Linear team; customers are recognised by Slack workspace.** Anyone outside `team.slack_team_ids` (default: the connector's own workspace) posting in a channel the bot is in is a customer, and the channel gets an account. The connector has no `conversations.info`, so shared channels cannot be detected. A team member's message is kept only in a channel that already has an account; elsewhere it is skipped and nothing is stored. A customer who posts from your workspace needs `customers.test_user_ids`. A team reply moves the issue to On Customer and supersedes pending drafts without redrawing their cards. No SLAs, email intake or board. | Out of scope for this example.                                                                                          |
 
 The contract the agents build against is `plans/sylon/interfaces.md` in the Sapiom monorepo.

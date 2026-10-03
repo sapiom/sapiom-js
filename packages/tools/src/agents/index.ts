@@ -41,11 +41,9 @@ import {
   defaultTransport,
 } from "../_client/index.js";
 import type { DispatchHandle } from "../dispatch.js";
+import { resolveToolsBaseUrl } from "../_client/tools-base.js";
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_AGENTS_URL ??
-  process.env.SAPIOM_TOOLS_BASE ??
-  "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl(process.env.SAPIOM_AGENTS_URL);
 
 /**
  * Signal a run fires when it reaches a terminal state (completed OR failed — the

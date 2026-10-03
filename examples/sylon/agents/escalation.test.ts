@@ -10,10 +10,12 @@ import { localFleetDb, setLocalDb, withDb, type Db } from "../_shared/db";
 import {
   accountByChannel,
   getIssue,
+  linkMessage,
   messageBySourceEventId,
   messagesForIssue,
   openIssue,
   setStatus,
+  updateIssue,
 } from "../_shared/issues";
 import { LinearRelayError } from "../_shared/linear";
 import { fakeCtx } from "../_shared/test-ctx";
@@ -134,6 +136,8 @@ describe("escalation against the relay (mocked fetch)", () => {
   let calls: { tool?: string; method: string; args: Record<string, unknown> }[];
   let found: Record<string, unknown>[];
   let linearDown: boolean;
+  /** What get_issue reports for the issue already linked, when a test links one first. */
+  let existingState: Record<string, string>;
 
   beforeEach(async () => {
     vi.stubEnv("SAPIOM_API_KEY", "sat_test");
@@ -152,6 +156,7 @@ describe("escalation against the relay (mocked fetch)", () => {
     calls = [];
     found = [];
     linearDown = false;
+    existingState = {};
     let ts = 0;
     vi.stubGlobal(
       "fetch",
@@ -173,11 +178,19 @@ describe("escalation against the relay (mocked fetch)", () => {
           const result =
             name === "list_issues"
               ? { issues: found }
-              : {
-                  id: "SAP-900",
-                  uuid: "u-900",
-                  url: "https://linear.app/x/issue/SAP-900",
-                };
+              : name === "get_issue" &&
+                  body.params.arguments.id === "uuid-SAP-5"
+                ? {
+                    id: "SAP-5",
+                    uuid: "uuid-SAP-5",
+                    url: "https://linear.app/x/issue/SAP-5",
+                    ...existingState,
+                  }
+                : {
+                    id: "SAP-900",
+                    uuid: "u-900",
+                    url: "https://linear.app/x/issue/SAP-900",
+                  };
           return new Response(
             JSON.stringify({
               jsonrpc: "2.0",
@@ -397,6 +410,46 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(JSON.stringify(card.args.blocks)).toContain(
       "*Linear:* <https://linear.app/x/issue/SAP-900|SAP-900>",
     );
+  });
+
+  it("a repeat escalation whose Linear issue is already Done opens a new Linear issue and replies in both threads", async () => {
+    await updateIssue(db, issueId, {
+      linearIssueId: "uuid-SAP-5",
+      linearIdentifier: "SAP-5",
+      linearUrl: "https://linear.app/x/issue/SAP-5",
+    });
+    existingState = { status: "Done", statusType: "completed" };
+    const first = liveCtx();
+    // First escalation: replies recorded under the bare keys for SAP-5.
+    await linkMessage(db, {
+      issueId,
+      source: "slack",
+      sourceEventId: customerReplyKey(issueId),
+      direction: "agent",
+      slack: { channel: "C0CUSTOMER1", ts: "1790889400.1" },
+      userId: "sylon-escalation",
+      text: "Tracked as SAP-5: https://linear.app/x/issue/SAP-5",
+    });
+    const { ctx, emitted } = first;
+    const out = await escalate(ctx as never, db, input());
+    expect(out).toMatchObject({
+      outcome: "escalated",
+      linearIdentifier: "SAP-900",
+      made: "created",
+    });
+    expect(calls.filter((c) => c.tool === "save_issue")).toHaveLength(1);
+    const issue = await getIssue(db, issueId);
+    expect(issue.linearIdentifier).toBe("SAP-900");
+    expect(issue.status).toBe("on_hold");
+    expect(
+      calls
+        .filter((c) => c.method === "chat.postMessage")
+        .map((c) => c.args.text),
+    ).toEqual([
+      "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
+      "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
+    ]);
+    expect(emitted).toHaveLength(1);
   });
 });
 

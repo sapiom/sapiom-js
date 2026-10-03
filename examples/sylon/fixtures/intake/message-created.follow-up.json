@@ -5,6 +5,7 @@
     "event": {
       "ts": "1790890100.000200",
       "team": "T0EXAMPLE01",
+      "user_team": "T0CUSTOMER1",
       "text": "Still failing after a retry, export id 4411.",
       "type": "message",
       "user": "U0CUSTOMER1",

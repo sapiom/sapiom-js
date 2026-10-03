@@ -21,10 +21,10 @@
  * (Slack answered `ok: false`; its error code is in the message).
  */
 import { Transport, defaultTransport } from "../../_client/index.js";
+import { resolveToolsBaseUrl } from "../../_client/tools-base.js";
 
 // Same tools host agents/models resolve — via SAPIOM_TOOLS_BASE. No new per-cap config.
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl();
 
 /** A Block Kit block, passed through to Slack untouched. */
 export type SlackBlock = Record<string, unknown>;

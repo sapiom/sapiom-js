@@ -16,9 +16,22 @@ export const ConfigSchemas = {
   ),
   "oncall.slack_id": z.string().min(1),
   "nudge.minutes": z.number().int().positive(),
+  /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
+  "team.slack_team_ids": z.array(z.string().min(1)),
+  /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
+  "customers.test_user_ids": z.array(z.string().min(1)),
+  /** Whether intake adds 👀 / 🎫 to customer messages. Off for a shadow pilot that must leave no footprint. */
+  "intake.reactions": z.boolean(),
+  /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
+  "linear_sync.notify_customer": z.boolean(),
 } as const;
-/** Keys fleet.json may leave out: seeding skips them, and readers use {@link getConfigOr}. */
-export const OPTIONAL_KEYS: readonly string[] = ["alerts.channel"];
+
+/** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
+export const OPTIONAL_KEYS: readonly ConfigKey[] = [
+  "team.slack_team_ids",
+  "channels.customer",
+  "alerts.channel",
+];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
   (typeof ConfigSchemas)[K]
@@ -58,7 +71,10 @@ export async function getConfig<K extends ConfigKey>(
   return value;
 }
 
-/** {@link getConfig}, or `fallback` when the key is not set. A stored value that fails its schema still throws. */
+/**
+ * Like {@link getConfig}, but an unset key yields `fallback`. For keys added after a fleet was
+ * installed: the live config table does not have them until setup re-seeds.
+ */
 export async function getConfigOr<K extends ConfigKey, F>(
   db: Db,
   key: K,
@@ -99,6 +115,6 @@ export async function customerChannel(
   db: Db,
   channelId: string,
 ): Promise<{ channelId: string; accountName: string } | null> {
-  const channels = await getConfig(db, "channels.customer");
+  const channels = await getConfigOr(db, "channels.customer", []);
   return channels.find((c) => c.channelId === channelId) ?? null;
 }

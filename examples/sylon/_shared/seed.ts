@@ -102,7 +102,7 @@ export async function seedFleet(
     set.push(key);
   }
   const customers = ConfigSchemas["channels.customer"].parse(
-    values["channels.customer"],
+    values["channels.customer"] ?? [],
   );
   for (const c of customers)
     await ensureAccount(db, {

@@ -5,6 +5,7 @@
     "event": {
       "ts": "1790890000.000100",
       "team": "T0EXAMPLE01",
+      "user_team": "T0CUSTOMER1",
       "text": "Our CSV export returns a 500 since this morning <!here>. Can someone look?",
       "type": "message",
       "user": "U0CUSTOMER1",

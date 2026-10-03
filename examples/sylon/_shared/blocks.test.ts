@@ -36,6 +36,8 @@ const issue: Issue = {
   linearIssueId: null,
   linearIdentifier: null,
   linearUrl: null,
+  onHoldAt: null,
+  cardDirty: false,
   createdAt: now,
   updatedAt: now,
   closedAt: null,

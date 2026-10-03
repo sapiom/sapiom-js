@@ -27,6 +27,9 @@ export const SlackMessage = z.object({
   thread_ts: z.string().optional(),
   channel_type: z.string().optional(),
   team: z.string().optional(),
+  /** Slack Connect: the poster's own workspace, which differs from ours for a customer. */
+  user_team: z.string().optional(),
+  source_team: z.string().optional(),
   event_ts: z.string().optional(),
   subtype: z.string().optional(),
   bot_id: z.string().optional(),
@@ -132,6 +135,11 @@ export const Events = {
   }),
   "issue.on_hold": Envelope.extend({ linearIdentifier: z.string() }),
   "issue.nudged": Envelope.extend({ kind: z.string() }),
+  /** linear-sync saw the escalated issue's Linear issue reach a completed state. */
+  "issue.engineering_resolved": Envelope.extend({
+    linearIdentifier: z.string(),
+    linearState: z.string(),
+  }),
 } as const;
 export type EventType = keyof typeof Events;
 export type EventPayload<T extends EventType> = z.infer<(typeof Events)[T]>;

@@ -17,6 +17,7 @@
         "escalation",
         "controller",
         "urgent-pager",
+        "linear-sync",
         "watchdog"
       ]
     },
@@ -24,7 +25,7 @@
       "provider": "linear",
       "relaySlug": "linear",
       "discover": true,
-      "requiredBy": ["escalation"]
+      "requiredBy": ["escalation", "linear-sync"]
     }
   ],
   "projects": [
@@ -39,6 +40,11 @@
       "key": "controller",
       "path": "agents/controller",
       "slug": "sylon-controller"
+    },
+    {
+      "key": "linear-sync",
+      "path": "agents/linear-sync",
+      "slug": "sylon-linear-sync"
     },
     {
       "key": "urgent-pager",
@@ -94,6 +100,11 @@
     { "project": "escalation", "kind": "event", "eventType": "issue.escalate" },
     { "project": "controller", "kind": "schedule_cron", "cron": "*/2 * * * *" },
     {
+      "project": "linear-sync",
+      "kind": "schedule_cron",
+      "cron": "*/2 * * * *"
+    },
+    {
       "project": "urgent-pager",
       "kind": "event",
       "eventType": "issue.created"
@@ -120,6 +131,9 @@
       { "channelId": "C0CUSTOMER1", "accountName": "Example Customer" }
     ],
     "oncall.slack_id": "U0ONCALL001",
-    "nudge.minutes": 5
+    "nudge.minutes": 5,
+    "customers.test_user_ids": [],
+    "intake.reactions": true,
+    "linear_sync.notify_customer": false
   }
 }
