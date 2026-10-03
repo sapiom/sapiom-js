@@ -167,9 +167,19 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
     emits: ["issue.nudged"],
     writes: "nudges, runs, events_log; posts nudges in triage threads",
   },
+  "linear-sync": {
+    emits: ["issue.engineering_resolved"],
+    writes:
+      "issues (status, linear_checked_at, card_dirty), messages, runs, events_log; reads Linear; posts in triage threads",
+  },
   "urgent-pager": {
     emits: [],
     writes: "messages, runs; DMs on-call for urgent issues",
+  },
+  watchdog: {
+    emits: [],
+    writes:
+      "watchdog_state, watchdog_reported, watchdog_alerted; reads failed runs from the Sapiom API; posts each failure with action items",
   },
 };
 
