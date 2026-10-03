@@ -2,6 +2,7 @@
  * intake: the Slack source adapter. A customer message becomes a classified issue (or a follow-up
  * on an open one), an issue card in the triage channel, and an `issue.created` or
  * `issue.message_added` event. Also owns the `issue.*` buttons (Take, Close) and the 🎫 reaction.
+ * Close on an issue whose Linear ticket is still open notes it in the triage thread and on the ticket.
  *
  * Triggers: `slack.message.created`, `slack.reaction_added`, `slack.block_actions`. Triggers match
  * on type only, so `guard` filters and routes.
@@ -63,6 +64,8 @@ import {
   type Account,
   type Issue,
 } from "../../_shared/issues";
+import { commentIssue, getIssue as getLinearIssue } from "../../_shared/linear";
+import { resolution } from "../linear-sync/rules";
 import {
   type SlackCtx,
   permalink,
@@ -972,6 +975,61 @@ async function settleClicked(
   }
 }
 
+/**
+ * After a Close, say in the triage thread and on the Linear ticket that the ticket is still open:
+ * linear-sync reads only On Hold issues, so nothing would look at it again. Never throws, since the
+ * close is already committed and a retried step would see it as already closed.
+ */
+export async function noteOpenLinear(
+  ctx: SlackCtx,
+  triageChannel: string,
+  issue: Issue,
+): Promise<void> {
+  const identifier = issue.linearIdentifier;
+  if (!identifier) return;
+  let linear;
+  try {
+    linear = await getLinearIssue(ctx, issue.linearIssueId ?? identifier);
+  } catch (err) {
+    ctx.logger.warn("linear state not read on close", {
+      issueId: issue.id,
+      linear: identifier,
+      err: String(err),
+    });
+    return;
+  }
+  if (resolution(linear)) return;
+  const url = issue.linearUrl ?? linear.url;
+  const name = escapeMrkdwn(identifier);
+  if (issue.triageRootTs) {
+    try {
+      await post(ctx, {
+        channel: triageChannel,
+        threadTs: issue.triageRootTs,
+        text: `${url ? mrkdwnLink(url, name) : name} is still open in Linear. Cancel it there if it no longer needs work.`,
+      });
+    } catch (err) {
+      ctx.logger.warn("open Linear note not posted", {
+        issueId: issue.id,
+        err: String(err),
+      });
+    }
+  }
+  try {
+    await commentIssue(
+      ctx,
+      linear.id,
+      `Support issue #${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
+    );
+  } catch (err) {
+    ctx.logger.warn("open Linear comment not added", {
+      issueId: issue.id,
+      linear: identifier,
+      err: String(err),
+    });
+  }
+}
+
 const button = defineStep({
   name: "button",
   terminal: true,
@@ -1079,6 +1137,8 @@ const button = defineStep({
           text: `Closed by <@${clicker}>`,
         });
       }
+      if (verb === "close" && changed)
+        await noteOpenLinear(ctx, triageChannel, issue);
       return terminate({
         outcome: verb,
         changed,

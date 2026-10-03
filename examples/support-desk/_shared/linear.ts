@@ -9,9 +9,11 @@
  *               (0 none, 1 urgent, 2 high, 3 medium, 4 low), links [{ url, title }].
  *               Also: id, state, assignee, labels, parentId, ...
  *   get_issue   id (issue id or identifier such as SAP-123), includeRelations?
+ *   save_comment  issueId, body (markdown). Not in that `tools/list` snapshot: a failed call is
+ *               logged by the caller (SAP-3794).
  *
- * Both return one text content block holding JSON; `id` there is the identifier (SAP-123) and
- * `uuid` is the Linear id. On a local trace nothing is sent and a stub issue comes back.
+ * save_issue and get_issue return one text content block holding JSON; `id` there is the
+ * identifier (SAP-123) and `uuid` is the Linear id. On a local trace nothing is sent and a stub issue comes back.
  */
 import { connectors, type McpCallToolResult } from "@sapiom/tools";
 
@@ -21,6 +23,7 @@ export const LINEAR_RELAY_SLUG = "linear";
 export const LINEAR_TOOLS = {
   createIssue: "save_issue",
   getIssue: "get_issue",
+  comment: "save_comment",
 } as const;
 
 export interface LinearIssue {
@@ -157,4 +160,19 @@ export async function getIssue(
   return toLinearIssue(
     await callTool(LINEAR_TOOLS.getIssue, { id: idOrIdentifier }, ctx),
   );
+}
+
+/** Add a comment to a Linear issue. On a local trace nothing is sent. */
+export async function commentIssue(
+  ctx: SlackCtx,
+  issueId: string,
+  body: string,
+): Promise<void> {
+  if (ctx.isLocalTrace) {
+    ctx.logger.info("linear save_comment (local trace, not sent)", {
+      issueId,
+    });
+    return;
+  }
+  await callTool(LINEAR_TOOLS.comment, { issueId, body }, ctx);
 }
