@@ -283,6 +283,20 @@ export function latencies(t: TimelineInput): Latencies {
   };
 }
 
+/**
+ * Draft creation time from the first draft row, card time from the first row whose card posted:
+ * a draft row exists before its Slack post, so an earlier failed post must not hide a later card.
+ */
+export function draftTimes(
+  drafts: { card_ts?: unknown; created_at?: unknown }[],
+): { draftCreatedAt: Date | null; draftCardTs: string | null } {
+  const posted = drafts.find((d) => d.card_ts != null);
+  return {
+    draftCreatedAt: (drafts[0]?.created_at as Date | undefined) ?? null,
+    draftCardTs: (posted?.card_ts as string | undefined) ?? null,
+  };
+}
+
 // --- receipts --------------------------------------------------------------------------------
 
 export interface ReceiptSummary {
@@ -294,6 +308,33 @@ export interface ReceiptSummary {
   deliveries: { total: number; failed: number; stale?: number };
   triggerSlugs: string[];
   failedTriggerSlugs: string[];
+}
+
+/** Rows per receipts request (the API's maximum). */
+export const RECEIPT_PAGE = 200;
+/** Pages read per list, so one page load costs a bounded number of API calls. */
+export const RECEIPT_MAX_PAGES = 10;
+
+/**
+ * Receipts newest first, paged by offset until a short page, a receipt older than `since`, or
+ * `maxPages`. `truncated` is true when more rows may exist beyond what was read.
+ */
+export async function pageReceipts(
+  fetchPage: (offset: number, limit: number) => Promise<ReceiptSummary[]>,
+  opts: { since?: number; maxPages?: number; pageSize?: number } = {},
+): Promise<{ receipts: ReceiptSummary[]; truncated: boolean }> {
+  const pageSize = opts.pageSize ?? RECEIPT_PAGE;
+  const maxPages = opts.maxPages ?? RECEIPT_MAX_PAGES;
+  const receipts: ReceiptSummary[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const rows = await fetchPage(page * pageSize, pageSize);
+    receipts.push(...rows);
+    if (rows.length < pageSize) return { receipts, truncated: false };
+    const oldest = toMs(rows[rows.length - 1]!.receivedAt);
+    if (opts.since != null && oldest != null && oldest < opts.since)
+      return { receipts, truncated: false };
+  }
+  return { receipts, truncated: true };
 }
 
 /** Receipts with a failed delivery to a Sylon agent; other workflows' failures are not ours to replay. */

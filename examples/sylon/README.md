@@ -124,7 +124,8 @@ The copilot drafts from two sources, and neither is compiled into the agent.
   three pages. Those pages are fetched as markdown (`<page url>.md`), cut to 12,000 characters each,
   and cached in the `doc_cache` table for one hour. Only URLs under `https://docs.sapiom.ai/` are
   ever fetched. If the docs cannot be read, the draft is written from the team's articles alone and
-  its confidence is capped at 50%; the run does not fail.
+  its confidence is capped at 50%; if only some selected pages fail, the prompt names them and
+  confidence is capped at 60%. The run does not fail.
 - **Team knowledge, edited in the Console.** The **Knowledge** tab lists the `kb_articles` table:
   create, edit, enable or disable, and delete. A _policy_ is a rule the copilot always follows
   (refund wording, SLAs, tone). An _answer_ is a team-written Q&A; they are all included while
@@ -136,6 +137,17 @@ Citations on a draft card are the docs pages (as links) and the team articles th
 Seeding: `pnpm run setup` adds three starter policies (billing questions beyond the pricing page,
 never ask for credentials, tone) when the table is empty. They are examples; edit or delete them in
 the Console. To load more at once, insert rows into `kb_articles` with `kind` `policy` or `answer`.
+
+## Console
+
+The Console is an App Link (`sylon-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, and cue cards. Its state lives in the `sylon` database and the Sapiom API.
+
+```bash
+pnpm run console:build     # bundle apps/console into apps/console/dist/server.mjs
+pnpm run console:publish   # build, then create or update the org-only App Link and publish it
+```
+
+`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, replays receipts and redraws Slack cards). The key is stored in the link's env as `SYLON_CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
 
 ## Add your own agent
 
