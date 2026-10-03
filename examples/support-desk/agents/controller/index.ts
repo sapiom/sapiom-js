@@ -1,9 +1,4 @@
-/**
- * SAP-3788 adds opt-in escalation so stalled issues can reach a person beyond triage.
- *
- * Trigger: `schedule_cron` (`*\/2 * * * *` in fleet.json). The trigger's stored `input` may carry
- * `jevCheck: false` to skip the Jev "does this expect a reply?" check on `customer_waiting`.
- */
+/** SAP-3788 adds opt-in escalation so stalled issues can reach a person beyond triage. */
 import {
   defineAgent,
   defineStep,
