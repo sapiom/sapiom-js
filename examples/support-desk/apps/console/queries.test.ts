@@ -15,15 +15,19 @@ import {
 } from "../../_shared/issues";
 import { createArticle, listArticles } from "../../_shared/kb";
 import { resetBoard } from "../../_shared/reset";
-import { fakeCtx } from "../../_shared/test-ctx";
+import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import { scopeReceipts } from "./logic";
 import {
   boardIssues,
+  clearSla,
   deskAccount,
   deskPeople,
   deskTicket,
+  issueMessages,
   metricIssues,
   parseBoardFilter,
+  readSla,
+  saveSla,
   receiptDesks,
   statusCounts,
 } from "./queries";
@@ -304,5 +308,63 @@ describe("desk-scoped writes", () => {
       (await listArticles(db, { deskId })).map((a) => a.title).sort();
     expect(await titles(test.id)).toEqual(["everyone", "test only"]);
     expect(await titles(support.id)).toEqual(["everyone", "support only"]);
+  });
+});
+
+describe("SLA", () => {
+  it("lists only the asked issues' customer-thread messages", async () => {
+    const a = await issueOn(test, "a");
+    const b = await issueOn(test, "b");
+    const other = await issueOn(support, "other");
+    let e = 0;
+    const say = (
+      issueId: string,
+      direction: "customer" | "agent" | "internal",
+    ) =>
+      linkMessage(db, {
+        issueId,
+        source: "slack",
+        sourceEventId: `EvSla${++e}`,
+        direction,
+        slack: { channel: "C0X", ts: `1790500${e}00.000100` },
+        userId: "U0X",
+        text: direction,
+      });
+    await say(a.id, "customer");
+    await say(a.id, "internal");
+    await say(b.id, "agent");
+    await say(other.id, "customer");
+    const rows = await issueMessages(db, [a.id, b.id]);
+    expect(rows.map((r) => [r.issue_id, r.direction]).sort()).toEqual(
+      [
+        [a.id, "customer"],
+        [b.id, "agent"],
+      ].sort(),
+    );
+    expect(await issueMessages(db, [])).toEqual([]);
+  });
+
+  it("saves, reads and clears the sla key, and rejects a bad zone without writing", async () => {
+    expect(await readSla(db)).toBeNull();
+    const bad = await saveSla(db, {
+      ...EXAMPLE_SLA,
+      businessHours: { ...EXAMPLE_SLA.businessHours, timeZone: "Nowhere/City" },
+    });
+    expect(bad).toMatchObject({ ok: false });
+    expect(!bad.ok && bad.error).toMatch(/timeZone/);
+    expect(await readSla(db)).toBeNull();
+
+    expect(await saveSla(db, EXAMPLE_SLA)).toEqual({
+      ok: true,
+      sla: EXAMPLE_SLA,
+    });
+    expect(await readSla({ ...db })).toEqual(EXAMPLE_SLA);
+    const [row] = await db.query<{ set_by: string }>(
+      "select set_by from config where key = 'sla'",
+    );
+    expect(row.set_by).toBe("console");
+
+    await clearSla(db);
+    expect(await readSla({ ...db })).toBeNull();
   });
 });

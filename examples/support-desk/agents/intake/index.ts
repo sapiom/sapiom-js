@@ -30,6 +30,7 @@ import {
 } from "../../_shared/desks";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
+import { issueSla } from "../../_shared/sla";
 import {
   SlackBlockActions,
   SlackMessageCreated,
@@ -425,6 +426,7 @@ const team = defineStep({
         const triageChannel = await cardChannel(db, issue);
         await refreshCard(
           ctx,
+          db,
           triageChannel,
           issue,
           await getAccount(db, issue.accountId),
@@ -820,6 +822,7 @@ async function followUp(db: Db, issueId: string): Promise<Issue> {
 
 async function refreshCard(
   ctx: SlackCtx,
+  db: Db,
   triageChannel: string,
   issue: Issue,
   account: Account,
@@ -829,7 +832,7 @@ async function refreshCard(
     channel: triageChannel,
     ts: issue.triageRootTs,
     text: issueCardText(issue, account),
-    blocks: issueCard(issue, account),
+    blocks: issueCard(issue, account, await issueSla(db, issue)),
   });
 }
 
@@ -858,7 +861,7 @@ const announce = defineStep({
         const card = await post(ctx, {
           channel: triageChannel,
           text: issueCardText(locked, account),
-          blocks: issueCard(locked, account),
+          blocks: issueCard(locked, account, await issueSla(tx, locked)),
         });
         return {
           issue: await setTriageRoot(tx, locked.id, triageChannel, card.ts),
@@ -876,7 +879,7 @@ const announce = defineStep({
         });
       } else if (input.decision === "link") {
         // The card shows the status the follow-up set; a replay refreshes it but mirrors nothing.
-        await refreshCard(ctx, cardIn, issue, account);
+        await refreshCard(ctx, db, cardIn, issue, account);
         if (!input.duplicate)
           await post(ctx, {
             channel: cardIn,
@@ -1121,7 +1124,7 @@ const button = defineStep({
       try {
         // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
         const account = await getAccount(db, issue.accountId);
-        await refreshCard(ctx, triageChannel, issue, account);
+        await refreshCard(ctx, db, triageChannel, issue, account);
         if (input.container?.message_ts !== issue.triageRootTs) {
           const line =
             verb === "take"

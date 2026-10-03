@@ -6,7 +6,9 @@
  */
 import fleet from "../../fleet.json";
 import { agentSlug } from "../../_shared/fleet-id";
+import type { Direction, IssueStatus } from "../../_shared/issues";
 import { KB_KINDS, UUID, type KbInput } from "../../_shared/kb";
+import { slaDue, type Sla, type SlaDue, type SlaKind } from "../../_shared/sla";
 
 export interface FleetProject {
   key: string;
@@ -288,7 +290,7 @@ export const TABLES: [string, string][] = [
   ],
   [
     "config",
-    "runtime config: customer channels, alerts channel, switches, escalation per desk (other desk settings live in desks)",
+    "runtime config: customer channels, alerts channel, switches, escalation per desk, SLA targets (other desk settings live in desks)",
   ],
   ["schema_migrations", "applied migrations"],
 ];
@@ -308,6 +310,85 @@ export function linearIssueUrl(
 
 export const agentPageUrl = (definitionId: string) =>
   `https://app.sapiom.ai/agents/${definitionId}`;
+
+// --- SLA -------------------------------------------------------------------------------------
+
+/** `ms` as `12m`, `3h 5m` or `2d 4h`, rounded with `round` to whole minutes, at least 1m. */
+function span(ms: number, round: (x: number) => number): string {
+  const m = Math.max(1, round(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
+}
+
+/** The board's SLA cell: `first response in 12m`, `next response breached 5m ago`, or null. */
+export function slaLabel(
+  due: Pick<SlaDue, "kind" | "dueAt"> | null,
+  now: Date,
+): string | null {
+  if (!due) return null;
+  const what =
+    due.kind === "first_response" ? "first response" : "next response";
+  const left = due.dueAt.getTime() - now.getTime();
+  return left > 0
+    ? `${what} in ${span(left, Math.ceil)}`
+    : `${what} breached ${span(-left, Math.floor)} ago`;
+}
+
+export interface BoardSla {
+  slaKind: SlaKind | null;
+  slaDueAt: string | null;
+  slaLabel: string | null;
+}
+
+/** Each board row's running SLA clock, in row order; all null when `sla` is unset. */
+export function boardSla(
+  rows: readonly {
+    id: string;
+    status: string;
+    priority: string | null;
+    createdAt: Date | string;
+  }[],
+  messages: readonly {
+    issue_id: string;
+    direction: string;
+    ts: string | null;
+    created_at: Date | string;
+  }[],
+  sla: Sla | null,
+  now: Date,
+): BoardSla[] {
+  const byIssue = new Map<string, (typeof messages)[number][]>();
+  for (const m of messages) {
+    const list = byIssue.get(m.issue_id);
+    if (list) list.push(m);
+    else byIssue.set(m.issue_id, [m]);
+  }
+  return rows.map((r) => {
+    const due = sla
+      ? slaDue(
+          {
+            status: r.status as IssueStatus,
+            priority: r.priority,
+            createdAt: new Date(r.createdAt),
+            messages: (byIssue.get(r.id) ?? []).map((m) => ({
+              direction: m.direction as Direction,
+              ts: m.ts,
+              createdAt: new Date(m.created_at),
+            })),
+          },
+          sla,
+        )
+      : null;
+    return {
+      slaKind: due?.kind ?? null,
+      slaDueAt: due?.dueAt.toISOString() ?? null,
+      slaLabel: slaLabel(due, now),
+    };
+  });
+}
 
 // --- latency ---------------------------------------------------------------------------------
 

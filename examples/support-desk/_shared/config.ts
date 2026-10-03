@@ -20,6 +20,56 @@ export const DeskEscalationSchema = z.object({
   oncallSlackId: z.string().min(1).optional(),
 });
 export type DeskEscalation = z.infer<typeof DeskEscalationSchema>;
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** `"HH:MM"` as minutes since local midnight. */
+export const minuteOfDay = (hhmm: string): number =>
+  Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+function validTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SlaTarget = z.object({
+  firstResponseMinutes: z.number().int().min(1).max(10080),
+  nextResponseMinutes: z.number().int().min(1).max(10080),
+  /** Count only minutes inside `businessHours`; false counts wall-clock minutes. */
+  businessHours: z.boolean(),
+});
+
+/**
+ * Response targets per issue priority (`_shared/sla.ts` applies them). Lives here rather than in
+ * `sla.ts` so `ConfigSchemas` never waits on a module that imports this one.
+ */
+export const SlaSchema = z.object({
+  businessHours: z
+    .object({
+      timeZone: z.string().refine(validTimeZone, "unknown time zone"),
+      /** 0 = Sunday .. 6 = Saturday. */
+      days: z
+        .array(z.number().int().min(0).max(6))
+        .min(1)
+        .refine((d) => new Set(d).size === d.length, "days must be unique"),
+      start: z.string().regex(HHMM, "use HH:MM"),
+      end: z.string().regex(HHMM, "use HH:MM"),
+    })
+    // The bound keeps the business clock's walk short: see `addBusinessMinutes`.
+    .refine((h) => minuteOfDay(h.end) - minuteOfDay(h.start) >= 60, {
+      message: "end must be at least 60 minutes after start",
+      path: ["end"],
+    }),
+  targets: z.object({
+    urgent: SlaTarget,
+    high: SlaTarget,
+    normal: SlaTarget,
+    low: SlaTarget,
+  }),
+});
 
 export const ConfigSchemas = {
   /** Superseded by the desk's own value (`desks.linear_team_id`); read only when the desk has none. */
@@ -63,6 +113,8 @@ export const ConfigSchemas = {
     })
     .partial()
     .strict(),
+  /** Response targets per priority. Unset: the controller nudges after the desk's `nudge_minutes`. */
+  sla: SlaSchema,
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -79,6 +131,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "nudge.minutes",
   "escalation",
   "digest.sla_hours",
+  "sla",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ConfigSchemas,
   MissingConfigError,
+  OPTIONAL_KEYS,
   customerChannel,
   deskEscalation,
   getConfig,
@@ -12,6 +13,7 @@ import {
 } from "./config";
 import { memoryDb } from "./db";
 import { seedFleet } from "./seed";
+import { EXAMPLE_SLA } from "./test-ctx";
 
 describe("config", () => {
   it("getConfigOr returns the fallback only when the key is unset", async () => {
@@ -176,5 +178,27 @@ describe("config", () => {
       await expect(
         setConfig(db, "nudge.repeat_minutes", bad, "test"),
       ).rejects.toThrow();
+  });
+
+  it("stores an sla, which fleet.json may omit", async () => {
+    expect(OPTIONAL_KEYS).toContain("sla");
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "sla", null)).toBeNull();
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    expect(await getConfig(db, "sla")).toEqual(EXAMPLE_SLA);
+    await expect(
+      setConfig(
+        db,
+        "sla",
+        {
+          ...EXAMPLE_SLA,
+          businessHours: {
+            ...EXAMPLE_SLA.businessHours,
+            timeZone: "Nowhere/City",
+          },
+        },
+        "test",
+      ),
+    ).rejects.toThrow(/timeZone/);
   });
 });

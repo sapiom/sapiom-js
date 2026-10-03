@@ -15,6 +15,7 @@
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
+ * The SLA writes (`/api/sla`) touch only `config.sla` and record `console` as `set_by`.
  *
  * Ticket actions (`/api/tickets/<id>/actions/<verb>`) emit the event the Slack button would, and
  * the agents handle it (see `actions.ts`); the Console writes no issue or draft itself.
@@ -61,12 +62,16 @@ import { planAction } from "./actions";
 import { getEscalation, putEscalation } from "./escalation";
 import {
   boardIssues,
+  clearSla,
   deskAccount,
   deskPeople,
   deskTicket,
+  issueMessages,
   metricIssues,
   parseBoardFilter,
+  readSla,
   receiptDesks,
+  saveSla,
   statusCounts,
   type BoardRow,
 } from "./queries";
@@ -80,6 +85,7 @@ import {
   agentByKey,
   METRIC_WINDOWS,
   agentPageUrl,
+  boardSla,
   costOf,
   costSummary,
   cuesFromReplay,
@@ -470,17 +476,24 @@ function ticketRow(
 async function board(d: Db, desk: Desk, url: URL) {
   const filter = parseBoardFilter(url.searchParams.get("status"));
   if (!filter) throw new HttpError(400, "unknown status filter");
-  const [project, rows, counts] = await Promise.all([
+  const [project, rows, counts, sla] = await Promise.all([
     linearProject(d, desk),
     boardIssues(d, desk.id, filter),
     statusCounts(d, desk.id),
+    readSla(d),
   ]);
   const owners = await ownerNames(rows.map((r) => r.ownerSlackId));
+  // Computed per request, so the column is live on every board refresh.
+  const messages = sla ? await issueMessages(d, rows.map((r) => r.id)) : [];
+  const slas = boardSla(rows, messages, sla, new Date());
   return {
     desk: desk.slug,
     filter,
     counts,
-    issues: rows.map((r) => ticketRow(r, desk, project.url, owners)),
+    issues: rows.map((r, i) => ({
+      ...ticketRow(r, desk, project.url, owners),
+      ...slas[i],
+    })),
   };
 }
 
@@ -897,6 +910,10 @@ const GET: [RegExp, Handler][] = [
   [/^\/api\/cues$/, async () => cuesFromReplay(replay)],
   [/^\/api\/system$/, () => withConsoleDb(system)],
   [
+    /^\/api\/sla$/,
+    () => withConsoleDb(async (d) => ({ sla: await readSla(d) })),
+  ],
+  [
     /^\/api\/kb$/,
     (_, __, url) =>
       withConsoleDb(async (d) =>
@@ -1056,6 +1073,12 @@ function httpBody(res: { status: number; body: unknown }) {
   return res.body;
 }
 
+async function putSla(body: Record<string, unknown>) {
+  const saved = await withConsoleDb((d) => saveSla(d, body));
+  if (!saved.ok) throw new HttpError(400, saved.error);
+  return { sla: saved.sla };
+}
+
 const PUT: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id], body) => updateKbArticle(id!, body)],
   [
@@ -1089,10 +1112,19 @@ const PUT: [RegExp, Handler][] = [
         return settingsView(d, desk, await putFleetSettings(d, desk, body));
       }),
   ],
+  [/^\/api\/sla$/, (_, body) => putSla(body)],
 ];
 
 const DELETE: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id]) => deleteKbArticle(id!)],
+  [
+    /^\/api\/sla$/,
+    () =>
+      withConsoleDb(async (d) => {
+        await clearSla(d);
+        return { sla: null };
+      }),
+  ],
 ];
 
 function route(table: [RegExp, Handler][], path: string) {

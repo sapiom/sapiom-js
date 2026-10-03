@@ -50,6 +50,7 @@ import {
   type Issue,
 } from "../../_shared/issues";
 import { getIssue as getLinearIssue } from "../../_shared/linear";
+import { issueSla } from "../../_shared/sla";
 import { post, update } from "../../_shared/slack";
 
 import { resolution, syncKey, type Resolution } from "./rules";
@@ -221,7 +222,7 @@ async function redrawCard(
       channel: triageChannel,
       ts: issue.triageRootTs,
       text: issueCardText(issue, account),
-      blocks: issueCard(issue, account),
+      blocks: issueCard(issue, account, await issueSla(db, issue)),
     });
   }
   await setCardDirty(db, issue.id, false);

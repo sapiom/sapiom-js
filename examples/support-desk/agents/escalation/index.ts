@@ -54,6 +54,7 @@ import {
   type LinearIssue,
 } from "../../_shared/linear";
 import { resolution } from "../linear-sync/rules";
+import { issueSla } from "../../_shared/sla";
 import { permalink, post, update, userInfo } from "../../_shared/slack";
 
 export const AGENT = agentSlug("escalation");
@@ -478,7 +479,7 @@ async function redrawCard(
     channel: triageChannel,
     ts: issue.triageRootTs,
     text: issueCardText(issue, account),
-    blocks: issueCard(issue, account),
+    blocks: issueCard(issue, account, await issueSla(db, issue)),
   });
 }
 
