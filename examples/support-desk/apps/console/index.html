@@ -1250,13 +1250,18 @@
       }
       // Only the newest call may touch the form: a slug check alone misses a switch away and back.
       let escalationSeq = 0;
+      // One request at a time, so the server applies saves in click order and a load sees them.
+      let escalationQueue = Promise.resolve();
       async function escalationCall(body) {
         const seq = ++escalationSeq;
+        const path = scoped("/api/escalation");
         escalationLocked(true);
+        const request = escalationQueue.then(() =>
+          body ? post(path, body, "PUT") : get(path),
+        );
+        escalationQueue = request.catch(() => {});
         try {
-          const out = body
-            ? await post(scoped("/api/escalation"), body, "PUT")
-            : await get(scoped("/api/escalation"));
+          const out = await request;
           if (seq !== escalationSeq) return;
           showEscalation(out);
           escalationLocked(false);
