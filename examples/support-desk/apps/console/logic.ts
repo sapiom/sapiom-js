@@ -212,7 +212,8 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
   },
   controller: {
     emits: ["issue.nudged"],
-    writes: "nudges, runs, events_log; posts nudges in triage threads",
+    writes:
+      "nudges, runs, events_log; posts nudges in triage threads, DMs on-call and mentions the support group when an issue escalates",
   },
   "linear-sync": {
     emits: ["issue.engineering_resolved"],
@@ -253,7 +254,7 @@ export const TABLES: [string, string][] = [
   ["drafts", "AI reply drafts and their Approve / Escalate / Dismiss outcome"],
   [
     "nudges",
-    "follow-ups the controller already sent, one per issue and condition",
+    "follow-ups and escalations the controller already sent, one per issue and condition or level",
   ],
   ["runs", "each agent execution and the issue it worked on"],
   [
@@ -267,7 +268,7 @@ export const TABLES: [string, string][] = [
   ],
   [
     "config",
-    "runtime config: customer channels, alerts channel, switches (desk settings live in desks)",
+    "runtime config: customer channels, alerts channel, switches, escalation per desk (other desk settings live in desks)",
   ],
   ["schema_migrations", "applied migrations"],
 ];

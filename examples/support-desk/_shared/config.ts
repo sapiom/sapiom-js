@@ -6,6 +6,22 @@ import { z } from "zod/v4";
 
 import type { Db } from "./db";
 
+/** One desk's escalation: minutes per level, and who hears about it (SAP-3788). */
+export const DeskEscalationSchema = z.object({
+  levels: z
+    .array(z.number().int().positive())
+    .min(1)
+    .max(5)
+    .refine((l) => l.every((m, i) => i === 0 || m > l[i - 1]), {
+      message: "levels must be strictly ascending",
+    }),
+  /** A Slack user group id (`S…`), mentioned in the triage thread. */
+  groupId: z.string().min(1).optional(),
+  /** Overrides the desk's on-call for the DM. */
+  oncallSlackId: z.string().min(1).optional(),
+});
+export type DeskEscalation = z.infer<typeof DeskEscalationSchema>;
+
 export const ConfigSchemas = {
   /** Superseded by the desk's own value (`desks.linear_team_id`); read only when the desk has none. */
   "linear.team_id": z.string().min(1),
@@ -34,6 +50,8 @@ export const ConfigSchemas = {
   "intake.reactions": z.boolean(),
   /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
   "linear_sync.notify_customer": z.boolean(),
+  /** Per desk slug; a desk without an entry never escalates to a person. */
+  escalation: z.record(z.string().min(1), DeskEscalationSchema),
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -47,6 +65,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "channels.triage",
   "oncall.slack_id",
   "nudge.minutes",
+  "escalation",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
@@ -124,6 +143,45 @@ export async function setConfig<K extends ConfigKey>(
 export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
   await db.query("delete from config where key = $1", [key]);
   cacheFor(db).delete(key);
+}
+
+/** Every desk's escalation entry by desk slug; `{}` when the key is unset. */
+export async function escalations(db: Db): Promise<ConfigValue<"escalation">> {
+  return getConfigOr(db, "escalation", {} as ConfigValue<"escalation">);
+}
+
+/** The desk's escalation entry, or null when it has none (escalation off). */
+export async function deskEscalation(
+  db: Db,
+  slug: string,
+): Promise<DeskEscalation | null> {
+  return (await escalations(db))[slug] ?? null;
+}
+
+/**
+ * Set or (with null) remove one desk's escalation entry, leaving the other desks' alone. The row is
+ * created if absent and locked before the read, so two saves for different desks cannot overwrite
+ * each other.
+ */
+export async function setDeskEscalation(
+  db: Db,
+  slug: string,
+  entry: DeskEscalation | null,
+  setBy: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.query(
+      "insert into config (key, value) values ('escalation', '{}'::jsonb) on conflict (key) do nothing",
+    );
+    const [row] = await tx.query<{ value: unknown }>(
+      "select value from config where key = 'escalation' for update",
+    );
+    const all = { ...ConfigSchemas.escalation.parse(row.value) };
+    if (entry) all[slug] = DeskEscalationSchema.parse(entry);
+    else delete all[slug];
+    await setConfig(tx, "escalation", all, setBy);
+  });
+  cacheFor(db).delete("escalation");
 }
 
 /** The account name for a customer channel, or null when the channel is not a customer channel. */

@@ -152,13 +152,114 @@ export function dueNudges(input: RuleInput): Nudge[] {
     if (!onHold && pending && old(pending.createdAt))
       add("draft_pending", pending.id);
 
-    // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
-    const last = (messages.get(issue.id) ?? [])
-      .filter((m) => m.direction !== "internal")
-      .sort(byThreadOrder)
-      .at(-1);
-    if (!onHold && last?.direction === "customer" && old(last.createdAt))
+    const last = lastCustomerMessage(messages.get(issue.id) ?? []);
+    if (!onHold && last && old(last.createdAt))
       add("customer_waiting", last.id);
+  }
+  return due;
+}
+
+/** The customer's message when it is the last word in the customer thread, else undefined. */
+function lastCustomerMessage(messages: MessageRow[]): MessageRow | undefined {
+  // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
+  const last = messages
+    .filter((m) => m.direction !== "internal")
+    .sort(byThreadOrder)
+    .at(-1);
+  return last?.direction === "customer" ? last : undefined;
+}
+
+// --- escalation to a person (SAP-3788) ------------------------------------------------------
+
+/** The nudge conditions that escalate to a person once they have held long enough. */
+export const ESCALATION_KINDS = ["no_owner", "customer_waiting"] as const;
+export type EscalationKind = (typeof ESCALATION_KINDS)[number];
+
+/** Recorded in `nudges.kind`: one escalation per issue per level. */
+export const escalationKey = (level: number): string => `escalate:${level}`;
+
+export interface Escalation {
+  issueId: string;
+  /** 1-based index into the desk's levels. */
+  level: number;
+  /** Every escalating condition that holds now, with how long it has held. */
+  reasons: { kind: EscalationKind; refId: string; minutes: number }[];
+  key: string;
+}
+
+export interface EscalationInput {
+  issues: IssueRow[];
+  messages: MessageRow[];
+  sent: SentRow[];
+  now: Date;
+  /** Minutes per level, by desk id; a desk not listed never escalates. */
+  levels: Readonly<Record<string, readonly number[]>>;
+  /** The desk whose levels apply to an issue without one. */
+  defaultDeskId?: string | null;
+  /** Whether Jev `skip:customer_waiting:<msgId>` verdicts count (default true). */
+  jevCheck?: boolean;
+}
+
+/**
+ * The escalation due for each issue at `now`. The stall age is the age of the oldest condition
+ * that holds; only the highest level it reaches is due, and only when no level at or above it was
+ * sent, so a controller that was off does not send level 1 then level 2, and a condition coming
+ * back never repeats a level. Same skips as {@link dueNudges}.
+ */
+export function dueEscalations(input: EscalationInput): Escalation[] {
+  const messages = groupBy(input.messages);
+  const sent = groupBy(input.sent);
+  const jevCheck = input.jevCheck ?? true;
+  const now = input.now.getTime();
+  const due: Escalation[] = [];
+
+  for (const issue of input.issues) {
+    if (issue.status === "closed" || !issue.triageRootTs) continue;
+    const levels = input.levels[issue.deskId ?? input.defaultDeskId ?? ""];
+    if (!levels?.length) continue;
+    const issueSent = new Set((sent.get(issue.id) ?? []).map((s) => s.kind));
+
+    const holding: { kind: EscalationKind; refId: string; since: Date }[] = [];
+    if (!issue.ownerSlackId)
+      holding.push({
+        kind: "no_owner",
+        refId: issue.id,
+        since: issue.createdAt,
+      });
+    const last = lastCustomerMessage(messages.get(issue.id) ?? []);
+    if (
+      issue.status !== "on_hold" &&
+      last &&
+      !(jevCheck && issueSent.has(skipKey("customer_waiting", last.id)))
+    )
+      holding.push({
+        kind: "customer_waiting",
+        refId: last.id,
+        since: last.createdAt,
+      });
+    if (holding.length === 0) continue;
+
+    const ageMs = now - Math.min(...holding.map((h) => h.since.getTime()));
+    let level = 0;
+    levels.forEach((m, i) => {
+      if (ageMs >= m * 60_000) level = i + 1;
+    });
+    if (level === 0) continue;
+    const sentLevels = [...issueSent]
+      .filter((k) => k.startsWith("escalate:"))
+      .map((k) => Number(k.slice("escalate:".length)));
+    if (sentLevels.some((l) => l >= level)) continue;
+
+    due.push({
+      issueId: issue.id,
+      level,
+      reasons: holding.map((h) => ({
+        kind: h.kind,
+        refId: h.refId,
+        minutes: Math.floor((now - h.since.getTime()) / 60_000),
+      })),
+      key: escalationKey(level),
+    });
   }
   return due;
 }

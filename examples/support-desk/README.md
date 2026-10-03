@@ -62,7 +62,7 @@ flowchart LR
 | `intake`              | `slack.message.created`, `slack.reaction_added`, `slack.block_actions` | Classifies a customer message with Jev, opens an issue or links it to an open one, posts the triage card, emits `issue.*`. Owns Take and Close, and 🎫 (force an issue). |
 | `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from the docs and the team's articles, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                           |
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in the triage thread (the customer thread gets a neutral line, no link), moves the issue On Hold.                                                                             |
-| `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
+| `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason. Escalates an issue left unowned or a customer left waiting to on-call and a support group, once per level (see Escalation to a person). |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
 | `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other fleet agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
@@ -237,6 +237,30 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 including optional ones. `--no-triggers` deploys without attaching triggers. `--overwrite` resets desks and config to `fleet.local.json` + `fleet.json`
 (normally a rerun keeps what an onboarding flow changed).
 
+### Escalation to a person
+
+Nudges stay in the triage thread. When an issue stays unowned, or its customer keeps waiting for a
+reply, past a level, the controller also DMs on-call and mentions a Slack user group in the issue's
+triage thread. It is set per desk in the `escalation` config key, keyed by desk slug, and is off
+for a desk without an entry (so existing installs change nothing until you turn it on):
+
+```json
+{ "support": { "levels": [30, 120], "groupId": "S0123ABCD", "oncallSlackId": "U0456EFGH" } }
+```
+
+- `levels`: minutes, 1 to 5, strictly ascending. The issue's stall age is the age of its oldest
+  condition that holds (no owner since it opened, or the customer's unanswered last message, not
+  while On Hold). Only the highest level reached is sent, and each level at most once per issue
+  (recorded as `escalate:<n>` in `nudges`), so a condition coming back never repeats a level.
+- `groupId` (optional): the user group mentioned in the thread. User groups need a paid Slack plan;
+  without one the thread post mentions on-call instead.
+- `oncallSlackId` (optional): who gets the DM; defaults to the desk's on-call. With neither a group
+  nor an on-call the escalation is logged and not recorded.
+- A customer message Jev reads as needing no reply (a thank-you) does not count, as for nudges.
+
+Edit it from the Console's Escalation card (per selected desk: Save, Turn off). Per-priority
+thresholds from SLAs come later (SAP-3790); until then levels are explicit minutes.
+
 ### Failure alerts (watchdog)
 
 No event fires when a run fails, so the watchdog polls `GET /v1/workflows/executions?status=failed`
@@ -286,7 +310,7 @@ the Console. To load more at once, insert rows into `kb_articles` with `kind` `p
 
 ## Console
 
-The Console is an App Link (`support-desk-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, and cue cards. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes the board, timeline, metrics, failed events and Knowledge tab to one desk; Reset board closes only that desk's open tickets. Dispatch timing in the metrics is fleet-wide, and a failed event that carries no issue (a raw Slack event) shows on every desk. The System tab lists the desks with their triage channel and Linear project. Its state lives in the fleet database and the Sapiom API.
+The Console is an App Link (`support-desk-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, each desk's escalation levels and recipients, and cue cards. A desk switcher in the header (`?desk=<slug>`, default desk preselected) scopes the board, timeline, metrics, failed events, Escalation card and Knowledge tab to one desk; Reset board closes only that desk's open tickets. Dispatch timing in the metrics is fleet-wide, and a failed event that carries no issue (a raw Slack event) shows on every desk. The System tab lists the desks with their triage channel and Linear project. Its state lives in the fleet database and the Sapiom API.
 
 ```bash
 pnpm run console:build     # bundle apps/console into apps/console/dist/server.mjs

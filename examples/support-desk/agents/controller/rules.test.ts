@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  dueEscalations,
   dueNudges,
+  escalationKey,
+  type EscalationInput,
   nudgeKey,
   skipKey,
   type DraftRow,
@@ -298,5 +301,147 @@ describe("dedup and scope", () => {
         "no_draft:issue-1",
       ]);
     }
+  });
+});
+
+describe("dueEscalations", () => {
+  const MIN = 60_000;
+  const LEVELS = { "desk-1": [5, 60] };
+  const esc = (over: Partial<EscalationInput>) =>
+    dueEscalations({
+      issues: [],
+      messages: [],
+      sent: [],
+      now: NOW,
+      levels: LEVELS,
+      ...over,
+    });
+  const onDesk = (over: Partial<IssueRow> = {}) =>
+    issue({ deskId: "desk-1", ...over });
+
+  it("fires level 1 at exactly its minutes, not a millisecond before", () => {
+    expect(esc({ issues: [onDesk({ createdAt: ago(5 * MIN) })] })).toEqual([
+      {
+        issueId: "issue-1",
+        level: 1,
+        reasons: [{ kind: "no_owner", refId: "issue-1", minutes: 5 }],
+        key: "escalate:1",
+      },
+    ]);
+    expect(esc({ issues: [onDesk({ createdAt: ago(5 * MIN - 1) })] })).toEqual(
+      [],
+    );
+  });
+
+  it("returns only the highest level reached", () => {
+    expect(
+      esc({ issues: [onDesk({ createdAt: ago(61 * MIN) })] }).map((e) => e.key),
+    ).toEqual([escalationKey(2)]);
+  });
+
+  it("a sent level never fires again, even for a condition that comes back; the next level still does", () => {
+    const owned = onDesk({ ownerSlackId: "U1", createdAt: ago(30 * MIN) });
+    const sent = [{ issueId: "issue-1", kind: "escalate:1" }];
+    // The owner was set after level 1; now a new customer message has waited 10 minutes.
+    const back = [message({ id: "msg-2", createdAt: ago(10 * MIN) })];
+    expect(esc({ issues: [owned], messages: back, sent })).toEqual([]);
+    const later = [message({ id: "msg-2", createdAt: ago(60 * MIN) })];
+    expect(
+      esc({ issues: [owned], messages: later, sent }).map((e) => e.key),
+    ).toEqual(["escalate:2"]);
+  });
+
+  it("does not send a lower level after a higher one", () => {
+    const sent = [{ issueId: "issue-1", kind: "escalate:2" }];
+    expect(
+      esc({ issues: [onDesk({ createdAt: ago(10 * MIN) })], sent }),
+    ).toEqual([]);
+  });
+
+  it("names both conditions and ages the issue from the oldest", () => {
+    const [e] = esc({
+      issues: [onDesk({ createdAt: ago(70 * MIN) })],
+      messages: [message({ createdAt: ago(3 * MIN) })],
+    });
+    expect(e.level).toBe(2);
+    expect(e.reasons).toEqual([
+      { kind: "no_owner", refId: "issue-1", minutes: 70 },
+      { kind: "customer_waiting", refId: "msg-1", minutes: 3 },
+    ]);
+  });
+
+  it("counts customer_waiting from the customer's last message", () => {
+    const owned = onDesk({ ownerSlackId: "U1", createdAt: ago(90 * MIN) });
+    expect(
+      esc({
+        issues: [owned],
+        messages: [message({ createdAt: ago(6 * MIN) })],
+      }).map((e) => e.reasons.map((r) => r.kind)),
+    ).toEqual([["customer_waiting"]]);
+    // A team reply after it ends the wait.
+    expect(
+      esc({
+        issues: [owned],
+        messages: [
+          message({ createdAt: ago(6 * MIN), ts: "1" }),
+          message({
+            id: "msg-2",
+            direction: "agent",
+            createdAt: ago(1 * MIN),
+            ts: "2",
+          }),
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("skips closed issues and issues without a triage card", () => {
+    const old = ago(10 * MIN);
+    expect(
+      esc({
+        issues: [
+          onDesk({ status: "closed", createdAt: old }),
+          onDesk({ id: "issue-2", triageRootTs: null, createdAt: old }),
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("on hold keeps no_owner but not customer_waiting", () => {
+    const [e] = esc({
+      issues: [onDesk({ status: "on_hold", createdAt: ago(10 * MIN) })],
+      messages: [message({ createdAt: ago(10 * MIN) })],
+    });
+    expect(e.reasons.map((r) => r.kind)).toEqual(["no_owner"]);
+  });
+
+  it("honours a Jev skip only with jevCheck on", () => {
+    const input = {
+      issues: [onDesk({ ownerSlackId: "U1", createdAt: ago(10 * MIN) })],
+      messages: [message({ createdAt: ago(10 * MIN) })],
+      sent: [
+        { issueId: "issue-1", kind: skipKey("customer_waiting", "msg-1") },
+      ],
+    };
+    expect(esc(input)).toEqual([]);
+    expect(esc({ ...input, jevCheck: false }).map((e) => e.key)).toEqual([
+      "escalate:1",
+    ]);
+  });
+
+  it("a desk without levels never escalates; an issue without a desk uses the default desk", () => {
+    const old = ago(10 * MIN);
+    expect(
+      esc({ issues: [issue({ deskId: "desk-2", createdAt: old })] }),
+    ).toEqual([]);
+    expect(esc({ issues: [issue({ deskId: null, createdAt: old })] })).toEqual(
+      [],
+    );
+    expect(
+      esc({
+        issues: [issue({ deskId: null, createdAt: old })],
+        defaultDeskId: "desk-1",
+      }).map((e) => e.key),
+    ).toEqual(["escalate:1"]);
   });
 });
