@@ -16,6 +16,7 @@ import {
   issueCardText,
   mrkdwnLink,
   slackToPlain,
+  workingCard,
 } from "../../_shared/blocks";
 import { customerChannel, getConfig, getConfigOr } from "../../_shared/config";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
@@ -55,14 +56,15 @@ import {
   type Issue,
 } from "../../_shared/issues";
 import {
+  type SlackCtx,
   permalink,
   post,
   react,
   replies,
+  showWorking,
   unreact,
   update,
   userInfo,
-  type SlackCtx,
 } from "../../_shared/slack";
 import {
   categoryOf,
@@ -923,6 +925,9 @@ const button = defineStep({
     if (!issueId.success)
       return terminate({ skipped: `no issue id in ${action.action_id}` });
     const clicker = input.user.id;
+    // Before any database work, so the click shows at once; every path below redraws the card.
+    if (verb === "take" || verb === "close")
+      await showWorking(ctx, input, verb, workingCard);
 
     return withDb(ctx, async (db) => {
       // Issue cards and nudges live only in the triage channel. A click from anywhere else (say a

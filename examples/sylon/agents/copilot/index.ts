@@ -31,6 +31,7 @@ import {
   issueCard,
   issueCardText,
   statusLabel,
+  workingCard,
 } from "../../_shared/blocks";
 import { getConfig } from "../../_shared/config";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
@@ -58,7 +59,7 @@ import {
   type Message,
 } from "../../_shared/issues";
 import { articleTitles } from "../../_shared/kb";
-import { post, update, type SlackCtx } from "../../_shared/slack";
+import { type SlackCtx, post, showWorking, update } from "../../_shared/slack";
 import {
   DRAFT_FAILED_NOTE,
   DraftOutput,
@@ -456,6 +457,8 @@ const receive = defineStep({
         });
       if (!(ACTIONS.draft as readonly string[]).includes(decoded.verb))
         return terminate({ skipped: `unknown draft verb: ${decoded.verb}` });
+      // Before any database work, so the click shows within a second or two; `apply` redraws.
+      await showWorking(ctx, click.data, decoded.verb, workingCard);
       return goto("decide", click.data);
     }
     const trigger = DraftTrigger.safeParse(input);
