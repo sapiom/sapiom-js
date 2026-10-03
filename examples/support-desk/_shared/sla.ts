@@ -53,70 +53,53 @@ export const byThreadOrder = (
 /** Walk bound for {@link addBusinessMinutes}; the schema's limits keep every accepted config far below it. */
 export const MAX_STEPS = 5000;
 
-const WEEKDAY: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
+const DAY_MS = 86_400_000;
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-/** The local weekday and minute of day (with its fraction) of `ms` in `timeZone`. */
-function localTime(ms: number, timeZone: string) {
+/** The local wall-clock time of `ms` in `timeZone`, as epoch milliseconds read as if UTC. */
+function wall(ms: number, timeZone: string): number {
   let f = formatters.get(timeZone);
   if (!f) {
     f = new Intl.DateTimeFormat("en-US", {
       timeZone,
-      weekday: "short",
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
-      hourCycle: "h23",
     });
     formatters.set(timeZone, f);
   }
-  const part: Record<string, string> = {};
-  for (const p of f.formatToParts(ms)) part[p.type] = p.value;
-  return {
-    day: WEEKDAY[part.weekday!]!,
-    minute:
-      Number(part.hour) * 60 +
-      Number(part.minute) +
-      (Number(part.second) + (((ms % 1000) + 1000) % 1000) / 1000) / 60,
-  };
+  const p: Record<string, number> = {};
+  for (const part of f.formatToParts(ms)) p[part.type] = Number(part.value);
+  return (
+    Date.UTC(p.year!, p.month! - 1, p.day!, p.hour!, p.minute!, p.second!) +
+    (((ms % 1000) + 1000) % 1000)
+  );
 }
 
-/**
- * The instant at which the local clock, now at `minute`, next reads `target` (1440 = midnight).
- * Adding the difference lands an hour off when a DST change falls in between; one corrective read
- * fixes that, unless `target` is itself in a skipped hour, where the first landing is kept.
- */
-function localInstant(
-  t: number,
-  minute: number,
-  target: number,
+/** The first instant in `(lo, hi]` whose UTC offset is not `offset`; `hi` must have another one. */
+function offsetChange(
+  lo: number,
+  hi: number,
+  offset: number,
   timeZone: string,
 ): number {
-  const next = t + (target - minute) * 60_000;
-  const want = target % 1440;
-  let off = want - localTime(next, timeZone).minute;
-  if (off > 720) off -= 1440;
-  if (off < -720) off += 1440;
-  if (Math.abs(off) < 1e-6) return next;
-  const fixed = next + off * 60_000;
-  return Math.abs(localTime(fixed, timeZone).minute - want) < 1e-6
-    ? fixed
-    : next;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (wall(mid, timeZone) - mid === offset) lo = mid;
+    else hi = mid;
+  }
+  return hi;
 }
 
 /**
- * `start` plus `minutes` counted only inside the business window. Window edges are found as real
- * instants, so a DST change before or inside a window (a 23- or 25-hour day) counts the minutes
- * that actually pass.
+ * `start` plus `minutes` counted only while the local clock is inside the business window. It
+ * walks spans of constant UTC offset, ending each at the next window edge, midnight or DST change,
+ * so a change before, inside or on the edge of a window counts the minutes that actually pass.
  */
 export function addBusinessMinutes(
   start: Date,
@@ -131,17 +114,20 @@ export function addBusinessMinutes(
   let t = start.getTime();
   let left = minutes * 60_000;
   for (let step = 0; step < maxSteps; step++) {
-    const { day, minute } = localTime(t, zone);
-    if (days.has(day) && minute >= open && minute < close) {
-      const closesAt = localInstant(t, minute, close, zone);
-      if (left <= closesAt - t) return new Date(Math.round(t + left));
-      left -= closesAt - t;
-      t = closesAt;
-    } else if (days.has(day) && minute < open) {
-      t = localInstant(t, minute, open, zone);
-    } else {
-      t = localInstant(t, minute, 1440, zone);
+    const local = wall(t, zone);
+    const offset = local - t;
+    const businessDay = days.has(new Date(local).getUTCDay());
+    const minute = (((local % DAY_MS) + DAY_MS) % DAY_MS) / 60_000;
+    const inside = businessDay && minute >= open && minute < close;
+    const edge = inside ? close : businessDay && minute < open ? open : 1440;
+    let next = Math.round(t + (edge - minute) * 60_000);
+    if (wall(next, zone) - next !== offset)
+      next = offsetChange(t, next, offset, zone);
+    if (inside) {
+      if (left <= next - t) return new Date(t + left);
+      left -= next - t;
     }
+    t = next;
   }
   throw new Error(
     `addBusinessMinutes: no result within ${maxSteps} steps (${minutes} minutes in ${zone})`,
