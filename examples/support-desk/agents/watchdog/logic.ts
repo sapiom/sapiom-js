@@ -33,6 +33,7 @@ export const WATCHED_SLUGS: readonly string[] = [
   "escalation",
   "controller",
   "urgent-pager",
+  "digest",
 ].map((key) => agentSlug(key));
 
 /** A row of `GET /v1/workflows/executions`. */

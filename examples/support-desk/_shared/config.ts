@@ -34,6 +34,16 @@ export const ConfigSchemas = {
   "intake.reactions": z.boolean(),
   /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
   "linear_sync.notify_customer": z.boolean(),
+  /** Hours an open issue may age, by priority, before the daily digest flags it; unset keys keep the default. */
+  "digest.sla_hours": z
+    .object({
+      urgent: z.number().positive(),
+      high: z.number().positive(),
+      normal: z.number().positive(),
+      low: z.number().positive(),
+    })
+    .partial()
+    .strict(),
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -47,6 +57,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "channels.triage",
   "oncall.slack_id",
   "nudge.minutes",
+  "digest.sla_hours",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
