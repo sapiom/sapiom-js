@@ -50,7 +50,7 @@ const JEV_CONTEXT_MESSAGES = 6;
 const replyKey = (kind: Nudge["kind"], refId: string): string =>
   `reply:${kind}:${refId}`;
 
-// The cron trigger's stored input (fleet.json) may set `jevCheck: false` to skip the Jev check.
+// Accept an optional Jev bypass so scheduled runs can nudge without message classification.
 const Input = z.object({ jevCheck: z.boolean().optional() });
 
 const NudgeSchema = z.object({
