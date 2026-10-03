@@ -26,7 +26,7 @@ describe("console page SLA", () => {
     expect(page).toContain('get("/api/sla")');
     expect(page).toContain('post("/api/sla", body, "PUT")');
     expect(page).toContain('post("/api/sla", undefined, "DELETE")');
-    // A 400's message lands under the textarea.
+    // Keep validation errors beside the editor so the operator can correct the submitted settings.
     expect(page).toMatch(
       /post\("\/api\/sla", body, "PUT"\);\s*\} catch \(e\) \{\s*\$\("sla-error"\)\.textContent = e\.message;/,
     );

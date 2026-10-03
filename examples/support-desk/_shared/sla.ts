@@ -1,12 +1,4 @@
-/**
- * Response targets per priority (the `sla` config key): which clock runs for an issue and when it
- * breaches. Pure functions over plain rows, plus {@link issueSla} for callers holding a `Db`.
- *
- * - first response: no `agent` message yet; the clock starts when the issue opened.
- * - next response: the team has replied once and the customer spoke last; the clock starts at
- *   that customer message.
- * - none: the team spoke last, or the issue is closed or on hold (engineering owns the next move).
- */
+/** On-hold issues have no response clock because engineering owns the next move. */
 import { getConfigOr, minuteOfDay, type ConfigValue } from "./config";
 import type { Db } from "./db";
 import {
@@ -27,7 +19,6 @@ export interface SlaDue {
   dueAt: Date;
 }
 
-/** What {@link slaDue} reads of a message. */
 export interface SlaMessage {
   direction: Direction;
   /** Slack `ts`: when the message was posted, which a delayed or replayed event cannot move. */
@@ -36,10 +27,8 @@ export interface SlaMessage {
   createdAt: Date;
 }
 
-/**
- * Thread order: by Slack `ts`, so an event stored late still sorts where it was posted. Falls back
- * to the insert time only for a message without a `ts`.
- */
+// Prefer Slack posting time so delayed events keep thread order; missing or non-finite
+// timestamps use insertion time.
 export function postedAt(m: Pick<SlaMessage, "ts" | "createdAt">): number {
   const ts = m.ts === null ? NaN : Number(m.ts);
   return Number.isFinite(ts) ? ts * 1000 : m.createdAt.getTime();
@@ -50,14 +39,17 @@ export const byThreadOrder = (
   b: Pick<SlaMessage, "ts" | "createdAt">,
 ): number => postedAt(a) - postedAt(b);
 
-/** Walk bound for {@link addBusinessMinutes}; the schema's limits keep every accepted config far below it. */
+/**
+ * Walk bound for {@link addBusinessMinutes}; the schema's limits keep every accepted config far
+ * below it.
+ */
 export const MAX_STEPS = 5000;
 
 const DAY_MS = 86_400_000;
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-/** The local wall-clock time of `ms` in `timeZone`, as epoch milliseconds read as if UTC. */
+// Encode local calendar fields as UTC so weekdays and window boundaries share one arithmetic frame.
 function wall(ms: number, timeZone: string): number {
   let f = formatters.get(timeZone);
   if (!f) {
@@ -97,9 +89,7 @@ function offsetChange(
 }
 
 /**
- * `start` plus `minutes` counted only while the local clock is inside the business window. It
- * walks spans of constant UTC offset, ending each at the next window edge, midnight or DST change,
- * so a change before, inside or on the edge of a window counts the minutes that actually pass.
+ * Split at window edges and UTC-offset changes so DST counts elapsed business minutes correctly.
  */
 export function addBusinessMinutes(
   start: Date,
@@ -134,14 +124,14 @@ export function addBusinessMinutes(
   );
 }
 
-/** The target for a priority; null or unknown priorities get `normal`, intake's own default. */
+// Keep the fallback aligned with intake's normal priority; own keys only, so an inherited name
+// such as `toString` falls back too.
 export function slaTarget(sla: Sla, priority: string | null | undefined) {
-  return priority && priority in sla.targets
+  return priority && Object.hasOwn(sla.targets, priority)
     ? sla.targets[priority as SlaPriority]
     : sla.targets.normal;
 }
 
-/** When the `kind` clock that started at `start` breaches, for an issue of `priority`. */
 export function slaDeadline(
   sla: Sla,
   priority: string | null | undefined,
@@ -158,7 +148,6 @@ export function slaDeadline(
     : new Date(start.getTime() + minutes * 60_000);
 }
 
-/** Which clock runs for an issue and when it breaches, or null when none runs. */
 export function slaDue(
   issue: {
     status: IssueStatus;
@@ -190,7 +179,6 @@ export function slaDue(
   };
 }
 
-/** The issue's running SLA clock, or null when `sla` is unset or no clock runs. */
 export async function issueSla(db: Db, issue: Issue): Promise<SlaDue | null> {
   const sla = await getConfigOr(db, "sla", null);
   if (!sla) return null;

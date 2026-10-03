@@ -130,11 +130,6 @@ function slaFact(sla: Pick<SlaDue, "kind" | "dueAt">, now: Date): string {
   return `*${what} ${state}:* <!date^${unix}^{date_short_pretty} {time}|${sla.dueAt.toISOString()}>`;
 }
 
-/**
- * The triage card for an issue: number, account, classification, status, owner, the running SLA
- * clock when there is one; Take and Close. The title links to the customer message and the Linear
- * identifier to the Linear issue.
- */
 export function issueCard(
   issue: Issue,
   account: Account,

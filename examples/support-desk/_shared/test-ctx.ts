@@ -3,7 +3,7 @@ import type { EmitEventResult } from "@sapiom/tools";
 
 import type { Sla } from "./sla";
 
-/** The README's `sla` example: urgent 15 min, high 1 h, normal and low 8 business hours. */
+/** Shared fixture from the README's SLA example. */
 export const EXAMPLE_SLA: Sla = {
   businessHours: {
     timeZone: "America/New_York",

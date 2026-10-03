@@ -15,7 +15,7 @@
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
- * The SLA writes (`/api/sla`) touch only `config.sla` and record `console` as `set_by`.
+ * The SLA routes (`/api/sla`) touch only `config.sla`; a save records `console` as `set_by`.
  *
  * Desks: the board, timeline, metrics, failed events and Knowledge tab are scoped to one desk,
  * named by `?desk=<slug>` (default: the default desk). Reset board closes only that desk's issues.

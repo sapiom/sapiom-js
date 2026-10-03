@@ -20,7 +20,7 @@ export interface IssueRow {
   triageRootTs: string | null;
   /** The issue's desk, which sets its threshold in `RuleInput.deskMinutes`. */
   deskId?: string | null;
-  /** Picks the issue's target when `RuleInput.sla` is set. */
+  /** Keep priority in the snapshot so scan and send can evaluate the same SLA target. */
   priority?: string | null;
   createdAt: Date;
 }
@@ -126,12 +126,7 @@ function lastRound(
   return last;
 }
 
-/**
- * Every nudge due at `now` and not yet sent. A condition is due once it has held for at least
- * the issue's SLA target (first response until the team has replied once, next response after),
- * or without `sla` its desk's `nudge_minutes`. Closed issues and issues without a triage card
- * (nowhere to post) get none; on-hold issues get no `draft_pending` or `customer_waiting`, since engineering owns the next move.
- */
+/** Engineering owns the next move on hold, so suppress draft and customer follow-ups there. */
 export function dueNudges(input: RuleInput): Nudge[] {
   const drafts = groupBy(input.drafts);
   const messages = groupBy(input.messages);

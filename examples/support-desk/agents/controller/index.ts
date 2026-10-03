@@ -102,10 +102,7 @@ interface Snapshot {
   now: Date;
 }
 
-/**
- * Thresholds for `dueNudges`: the SLA targets when `sla` is set, else each desk's own, and the
- * pre-desk `nudge.minutes` for an issue with none.
- */
+/** Share threshold loading so scan and send apply the same configuration precedence. */
 async function thresholds(db: Db) {
   return {
     sla: await getConfigOr(db, "sla", null),
