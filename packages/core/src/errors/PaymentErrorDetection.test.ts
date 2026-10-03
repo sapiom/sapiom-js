@@ -1,6 +1,8 @@
 import {
   PaymentRequiredError,
   X402PaymentResponse,
+  extractX402Response,
+  extractTransactionId,
 } from "./PaymentErrorDetection";
 import { X402ResponseV1, X402ResponseV2 } from "../types/transaction";
 
@@ -132,6 +134,59 @@ describe("PaymentRequiredError", () => {
         "https://api.example.com/resource",
       );
       expect(error.x402Response).toBe(v2Response);
+    });
+  });
+});
+
+// ============================================================================
+// Sapiom-format 402 body detection (regression guard for the isSapiomPaymentResponse guard)
+// ============================================================================
+
+describe("Sapiom-format 402 detection", () => {
+  /** A Sapiom 402 error: the x402 payload is nested under a `requiresPayment` wrapper. */
+  function sapiomError(data: Record<string, unknown>, headers?: Record<string, string>) {
+    return { status: 402, message: "Payment Required", data, headers };
+  }
+
+  describe("extractX402Response", () => {
+    it("extracts the x402 payload nested in a Sapiom `requiresPayment` wrapper", () => {
+      // The wrapper is not itself an x402 response (no top-level x402Version/accepts),
+      // so this only works if the Sapiom guard accepts it — the branch that was dead
+      // while the guard demanded a non-existent `paymentData` field.
+      const error = sapiomError({
+        requiresPayment: true,
+        transactionId: "txn_abc",
+        x402: v2Response,
+      });
+      expect(extractX402Response(error)).toBe(v2Response);
+    });
+
+    it("still extracts a bare (unwrapped) x402 response", () => {
+      const error = sapiomError(
+        v2Response as unknown as Record<string, unknown>,
+      );
+      expect(extractX402Response(error)).toEqual(v2Response);
+    });
+  });
+
+  describe("extractTransactionId", () => {
+    it("returns the transactionId carried in a Sapiom body", () => {
+      const error = sapiomError({
+        requiresPayment: true,
+        transactionId: "txn_abc",
+        x402: v2Response,
+      });
+      expect(extractTransactionId(error)).toBe("txn_abc");
+    });
+
+    it("falls back to the x-sapiom-transaction-id header when the body has none", () => {
+      // Regression guard: a Sapiom body without its own transactionId must not
+      // short-circuit the header fallback.
+      const error = sapiomError(
+        { requiresPayment: true, x402: v2Response },
+        { "x-sapiom-transaction-id": "hdr_txn" },
+      );
+      expect(extractTransactionId(error)).toBe("hdr_txn");
     });
   });
 });
