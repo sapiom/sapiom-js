@@ -129,4 +129,53 @@ create unique index drafts_issue_causation on drafts (issue_id, causation_id);
 alter table issues add column linear_url text;
 `,
   },
+  {
+    id: "060_watchdog",
+    sql: `-- Watchdog: the failure poll's cursor (a single row) and the executions it has already reported.
+-- The reported set is the dedup; the cursor only bounds how far back the next poll looks.
+
+create table watchdog_state (
+  id int primary key check (id = 1),
+  cursor timestamptz not null
+);
+
+create table watchdog_reported (
+  execution_id text primary key,
+  agent text not null,
+  reported_at timestamptz not null default now()
+);
+`,
+  },
+  {
+    id: "061_linear_sync",
+    sql: `-- linear-sync: when it last read the issue's Linear state, so a backlog larger than one tick's read
+-- cap rotates oldest-checked first. Null until the first check.
+
+alter table issues add column linear_checked_at timestamptz;
+create index issues_linear_checked on issues (status, linear_checked_at);
+`,
+  },
+  {
+    id: "062_escalation_generation",
+    sql: `-- linear-sync: on_hold_at is when the issue last entered On Hold (one value per escalation), so a
+-- repeat escalation gets its own dedup keys. card_dirty marks a triage card that still has to be
+-- redrawn after a status move, so a failed Slack update is retried on a later tick.
+
+alter table issues add column on_hold_at timestamptz;
+alter table issues add column card_dirty boolean not null default false;
+update issues set on_hold_at = updated_at where status = 'on_hold';
+create index issues_card_dirty on issues (card_dirty) where card_dirty;
+`,
+  },
+  {
+    id: "063_watchdog_alerted",
+    sql: `-- Watchdog: one row per distinct "cannot poll" problem it has told Slack about, so a persistent
+-- failure (a revoked key) is announced once an hour rather than every tick.
+
+create table watchdog_alerted (
+  problem text primary key,
+  alerted_at timestamptz not null default now()
+);
+`,
+  },
 ];

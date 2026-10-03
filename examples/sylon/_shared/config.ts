@@ -10,12 +10,28 @@ export const ConfigSchemas = {
   "linear.team_id": z.string().min(1),
   "linear.project_id": z.string().min(1),
   "channels.triage": z.string().min(1),
+  "alerts.channel": z.string().min(1),
   "channels.customer": z.array(
     z.object({ channelId: z.string().min(1), accountName: z.string().min(1) }),
   ),
   "oncall.slack_id": z.string().min(1),
   "nudge.minutes": z.number().int().positive(),
+  /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
+  "team.slack_team_ids": z.array(z.string().min(1)),
+  /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
+  "customers.test_user_ids": z.array(z.string().min(1)),
+  /** Whether intake adds 👀 / 🎫 to customer messages. Off for a shadow pilot that must leave no footprint. */
+  "intake.reactions": z.boolean(),
+  /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
+  "linear_sync.notify_customer": z.boolean(),
 } as const;
+
+/** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
+export const OPTIONAL_KEYS: readonly ConfigKey[] = [
+  "team.slack_team_ids",
+  "channels.customer",
+  "alerts.channel",
+];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
   (typeof ConfigSchemas)[K]
@@ -55,6 +71,23 @@ export async function getConfig<K extends ConfigKey>(
   return value;
 }
 
+/**
+ * Like {@link getConfig}, but an unset key yields `fallback`. For keys added after a fleet was
+ * installed: the live config table does not have them until setup re-seeds.
+ */
+export async function getConfigOr<K extends ConfigKey, F>(
+  db: Db,
+  key: K,
+  fallback: F,
+): Promise<ConfigValue<K> | F> {
+  try {
+    return await getConfig(db, key);
+  } catch (err) {
+    if (err instanceof MissingConfigError) return fallback;
+    throw err;
+  }
+}
+
 export async function setConfig<K extends ConfigKey>(
   db: Db,
   key: K,
@@ -71,11 +104,17 @@ export async function setConfig<K extends ConfigKey>(
   cacheFor(db).delete(key);
 }
 
+/** Remove a key so readers fall back to their default. */
+export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
+  await db.query("delete from config where key = $1", [key]);
+  cacheFor(db).delete(key);
+}
+
 /** The account name for a customer channel, or null when the channel is not a customer channel. */
 export async function customerChannel(
   db: Db,
   channelId: string,
 ): Promise<{ channelId: string; accountName: string } | null> {
-  const channels = await getConfig(db, "channels.customer");
+  const channels = await getConfigOr(db, "channels.customer", []);
   return channels.find((c) => c.channelId === channelId) ?? null;
 }

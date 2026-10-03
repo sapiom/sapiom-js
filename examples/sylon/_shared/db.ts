@@ -23,6 +23,14 @@ export interface Db {
    * Inside `fn`, query through `tx` only: on a memory db the outer `db` waits for this transaction.
    */
   transaction<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
+  /**
+   * Run `fn` only if no other caller holds the named lock; `held: false` means someone does and
+   * `fn` was not called. Unlike a transaction it does not roll `fn`'s writes back when it throws.
+   */
+  tryLock<R>(
+    name: string,
+    fn: () => Promise<R>,
+  ): Promise<{ held: true; value: R } | { held: false }>;
 }
 
 /** What `openDb` needs from a step context. */
@@ -58,6 +66,25 @@ function wrapPostgres(sql: PgSql | PgTx, inTx: boolean): Db {
         fn(wrapPostgres(tx, true)),
       )) as R;
     },
+    async tryLock<R>(name: string, fn: () => Promise<R>) {
+      if (inTx) throw new Error("tryLock cannot run inside a transaction");
+      // A session advisory lock lives on one connection, so reserve it for the lock's lifetime.
+      const conn = await (sql as PgSql).reserve();
+      try {
+        const [row] = await conn.unsafe(
+          "select pg_try_advisory_lock(hashtext($1)) as ok",
+          [name],
+        );
+        if (!row?.ok) return { held: false as const };
+        try {
+          return { held: true as const, value: await fn() };
+        } finally {
+          await conn.unsafe("select pg_advisory_unlock(hashtext($1))", [name]);
+        }
+      } finally {
+        conn.release();
+      }
+    },
   };
 }
 
@@ -82,9 +109,19 @@ function wrapMemory(
   run: (text: string, params: unknown[]) => Promise<{ rows: unknown[] }>,
   inTx = false,
   lock: { tail: Promise<unknown> } = { tail: Promise.resolve() },
+  held: Set<string> = new Set(),
 ): Db {
   return {
     kind: "memory",
+    async tryLock<R>(name: string, fn: () => Promise<R>) {
+      if (held.has(name)) return { held: false as const };
+      held.add(name);
+      try {
+        return { held: true as const, value: await fn() };
+      } finally {
+        held.delete(name);
+      }
+    },
     async query<T>(text: string, params: unknown[] = []) {
       // Outside a transaction, wait for any open one, so a standalone write can neither interleave
       // with it nor be undone by its rollback snapshot.
@@ -99,7 +136,7 @@ function wrapMemory(
       const turn = lock.tail.then(async () => {
         const snapshot = mem.backup();
         try {
-          return await fn(wrapMemory(mem, run, true, lock));
+          return await fn(wrapMemory(mem, run, true, lock, held));
         } catch (err) {
           snapshot.restore();
           throw err;

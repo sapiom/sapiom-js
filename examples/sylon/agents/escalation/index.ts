@@ -50,6 +50,7 @@ import {
   toLinearIssue,
   type LinearIssue,
 } from "../../_shared/linear";
+import { resolution } from "../linear-sync/rules";
 import { permalink, post, update, userInfo } from "../../_shared/slack";
 
 export const AGENT = "sylon-escalation";
@@ -71,6 +72,25 @@ export const marker = (issueId: string) => `sylon:${issueId}`;
 /** Key of the customer-thread reply in `messages`; its presence means the replies went out. */
 export const customerReplyKey = (issueId: string) => `escalation:${issueId}`;
 const triageReplyKey = (issueId: string) => `escalation:${issueId}:triage`;
+
+/**
+ * The reply keys for the issue's current Linear link. The first link uses the bare keys; a link
+ * made after an earlier one resolved (a repeat escalation) adds its identifier, so its replies are
+ * not mistaken for the first escalation's.
+ */
+async function replyKeys(db: Db, issueId: string, identifier: string) {
+  const first = await messageBySourceEventId(db, customerReplyKey(issueId));
+  const text = first?.text ?? "";
+  const bare =
+    !first ||
+    text.includes(`Tracked as ${identifier}:`) ||
+    text.endsWith(`Tracked as ${identifier}`);
+  const suffix = bare ? "" : `:${identifier}`;
+  return {
+    customer: `${customerReplyKey(issueId)}${suffix}`,
+    triage: `${triageReplyKey(issueId)}${suffix}`,
+  };
+}
 
 export const EscalateInput = Events["issue.escalate"].extend({
   /**
@@ -251,9 +271,22 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     let issue = await lockIssue(tx, issueId);
     let made: "existing" | "adopted" | "created" = "existing";
     let url = "";
-    if (!issue.linearIssueId || !issue.linearIdentifier) {
+    // A repeat escalation of an issue whose Linear issue is already Done or Canceled gets a new
+    // Linear issue, so engineering sees the new report; the resolved one would only bounce it back.
+    const resolved =
+      issue.linearIdentifier &&
+      issue.status !== "on_hold" &&
+      resolution(
+        await getLinearIssue(
+          ctx,
+          issue.linearIssueId ?? issue.linearIdentifier,
+        ),
+      ) !== null;
+    if (!issue.linearIssueId || !issue.linearIdentifier || resolved) {
       const account = await getAccount(tx, issue.accountId);
-      const found = await findByMarker(ctx, { teamId, projectId, issueId });
+      const found = resolved
+        ? null
+        : await findByMarker(ctx, { teamId, projectId, issueId });
       const linear =
         found ??
         (await createIssue(ctx, {
@@ -290,7 +323,8 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     url ||= `(no url for ${identifier})`;
     const base = { issueId, linearIdentifier: identifier, url, made };
 
-    const replied = await messageBySourceEventId(tx, customerReplyKey(issueId));
+    const keys = await replyKeys(tx, issueId, identifier);
+    const replied = await messageBySourceEventId(tx, keys.customer);
     if (
       made === "existing" &&
       replied &&
@@ -309,7 +343,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
 
     const text = `Tracked as ${identifier}: ${url}`;
     const triageTs = await replyOnce(ctx, tx, {
-      key: triageReplyKey(issueId),
+      key: keys.triage,
       channel: triageChannel,
       threadTs: issue.triageRootTs,
       text,
@@ -317,7 +351,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       issueId,
     });
     const customerTs = await replyOnce(ctx, tx, {
-      key: customerReplyKey(issueId),
+      key: keys.customer,
       channel: issue.customerChannel ?? input.slack.channel,
       threadTs: issue.customerRootTs,
       text,

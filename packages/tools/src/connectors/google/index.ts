@@ -30,13 +30,13 @@ import {
   toProxyRequest,
 } from "../core/proxy-request.js";
 import { createProxyAuthClient } from "./auth-client.js";
+import { resolveToolsBaseUrl } from "../../_client/tools-base.js";
 
 /** This capability's provider key — the segment the gateway resolves to the tenant's connector. */
 const PROVIDER = "google";
 
 // Same tools host agents/models resolve — via SAPIOM_TOOLS_BASE. No new per-cap config.
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl();
 
 /**
  * The tenant's Google auth client for the vendor SDKs — a GENUINE `google-auth-library`
@@ -83,21 +83,20 @@ export async function fetch(
   init: RequestInit = {},
   transport: Transport = defaultTransport(),
 ): Promise<Response> {
-  const base = DEFAULT_BASE_URL.replace(/\/+$/, "");
   const headers: Record<string, string> = { ...headerRecord(init.headers) };
   let url: string;
   if (/^https?:\/\//i.test(pathOrUrl)) {
     const proxied = toProxyRequest({
       sdkUrl: pathOrUrl,
       provider: PROVIDER,
-      proxyBaseUrl: base,
+      proxyBaseUrl: DEFAULT_BASE_URL,
     });
     url = proxied.url;
     // Absolute vendor URL → forward its host; bare path → let the proxy use the default origin.
     headers[CONNECTOR_HOST_HEADER] = proxied.upstreamHost;
   } else {
     const path = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
-    url = `${base}/connectors/v1/providers/${PROVIDER}/proxy${path}`;
+    url = `${DEFAULT_BASE_URL}/connectors/v1/providers/${PROVIDER}/proxy${path}`;
   }
   return transport.fetch(url, { ...init, headers });
 }

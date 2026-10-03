@@ -4,11 +4,19 @@ import {
   MissingConfigError,
   customerChannel,
   getConfig,
+  getConfigOr,
   setConfig,
 } from "./config";
 import { memoryDb } from "./db";
 
 describe("config", () => {
+  it("getConfigOr returns the fallback only when the key is unset", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "alerts.channel", null)).toBeNull();
+    await setConfig(db, "alerts.channel", "C0ALERTS01", "test");
+    expect(await getConfigOr(db, "alerts.channel", null)).toBe("C0ALERTS01");
+  });
+
   it("throws a setup hint for a missing key", async () => {
     const db = await memoryDb();
     await expect(getConfig(db, "channels.triage")).rejects.toBeInstanceOf(
@@ -17,6 +25,29 @@ describe("config", () => {
     await expect(getConfig(db, "channels.triage")).rejects.toThrow(
       /pnpm run setup/,
     );
+  });
+
+  it("getConfigOr falls back for a missing key and returns a stored one", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "linear_sync.notify_customer", false)).toBe(
+      false,
+    );
+    await setConfig(db, "linear_sync.notify_customer", true, "test");
+    expect(await getConfigOr(db, "linear_sync.notify_customer", false)).toBe(
+      true,
+    );
+  });
+
+  it("getConfigOr returns the fallback for an unset key and the value once set", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "intake.reactions", true)).toBe(true);
+    await setConfig(db, "intake.reactions", false, "test");
+    expect(await getConfigOr(db, "intake.reactions", true)).toBe(false);
+  });
+
+  it("customerChannel finds nothing, rather than throwing, when channels.customer is unset", async () => {
+    const db = await memoryDb();
+    expect(await customerChannel(db, "C1")).toBeNull();
   });
 
   it("round-trips typed values and overwrites on a second set", async () => {
