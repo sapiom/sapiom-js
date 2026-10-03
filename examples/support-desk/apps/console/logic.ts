@@ -18,7 +18,13 @@ export interface FleetProject {
 
 export type FleetTrigger =
   | { project: string; kind: "event"; eventType: string }
-  | { project: string; kind: "schedule_cron"; cron: string };
+  | {
+      project: string;
+      kind: "schedule_cron";
+      cron: string;
+      /** IANA zone the cron runs in; unset means UTC, as on the server. */
+      timezone?: string;
+    };
 
 /** A trigger as `GET /v1/workflows/definitions/<slug>/triggers` lists it. */
 export interface AttachedTrigger {
@@ -27,6 +33,7 @@ export interface AttachedTrigger {
   status: string;
   eventType: string | null;
   cron: string | null;
+  timezone?: string | null;
   definitionSlug?: string;
 }
 
@@ -57,17 +64,22 @@ export function sameTrigger(
   if (have.status === "disabled" || have.kind !== want.kind) return false;
   return want.kind === "event"
     ? have.eventType === want.eventType
-    : have.cron === want.cron;
+    : have.cron === want.cron &&
+        (have.timezone ?? "UTC") === (want.timezone ?? "UTC");
 }
 
 export function triggerLabel(t: FleetTrigger): string {
-  return t.kind === "event" ? t.eventType : `cron ${t.cron}`;
+  return t.kind === "event"
+    ? t.eventType
+    : `cron ${t.cron}${t.timezone ? ` ${t.timezone}` : ""}`;
 }
 
 export function triggerBody(t: FleetTrigger): Record<string, string> {
   return t.kind === "event"
     ? { kind: t.kind, eventType: t.eventType }
-    : { kind: t.kind, cron: t.cron };
+    : t.timezone
+      ? { kind: t.kind, cron: t.cron, timezone: t.timezone }
+      : { kind: t.kind, cron: t.cron };
 }
 
 export interface TriggerState {
@@ -228,6 +240,11 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
     writes:
       "watchdog_state, watchdog_reported, watchdog_alerted; reads failed runs from the Sapiom API; posts each failure with action items",
   },
+  digest: {
+    emits: [],
+    writes:
+      "digests, runs; posts the daily digest in each desk's triage channel",
+  },
 };
 
 /** What the agent listens to, from fleet.json `triggers`. */
@@ -255,6 +272,7 @@ export const TABLES: [string, string][] = [
     "nudges",
     "follow-ups the controller already sent, one per issue, condition and round",
   ],
+  ["digests", "daily digests already posted, one per desk and day"],
   ["runs", "each agent execution and the issue it worked on"],
   [
     "kb_articles",

@@ -5,6 +5,8 @@ import {
   connectorsFor,
   missingTriggers,
   parseArgs,
+  TRIGGERS,
+  triggerBody,
   pausedToResume,
   selectProjects,
   triggersFor,
@@ -31,6 +33,7 @@ describe("setup selection", () => {
       "controller",
       "linear-sync",
       "watchdog",
+      "digest",
     ]);
   });
 
@@ -50,7 +53,7 @@ describe("setup selection", () => {
           parseArgs(["--skip", "controller", "--skip", "copilot"]),
         ),
       ),
-    ).toEqual(["intake", "escalation", "linear-sync", "watchdog"]);
+    ).toEqual(["intake", "escalation", "linear-sync", "watchdog", "digest"]);
     expect(
       keys(selectProjects(parseArgs(["--only", "intake,urgent-pager"]))),
     ).toEqual(["intake", "urgent-pager"]);
@@ -117,6 +120,81 @@ describe("trigger dedup", () => {
         ],
       ),
     ).toEqual([cron, event]);
+  });
+});
+
+describe("cron time zone", () => {
+  const digest = {
+    project: "digest",
+    kind: "schedule_cron",
+    cron: "0 9 * * *",
+    timezone: "America/Los_Angeles",
+  } as const;
+  const utc = {
+    project: "watchdog",
+    kind: "schedule_cron",
+    cron: "*/5 * * * *",
+  } as const;
+
+  it("fleet.json schedules the digest at 09:00 Pacific", () => {
+    expect(TRIGGERS.filter((t) => t.project === "digest")).toEqual([digest]);
+  });
+
+  it("sends the zone only when the trigger has one", () => {
+    expect(triggerBody(digest)).toEqual({
+      kind: "schedule_cron",
+      cron: "0 9 * * *",
+      timezone: "America/Los_Angeles",
+    });
+    expect(triggerBody(utc)).toEqual({
+      kind: "schedule_cron",
+      cron: "*/5 * * * *",
+    });
+  });
+
+  it("matches a cron only in the same zone, a missing zone meaning UTC", () => {
+    const same = attached({
+      kind: "schedule_cron",
+      cron: "0 9 * * *",
+      timezone: "America/Los_Angeles",
+    });
+    const inUtc = attached({
+      kind: "schedule_cron",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+    });
+    expect(missingTriggers([digest], [same])).toEqual([]);
+    expect(missingTriggers([digest], [inUtc])).toEqual([digest]);
+    expect(
+      missingTriggers(
+        [digest],
+        [attached({ kind: "schedule_cron", cron: "0 9 * * *" })],
+      ),
+    ).toEqual([digest]);
+    expect(
+      missingTriggers(
+        [utc],
+        [
+          attached({
+            kind: "schedule_cron",
+            cron: "*/5 * * * *",
+            timezone: "UTC",
+          }),
+        ],
+      ),
+    ).toEqual([]);
+    expect(
+      missingTriggers(
+        [utc],
+        [
+          attached({
+            kind: "schedule_cron",
+            cron: "*/5 * * * *",
+            timezone: null,
+          }),
+        ],
+      ),
+    ).toEqual([]);
   });
 });
 

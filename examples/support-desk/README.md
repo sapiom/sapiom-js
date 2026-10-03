@@ -65,6 +65,7 @@ flowchart LR
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, and repeats on a backoff while the reason holds.                                                                           |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
 | `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other fleet agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
+| `digest`              | cron, daily at 09:00 America/Los_Angeles                               | Posts one message per desk in its triage channel: open issues grouped by status, with age, owner, a link to the card, and the ones past their SLA (`digest.sla_hours`) flagged. Once per desk per day. |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
 
 ### linear-sync and customer messages
@@ -144,6 +145,7 @@ unset (so a live fleet needs no re-seed):
 | `team.slack_team_ids`     | the workspace the connector is installed in | Slack workspace ids whose members are our team. A customer-channel message from one of them is a team message: stored, never opened as an issue; a reply in an issue's thread moves it to On Customer. |
 | `customers.test_user_ids` | `[]`                                        | Slack user ids always treated as the customer, even from our workspace. Lets one person test with two accounts in the same workspace.                                                                  |
 | `intake.reactions`        | `true`                                      | `false` stops intake adding or removing 👀 and 🎫 on customer messages, so a shadow pilot leaves no visible footprint.                                                                                 |
+| `digest.sla_hours`      | `{ "urgent": 4, "high": 24, "normal": 72, "low": 168 }` | Hours an open issue may age, from its creation, before the daily digest flags it past SLA, by priority (a missing or other priority counts as `normal`; On Hold included). A partial object overrides only its keys. |
 
 ## Fleet identity
 
@@ -259,6 +261,17 @@ tick post 10 and one "and N more" line linking the Events page.
   `org.api_keys.write` and `org.write`; without them setup stops and tells you to create an
   `org.read` key yourself and add it in the agent's Secrets tab. The key is never printed or
   written to `.sapiom/fleet-state.json` (only its id).
+
+### Daily digest
+
+The digest's post time is its trigger in `fleet.json` (`0 9 * * *` in `America/Los_Angeles`, every
+day), not a `config` row. To change it, edit that trigger's `cron` or `timezone` (`0 9 * * 1-5` for
+weekdays only), cancel the old trigger (Console, or `sapiom agents schedule`), then run
+`pnpm run setup`. Setup never detaches a trigger, so a skipped cancel leaves both schedules firing;
+the `digests` table still keeps it to one post per desk per day. A failed post fails the run, which
+the watchdog reports; rerun the digest agent to post the desks still missing that day. Past about
+50 Slack blocks the message ends with `+k more open issues`. Issues stay grouped by status, past-SLA
+first within each status, and past-SLA issues are the last to be cut.
 
 Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
 each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open

@@ -28,6 +28,7 @@ import {
   scopeReceipts,
   secondsBetween,
   slackTsToMs,
+  triggerBody,
   triggerStates,
 } from "./logic";
 import { agentSlug } from "../../_shared/fleet-id";
@@ -61,6 +62,7 @@ describe("fleet agents", () => {
       "linear-sync",
       "urgent-pager",
       "watchdog",
+      "digest",
     ]);
   });
 
@@ -72,6 +74,7 @@ describe("fleet agents", () => {
       "controller",
       "linear-sync",
       "watchdog",
+      "digest",
     ]);
   });
 });
@@ -88,6 +91,55 @@ describe("trigger diffing", () => {
     ).toBe(false);
     expect(isOn("controller", [cron("9", "*/2 * * * *")])).toBe(true);
     expect(isOn("controller", [cron("9", "*/5 * * * *")])).toBe(false);
+  });
+
+  it("matches the digest's cron only in its zone, a missing zone meaning UTC", () => {
+    const pacific = {
+      ...cron("5", "0 9 * * *"),
+      timezone: "America/Los_Angeles",
+    };
+    expect(isOn("digest", [pacific])).toBe(true);
+    expect(isOn("digest", [cron("5", "0 9 * * *")])).toBe(false);
+    expect(isOn("digest", [{ ...pacific, timezone: "UTC" }])).toBe(false);
+    expect(
+      isOn("watchdog", [{ ...cron("6", "*/5 * * * *"), timezone: "UTC" }]),
+    ).toBe(true);
+    expect(planSwitch("digest", true, [cron("5", "0 9 * * *")]).create).toEqual(
+      [
+        {
+          project: "digest",
+          kind: "schedule_cron",
+          cron: "0 9 * * *",
+          timezone: "America/Los_Angeles",
+        },
+      ],
+    );
+    expect(
+      triggerBody({
+        project: "digest",
+        kind: "schedule_cron",
+        cron: "0 9 * * *",
+        timezone: "America/Los_Angeles",
+      }),
+    ).toEqual({
+      kind: "schedule_cron",
+      cron: "0 9 * * *",
+      timezone: "America/Los_Angeles",
+    });
+    expect(
+      triggerBody({
+        project: "watchdog",
+        kind: "schedule_cron",
+        cron: "*/5 * * * *",
+      }),
+    ).toEqual({ kind: "schedule_cron", cron: "*/5 * * * *" });
+    expect(triggerStates("digest", [])).toEqual([
+      {
+        label: "cron 0 9 * * * America/Los_Angeles",
+        state: "missing",
+        id: null,
+      },
+    ]);
   });
 
   it("treats a disabled trigger as deleted", () => {
