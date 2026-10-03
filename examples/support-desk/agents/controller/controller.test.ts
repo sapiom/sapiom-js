@@ -440,16 +440,68 @@ describe("controller", () => {
       expect(threadPosts(r)[0].text).toContain("<@U0OVERRIDE1>");
     });
 
-    it("records nothing when there is nobody to notify", async () => {
+    it("records nothing and never asks Jev again when there is nobody to notify", async () => {
       await escalate({});
       await db.query("update desks set oncall_slack_id = null");
-      const issue = await seedIssue(db, { title: "nobody" });
+      const issue = await seedIssue(db, {
+        title: "nobody",
+        customerText: "still broken",
+      });
       await backdate(db);
-      const r = await runController("exec-1");
-      expect(dms(r)).toHaveLength(0);
-      expect(threadPosts(r)).toHaveLength(0);
-      expect(r.done.output?.unnotified).toEqual(["escalate:1"]);
+      const first = await runController("exec-1");
+      expect(dms(first)).toHaveLength(0);
+      expect(threadPosts(first)).toHaveLength(0);
+      expect(first.done.output?.unnotified).toEqual(["escalate:1"]);
       expect(await recorded(issue.id)).toEqual([]);
+      // The nudge asked once; the unrecorded escalation must not ask on every run.
+      expect(first.asked).toEqual(["still broken"]);
+      const second = await runController("exec-2");
+      expect(second.asked).toEqual([]);
+      expect(second.done.output?.unnotified).toEqual(["escalate:1"]);
+    });
+
+    it("a delayed send never posts a lower level after a racing run sent a higher one", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      const issue = await seedIssue(db, {
+        title: "race",
+        customerText: "still broken",
+      });
+      await db.query(
+        "update issues set created_at = now() - interval '59 minutes'",
+      );
+      await db.query(
+        "update messages set created_at = now() - interval '8 minutes'",
+      );
+      const c = ctxWithJev("exec-1");
+      const scanned = await step("scan").run({}, c.ctx);
+      expect(
+        (scanned.input as { escalations: { key: string }[] }).escalations.map(
+          (e) => e.key,
+        ),
+      ).toEqual(["escalate:1"]);
+      // Another run sends level 2, then someone takes the issue; the customer still waits.
+      await db.query(
+        "insert into nudges (issue_id, kind) values ($1, 'escalate:2')",
+        [issue.id],
+      );
+      await db.query("update issues set owner_slack_id = 'U0OWNER0001'");
+      const out = await step("send").run(scanned.input, c.ctx);
+      expect(out.output!.escalated).toEqual([]);
+      expect(await recorded(issue.id)).toEqual(["escalate:2"]);
+    });
+
+    it("jevCheck off overrides an earlier Jev skip for escalations too", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      await seedIssue(db, {
+        title: "thanked",
+        customerText: "thanks, that fixed it!",
+      });
+      await db.query("update issues set owner_slack_id = 'U0OWNER0001'");
+      await backdate(db);
+      expect(escalated(await runController("exec-1"))).toEqual([]);
+      expect(
+        escalated(await runController("exec-2", { jevCheck: false })),
+      ).toEqual(["escalate:1"]);
     });
 
     it("a desk without an entry never escalates", async () => {

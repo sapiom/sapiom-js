@@ -159,7 +159,6 @@ export function dueNudges(input: RuleInput): Nudge[] {
   return due;
 }
 
-/** The customer's message when it is the last word in the customer thread, else undefined. */
 function lastCustomerMessage(messages: MessageRow[]): MessageRow | undefined {
   // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
   const last = messages
@@ -169,9 +168,7 @@ function lastCustomerMessage(messages: MessageRow[]): MessageRow | undefined {
   return last?.direction === "customer" ? last : undefined;
 }
 
-// --- escalation to a person (SAP-3788) ------------------------------------------------------
-
-/** The nudge conditions that escalate to a person once they have held long enough. */
+/** SAP-3788 requires paging for missing ownership or a waiting customer. */
 export const ESCALATION_KINDS = ["no_owner", "customer_waiting"] as const;
 export type EscalationKind = (typeof ESCALATION_KINDS)[number];
 
@@ -180,6 +177,7 @@ export const escalationKey = (level: number): string => `escalate:${level}`;
 
 export interface Escalation {
   issueId: string;
+  deskId: string;
   /** 1-based index into the desk's levels. */
   level: number;
   /** Every escalating condition that holds now, with how long it has held. */
@@ -194,18 +192,12 @@ export interface EscalationInput {
   now: Date;
   /** Minutes per level, by desk id; a desk not listed never escalates. */
   levels: Readonly<Record<string, readonly number[]>>;
-  /** The desk whose levels apply to an issue without one. */
   defaultDeskId?: string | null;
-  /** Whether Jev `skip:customer_waiting:<msgId>` verdicts count (default true). */
+  /** Reuse no-reply verdicts to avoid paging for customer acknowledgements. */
   jevCheck?: boolean;
 }
 
-/**
- * The escalation due for each issue at `now`. The stall age is the age of the oldest condition
- * that holds; only the highest level it reaches is due, and only when no level at or above it was
- * sent, so a controller that was off does not send level 1 then level 2, and a condition coming
- * back never repeats a level. Same skips as {@link dueNudges}.
- */
+/** Select only the highest due level and suppress previously reached levels to avoid catch-up paging. */
 export function dueEscalations(input: EscalationInput): Escalation[] {
   const messages = groupBy(input.messages);
   const sent = groupBy(input.sent);
@@ -215,7 +207,8 @@ export function dueEscalations(input: EscalationInput): Escalation[] {
 
   for (const issue of input.issues) {
     if (issue.status === "closed" || !issue.triageRootTs) continue;
-    const levels = input.levels[issue.deskId ?? input.defaultDeskId ?? ""];
+    const deskId = issue.deskId ?? input.defaultDeskId ?? "";
+    const levels = input.levels[deskId];
     if (!levels?.length) continue;
     const issueSent = new Set((sent.get(issue.id) ?? []).map((s) => s.kind));
 
@@ -252,6 +245,7 @@ export function dueEscalations(input: EscalationInput): Escalation[] {
 
     due.push({
       issueId: issue.id,
+      deskId,
       level,
       reasons: holding.map((h) => ({
         kind: h.kind,

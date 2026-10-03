@@ -874,7 +874,6 @@ async function deleteKbArticle(id: string) {
   return { deleted: id };
 }
 
-/** A handler result as the response body, or its error as an {@link HttpError}. */
 function httpBody(res: { status: number; body: unknown }) {
   if (res.status !== 200)
     throw new HttpError(

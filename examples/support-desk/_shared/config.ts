@@ -6,7 +6,7 @@ import { z } from "zod/v4";
 
 import type { Db } from "./db";
 
-/** One desk's escalation: minutes per level, and who hears about it (SAP-3788). */
+/** SAP-3788 requires runtime-editable escalation thresholds and recipients. */
 export const DeskEscalationSchema = z.object({
   levels: z
     .array(z.number().int().positive())
@@ -17,7 +17,6 @@ export const DeskEscalationSchema = z.object({
     }),
   /** A Slack user group id (`S…`), mentioned in the triage thread. */
   groupId: z.string().min(1).optional(),
-  /** Overrides the desk's on-call for the DM. */
   oncallSlackId: z.string().min(1).optional(),
 });
 export type DeskEscalation = z.infer<typeof DeskEscalationSchema>;
@@ -145,12 +144,10 @@ export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
   cacheFor(db).delete(key);
 }
 
-/** Every desk's escalation entry by desk slug; `{}` when the key is unset. */
 export async function escalations(db: Db): Promise<ConfigValue<"escalation">> {
   return getConfigOr(db, "escalation", {} as ConfigValue<"escalation">);
 }
 
-/** The desk's escalation entry, or null when it has none (escalation off). */
 export async function deskEscalation(
   db: Db,
   slug: string,
@@ -158,11 +155,7 @@ export async function deskEscalation(
   return (await escalations(db))[slug] ?? null;
 }
 
-/**
- * Set or (with null) remove one desk's escalation entry, leaving the other desks' alone. The row is
- * created if absent and locked before the read, so two saves for different desks cannot overwrite
- * each other.
- */
+/** Lock the shared config row before merging so concurrent saves preserve other desks' entries. */
 export async function setDeskEscalation(
   db: Db,
   slug: string,

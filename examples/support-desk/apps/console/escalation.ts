@@ -1,7 +1,4 @@
-/**
- * The Console's escalation card: read and write one desk's `escalation` config entry. Pure over a
- * `Db` and returning `{ status, body }`, so a spec runs it on pg-mem; `server.ts` maps the status.
- */
+/** Injecting Db lets specs exercise real SQL on pg-mem without starting the Console server. */
 import {
   DeskEscalationSchema,
   deskEscalation,
@@ -10,7 +7,6 @@ import {
 import type { Db } from "../../_shared/db";
 import { oncallFor, type Desk } from "../../_shared/desks";
 
-/** Recorded as `config.set_by`. */
 const EDITOR = "console";
 
 export async function getEscalation(db: Db, desk: Desk) {
@@ -24,7 +20,6 @@ export async function getEscalation(db: Db, desk: Desk) {
   };
 }
 
-/** `{ off: true }` removes the desk's entry; anything else must be a valid entry. */
 export async function putEscalation(
   db: Db,
   desk: Desk,

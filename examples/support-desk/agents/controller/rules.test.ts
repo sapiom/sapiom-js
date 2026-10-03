@@ -323,6 +323,7 @@ describe("dueEscalations", () => {
     expect(esc({ issues: [onDesk({ createdAt: ago(5 * MIN) })] })).toEqual([
       {
         issueId: "issue-1",
+        deskId: "desk-1",
         level: 1,
         reasons: [{ kind: "no_owner", refId: "issue-1", minutes: 5 }],
         key: "escalate:1",
@@ -342,7 +343,7 @@ describe("dueEscalations", () => {
   it("a sent level never fires again, even for a condition that comes back; the next level still does", () => {
     const owned = onDesk({ ownerSlackId: "U1", createdAt: ago(30 * MIN) });
     const sent = [{ issueId: "issue-1", kind: "escalate:1" }];
-    // The owner was set after level 1; now a new customer message has waited 10 minutes.
+    // A new waiting condition must not re-arm an escalation level already sent.
     const back = [message({ id: "msg-2", createdAt: ago(10 * MIN) })];
     expect(esc({ issues: [owned], messages: back, sent })).toEqual([]);
     const later = [message({ id: "msg-2", createdAt: ago(60 * MIN) })];
@@ -378,7 +379,6 @@ describe("dueEscalations", () => {
         messages: [message({ createdAt: ago(6 * MIN) })],
       }).map((e) => e.reasons.map((r) => r.kind)),
     ).toEqual([["customer_waiting"]]);
-    // A team reply after it ends the wait.
     expect(
       esc({
         issues: [owned],
