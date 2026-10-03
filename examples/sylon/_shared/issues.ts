@@ -618,6 +618,34 @@ export async function openIssueForMessage(
   });
 }
 
+/** Slack `ts` of the newest customer message on the issue, or null when it has none. */
+export async function latestCustomerTs(
+  db: Db,
+  issueId: string,
+): Promise<string | null> {
+  const rows = await db.query(
+    "select ts from messages where issue_id = $1 and direction = 'customer' and ts is not null",
+    [issueId],
+  );
+  let latest: string | null = null;
+  for (const r of rows) {
+    const ts = String(r.ts);
+    if (latest === null || compareSlackTs(ts, latest) > 0) latest = ts;
+  }
+  return latest;
+}
+
+/** Numeric order of two Slack timestamps ("seconds.micros"); exact, since a double cannot hold 16 digits safely. */
+export function compareSlackTs(a: string, b: string): number {
+  const norm = (ts: string) => {
+    const [sec = "0", frac = ""] = ts.split(".");
+    return BigInt(sec + frac.padEnd(6, "0").slice(0, 6));
+  };
+  const x = norm(a);
+  const y = norm(b);
+  return x === y ? 0 : x > y ? 1 : -1;
+}
+
 export async function messagesForIssue(
   db: Db,
   issueId: string,

@@ -1,10 +1,8 @@
 /** SAP-3684: run credentials need the agents gateway rather than the org-key Events API. */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveToolsBaseUrl } from "../_client/tools-base.js";
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_AGENTS_URL ??
-  process.env.SAPIOM_TOOLS_BASE ??
-  "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl(process.env.SAPIOM_AGENTS_URL);
 
 export interface EmitEventSpec {
   /** Dotted event type, e.g. `lead.created`; matched against `event` triggers. */

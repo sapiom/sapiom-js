@@ -7,10 +7,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, withDb, type Db } from "../../_shared/db";
+import { setConfig } from "../../_shared/config";
 import {
   accountByChannel,
+  createDraft,
+  getDraft,
   getIssue,
   linkMessage,
+  messageBySourceEventId,
   messagesForIssue,
   openIssue,
 } from "../../_shared/issues";
@@ -383,6 +387,240 @@ describe("intake agent", () => {
     );
   });
 
+  describe("team vs customer", () => {
+    const teamReply = () =>
+      intakeFixture("message-created.team-reply.json").payload;
+
+    async function openBug() {
+      const { output } = await run(
+        intakeFixture("message-created.bug.json").payload,
+        makeCtx("exec-bug", JEV.bug).ctx,
+      );
+      return output.issueId as string;
+    }
+
+    it("a team reply in an issue thread is stored as agent, hands the ball to the customer, mirrors once", async () => {
+      const issueId = await openBug();
+      const issue = await getIssue(db, issueId);
+      const draft = await createDraft(db, { issueId, text: "hi" });
+
+      const t = makeCtx("exec-team");
+      const out = await run(teamReply(), t.ctx);
+      expect(out.visited).toEqual(["guard", "team"]);
+      expect(out.output).toMatchObject({
+        outcome: "team_reply",
+        issueId,
+        status: "on_customer",
+      });
+      expect(t.calls).toHaveLength(0);
+      expect(t.emitted).toHaveLength(0);
+      expect(t.slack("reactions.add")).toHaveLength(0);
+      expect(t.slack("reactions.remove")).toHaveLength(0);
+      expect(await getIssue(db, issueId)).toMatchObject({
+        status: "on_customer",
+      });
+      expect((await getDraft(db, draft.id)).status).toBe("superseded");
+      const stored = await messageBySourceEventId(db, "Ev0INTAKETEAM1");
+      expect(stored).toMatchObject({
+        issueId,
+        direction: "agent",
+        userId: "U0TEAMENG01",
+        userName: "U0TEAMENG01",
+      });
+      expect(t.slack("chat.postMessage")).toEqual([
+        expect.objectContaining({
+          threadTs: issue.triageRootTs,
+          text: expect.stringMatching(
+            /^\*U0TEAMENG01\* \(team\): Looking into it/,
+          ),
+        }),
+      ]);
+      expect(t.slack("chat.update")).toEqual([
+        expect.objectContaining({ ts: issue.triageRootTs }),
+      ]);
+
+      // Redelivery: stored once, not mirrored twice.
+      const again = makeCtx("exec-team-2");
+      expect((await run(teamReply(), again.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        duplicate: true,
+      });
+      expect(again.slack("chat.postMessage")).toHaveLength(0);
+      expect(await messagesForIssue(db, issueId)).toHaveLength(2);
+    });
+
+    it("a redelivered team reply after a newer customer follow-up changes nothing", async () => {
+      const issueId = await openBug();
+      await run(teamReply(), makeCtx("exec-team").ctx);
+      const fup = structuredClone(
+        intakeFixture("message-created.follow-up.json").payload,
+      ) as { eventId: string; event: { ts: string; event_ts: string } };
+      fup.eventId = "Ev0INTAKEFUP2";
+      fup.event.ts = fup.event.event_ts = "1790890400.000500";
+      await run(fup, makeCtx("exec-fup").ctx);
+      const draft = await createDraft(db, { issueId, text: "answer" });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+
+      const again = makeCtx("exec-team-again");
+      expect((await run(teamReply(), again.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        duplicate: true,
+        status: "on_you",
+      });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+      expect((await getDraft(db, draft.id)).status).toBe("pending");
+    });
+
+    it("a team reply older than the customer's latest message changes nothing", async () => {
+      const issueId = await openBug();
+      await run(
+        intakeFixture("message-created.follow-up.json").payload,
+        makeCtx("exec-fup").ctx,
+      );
+      const draft = await createDraft(db, { issueId, text: "answer" });
+      const old = structuredClone(teamReply()) as {
+        eventId: string;
+        event: { ts: string; event_ts: string };
+      };
+      old.eventId = "Ev0INTAKETEAMOLD";
+      old.event.ts = old.event.event_ts = "1790890050.000300";
+      const out = await run(old, makeCtx("exec-team-old").ctx);
+      expect(out.output).toMatchObject({
+        outcome: "team_reply",
+        duplicate: false,
+        status: "on_you",
+      });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+      expect((await getDraft(db, draft.id)).status).toBe("pending");
+    });
+
+    it("leaves On Hold and Closed issues where they are", async () => {
+      for (const status of ["on_hold", "closed"]) {
+        setLocalDb(undefined);
+        db = await localFleetDb();
+        setLocalDb(db);
+        const issueId = await openBug();
+        await db.query("update issues set status = $2 where id = $1", [
+          issueId,
+          status,
+        ]);
+        await run(teamReply(), makeCtx("exec-team").ctx);
+        expect((await getIssue(db, issueId)).status).toBe(status);
+      }
+    });
+
+    it("a team message with no issue is stored and does nothing else", async () => {
+      const top = structuredClone(teamReply()) as {
+        event: { thread_ts?: string };
+      };
+      delete top.event.thread_ts;
+      const t = makeCtx("exec-team-top");
+      expect((await run(top, t.ctx)).output).toMatchObject({
+        outcome: "team_message",
+        issueId: null,
+      });
+      expect(await messageBySourceEventId(db, "Ev0INTAKETEAM1")).toMatchObject({
+        issueId: null,
+        direction: "agent",
+      });
+      expect(t.calls).toHaveLength(0);
+      expect(t.emitted).toHaveLength(0);
+      expect(t.slack("chat.postMessage")).toHaveLength(0);
+      expect(t.slack("reactions.add")).toHaveLength(0);
+      expect(await getAccountIssues()).toBe(0);
+    });
+
+    const getAccountIssues = async () =>
+      Number(
+        (
+          await db.query<{ n: string }>(
+            "select count(*)::text as n from issues",
+          )
+        )[0].n,
+      );
+
+    it("a customer message from another workspace takes the normal flow", async () => {
+      const t = makeCtx("exec-cnx", JEV.bug);
+      const out = await run(
+        intakeFixture("message-created.connect-customer.json").payload,
+        t.ctx,
+      );
+      expect(out.output).toMatchObject({ outcome: "opened" });
+      expect(t.slack("reactions.add").map((r) => r.name)).toEqual([
+        "eyes",
+        "ticket",
+      ]);
+    });
+
+    it("an outsider in an unlisted channel opens an issue and creates its account", async () => {
+      const msg = structuredClone(
+        intakeFixture("message-created.bug.json").payload,
+      ) as { event: { channel: string } };
+      msg.event.channel = "C0UNLISTED1";
+      expect(await accountByChannel(db, "C0UNLISTED1")).toBeNull();
+      const out = await run(msg, makeCtx("exec-unlisted", JEV.bug).ctx);
+      expect(out.output).toMatchObject({ outcome: "opened" });
+      expect(await accountByChannel(db, "C0UNLISTED1")).toMatchObject({
+        name: "C0UNLISTED1",
+      });
+    });
+
+    it("a team message in a channel with no account is skipped and stores nothing", async () => {
+      const msg = structuredClone(teamReply()) as {
+        event: { channel: string; thread_ts?: string };
+      };
+      msg.event.channel = "C0INTERNAL01";
+      delete msg.event.thread_ts;
+      const t = makeCtx("exec-internal-chat");
+      const out = await run(msg, t.ctx);
+      expect(out).toMatchObject({
+        visited: ["guard"],
+        output: { skipped: "team message outside a customer channel" },
+      });
+      expect(await messageBySourceEventId(db, "Ev0INTAKETEAM1")).toBeNull();
+      expect(t.slack("reactions.add")).toHaveLength(0);
+    });
+
+    it("a team message in a channel that has an account takes the team step", async () => {
+      const msg = structuredClone(
+        intakeFixture("message-created.connect-customer.json").payload,
+      ) as { event: { channel: string; user: string; user_team: string } };
+      msg.event.channel = "C0UNLISTED1";
+      await run(msg, makeCtx("exec-cnx", JEV.bug).ctx);
+      const chat = structuredClone(teamReply()) as {
+        event: { channel: string; thread_ts?: string };
+      };
+      chat.event.channel = "C0UNLISTED1";
+      delete chat.event.thread_ts;
+      const out = await run(chat, makeCtx("exec-team-acct").ctx);
+      expect(out.visited).toEqual(["guard", "team"]);
+      expect(out.output).toMatchObject({ outcome: "team_message" });
+    });
+
+    it("a listed test user is the customer even from our workspace", async () => {
+      await setConfig(db, "customers.test_user_ids", ["U0TEAMENG01"], "test");
+      const top = structuredClone(teamReply()) as {
+        event: { thread_ts?: string };
+      };
+      delete top.event.thread_ts;
+      const out = await run(top, makeCtx("exec-test-user", JEV.bug).ctx);
+      expect(out.output).toMatchObject({ outcome: "opened" });
+    });
+
+    it("intake.reactions=false adds and removes no reactions", async () => {
+      await setConfig(db, "intake.reactions", false, "test");
+      const t = makeCtx("exec-quiet", JEV.bug);
+      const out = await run(
+        intakeFixture("message-created.bug.json").payload,
+        t.ctx,
+      );
+      expect(out.output).toMatchObject({ outcome: "opened" });
+      expect(t.slack("reactions.add")).toHaveLength(0);
+      expect(t.slack("reactions.remove")).toHaveLength(0);
+      expect(t.emitted).toHaveLength(1);
+    });
+  });
+
   it("a Jev failure still opens an unclassified issue", async () => {
     const ctx = makeCtx("exec-fail", new Error("router 503"));
     const { output } = await run(
@@ -413,11 +651,11 @@ describe("intake agent", () => {
     expect((await run(reaction, ctx)).output).toEqual({
       skipped: "reaction thumbsup",
     });
-    const elsewhere = structuredClone(
-      intakeFixture("message-created.bug.json").payload,
-    ) as { event: { channel: string } };
-    elsewhere.event.channel = "C0ELSEWHERE";
-    expect((await run(elsewhere, ctx)).output).toMatchObject({
+    const ticket = structuredClone(
+      intakeFixture("reaction-added.ticket.json").payload,
+    ) as { event: { item: { channel: string } } };
+    ticket.event.item.channel = "C0ELSEWHERE";
+    expect((await run(ticket, ctx)).output).toMatchObject({
       skipped: expect.stringMatching(/not a customer channel/),
     });
   });

@@ -117,6 +117,8 @@
     ],
     "oncall.slack_id": "U0ONCALL001",
     "nudge.minutes": 5,
+    "customers.test_user_ids": [],
+    "intake.reactions": true,
     "linear_sync.notify_customer": false
   }
 }

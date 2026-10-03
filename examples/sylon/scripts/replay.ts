@@ -24,7 +24,7 @@ import {
 import { createClient } from "@sapiom/tools";
 import { z } from "zod/v4";
 
-import { getConfig } from "../_shared/config";
+import { getConfig, getConfigOr } from "../_shared/config";
 import {
   connectPostgres,
   resolveConnectionString,
@@ -372,7 +372,11 @@ async function main() {
     await resolveConnectionString({ sapiom } as never),
   );
   try {
-    const [customer] = await getConfig(db, "channels.customer");
+    const [customer] = await getConfigOr(db, "channels.customer", []);
+    if (!customer)
+      throw new Error(
+        "replay posts in the first channel of `channels.customer`; list one in fleet.local.json",
+      );
     const triage = await getConfig(db, "channels.triage");
     const [latest] = await client.get<ReceiptRow[]>("/receipts?limit=1");
     const since = new Date();

@@ -31,6 +31,18 @@ describe("config", () => {
     );
   });
 
+  it("getConfigOr returns the fallback for an unset key and the value once set", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "intake.reactions", true)).toBe(true);
+    await setConfig(db, "intake.reactions", false, "test");
+    expect(await getConfigOr(db, "intake.reactions", true)).toBe(false);
+  });
+
+  it("customerChannel finds nothing, rather than throwing, when channels.customer is unset", async () => {
+    const db = await memoryDb();
+    expect(await customerChannel(db, "C1")).toBeNull();
+  });
+
   it("round-trips typed values and overwrites on a second set", async () => {
     const db = await memoryDb();
     await setConfig(db, "nudge.minutes", 5, "test");
