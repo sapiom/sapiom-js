@@ -15,7 +15,6 @@
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
- * The SLA routes (`/api/sla`) touch only `config.sla`; a save records `console` as `set_by`.
  *
  * Ticket actions (`/api/tickets/<id>/actions/<verb>`) emit the event the Slack button would, and
  * the agents handle it (see `actions.ts`); the Console writes no issue or draft itself.
@@ -1073,6 +1072,8 @@ function httpBody(res: { status: number; body: unknown }) {
   return res.body;
 }
 
+// Scope SLA edits to the fleet database because the operator key is org-wide; only saves record
+// set_by.
 async function putSla(body: Record<string, unknown>) {
   const saved = await withConsoleDb((d) => saveSla(d, body));
   if (!saved.ok) throw new HttpError(400, saved.error);
