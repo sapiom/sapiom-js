@@ -305,3 +305,27 @@ export async function showWorking(
     });
   }
 }
+
+/**
+ * Put the clicked message back as Slack sent it, for a click that ends after `showWorking` without
+ * a card of its own to draw. Best effort, like the placeholder it undoes.
+ */
+export async function restoreClicked(
+  ctx: SlackCtx & {
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
+  },
+  click: {
+    container?: { channel_id?: string; message_ts?: string };
+    message?: { text?: string; blocks?: Block[] };
+  },
+): Promise<void> {
+  const channel = click.container?.channel_id;
+  const ts = click.container?.message_ts;
+  const blocks = click.message?.blocks;
+  if (!channel || !ts || !blocks?.length) return;
+  try {
+    await update(ctx, { channel, ts, text: click.message?.text, blocks });
+  } catch (err) {
+    ctx.logger?.warn("clicked card not restored", { err: String(err) });
+  }
+}

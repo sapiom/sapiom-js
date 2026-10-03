@@ -272,11 +272,32 @@ const WORKING: Record<string, string> = {
 };
 
 /**
+ * The clicked card with its actions block (`actionBlockId`, or the only one when undefined) replaced
+ * by a one-line context. Built from the card Slack sent with the click, so it needs no database
+ * read. `null` when the click carries no card or the card has no such actions block.
+ */
+export function replaceActions(
+  blocks: readonly Block[] | undefined,
+  actionBlockId: string | undefined,
+  line: string,
+): Block[] | null {
+  if (!blocks?.length) return null;
+  const isActions = (b: Block) =>
+    b.type === "actions" &&
+    (actionBlockId === undefined || b.block_id === actionBlockId);
+  if (!blocks.some(isActions)) return null;
+  const replacement: Block = {
+    type: "context",
+    elements: [{ type: "mrkdwn", text: line }],
+  };
+  return blocks.map((b) => (isActions(b) ? replacement : { ...b }));
+}
+
+/**
  * The clicked card with its buttons swapped for a "working" line, so the click shows within a
- * second or two instead of when the run ends. Built from the card Slack sent with the click, so it
- * needs no database read. It is only a placeholder: every click path ends by redrawing the card
- * from the database, so a second click, a retry or an already-decided draft never leaves it stuck.
- * `null` when the click carries no card or the card has no actions block to replace.
+ * second or two instead of when the run ends. It is only a placeholder: every click path ends by
+ * redrawing the card (or restoring it), so a second click, a retry or an already-decided draft
+ * never leaves it stuck.
  */
 export function workingCard(
   blocks: readonly Block[] | undefined,
@@ -284,19 +305,9 @@ export function workingCard(
   verb: string,
   userId: string,
 ): Block[] | null {
-  if (!blocks?.length) return null;
-  const isActions = (b: Block) =>
-    b.type === "actions" &&
-    (actionBlockId === undefined || b.block_id === actionBlockId);
-  if (!blocks.some(isActions)) return null;
-  const line: Block = {
-    type: "context",
-    elements: [
-      {
-        type: "mrkdwn",
-        text: `:hourglass_flowing_sand: ${WORKING[verb] ?? "Working"}… (<@${userId}>)`,
-      },
-    ],
-  };
-  return blocks.map((b) => (isActions(b) ? line : { ...b }));
+  return replaceActions(
+    blocks,
+    actionBlockId,
+    `:hourglass_flowing_sand: ${WORKING[verb] ?? "Working"}… (<@${userId}>)`,
+  );
 }
