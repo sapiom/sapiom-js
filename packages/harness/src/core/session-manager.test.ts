@@ -2352,6 +2352,49 @@ describe("SessionManager", () => {
     expect(received).toEqual(["hello world", "!"]);
   });
 
+  it("keeps terminal listeners across credential relaunch and ignores retired PTY output", async () => {
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async () => true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: generation === 1,
+        },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-resumable");
+
+    const received: string[] = [];
+    const detach = manager.attach(session.id, (chunk) => received.push(chunk));
+    generation = 2;
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() =>
+      expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce(),
+    );
+    spawns[0]!.emitExit(0);
+    await removal;
+    await manager.flush();
+
+    expect(spawns).toHaveLength(2);
+    spawns[0]!.emitData("retired output");
+    expect(received).toEqual([]);
+    spawns[1]!.emitData("replacement output");
+    expect(received).toEqual(["replacement output"]);
+
+    detach?.();
+    spawns[1]!.emitData("after detach");
+    expect(received).toEqual(["replacement output"]);
+  });
+
   describe("onActivity", () => {
     it("broadcasts once immediately, then throttles further data within the window", async () => {
       vi.useFakeTimers();
@@ -4799,6 +4842,8 @@ describe("SessionManager", () => {
         cwd: "/tmp/proj",
         harness,
       });
+      const received: string[] = [];
+      const detach = manager.attach(session.id, (chunk) => received.push(chunk));
       await manager.setAgentSessionId(session.id, "agent-session-1");
       generation = 2;
       manager.reconcileMcpCredentialGeneration(generation);
@@ -4816,6 +4861,10 @@ describe("SessionManager", () => {
         mcpAuthState: "current",
       });
       expect(spawns).toHaveLength(2);
+      spawns[0]!.emitData("retired runtime output");
+      spawns[1]!.emitData("replacement runtime output");
+      expect(received).toEqual(["replacement runtime output"]);
+      detach?.();
       expect(adapter.resume).toHaveBeenCalledWith(
         "agent-session-1",
         expect.objectContaining({ harnessSessionId: session.id }),

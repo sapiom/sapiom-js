@@ -634,7 +634,6 @@ interface PtyHandle {
   pendingReadinessFrame: string | null;
   /** Whether the pending synchronized repaint has produced visible text. */
   pendingReadinessFrameHasContent: boolean;
-  emitter: EventEmitter;
   /** Epoch ms this pty was spawned — anchors the Claude hook-timeout fallback. */
   spawnedAt: number;
   /** Epoch ms the current non-blocking readiness candidate began. A recognized
@@ -1124,6 +1123,7 @@ export class SessionManager {
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
+  private readonly outputListeners = new Map<string, Set<SessionDataListener>>();
   private readonly credentialRemovalRelaunches = new Set<Promise<void>>();
   private readonly statusEmitter = new EventEmitter();
   private readonly activityEmitter = new EventEmitter();
@@ -2219,8 +2219,18 @@ export class SessionManager {
     const handle = this.ptys.get(id);
     if (!handle) return undefined;
     if (handle.buffer) listener(handle.buffer);
-    handle.emitter.on("data", listener);
-    return () => handle.emitter.off("data", listener);
+    let listeners = this.outputListeners.get(id);
+    if (!listeners) {
+      listeners = new Set();
+      this.outputListeners.set(id, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0 && this.outputListeners.get(id) === listeners) {
+        this.outputListeners.delete(id);
+      }
+    };
   }
 
   onStatusChange(listener: SessionStatusListener): () => void {
@@ -3008,8 +3018,6 @@ export class SessionManager {
       throw error;
     }
 
-    const emitter = new EventEmitter();
-    emitter.setMaxListeners(0);
     let resolveExited!: () => void;
     const exited = new Promise<void>((resolve) => {
       resolveExited = resolve;
@@ -3025,7 +3033,6 @@ export class SessionManager {
       pendingReadinessPrefix: "",
       pendingReadinessFrame: null,
       pendingReadinessFrameHasContent: false,
-      emitter,
       spawnedAt: Date.now(),
       readinessCandidateAt: null,
       lastOutputAt: null,
@@ -3059,7 +3066,9 @@ export class SessionManager {
       handle.bracketedPaste = trackBracketedPaste(handle.bracketedPaste, chunk);
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       this.recordReadinessOutput(handle, chunk, adapter);
-      handle.emitter.emit("data", chunk);
+      if (this.ptys.get(session.id) === handle) {
+        this.outputListeners.get(session.id)?.forEach((listener) => listener(chunk));
+      }
       this.recordActivity(session.id);
     });
 
