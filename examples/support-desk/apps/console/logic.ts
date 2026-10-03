@@ -253,7 +253,7 @@ export const TABLES: [string, string][] = [
   ["drafts", "AI reply drafts and their Approve / Escalate / Dismiss outcome"],
   [
     "nudges",
-    "follow-ups the controller already sent, one per issue and condition",
+    "follow-ups the controller already sent, one per issue, condition and round",
   ],
   ["runs", "each agent execution and the issue it worked on"],
   [

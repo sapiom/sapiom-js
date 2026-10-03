@@ -62,7 +62,7 @@ flowchart LR
 | `intake`              | `slack.message.created`, `slack.reaction_added`, `slack.block_actions` | Classifies a customer message with Jev, opens an issue or links it to an open one, posts the triage card, emits `issue.*`. Owns Take and Close, and 🎫 (force an issue). |
 | `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from the docs and the team's articles, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                           |
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in the triage thread (the customer thread gets a neutral line, no link), moves the issue On Hold.                                                                             |
-| `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
+| `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, and repeats on a backoff while the reason holds.                                                                           |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
 | `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other fleet agents and posts one Slack message per failure: agent, step, error, link and action items.                       |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                           |
@@ -200,6 +200,11 @@ accounts and issues belong to it, and each knowledge article belongs to one desk
 | `oncallSlackId`                   | urgent-pager (falls back to the old `oncall.slack_id` key)                    |
 | `nudgeMinutes` (default 30)       | controller                                                                    |
 | `default`                         | the desk for any customer channel `channels.customer` does not assign         |
+
+`nudgeMinutes` is how long a condition holds before its first nudge. While it still holds, the
+controller nudges again after each gap in the fleet-wide config key `nudge.repeat_minutes`
+(default `[60, 240]`: +1 h, then every 4 h, the last gap repeating); `[]` nudges once. It stops as
+soon as the condition clears.
 
 How a message finds its desk: intake looks up the customer channel in `channels.customer`; its
 `desk` slug names the desk, and an entry without one (or an unlisted channel) gets the default desk.
