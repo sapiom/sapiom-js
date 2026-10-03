@@ -252,8 +252,9 @@ for a desk without an entry (so existing installs change nothing until you turn 
   condition that holds (no owner since it opened, or the customer's unanswered last message, not
   while On Hold). Only the highest level reached is sent, and each level at most once per issue
   (recorded as `escalate:<n>` in `nudges`), so a condition coming back never repeats a level.
-- `groupId` (optional): the user group mentioned in the thread. User groups need a paid Slack plan;
-  without one the thread post mentions on-call instead.
+- `groupId` (optional): the user group mentioned in the thread. User groups need a paid Slack plan,
+  and the controller cannot tell when the mention reaches nobody: on a free plan leave `groupId`
+  unset, and the thread post mentions on-call instead.
 - `oncallSlackId` (optional): who gets the DM; defaults to the desk's on-call. With neither a group
   nor an on-call the escalation is logged and not recorded.
 - A customer message Jev reads as needing no reply (a thank-you) does not count, as for nudges.
