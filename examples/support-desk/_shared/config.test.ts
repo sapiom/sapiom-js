@@ -143,6 +143,17 @@ describe("config", () => {
       });
     });
 
+    it("reads a change written through another handle", async () => {
+      const db = await memoryDb();
+      await setDeskEscalation(db, "support", { levels: [5] }, "test");
+      expect(await deskEscalation(db, "support")).toEqual({ levels: [5] });
+      // The Console writes from its own process, so this handle's cache never sees it.
+      await db.query(
+        "update config set value = '{}'::jsonb where key = 'escalation'",
+      );
+      expect(await deskEscalation(db, "support")).toBeNull();
+    });
+
     it("rejects an invalid entry without writing", async () => {
       const db = await memoryDb();
       await expect(

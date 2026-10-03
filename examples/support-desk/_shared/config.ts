@@ -144,8 +144,12 @@ export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
   cacheFor(db).delete(key);
 }
 
+// Uncached: the Console edits it from another process while a step process can stay warm.
 export async function escalations(db: Db): Promise<ConfigValue<"escalation">> {
-  return getConfigOr(db, "escalation", {} as ConfigValue<"escalation">);
+  const rows = await db.query<{ value: unknown }>(
+    "select value from config where key = 'escalation'",
+  );
+  return rows[0] ? ConfigSchemas.escalation.parse(rows[0].value) : {};
 }
 
 export async function deskEscalation(
