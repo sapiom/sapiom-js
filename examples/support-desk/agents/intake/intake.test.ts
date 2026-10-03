@@ -437,6 +437,13 @@ describe("intake agent", () => {
     expect(JSON.stringify(card.blocks)).toContain(
       "*First response due:* <!date^",
     );
+    // A follow-up redraws the card through refreshCard, still before any team reply.
+    const fup = makeCtx("exec-sla-fup");
+    await run(intakeFixture("message-created.follow-up.json").payload, fup.ctx);
+    const [redrawn] = fup.slack("chat.update");
+    expect(JSON.stringify(redrawn.blocks)).toContain(
+      "*First response due:* <!date^",
+    );
   });
 
   it("a follow-up on an On Hold issue stays On Hold", async () => {
