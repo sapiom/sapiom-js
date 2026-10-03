@@ -627,6 +627,67 @@ describe("click path", () => {
     expect(t2.slack("chat.update")).toHaveLength(1);
   });
 
+  const ORIGINAL_BLOCKS = [
+    { type: "section", text: { type: "mrkdwn", text: "Draft body" } },
+    {
+      type: "actions",
+      block_id: "draft.actions",
+      elements: [{ type: "button", action_id: "draft.approve" }],
+    },
+  ];
+  const clickWithCard = (value?: string) => {
+    const click = structuredClone(
+      fixture("slack/block-actions.draft-approve.json").payload,
+    ) as {
+      message: { blocks: unknown[] };
+      actions: { value: string }[];
+    };
+    click.message.blocks = structuredClone(ORIGINAL_BLOCKS);
+    if (value !== undefined) click.actions[0].value = value;
+    return click;
+  };
+
+  it("shows Approving on the clicked card first and ends on the decided draft card", async () => {
+    const t = ctxFor("exec-working");
+    await runAgent(clickWithCard(), t.ctx);
+    const clicked = t
+      .slack("chat.update")
+      .filter((u) => u.ts === "1790889450.000250");
+    expect(JSON.stringify(t.slack("chat.update")[0].blocks)).toContain(
+      "Approving…",
+    );
+    expect(t.slack("chat.update")[0].ts).toBe("1790889450.000250");
+    expect(JSON.stringify(clicked.at(-1)!.blocks)).toContain(
+      "Approved and sent by <@U0TEAMMATE1>",
+    );
+    expect(JSON.stringify(clicked.at(-1)!.blocks)).not.toContain("Approving");
+  });
+
+  it("shows no working card for a click whose value is not a draft id", async () => {
+    const t = ctxFor("exec-bad-value");
+    const ds = await runAgent(clickWithCard("not-a-uuid"), t.ctx);
+    expect(last(ds).output).toMatchObject({
+      skipped: "value is not a draftId",
+    });
+    expect(t.slack("chat.update")).toHaveLength(0);
+  });
+
+  it("restores the clicked card when the draft is not found", async () => {
+    const t = ctxFor("exec-missing");
+    const ds = await runAgent(
+      clickWithCard("00000000-0000-4000-8000-000000000000"),
+      t.ctx,
+    );
+    expect(last(ds).output).toMatchObject({ skipped: "draft not found" });
+    const updates = t.slack("chat.update");
+    expect(updates).toHaveLength(2);
+    expect(JSON.stringify(updates[0].blocks)).toContain("Approving…");
+    expect(updates[1]).toMatchObject({
+      ts: "1790889450.000250",
+      blocks: ORIGINAL_BLOCKS,
+    });
+  });
+
   it("Approve on a closed issue sends nothing and dismisses the draft", async () => {
     await setStatus(db, FIXTURE_ISSUE, "closed");
     const t = ctxFor("e");

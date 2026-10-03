@@ -9,6 +9,7 @@ import {
   mrkdwnLink,
   nudge,
   slackToPlain,
+  workingCard,
 } from "./blocks";
 import type { Account, Draft, Issue } from "./issues";
 
@@ -240,5 +241,30 @@ describe("slackToPlain", () => {
     const t = performance.now();
     expect(slackToPlain(evil)).toBe("");
     expect(performance.now() - t).toBeLessThan(500);
+  });
+});
+
+describe("workingCard", () => {
+  const card = [
+    {
+      type: "section",
+      block_id: "draft.header",
+      text: { type: "mrkdwn", text: "Draft" },
+    },
+    { type: "actions", block_id: "draft.actions", elements: [] },
+  ];
+
+  it("swaps the clicked actions block for a working line naming the clicker", () => {
+    const out = workingCard(card, "draft.actions", "approve", "U1")!;
+    expect(out[0]).toEqual(card[0]);
+    expect(out[1]).toMatchObject({ type: "context" });
+    expect(JSON.stringify(out[1])).toContain("Approving… (<@U1>)");
+    expect(card[1].type).toBe("actions");
+  });
+
+  it("returns null when the click carries no card or no actions block", () => {
+    expect(workingCard(undefined, "draft.actions", "approve", "U1")).toBeNull();
+    expect(workingCard([card[0]], "draft.actions", "approve", "U1")).toBeNull();
+    expect(workingCard(card, "issue.actions", "close", "U1")).toBeNull();
   });
 });

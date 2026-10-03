@@ -265,3 +265,67 @@ export function permalink(
     ? `${base}?thread_ts=${threadTs}&cid=${channel}`
     : base;
 }
+
+/**
+ * Swap the clicked card's buttons for a "working" line (see `workingCard`). Best effort: the click
+ * is handled either way, and a failed placeholder must not fail it.
+ */
+export async function showWorking(
+  ctx: SlackCtx & {
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
+  },
+  click: {
+    user: { id: string };
+    container?: { channel_id?: string; message_ts?: string };
+    message?: { text?: string; blocks?: Block[] };
+    actions: { block_id?: string }[];
+  },
+  verb: string,
+  build: (
+    blocks: readonly Block[] | undefined,
+    blockId: string | undefined,
+    verb: string,
+    userId: string,
+  ) => Block[] | null,
+): Promise<void> {
+  const channel = click.container?.channel_id;
+  const ts = click.container?.message_ts;
+  const blocks = build(
+    click.message?.blocks,
+    click.actions[0]?.block_id,
+    verb,
+    click.user.id,
+  );
+  if (!channel || !ts || !blocks) return;
+  try {
+    await update(ctx, { channel, ts, text: click.message?.text, blocks });
+  } catch (err) {
+    ctx.logger?.warn("working card not shown; handling the click anyway", {
+      err: String(err),
+    });
+  }
+}
+
+/**
+ * Put the clicked message back as Slack sent it, for a click that ends after `showWorking` without
+ * a card of its own to draw. Best effort, like the placeholder it undoes.
+ */
+export async function restoreClicked(
+  ctx: SlackCtx & {
+    logger?: { warn: (msg: string, meta?: Record<string, unknown>) => void };
+  },
+  click: {
+    container?: { channel_id?: string; message_ts?: string };
+    message?: { text?: string; blocks?: Block[] };
+  },
+): Promise<void> {
+  const channel = click.container?.channel_id;
+  const ts = click.container?.message_ts;
+  const blocks = click.message?.blocks;
+  if (!channel || !ts || !blocks?.length) return;
+  try {
+    await update(ctx, { channel, ts, text: click.message?.text, blocks });
+  } catch (err) {
+    ctx.logger?.warn("clicked card not restored", { err: String(err) });
+  }
+}

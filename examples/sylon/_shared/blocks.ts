@@ -261,3 +261,53 @@ export function nudge(
   }
   return blocks;
 }
+
+/** What a card says while a click is being handled, by verb. */
+const WORKING: Record<string, string> = {
+  approve: "Approving",
+  escalate: "Escalating",
+  dismiss: "Dismissing",
+  take: "Taking",
+  close: "Closing",
+};
+
+/**
+ * The clicked card with its actions block (`actionBlockId`, or the only one when undefined) replaced
+ * by a one-line context. Built from the card Slack sent with the click, so it needs no database
+ * read. `null` when the click carries no card or the card has no such actions block.
+ */
+export function replaceActions(
+  blocks: readonly Block[] | undefined,
+  actionBlockId: string | undefined,
+  line: string,
+): Block[] | null {
+  if (!blocks?.length) return null;
+  const isActions = (b: Block) =>
+    b.type === "actions" &&
+    (actionBlockId === undefined || b.block_id === actionBlockId);
+  if (!blocks.some(isActions)) return null;
+  const replacement: Block = {
+    type: "context",
+    elements: [{ type: "mrkdwn", text: line }],
+  };
+  return blocks.map((b) => (isActions(b) ? replacement : { ...b }));
+}
+
+/**
+ * The clicked card with its buttons swapped for a "working" line, so the click shows within a
+ * second or two instead of when the run ends. It is only a placeholder: every click path ends by
+ * redrawing the card (or restoring it), so a second click, a retry or an already-decided draft
+ * never leaves it stuck.
+ */
+export function workingCard(
+  blocks: readonly Block[] | undefined,
+  actionBlockId: string | undefined,
+  verb: string,
+  userId: string,
+): Block[] | null {
+  return replaceActions(
+    blocks,
+    actionBlockId,
+    `:hourglass_flowing_sand: ${WORKING[verb] ?? "Working"}… (<@${userId}>)`,
+  );
+}

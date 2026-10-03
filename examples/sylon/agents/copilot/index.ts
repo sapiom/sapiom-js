@@ -31,6 +31,7 @@ import {
   issueCard,
   issueCardText,
   statusLabel,
+  workingCard,
 } from "../../_shared/blocks";
 import { getConfig } from "../../_shared/config";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
@@ -58,7 +59,13 @@ import {
   type Message,
 } from "../../_shared/issues";
 import { articleTitles } from "../../_shared/kb";
-import { post, update, type SlackCtx } from "../../_shared/slack";
+import {
+  type SlackCtx,
+  post,
+  restoreClicked,
+  showWorking,
+  update,
+} from "../../_shared/slack";
 import {
   DRAFT_FAILED_NOTE,
   DraftOutput,
@@ -456,6 +463,11 @@ const receive = defineStep({
         });
       if (!(ACTIONS.draft as readonly string[]).includes(decoded.verb))
         return terminate({ skipped: `unknown draft verb: ${decoded.verb}` });
+      // A rejected click gets no placeholder.
+      if (!UUID.safeParse(action.value).success)
+        return terminate({ skipped: "value is not a draftId" });
+      // Before any database work, so the click shows within a second or two; `apply` redraws.
+      await showWorking(ctx, click.data, decoded.verb, workingCard);
       return goto("decide", click.data);
     }
     const trigger = DraftTrigger.safeParse(input);
@@ -479,7 +491,10 @@ const decide = defineStep({
     return db(ctx, async (db) => {
       await recordRun(db, ctx, AGENT);
       const found = await getDraft(db, draftId.data).catch(() => null);
-      if (!found) return terminate({ skipped: "draft not found" });
+      if (!found) {
+        await restoreClicked(ctx, click);
+        return terminate({ skipped: "draft not found" });
+      }
       await recordRun(db, ctx, AGENT, found.issueId);
       // A reply drafted before the issue closed must not reach the customer: Approve on a closed
       // issue dismisses the draft instead.

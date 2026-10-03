@@ -855,6 +855,91 @@ describe("intake agent", () => {
     expect(runs).toHaveLength(0);
   });
 
+  const NUDGE_BLOCKS = [
+    {
+      type: "section",
+      block_id: "nudge.stale",
+      text: { type: "mrkdwn", text: "Stale" },
+    },
+    {
+      type: "actions",
+      block_id: "nudge.actions",
+      elements: [{ type: "button", action_id: "issue.take" }],
+    },
+  ];
+
+  it("Take from a nudge shows Taking, refreshes the card, then redraws the nudge as Taken by", async () => {
+    const bug = makeCtx("exec-bug", JEV.bug);
+    const { output } = await run(
+      intakeFixture("message-created.bug.json").payload,
+      bug.ctx,
+    );
+    const issue = await getIssue(db, output.issueId as string);
+    const take = structuredClone(
+      fixture("slack/block-actions.issue-take.json").payload,
+    ) as {
+      actions: { value: string; block_id: string }[];
+      container: { message_ts: string };
+      message: { blocks: unknown[] };
+    };
+    take.actions[0].value = issue.id;
+    take.actions[0].block_id = "nudge.actions";
+    take.container.message_ts = "1790899999.000999";
+    take.message.blocks = structuredClone(NUDGE_BLOCKS);
+    const t = makeCtx("exec-take-nudge");
+    expect((await run(take, t.ctx)).output).toMatchObject({ changed: true });
+    const updates = t.slack("chat.update");
+    expect(updates.map((u) => u.ts)).toEqual([
+      "1790899999.000999",
+      issue.triageRootTs,
+      "1790899999.000999",
+    ]);
+    expect(JSON.stringify(updates[0].blocks)).toContain("Taking…");
+    const final = JSON.stringify(updates[2].blocks);
+    expect(final).toContain("Taken by <@U0TEAMMATE1>");
+    expect(final).not.toContain("Taking");
+    expect(final).not.toContain("issue.take");
+
+    const t2 = makeCtx("exec-take-nudge-2");
+    await run(take, t2.ctx);
+    expect(JSON.stringify(t2.slack("chat.update").at(-1)!.blocks)).toContain(
+      "Owned by <@U0TEAMMATE1>",
+    );
+  });
+
+  it("shows no working card for an issue click whose value is not an id", async () => {
+    const take = structuredClone(
+      fixture("slack/block-actions.issue-take.json").payload,
+    ) as { actions: { value: string }[]; message: { blocks: unknown[] } };
+    take.actions[0].value = "nope";
+    take.message.blocks = structuredClone(NUDGE_BLOCKS);
+    const t = makeCtx("exec-take-bad");
+    expect((await run(take, t.ctx)).output).toMatchObject({
+      skipped: expect.stringContaining("no issue id"),
+    });
+    expect(t.slack("chat.update")).toHaveLength(0);
+  });
+
+  it("restores the clicked card when the issue is not found", async () => {
+    const take = structuredClone(
+      fixture("slack/block-actions.issue-take.json").payload,
+    ) as {
+      actions: { value: string; block_id: string }[];
+      message: { blocks: unknown[] };
+    };
+    take.actions[0].value = "00000000-0000-4000-8000-000000000000";
+    take.actions[0].block_id = "nudge.actions";
+    take.message.blocks = structuredClone(NUDGE_BLOCKS);
+    const t = makeCtx("exec-take-missing");
+    expect((await run(take, t.ctx)).output).toMatchObject({
+      skipped: expect.stringContaining("not found"),
+    });
+    const updates = t.slack("chat.update");
+    expect(updates).toHaveLength(2);
+    expect(JSON.stringify(updates[0].blocks)).toContain("Taking…");
+    expect(updates[1]).toMatchObject({ blocks: NUDGE_BLOCKS });
+  });
+
   it("two overlapping Close clicks post one Closed by", async () => {
     const bug = makeCtx("exec-bug", JEV.bug);
     const { output } = await run(

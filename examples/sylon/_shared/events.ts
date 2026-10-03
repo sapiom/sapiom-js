@@ -94,7 +94,13 @@ export const SlackBlockActions = z.object({
     })
     .optional(),
   message: z
-    .object({ ts: z.string(), thread_ts: z.string().optional() })
+    .object({
+      ts: z.string(),
+      thread_ts: z.string().optional(),
+      text: z.string().optional(),
+      /** The clicked card as Slack holds it; the "working" redraw edits it without a database read. */
+      blocks: z.array(z.looseObject({})).optional(),
+    })
     .optional(),
   actions: z.array(SlackAction).min(1),
 });

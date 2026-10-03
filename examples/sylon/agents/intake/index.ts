@@ -16,6 +16,8 @@ import {
   issueCardText,
   mrkdwnLink,
   slackToPlain,
+  replaceActions,
+  workingCard,
 } from "../../_shared/blocks";
 import { customerChannel, getConfig, getConfigOr } from "../../_shared/config";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
@@ -55,14 +57,16 @@ import {
   type Issue,
 } from "../../_shared/issues";
 import {
+  type SlackCtx,
   permalink,
   post,
   react,
   replies,
+  restoreClicked,
+  showWorking,
   unreact,
   update,
   userInfo,
-  type SlackCtx,
 } from "../../_shared/slack";
 import {
   categoryOf,
@@ -912,6 +916,30 @@ const settle = defineStep({
 
 const IssueId = z.string().uuid();
 
+/**
+ * A click on a nudge: the issue card was refreshed, so the nudge's own buttons give way to the
+ * outcome. Best effort; the decision is already made.
+ */
+async function settleClicked(
+  ctx: SlackCtx,
+  click: SlackBlockActions,
+  line: string,
+): Promise<void> {
+  const channel = click.container?.channel_id;
+  const ts = click.container?.message_ts;
+  const blocks = replaceActions(
+    click.message?.blocks,
+    click.actions[0]?.block_id,
+    line,
+  );
+  if (!channel || !ts || !blocks) return;
+  try {
+    await update(ctx, { channel, ts, text: click.message?.text, blocks });
+  } catch (err) {
+    ctx.logger.warn("clicked nudge not redrawn", { err: String(err) });
+  }
+}
+
 const button = defineStep({
   name: "button",
   terminal: true,
@@ -923,6 +951,9 @@ const button = defineStep({
     if (!issueId.success)
       return terminate({ skipped: `no issue id in ${action.action_id}` });
     const clicker = input.user.id;
+    // Before any database work, so the click shows at once; every path below redraws the card.
+    if (verb === "take" || verb === "close")
+      await showWorking(ctx, input, verb, workingCard);
 
     return withDb(ctx, async (db) => {
       // Issue cards and nudges live only in the triage channel. A click from anywhere else (say a
@@ -935,6 +966,7 @@ const button = defineStep({
           channel: from ?? null,
           user: clicker,
         });
+        await restoreClicked(ctx, input);
         return terminate({
           skipped: `issue action from channel ${from ?? "unknown"}, not triage`,
         });
@@ -943,8 +975,10 @@ const button = defineStep({
       const rows = await db.query("select 1 from issues where id = $1", [
         issueId.data,
       ]);
-      if (rows.length === 0)
+      if (rows.length === 0) {
+        await restoreClicked(ctx, input);
         return terminate({ skipped: `issue ${issueId.data} not found` });
+      }
       await recordRun(db, ctx, AGENT, issueId.data);
       if (verb !== "take" && verb !== "close")
         return terminate({
@@ -972,6 +1006,19 @@ const button = defineStep({
       // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
       const account = await getAccount(db, issue.accountId);
       await refreshCard(ctx, triageChannel, issue, account);
+      if (input.container?.message_ts !== issue.triageRootTs) {
+        const line =
+          verb === "take"
+            ? changed
+              ? `Taken by <@${clicker}>`
+              : issue.status === "closed"
+                ? "Issue is closed"
+                : `Owned by <@${issue.ownerSlackId}>`
+            : changed
+              ? `Closed by <@${clicker}>`
+              : "Already closed";
+        await settleClicked(ctx, input, line);
+      }
       if (verb === "close" && changed && issue.triageRootTs) {
         await post(ctx, {
           channel: triageChannel,
