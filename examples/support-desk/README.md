@@ -146,6 +146,47 @@ unset (so a live fleet needs no re-seed):
 | `customers.test_user_ids` | `[]`                                                    | Slack user ids always treated as the customer, even from our workspace. Lets one person test with two accounts in the same workspace.                                                                                |
 | `intake.reactions`        | `true`                                                  | `false` stops intake adding or removing 👀 and 🎫 on customer messages, so a shadow pilot leaves no visible footprint.                                                                                               |
 | `digest.sla_hours`        | `{ "urgent": 4, "high": 24, "normal": 72, "low": 168 }` | Hours an open issue may age, from its creation, before the daily digest flags it past SLA, by priority (a missing or other priority counts as `normal`; On Hold included). A partial object overrides only its keys. |
+| `sla`                     | unset: the desks' `nudgeMinutes`                        | Response targets per priority (see [SLAs](#slas)).                                                                                                                                                                   |
+
+### SLAs
+
+The `sla` key sets a first-response and a next-response target for each priority, in minutes.
+Edit it in the Console's System tab (a JSON editor, validated on save), or put it in
+`fleet.local.json` under `config`:
+
+```json
+{
+  "businessHours": {
+    "timeZone": "America/New_York",
+    "days": [1, 2, 3, 4, 5],
+    "start": "09:00",
+    "end": "17:00"
+  },
+  "targets": {
+    "urgent": { "firstResponseMinutes": 15, "nextResponseMinutes": 15, "businessHours": false },
+    "high": { "firstResponseMinutes": 60, "nextResponseMinutes": 60, "businessHours": false },
+    "normal": { "firstResponseMinutes": 480, "nextResponseMinutes": 480, "businessHours": true },
+    "low": { "firstResponseMinutes": 480, "nextResponseMinutes": 480, "businessHours": true }
+  }
+}
+```
+
+- The first-response clock runs from when the issue opened until the team's first reply in the
+  customer thread. The next-response clock runs from each later customer message until the team
+  answers it. No clock runs when the team spoke last, or while the issue is On Hold or Closed.
+- A target with `businessHours: true` counts only minutes inside the window: `days` are 0 (Sunday)
+  to 6 (Saturday), `start` and `end` are local `HH:MM` in `timeZone`, at least an hour apart. With
+  `false` it counts every minute. An issue without a priority uses `normal`.
+- Each target is 1 to 10080 minutes. All four priorities are required.
+- While `sla` is set, a nudge's first round fires when the issue's current target is reached
+  instead of after the desks' `nudgeMinutes`; later rounds follow `nudge.repeat_minutes`.
+  Escalation to a person keeps its own per-desk levels (`escalation`), and the daily digest its
+  own `digest.sla_hours`.
+- The issue card shows "First response due" or "Next response due" (or "breached") in each
+  reader's own time zone; the card is redrawn on each event, so the line is as of its last redraw.
+  The Console board's SLA column is computed on every refresh.
+- **Use nudge minutes** in the Console removes the key, and the desks' `nudgeMinutes` apply again.
+  So does `pnpm run setup --overwrite` when `fleet.json` has no `sla`.
 
 ## Fleet identity
 
@@ -204,7 +245,7 @@ accounts and issues belong to it, and each knowledge article belongs to one desk
 | `triageChannel`                   | cards, drafts, notes and nudges for the desk's issues; where its clicks count |
 | `linearTeamId`, `linearProjectId` | escalation (falls back to the old `linear.*` config keys when unset)          |
 | `oncallSlackId`                   | urgent-pager (falls back to the old `oncall.slack_id` key)                    |
-| `nudgeMinutes` (default 30)       | controller                                                                    |
+| `nudgeMinutes` (default 30)       | controller, when the `sla` key is unset                                       |
 | `default`                         | the desk for any customer channel `channels.customer` does not assign         |
 
 `nudgeMinutes` is how long a condition holds before its first nudge. While it still holds, the
@@ -448,4 +489,4 @@ The deployed agents always share the fleet database.
 | **Intake links by content.** A new top-level message joins any open issue Jev judges to be the same problem (p ≥ 0.8). Leftover open issues capture new messages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Run `pnpm run reset-demo` before a demo.                                                                                                |
 | **Latency.** Dispatch takes about 65–100 ms. The intake run takes about 24 s, roughly 3 s per step. A customer message reaches its draft card in about 35 s. A click shows a working state in about 2 s.                                                                                                                                                                                                                                                                                                                                                                                                                                                              | The time goes to the steps, not the engine: intake makes a Jev call and several Slack calls, and each step starts a fresh sandbox call. |
 | **Deploy detection is local.** setup skips a deploy when the bundle hash in `.sapiom/fleet-state.json` matches the live build; a fresh clone redeploys once.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | The server does not expose a content hash for a build.                                                                                  |
-| **One Linear team; customers are recognised by Slack workspace.** Anyone outside `team.slack_team_ids` (default: the connector's own workspace) posting in a channel the bot is in is a customer, and the channel gets an account. The connector has no `conversations.info`, so shared channels cannot be detected. A team member's message is kept only in a channel that already has an account; elsewhere it is skipped and nothing is stored. A customer who posts from your workspace needs `customers.test_user_ids`. A team reply moves the issue to On Customer and supersedes pending drafts without redrawing their cards. No SLAs, email intake or board. | Out of scope for this example.                                                                                                          |
+| **One Linear team; customers are recognised by Slack workspace.** Anyone outside `team.slack_team_ids` (default: the connector's own workspace) posting in a channel the bot is in is a customer, and the channel gets an account. The connector has no `conversations.info`, so shared channels cannot be detected. A team member's message is kept only in a channel that already has an account; elsewhere it is skipped and nothing is stored. A customer who posts from your workspace needs `customers.test_user_ids`. A team reply moves the issue to On Customer and supersedes pending drafts without redrawing their cards. No email intake or board. | Out of scope for this example.                                                                                                          |
