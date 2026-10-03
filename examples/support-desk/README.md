@@ -265,7 +265,8 @@ weekdays only), cancel the old trigger (Console, or `sapiom agents schedule`), t
 `pnpm run setup`. Setup never detaches a trigger, so a skipped cancel leaves both schedules firing;
 the `digests` table still keeps it to one post per desk per day. A failed post fails the run, which
 the watchdog reports; rerun the digest agent to post the desks still missing that day. Past about
-50 Slack blocks the message ends with `+k more open issues`, the past-SLA issues listed first.
+50 Slack blocks the message ends with `+k more open issues`. Issues stay grouped by status, past-SLA
+first within each status, and past-SLA issues are the last to be cut.
 
 Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
 each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open
