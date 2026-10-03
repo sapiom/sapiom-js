@@ -1,9 +1,4 @@
-/**
- * SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge.
- *
- * Trigger: `schedule_cron` (`*\/2 * * * *` in fleet.json). The trigger's stored `input` may carry
- * `jevCheck: false` to skip the Jev "does this expect a reply?" check on `customer_waiting`.
- */
+/** SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge. */
 import {
   defineAgent,
   defineStep,
@@ -49,12 +44,13 @@ export const EXPECTS_REPLY_MIN = 0.5;
 const JEV_CONTEXT_MESSAGES = 6;
 
 /**
- * Recorded when Jev says the message expects a reply, so its later rounds skip the question. A
- * failed check records nothing, so the next round asks again.
+ * Cache successful Jev verdicts so repeat nudges avoid reevaluation.
+ * Leave failures uncached so later due rounds can retry while Jev checking is enabled.
  */
 const replyKey = (kind: Nudge["kind"], refId: string): string =>
   `reply:${kind}:${refId}`;
 
+// The cron trigger's stored input (fleet.json) may set `jevCheck: false` to skip the Jev check.
 const Input = z.object({ jevCheck: z.boolean().optional() });
 
 const NudgeSchema = z.object({
