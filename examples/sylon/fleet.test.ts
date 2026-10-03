@@ -8,7 +8,8 @@ import { getConfig, getConfigOr, setConfig } from "./_shared/config";
 import { memoryDb } from "./_shared/db";
 import { Events, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
-import { exampleKeys, mergeConfig, seedFleet } from "./_shared/seed";
+import { defaultDesk, deskBySlug, upsertDesk } from "./_shared/desks";
+import { exampleKeys, mergeConfig, mergeDesks, seedFleet } from "./_shared/seed";
 import fleet from "./fleet.json";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -46,30 +47,89 @@ describe("fleet.json", () => {
     }
   });
 
-  it("seeds config and accounts, twice without change", async () => {
+  it("seeds desks, config and accounts, twice without change", async () => {
     const db = await memoryDb();
     await seedFleet(db, "test");
-    await seedFleet(db, "test");
-    expect(await getConfig(db, "channels.triage")).toBe("C0TRIAGE001");
-    expect(await getConfig(db, "linear.team_id")).toBe(
-      "example-linear-team-id",
-    );
-    expect((await accountByChannel(db, "C0CUSTOMER1"))?.name).toBe(
-      "Example Customer",
-    );
+    const second = await seedFleet(db, "test");
+    expect(second).toMatchObject({ desksSet: [], desksKept: ["support"] });
+    const desk = await deskBySlug(db, "support");
+    expect(desk).toMatchObject({
+      triageChannel: "C0TRIAGE001",
+      linearTeamId: "example-linear-team-id",
+      nudgeMinutes: 5,
+      isDefault: true,
+    });
+    const account = await accountByChannel(db, "C0CUSTOMER1");
+    expect(account?.name).toBe("Example Customer");
+    expect(account?.deskId).toBe(desk?.id);
     expect(await db.query("select * from accounts")).toHaveLength(1);
+    expect(await db.query("select * from desks")).toHaveLength(1);
   });
 
-  it("keeps onboarded config on a rerun unless told to overwrite", async () => {
+  it("seeds several desks, files a channel under its desk, and rejects an unknown desk slug", async () => {
+    const db = await memoryDb();
+    const desks = [
+      { slug: "test", name: "Test", triageChannel: "C0TESTTRI", default: true },
+      { slug: "support", name: "Support", triageChannel: "C0SUPPTRI" },
+    ];
+    const values = {
+      ...mergeConfig(undefined),
+      "channels.customer": [
+        { channelId: "C0A", accountName: "Acme", desk: "support" },
+        { channelId: "C0B", accountName: "Bolt" },
+      ],
+    };
+    await seedFleet(db, "setup", { values, desks });
+    const support = await deskBySlug(db, "support");
+    expect((await accountByChannel(db, "C0A"))?.deskId).toBe(support?.id);
+    expect((await accountByChannel(db, "C0B"))?.deskId).toBe(
+      (await defaultDesk(db))?.id,
+    );
+    expect((await defaultDesk(db))?.slug).toBe("test");
+
+    const bad = {
+      ...values,
+      "channels.customer": [
+        { channelId: "C0C", accountName: "Cy", desk: "nope" },
+      ],
+    };
+    await expect(
+      seedFleet(await memoryDb(), "setup", { values: bad, desks }),
+    ).rejects.toThrow(/desk 'nope'/);
+  });
+
+  it("makes the first desk the default when the file marks none", async () => {
+    const db = await memoryDb();
+    await seedFleet(db, "setup", {
+      desks: [
+        { slug: "a", name: "A", triageChannel: "C0A" },
+        { slug: "b", name: "B", triageChannel: "C0B" },
+      ],
+    });
+    expect((await defaultDesk(db))?.slug).toBe("a");
+  });
+
+  it("keeps an onboarded desk on a rerun unless told to overwrite", async () => {
     const db = await memoryDb();
     await seedFleet(db, "setup");
-    await setConfig(db, "nudge.minutes", 30, "onboarding");
-    expect(await seedFleet(db, "setup")).toMatchObject({ set: [] });
-    expect(await getConfig(db, "nudge.minutes")).toBe(30);
-    await seedFleet(db, "setup", { overwrite: true });
-    expect(await getConfig(db, "nudge.minutes")).toBe(
-      fleet.config["nudge.minutes"],
+    const desk = (await deskBySlug(db, "support"))!;
+    await upsertDesk(
+      db,
+      { slug: "support", name: "Support", triageChannel: "C0TRIAGE001", nudgeMinutes: 30, isDefault: true },
+      { overwrite: true },
     );
+    expect(await seedFleet(db, "setup")).toMatchObject({ desksSet: [] });
+    expect((await deskBySlug(db, "support"))?.nudgeMinutes).toBe(30);
+    await seedFleet(db, "setup", { overwrite: true });
+    expect((await deskBySlug(db, "support"))?.nudgeMinutes).toBe(5);
+    expect((await deskBySlug(db, "support"))?.id).toBe(desk.id);
+  });
+
+  it("does not require the desk-owned config keys", async () => {
+    const db = await memoryDb();
+    await seedFleet(db, "setup");
+    expect(await getConfigOr(db, "channels.triage", null)).toBeNull();
+    expect(await getConfigOr(db, "nudge.minutes", null)).toBeNull();
   });
 
   it("removes an optional key the file omits on overwrite so readers fall back", async () => {
@@ -89,30 +149,45 @@ describe("fleet.json", () => {
     expect(await getConfigOr(db, "alerts.channel", null)).toBeNull();
   });
 
-  it("flags every key left at its example value, and none once overridden", () => {
-    expect(exampleKeys(mergeConfig(undefined))).toHaveLength(5);
+  it("flags every value left at its example, and none once overridden", () => {
+    const flagged = exampleKeys(mergeConfig(undefined), mergeDesks(undefined));
+    expect(flagged).toEqual([
+      "channels.customer",
+      "desks.support.triageChannel",
+      "desks.support.linearTeamId",
+      "desks.support.linearProjectId",
+      "desks.support.oncallSlackId",
+    ]);
     const local = {
-      "linear.team_id": "t",
-      "linear.project_id": "p",
-      "channels.triage": "C1",
       "channels.customer": [{ channelId: "C2", accountName: "Acme" }],
-      "oncall.slack_id": "U1",
     };
-    expect(exampleKeys(mergeConfig(local))).toEqual([]);
-    expect(exampleKeys(mergeConfig({ "channels.triage": "C1" }))).not.toContain(
-      "channels.triage",
-    );
+    const desks = [
+      {
+        slug: "support",
+        name: "Support",
+        triageChannel: "C1",
+        linearTeamId: "t",
+        linearProjectId: "p",
+        oncallSlackId: "U1",
+      },
+    ];
+    expect(exampleKeys(mergeConfig(local), desks)).toEqual([]);
+    // A desk is flagged field by field.
+    expect(
+      exampleKeys(mergeConfig(local), [
+        { ...desks[0], triageChannel: "C0TRIAGE001" },
+      ]),
+    ).toEqual(["desks.support.triageChannel"]);
     const examples = mergeConfig(undefined)["channels.customer"] as {
       channelId: string;
       accountName: string;
     }[];
     const mixed = mergeConfig({
-      ...local,
       "channels.customer": [
         { channelId: "C2", accountName: "Acme" },
         ...examples,
       ],
     });
-    expect(exampleKeys(mixed)).toEqual(["channels.customer"]);
+    expect(exampleKeys(mixed, desks)).toEqual(["channels.customer"]);
   });
 });

@@ -150,7 +150,7 @@ function wrapMemory(
 }
 
 /** A fresh, migrated, in-process database. pg-mem is loaded lazily so a deployed run never pays for it. */
-export async function memoryDb(): Promise<Db> {
+export async function memoryDb(opts: { through?: string } = {}): Promise<Db> {
   const { newDb, DataType } = await import("pg-mem");
   const mem = newDb();
   mem.public.registerFunction({
@@ -159,10 +159,18 @@ export async function memoryDb(): Promise<Db> {
     implementation: randomUUID,
     impure: true,
   });
+  // Postgres has `replace`; pg-mem does not, and migration 080 uses it to unquote jsonb strings.
+  mem.public.registerFunction({
+    name: "replace",
+    args: [DataType.text, DataType.text, DataType.text],
+    returns: DataType.text,
+    implementation: (s: string, from: string, to: string) =>
+      s.split(from).join(to),
+  });
   const { Pool } = mem.adapters.createPg();
   const pool = new Pool();
   const db = wrapMemory(mem, (t, p) => pool.query(t, p));
-  await migrate(db);
+  await migrate(db, opts.through);
   return db;
 }
 
@@ -187,8 +195,11 @@ export async function ensureMigrated(db: Db): Promise<string[]> {
   return migrate(db);
 }
 
-/** Apply every migration not yet recorded in `schema_migrations`. Safe to call from every run. */
-export async function migrate(db: Db): Promise<string[]> {
+/**
+ * Apply every migration not yet recorded in `schema_migrations`. Safe to call from every run.
+ * `through` stops after that id, so a test can stage a database as it was before a later migration.
+ */
+export async function migrate(db: Db, through?: string): Promise<string[]> {
   if (db.kind === "postgres") {
     await db.query(
       "create table if not exists schema_migrations (id text primary key, applied_at timestamptz not null default now())",
@@ -217,12 +228,13 @@ export async function migrate(db: Db): Promise<string[]> {
       return true;
     });
     if (did) applied.push(m.id);
+    if (m.id === through) break;
   }
   return applied;
 }
 
 /** One statement per call (pg-mem requires it; extended-protocol Postgres does too). Our migrations have no semicolons inside strings. */
-function splitStatements(sql: string): string[] {
+export function splitStatements(sql: string): string[] {
   return sql
     .split("\n")
     .filter((line) => !line.trim().startsWith("--"))

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Db } from "./db";
 import { memoryDb } from "./db";
+import { upsertDesk } from "./desks";
 import {
   IllegalTransitionError,
   ISSUE_STATUSES,
@@ -307,5 +308,74 @@ describe("issues.ts on a database", () => {
     expect(
       await db.query("select issue_id from runs where execution_id = 'e2'"),
     ).toEqual([{ issue_id: issue.id }]);
+  });
+});
+
+describe("desks on accounts and issues", () => {
+  const desk = async (db: Db, slug: string, isDefault = false) =>
+    (
+      await upsertDesk(db, {
+        slug,
+        name: slug,
+        triageChannel: `C0${slug}`,
+        isDefault,
+      })
+    ).desk;
+  const open = (db: Db, accountId: string, deskId?: string | null) =>
+    openIssue(db, {
+      accountId,
+      deskId,
+      source: "slack",
+      category: "bug",
+      priority: "normal",
+      title: "t",
+      customer: CUSTOMER,
+    });
+
+  it("files a new account under the given desk, else the default desk, and never moves it", async () => {
+    const db = await memoryDb();
+    const test = await desk(db, "test", true);
+    const support = await desk(db, "support");
+    const a = await ensureAccount(db, {
+      name: "A",
+      slackChannelId: "C0A",
+      deskId: support.id,
+    });
+    const b = await ensureAccount(db, { name: "B", slackChannelId: "C0B" });
+    expect(a.deskId).toBe(support.id);
+    expect(b.deskId).toBe(test.id);
+    expect(
+      (
+        await ensureAccount(db, {
+          name: "A",
+          slackChannelId: "C0A",
+          deskId: test.id,
+        })
+      ).deskId,
+    ).toBe(support.id);
+  });
+
+  it("opens an issue on its account's desk, or the desk it is given", async () => {
+    const db = await memoryDb();
+    const test = await desk(db, "test", true);
+    const support = await desk(db, "support");
+    const account = await ensureAccount(db, {
+      name: "A",
+      slackChannelId: "C0A",
+      deskId: support.id,
+    });
+    expect((await open(db, account.id)).deskId).toBe(support.id);
+    expect((await open(db, account.id, test.id)).deskId).toBe(test.id);
+  });
+
+  it("puts an issue of a desk-less account on the default desk", async () => {
+    const db = await memoryDb();
+    const account = await ensureAccount(db, {
+      name: "A",
+      slackChannelId: "C0A",
+    });
+    expect(account.deskId).toBeNull();
+    const test = await desk(db, "test", true);
+    expect((await open(db, account.id)).deskId).toBe(test.id);
   });
 });

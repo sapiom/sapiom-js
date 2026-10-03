@@ -3,7 +3,8 @@
  * read by the copilot on every draft. Public docs are not stored here; see `docs.ts`.
  *
  * `policy` articles are rules the copilot always follows (refunds, SLAs, tone). `answer` articles
- * are team-written Q&A it may quote.
+ * are team-written Q&A it may quote. An article belongs to one desk, or to every desk when its
+ * `deskId` is null.
  */
 import type { Db, Row } from "./db";
 
@@ -16,6 +17,8 @@ export interface KbArticle {
   title: string;
   body: string;
   enabled: boolean;
+  /** Null: applies to every desk. */
+  deskId: string | null;
   updatedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -26,13 +29,20 @@ export interface KbInput {
   title: string;
   body: string;
   enabled?: boolean;
+  deskId?: string | null;
 }
 
-/** Column names a patch may set; the keys are interpolated into SQL, so only these pass. */
-const PATCHABLE = new Set(["kind", "title", "body", "enabled"]);
+/** Patchable fields and their columns; the column names are interpolated into SQL, so only these pass. */
+const PATCHABLE: Record<string, string> = {
+  kind: "kind",
+  title: "title",
+  body: "body",
+  enabled: "enabled",
+  deskId: "desk_id",
+};
 
 const COLUMNS =
-  "id, kind, title, body, enabled, updated_by, created_at, updated_at";
+  "id, kind, title, body, enabled, desk_id, updated_by, created_at, updated_at";
 
 function toArticle(r: Row): KbArticle {
   return {
@@ -41,25 +51,48 @@ function toArticle(r: Row): KbArticle {
     title: r.title as string,
     body: r.body as string,
     enabled: r.enabled as boolean,
+    deskId: (r.desk_id as string | null) ?? null,
     updatedBy: (r.updated_by as string | null) ?? null,
     createdAt: r.created_at as Date,
     updatedAt: r.updated_at as Date,
   };
 }
 
-/** Every article, policies first, then by title: the Console list. */
-export async function listArticles(db: Db): Promise<KbArticle[]> {
-  const rows = await db.query(
-    `select ${COLUMNS} from kb_articles order by kind desc, lower(title), created_at`,
-  );
+/**
+ * Articles, policies first, then by title: the Console list. With `deskId`, that desk's articles
+ * and the all-desks ones; without it, every article.
+ */
+export async function listArticles(
+  db: Db,
+  opts: { deskId?: string } = {},
+): Promise<KbArticle[]> {
+  const rows = opts.deskId
+    ? await db.query(
+        `select ${COLUMNS} from kb_articles where desk_id is null or desk_id = $1 order by kind desc, lower(title), created_at`,
+        [opts.deskId],
+      )
+    : await db.query(
+        `select ${COLUMNS} from kb_articles order by kind desc, lower(title), created_at`,
+      );
   return rows.map(toArticle);
 }
 
-/** What the copilot reads: enabled articles only, in a stable order. */
-export async function listEnabled(db: Db): Promise<KbArticle[]> {
-  const rows = await db.query(
-    `select ${COLUMNS} from kb_articles where enabled order by kind desc, lower(title), created_at`,
-  );
+/**
+ * What the copilot reads for an issue on `deskId`: enabled articles that apply to that desk or to
+ * every desk, in a stable order. An issue without a desk sees only the all-desks articles.
+ */
+export async function listEnabled(
+  db: Db,
+  deskId: string | null,
+): Promise<KbArticle[]> {
+  const rows = deskId
+    ? await db.query(
+        `select ${COLUMNS} from kb_articles where enabled and (desk_id is null or desk_id = $1) order by kind desc, lower(title), created_at`,
+        [deskId],
+      )
+    : await db.query(
+        `select ${COLUMNS} from kb_articles where enabled and desk_id is null order by kind desc, lower(title), created_at`,
+      );
   return rows.map(toArticle);
 }
 
@@ -80,9 +113,16 @@ export async function createArticle(
   updatedBy: string,
 ): Promise<KbArticle> {
   const rows = await db.query(
-    `insert into kb_articles (kind, title, body, enabled, updated_by)
-     values ($1, $2, $3, $4, $5) returning ${COLUMNS}`,
-    [input.kind, input.title, input.body, input.enabled ?? true, updatedBy],
+    `insert into kb_articles (kind, title, body, enabled, desk_id, updated_by)
+     values ($1, $2, $3, $4, $5, $6) returning ${COLUMNS}`,
+    [
+      input.kind,
+      input.title,
+      input.body,
+      input.enabled ?? true,
+      input.deskId ?? null,
+      updatedBy,
+    ],
   );
   return toArticle(rows[0]);
 }
@@ -99,9 +139,10 @@ export async function updateArticle(
   const sets: string[] = [];
   const params: unknown[] = [id];
   for (const [key, value] of Object.entries(definedOnly(patch))) {
-    if (!PATCHABLE.has(key)) continue;
+    const column = PATCHABLE[key];
+    if (!column) continue;
     params.push(value);
-    sets.push(`${key} = $${params.length}`);
+    sets.push(`${column} = $${params.length}`);
   }
   params.push(updatedBy);
   sets.push(`updated_by = $${params.length}`, "updated_at = now()");
