@@ -4,6 +4,7 @@ import {
   MissingConfigError,
   customerChannel,
   getConfig,
+  getConfigOr,
   setConfig,
 } from "./config";
 import { memoryDb } from "./db";
@@ -17,6 +18,18 @@ describe("config", () => {
     await expect(getConfig(db, "channels.triage")).rejects.toThrow(
       /pnpm run setup/,
     );
+  });
+
+  it("getConfigOr returns the fallback for an unset key and the value once set", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "intake.reactions", true)).toBe(true);
+    await setConfig(db, "intake.reactions", false, "test");
+    expect(await getConfigOr(db, "intake.reactions", true)).toBe(false);
+  });
+
+  it("customerChannel finds nothing, rather than throwing, when channels.customer is unset", async () => {
+    const db = await memoryDb();
+    expect(await customerChannel(db, "C1")).toBeNull();
   });
 
   it("round-trips typed values and overwrites on a second set", async () => {

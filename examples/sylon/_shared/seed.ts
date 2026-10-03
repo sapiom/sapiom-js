@@ -7,7 +7,12 @@
  * changed. Pass `overwrite: true` (`pnpm run setup --overwrite`) to reset config to fleet.json.
  */
 import fleet from "../fleet.json";
-import { ConfigSchemas, setConfig, type ConfigKey } from "./config";
+import {
+  ConfigSchemas,
+  OPTIONAL_KEYS,
+  setConfig,
+  type ConfigKey,
+} from "./config";
 import type { Db } from "./db";
 import { ensureAccount } from "./issues";
 
@@ -71,6 +76,7 @@ export async function seedFleet(
   const set: ConfigKey[] = [];
   const kept: ConfigKey[] = [];
   for (const key of Object.keys(ConfigSchemas) as ConfigKey[]) {
+    if (values[key] === undefined && OPTIONAL_KEYS.includes(key)) continue;
     if (values[key] === undefined)
       throw new Error(`fleet.json config is missing '${key}'`);
     if (present.has(key) && !opts.overwrite) {
@@ -86,7 +92,7 @@ export async function seedFleet(
     set.push(key);
   }
   const customers = ConfigSchemas["channels.customer"].parse(
-    values["channels.customer"],
+    values["channels.customer"] ?? [],
   );
   for (const c of customers)
     await ensureAccount(db, {

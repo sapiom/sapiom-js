@@ -27,6 +27,9 @@ export const SlackMessage = z.object({
   thread_ts: z.string().optional(),
   channel_type: z.string().optional(),
   team: z.string().optional(),
+  /** Slack Connect: the poster's own workspace, which differs from ours for a customer. */
+  user_team: z.string().optional(),
+  source_team: z.string().optional(),
   event_ts: z.string().optional(),
   subtype: z.string().optional(),
   bot_id: z.string().optional(),
