@@ -193,8 +193,12 @@ async function database(
     const accountsBefore = await db.query<{ n: string }>(
       "select count(*)::text as n from accounts",
     );
-    const { set, kept } = await seedFleet(db, "setup", { overwrite, values });
+    const { set, kept, removed } = await seedFleet(db, "setup", {
+      overwrite,
+      values,
+    });
     if (set.length) changed(`config set: ${set.join(", ")}`);
+    if (removed.length) changed(`config removed: ${removed.join(", ")}`);
     if (kept.length) say(`config kept: ${kept.join(", ")}`);
     const accounts = await db.query<{ name: string; slack_channel_id: string }>(
       "select name, slack_channel_id from accounts order by name",

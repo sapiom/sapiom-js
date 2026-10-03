@@ -88,6 +88,12 @@ export async function setConfig<K extends ConfigKey>(
   cacheFor(db).delete(key);
 }
 
+/** Remove a key so readers fall back to their default. */
+export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
+  await db.query("delete from config where key = $1", [key]);
+  cacheFor(db).delete(key);
+}
+
 /** The account name for a customer channel, or null when the channel is not a customer channel. */
 export async function customerChannel(
   db: Db,
