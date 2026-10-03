@@ -96,6 +96,7 @@ import {
   writeCredentials,
 } from "@sapiom/mcp/auth";
 import { startServer, type HarnessServer } from "./index.js";
+import { resolveStatePaths } from "../core/paths.js";
 import type {
   HarnessAdapter,
   HarnessKind,
@@ -455,6 +456,82 @@ describe("Agent Studio MCP authentication wiring", () => {
       persistedIdentity,
     );
     expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a persisted session when a nested project takes ownership of its cwd", async () => {
+    await boot({ machineId: "machine-test" });
+    await rm(join(projectRoot, "sapiom.json"));
+    const settings = await fetch(
+      `http://127.0.0.1:${server!.port}/api/settings`,
+      {
+        method: "PATCH",
+        headers: {
+          "x-harness-token": "test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ recentDirs: [projectRoot] }),
+      },
+    );
+    expect(settings.status).toBe(200);
+    const createdProject = await post("/api/projects", {
+      displayName: "Outer resume project",
+    });
+    expect(createdProject.status).toBe(201);
+    const outerProject = (await createdProject.json()) as {
+      projectId: string;
+    };
+    const outerBinding = await post(
+      `/api/projects/${outerProject.projectId}/root-bindings`,
+      { root: projectRoot },
+    );
+    expect(outerBinding.status).toBe(201);
+
+    const nestedRoot = join(projectRoot, "nested");
+    await mkdir(nestedRoot);
+    const session = await server!.sessionManager.create({
+      cwd: nestedRoot,
+      harness: "claude-code",
+    });
+    expect(session.agentMapIdentity?.projectId).toBe(outerProject.projectId);
+    await server!.sessionManager.setAgentSessionId(
+      session.id,
+      "agent-session-nested-project",
+    );
+    await server!.sessionManager.kill(session.id);
+    await server!.sessionManager.flush();
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+
+    const catalog = new StudioProjectCatalog(
+      resolveStatePaths(root).studioProjects,
+    );
+    const nestedProject = await catalog.create("Nested resume project");
+    await catalog.addRootBinding(nestedProject.projectId, nestedRoot);
+    expect(
+      (await catalog.resolveIdentityForPath(nestedRoot))?.projectId,
+    ).toBe(nestedProject.projectId);
+
+    const reconcile = vi.spyOn(StudioProjectCatalog.prototype, "reconcile");
+    reconcile.mockClear();
+    const resume = await post(`/api/sessions/${session.id}/resume`);
+    const body = (await resume.json()) as { code?: string };
+    expect(resume.status).toBe(409);
+    expect(body.code).toBe("PROJECT_SESSION_SCOPE_UNAVAILABLE");
+    expect(server!.sessionManager.get(session.id)?.agentMapIdentity).toEqual(
+      persistedIdentity,
+    );
+    expect(reconcile).not.toHaveBeenCalled();
+
+    await server!.sessionManager.flush();
+    const persistedSessions = JSON.parse(
+      readFileSync(resolveStatePaths(root).sessions, "utf8"),
+    ) as Array<{
+      id: string;
+      agentMapIdentity?: unknown;
+    }>;
+    expect(
+      persistedSessions.find((candidate) => candidate.id === session.id)
+        ?.agentMapIdentity,
+    ).toEqual(persistedIdentity);
   });
 
   it("keeps a keyless session's Agent Map capability across an account change", async () => {

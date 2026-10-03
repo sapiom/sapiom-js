@@ -65,6 +65,36 @@ function validTimestamp(value: unknown): value is string {
   }
 }
 
+function newestPreferenceIndex(
+  preferences: readonly StudioWorkspacePreference[],
+  projectId: StudioProjectId,
+): number {
+  let newestIndex = -1;
+  for (let index = 0; index < preferences.length; index += 1) {
+    const candidate = preferences[index]!;
+    if (candidate.projectId !== projectId) continue;
+    const newest =
+      newestIndex < 0 ? undefined : preferences[newestIndex]!;
+    if (!newest || candidate.updatedAt >= newest.updatedAt) {
+      newestIndex = index;
+    }
+  }
+  return newestIndex;
+}
+
+function replaceProjectPreference(
+  preferences: readonly StudioWorkspacePreference[],
+  projectId: StudioProjectId,
+  preference: StudioWorkspacePreference,
+): StudioWorkspacePreference[] {
+  const newestIndex = newestPreferenceIndex(preferences, projectId);
+  if (newestIndex < 0) return [...preferences, preference];
+  return preferences.flatMap((candidate, index) => {
+    if (candidate.projectId !== projectId) return [candidate];
+    return index === newestIndex ? [preference] : [];
+  });
+}
+
 function validAgentId(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -139,7 +169,7 @@ function parseState(value: unknown): PersistedPreferences {
   return { schemaVersion: value.schemaVersion, preferences, agentBindings };
 }
 
-/** Atomic owner of per-user selection and private path-to-opaque-id bindings. */
+/** Atomic owner of per-project selection and private path-to-opaque-id bindings. */
 export class StudioWorkspacePreferenceStore {
   private state: PersistedPreferences | null = null;
   private queue: Promise<void> = Promise.resolve();
@@ -296,10 +326,14 @@ export class StudioWorkspacePreferenceStore {
         workflows,
         scanComplete,
       );
-      const preference = reconciled.state.preferences.find(
-        (candidate) =>
-          candidate.projectId === projectId,
+      const preferenceIndex = newestPreferenceIndex(
+        reconciled.state.preferences,
+        projectId,
       );
+      const preference =
+        preferenceIndex < 0
+          ? undefined
+          : reconciled.state.preferences[preferenceIndex];
       const requested = preference?.selection;
       const valid =
         !requested ||
@@ -322,13 +356,16 @@ export class StudioWorkspacePreferenceStore {
           : { kind: "agent-map", projectId };
       let changed = reconciled.changed;
       if (repaired) {
-        const index = reconciled.state.preferences.indexOf(preference!);
-        reconciled.state.preferences[index] = {
-          userId,
+        reconciled.state.preferences = replaceProjectPreference(
+          reconciled.state.preferences,
           projectId,
-          selection,
-          updatedAt: this.now().toISOString(),
-        };
+          {
+            userId,
+            projectId,
+            selection,
+            updatedAt: this.now().toISOString(),
+          },
+        );
         changed = true;
       }
       if (changed) await this.persist(reconciled.state);
@@ -403,8 +440,9 @@ export class StudioWorkspacePreferenceStore {
               agentId: requested.agentId,
             }
           : { kind: "agent-map", projectId: requested.projectId };
-      const index = reconciled.state.preferences.findIndex(
-        (candidate) => candidate.projectId === projectId,
+      const index = newestPreferenceIndex(
+        reconciled.state.preferences,
+        projectId,
       );
       const sameProject = normalized.projectId === projectId;
       const visibleAgent =
@@ -453,8 +491,11 @@ export class StudioWorkspacePreferenceStore {
           selection,
           updatedAt: this.now().toISOString(),
         };
-        if (index < 0) reconciled.state.preferences.push(nextPreference);
-        else reconciled.state.preferences[index] = nextPreference;
+        reconciled.state.preferences = replaceProjectPreference(
+          reconciled.state.preferences,
+          projectId,
+          nextPreference,
+        );
         await this.persist(reconciled.state);
       } else if (reconciled.changed) {
         await this.persist(reconciled.state);

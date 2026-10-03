@@ -178,10 +178,7 @@ import {
 } from "./agent-map-mcp.js";
 import { AgentMapMcpProjectUnavailableError } from "./agent-map-mcp-tools.js";
 import { StudioWorkspacePreferenceStore } from "../core/studio-workspace-preferences.js";
-import {
-  isProjectSessionDispatchAuthorized,
-  isWithinCurrentProject,
-} from "../core/project-session.js";
+import { isProjectSessionDispatchAuthorized } from "../core/project-session.js";
 import { legacyProjectSessionStateRoot } from "../core/project-session-legacy-migration.js";
 import { ProjectBootstrapCoordinator } from "../core/project-bootstrap.js";
 import { IngestCredentialRegistry } from "../core/ingest-credentials.js";
@@ -1501,10 +1498,8 @@ export const startServer = async (
         if (persisted.sessionId !== sessionId) {
           throw new ProjectSessionScopeUnavailableError(sessionId);
         }
-        const project = await studioProjectCatalog.resolveIdentity(
-          persisted.projectId,
-        );
-        if (!project || !isWithinCurrentProject(project, cwd)) {
+        const project = await studioProjectCatalog.resolveIdentityForPath(cwd);
+        if (!project || project.projectId !== persisted.projectId) {
           throw new ProjectSessionScopeUnavailableError(sessionId);
         }
         return structuredClone(persisted);
