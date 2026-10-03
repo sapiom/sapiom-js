@@ -311,9 +311,7 @@ export function linearIssueUrl(
 export const agentPageUrl = (definitionId: string) =>
   `https://app.sapiom.ai/agents/${definitionId}`;
 
-// --- SLA -------------------------------------------------------------------------------------
-
-/** `ms` as `12m`, `3h 5m` or `2d 4h`, rounded with `round` to whole minutes, at least 1m. */
+// Clamp sub-minute spans to avoid displaying a zero-minute deadline.
 function span(ms: number, round: (x: number) => number): string {
   const m = Math.max(1, round(ms / 60_000));
   if (m < 60) return `${m}m`;
@@ -323,7 +321,6 @@ function span(ms: number, round: (x: number) => number): string {
   return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
 }
 
-/** The board's SLA cell: `first response in 12m`, `next response breached 5m ago`, or null. */
 export function slaLabel(
   due: Pick<SlaDue, "kind" | "dueAt"> | null,
   now: Date,

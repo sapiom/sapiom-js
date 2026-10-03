@@ -382,7 +382,7 @@ describe("controller", () => {
       "update issues set created_at = now() - interval '16 minutes'",
     );
     const r = await runController("exec-sla", { jevCheck: false });
-    // Urgent is past its 15 wall-clock minutes; normal has 8 business hours.
+    // Distinct priorities must remain distinct through both scan and send.
     expect(
       (r.done.output!.nudged as { key: string }[]).map((n) => n.key),
     ).toEqual([`no_draft:${urgent.id}:1`]);

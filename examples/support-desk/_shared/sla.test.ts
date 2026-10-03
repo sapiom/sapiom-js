@@ -15,7 +15,7 @@ import { EXAMPLE_SLA } from "./test-ctx";
 const NY: BusinessHours = EXAMPLE_SLA.businessHours;
 const SLA = EXAMPLE_SLA;
 
-// October 2026 is EDT (UTC-4): Mon 2026-10-05 10:00 New York is 14:00Z.
+// Use a fixed UTC offset so these fixtures represent local business-hour times consistently.
 const ny = (iso: string) => new Date(`${iso}-04:00`);
 const add = (iso: string, minutes: number, hours = NY) =>
   addBusinessMinutes(ny(iso), minutes, hours).toISOString();
@@ -92,19 +92,21 @@ describe("addBusinessMinutes", () => {
   });
 
   it("keeps local time across the DST start", () => {
-    // Fri 2027-03-12 16:30 EST; clocks go forward on Sun 2027-03-14.
+    // Cross the spring offset change to verify that the next business window stays aligned with
+    // local time.
     const out = addBusinessMinutes(new Date("2027-03-12T21:30:00Z"), 60, NY);
     expect(out.toISOString()).toBe("2027-03-15T13:30:00.000Z");
   });
 
   it("keeps local time across the DST end", () => {
-    // Fri 2026-10-30 16:30 EDT; clocks go back on Sun 2026-11-01.
+    // Cross the autumn offset change to verify that the next business window stays aligned with
+    // local time.
     const out = addBusinessMinutes(new Date("2026-10-30T20:30:00Z"), 60, NY);
     expect(out.toISOString()).toBe("2026-11-02T14:30:00.000Z");
   });
 
   it("counts the minutes that pass in a window holding the DST start", () => {
-    // Sun 2027-03-14 01:00-04:00 New York: 02:00 EST jumps to 03:00 EDT, so the window holds 120.
+    // A skipped local hour must not count toward elapsed business time.
     const sunday: BusinessHours = {
       ...NY,
       days: [0],
@@ -115,14 +117,15 @@ describe("addBusinessMinutes", () => {
     expect(addBusinessMinutes(open, 120, sunday).toISOString()).toBe(
       "2027-03-14T08:00:00.000Z",
     );
-    // The rest runs into the next Sunday, 01:00 + 60 = 02:00 EDT.
+    // Excess business time must resume in the next eligible window.
     expect(addBusinessMinutes(open, 180, sunday).toISOString()).toBe(
       "2027-03-21T06:00:00.000Z",
     );
   });
 
   it("counts the minutes that pass in a window holding the DST end", () => {
-    // Sun 2026-11-01 01:00-04:00 New York: 02:00 EDT falls back to 01:00 EST, so it holds 240.
+    // The repeated local hour must count twice because both occurrences consume elapsed business
+    // time.
     const sunday: BusinessHours = {
       ...NY,
       days: [0],
@@ -139,7 +142,7 @@ describe("addBusinessMinutes", () => {
   });
 
   it("ends a window whose closing time is skipped at the DST start", () => {
-    // Sun 2027-03-14 01:00-02:30 New York: 02:30 never happens, so the window holds 60.
+    // A skipped closing time must not create business minutes that never elapsed.
     const sunday: BusinessHours = {
       ...NY,
       days: [0],
@@ -153,7 +156,7 @@ describe("addBusinessMinutes", () => {
   });
 
   it("counts a window twice when the DST end repeats it", () => {
-    // Sun 2026-11-01 01:00-01:30 New York happens in EDT, then again in EST.
+    // Both occurrences of a repeated local window must contribute elapsed business time.
     const sunday: BusinessHours = {
       ...NY,
       days: [0],
@@ -174,7 +177,7 @@ describe("addBusinessMinutes", () => {
       end: "10:00",
     };
     const out = addBusinessMinutes(ny("2026-10-05T10:00"), 10080, weekly);
-    // 168 one-hour Wednesday windows: the last one ends 167 weeks after Wed 2026-10-07.
+    // A sparse weekly schedule exercises the longest wait admitted by the schema.
     const weeks = Math.round(
       (out.getTime() - ny("2026-10-07T10:00").getTime()) / (7 * 86_400_000),
     );
@@ -229,7 +232,7 @@ describe("slaDue", () => {
   });
 
   it("orders by Slack ts, not by insert time", () => {
-    // Stored late, posted before the agent's reply: the team spoke last.
+    // Delayed delivery must not reopen a response clock after the team has already answered.
     const late = {
       ...msg("customer", 2),
       createdAt: msg("customer", 50).createdAt,
@@ -259,10 +262,12 @@ describe("slaDue", () => {
     const normal = ny("2026-10-06T10:00");
     expect(due([], { priority: null })?.dueAt).toEqual(normal);
     expect(due([], { priority: "p0" })?.dueAt).toEqual(normal);
+    expect(due([], { priority: "toString" })?.dueAt).toEqual(normal);
   });
 
   it("counts wall-clock minutes when the target says so", () => {
-    // Saturday: urgent ignores business hours.
+    // Use a wall-clock target to prove that a closed business window does not postpone the
+    // deadline.
     const sat = ny("2026-10-10T12:00");
     expect(
       slaDue(

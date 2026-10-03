@@ -22,7 +22,6 @@ export const DeskEscalationSchema = z.object({
 export type DeskEscalation = z.infer<typeof DeskEscalationSchema>;
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** `"HH:MM"` as minutes since local midnight. */
 export const minuteOfDay = (hhmm: string): number =>
   Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 

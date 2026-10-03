@@ -15,7 +15,7 @@
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
- * The SLA writes (`/api/sla`) touch only `config.sla` and record `console` as `set_by`.
+ * The SLA routes (`/api/sla`) touch only `config.sla`; a save records `console` as `set_by`.
  *
  * Ticket actions (`/api/tickets/<id>/actions/<verb>`) emit the event the Slack button would, and
  * the agents handle it (see `actions.ts`); the Console writes no issue or draft itself.

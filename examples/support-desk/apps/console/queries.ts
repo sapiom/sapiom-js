@@ -297,13 +297,13 @@ export async function issueMessages(d: Db, issueIds: readonly string[]) {
   );
 }
 
-/** Who the SLA writes are recorded as, in `config.set_by`. */
+// Attribute saved settings to the Console so their origin remains identifiable.
 export const SLA_EDITOR = "console";
 
 export const readSla = (d: Db): Promise<Sla | null> =>
   getConfigOr(d, "sla", null);
 
-/** Validate and store the `sla` key; an invalid body writes nothing. */
+// Reject invalid settings before writing so a bad edit preserves the configured SLA.
 export async function saveSla(
   d: Db,
   body: unknown,
@@ -315,5 +315,4 @@ export async function saveSla(
   return { ok: true, sla: parsed.data };
 }
 
-/** Back to the desks' nudge minutes. */
 export const clearSla = (d: Db): Promise<void> => deleteConfig(d, "sla");
