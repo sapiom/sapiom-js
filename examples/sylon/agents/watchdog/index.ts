@@ -25,7 +25,7 @@ import {
 import { z } from "zod/v4";
 
 import { getConfigOr } from "../../_shared/config";
-import { requireDefaultDesk } from "../../_shared/desks";
+import { defaultDesk, NoDeskError } from "../../_shared/desks";
 import { withDb, type Db } from "../../_shared/db";
 import { post, type SlackCtx } from "../../_shared/slack";
 
@@ -175,8 +175,9 @@ type TickCtx = SlackCtx & Pick<AgentExecutionContext, "executionId">;
 export async function tick(ctx: TickCtx, db: Db, deps: Deps) {
   const channel =
     (await getConfigOr(db, "alerts.channel", null)) ??
-    (await getConfigOr(db, "channels.triage", null)) ??
-    (await requireDefaultDesk(db)).triageChannel;
+    (await defaultDesk(db))?.triageChannel ??
+    (await getConfigOr(db, "channels.triage", null));
+  if (!channel) throw new NoDeskError("the alert channel");
   const [{ now }] = await db.query<{ now: Date }>("select now() as now");
   const to = new Date(now);
   const from = lookbackFrom(await readCursor(db), to);

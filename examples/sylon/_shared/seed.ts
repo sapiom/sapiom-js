@@ -15,7 +15,13 @@ import {
   type ConfigKey,
 } from "./config";
 import type { Db } from "./db";
-import { defaultDesk, deskBySlug, upsertDesk, type DeskInput } from "./desks";
+import {
+  defaultDesk,
+  deskBySlug,
+  setDefaultDesk,
+  upsertDesk,
+  type DeskInput,
+} from "./desks";
 import { ensureAccount } from "./issues";
 
 /** Example values from fleet.json. Real ids go in a gitignored fleet.local.json (see setup.ts). */
@@ -45,8 +51,50 @@ export interface FleetDesk {
 /** fleet.json's example desks. A local file's `desks` replaces them whole, not field by field. */
 export const FLEET_DESKS = fleet.desks as FleetDesk[];
 
-export function mergeDesks(local: FleetDesk[] | undefined): FleetDesk[] {
-  return local ?? FLEET_DESKS;
+/**
+ * The desks to seed. A local file's `desks` wins. A local file from before desks has none, only the
+ * single desk's settings in `config`: that becomes one default desk, so an existing install reruns
+ * setup without rewriting its file. It takes the slug `test` because the desks migration backfills
+ * an existing database's one desk under that slug, and setup keeps a desk that already exists.
+ * fleet.json's example desks apply only when the local file gives neither.
+ */
+export function mergeDesks(
+  local: FleetDesk[] | undefined,
+  localConfig?: Record<string, unknown>,
+): FleetDesk[] {
+  if (local) return local;
+  const triage = localConfig?.["channels.triage"];
+  if (typeof triage !== "string" || !triage) return FLEET_DESKS;
+  const text = (key: string) => {
+    const v = localConfig?.[key];
+    return typeof v === "string" && v ? v : undefined;
+  };
+  const nudge = localConfig?.["nudge.minutes"];
+  return [
+    {
+      slug: "test",
+      name: "Test",
+      triageChannel: triage,
+      linearTeamId: text("linear.team_id"),
+      linearProjectId: text("linear.project_id"),
+      oncallSlackId: text("oncall.slack_id"),
+      nudgeMinutes: typeof nudge === "number" ? nudge : undefined,
+      default: true,
+    },
+  ];
+}
+
+/** A triage channel names one desk (a click or thread note finds its desk by channel); throws on a repeat. */
+export function assertDistinctTriageChannels(desks: readonly FleetDesk[]) {
+  const seen = new Map<string, string>();
+  for (const d of desks) {
+    const other = seen.get(d.triageChannel);
+    if (other)
+      throw new Error(
+        `desks '${other}' and '${d.slug}' share triage channel ${d.triageChannel}; each desk needs its own`,
+      );
+    seen.set(d.triageChannel, d.slug);
+  }
 }
 
 const toDeskInput = (d: FleetDesk): DeskInput => ({
@@ -123,6 +171,7 @@ export async function seedFleet(
 }> {
   const values = opts.values ?? FLEET_CONFIG;
   const desks = opts.desks ?? FLEET_DESKS;
+  assertDistinctTriageChannels(desks);
   const present = new Set(
     (await db.query<{ key: string }>("select key from config")).map(
       (r) => r.key,
@@ -165,12 +214,9 @@ export async function seedFleet(
     (res.created || res.updated ? desksSet : desksKept).push(d.slug);
   }
   // A file with desks but no `default` still needs one, or unlisted channels have no desk.
+  // Only the flag changes: the desk's other settings stay as onboarding left them.
   if (desks.length && !(await defaultDesk(db)))
-    await upsertDesk(
-      db,
-      { ...toDeskInput(desks[0]), isDefault: true },
-      { overwrite: true },
-    );
+    await setDefaultDesk(db, desks[0].slug);
   const customers = ConfigSchemas["channels.customer"].parse(
     values["channels.customer"] ?? [],
   );

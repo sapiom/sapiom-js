@@ -8,8 +8,9 @@ import { getConfig, getConfigOr, setConfig } from "./_shared/config";
 import { memoryDb } from "./_shared/db";
 import { Events, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
-import { defaultDesk, deskBySlug, upsertDesk } from "./_shared/desks";
+import { defaultDesk, deskBySlug, setDefaultDesk, upsertDesk } from "./_shared/desks";
 import {
+  assertDistinctTriageChannels,
   exampleKeys,
   mergeConfig,
   mergeDesks,
@@ -112,6 +113,79 @@ describe("fleet.json", () => {
       ],
     });
     expect((await defaultDesk(db))?.slug).toBe("a");
+  });
+
+  it("keeps an onboarded desk's settings when it only becomes the default", async () => {
+    const db = await memoryDb();
+    await upsertDesk(db, {
+      slug: "a",
+      name: "A",
+      triageChannel: "C0NEW",
+      nudgeMinutes: 10,
+      oncallSlackId: "U0ONB",
+    });
+    await seedFleet(db, "setup", {
+      desks: [{ slug: "a", name: "A", triageChannel: "C0OLD", nudgeMinutes: 5 }],
+    });
+    expect(await deskBySlug(db, "a")).toMatchObject({
+      isDefault: true,
+      triageChannel: "C0NEW",
+      nudgeMinutes: 10,
+      oncallSlackId: "U0ONB",
+    });
+  });
+
+  it("setDefaultDesk moves the flag and rejects an unknown desk", async () => {
+    const db = await memoryDb();
+    await upsertDesk(db, { slug: "a", name: "A", triageChannel: "C0A", isDefault: true });
+    await upsertDesk(db, { slug: "b", name: "B", triageChannel: "C0B" });
+    await setDefaultDesk(db, "b");
+    expect((await defaultDesk(db))?.slug).toBe("b");
+    expect((await deskBySlug(db, "a"))?.isDefault).toBe(false);
+    await expect(setDefaultDesk(db, "nope")).rejects.toThrow(/not found/);
+  });
+
+  it("derives one default desk from a pre-desk local config", async () => {
+    const legacy = {
+      "channels.triage": "C_REAL",
+      "linear.team_id": "T_REAL",
+      "linear.project_id": "P_REAL",
+      "oncall.slack_id": "U_REAL",
+      "nudge.minutes": 12,
+    };
+    const desks = mergeDesks(undefined, legacy);
+    expect(desks).toEqual([
+      {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C_REAL",
+        linearTeamId: "T_REAL",
+        linearProjectId: "P_REAL",
+        oncallSlackId: "U_REAL",
+        nudgeMinutes: 12,
+        default: true,
+      },
+    ]);
+    const local = { "channels.customer": [{ channelId: "C2", accountName: "Acme" }] };
+    expect(exampleKeys(mergeConfig(local), desks)).toEqual([]);
+    // An explicit desks list wins, and no legacy triage channel falls back to the examples.
+    expect(mergeDesks([], legacy)).toEqual([]);
+    expect(mergeDesks(undefined, { "linear.team_id": "T" })).toBe(
+      mergeDesks(undefined),
+    );
+  });
+
+  it("rejects desks that share a triage channel before writing any", async () => {
+    const desks = [
+      { slug: "a", name: "A", triageChannel: "C0X" },
+      { slug: "b", name: "B", triageChannel: "C0X" },
+    ];
+    expect(() => assertDistinctTriageChannels(desks)).toThrow(
+      /'a' and 'b' share triage channel C0X/,
+    );
+    const db = await memoryDb();
+    await expect(seedFleet(db, "setup", { desks })).rejects.toThrow(/share/);
+    expect(await db.query("select * from desks")).toHaveLength(0);
   });
 
   it("keeps an onboarded desk on a rerun unless told to overwrite", async () => {

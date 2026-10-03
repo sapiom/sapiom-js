@@ -96,3 +96,17 @@ describe("080_desks backfill", () => {
     await expect(insert("b")).rejects.toThrow();
   });
 });
+
+describe("081_desk_triage_unique", () => {
+  it("rejects a second desk on the same triage channel", async () => {
+    const db = await memoryDb();
+    const insert = (slug: string, channel: string) =>
+      db.query(
+        "insert into desks (slug, name, triage_channel) values ($1, $1, $2)",
+        [slug, channel],
+      );
+    await insert("a", "C0X");
+    await insert("b", "C0Y");
+    await expect(insert("c", "C0X")).rejects.toThrow();
+  });
+});

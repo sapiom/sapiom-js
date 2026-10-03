@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { deleteConfig, setConfig } from "../../_shared/config";
+import { setConfig } from "../../_shared/config";
 import { memoryDb, type Db } from "../../_shared/db";
 import { upsertDesk } from "../../_shared/desks";
 import { fakeCtx } from "../../_shared/test-ctx";
@@ -266,8 +266,7 @@ describe("tick", () => {
     expect(posts(r.logs)[0].channel).toBe("C0ALERTS01");
   });
 
-  it("alerts in the default desk's triage channel when no channel is configured", async () => {
-    await deleteConfig(db, "channels.triage");
+  it("prefers the default desk's triage channel to the legacy channels.triage", async () => {
     await upsertDesk(db, {
       slug: "support",
       name: "Support",

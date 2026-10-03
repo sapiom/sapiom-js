@@ -49,6 +49,7 @@ import {
 import { seedStarters } from "./_shared/kb";
 import { listTools } from "./_shared/linear";
 import {
+  assertDistinctTriageChannels,
   exampleKeys,
   mergeConfig,
   mergeDesks,
@@ -90,7 +91,8 @@ function loadConfig() {
       })
     : undefined;
   const values = mergeConfig(local?.config);
-  const desks = mergeDesks(local?.desks);
+  const desks = mergeDesks(local?.desks, local?.config);
+  assertDistinctTriageChannels(desks);
   const unset = exampleKeys(values, desks);
   if (unset.length > 0) {
     throw new Error(

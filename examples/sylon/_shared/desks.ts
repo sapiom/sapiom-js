@@ -3,7 +3,8 @@
  * fleet: its own triage channel, Linear target, on-call user and nudge timing. Accounts, issues and
  * (optionally) knowledge articles belong to a desk; the agents are shared.
  *
- * Reads come from one per-Db cache of every desk (a fleet has a handful), so a run queries once.
+ * Reads query every time: the table is tiny, and a Db handle shared by a long-lived step process
+ * must see what setup or an onboarding flow wrote through another handle.
  */
 import { getConfigOr } from "./config";
 import type { Db, Row } from "./db";
@@ -56,22 +57,12 @@ const toDesk = (r: Row): Desk => ({
   createdAt: r.created_at as Date,
 });
 
-const cache = new WeakMap<Db, Promise<Desk[]>>();
-
 /** Every desk, default first, then by slug. */
 export async function listDesks(db: Db): Promise<Desk[]> {
-  let desks = cache.get(db);
-  if (!desks) {
-    desks = db
-      .query("select * from desks order by is_default desc, slug")
-      .then((rows) => rows.map(toDesk));
-    cache.set(db, desks);
-    // A failed read is not cached: the next call retries.
-    desks.catch(() => {
-      if (cache.get(db) === desks) cache.delete(db);
-    });
-  }
-  return desks;
+  const rows = await db.query(
+    "select * from desks order by is_default desc, slug",
+  );
+  return rows.map(toDesk);
 }
 
 export async function getDesk(db: Db, id: string): Promise<Desk> {
@@ -154,11 +145,29 @@ export async function upsertDesk(
       );
     }
   });
-  // Invalidate, never patch: the write may sit in a transaction that later rolls back.
-  cache.delete(db);
   const desk = await deskBySlug(db, input.slug);
   if (!desk) throw new Error(`desk ${input.slug} not found after write`);
   return { desk, created: !existing, updated: Boolean(existing) };
+}
+
+/** Make `slug` the default desk without touching its other settings; throws when no such desk exists. */
+export async function setDefaultDesk(db: Db, slug: string): Promise<Desk> {
+  await db.transaction(async (tx) => {
+    const found = await tx.query("select id from desks where slug = $1", [
+      slug,
+    ]);
+    if (!found.length) throw new Error(`desk ${slug} not found`);
+    await tx.query(
+      "update desks set is_default = false where is_default and slug <> $1",
+      [slug],
+    );
+    await tx.query("update desks set is_default = true where slug = $1", [
+      slug,
+    ]);
+  });
+  const desk = await deskBySlug(db, slug);
+  if (!desk) throw new Error(`desk ${slug} not found after write`);
+  return desk;
 }
 
 /** The desk's Linear team and project, falling back to the pre-desk config keys; null when neither names one. */
