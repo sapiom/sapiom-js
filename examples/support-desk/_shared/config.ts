@@ -41,6 +41,8 @@ export const ConfigSchemas = {
   "oncall.slack_id": z.string().min(1),
   /** Superseded by `desks.nudge_minutes`. */
   "nudge.minutes": z.number().int().positive(),
+  /** Controller gaps between repeat nudges: after round n, entry n-1; the last one repeats, `[]` nudges once. */
+  "nudge.repeat_minutes": z.array(z.number().int().positive()),
   /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
   "team.slack_team_ids": z.array(z.string().min(1)),
   /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
@@ -51,6 +53,16 @@ export const ConfigSchemas = {
   "linear_sync.notify_customer": z.boolean(),
   /** Per desk slug; a desk without an entry never escalates to a person. */
   escalation: z.record(z.string().min(1), DeskEscalationSchema),
+  /** Hours an open issue may age, by priority, before the daily digest flags it; unset keys keep the default. */
+  "digest.sla_hours": z
+    .object({
+      urgent: z.number().positive(),
+      high: z.number().positive(),
+      normal: z.number().positive(),
+      low: z.number().positive(),
+    })
+    .partial()
+    .strict(),
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -58,6 +70,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "team.slack_team_ids",
   "channels.customer",
   "alerts.channel",
+  "nudge.repeat_minutes",
   // Desk-owned now; a database installed before desks keeps them as fallbacks.
   "linear.team_id",
   "linear.project_id",
@@ -65,6 +78,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "oncall.slack_id",
   "nudge.minutes",
   "escalation",
+  "digest.sla_hours",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<

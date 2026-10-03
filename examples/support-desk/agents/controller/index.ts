@@ -1,4 +1,7 @@
-/** SAP-3788 adds opt-in escalation so stalled issues can reach a person beyond triage. */
+/**
+ * SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge.
+ * SAP-3788: opt-in escalation so stalled issues can reach a person beyond triage.
+ */
 import {
   defineAgent,
   defineStep,
@@ -37,9 +40,12 @@ import {
   nudgeKey,
   skipKey,
   type Escalation,
+  type EscalationInput,
   type DraftRow,
   type IssueRow,
   type MessageRow,
+  type Nudge,
+  type SentRow,
 } from "./rules";
 
 export const AGENT = agentSlug("controller");
@@ -49,12 +55,21 @@ export const EXPECTS_REPLY_MIN = 0.5;
 /** How much of the customer thread Jev sees, newest last. */
 const JEV_CONTEXT_MESSAGES = 6;
 
+/**
+ * Cache successful Jev verdicts so repeat nudges avoid reevaluation.
+ * Leave failures uncached so later due rounds can retry while Jev checking is enabled.
+ */
+const replyKey = (kind: Nudge["kind"], refId: string): string =>
+  `reply:${kind}:${refId}`;
+
+// Accept an optional Jev bypass so scheduled runs can nudge without message classification.
 const Input = z.object({ jevCheck: z.boolean().optional() });
 
 const NudgeSchema = z.object({
   issueId: z.string(),
   kind: z.enum(NUDGE_KINDS),
   refId: z.string(),
+  n: z.number().int().positive(),
   key: z.string(),
 });
 const EscalationSchema = z.object({
@@ -83,14 +98,14 @@ interface Snapshot {
   issues: IssueRow[];
   drafts: DraftRow[];
   messages: MessageRow[];
-  sent: { issueId: string; kind: string }[];
+  sent: SentRow[];
   now: Date;
 }
 
-/** Thresholds for `dueNudges`: each desk's own, and the pre-desk `nudge.minutes` for an issue with none. */
 async function thresholds(db: Db) {
   return {
     minutes: await getConfigOr(db, "nudge.minutes", 30),
+    repeatMinutes: await getConfigOr(db, "nudge.repeat_minutes", [60, 240]),
     deskMinutes: Object.fromEntries(
       (await listDesks(db)).map((d) => [d.id, d.nudgeMinutes]),
     ),
@@ -151,7 +166,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
       params,
     ),
     await db.query(
-      `select n.issue_id, n.kind from nudges n join issues i on i.id = n.issue_id where ${where}`,
+      `select n.issue_id, n.kind, n.sent_at from nudges n join issues i on i.id = n.issue_id where ${where}`,
       params,
     ),
     await db.query<{ now: Date }>("select now() as now"),
@@ -182,6 +197,7 @@ export async function snapshot(db: Db, issueId?: string): Promise<Snapshot> {
     sent: sent.map((r: Row) => ({
       issueId: r.issue_id as string,
       kind: r.kind as string,
+      sentAt: new Date(r.sent_at as Date),
     })),
     // The database clock, so a laptop or sandbox with drift cannot move a threshold.
     now: new Date(clock[0].now),
@@ -238,19 +254,28 @@ const scan = defineStep({
         jevCheck,
       });
       const esc = await escalationConfig(db, await listDesks(db));
-      const escalate = (sent: Snapshot["sent"]) =>
+      const escalate = (sent: EscalationInput["sent"]) =>
         dueEscalations({ ...snap, sent, ...esc, jevCheck });
       const notifiable = (e: Escalation) => !esc.unnotifiable.has(e.deskId);
 
       // The customer messages to ask Jev about: one question per message, shared by a nudge and
       // an escalation that wait on the same message.
       const waiting = new Map<string, string>();
+      // A message Jev already said expects a reply is not asked about again.
+      const answered = (issueId: string, msgId: string) =>
+        snap.sent.some(
+          (s) =>
+            s.issueId === issueId &&
+            s.kind === replyKey("customer_waiting", msgId),
+        );
       if (jevCheck) {
         for (const n of candidates)
-          if (n.kind === "customer_waiting") waiting.set(n.refId, n.issueId);
+          if (n.kind === "customer_waiting" && !answered(n.issueId, n.refId))
+            waiting.set(n.refId, n.issueId);
         for (const e of escalate(snap.sent).filter(notifiable))
           for (const r of e.reasons)
-            if (r.kind === "customer_waiting") waiting.set(r.refId, e.issueId);
+            if (r.kind === "customer_waiting" && !answered(e.issueId, r.refId))
+              waiting.set(r.refId, e.issueId);
       }
       const noReply = new Set<string>();
       const skipped: { issueId: string; key: string; expectsReply: number }[] =
@@ -270,13 +295,16 @@ const scan = defineStep({
           });
           continue;
         }
-        if (p < EXPECTS_REPLY_MIN) {
+        if (p >= EXPECTS_REPLY_MIN) {
+          // Remember the yes, so later rounds of this nudge do not ask Jev again.
+          await recordNudge(db, issueId, replyKey("customer_waiting", msgId));
+        } else {
           // Remember the verdict for this message, so the next run neither nudges nor asks again.
           await recordNudge(db, issueId, skipKey("customer_waiting", msgId));
           noReply.add(msgId);
           skipped.push({
             issueId,
-            key: nudgeKey("customer_waiting", msgId),
+            key: skipKey("customer_waiting", msgId),
             expectsReply: p,
           });
         }
@@ -290,7 +318,7 @@ const scan = defineStep({
         ...snap.sent,
         ...skipped.map((s) => ({
           issueId: s.issueId,
-          kind: `skip:${s.key}`,
+          kind: s.key,
         })),
       ]);
       const due = all.filter(notifiable);
@@ -348,13 +376,12 @@ const send = defineStep({
       const resolved: string[] = [];
       for (const n of input.nudges) {
         const sent = await db.transaction(async (tx) => {
-          // The issue may have moved since scan (taken, drafted, answered, held, closed): rerun the
-          // rules on its current rows and post only if this nudge is still due. Jev already passed
-          // this candidate in scan, so its skip records do not apply here.
+          // Recheck live conditions because scan may be stale, while keeping scan's Jev decision.
+          // Exclude this round's key so an otherwise-due retry reaches recordNudge's duplicate check.
           const fresh = await snapshot(tx, n.issueId);
           const stillDue = dueNudges({
             ...fresh,
-            sent: [],
+            sent: fresh.sent.filter((s) => s.kind !== n.key),
             ...limits,
             jevCheck: false,
           }).some((d) => d.key === n.key);
@@ -461,7 +488,7 @@ const send = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk controller: a cron that pings the triage thread once per stale condition (no owner, no draft, draft pending, customer waiting), and escalates to on-call and a support group when an issue stays unowned or a customer keeps waiting past a desk's escalation levels.",
+    "Support desk controller: a cron that pings the triage thread on a backoff while a condition stays stale (no owner, no draft, draft pending, customer waiting), and escalates to on-call and a support group when an issue stays unowned or a customer keeps waiting past a desk's escalation levels.",
   entry: "scan",
   steps: { scan, send },
 });

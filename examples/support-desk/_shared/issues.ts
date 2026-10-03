@@ -849,6 +849,27 @@ async function recordNudgeIn(
   return rows.length > 0;
 }
 
+/**
+ * Claim the daily digest of `deskId` for `day` (a `YYYY-MM-DD` date). False when it is already
+ * claimed. Call it inside the transaction that posts, so a failed post releases the claim.
+ */
+export async function recordDigest(
+  db: Db,
+  deskId: string,
+  day: string,
+): Promise<boolean> {
+  const seen = await db.query(
+    "select 1 from digests where desk_id = $1 and day = $2::date",
+    [deskId, day],
+  );
+  if (seen.length > 0) return false;
+  const rows = await db.query(
+    "insert into digests (desk_id, day) values ($1, $2::date) on conflict (desk_id, day) do nothing returning desk_id",
+    [deskId, day],
+  );
+  return rows.length > 0;
+}
+
 /** Every agent records its execution on its first step, so the board can sum cost per issue. */
 export async function recordRun(
   db: Db,
