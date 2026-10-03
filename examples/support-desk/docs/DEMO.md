@@ -42,7 +42,8 @@ our own runs on 2026-10-02.
    Click **Approve**: the reply lands in the customer thread and the card shows who sent it.
 7. **Thank-you.** No card: Jev's `is_issue` came back 0.04 in both rehearsals.
 8. **Escalate.** Click **Escalate** on the bug's draft card. One Linear issue appears in your desk's
-   Issues, and both threads get "Tracked as SAP-n". The card shows On Hold and the Linear id.
+   Issues. The triage thread gets "Tracked as SAP-n" with the link; the customer thread gets "I've passed
+   this to our engineering team and will follow up in this thread." The card shows On Hold and the Linear id.
 9. **Nudges.** After the desk's `nudgeMinutes` (5 in the demo), the controller posts "No owner yet", "Draft waiting
    for a decision" and "Customer is waiting for a reply" in the triage threads. To show it on demand, run
    `sapiom agents run --input '{"jevCheck":true}'` in `agents/controller`.
