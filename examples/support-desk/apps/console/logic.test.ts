@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AttachedTrigger, ReceiptFire, ReceiptSummary } from "./logic";
 import {
   AGENTS,
+  boardSla,
   costOf,
   costSummary,
   cuesFromReplay,
@@ -30,8 +31,10 @@ import {
   slackTsToMs,
   triggerBody,
   triggerStates,
+  slaLabel,
 } from "./logic";
 import { agentSlug } from "../../_shared/fleet-id";
+import { EXAMPLE_SLA } from "../../_shared/test-ctx";
 
 const ev = (
   id: string,
@@ -654,5 +657,57 @@ describe("parseKbInput desk", () => {
       ok: true,
       value: { deskId: null },
     });
+  });
+});
+
+describe("SLA column", () => {
+  const now = new Date("2026-10-05T14:00:00Z");
+  const min = 60_000;
+  const at = (m: number) => new Date(now.getTime() + m * min);
+
+  it("labels time left and time past the deadline", () => {
+    expect(slaLabel(null, now)).toBeNull();
+    expect(slaLabel({ kind: "first_response", dueAt: at(12) }, now)).toBe(
+      "first response in 12m",
+    );
+    expect(slaLabel({ kind: "next_response", dueAt: at(-5) }, now)).toBe(
+      "next response breached 5m ago",
+    );
+    expect(slaLabel({ kind: "first_response", dueAt: at(125) }, now)).toBe(
+      "first response in 2h 5m",
+    );
+    expect(slaLabel({ kind: "first_response", dueAt: at(-26 * 60) }, now)).toBe(
+      "first response breached 1d 2h ago",
+    );
+  });
+
+  it("gives each row its clock, and nulls without an sla", () => {
+    const rows = [
+      { id: "a", status: "new", priority: "urgent", created_at: at(-3) },
+      { id: "b", status: "on_customer", priority: "high", created_at: at(-90) },
+      { id: "c", status: "on_you", priority: "urgent", created_at: at(-90) },
+    ];
+    const messages = [
+      { issue_id: "b", direction: "customer", ts: "1.0", created_at: at(-90) },
+      { issue_id: "b", direction: "agent", ts: "2.0", created_at: at(-80) },
+      { issue_id: "c", direction: "agent", ts: "1.0", created_at: at(-80) },
+      { issue_id: "c", direction: "customer", ts: "2.0", created_at: at(-20) },
+    ];
+    expect(boardSla(rows, messages, EXAMPLE_SLA, now)).toEqual([
+      {
+        slaKind: "first_response",
+        slaDueAt: at(12).toISOString(),
+        slaLabel: "first response in 12m",
+      },
+      { slaKind: null, slaDueAt: null, slaLabel: null },
+      {
+        slaKind: "next_response",
+        slaDueAt: at(-5).toISOString(),
+        slaLabel: "next response breached 5m ago",
+      },
+    ]);
+    expect(boardSla(rows, messages, null, now)).toEqual(
+      Array(3).fill({ slaKind: null, slaDueAt: null, slaLabel: null }),
+    );
   });
 });

@@ -19,7 +19,7 @@ import {
   messagesForIssue,
   openIssue,
 } from "../../_shared/issues";
-import { fakeCtx } from "../../_shared/test-ctx";
+import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import {
   decide,
   IS_ISSUE_MIN,
@@ -368,6 +368,16 @@ describe("intake agent", () => {
       status: "closed",
       ownerSlackId: "U0TEAMMATE1",
     });
+  });
+
+  it("with sla set, the first card shows the first-response deadline", async () => {
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    const bug = makeCtx("exec-sla", JEV.bug);
+    await run(intakeFixture("message-created.bug.json").payload, bug.ctx);
+    const card = bug.slack("chat.postMessage").find((p) => !p.threadTs)!;
+    expect(JSON.stringify(card.blocks)).toContain(
+      "*First response due:* <!date^",
+    );
   });
 
   it("a follow-up on an On Hold issue stays On Hold", async () => {

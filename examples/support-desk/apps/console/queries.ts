@@ -1,9 +1,19 @@
 /**
- * The desk-scoped reads behind the Console's board, timeline, metrics and failed-events views.
- * Plain SQL, kept apart from `server.ts` (which starts a listener on import) so the scoping can be
- * tested on pg-mem. Every query here takes the selected desk's id; none returns another desk's issues.
+ * The desk-scoped reads behind the Console's board, timeline, metrics and failed-events views, and
+ * the SLA settings. Plain SQL, kept apart from `server.ts` (which starts a listener on import) so
+ * they can be tested on pg-mem. Every issue query takes the selected desk's id or issue ids from
+ * it; none returns another desk's issues.
  */
+import { z } from "zod/v4";
+
+import {
+  ConfigSchemas,
+  deleteConfig,
+  getConfigOr,
+  setConfig,
+} from "../../_shared/config";
 import type { Db } from "../../_shared/db";
+import type { Sla } from "../../_shared/sla";
 
 export async function statusCounts(
   d: Db,
@@ -70,3 +80,39 @@ export async function receiptDesks(
   );
   return new Map(rows.map((r) => [r.receipt_id, r.desk_id]));
 }
+
+/** The customer-thread messages of the board's issues, for their SLA clocks. */
+export async function issueMessages(d: Db, issueIds: readonly string[]) {
+  if (!issueIds.length) return [];
+  return d.query<{
+    issue_id: string;
+    direction: string;
+    ts: string | null;
+    created_at: Date;
+  }>(
+    `select issue_id, direction, ts, created_at from messages
+      where issue_id = any($1) and direction <> 'internal'`,
+    [[...issueIds]],
+  );
+}
+
+/** Who the SLA writes are recorded as, in `config.set_by`. */
+export const SLA_EDITOR = "console";
+
+export const readSla = (d: Db): Promise<Sla | null> =>
+  getConfigOr(d, "sla", null);
+
+/** Validate and store the `sla` key; an invalid body writes nothing. */
+export async function saveSla(
+  d: Db,
+  body: unknown,
+): Promise<{ ok: true; sla: Sla } | { ok: false; error: string }> {
+  const parsed = ConfigSchemas.sla.safeParse(body);
+  if (!parsed.success)
+    return { ok: false, error: z.prettifyError(parsed.error) };
+  await setConfig(d, "sla", parsed.data, SLA_EDITOR);
+  return { ok: true, sla: parsed.data };
+}
+
+/** Back to the desks' nudge minutes. */
+export const clearSla = (d: Db): Promise<void> => deleteConfig(d, "sla");

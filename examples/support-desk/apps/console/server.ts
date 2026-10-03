@@ -15,6 +15,7 @@
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
  * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
+ * The SLA writes (`/api/sla`) touch only `config.sla` and record `console` as `set_by`.
  *
  * Desks: the board, timeline, metrics, failed events and Knowledge tab are scoped to one desk,
  * named by `?desk=<slug>` (default: the default desk). Reset board closes only that desk's issues.
@@ -53,10 +54,14 @@ import replay from "../../scripts/replay.json";
 import page from "./index.html";
 import { getEscalation, putEscalation } from "./escalation";
 import {
+  clearSla,
   deskIssue,
+  issueMessages,
   metricIssues,
+  readSla,
   receiptDesks,
   recentIssues,
+  saveSla,
   statusCounts,
 } from "./queries";
 import {
@@ -68,6 +73,7 @@ import {
   agentByKey,
   METRIC_WINDOWS,
   agentPageUrl,
+  boardSla,
   costOf,
   costSummary,
   cuesFromReplay,
@@ -298,10 +304,15 @@ async function board(d: Db, desk: Desk) {
   const triage = desk.triageChannel;
   const project = await linearProject(d, desk);
   const recent = await recentIssues(d, desk.id);
+  const sla = await readSla(d);
+  // Computed per request, so the column is live on every board refresh.
+  const ids = recent.map((r) => r.id as string);
+  const messages = sla ? await issueMessages(d, ids) : [];
+  const slas = boardSla(recent, messages, sla, new Date());
   return {
     desk: desk.slug,
     counts: await statusCounts(d, desk.id),
-    issues: recent.map((r) => ({
+    issues: recent.map((r, i) => ({
       number: Number(r.number),
       account: r.account,
       title: r.title,
@@ -315,6 +326,7 @@ async function board(d: Db, desk: Desk) {
       ),
       createdAt: r.created_at,
       cardUrl: triageLink(triage, r.triage_root_ts as string | null),
+      ...slas[i],
     })),
   };
 }
@@ -759,6 +771,10 @@ const GET: [RegExp, Handler][] = [
   [/^\/api\/cues$/, async () => cuesFromReplay(replay)],
   [/^\/api\/system$/, () => withConsoleDb(system)],
   [
+    /^\/api\/sla$/,
+    () => withConsoleDb(async (d) => ({ sla: await readSla(d) })),
+  ],
+  [
     /^\/api\/kb$/,
     (_, __, url) =>
       withConsoleDb(async (d) =>
@@ -883,6 +899,12 @@ function httpBody(res: { status: number; body: unknown }) {
   return res.body;
 }
 
+async function putSla(body: Record<string, unknown>) {
+  const saved = await withConsoleDb((d) => saveSla(d, body));
+  if (!saved.ok) throw new HttpError(400, saved.error);
+  return { sla: saved.sla };
+}
+
 const PUT: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id], body) => updateKbArticle(id!, body)],
   [
@@ -892,10 +914,19 @@ const PUT: [RegExp, Handler][] = [
         httpBody(await putEscalation(d, await deskOf(d, url), body)),
       ),
   ],
+  [/^\/api\/sla$/, (_, body) => putSla(body)],
 ];
 
 const DELETE: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id]) => deleteKbArticle(id!)],
+  [
+    /^\/api\/sla$/,
+    () =>
+      withConsoleDb(async (d) => {
+        await clearSla(d);
+        return { sla: null };
+      }),
+  ],
 ];
 
 function route(table: [RegExp, Handler][], path: string) {
