@@ -138,6 +138,34 @@ describe("addBusinessMinutes", () => {
     );
   });
 
+  it("ends a window whose closing time is skipped at the DST start", () => {
+    // Sun 2027-03-14 01:00-02:30 New York: 02:30 never happens, so the window holds 60.
+    const sunday: BusinessHours = {
+      ...NY,
+      days: [0],
+      start: "01:00",
+      end: "02:30",
+    };
+    const open = new Date("2027-03-14T06:00:00Z");
+    expect(addBusinessMinutes(open, 90, sunday).toISOString()).toBe(
+      "2027-03-21T05:30:00.000Z",
+    );
+  });
+
+  it("counts a window twice when the DST end repeats it", () => {
+    // Sun 2026-11-01 01:00-01:30 New York happens in EDT, then again in EST.
+    const sunday: BusinessHours = {
+      ...NY,
+      days: [0],
+      start: "01:00",
+      end: "01:30",
+    };
+    const open = new Date("2026-11-01T05:00:00Z");
+    expect(addBusinessMinutes(open, 45, sunday).toISOString()).toBe(
+      "2026-11-01T06:15:00.000Z",
+    );
+  });
+
   it("finishes the longest accepted case and throws past the step bound", () => {
     const weekly: BusinessHours = {
       ...NY,
