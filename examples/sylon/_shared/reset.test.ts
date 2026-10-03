@@ -46,6 +46,26 @@ describe("resetBoard", () => {
     expect(await resetBoard(db, ctx)).toEqual([]);
   });
 
+  it("redraws cards through the client in ctx.sapiom, not the ambient connector", async () => {
+    const { db, carded } = await seeded();
+    const updates: Record<string, unknown>[] = [];
+    const { ctx } = fakeCtx();
+    (ctx as { sapiom: unknown }).sapiom = {
+      connectors: {
+        slack: {
+          update: async (args: Record<string, unknown>) => {
+            updates.push(args);
+            return { ok: true };
+          },
+        },
+      },
+    };
+    const out = await resetBoard(db, ctx);
+    expect(out.find((o) => o.issueId === carded.id)?.card).toBe("redrawn");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ ts: "1790000002.000100" });
+  });
+
   it("writes nothing on a dry run", async () => {
     const { db, carded } = await seeded();
     const out = await resetBoard(db, fakeCtx({ isLocalTrace: true }).ctx, {

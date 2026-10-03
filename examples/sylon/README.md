@@ -115,6 +115,17 @@ Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/repl
 each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open
 issue. See `docs/DEMO.md`.
 
+## Console
+
+The Console is an App Link (`sylon-console`) for operating the demo: fleet switches, the controller, the board, a latency timeline, metrics, failed events with replay, and cue cards. Its state lives in the `sylon` database and the Sapiom API.
+
+```bash
+pnpm run console:build     # bundle apps/console into apps/console/dist/server.mjs
+pnpm run console:publish   # build, then create or update the org-only App Link and publish it
+```
+
+`console:publish` reads `SAPIOM_API_KEY` from your shell, which must be an org key with write access (the Console changes triggers, starts runs, replays receipts and redraws Slack cards). The key is stored in the link's env as `SYLON_CONSOLE_API_KEY`; the platform's own read-only `SAPIOM_API_KEY` cannot write. The link is organization-only and publish refuses any other visibility. To republish after a change, run `pnpm run console:publish` again; it updates the same link.
+
 ## Add your own agent
 
 `agents/urgent-pager` is the worked example: about 40 lines that page on-call for urgent issues,

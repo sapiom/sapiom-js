@@ -3,10 +3,12 @@
  * `sylon-console`. Running it again republishes to the same link.
  *
  * Three REST calls (create or update the link with its env map, upload the bundle, publish). The
- * env map carries only SAPIOM_API_KEY, taken from this shell and never printed. Setting `env`
- * replaces the whole map, so a key dropped here is gone from the next wake.
+ * env map carries only SYLON_CONSOLE_API_KEY, the operator's key taken from this shell's
+ * SAPIOM_API_KEY and never printed. The platform separately injects its own read-only (org.read)
+ * SAPIOM_API_KEY at runtime; the Console writes with the operator key. Setting `env` replaces the
+ * whole map, so a key dropped here is gone from the next wake.
  *
- * Needs SAPIOM_API_KEY (an org key for the target org).
+ * Needs SAPIOM_API_KEY in this shell: an org key with write access for the target org.
  */
 import { readFileSync } from "node:fs";
 

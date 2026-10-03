@@ -7,6 +7,8 @@ import {
   costSummary,
   cuesFromReplay,
   dispatchDelays,
+  draftTimes,
+  pageReceipts,
   parseWindow,
   percentile,
   summarizeLatencies,
@@ -398,5 +400,68 @@ describe("metrics", () => {
     expect(s.meanSandboxSeconds).toBe(10);
     expect(s.pylonUsdPerTicket).toBe(3);
     expect(costSummary([]).meanUsd).toBeNull();
+  });
+});
+
+describe("pageReceipts", () => {
+  const receipt = (id: number, receivedAt: string) =>
+    ({ id: String(id), receivedAt }) as ReceiptSummary;
+  const source = (total: number) => async (offset: number, limit: number) =>
+    Array.from(
+      { length: Math.max(0, Math.min(limit, total - offset)) },
+      (_, i) => receipt(offset + i, "2026-10-01T00:00:00Z"),
+    );
+
+  it("reads every page until a short one", async () => {
+    const out = await pageReceipts(source(25), { pageSize: 10 });
+    expect(out.receipts).toHaveLength(25);
+    expect(out.truncated).toBe(false);
+  });
+
+  it("stops at the page cap and flags truncation", async () => {
+    const out = await pageReceipts(source(100), { pageSize: 10, maxPages: 3 });
+    expect(out.receipts).toHaveLength(30);
+    expect(out.truncated).toBe(true);
+  });
+
+  it("stops once a page crosses the window boundary", async () => {
+    let calls = 0;
+    const out = await pageReceipts(
+      async (offset, limit) => {
+        calls++;
+        return Array.from({ length: limit }, (_, i) =>
+          receipt(
+            offset + i,
+            offset === 0 ? "2026-10-01T00:00:00Z" : "2026-09-01T00:00:00Z",
+          ),
+        );
+      },
+      { pageSize: 2, since: Date.parse("2026-09-15T00:00:00Z") },
+    );
+    expect(calls).toBe(2);
+    expect(out.truncated).toBe(false);
+  });
+});
+
+describe("draftTimes", () => {
+  const created = new Date("2026-10-01T10:00:00Z");
+  it("takes card time from the first posted draft and creation from the first row", () => {
+    const out = draftTimes([
+      { created_at: created, card_ts: null },
+      {
+        created_at: new Date("2026-10-01T10:02:00Z"),
+        card_ts: "1790000100.000100",
+      },
+      {
+        created_at: new Date("2026-10-01T10:03:00Z"),
+        card_ts: "1790000200.000100",
+      },
+    ]);
+    expect(out.draftCreatedAt).toBe(created);
+    expect(out.draftCardTs).toBe("1790000100.000100");
+  });
+
+  it("returns nulls with no drafts", () => {
+    expect(draftTimes([])).toEqual({ draftCreatedAt: null, draftCardTs: null });
   });
 });

@@ -1032,7 +1032,9 @@
       // --- failed events -------------------------------------------------------------------
       async function refreshReceipts() {
         try {
-          const list = await get("/api/receipts/failed");
+          const { receipts: list, truncated } = await get(
+            "/api/receipts/failed",
+          );
           S.failed = list;
           renderSummary();
           $("receipts").className = "";
@@ -1044,6 +1046,9 @@
                 )
                 .join("")}</table>`
             : `<span class="muted">No failed deliveries to Sylon agents.</span>`;
+          if (truncated)
+            $("receipts").innerHTML +=
+              `<div class="muted" style="margin-top:6px">Truncated: only the newest receipts were read; older failures may be missing.</div>`;
           for (const b of $("receipts").querySelectorAll("button[data-replay]"))
             b.onclick = () =>
               act(
@@ -1076,7 +1081,7 @@
                 : "bad";
           $("metrics").className = "";
           $("metrics").innerHTML = `
-            <div class="muted" style="margin-bottom:6px">${m.issues} ticket${m.issues === 1 ? "" : "s"} in the window${m.capped ? " (newest 50)" : ""}</div>
+            <div class="muted" style="margin-bottom:6px">${m.issues} ticket${m.issues === 1 ? "" : "s"} in the window${m.capped ? " (newest 50)" : ""}${m.dispatchTruncated ? "; event → run start covers only the newest receipts (truncated)" : ""}</div>
             <table>
               <tr><th></th><th class="num">p50</th><th class="num">p90</th><th class="num">tickets</th></tr>
               ${spreadRow("Message → issue card", m.latency.messageToCard)}

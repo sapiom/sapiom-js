@@ -5,8 +5,11 @@
  * a fresh App Link wake shows exactly what a running one would. `pnpm run console:build` bundles
  * this file, the page and the `_shared` code into one `dist/server.mjs` that needs no install.
  *
- * Env: SAPIOM_API_KEY (an org key: it lists and changes triggers, starts runs, replays receipts,
- * and resolves the database), PORT (default 3000), SAPIOM_API_URL (default production).
+ * Env: SYLON_CONSOLE_API_KEY (the operator's org key, set by `console:publish`: it lists and
+ * changes triggers, starts runs, replays receipts, redraws Slack cards and resolves the database),
+ * PORT (default 3000), SAPIOM_API_URL (default production). SAPIOM_API_KEY is the org.read key the
+ * platform injects into every App Link; it is only a fallback and cannot write, so a 403 from a
+ * switch, Run now, Replay or Reset board means SYLON_CONSOLE_API_KEY is missing or lacks write.
  *
  * There is no login of its own: the App Link admits only signed-in org members, and its preview
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
@@ -15,7 +18,7 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { connectors, createClient } from "@sapiom/tools";
+import { createClient } from "@sapiom/tools";
 
 import { getConfig } from "../../_shared/config";
 import {
@@ -66,6 +69,8 @@ import {
   type Latencies,
   type TimedFire,
   type ReceiptFire,
+  draftTimes,
+  pageReceipts,
   type ReceiptSummary,
 } from "./logic";
 
@@ -77,6 +82,9 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
 /** The operator's key from publish; the platform's own read-only runtime key is the fallback. */
 const API_KEY =
   process.env.SYLON_CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
+
+/** The operator-keyed client for calls that go through `@sapiom/tools` rather than `sapiom()`. */
+const operatorClient = () => createClient({ apiKey: API_KEY });
 
 class HttpError extends Error {
   constructor(
@@ -201,7 +209,9 @@ function db(): Promise<Db> {
 
 async function withConsoleDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   try {
-    return await fn(await db());
+    // A fresh wrapper per request: getConfig caches per Db object, and onboarding writes config
+    // from another process, so a request must not see an earlier request's cached values.
+    return await fn({ ...(await db()) });
   } catch (err) {
     if (!(err instanceof HttpError)) dbPromise = undefined;
     throw err;
@@ -212,11 +222,20 @@ const triageLink = (triage: string, ts: string | null) =>
   ts ? permalink(triage, ts) : null;
 
 let projectPromise: Promise<{ name: string; url: string | null }> | undefined;
+let projectAt = 0;
+const PROJECT_TTL_MS = 5 * 60_000;
 
-/** The Linear project's name and URL. Static for the server's life; a failed lookup is retried. */
+/** The Linear project's name and URL, looked up at most every five minutes; a failed lookup is retried. */
 function linearProject(d: Db) {
+  if (projectPromise && Date.now() - projectAt > PROJECT_TTL_MS)
+    projectPromise = undefined;
+  if (!projectPromise) projectAt = Date.now();
   projectPromise ??= getConfig(d, "linear.project_id")
-    .then((query) => callTool("get_project", { query }))
+    .then((query) =>
+      callTool("get_project", { query }, {
+        sapiom: operatorClient(),
+      } as never),
+    )
     .then((p) => ({
       name: typeof p.name === "string" ? p.name : "Linear project",
       url: typeof p.url === "string" ? p.url : null,
@@ -288,7 +307,6 @@ async function timeline(d: Db, number?: number) {
     "select type, emitted_by, receipt_id, created_at from events_log where payload->>'issueId' = $1 order by created_at asc",
     [id],
   );
-  const firstDraft = drafts[0];
   return {
     issue: {
       id,
@@ -305,8 +323,7 @@ async function timeline(d: Db, number?: number) {
       customerTs: (firstMessage?.ts as string | undefined) ?? null,
       triageRootTs: (issue.triage_root_ts as string | null) ?? null,
       issueCreatedAt: issue.created_at as Date,
-      draftCreatedAt: (firstDraft?.created_at as Date | undefined) ?? null,
-      draftCardTs: (firstDraft?.card_ts as string | undefined) ?? null,
+      ...draftTimes(drafts),
     }),
     drafts: drafts.map((r) => ({
       id: r.id,
@@ -338,11 +355,16 @@ async function timeline(d: Db, number?: number) {
 }
 
 async function failedReceipts() {
-  const receipts = await sapiom<ReceiptSummary[]>(
-    "GET",
-    "/v1/workflows/receipts?attention=true&limit=100",
+  const { receipts, truncated } = await pageReceipts((offset, limit) =>
+    sapiom<ReceiptSummary[]>(
+      "GET",
+      `/v1/workflows/receipts?attention=true&limit=${limit}&offset=${offset}`,
+    ),
   );
-  return failedFleetReceipts(receipts).map(receiptView);
+  return {
+    receipts: failedFleetReceipts(receipts).map(receiptView),
+    truncated,
+  };
 }
 
 // --- metrics ---------------------------------------------------------------------------------
@@ -401,11 +423,17 @@ async function executionCosts(ids: string[]): Promise<Map<string, Cost>> {
 }
 
 /** Receipt arrival → run start for each Sylon fire of the receipts received since `since`. */
-async function dispatchSeconds(since: number): Promise<number[]> {
+async function dispatchSeconds(
+  since: number,
+): Promise<{ delays: number[]; truncated: boolean }> {
   const slugs = new Set(AGENTS.map((a) => a.slug));
-  const list = await sapiom<ReceiptSummary[]>(
-    "GET",
-    "/v1/workflows/receipts?limit=100",
+  const { receipts: list, truncated } = await pageReceipts(
+    (offset, limit) =>
+      sapiom<ReceiptSummary[]>(
+        "GET",
+        `/v1/workflows/receipts?from=${encodeURIComponent(new Date(since).toISOString())}&limit=${limit}&offset=${offset}`,
+      ),
+    { since },
   );
   const mine = list.filter(
     (r) =>
@@ -431,7 +459,12 @@ async function dispatchSeconds(since: number): Promise<number[]> {
     if (ours.length > 0 && delays.length === ours.length)
       dispatchCache.set(r.id, delays);
   });
-  return mine.flatMap((r) => dispatchCache.get(r.id) ?? seen.get(r.id) ?? []);
+  return {
+    delays: mine.flatMap(
+      (r) => dispatchCache.get(r.id) ?? seen.get(r.id) ?? [],
+    ),
+    truncated,
+  };
 }
 
 async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
@@ -442,7 +475,7 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
     [new Date(since).toISOString()],
   );
   const ids = issues.map((i) => i.id as string);
-  const [firstMessages, firstDrafts, runs] = ids.length
+  const [firstMessages, draftRows, runs] = ids.length
     ? await Promise.all([
         d.query<Record<string, unknown>>(
           `select distinct on (issue_id) issue_id, ts from messages
@@ -450,8 +483,7 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
           [ids],
         ),
         d.query<Record<string, unknown>>(
-          `select distinct on (issue_id) issue_id, card_ts, created_at from drafts
-            where issue_id = any($1) order by issue_id, created_at asc`,
+          "select issue_id, card_ts, created_at from drafts where issue_id = any($1) order by issue_id, created_at asc",
           [ids],
         ),
         d.query<Record<string, unknown>>(
@@ -461,12 +493,17 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
       ])
     : [[], [], []];
   const messageOf = new Map(firstMessages.map((m) => [m.issue_id, m]));
-  const draftOf = new Map(firstDrafts.map((m) => [m.issue_id, m]));
+  const draftsOf = new Map<unknown, Record<string, unknown>[]>();
+  for (const row of draftRows)
+    draftsOf.set(row.issue_id, [...(draftsOf.get(row.issue_id) ?? []), row]);
   const executions = [...new Set(runs.map((r) => r.execution_id as string))];
 
   const [costs, dispatch] = await Promise.all([
     executionCosts(executions),
-    dispatchSeconds(since).catch(() => [] as number[]),
+    dispatchSeconds(since).catch(() => ({
+      delays: [] as number[],
+      truncated: false,
+    })),
   ]);
 
   const rows = issues.map((i) => {
@@ -486,13 +523,11 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
       },
       { usd: 0, llmUsd: 0, capabilityUsd: 0, sandboxSeconds: 0 },
     );
-    const draft = draftOf.get(i.id);
     const latency: Latencies = latencies({
       customerTs: (messageOf.get(i.id)?.ts as string | undefined) ?? null,
       triageRootTs: (i.triage_root_ts as string | null) ?? null,
       issueCreatedAt: i.created_at as Date,
-      draftCreatedAt: (draft?.created_at as Date | undefined) ?? null,
-      draftCardTs: (draft?.card_ts as string | undefined) ?? null,
+      ...draftTimes(draftsOf.get(i.id) ?? []),
     });
     const cost: IssueCost = {
       ...total,
@@ -507,7 +542,8 @@ async function metrics(d: Db, window: keyof typeof METRIC_WINDOWS) {
     issues: rows.length,
     capped: rows.length === METRIC_ISSUES,
     latency: summarizeLatencies(rows.map((r) => r.latency)),
-    dispatch: spread(dispatch),
+    dispatch: spread(dispatch.delays),
+    dispatchTruncated: dispatch.truncated,
     cost: costSummary(rows.map((r) => r.cost)),
     runsMissing: rows.reduce((n, r) => n + r.cost.runsMissing, 0),
     perIssue: rows.map((r) => ({
@@ -534,8 +570,8 @@ async function system(d: Db) {
     getConfig(d, "oncall.slack_id"),
   ]);
   const [teamId, project, definitions] = await Promise.all([
-    connectors.slack
-      .userInfo({ user: oncall })
+    operatorClient()
+      .connectors.slack.userInfo({ user: oncall })
       .then(
         (r) => (r.user as { team_id?: string } | undefined)?.team_id ?? null,
       )
@@ -683,7 +719,13 @@ const POST: [RegExp, Handler][] = [
       // The page's confirm step sends this; a stray POST closes nothing.
       if (body.confirm !== "reset")
         throw new HttpError(400, 'send { "confirm": "reset" }');
-      const ctx = { isLocalTrace: false, logger: console } as never;
+      // The Slack helpers fall back to the ambient connector, which holds the platform's read-only
+      // key; the operator's client is passed so the card redraw can write.
+      const ctx = {
+        isLocalTrace: false,
+        logger: console,
+        sapiom: operatorClient(),
+      } as never;
       return { closed: await withConsoleDb((d) => resetBoard(d, ctx)) };
     },
   ],
