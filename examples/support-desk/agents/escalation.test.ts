@@ -25,6 +25,7 @@ import { fakeCtx } from "../_shared/test-ctx";
 import {
   LINEAR_PRIORITY,
   agent,
+  CUSTOMER_REPLY,
   customerReplyKey,
   escalate,
   linearDescription,
@@ -79,7 +80,7 @@ describe("escalation on a local trace", () => {
       posts.map((p) => (p.data as { args: { text: string } }).args.text),
     ).toEqual([
       "Tracked as LOCAL-1: https://linear.app/local/issue/LOCAL-1",
-      "Tracked as LOCAL-1: https://linear.app/local/issue/LOCAL-1",
+      CUSTOMER_REPLY,
     ]);
 
     const issueId = done.output!.issueId as string;
@@ -266,6 +267,8 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(posts[0].args.text).toBe(
       "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
     );
+    expect(posts[1].args.text).toBe(CUSTOMER_REPLY);
+    expect(posts[1].args.text).not.toMatch(/linear\.app|SAP-\d+/);
     expect(save.args.description).toContain(
       "**Requested by:** Dana (U0TEAMMATE1)",
     );
@@ -522,9 +525,49 @@ describe("escalation against the relay (mocked fetch)", () => {
         .map((c) => c.args.text),
     ).toEqual([
       "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
-      "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
+      CUSTOMER_REPLY,
     ]);
     expect(emitted).toHaveLength(1);
+  });
+
+  it("a repeat escalation after the first replies (triage tracked, customer neutral) gets fresh keys", async () => {
+    await updateIssue(db, issueId, {
+      linearIssueId: "uuid-SAP-5",
+      linearIdentifier: "SAP-5",
+      linearUrl: "https://linear.app/x/issue/SAP-5",
+    });
+    existingState = { status: "Done", statusType: "completed" };
+    const { ctx } = liveCtx();
+    for (const [key, direction, text, ts] of [
+      [
+        `${customerReplyKey(issueId)}:triage`,
+        "internal",
+        "Tracked as SAP-5: https://linear.app/x/issue/SAP-5",
+        "1790889400.2",
+      ],
+      [customerReplyKey(issueId), "agent", CUSTOMER_REPLY, "1790889400.1"],
+    ] as const)
+      await linkMessage(db, {
+        issueId,
+        source: "slack",
+        sourceEventId: key,
+        direction,
+        slack: { channel: "C0CUSTOMER1", ts },
+        userId: agentSlug("escalation"),
+        text,
+      });
+    const out = await escalate(ctx as never, db, input());
+    expect(out).toMatchObject({ outcome: "escalated", made: "created" });
+    const texts = calls
+      .filter((c) => c.method === "chat.postMessage")
+      .map((c) => c.args.text);
+    expect(texts).toEqual([
+      "Tracked as SAP-900: https://linear.app/x/issue/SAP-900",
+      CUSTOMER_REPLY,
+    ]);
+    expect(
+      await messageBySourceEventId(db, `${customerReplyKey(issueId)}:SAP-900`),
+    ).toMatchObject({ text: CUSTOMER_REPLY });
   });
 });
 

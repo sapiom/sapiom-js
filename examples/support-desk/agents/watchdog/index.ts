@@ -42,6 +42,8 @@ import {
   WATCHED_SLUGS,
   type Execution,
   type ExecutionDetail,
+  ApiError,
+  problemStatus,
 } from "./logic";
 
 export const AGENT = agentSlug("watchdog");
@@ -68,8 +70,10 @@ async function getJson<T>(deps: Deps, path: string): Promise<T> {
     headers: { "x-api-key": deps.apiKey },
   });
   if (!res.ok)
-    throw new Error(
-      `GET ${path.split("?")[0]} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    throw new ApiError(
+      `GET ${path.split("?")[0]}`,
+      res.status,
+      await res.text(),
     );
   return (await res.json()) as T;
 }
@@ -157,7 +161,10 @@ async function alertCannotPoll(
       now.getTime() - new Date(last.alerted_at).getTime() < PROBLEM_REPEAT_MS
     )
       return;
-    await post(ctx, { channel, text: cannotPollMessage(problem) });
+    await post(ctx, {
+      channel,
+      text: cannotPollMessage(problem, problemStatus(problem)),
+    });
     await db.query("delete from watchdog_alerted where problem = $1", [key]);
     await db.query(
       "insert into watchdog_alerted (problem, alerted_at) values ($1, $2)",
