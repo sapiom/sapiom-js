@@ -1,8 +1,5 @@
 /**
- * controller: the follow-up cron. Every run reads the open issues, applies the rules in
- * `rules.ts`, and posts each due nudge once in the issue's triage thread: no owner, no draft, a
- * draft waiting for a decision, or a customer waiting for a reply. SAP-3788 adds opt-in escalation
- * so stalled issues can reach a person beyond triage.
+ * SAP-3788 adds opt-in escalation so stalled issues can reach a person beyond triage.
  *
  * Trigger: `schedule_cron` (`*\/2 * * * *` in fleet.json). The trigger's stored `input` may carry
  * `jevCheck: false` to skip the Jev "does this expect a reply?" check on `customer_waiting`.
@@ -407,8 +404,8 @@ const send = defineStep({
       const unnotified = [...(input.unnotified ?? [])];
       for (const e of input.escalations ?? []) {
         const out = await db.transaction(async (tx) => {
-          // Recheck on the locked row with every record applied: a reason Jev rejected cannot stand
-          // in for one that cleared, and a higher level sent by a racing run blocks this one.
+          // Recheck under the issue lock to prevent stale conditions or racing higher levels from paging.
+          // Honor Jev skip verdicts unless jevCheck is disabled.
           const fresh = await snapshot(tx, e.issueId);
           const due = dueEscalations({
             ...fresh,

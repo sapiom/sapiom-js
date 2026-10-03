@@ -453,7 +453,7 @@ describe("controller", () => {
       expect(threadPosts(first)).toHaveLength(0);
       expect(first.done.output?.unnotified).toEqual(["escalate:1"]);
       expect(await recorded(issue.id)).toEqual([]);
-      // The nudge asked once; the unrecorded escalation must not ask on every run.
+      // Unnotifiable escalations must not re-query Jev on every scan.
       expect(first.asked).toEqual(["still broken"]);
       const second = await runController("exec-2");
       expect(second.asked).toEqual([]);
@@ -479,7 +479,7 @@ describe("controller", () => {
           (e) => e.key,
         ),
       ).toEqual(["escalate:1"]);
-      // Another run sends level 2, then someone takes the issue; the customer still waits.
+      // A higher sent level must suppress a delayed lower-level send even when another condition still holds.
       await db.query(
         "insert into nudges (issue_id, kind) values ($1, 'escalate:2')",
         [issue.id],

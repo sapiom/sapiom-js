@@ -1248,19 +1248,20 @@
           $(id).dataset.busy = on ? "1" : "0";
         syncButtons();
       }
+      // Only the newest call may touch the form: a slug check alone misses a switch away and back.
+      let escalationSeq = 0;
       async function escalationCall(body) {
-        // The form must only ever show, and save, the desk it was loaded for.
-        const forDesk = desk;
+        const seq = ++escalationSeq;
         escalationLocked(true);
         try {
           const out = body
             ? await post(scoped("/api/escalation"), body, "PUT")
             : await get(scoped("/api/escalation"));
-          if (forDesk !== desk) return;
+          if (seq !== escalationSeq) return;
           showEscalation(out);
           escalationLocked(false);
         } catch (e) {
-          if (forDesk !== desk) return;
+          if (seq !== escalationSeq) return;
           $("esc-state").className = "bad";
           $("esc-state").textContent = e.message;
           // A failed save leaves the loaded form valid; a failed load leaves nothing to save.
