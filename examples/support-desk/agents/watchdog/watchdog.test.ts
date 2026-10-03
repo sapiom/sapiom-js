@@ -18,6 +18,9 @@ import {
   splitBatch,
   type Execution,
   describeFailure,
+  ApiError,
+  cannotPollMessage,
+  problemStatus,
 } from "./logic";
 import { FLEET_ID, agentSlug } from "../../_shared/fleet-id";
 
@@ -187,6 +190,16 @@ describe("failureMessage", () => {
 
 type Handler = (url: URL) => unknown;
 
+/** A handler result that fails the call with a given HTTP status (a plain Error is a 500). */
+class HttpFail extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 function stubFetch(handler: Handler) {
   const calls: string[] = [];
   const fetch = (async (input: string | URL | Request) => {
@@ -194,7 +207,9 @@ function stubFetch(handler: Handler) {
     calls.push(`${url.pathname}${url.search}`);
     const body = handler(url);
     if (body instanceof Error)
-      return new Response(body.message, { status: 500 });
+      return new Response(body.message, {
+        status: body instanceof HttpFail ? body.status : 500,
+      });
     return new Response(JSON.stringify(body), { status: 200 });
   }) as typeof globalThis.fetch;
   return { fetch, calls };
@@ -379,7 +394,7 @@ describe("tick hardening", () => {
       done: tick(c.ctx, db, { fetch, apiKey: "k", page: 5, maxPages: 4 }),
     };
   };
-  const denied = () => stubFetch(() => new Error("forbidden")).fetch;
+  const denied = () => stubFetch(() => new HttpFail("forbidden", 403)).fetch;
 
   it("posts one deduped 'cannot poll' line when the key is rejected", async () => {
     const first = run(denied());
@@ -388,11 +403,20 @@ describe("tick hardening", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].channel).toBe("C0TRIAGE001");
     expect(sent[0].text).toContain("Support desk watchdog cannot poll");
+    expect(sent[0].text).toContain("re-provision");
     expect(sent[0].text).toContain("pnpm run setup --only watchdog");
 
     const second = run(denied(), "wd-2");
     await expect(second.done).rejects.toThrow();
     expect(posts(second.logs)).toEqual([]);
+  });
+
+  it("says an API outage is transient, not a key problem", async () => {
+    const r = run(stubFetch(() => new Error("<html>Application Error</html>")).fetch);
+    await expect(r.done).rejects.toThrow();
+    const text = posts(r.logs)[0].text;
+    expect(text).toContain("next tick retries");
+    expect(text).not.toContain("pnpm run setup --only watchdog");
   });
 
   it("alerts when a watched agent's list call fails, then throws", async () => {
@@ -568,5 +592,20 @@ describe("describeFailure", () => {
     expect(f.step).toBe("receive");
     expect(f.error).toContain("model_not_available");
     expect(actionItems(f.slug, f.step, f.error)[0]).toMatch(/routing label/);
+  });
+});
+
+describe("cannot-poll advice", () => {
+  it("treats a gateway 503 page as transient and drops its HTML", () => {
+    const err = new ApiError("GET /v1/workflows/definitions", 503, "<!DOCTYPE html><html><title>Application Error</title>");
+    expect(String(err)).not.toContain("html");
+    const msg = cannotPollMessage(`list definitions: ${String(err)}`, problemStatus(String(err)));
+    expect(msg).toContain("next tick retries");
+    expect(msg).not.toContain("re-provision");
+  });
+
+  it("asks for a key re-provision only when the key is refused", () => {
+    const err = new ApiError("GET /v1/workflows/executions", 403, '{"error":"forbidden"}');
+    expect(cannotPollMessage(String(err), problemStatus(err))).toContain("re-provision");
   });
 });
