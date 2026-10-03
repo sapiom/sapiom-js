@@ -194,6 +194,7 @@ async function newerPostedDraft(
  * answers, and those tokens come out of the same cap.
  */
 const DRAFT_MAX_TOKENS = 8192;
+const DRAFT_MODEL = "sonnet";
 
 /** Attempts per draft. A second identical step retry would only repeat the miss and its cost. */
 const DRAFT_ATTEMPTS = 2;
@@ -211,6 +212,9 @@ async function requestDraft(
 ): Promise<DraftOutput | null> {
   for (let attempt = 1; attempt <= DRAFT_ATTEMPTS; attempt++) {
     const response = await ctx.sapiom.llm.run({
+      // A routing label, not a model id. With no model the gateway routes to `smart`, whose
+      // self-hosted model ignored the forced tool call on both attempts (execution 848839).
+      model: DRAFT_MODEL,
       request: {
         system:
           attempt === 1

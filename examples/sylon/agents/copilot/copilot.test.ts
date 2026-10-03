@@ -166,7 +166,7 @@ describe("draft path", () => {
       model?: string;
       request: { max_tokens: number; messages: { content: string }[] };
     };
-    expect(spec.model).toBeUndefined();
+    expect(spec.model).toBe("sonnet");
     expect(spec.request.max_tokens).toBeGreaterThanOrEqual(4096);
     expect(spec.request.messages[0].content).toContain(
       "signature errors. Did something change?",
