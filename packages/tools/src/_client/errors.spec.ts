@@ -22,4 +22,19 @@ describe("parseRetryAfterMs", () => {
     expect(parseRetryAfterMs("soon", now)).toBeNull();
     expect(parseRetryAfterMs("-5", now)).toBeNull();
   });
+
+  it("drops a delay too large to represent", () => {
+    expect(parseRetryAfterMs("9".repeat(20), now)).toBeNull();
+  });
+
+  it("drops a date-form delay past a day", () => {
+    expect(parseRetryAfterMs("2050 GMT", now)).toBeNull();
+    expect(parseRetryAfterMs("Wed, 30 Sep 2026 12:00:00 GMT", now)).toBeNull();
+  });
+
+  it("keeps a date-form delay within a day", () => {
+    expect(parseRetryAfterMs("Tue, 22 Sep 2026 13:00:00 GMT", now)).toBe(
+      3_600_000,
+    );
+  });
 });
