@@ -1,0 +1,37 @@
+{
+  "description": "The support desk demo conversation, posted by a test customer in the customer channel. Each step names what the fleet should do with it.",
+  "prefix": "[test]",
+  "steps": [
+    {
+      "id": "bug",
+      "text": "Our webhook deliveries started failing this morning. Every POST to our endpoint is rejected with a signature mismatch, and nothing changed on our side.",
+      "expect": "intake opens a bug issue and posts its card in triage; copilot posts a draft card that cites docs pages or team articles, if any apply",
+      "pauseSeconds": 40
+    },
+    {
+      "id": "follow-up",
+      "threadOf": "bug",
+      "text": "More detail: it is the order.created events, and clicking Redeliver gives the same mismatch.",
+      "expect": "intake links the reply to the bug issue (no new issue); copilot supersedes its draft with a new one",
+      "pauseSeconds": 40
+    },
+    {
+      "id": "outage",
+      "text": "URGENT: production is down for us. Every API call has returned 500 for the last 10 minutes and our checkout is blocked.",
+      "expect": "intake opens an urgent issue; urgent-pager (once added) DMs on-call",
+      "pauseSeconds": 40
+    },
+    {
+      "id": "question",
+      "text": "Quick question: how do I deploy my agent project, and where do I see the first run once it is live?",
+      "expect": "intake opens a question issue; copilot selects the docs deploy page, fetches it live, and drafts an answer citing it",
+      "pauseSeconds": 40
+    },
+    {
+      "id": "thanks",
+      "text": "Thanks, that fixed it!",
+      "expect": "no new issue: Jev reads it as a thank-you",
+      "pauseSeconds": 0
+    }
+  ]
+}
