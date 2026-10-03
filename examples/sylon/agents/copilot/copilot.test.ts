@@ -899,6 +899,17 @@ describe("draft helpers", () => {
     expect(sourceLabel("gone", titles)).toBe("removed article");
   });
 
+  it("sourceLabel never lets a stored url inject Slack markup", () => {
+    const evil = "https://docs.sapiom.ai/a|b>c<!channel>";
+    const out = sourceLabel(evil, new Map());
+    expect(out).not.toContain("<");
+    expect(out).not.toContain("|");
+    expect(out).not.toContain(">");
+    expect(sourceLabel("https://docs.sapiom.ai/a%7Cb", new Map())).not.toMatch(
+      /^<https/,
+    );
+  });
+
   it("promptMessages keeps the first customer message and the latest ones, never internal notes", () => {
     const msg = (i: number, direction: "customer" | "agent" | "internal") =>
       ({ id: `m${i}`, direction, text: `t${i}` }) as never;

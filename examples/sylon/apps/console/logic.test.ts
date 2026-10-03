@@ -434,6 +434,17 @@ describe("parseKbInput", () => {
     expect((out as { error: string }).error).toContain(message);
   });
 
+  it.each([[null], [[]], ["x"], [5]])(
+    "rejects a body that is not a JSON object (%j)",
+    (body) => {
+      expect(parseKbInput(body, "create")).toEqual({
+        ok: false,
+        error: "body must be a JSON object",
+      });
+      expect(parseKbInput(body, "update")).toMatchObject({ ok: false });
+    },
+  );
+
   it("update takes any subset but not nothing, and ignores other keys", () => {
     expect(parseKbInput({ enabled: false }, "update")).toEqual({
       ok: true,

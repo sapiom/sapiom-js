@@ -18,6 +18,10 @@ export const TTL_MS = 60 * 60 * 1000;
 export const MAX_PAGE_CHARS = 12_000;
 export const TRUNCATION_NOTE = "\n\n[page truncated]";
 const FETCH_TIMEOUT_MS = 5000;
+/** Bytes read from one response: a page needs at most 4 bytes per kept character, plus margin. */
+export const MAX_PAGE_BYTES = MAX_PAGE_CHARS * 4 + 1024;
+/** The index lists every page, so it gets a larger bound. */
+export const MAX_INDEX_BYTES = 1024 * 1024;
 
 export interface DocEntry {
   title: string;
@@ -98,8 +102,32 @@ export const httpFetcher: Fetcher = async (url) => {
     headers: { accept: "text/markdown, text/plain;q=0.9" },
   });
   if (!res.ok) throw new Error(`GET ${url} returned ${res.status}`);
-  return res.text();
+  return readCapped(res, url === INDEX_URL ? MAX_INDEX_BYTES : MAX_PAGE_BYTES);
 };
+
+/** Reads at most `maxBytes` of the body and cancels the rest, so a huge or endless body costs nothing. */
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) return (await res.text()).slice(0, maxBytes);
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (size < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.byteLength;
+  }
+  if (size >= maxBytes) await reader.cancel().catch(() => undefined);
+  const all = new Uint8Array(Math.min(size, maxBytes));
+  let at = 0;
+  for (const c of chunks) {
+    const part = c.subarray(0, all.length - at);
+    all.set(part, at);
+    at += part.length;
+    if (at >= all.length) break;
+  }
+  return new TextDecoder().decode(all);
+}
 
 const LOCAL_INDEX = [
   "- [Deploy an agent](https://docs.sapiom.ai/guides/deploy): Deploy a project and inspect its first run.",
@@ -159,7 +187,13 @@ async function cached(
 }
 
 export async function getIndex(db: Db, deps: DocsDeps): Promise<DocEntry[]> {
-  const text = await cached(db, INDEX_URL, deps, () => deps.fetcher(INDEX_URL));
+  // Validated before it is cached: an empty or malformed 200 must not shadow a good copy for the TTL.
+  const text = await cached(db, INDEX_URL, deps, async () => {
+    const body = await deps.fetcher(INDEX_URL);
+    if (parseLlmsTxt(body).length === 0)
+      throw new Error("llms.txt lists no pages");
+    return body;
+  });
   return parseLlmsTxt(text);
 }
 

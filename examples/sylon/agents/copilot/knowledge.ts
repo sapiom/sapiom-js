@@ -21,6 +21,8 @@ const SELECTION_MESSAGES = 3;
 const SELECTION_MESSAGE_CHARS = 600;
 /** Draft confidence is capped at this when the docs could not be read. */
 export const DOCS_OUTAGE_CONFIDENCE_CAP = 0.5;
+/** When some selected pages loaded and others did not. */
+export const DOCS_PARTIAL_CONFIDENCE_CAP = 0.6;
 
 export const SELECT_OUTPUT_NAME = "select_sources";
 
@@ -132,6 +134,8 @@ export interface Knowledge {
   docs: readonly DocPage[];
   /** The docs index or a selected page could not be read; the draft leans on the team's KB alone. */
   docsUnavailable: boolean;
+  /** Selected pages that could not be read; some other selected pages may have loaded. */
+  failedDocs?: readonly string[];
 }
 
 /** The ids and urls a draft may cite: exactly what its prompt provided. */
@@ -164,9 +168,13 @@ export function renderKnowledge(k: Knowledge): string {
         `<page url="${d.url}" title="${attr(d.title)}">\n${d.body}\n</page>`,
     )
     .join("\n");
-  const status = k.docsUnavailable
-    ? "\nThe public docs could not be read for this draft. Answer only from the policies, team answers and thread, and keep confidence low.\n"
-    : "";
+  const failed = k.failedDocs ?? [];
+  const status =
+    k.docsUnavailable && k.docs.length > 0 && failed.length > 0
+      ? `\nThese selected docs pages could not be read: ${failed.join(", ")}. The pages above are incomplete for this question; do not guess what the missing pages say, and keep confidence low.\n`
+      : k.docsUnavailable
+        ? "\nThe public docs could not be read for this draft. Answer only from the policies, team answers and thread, and keep confidence low.\n"
+        : "";
   return `<policies>
 ${policies || "(none)"}
 </policies>

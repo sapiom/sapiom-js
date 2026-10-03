@@ -76,7 +76,11 @@ import {
   responseShape,
 } from "./draft";
 import { gatherKnowledge } from "./gather";
-import { DOCS_OUTAGE_CONFIDENCE_CAP, citable } from "./knowledge";
+import {
+  DOCS_OUTAGE_CONFIDENCE_CAP,
+  DOCS_PARTIAL_CONFIDENCE_CAP,
+  citable,
+} from "./knowledge";
 import { seedLocalFixtures } from "./local";
 
 export const AGENT = "sylon-copilot";
@@ -331,7 +335,9 @@ async function draftReply(
         if (knowledge.docsUnavailable)
           output.confidence = Math.min(
             output.confidence,
-            DOCS_OUTAGE_CONFIDENCE_CAP,
+            knowledge.docs.length > 0
+              ? DOCS_PARTIAL_CONFIDENCE_CAP
+              : DOCS_OUTAGE_CONFIDENCE_CAP,
           );
         confidence = output.confidence;
         issue = await updateIssue(db, issue.id, { summary: output.summary });

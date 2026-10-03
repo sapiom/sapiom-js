@@ -17,7 +17,7 @@ import type {
   Issue,
   Message,
 } from "../../_shared/issues";
-import { isDocsUrl } from "../../_shared/docs";
+import { DOCS_ORIGIN, isDocsUrl } from "../../_shared/docs";
 import type { Block } from "../../_shared/slack";
 import { renderKnowledge, type Knowledge } from "./knowledge";
 
@@ -194,16 +194,20 @@ export function citedSources(draft: Draft): string[] {
   return Array.isArray(draft.citations) ? draft.citations.map(String) : [];
 }
 
+const SAFE_DOCS_PATH = /^[A-Za-z0-9._~\-/]+$/;
+
 /** A docs url becomes a link named by its path; an article id becomes its title. */
 export function sourceLabel(
   source: string,
   titles: ReadonlyMap<string, string>,
 ): string {
-  if (isDocsUrl(source))
-    return mrkdwnLink(
-      source,
-      escapeMrkdwn(new URL(source).pathname.replace(/^\//, "") || "docs"),
-    );
+  if (isDocsUrl(source)) {
+    const path = new URL(source).pathname.replace(/^\//, "") || "docs";
+    // Citations are stored text; only plain path characters may reach a Slack link.
+    return SAFE_DOCS_PATH.test(path)
+      ? mrkdwnLink(`${DOCS_ORIGIN}/${path}`, escapeMrkdwn(path))
+      : escapeMrkdwn(path.replace(/[<>|]/g, ""));
+  }
   return escapeMrkdwn(titles.get(source) ?? "removed article");
 }
 

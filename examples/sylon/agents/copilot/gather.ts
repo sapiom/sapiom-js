@@ -3,7 +3,8 @@
  * small selection call over the docs index to pick pages (and answers, when there are many).
  *
  * A docs outage never fails a run. A failed index, selection or page read is logged and the draft
- * proceeds from the team's articles alone, flagged `docsUnavailable` so its confidence is capped.
+ * proceeds from the team's articles alone, flagged `docsUnavailable` so its confidence is capped. A page that fails while others load is named
+ * in `failedDocs`.
  */
 import type { AgentExecutionContext } from "@sapiom/agent";
 
@@ -16,10 +17,11 @@ import {
   type DocsDeps,
 } from "../../_shared/docs";
 import type { Issue, Message } from "../../_shared/issues";
-import { listEnabled } from "../../_shared/kb";
+import { listEnabled, type KbArticle } from "../../_shared/kb";
 import {
   SELECT_OUTPUT_NAME,
   SELECT_SYSTEM,
+  ANSWERS_INLINE_CHARS,
   SelectOutput,
   answersFitInline,
   buildSelectionPrompt,
@@ -59,6 +61,20 @@ async function select(
   return validateSelection(parsed.data, input.index, input.answers);
 }
 
+/** The most recently updated answers that fit the inline budget: the fallback when selection fails. */
+function recentAnswers(answers: readonly KbArticle[]): KbArticle[] {
+  const kept: KbArticle[] = [];
+  let chars = 0;
+  for (const a of [...answers].sort(
+    (x, y) => y.updatedAt.getTime() - x.updatedAt.getTime(),
+  )) {
+    chars += a.title.length + a.body.length;
+    if (chars > ANSWERS_INLINE_CHARS) break;
+    kept.push(a);
+  }
+  return kept;
+}
+
 export async function gatherKnowledge(
   ctx: Ctx,
   db: Db,
@@ -87,11 +103,13 @@ export async function gatherKnowledge(
   }
 
   let selection: Selection = { docUrls: [], answerIds: [] };
+  let selectionFailed = false;
   if (index.length > 0 || offered.length > 0) {
     try {
       selection = await select(ctx, { ...input, index, answers: offered });
     } catch (err) {
       docsUnavailable = true;
+      selectionFailed = true;
       ctx.logger.warn("source selection failed; drafting without docs", {
         err: String(err),
       });
@@ -107,21 +125,29 @@ export async function gatherKnowledge(
     })),
   );
   const docs: DocPage[] = [];
+  const failedDocs: string[] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") docs.push(r.value);
-    else
+    else {
+      failedDocs.push(selection.docUrls[i]);
       ctx.logger.warn("docs page unavailable", {
         url: selection.docUrls[i],
         err: String(r.reason),
       });
+    }
   });
-  if (selection.docUrls.length > 0 && docs.length === 0) docsUnavailable = true;
+  if (failedDocs.length > 0) docsUnavailable = true;
 
   const chosen = new Set(selection.answerIds);
   return {
     policies,
-    answers: inline ? allAnswers : allAnswers.filter((a) => chosen.has(a.id)),
+    answers: inline
+      ? allAnswers
+      : selectionFailed
+        ? recentAnswers(allAnswers)
+        : allAnswers.filter((a) => chosen.has(a.id)),
     docs,
     docsUnavailable,
+    failedDocs,
   };
 }

@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Db } from "./db";
 import { memoryDb } from "./db";
 import {
   INDEX_URL,
+  MAX_INDEX_BYTES,
+  MAX_PAGE_BYTES,
   MAX_PAGE_CHARS,
   TTL_MS,
   canonicalPageUrl,
@@ -86,6 +88,36 @@ describe("origin allowlist", () => {
     );
   });
 
+  describe("response size", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("stops reading an endless body at the page cap and cancels the stream", async () => {
+      let pulled = 0;
+      let cancelled = false;
+      const chunk = new Uint8Array(16 * 1024).fill(97);
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      vi.stubGlobal("fetch", async () => new Response(body, { status: 200 }));
+      const text = await httpFetcher("https://docs.sapiom.ai/guides/deploy.md");
+      expect(text.length).toBe(MAX_PAGE_BYTES);
+      expect(cancelled).toBe(true);
+      expect(pulled).toBeLessThan(MAX_PAGE_BYTES + 4 * chunk.byteLength);
+    });
+
+    it("gives the index a larger bound than a page", async () => {
+      const big = new Uint8Array(MAX_INDEX_BYTES + 5000).fill(97);
+      vi.stubGlobal("fetch", async () => new Response(big, { status: 200 }));
+      expect((await httpFetcher(INDEX_URL)).length).toBe(MAX_INDEX_BYTES);
+    });
+  });
+
   it("getPage refuses a url off the docs origin without fetching", async () => {
     const db = await memoryDb();
     const calls: string[] = [];
@@ -156,6 +188,22 @@ describe("cache", () => {
     const page = await getPage(db, PAGE, deps());
     expect(page.length).toBeLessThan(MAX_PAGE_CHARS + 50);
     expect(page.endsWith("[page truncated]")).toBe(true);
+  });
+
+  it("does not cache an index with no pages, and serves the stale valid copy", async () => {
+    body = LLMS;
+    expect(await getIndex(db, deps())).toHaveLength(3);
+    body = "Service unavailable";
+    now = new Date(now.getTime() + TTL_MS * 2);
+    expect(await getIndex(db, deps())).toHaveLength(3);
+    // The bad body was not stored, so the next call refetches rather than serving it for an hour.
+    body = LLMS + "- [New](https://docs.sapiom.ai/new): n.\n";
+    expect(await getIndex(db, deps())).toHaveLength(4);
+  });
+
+  it("throws on an empty index when there is no copy to fall back to", async () => {
+    body = "Service unavailable";
+    await expect(getIndex(db, deps())).rejects.toThrow("no pages");
   });
 
   it("caches and parses the index", async () => {

@@ -64,6 +64,22 @@ describe("kb articles", () => {
     ).toBeNull();
   });
 
+  it("writes only the patched columns, so a stale copy cannot revert another edit", async () => {
+    const a = await createArticle(
+      db,
+      { kind: "answer", title: "Old", body: "body" },
+      "setup",
+    );
+    // Two editors patch different fields; neither has read the other's change.
+    await updateArticle(db, a.id, { title: "New" }, "one");
+    await updateArticle(db, a.id, { enabled: false }, "two");
+    expect(await getArticle(db, a.id)).toMatchObject({
+      title: "New",
+      enabled: false,
+      updatedBy: "two",
+    });
+  });
+
   it("disabled articles are not read by the copilot", async () => {
     const a = await createArticle(
       db,

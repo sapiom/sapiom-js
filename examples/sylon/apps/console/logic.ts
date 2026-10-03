@@ -555,9 +555,13 @@ export type KbParse =
  * so a request can never set `updated_by` or an id.
  */
 export function parseKbInput(
-  body: Record<string, unknown>,
+  raw: unknown,
   mode: "create" | "update",
 ): KbParse {
+  // A JSON body can be null, an array or a scalar; only an object has fields to read.
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    return { ok: false, error: "body must be a JSON object" };
+  const body = raw as Record<string, unknown>;
   const value: Partial<KbInput> = {};
   if (body.kind !== undefined) {
     if (!(KB_KINDS as readonly unknown[]).includes(body.kind))

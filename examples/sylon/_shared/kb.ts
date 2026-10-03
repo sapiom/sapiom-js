@@ -28,6 +28,9 @@ export interface KbInput {
   enabled?: boolean;
 }
 
+/** Column names a patch may set; the keys are interpolated into SQL, so only these pass. */
+const PATCHABLE = new Set(["kind", "title", "body", "enabled"]);
+
 const COLUMNS =
   "id, kind, title, body, enabled, updated_by, created_at, updated_at";
 
@@ -91,14 +94,20 @@ export async function updateArticle(
   patch: Partial<KbInput>,
   updatedBy: string,
 ): Promise<KbArticle | null> {
-  const current = await getArticle(db, id);
-  if (!current) return null;
-  const next = { ...current, ...definedOnly(patch) };
+  // Only the patched columns are written, so a concurrent edit to another field is not reverted
+  // by a stale full-row copy.
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+  for (const [key, value] of Object.entries(definedOnly(patch))) {
+    if (!PATCHABLE.has(key)) continue;
+    params.push(value);
+    sets.push(`${key} = $${params.length}`);
+  }
+  params.push(updatedBy);
+  sets.push(`updated_by = $${params.length}`, "updated_at = now()");
   const rows = await db.query(
-    `update kb_articles
-        set kind = $2, title = $3, body = $4, enabled = $5, updated_by = $6, updated_at = now()
-      where id = $1 returning ${COLUMNS}`,
-    [id, next.kind, next.title, next.body, next.enabled, updatedBy],
+    `update kb_articles set ${sets.join(", ")} where id = $1 returning ${COLUMNS}`,
+    params,
   );
   return rows[0] ? toArticle(rows[0]) : null;
 }
