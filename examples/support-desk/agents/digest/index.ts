@@ -1,18 +1,5 @@
-/**
- * digest: the daily summary. Each run posts one message per desk in its triage channel: the desk's
- * open issues grouped by status, with age, owner, a link to the card, and the ones past their SLA
- * (`digest.sla_hours`) flagged.
- *
- * Trigger: `schedule_cron` with a `timezone` (`0 9 * * *` in America/Los_Angeles in fleet.json),
- * so the time is the trigger's: change it in fleet.json, cancel the old trigger, run setup.
- *
- * Once per desk per day: the `digests` row is inserted in the transaction that posts, so a second
- * fire on the same day (a leftover trigger, a rerun) posts nothing. A failed post rolls its row
- * back and fails the step once every desk was tried; the runner's retries and a manual rerun post
- * only the desks still missing, and the watchdog reports a run that stays failed. Slack delivery
- * is not atomic with the database: a post Slack accepted whose response is lost, or whose commit
- * fails, rolls the claim back and can be posted again, as in the controller.
- */
+// Commit each desk/day claim with its post so retries skip committed claims.
+// Slack delivery is not atomic with the database: ambiguous responses or failed commits can duplicate posts.
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
