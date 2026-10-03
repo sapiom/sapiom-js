@@ -357,6 +357,14 @@ describe("tick hardening", () => {
     const c = fakeCtx({ isLocalTrace: true, executionId });
     return { ...c, done: tick(c.ctx, db, { fetch, apiKey: "k" }) };
   };
+  /** Five rows a page and a four-page cap: the paging rules on a handful of rows. */
+  const small = (fetch: Deps["fetch"]) => {
+    const c = fakeCtx({ isLocalTrace: true, executionId: "wd-1" });
+    return {
+      ...c,
+      done: tick(c.ctx, db, { fetch, apiKey: "k", page: 5, maxPages: 4 }),
+    };
+  };
   const denied = () => stubFetch(() => new Error("forbidden")).fetch;
 
   it("posts one deduped 'cannot poll' line when the key is rejected", async () => {
@@ -393,7 +401,7 @@ describe("tick hardening", () => {
   });
 
   it("pages until a short page and keeps the cursor when the cap is hit", async () => {
-    const full = Array.from({ length: 500 }, (_, i) => exec(String(1000 + i)));
+    const full = Array.from({ length: 5 }, (_, i) => exec(String(1000 + i)));
     let pages = 0;
     const { fetch } = stubFetch((url) => {
       if (url.pathname === "/v1/workflows/definitions") return DEFS;
@@ -404,27 +412,27 @@ describe("tick hardening", () => {
       }
       return {};
     });
-    const out = await run(fetch).done;
-    expect(pages).toBe(20);
+    const out = await small(fetch).done;
+    expect(pages).toBe(4);
     expect(out).toMatchObject({ incomplete: ["sylon-copilot"] });
     expect(await db.query("select * from watchdog_state")).toEqual([]);
   });
 
-  it("reads past the old four-page limit when the pages end short", async () => {
+  it("reads every full page until a short one", async () => {
     let pages = 0;
     const { fetch } = stubFetch((url) => {
       if (url.pathname === "/v1/workflows/definitions") return DEFS;
       if (url.pathname === "/v1/workflows/executions") {
         if (url.searchParams.get("definitionId") !== "def-copilot") return [];
         pages++;
-        return pages < 6
-          ? Array.from({ length: 500 }, (_, i) => exec(`p${pages}-${i}`))
+        return pages < 4
+          ? Array.from({ length: 5 }, (_, i) => exec(`p${pages}-${i}`))
           : [];
       }
       return {};
     });
-    const out = await run(fetch).done;
-    expect(pages).toBe(6);
+    const out = await small(fetch).done;
+    expect(pages).toBe(4);
     expect(out).not.toHaveProperty("incomplete");
     expect(await db.query("select * from watchdog_state")).toHaveLength(1);
   });

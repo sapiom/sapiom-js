@@ -56,6 +56,9 @@ const KEEP_REPORTED_DAYS = 7;
 export interface Deps {
   fetch: typeof globalThis.fetch;
   apiKey: string;
+  /** Rows per page and the page cap; tests shrink them so paging runs on a few rows. */
+  page?: number;
+  maxPages?: number;
 }
 
 async function getJson<T>(deps: Deps, path: string): Promise<T> {
@@ -76,21 +79,22 @@ async function failedSince(
   to: Date,
 ): Promise<{ rows: Execution[]; complete: boolean }> {
   const rows: Execution[] = [];
-  for (let page = 0; page < MAX_PAGES; page++) {
+  const size = deps.page ?? PAGE;
+  for (let page = 0; page < (deps.maxPages ?? MAX_PAGES); page++) {
     const q = new URLSearchParams({
       definitionId,
       status: "failed",
       from: from.toISOString(),
       to: to.toISOString(),
-      limit: String(PAGE),
-      offset: String(page * PAGE),
+      limit: String(size),
+      offset: String(page * size),
     });
     const got = await getJson<Execution[]>(
       deps,
       `/v1/workflows/executions?${q}`,
     );
     rows.push(...got);
-    if (got.length < PAGE) return { rows, complete: true };
+    if (got.length < size) return { rows, complete: true };
   }
   return { rows, complete: false };
 }
