@@ -10,7 +10,7 @@ import {
 } from "./linear";
 import { fakeCtx } from "./test-ctx";
 
-/** A ctx whose `sapiom.connectors.linear` answers every `callTool` with `result` (or throws `err`). */
+/** Inject a connector so these tests exercise the wrapper without contacting Linear. */
 function ctxWithLinear(result: unknown, err?: unknown) {
   const calls: { name: string; args: unknown }[] = [];
   const linear = {

@@ -1180,7 +1180,6 @@ describe("intake agent", () => {
 describe("noteOpenLinear against the relay (mocked fetch)", () => {
   let state: { status: string; statusType: string } | null;
   let failComment: boolean;
-  /** Slack method answered with a 500. */
   let failMethod: string | null;
   let calls: { tool?: string; method: string; args: Record<string, unknown> }[];
 
