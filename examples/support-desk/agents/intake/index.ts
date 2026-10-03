@@ -2,7 +2,6 @@
  * intake: the Slack source adapter. A customer message becomes a classified issue (or a follow-up
  * on an open one), an issue card in the triage channel, and an `issue.created` or
  * `issue.message_added` event. Also owns the `issue.*` buttons (Take, Close) and the 🎫 reaction.
- * Close on an issue whose Linear ticket is still open notes it in the triage thread and on the ticket.
  *
  * Triggers: `slack.message.created`, `slack.reaction_added`, `slack.block_actions`. Triggers match
  * on type only, so `guard` filters and routes.
@@ -976,9 +975,8 @@ async function settleClicked(
 }
 
 /**
- * After a Close, say in the triage thread and on the Linear ticket that the ticket is still open:
- * linear-sync reads only On Hold issues, so nothing would look at it again. Never throws, since the
- * close is already committed and a retried step would see it as already closed.
+ * Closed issues leave linear-sync's On Hold scan, so an unresolved Linear ticket is flagged here.
+ * Never throws: the close is already committed and a retried step would see it as already closed.
  */
 export async function noteOpenLinear(
   ctx: SlackCtx,
@@ -1114,31 +1112,35 @@ const button = defineStep({
         };
       });
 
-      // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
-      const account = await getAccount(db, issue.accountId);
-      await refreshCard(ctx, triageChannel, issue, account);
-      if (input.container?.message_ts !== issue.triageRootTs) {
-        const line =
-          verb === "take"
-            ? changed
-              ? `Taken by <@${clicker}>`
-              : issue.status === "closed"
-                ? "Issue is closed"
-                : `Owned by <@${issue.ownerSlackId}>`
-            : changed
-              ? `Closed by <@${clicker}>`
-              : "Already closed";
-        await settleClicked(ctx, input, line);
+      try {
+        // The click may come from a controller nudge, so the card is always addressed by triage_root_ts.
+        const account = await getAccount(db, issue.accountId);
+        await refreshCard(ctx, triageChannel, issue, account);
+        if (input.container?.message_ts !== issue.triageRootTs) {
+          const line =
+            verb === "take"
+              ? changed
+                ? `Taken by <@${clicker}>`
+                : issue.status === "closed"
+                  ? "Issue is closed"
+                  : `Owned by <@${issue.ownerSlackId}>`
+              : changed
+                ? `Closed by <@${clicker}>`
+                : "Already closed";
+          await settleClicked(ctx, input, line);
+        }
+        if (verb === "close" && changed && issue.triageRootTs) {
+          await post(ctx, {
+            channel: triageChannel,
+            threadTs: issue.triageRootTs,
+            text: `Closed by <@${clicker}>`,
+          });
+        }
+      } finally {
+        // A Slack failure above must not skip it: the retry sees the issue as already closed.
+        if (verb === "close" && changed)
+          await noteOpenLinear(ctx, triageChannel, issue);
       }
-      if (verb === "close" && changed && issue.triageRootTs) {
-        await post(ctx, {
-          channel: triageChannel,
-          threadTs: issue.triageRootTs,
-          text: `Closed by <@${clicker}>`,
-        });
-      }
-      if (verb === "close" && changed)
-        await noteOpenLinear(ctx, triageChannel, issue);
       return terminate({
         outcome: verb,
         changed,

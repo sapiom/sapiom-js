@@ -6,7 +6,13 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { localFleetDb, setLocalDb, withDb, type Db } from "../../_shared/db";
+import {
+  localFleetDb,
+  resetSharedDb,
+  setLocalDb,
+  withDb,
+  type Db,
+} from "../../_shared/db";
 import { setConfig } from "../../_shared/config";
 import { upsertDesk } from "../../_shared/desks";
 import {
@@ -1172,10 +1178,10 @@ describe("intake agent", () => {
 });
 
 describe("noteOpenLinear against the relay (mocked fetch)", () => {
-  /** Linear state served by get_issue; null makes get_issue fail. */
   let state: { status: string; statusType: string } | null;
   let failComment: boolean;
-  let failPost: boolean;
+  /** Slack method answered with a 500. */
+  let failMethod: string | null;
   let calls: { tool?: string; method: string; args: Record<string, unknown> }[];
 
   const issue = {
@@ -1194,7 +1200,7 @@ describe("noteOpenLinear against the relay (mocked fetch)", () => {
     vi.stubEnv("SAPIOM_API_KEY", "sat_test");
     state = { status: "In Progress", statusType: "started" };
     failComment = false;
-    failPost = false;
+    failMethod = null;
     calls = [];
     vi.stubGlobal(
       "fetch",
@@ -1230,7 +1236,7 @@ describe("noteOpenLinear against the relay (mocked fetch)", () => {
         }
         const method = url.split("/methods/")[1];
         calls.push({ method, args: body });
-        if (failPost)
+        if (method === failMethod)
           return new Response(JSON.stringify({ ok: false, error: "boom" }), {
             status: 500,
           });
@@ -1299,9 +1305,47 @@ describe("noteOpenLinear against the relay (mocked fetch)", () => {
   });
 
   it("a failed Slack post still sends the comment", async () => {
-    failPost = true;
+    failMethod = "chat.postMessage";
     expect(await note()).toEqual(["open Linear note not posted"]);
     expect(comments()).toHaveLength(1);
+  });
+
+  it('a failed "Closed by" post still comments on the open ticket', async () => {
+    // A live ctx reaches the database through the shared pool; point it at a local one.
+    const db = await localFleetDb();
+    await resetSharedDb(async () => ({ db, close: async () => {} }));
+    const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
+    const opened = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "high",
+      title: "Export fails",
+      customer: { channel: "C0CUSTOMER1", ts: "1790889355.981" },
+      triageRootTs: "1790889356.001",
+    });
+    await updateIssue(db, opened.id, {
+      linearIssueId: "uuid-SAP-9",
+      linearIdentifier: "SAP-9",
+      linearUrl: "https://linear.app/x/issue/SAP-9",
+    });
+    await setStatus(db, opened.id, "on_hold");
+    const close = structuredClone(
+      fixture("slack/block-actions.issue-close.json").payload,
+    ) as { actions: { value: string }[] };
+    close.actions[0].value = opened.id;
+    failMethod = "chat.postMessage";
+
+    const made = fakeCtx({ isLocalTrace: false });
+    (made.ctx.sapiom as Record<string, unknown>).database = {
+      get: async () => ({
+        connection: { connectionString: "postgres://local" },
+      }),
+    };
+    await expect(run(close, made.ctx)).rejects.toThrow();
+    expect((await getIssue(db, opened.id)).status).toBe("closed");
+    expect(comments()).toHaveLength(1);
+    await resetSharedDb();
   });
 
   it("no triage thread: no note, the comment still goes", async () => {
