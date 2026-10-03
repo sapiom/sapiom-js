@@ -1,4 +1,3 @@
-/** digest: the pure message, then the run on pg-mem with a fake Slack connector. */
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
@@ -177,7 +176,7 @@ describe("digest message", () => {
     const issues = Array.from({ length: 1500 }, (_, i) =>
       issue({
         status: (["new", "on_you", "on_customer", "on_hold"] as const)[i % 4],
-        // 40 past SLA, spread across statuses and placed at the end of the input.
+        // Put overdue issues last to catch truncation that follows input order.
         ageHours: i >= 1460 ? 500 : 1,
         title: "y".repeat(80),
       }),
@@ -190,12 +189,10 @@ describe("digest message", () => {
     const last = texts(out.blocks).at(-1)!;
     expect(last).toBe(`+${1500 - listed} more open issues, see the Console`);
     expect(body(out.blocks).match(/past SLA/g)).toHaveLength(40);
-    // One block fewer would have fit another line: the listing is as long as it can be.
+    // Guard against severe underfilling of the available message capacity.
     expect(listed).toBeGreaterThan(600);
   });
 });
-
-// --- the run ---------------------------------------------------------------------------------
 
 type Call = { method: string; args: Record<string, unknown> };
 

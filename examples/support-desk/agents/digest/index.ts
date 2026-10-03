@@ -8,8 +8,9 @@
  *
  * Once per desk per day: the `digests` row is inserted in the transaction that posts, so a second
  * fire on the same day (a leftover trigger, a rerun) posts nothing. A failed post rolls its row
- * back and fails the run once every desk was tried; the watchdog reports it, and a manual rerun
- * posts the desks still missing. Nothing retries on its own before the next day.
+ * back and fails the step once every desk was tried; the runner's retries and a manual rerun post
+ * only the desks still missing, and the watchdog reports a run that stays failed. The only
+ * duplicate is a post that succeeded right before the commit failed, as in the controller.
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";

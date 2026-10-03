@@ -6,7 +6,6 @@ import { escapeMrkdwn, mrkdwnLink, statusLabel } from "../../_shared/blocks";
 import { OPEN_STATUSES, type IssueStatus } from "../../_shared/issues";
 import { permalink, type Block } from "../../_shared/slack";
 
-/** Hours an open issue may age before it is flagged, by the intake's four priorities. */
 export const DEFAULT_SLA_HOURS = { urgent: 4, high: 24, normal: 72, low: 168 };
 export type SlaHours = typeof DEFAULT_SLA_HOURS;
 
@@ -33,7 +32,6 @@ export function slaHoursFor(priority: string | null, table: SlaHours): number {
     : table.normal;
 }
 
-/** `3d 4h`, or `5h 12m` under a day. */
 export function formatAge(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000));
   const hours = Math.floor(minutes / 60);
@@ -46,7 +44,7 @@ interface Ranked extends DigestIssue {
   pastSla: boolean;
 }
 
-/** Past SLA first, then oldest first. */
+// Prioritize overdue issues so truncation drops them last.
 const byUrgency = (a: Ranked, b: Ranked) =>
   Number(b.pastSla) - Number(a.pastSla) ||
   a.createdAt.getTime() - b.createdAt.getTime();
@@ -59,7 +57,7 @@ const section = (text: string): Block => ({
 export function digestMessage(input: {
   desk: { name: string; triageChannel: string };
   issues: DigestIssue[];
-  /** Display names by Slack user id; an owner missing here shows as its id. */
+  /** Keep owners identifiable when their display names are unavailable. */
   owners: ReadonlyMap<string, string>;
   now: Date;
   day: string;
@@ -110,7 +108,7 @@ export function digestMessage(input: {
     return parts.join(" · ").slice(0, maxChars);
   };
 
-  /** Status groups in board order, each packed into as few sections as fit `maxChars`. */
+  // Match the Console's status order so readers can compare the digest with the board.
   const layout = (list: Ranked[]): Block[] => {
     const out: Block[] = [];
     for (const status of OPEN_STATUSES) {
