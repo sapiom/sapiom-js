@@ -141,6 +141,30 @@ describe("google.drive", () => {
     expect(result).toEqual(permission);
   });
 
+  it("trims a trailing slash from SAPIOM_TOOLS_BASE before appending the method route", async () => {
+    const original = process.env.SAPIOM_TOOLS_BASE;
+    process.env.SAPIOM_TOOLS_BASE = "https://tools.example/";
+    try {
+      // The base resolves at module load, so re-import under the overridden env.
+      await jest.isolateModulesAsync(async () => {
+        const fresh = await import("./index.js");
+        const { transport, calls } = makeTransport([() => jsonResponse({})]);
+
+        await fresh.driveShareFile(
+          { fileId: "file-1", role: "reader", type: "anyone" },
+          transport,
+        );
+
+        expect(calls[0]!.url).toBe(
+          "https://tools.example/connectors/v1/google/methods/shareFile",
+        );
+      });
+    } finally {
+      if (original === undefined) delete process.env.SAPIOM_TOOLS_BASE;
+      else process.env.SAPIOM_TOOLS_BASE = original;
+    }
+  });
+
   it("uploadFile POSTs methods/uploadFile with the args body, returns the file", async () => {
     const file = { id: "file-9", name: "notes.txt", mimeType: "text/plain" };
     const { transport, calls } = makeTransport([() => jsonResponse(file)]);

@@ -11,11 +11,9 @@
  * `/agents/v1/triggers`.
  */
 import { Transport, defaultTransport } from "../_client/index.js";
+import { resolveToolsBaseUrl } from "../_client/tools-base.js";
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_AGENTS_URL ??
-  process.env.SAPIOM_TOOLS_BASE ??
-  "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl(process.env.SAPIOM_AGENTS_URL);
 
 export type ScheduleKind = "schedule_cron" | "schedule_once";
 export type ScheduleStatus = "active" | "paused" | "completed" | "disabled";

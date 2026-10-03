@@ -34,10 +34,10 @@ import {
   defaultTransport,
 } from "../../_client/index.js";
 import { parseRetryAfterMs, readErrorBody } from "../../_client/errors.js";
+import { resolveToolsBaseUrl } from "../../_client/tools-base.js";
 
 // Same tools host agents/models resolve — via SAPIOM_TOOLS_BASE. No new per-cap config.
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl();
 
 /** A tool the connector exposes, as discovered from the provider's MCP server. */
 export interface McpTool {
