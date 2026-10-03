@@ -103,6 +103,41 @@ describe("addBusinessMinutes", () => {
     expect(out.toISOString()).toBe("2026-11-02T14:30:00.000Z");
   });
 
+  it("counts the minutes that pass in a window holding the DST start", () => {
+    // Sun 2027-03-14 01:00-04:00 New York: 02:00 EST jumps to 03:00 EDT, so the window holds 120.
+    const sunday: BusinessHours = {
+      ...NY,
+      days: [0],
+      start: "01:00",
+      end: "04:00",
+    };
+    const open = new Date("2027-03-14T06:00:00Z");
+    expect(addBusinessMinutes(open, 120, sunday).toISOString()).toBe(
+      "2027-03-14T08:00:00.000Z",
+    );
+    // The rest runs into the next Sunday, 01:00 + 60 = 02:00 EDT.
+    expect(addBusinessMinutes(open, 180, sunday).toISOString()).toBe(
+      "2027-03-21T06:00:00.000Z",
+    );
+  });
+
+  it("counts the minutes that pass in a window holding the DST end", () => {
+    // Sun 2026-11-01 01:00-04:00 New York: 02:00 EDT falls back to 01:00 EST, so it holds 240.
+    const sunday: BusinessHours = {
+      ...NY,
+      days: [0],
+      start: "01:00",
+      end: "04:00",
+    };
+    const open = new Date("2026-11-01T05:00:00Z");
+    expect(addBusinessMinutes(open, 240, sunday).toISOString()).toBe(
+      "2026-11-01T09:00:00.000Z",
+    );
+    expect(addBusinessMinutes(open, 241, sunday).toISOString()).toBe(
+      "2026-11-08T06:01:00.000Z",
+    );
+  });
+
   it("finishes the longest accepted case and throws past the step bound", () => {
     const weekly: BusinessHours = {
       ...NY,

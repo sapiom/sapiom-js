@@ -91,11 +91,11 @@ function localTime(ms: number, timeZone: string) {
 }
 
 /**
- * The instant `target` local minutes into the day, reached from `t` (at local `minute`) by adding
- * the difference. A DST change in between moves the landing by an hour: an early landing is fixed
- * by the caller's next read, a late one (a skipped hour) here, unless `target` is itself skipped.
+ * The instant at which the local clock, now at `minute`, next reads `target` (1440 = midnight).
+ * Adding the difference lands an hour off when a DST change falls in between; one corrective read
+ * fixes that, unless `target` is itself in a skipped hour, where the first landing is kept.
  */
-function advanceTo(
+function localInstant(
   t: number,
   minute: number,
   target: number,
@@ -103,17 +103,20 @@ function advanceTo(
 ): number {
   const next = t + (target - minute) * 60_000;
   const want = target % 1440;
-  let late = localTime(next, timeZone).minute - want;
-  if (late > 720) late -= 1440;
-  if (late < -720) late += 1440;
-  if (late <= 1e-6) return next;
-  const back = next - late * 60_000;
-  return Math.abs(localTime(back, timeZone).minute - want) < 1e-6 ? back : next;
+  let off = want - localTime(next, timeZone).minute;
+  if (off > 720) off -= 1440;
+  if (off < -720) off += 1440;
+  if (Math.abs(off) < 1e-6) return next;
+  const fixed = next + off * 60_000;
+  return Math.abs(localTime(fixed, timeZone).minute - want) < 1e-6
+    ? fixed
+    : next;
 }
 
 /**
- * `start` plus `minutes` counted only inside the business window. Each step re-reads the local
- * time after a jump, so a DST change (a 23- or 25-hour day) corrects itself.
+ * `start` plus `minutes` counted only inside the business window. Window edges are found as real
+ * instants, so a DST change before or inside a window (a 23- or 25-hour day) counts the minutes
+ * that actually pass.
  */
 export function addBusinessMinutes(
   start: Date,
@@ -126,18 +129,18 @@ export function addBusinessMinutes(
   const days = new Set(hours.days);
   const zone = hours.timeZone;
   let t = start.getTime();
-  let left = minutes;
+  let left = minutes * 60_000;
   for (let step = 0; step < maxSteps; step++) {
     const { day, minute } = localTime(t, zone);
     if (days.has(day) && minute >= open && minute < close) {
-      const room = close - minute;
-      if (left <= room) return new Date(Math.round(t + left * 60_000));
-      left -= room;
-      t += room * 60_000;
+      const closesAt = localInstant(t, minute, close, zone);
+      if (left <= closesAt - t) return new Date(Math.round(t + left));
+      left -= closesAt - t;
+      t = closesAt;
     } else if (days.has(day) && minute < open) {
-      t = advanceTo(t, minute, open, zone);
+      t = localInstant(t, minute, open, zone);
     } else {
-      t = advanceTo(t, minute, 1440, zone);
+      t = localInstant(t, minute, 1440, zone);
     }
   }
   throw new Error(
