@@ -282,7 +282,37 @@ export function moreMessage(n: number): string {
   return `and ${n} more failed ${n === 1 ? "run" : "runs"}: ${mrkdwnLink(EVENTS_URL, "see the Events page")}`;
 }
 
+/**
+ * A failed Sapiom API call. Keeps the status so the alert can say what to do, and drops an HTML
+ * body (a gateway error page) that would otherwise be pasted into Slack.
+ */
+export class ApiError extends Error {
+  constructor(
+    readonly request: string,
+    readonly status: number,
+    body: string,
+  ) {
+    const text = /^\s*</.test(body) ? "" : `: ${body.slice(0, 200)}`;
+    super(`${request} failed (${status})${text}`);
+    this.name = "ApiError";
+  }
+}
+
+/** The status of the failed call behind a poll problem, when there was one. */
+export function problemStatus(err: unknown): number | null {
+  if (err instanceof ApiError) return err.status;
+  const m = /failed \((\d{3})\)/.exec(String(err));
+  return m ? Number(m[1]) : null;
+}
+
 /** The line posted when the watchdog itself cannot read the API, so its own outage is not silent. */
-export function cannotPollMessage(problem: string): string {
-  return `:warning: Support desk watchdog cannot poll: ${escapeMrkdwn(truncate(slackToPlain(problem)))}. Run \`pnpm run setup --only watchdog\` to re-provision its key.`;
+export function cannotPollMessage(problem: string, status: number | null = null): string {
+  const what = escapeMrkdwn(truncate(slackToPlain(problem)));
+  const advice =
+    status === 401 || status === 403
+      ? "Its key was refused: run `pnpm run setup --only watchdog` to re-provision it."
+      : status === null || status >= 500
+        ? "The Sapiom API was unavailable; the next tick retries. Act only if this repeats for an hour."
+        : "Check the watchdog's run log; run `pnpm run setup --only watchdog` if its key or config changed.";
+  return `:warning: Support desk watchdog cannot poll: ${what}. ${advice}`;
 }
