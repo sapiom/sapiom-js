@@ -838,6 +838,7 @@
       /** The selected desk's slug, kept in the query string so a link opens on the same desk. */
       let desk = new URLSearchParams(location.search).get("desk") || "";
       let desks = [];
+      let desksReady = false;
       const deskName = (slug) =>
         desks.find((d) => d.slug === slug)?.name || slug;
       /** `path` scoped to the selected desk. */
@@ -1165,7 +1166,7 @@
             ? `<table>${list
                 .map(
                   (r) =>
-                    `<tr><td class="num">${esc(r.id)}</td><td style="white-space:normal">${esc(r.eventType)}<div class="muted" style="font-size:12px">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button class="mut" data-replay="${esc(r.id)}">Replay</button></td></tr>`,
+                    `<tr><td class="num">${esc(r.id)}</td><td style="white-space:normal">${esc(r.eventType)}${r.fleetWide ? ` <span class="muted" title="Raised before any ticket existed, so it cannot be tied to a desk; it shows on every desk.">(fleet-wide)</span>` : ""}<div class="muted" style="font-size:12px">${esc(r.failedTriggerSlugs.join(", "))} · ${clock(r.receivedAt)}</div></td><td><button class="mut" data-replay="${esc(r.id)}">Replay</button></td></tr>`,
                 )
                 .join("")}</table>`
             : `<span class="muted">No failed deliveries to Sylon agents.</span>`;
@@ -1212,7 +1213,7 @@
               ${spreadRow("Message → issue card", m.latency.messageToCard)}
               ${spreadRow("Issue → first draft card", m.latency.issueToDraftCard)}
               ${spreadRow("Message → first draft card", m.latency.messageToDraftCard)}
-              ${spreadRow("Event → run start", m.dispatch)}
+              ${spreadRow("Event → run start (fleet-wide)", m.dispatch)}
             </table>
             <table style="margin-top:10px">
               <tr><td>Cost per ticket</td><td class="num ${versus}">mean <strong>${usd(c.meanUsd)}</strong></td><td class="num">p90 <strong>${usd(c.p90Usd)}</strong></td></tr>
@@ -1351,11 +1352,15 @@
       let kbEditing = null; // an article id, "new", or null
       let kbConfirm = null; // the id whose Delete awaits a second click
       async function loadKb() {
+        // A response for a desk that is no longer selected must not replace the visible list.
+        const forDesk = desk;
         try {
-          kbArticles = await get(scoped("/api/kb"));
+          const articles = await get(scoped("/api/kb"));
+          if (desk !== forDesk) return;
+          kbArticles = articles;
           renderKb();
         } catch (e) {
-          $("kb-list").textContent = e.message;
+          if (desk === forDesk) $("kb-list").textContent = e.message;
         }
       }
       const deskSlugById = (id) => desks.find((d) => d.id === id)?.slug || id;
@@ -1478,7 +1483,8 @@
         }
         store.set(TAB_KEY, name);
         if (name === "system" && !systemLoaded) loadSystem();
-        if (name === "kb") loadKb();
+        // Before loadDesks resolves no desk is selected; its continuation loads the list.
+        if (name === "kb" && desksReady) loadKb();
       }
       for (const t of Object.keys(TABS))
         $(`tab-${t}`).onclick = () => showTab(t);
@@ -1488,6 +1494,7 @@
       refreshFleet();
       // The desk is known before the first scoped request, so nothing renders the wrong desk.
       loadDesks().then(() => {
+        desksReady = true;
         refreshBoard();
         refreshTimeline();
         refreshReceipts();

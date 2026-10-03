@@ -392,7 +392,11 @@ async function failedReceipts(d: Db, desk: Desk) {
     failed.map((r) => r.id),
   );
   return {
-    receipts: scopeReceipts(failed, owners, desk.id).map(receiptView),
+    // A receipt with no issue (a raw Slack event) is on every desk; say so rather than imply it is this desk's.
+    receipts: scopeReceipts(failed, owners, desk.id).map((r) => ({
+      ...receiptView(r),
+      fleetWide: !owners.get(r.id),
+    })),
     truncated,
   };
 }
@@ -571,6 +575,7 @@ async function metrics(d: Db, desk: Desk, window: keyof typeof METRIC_WINDOWS) {
     latency: summarizeLatencies(rows.map((r) => r.latency)),
     // Receipts name no desk, so dispatch timing covers the whole fleet.
     dispatch: spread(dispatch.delays),
+    dispatchScope: "fleet" as const,
     dispatchTruncated: dispatch.truncated,
     cost: costSummary(rows.map((r) => r.cost)),
     runsMissing: rows.reduce((n, r) => n + r.cost.runsMissing, 0),
