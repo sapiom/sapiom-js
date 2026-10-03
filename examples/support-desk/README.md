@@ -151,8 +151,8 @@ unset (so a live fleet needs no re-seed):
 ### SLAs
 
 The `sla` key sets a first-response and a next-response target for each priority, in minutes.
-Edit it in the Console's System tab (a JSON editor, validated on save), or put it in
-`fleet.local.json` under `config`:
+Edit it in the Console's System tab (a JSON editor, validated on save), or set this value as
+`config.sla` in `fleet.local.json` (`"config": { "sla": { ... } }`):
 
 ```json
 {
