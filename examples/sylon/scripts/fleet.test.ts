@@ -29,6 +29,7 @@ describe("setup selection", () => {
       "copilot",
       "escalation",
       "controller",
+      "linear-sync",
     ]);
   });
 
@@ -48,7 +49,7 @@ describe("setup selection", () => {
           parseArgs(["--skip", "controller", "--skip", "copilot"]),
         ),
       ),
-    ).toEqual(["intake", "escalation"]);
+    ).toEqual(["intake", "escalation", "linear-sync"]);
     expect(
       keys(selectProjects(parseArgs(["--only", "intake,urgent-pager"]))),
     ).toEqual(["intake", "urgent-pager"]);

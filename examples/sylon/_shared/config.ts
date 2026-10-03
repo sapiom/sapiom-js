@@ -21,6 +21,8 @@ export const ConfigSchemas = {
   "customers.test_user_ids": z.array(z.string().min(1)),
   /** Whether intake adds 👀 / 🎫 to customer messages. Off for a shadow pilot that must leave no footprint. */
   "intake.reactions": z.boolean(),
+  /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
+  "linear_sync.notify_customer": z.boolean(),
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */

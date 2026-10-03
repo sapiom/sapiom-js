@@ -20,6 +20,17 @@ describe("config", () => {
     );
   });
 
+  it("getConfigOr falls back for a missing key and returns a stored one", async () => {
+    const db = await memoryDb();
+    expect(await getConfigOr(db, "linear_sync.notify_customer", false)).toBe(
+      false,
+    );
+    await setConfig(db, "linear_sync.notify_customer", true, "test");
+    expect(await getConfigOr(db, "linear_sync.notify_customer", false)).toBe(
+      true,
+    );
+  });
+
   it("getConfigOr returns the fallback for an unset key and the value once set", async () => {
     const db = await memoryDb();
     expect(await getConfigOr(db, "intake.reactions", true)).toBe(true);
