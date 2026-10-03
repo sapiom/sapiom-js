@@ -57,7 +57,7 @@ import {
   type Issue,
   type Message,
 } from "../../_shared/issues";
-import { KB } from "../../_shared/kb.generated";
+import { articleTitles } from "../../_shared/kb";
 import { post, update, type SlackCtx } from "../../_shared/slack";
 import {
   DRAFT_FAILED_NOTE,
@@ -69,11 +69,18 @@ import {
   VERB_DECISION,
   buildPrompt,
   cardText,
+  citedSources,
   copilotCard,
   normalizeOutput,
   outputSchema,
   responseShape,
 } from "./draft";
+import { gatherKnowledge } from "./gather";
+import {
+  DOCS_OUTAGE_CONFIDENCE_CAP,
+  DOCS_PARTIAL_CONFIDENCE_CAP,
+  citable,
+} from "./knowledge";
 import { seedLocalFixtures } from "./local";
 
 export const AGENT = "sylon-copilot";
@@ -126,7 +133,7 @@ async function updateCard(
     blocks: copilotCard(
       draft,
       issue,
-      KB,
+      await articleTitles(db, citedSources(draft)),
       note,
       draft.status === "approved"
         ? !!(await messageBySourceEventId(db, `draft:${draft.id}`))
@@ -191,6 +198,7 @@ async function newerPostedDraft(
  * answers, and those tokens come out of the same cap.
  */
 const DRAFT_MAX_TOKENS = 8192;
+const DRAFT_MODEL = "sonnet";
 
 /** Attempts per draft. A second identical step retry would only repeat the miss and its cost. */
 const DRAFT_ATTEMPTS = 2;
@@ -204,9 +212,13 @@ const DRAFT_ATTEMPTS = 2;
 async function requestDraft(
   ctx: AgentExecutionContext<Record<string, unknown>>,
   prompt: string,
+  allowedCitations: readonly string[],
 ): Promise<DraftOutput | null> {
   for (let attempt = 1; attempt <= DRAFT_ATTEMPTS; attempt++) {
     const response = await ctx.sapiom.llm.run({
+      // A routing label, not a model id. With no model the gateway routes to `smart`, whose
+      // self-hosted model ignored the forced tool call on both attempts (execution 848839).
+      model: DRAFT_MODEL,
       request: {
         system:
           attempt === 1
@@ -215,7 +227,7 @@ async function requestDraft(
         messages: [{ role: "user", content: prompt }],
         max_tokens: DRAFT_MAX_TOKENS,
       },
-      output: { name: OUTPUT_NAME, schema: outputSchema(KB) },
+      output: { name: OUTPUT_NAME, schema: outputSchema(allowedCitations) },
     });
     const structured = ctx.sapiom.llm.structuredOf(response, OUTPUT_NAME);
     const parsed = DraftOutput.safeParse(structured);
@@ -294,14 +306,13 @@ async function draftReply(
         getAccount(db, issue.accountId),
         messagesForIssue(db, issue.id),
       ]);
+      const messages = withTriggerMessage(stored, trigger);
+      const knowledge = await gatherKnowledge(ctx, db, { issue, messages });
+      const allowed = citable(knowledge);
       const raw = await requestDraft(
         ctx,
-        buildPrompt({
-          issue,
-          account,
-          messages: withTriggerMessage(stored, trigger),
-          kb: KB,
-        }),
+        buildPrompt({ issue, account, messages, knowledge }),
+        allowed,
       );
       if (!raw) {
         // A concurrent delivery of this event may have drafted while ours missed: publish its
@@ -319,7 +330,15 @@ async function draftReply(
         }
         issue = await getIssue(db, issue.id);
       } else {
-        const output = normalizeOutput(raw, KB);
+        const output = normalizeOutput(raw, allowed);
+        // Without the docs the draft rests on less than a reviewer assumes; say so in the number.
+        if (knowledge.docsUnavailable)
+          output.confidence = Math.min(
+            output.confidence,
+            knowledge.docs.length > 0
+              ? DOCS_PARTIAL_CONFIDENCE_CAP
+              : DOCS_OUTAGE_CONFIDENCE_CAP,
+          );
         confidence = output.confidence;
         issue = await updateIssue(db, issue.id, { summary: output.summary });
         // An empty reply means the model sees nothing to answer yet. A card would offer Approve
@@ -349,6 +368,7 @@ async function draftReply(
     const ours = Number(trigger.slack.ts);
     const current = issue;
     const mine = draft;
+    const titles = await articleTitles(db, citedSources(mine));
     // Publication is serialized per issue under the issue row lock: a second delivery of this
     // event waits and finds the card posted, and two different events cannot both leave an
     // actionable card. The lock is held across the Slack post on purpose.
@@ -379,7 +399,7 @@ async function draftReply(
           channel: triage,
           threadTs: triageRootTs,
           text: cardText(current),
-          blocks: copilotCard(own, current, KB),
+          blocks: copilotCard(own, current, titles),
         });
         own = await setDraftCard(tx, own.id, card);
         posted = true;

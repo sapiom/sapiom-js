@@ -5,7 +5,7 @@
     {
       "id": "bug",
       "text": "Our webhook deliveries started failing this morning. Every POST to our endpoint is rejected with a signature mismatch, and nothing changed on our side.",
-      "expect": "intake opens a bug issue and posts its card in triage; copilot posts a draft card citing the webhooks kb page",
+      "expect": "intake opens a bug issue and posts its card in triage; copilot posts a draft card that cites docs pages or team articles, if any apply",
       "pauseSeconds": 40
     },
     {
@@ -23,8 +23,8 @@
     },
     {
       "id": "question",
-      "text": "Quick question: how long does a data export download link stay valid? The one we got last week no longer works.",
-      "expect": "intake opens a question issue; copilot drafts an answer from the exports kb page (links expire after 7 days)",
+      "text": "Quick question: how do I deploy my agent project, and where do I see the first run once it is live?",
+      "expect": "intake opens a question issue; copilot selects the docs deploy page, fetches it live, and drafts an answer citing it",
       "pauseSeconds": 40
     },
     {

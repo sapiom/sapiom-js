@@ -12,7 +12,7 @@ What it does:
 - A customer message in a Slack channel becomes an issue, classified by Jev (bug, question,
   billing, ...; urgent to low), linked to the customer's account, and posted as a card in your
   triage channel.
-- A copilot drafts a reply grounded in your knowledge base (`kb/`). A teammate clicks **Approve**
+- A copilot drafts a reply grounded in the public docs and your team's own knowledge base (see Knowledge). A teammate clicks **Approve**
   to send it to the customer, **Escalate** to open a Linear issue, or **Dismiss**.
 - A controller nudges the triage thread when an issue has no draft, a draft waits for a decision,
   a customer waits for a reply, or nobody owns the issue.
@@ -57,7 +57,7 @@ flowchart LR
 | Agent                 | Trigger                                                                | Does                                                                                                                                                                     |
 | --------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `intake`              | `slack.message.created`, `slack.reaction_added`, `slack.block_actions` | Classifies a customer message with Jev, opens an issue or links it to an open one, posts the triage card, emits `issue.*`. Owns Take and Close, and 🎫 (force an issue). |
-| `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from `kb/`, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                                                      |
+| `copilot`             | `issue.created`, `issue.message_added`, `slack.block_actions`          | Drafts a reply from the docs and the team's articles, posts a draft card. Approve sends it, Escalate emits `issue.escalate`, Dismiss drops it.                           |
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in both threads, moves the issue On Hold.                                                                             |
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, once per issue and reason.                                                                                                 |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`. |
@@ -120,7 +120,7 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 
 1. Probes the Slack and Linear connectors, and stops with what to connect if one is missing.
 2. Resolves or creates the `sylon` database, applies migrations, seeds missing config and accounts.
-3. Rebuilds `_shared/kb.generated.ts` if `kb/` changed.
+3. Adds three starter policy articles when the knowledge base is empty.
 4. Links and deploys each project, skipping one whose bundle is already the live build.
 5. Lists each agent's triggers and attaches only the missing ones. The server dedups event
    triggers but not cron.
@@ -151,6 +151,29 @@ tick post 10 and one "and N more" line linking the Events page.
 Demo helpers: `pnpm run replay` posts the scripted conversation in `scripts/replay.json` and prints
 each receipt, run, issue and draft card as it appears. `pnpm run reset-demo` closes every open
 issue. See `docs/DEMO.md`.
+
+## Knowledge
+
+The copilot drafts from two sources, and neither is compiled into the agent.
+
+- **Public docs, fetched live.** Each draft starts with one small model call that reads the issue,
+  the customer's latest messages and the index at `https://docs.sapiom.ai/llms.txt`, and picks up to
+  three pages. Those pages are fetched as markdown (`<page url>.md`), cut to 12,000 characters each,
+  and cached in the `doc_cache` table for one hour. Only URLs under `https://docs.sapiom.ai/` are
+  ever fetched. If the docs cannot be read, the draft is written from the team's articles alone and
+  its confidence is capped at 50%; if only some selected pages fail, the prompt names them and
+  confidence is capped at 60%. The run does not fail.
+- **Team knowledge, edited in the Console.** The **Knowledge** tab lists the `kb_articles` table:
+  create, edit, enable or disable, and delete. A _policy_ is a rule the copilot always follows
+  (refund wording, SLAs, tone). An _answer_ is a team-written Q&A; they are all included while
+  their text totals under 15,000 characters, and chosen by the same selection call beyond that.
+  Edits apply to the next draft with no redeploy.
+
+Citations on a draft card are the docs pages (as links) and the team articles the reply used.
+
+Seeding: `pnpm run setup` adds three starter policies (billing questions beyond the pricing page,
+never ask for credentials, tone) when the table is empty. They are examples; edit or delete them in
+the Console. To load more at once, insert rows into `kb_articles` with `kind` `policy` or `answer`.
 
 ## Console
 
@@ -219,7 +242,7 @@ A new source works the same way: an adapter (say, a Read.ai meeting adapter) emi
 ```
 fleet.json            projects, triggers, connectors, example config values
 fleet.local.json      your workspace's ids (gitignored; you create it)
-setup.ts              pnpm run setup: the installer (preflight, db, kb, deploy, triggers, state)
+setup.ts              pnpm run setup: the installer (preflight, db, starter articles, deploy, triggers, state)
 _shared/              inlined into every agent by the bundler (relative imports, zod/v4)
   events.ts           raw slack.* and domain issue.* schemas
   db.ts               Db interface, withDb(ctx, fn), migrations runner, pg-mem for local runs
@@ -228,11 +251,10 @@ _shared/              inlined into every agent by the bundler (relative imports,
   config.ts seed.ts   typed runtime config in the config table
   slack.ts linear.ts  Slack connector methods; Linear MCP relay
   emit.ts blocks.ts   events.emit + events_log; Block Kit cards and the button codec
-  kb.generated.ts     kb/*.md compiled for the copilot (pnpm run build:kb; committed)
+  kb.ts docs.ts       the team's knowledge articles; live docs.sapiom.ai pages with a db cache
 agents/<key>/         one deployable project each (index.ts, package.json, gitignored sapiom.json)
-kb/                   the copilot's knowledge base, one markdown page per topic
 fixtures/<dir>/       { type, description, payload } per event; payload is the run input
-scripts/              build-kb, fleet (setup's pure logic), replay, reset-demo
+scripts/              fleet (setup's pure logic), replay, reset-demo
 docs/DEMO.md          rehearsal checklist and failure drill
 ```
 

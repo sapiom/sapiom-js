@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
@@ -18,7 +18,8 @@ import {
   setDraftCard,
   setStatus,
 } from "../../_shared/issues";
-import { KB } from "../../_shared/kb.generated";
+import { setDocsFetcher } from "../../_shared/docs";
+import { createArticle } from "../../_shared/kb";
 import { fakeCtx } from "../../_shared/test-ctx";
 import {
   DRAFT_FAILED_NOTE,
@@ -29,6 +30,7 @@ import {
   normalizeOutput,
   outputSchema,
   promptMessages,
+  sourceLabel,
   TOOL_REMINDER,
   type DraftOutput,
 } from "./draft";
@@ -57,35 +59,54 @@ const own = (file: string) =>
     readFileSync(path.join(DIR, "../../fixtures/copilot", file), "utf8"),
   ).payload as Record<string, unknown>;
 
+/** The page the stubbed selection call picks; it is in the local trace's docs index. */
+const DEPLOY_PAGE = "https://docs.sapiom.ai/guides/deploy";
+
 const DRAFTED: DraftOutput = {
   summary: "Webhook signatures fail since this morning.",
   reply:
     "Nothing changed on our side. Verify the signature against the raw body bytes.",
-  citations: ["webhooks", "not-a-page"],
+  citations: [DEPLOY_PAGE, "not-a-page"],
   confidence: 0.8,
 };
 
 function ctxFor(executionId: string, drafted: DraftOutput = DRAFTED) {
   const fake = fakeCtx({ isLocalTrace: true, executionId });
+  /** Drafting calls only; the selection call is in `selectCalls`. */
   const llmCalls: Record<string, unknown>[] = [];
+  const selectCalls: Record<string, unknown>[] = [];
   (fake.ctx.sapiom as Record<string, unknown>).llm = {
     async run(spec: Record<string, unknown>) {
+      const name = (spec.output as { name: string }).name;
+      if (name === "select_sources") {
+        selectCalls.push(spec);
+        return {
+          content: [
+            {
+              type: "tool_use",
+              name,
+              input: { docs: [DEPLOY_PAGE, "https://evil.example/x"] },
+            },
+          ],
+        };
+      }
       llmCalls.push(spec);
       return {
-        content: [
-          { type: "tool_use", name: "draft_reply", input: { ...drafted } },
-        ],
+        content: [{ type: "tool_use", name, input: { ...drafted } }],
       };
     },
-    structuredOf(response: { content: { input: unknown }[] }) {
-      return response.content[0]?.input;
+    structuredOf(
+      response: { content: { name?: string; input: unknown }[] },
+      name?: string,
+    ) {
+      return response.content.find((b) => !name || b.name === name)?.input;
     },
   };
   const slack = (method: string) =>
     fake.logs
       .filter((l) => l.msg === `slack ${method} (local trace, not sent)`)
       .map((l) => (l.data as { args: Record<string, unknown> }).args);
-  return { ...fake, llmCalls, slack };
+  return { ...fake, llmCalls, selectCalls, slack };
 }
 
 /** Walk the agent from `route` the way the engine would, returning every directive. */
@@ -145,14 +166,15 @@ describe("draft path", () => {
       model?: string;
       request: { max_tokens: number; messages: { content: string }[] };
     };
-    expect(spec.model).toBeUndefined();
+    expect(spec.model).toBe("sonnet");
     expect(spec.request.max_tokens).toBeGreaterThanOrEqual(4096);
     expect(spec.request.messages[0].content).toContain(
       "signature errors. Did something change?",
     );
     expect(spec.request.messages[0].content).toContain(
-      '<page slug="webhooks">',
+      `<page url="${DEPLOY_PAGE}"`,
     );
+    expect(spec.request.messages[0].content).toContain("Local trace:");
 
     const old = await getDraft(db, FIXTURE_DRAFT);
     expect(old).toMatchObject({ status: "superseded", decidedBy: "copilot" });
@@ -169,7 +191,7 @@ describe("draft path", () => {
       status: "pending",
       text: DRAFTED.reply,
       cardChannel: "C0TRIAGE001",
-      citations: ["webhooks"],
+      citations: [DEPLOY_PAGE],
       causationId: "Ev0EXAMPLE01",
       confidence: 0.8,
     });
@@ -179,7 +201,7 @@ describe("draft path", () => {
       threadTs: "1790889400.000200",
     });
     expect(posted.blocks).toEqual(
-      copilotCard(draft, await getIssue(db, FIXTURE_ISSUE), KB),
+      copilotCard(draft, await getIssue(db, FIXTURE_ISSUE), new Map()),
     );
     expect((await getIssue(db, FIXTURE_ISSUE)).summary).toBe(DRAFTED.summary);
   });
@@ -280,7 +302,8 @@ describe("draft path", () => {
     const run = llm.run.bind(llm);
     let calls = 0;
     llm.run = async (spec) => {
-      if (calls++ >= misses) return run(spec);
+      const name = (spec as { output: { name: string } }).output.name;
+      if (name !== "draft_reply" || calls++ >= misses) return run(spec);
       t.llmCalls.push(spec as Record<string, unknown>);
       return {
         stop_reason: "end_turn",
@@ -776,14 +799,115 @@ describe("click path", () => {
   });
 });
 
+describe("knowledge on the draft path", () => {
+  const fakeIndex = async (url: string) =>
+    url.endsWith("/llms.txt")
+      ? "- [Deploy](https://docs.sapiom.ai/guides/deploy): Deploy it.\n"
+      : "# Deploy\nrun it";
+  const run = (t: ReturnType<typeof ctxFor>) =>
+    runAgent(fixture("issue/created.json").payload, t.ctx);
+  afterEach(() => setDocsFetcher(undefined));
+
+  it("always puts enabled policies in the prompt and cites them by id", async () => {
+    const policy = await createArticle(
+      db,
+      { kind: "policy", title: "Refunds", body: "Never promise a refund." },
+      "test",
+    );
+    await createArticle(
+      db,
+      { kind: "policy", title: "Off", body: "DISABLEDTEXT", enabled: false },
+      "test",
+    );
+    const t = ctxFor("e", { ...DRAFTED, citations: [policy.id, "bogus"] });
+    const out = last(await run(t)).output!;
+    const prompt = (
+      t.llmCalls[0].request as { messages: { content: string }[] }
+    ).messages[0].content;
+    expect(prompt).toContain("Never promise a refund.");
+    expect(prompt).not.toContain("DISABLEDTEXT");
+    const draft = await getDraft(db, out.draftId as string);
+    expect(draft.citations).toEqual([policy.id]);
+  });
+
+  it("drops selected urls that are not in the docs index", async () => {
+    const t = ctxFor("e");
+    await run(t);
+    const prompt = (
+      t.llmCalls[0].request as { messages: { content: string }[] }
+    ).messages[0].content;
+    expect(prompt).not.toContain("evil.example");
+  });
+
+  it("a docs outage still drafts from the team KB, caps confidence, and logs it", async () => {
+    setDocsFetcher(async () => {
+      throw new Error("docs down");
+    });
+    await createArticle(
+      db,
+      { kind: "policy", title: "Tone", body: "TEAMPOLICY" },
+      "test",
+    );
+    const t = ctxFor("e");
+    const out = last(await run(t)).output!;
+    expect(t.selectCalls).toHaveLength(0);
+    expect(out.confidence).toBe(0.5);
+    const draft = await getDraft(db, out.draftId as string);
+    expect(draft).toMatchObject({ status: "pending", confidence: 0.5 });
+    const prompt = (
+      t.llmCalls[0].request as { messages: { content: string }[] }
+    ).messages[0].content;
+    expect(prompt).toContain("TEAMPOLICY");
+    expect(prompt).toContain("could not be read");
+    expect(draft.citations).toEqual([]);
+    expect(t.logs.some((l) => l.msg.includes("docs index unavailable"))).toBe(
+      true,
+    );
+  });
+
+  it("reads pages through the injected fetcher", async () => {
+    setDocsFetcher(fakeIndex);
+    const t = ctxFor("e");
+    await run(t);
+    const prompt = (
+      t.llmCalls[0].request as { messages: { content: string }[] }
+    ).messages[0].content;
+    expect(prompt).toContain("# Deploy\nrun it");
+  });
+});
+
 describe("draft helpers", () => {
-  it("normalizeOutput drops unknown citations and clamps confidence", () => {
+  it("normalizeOutput drops citations the prompt did not provide and clamps confidence", () => {
     expect(
       normalizeOutput(
-        { ...DRAFTED, confidence: 3, citations: ["x", "billing", "billing"] },
-        KB,
+        {
+          ...DRAFTED,
+          confidence: 3,
+          citations: ["x", DEPLOY_PAGE, DEPLOY_PAGE],
+        },
+        [DEPLOY_PAGE],
       ),
-    ).toMatchObject({ confidence: 1, citations: ["billing"] });
+    ).toMatchObject({ confidence: 1, citations: [DEPLOY_PAGE] });
+  });
+
+  it("sourceLabel links docs pages and names articles, with a placeholder for a deleted one", () => {
+    const titles = new Map([["id-1", "Refunds <b>"]]);
+    expect(sourceLabel(DEPLOY_PAGE, titles)).toBe(
+      `<${DEPLOY_PAGE}|guides/deploy>`,
+    );
+    expect(sourceLabel("id-1", titles)).toBe("Refunds &lt;b&gt;");
+    expect(sourceLabel("gone", titles)).toBe("removed article");
+  });
+
+  it("sourceLabel never lets a stored url inject Slack markup", () => {
+    const evil = "https://docs.sapiom.ai/a|b>c<!channel>";
+    const out = sourceLabel(evil, new Map());
+    expect(out).not.toContain("<");
+    expect(out).not.toContain("|");
+    expect(out).not.toContain(">");
+    expect(sourceLabel("https://docs.sapiom.ai/a%7Cb", new Map())).not.toMatch(
+      /^<https/,
+    );
   });
 
   it("promptMessages keeps the first customer message and the latest ones, never internal notes", () => {
@@ -802,24 +926,36 @@ describe("draft helpers", () => {
     expect(kept.some((m) => m.direction === "internal")).toBe(false);
   });
 
-  it("buildPrompt truncates long messages", () => {
+  it("buildPrompt truncates long messages and renders policies, answers and pages", () => {
     const long = "x".repeat(MAX_MESSAGE_CHARS + 500);
+    const article = (kind: "policy" | "answer", id: string) =>
+      ({ id, kind, title: `T ${id}`, body: `body ${id}` }) as never;
     const prompt = buildPrompt({
       issue: { number: 1, status: "new", title: "t" } as never,
       account: { name: "A" } as never,
       messages: [{ id: "m", direction: "customer", text: long } as never],
-      kb: KB,
+      knowledge: {
+        policies: [article("policy", "p1")],
+        answers: [article("answer", "a1")],
+        docs: [{ url: DEPLOY_PAGE, title: "Deploy", body: "page text" }],
+        docsUnavailable: false,
+      },
     });
     expect(prompt).toContain("[truncated]");
     expect(prompt).not.toContain("x".repeat(MAX_MESSAGE_CHARS + 1));
+    expect(prompt).toContain('<policy id="p1" title="T p1">');
+    expect(prompt).toContain('<answer id="a1" title="T a1">');
+    expect(prompt).toContain(`<page url="${DEPLOY_PAGE}" title="Deploy">`);
   });
 
-  it("the output schema limits citations to kb slugs", () => {
-    const schema = outputSchema(KB) as {
-      properties: { citations: { items: { enum: string[] } } };
+  it("the output schema allows no citations when nothing was provided", () => {
+    const schema = outputSchema([]) as {
+      properties: { citations: { maxItems?: number } };
     };
-    expect(schema.properties.citations.items.enum).toEqual(
-      KB.map((p) => p.slug),
-    );
+    expect(schema.properties.citations.maxItems).toBe(0);
+    expect(
+      (outputSchema([DEPLOY_PAGE]) as typeof schema).properties.citations
+        .maxItems,
+    ).toBeUndefined();
   });
 });

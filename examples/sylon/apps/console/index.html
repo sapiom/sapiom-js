@@ -118,6 +118,7 @@
       }
       input[type="password"],
       select,
+      textarea,
       input[type="text"] {
         font: inherit;
         font-size: 13px;
@@ -374,6 +375,25 @@
         color: var(--muted);
         margin-right: 4px;
       }
+      textarea {
+        width: 100%;
+        min-height: 140px;
+        resize: vertical;
+      }
+      .kb-form {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .kb-form label {
+        display: grid;
+        gap: 2px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .kb-off td:not(:last-child) {
+        color: var(--muted);
+      }
       .confirm {
         border: 1px solid var(--bad);
         border-radius: 6px;
@@ -501,6 +521,7 @@
           Console
         </button>
         <button role="tab" id="tab-system" aria-selected="false">System</button>
+        <button role="tab" id="tab-kb" aria-selected="false">Knowledge</button>
         <button role="tab" id="tab-cues" aria-selected="false">
           Cue cards
         </button>
@@ -681,6 +702,48 @@
         </div>
       </div>
 
+      <!-- Knowledge -->
+      <div id="kb-tab" hidden>
+        <section class="card">
+          <h2>
+            Team knowledge
+            <span class="row"
+              ><button id="kb-new" class="mut primary">
+                New article
+              </button></span
+            >
+          </h2>
+          <p class="muted" style="margin-top: 0">
+            The copilot reads these on every draft. A <strong>policy</strong> is
+            a rule it always follows; an <strong>answer</strong> is a Q&amp;A it
+            may quote. Public docs are fetched live from docs.sapiom.ai and are
+            not edited here. Changes apply to the next draft.
+          </p>
+          <div id="kb-form" class="kb-form" hidden>
+            <label
+              >Kind<select id="kb-kind">
+                <option value="policy">policy</option>
+                <option value="answer">answer</option>
+              </select></label
+            >
+            <label
+              >Title<input id="kb-title" type="text" maxlength="200"
+            /></label>
+            <label
+              >Body<textarea id="kb-body" maxlength="8000"></textarea>
+            </label>
+            <div class="row">
+              <button id="kb-save" class="mut primary">Save</button>
+              <button id="kb-cancel">Cancel</button>
+              <span id="kb-error" class="muted"></span>
+            </div>
+          </div>
+          <div class="scroll">
+            <div id="kb-list" class="muted">loading…</div>
+          </div>
+        </section>
+      </div>
+
       <!-- Cue cards -->
       <div id="cues-tab" hidden>
         <div class="row" style="margin-bottom: 10px">
@@ -771,9 +834,9 @@
         if (!r.ok) throw new Error(body.error || r.statusText);
         return body;
       }
-      async function post(path, body) {
+      async function post(path, body, method = "POST") {
         const r = await fetch(path, {
-          method: "POST",
+          method,
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body || {}),
         });
@@ -1210,8 +1273,118 @@
         }
       }
 
+      // --- knowledge -----------------------------------------------------------------------
+      let kbArticles = [];
+      let kbEditing = null; // an article id, "new", or null
+      let kbConfirm = null; // the id whose Delete awaits a second click
+      async function loadKb() {
+        try {
+          kbArticles = await get("/api/kb");
+          renderKb();
+        } catch (e) {
+          $("kb-list").textContent = e.message;
+        }
+      }
+      function renderKb() {
+        const rows = kbArticles.map((a) => {
+          const confirming = kbConfirm === a.id;
+          return `<tr class="${a.enabled ? "" : "kb-off"}">
+            <td>${esc(a.kind)}</td>
+            <td style="white-space:normal">${esc(a.title)}</td>
+            <td>${a.enabled ? "on" : "off"}</td>
+            <td title="${esc(a.updatedBy || "")}">${esc(age(a.updatedAt))} ago</td>
+            <td><div class="row">
+              <button class="mut" data-kb="edit" data-id="${esc(a.id)}">Edit</button>
+              <button class="mut" data-kb="toggle" data-id="${esc(a.id)}">${a.enabled ? "Disable" : "Enable"}</button>
+              <button class="mut danger" data-kb="delete" data-id="${esc(a.id)}">${confirming ? "Confirm delete" : "Delete"}</button>
+            </div></td></tr>`;
+        });
+        $("kb-list").className = "";
+        $("kb-list").innerHTML = rows.length
+          ? `<table><tr><th>Kind</th><th>Title</th><th>Enabled</th><th>Updated</th><th></th></tr>${rows.join("")}</table>`
+          : '<div class="muted">No articles yet. The copilot answers from the public docs alone.</div>';
+        syncButtons();
+      }
+      function openKbForm(article) {
+        kbEditing = article ? article.id : "new";
+        $("kb-kind").value = article ? article.kind : "policy";
+        $("kb-title").value = article ? article.title : "";
+        $("kb-body").value = article ? article.body : "";
+        $("kb-error").textContent = "";
+        $("kb-form").hidden = false;
+        $("kb-title").focus();
+      }
+      function closeKbForm() {
+        kbEditing = null;
+        $("kb-form").hidden = true;
+      }
+      async function kbAct(label, fn) {
+        try {
+          await fn();
+          log(label);
+          await loadKb();
+          return true;
+        } catch (e) {
+          log(`${label} FAILED: ${e.message}`);
+          return false;
+        }
+      }
+      $("kb-new").onclick = () => openKbForm(null);
+      $("kb-cancel").onclick = closeKbForm;
+      $("kb-save").onclick = async () => {
+        const body = {
+          kind: $("kb-kind").value,
+          title: $("kb-title").value,
+          body: $("kb-body").value,
+        };
+        const id = kbEditing;
+        $("kb-error").textContent = "";
+        try {
+          if (id === "new") await post("/api/kb", body);
+          else await post(`/api/kb/${id}`, body, "PUT");
+        } catch (e) {
+          $("kb-error").textContent = e.message;
+          return;
+        }
+        log(id === "new" ? "article created" : "article saved");
+        closeKbForm();
+        await loadKb();
+      };
+      $("kb-list").onclick = async (ev) => {
+        const b = ev.target.closest("button[data-kb]");
+        if (!b) return;
+        const article = kbArticles.find((a) => a.id === b.dataset.id);
+        if (!article) return;
+        const verb = b.dataset.kb;
+        if (verb === "edit") return openKbForm(article);
+        if (verb === "toggle")
+          return void kbAct(
+            `${article.enabled ? "disabled" : "enabled"} "${article.title}"`,
+            () =>
+              post(
+                `/api/kb/${article.id}`,
+                { enabled: !article.enabled },
+                "PUT",
+              ),
+          );
+        if (kbConfirm !== article.id) {
+          kbConfirm = article.id;
+          return renderKb();
+        }
+        kbConfirm = null;
+        await kbAct(`deleted "${article.title}"`, () =>
+          post(`/api/kb/${article.id}`, undefined, "DELETE"),
+        );
+        if (kbEditing === article.id) closeKbForm();
+      };
+
       // --- tabs ----------------------------------------------------------------------------
-      const TABS = { console: "console", system: "system", cues: "cues-tab" };
+      const TABS = {
+        console: "console",
+        system: "system",
+        kb: "kb-tab",
+        cues: "cues-tab",
+      };
       function showTab(name) {
         if (!TABS[name]) name = "console";
         for (const [t, panel] of Object.entries(TABS)) {
@@ -1220,6 +1393,7 @@
         }
         store.set(TAB_KEY, name);
         if (name === "system" && !systemLoaded) loadSystem();
+        if (name === "kb") loadKb();
       }
       for (const t of Object.keys(TABS))
         $(`tab-${t}`).onclick = () => showTab(t);

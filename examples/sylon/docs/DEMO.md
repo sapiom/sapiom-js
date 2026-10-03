@@ -28,14 +28,17 @@ the Sapiom Internal runs on 2026-10-02.
 1. `pnpm run replay`. It prints the steps (watch-only) or posts them, then prints each receipt,
    run, issue card, draft card, reply and nudge with links. It exits 1 if any Sylon run fails.
 2. **Bug report.** The issue card appears in triage about 30 s after the post; the draft card,
-   citing the webhooks page, about 20 s after that.
+   about 20 s after that. It cites a docs page or team article only if one applies; webhooks are
+   not in the public docs, so expect a low-confidence draft that asks for ids and timestamps.
 3. **Threaded follow-up.** It links to the same issue (no new card); copilot posts a new draft.
 4. **Live-add urgent-pager.** Before the outage step, run `pnpm run setup --only urgent-pager`
    (37 s on Internal, under the 2-minute budget). The summary shows one agent and one trigger;
    no other agent changes.
 5. **Outage.** Intake classifies it urgent; the on-call user gets a DM with the title and a link
    to the triage thread, about 50 s after the post.
-6. **Question.** Copilot drafts the answer from the exports page (links expire after 7 days).
+6. **Question.** Copilot picks the docs deploy page, fetches it live, and drafts the answer with
+   the page linked under Sources. Add a policy or answer in the Console's Knowledge tab first to
+   show a team edit changing the next draft with no redeploy.
    Click **Approve**: the reply lands in the customer thread and the card shows who sent it.
 7. **Thank-you.** No card: Jev's `is_issue` came back 0.04 in both rehearsals.
 8. **Escalate.** Click **Escalate** on the bug's draft card. One Linear issue appears in Sylon

@@ -14,6 +14,7 @@
  * There is no login of its own: the App Link admits only signed-in org members, and its preview
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
+ * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
  */
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -26,6 +27,13 @@ import {
   resolveConnectionString,
   type Db,
 } from "../../_shared/db";
+import {
+  UUID,
+  createArticle,
+  deleteArticle,
+  listArticles,
+  updateArticle,
+} from "../../_shared/kb";
 import { callTool } from "../../_shared/linear";
 import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
@@ -51,6 +59,7 @@ import {
   latencies,
   linearIssueUrl,
   listensTo,
+  parseKbInput,
   parseWindow,
   planSwitch,
   receiptView,
@@ -681,6 +690,7 @@ const GET: [RegExp, Handler][] = [
   ],
   [/^\/api\/cues$/, async () => cuesFromReplay(replay)],
   [/^\/api\/system$/, () => withConsoleDb(system)],
+  [/^\/api\/kb$/, () => withConsoleDb(listArticles)],
 ];
 
 /** Every POST changes state, and each is scoped to the fleet. */
@@ -730,6 +740,44 @@ const POST: [RegExp, Handler][] = [
     },
   ],
   [/^\/api\/receipts\/(\d+)\/replay$/, ([id]) => replayReceipt(id!)],
+  [/^\/api\/kb$/, (_, body) => createKbArticle(body)],
+];
+
+/** Knowledge base writes touch only `kb_articles`, and record the Console as the editor. */
+const KB_EDITOR = "console";
+
+async function createKbArticle(body: Record<string, unknown>) {
+  const parsed = parseKbInput(body, "create");
+  if (!parsed.ok) throw new HttpError(400, parsed.error);
+  return withConsoleDb((d) =>
+    createArticle(d, parsed.value as Required<typeof parsed.value>, KB_EDITOR),
+  );
+}
+
+async function updateKbArticle(id: string, body: Record<string, unknown>) {
+  if (!UUID.test(id)) throw new HttpError(404, "article not found");
+  const parsed = parseKbInput(body, "update");
+  if (!parsed.ok) throw new HttpError(400, parsed.error);
+  const article = await withConsoleDb((d) =>
+    updateArticle(d, id, parsed.value, KB_EDITOR),
+  );
+  if (!article) throw new HttpError(404, "article not found");
+  return article;
+}
+
+async function deleteKbArticle(id: string) {
+  if (!UUID.test(id)) throw new HttpError(404, "article not found");
+  if (!(await withConsoleDb((d) => deleteArticle(d, id))))
+    throw new HttpError(404, "article not found");
+  return { deleted: id };
+}
+
+const PUT: [RegExp, Handler][] = [
+  [/^\/api\/kb\/([^/]+)$/, ([id], body) => updateKbArticle(id!, body)],
+];
+
+const DELETE: [RegExp, Handler][] = [
+  [/^\/api\/kb\/([^/]+)$/, ([id]) => deleteKbArticle(id!)],
 ];
 
 function route(table: [RegExp, Handler][], path: string) {
@@ -753,10 +801,19 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return void res.end(page);
   }
   const table =
-    req.method === "GET" ? GET : req.method === "POST" ? POST : null;
+    req.method === "GET"
+      ? GET
+      : req.method === "POST"
+        ? POST
+        : req.method === "PUT"
+          ? PUT
+          : req.method === "DELETE"
+            ? DELETE
+            : null;
   const hit = table && route(table, path);
   if (!hit) return send(res, 404, { error: "not found" });
-  const body = req.method === "POST" ? await readJson(req) : {};
+  const body =
+    req.method === "POST" || req.method === "PUT" ? await readJson(req) : {};
   return send(res, 200, await hit.handler(hit.params, body, url));
 }
 
