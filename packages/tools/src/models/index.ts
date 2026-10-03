@@ -26,13 +26,11 @@ import type { DispatchHandle } from "../dispatch.js";
 import { Sandbox } from "../sandboxes/index.js";
 import type { Repository } from "../repositories/index.js";
 import { ensureCodingRunOk, CodingRunHttpError } from "./errors.js";
+import { resolveToolsBaseUrl } from "../_client/tools-base.js";
 
 export { CodingRunHttpError };
 
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_MODELS_URL ??
-  process.env.SAPIOM_TOOLS_BASE ??
-  "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl(process.env.SAPIOM_MODELS_URL);
 
 /**
  * Capability-stable signal a coding run fires when it reaches a terminal state

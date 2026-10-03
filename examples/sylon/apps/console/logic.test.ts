@@ -55,7 +55,9 @@ describe("fleet agents", () => {
       "copilot",
       "escalation",
       "controller",
+      "linear-sync",
       "urgent-pager",
+      "watchdog",
     ]);
   });
 
@@ -65,6 +67,8 @@ describe("fleet agents", () => {
       "copilot",
       "escalation",
       "controller",
+      "linear-sync",
+      "watchdog",
     ]);
   });
 });

@@ -189,4 +189,6 @@ export interface FleetState {
     }
   >;
   triggers: Record<string, { id: string; label: string }[]>;
+  /** Secrets setup provisioned, by project: the secret's name and the minted key's id, never a value. */
+  secrets?: Record<string, { name: string; keyId?: string; at: string }>;
 }

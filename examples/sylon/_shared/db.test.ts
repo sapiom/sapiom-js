@@ -29,6 +29,10 @@ describe("db", () => {
       { id: "001_init" },
       { id: "020_copilot" },
       { id: "050_linear_url" },
+      { id: "060_watchdog" },
+      { id: "061_linear_sync" },
+      { id: "062_escalation_generation" },
+      { id: "063_watchdog_alerted" },
       { id: "070_knowledge" },
     ]);
   });

@@ -21,10 +21,10 @@
  * 400 connector_method_invalid_args, 502 connector_method_upstream_failed.
  */
 import { Transport, defaultTransport } from "../../_client/index.js";
+import { resolveToolsBaseUrl } from "../../_client/tools-base.js";
 
 // Same tools host agents/models resolve — via SAPIOM_TOOLS_BASE. No new per-cap config.
-const DEFAULT_BASE_URL =
-  process.env.SAPIOM_TOOLS_BASE ?? "https://tools.sapiom.ai";
+const DEFAULT_BASE_URL = resolveToolsBaseUrl();
 
 /**
  * Arguments for {@link listRepos}. All optional — call with no args to list the first

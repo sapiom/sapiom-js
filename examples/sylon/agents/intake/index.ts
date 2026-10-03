@@ -17,8 +17,8 @@ import {
   mrkdwnLink,
   slackToPlain,
 } from "../../_shared/blocks";
-import { customerChannel, getConfig } from "../../_shared/config";
-import { withDb, type Db } from "../../_shared/db";
+import { customerChannel, getConfig, getConfigOr } from "../../_shared/config";
+import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import {
   SlackBlockActions,
@@ -30,12 +30,16 @@ import {
   accountByChannel,
   assign,
   attachMessage,
+  canTransition,
+  compareSlackTs,
+  decideDraft,
   ensureAccount,
   eventLogged,
   getAccount,
   getIssue,
   issueByCustomerThread,
   issueByTriageRoot,
+  latestCustomerTs,
   linkMessage,
   lockIssue,
   messageBySlackTs,
@@ -43,6 +47,7 @@ import {
   messagesForIssue,
   openIssueForMessage,
   openIssuesForAccount,
+  pendingDrafts,
   recordRun,
   setStatus,
   setTriageRoot,
@@ -68,10 +73,13 @@ import {
   type Decision,
   type IntakeJev,
 } from "./decide";
+import { classifyPoster } from "./poster";
 
 export const AGENT = "sylon-intake";
 const TICKET = "ticket";
 const EYES = "eyes";
+/** `decided_by` on a draft that a teammate's own reply made moot. */
+const SUPERSEDED_BY = "intake";
 /** Open issues offered to Jev as link targets, newest first. */
 const MAX_CANDIDATES = 10;
 
@@ -183,7 +191,7 @@ const refOf = (i: Incoming): SlackRef =>
 
 const guard = defineStep({
   name: "guard",
-  next: ["button", "internal", "ack"],
+  next: ["button", "internal", "team", "ack"],
   terminal: true,
   // The three trigger types arrive here; each branch parses its own schema.
   inputSchema: z.looseObject({}),
@@ -211,7 +219,7 @@ const guard = defineStep({
       if (e.item.type !== "message")
         return terminate({ skipped: `reaction on ${e.item.type}` });
       const target = await withDb(ctx, async (db) =>
-        (await customerChannel(db, e.item.channel))
+        (await knownChannel(db, e.item.channel))
           ? { stored: await messageBySlackTs(db, e.item.channel, e.item.ts) }
           : null,
       );
@@ -240,15 +248,35 @@ const guard = defineStep({
       const e = m.data.event;
       if (e.subtype || e.bot_id)
         return terminate({ skipped: "bot or edited message" });
+      // The bot only receives events from channels it was invited to, so the invite is the control:
+      // an outsider posting in any of them is a customer. The connector has no conversations.info, so
+      // we cannot ask Slack whether a channel is shared; the poster's workspace decides instead.
       const route = await withDb(ctx, async (db) => {
-        if (await customerChannel(db, e.channel)) return "customer";
         if ((await getConfig(db, "channels.triage")) === e.channel)
           return "triage";
-        return null;
+        const poster = classifyPoster({
+          user: e.user,
+          userTeam: e.user_team,
+          team: e.team,
+          envelopeTeamId: m.data.teamId,
+          teamSlackTeamIds: await getConfigOr(
+            db,
+            "team.slack_team_ids",
+            undefined,
+          ),
+          testUserIds: await getConfigOr(db, "customers.test_user_ids", []),
+        });
+        if (poster === "customer") return "customer";
+        // Our own engineers post in customer channels too, but in internal channels the bot is in
+        // their chatter is not ours to keep: only a channel with an account gets the team step.
+        return (await knownChannel(db, e.channel)) ? "team" : "ignore";
       });
       if (route === "triage") return goto("internal", m.data);
-      if (!route)
-        return terminate({ skipped: `not a customer channel: ${e.channel}` });
+      if (route === "team") return goto("team", m.data);
+      if (route === "ignore")
+        return terminate({
+          skipped: "team message outside a customer channel",
+        });
       return goto("ack", {
         eventId: m.data.eventId,
         trigger: "message",
@@ -298,17 +326,143 @@ const internal = defineStep({
   },
 });
 
+// --- our team's messages in a customer channel -----------------------------------------------
+
+/**
+ * A teammate's message in a customer channel. It is never the customer waiting: no reaction, no
+ * Jev call, no issue, no event (so copilot does not draft and the controller does not nudge). A
+ * reply in an issue's thread is recorded as the team's answer and hands the ball to the customer.
+ *
+ * The superseded drafts' cards are not redrawn: that needs copilot's card builder and knowledge
+ * base. The card's buttons still resolve, and `decideDraft` refuses a draft that is not pending.
+ */
+const team = defineStep({
+  name: "team",
+  terminal: true,
+  inputSchema: SlackMessageCreated,
+  async run(input, ctx) {
+    const e = input.event;
+    const root = e.thread_ts && e.thread_ts !== e.ts ? e.thread_ts : null;
+    const slack = refOf({
+      eventId: input.eventId,
+      trigger: "message",
+      channel: e.channel,
+      ts: e.ts,
+      threadTs: root ?? undefined,
+    });
+    return withDb(ctx, async (db) => {
+      await recordRun(db, ctx, AGENT);
+      const issueId = root ? await threadIssueFor(db, e.channel, root) : null;
+      if (!issueId) {
+        const { message, duplicate } = await linkMessage(db, {
+          source: "slack",
+          sourceEventId: input.eventId,
+          direction: "agent",
+          slack,
+          userId: e.user,
+          text: e.text,
+        });
+        return terminate({
+          outcome: "team_message",
+          messageId: message.id,
+          issueId: null,
+          duplicate,
+        });
+      }
+
+      const poster = await userInfo(ctx, e.user);
+      const { message, duplicate } = await linkMessage(db, {
+        issueId,
+        source: "slack",
+        sourceEventId: input.eventId,
+        direction: "agent",
+        slack,
+        userId: e.user,
+        userName: poster.name,
+        text: e.text,
+      });
+      // A redelivery, or a team message older than the customer's latest, must not undo what that
+      // later message did: it would hand the ball back and supersede the follow-up's draft.
+      const moved = await db.transaction(async (tx) => {
+        const locked = await lockIssue(tx, issueId);
+        if (duplicate) return { issue: locked, applied: false };
+        const customerTs = await latestCustomerTs(tx, issueId);
+        if (customerTs && compareSlackTs(e.ts, customerTs) < 0)
+          return { issue: locked, applied: false };
+        // Under the row lock, so a customer message landing now keeps its On You: the later write wins
+        // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
+        return {
+          issue: canTransition(locked.status, "on_customer")
+            ? await setStatus(tx, locked.id, "on_customer")
+            : locked,
+          applied: true,
+        };
+      });
+      const issue = moved.issue;
+      // Their reply answers what the drafts were for; an Approve now would answer twice.
+      if (moved.applied)
+        for (const draft of await pendingDrafts(db, issue.id))
+          await decideDraft(db, draft.id, "superseded", SUPERSEDED_BY);
+      await recordRun(db, ctx, AGENT, issue.id);
+
+      const triageChannel = await getConfig(db, "channels.triage");
+      if (issue.triageRootTs) {
+        await refreshCard(
+          ctx,
+          triageChannel,
+          issue,
+          await getAccount(db, issue.accountId),
+        );
+        // A redelivery or retry finds the row already stored and mirrors nothing.
+        if (!duplicate)
+          await post(ctx, {
+            channel: triageChannel,
+            threadTs: issue.triageRootTs,
+            text: `*${escapeMrkdwn(poster.name)}* (team): ${plain(stripClientFooter(e.text))} ${mrkdwnLink(
+              permalink(e.channel, e.ts, root ?? undefined),
+              "view",
+            )}`,
+          });
+      }
+      return terminate({
+        outcome: "team_reply",
+        messageId: message.id,
+        issueId: issue.id,
+        status: issue.status,
+        duplicate,
+      });
+    });
+  },
+});
+
 // --- customer message / 🎫 pipeline ----------------------------------------------------------
+
+/** `intake.reactions`: off leaves no 👀 or 🎫 on customer messages (a shadow pilot). Default on. */
+async function reactionsOn(ctx: DbCtx) {
+  return withDb(
+    ctx,
+    async (db) => (await getConfigOr(db, "intake.reactions", true)) !== false,
+  );
+}
 
 const ack = defineStep({
   name: "ack",
   next: ["context"],
   inputSchema: Incoming,
   async run(input, ctx) {
-    await react(ctx, { channel: input.channel, ts: input.ts, name: EYES });
+    if (await reactionsOn(ctx))
+      await react(ctx, { channel: input.channel, ts: input.ts, name: EYES });
     return goto("context", input);
   },
 });
+
+/** A channel with an account (an outsider has posted there) or listed in `channels.customer`. */
+async function knownChannel(db: Db, channel: string): Promise<boolean> {
+  return !!(
+    (await accountByChannel(db, channel)) ??
+    (await customerChannel(db, channel))
+  );
+}
 
 async function accountFor(db: Db, channel: string): Promise<Account> {
   const found = await accountByChannel(db, channel);
@@ -740,8 +894,10 @@ const settle = defineStep({
   inputSchema: Settle,
   async run(input, ctx) {
     const at = { channel: input.incoming.channel, ts: input.incoming.ts };
-    await unreact(ctx, { ...at, name: EYES });
-    if (input.opened) await react(ctx, { ...at, name: TICKET });
+    if (await reactionsOn(ctx)) {
+      await unreact(ctx, { ...at, name: EYES });
+      if (input.opened) await react(ctx, { ...at, name: TICKET });
+    }
     return terminate({
       outcome: input.outcome,
       trigger: input.incoming.trigger,
@@ -842,6 +998,7 @@ export const agent = defineAgent({
   steps: {
     guard,
     internal,
+    team,
     ack,
     context,
     classify,

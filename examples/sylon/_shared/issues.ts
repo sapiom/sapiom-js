@@ -57,6 +57,10 @@ export interface Issue {
   linearIdentifier: string | null;
   /** 050_linear_url: null for issues escalated before it, and on Linear replies without a URL. */
   linearUrl: string | null;
+  /** 062_escalation_generation: when the issue last entered On Hold; one value per escalation. */
+  onHoldAt: Date | null;
+  /** 062_escalation_generation: the triage card is stale; cleared once it is redrawn. */
+  cardDirty: boolean;
   createdAt: Date;
   updatedAt: Date;
   closedAt: Date | null;
@@ -151,6 +155,8 @@ const toIssue = (r: Row): Issue => ({
   linearIssueId: (r.linear_issue_id as string | null) ?? null,
   linearIdentifier: (r.linear_identifier as string | null) ?? null,
   linearUrl: (r.linear_url as string | null) ?? null,
+  onHoldAt: (r.on_hold_at as Date | null) ?? null,
+  cardDirty: (r.card_dirty as boolean | null) ?? false,
   createdAt: r.created_at as Date,
   updatedAt: r.updated_at as Date,
   closedAt: (r.closed_at as Date | null) ?? null,
@@ -340,6 +346,49 @@ export async function openIssuesForAccount(
   return rows.map(toIssue);
 }
 
+/** On Hold issues linked to Linear, least recently checked first (061_linear_sync), at most `limit`. */
+export async function onHoldLinked(db: Db, limit: number): Promise<Issue[]> {
+  const rows = await db.query(
+    `select * from issues
+     where status = 'on_hold' and linear_identifier is not null
+     order by linear_checked_at asc nulls first, number asc
+     limit $1`,
+    [limit],
+  );
+  return rows.map(toIssue);
+}
+
+/** Issues whose triage card is stale (062_escalation_generation), oldest first, at most `limit`. */
+export async function cardDirty(db: Db, limit: number): Promise<Issue[]> {
+  const rows = await db.query(
+    "select * from issues where card_dirty order by updated_at asc limit $1",
+    [limit],
+  );
+  return rows.map(toIssue);
+}
+
+/** Mark the triage card stale or fresh; set with the status move, cleared after a successful redraw. */
+export async function setCardDirty(
+  db: Db,
+  issueId: string,
+  dirty: boolean,
+): Promise<void> {
+  await db.query("update issues set card_dirty = $2 where id = $1", [
+    issueId,
+    dirty,
+  ]);
+}
+
+/** Stamp the time linear-sync last read this issue's Linear state, so the next tick checks others first. */
+export async function markLinearChecked(
+  db: Db,
+  issueId: string,
+): Promise<void> {
+  await db.query("update issues set linear_checked_at = now() where id = $1", [
+    issueId,
+  ]);
+}
+
 /** Enforces {@link TRANSITIONS}. Moving to the current status is a no-op, so retries are safe. */
 export async function setStatus(
   db: Db,
@@ -360,7 +409,8 @@ export async function setStatus(
       throw new IllegalTransitionError(issueId, current.status, status);
     const rows = await tx.query(
       `update issues set status = $2, updated_at = now(),
-         closed_at = case when $2 = 'closed' then now() else null end
+         closed_at = case when $2 = 'closed' then now() else null end,
+         on_hold_at = case when $2 = 'on_hold' then now() else on_hold_at end
        where id = $1 returning *`,
       [issueId, status],
     );
@@ -566,6 +616,34 @@ export async function openIssueForMessage(
     await attachMessage(tx, messageId, issue.id);
     return { issue, created: true };
   });
+}
+
+/** Slack `ts` of the newest customer message on the issue, or null when it has none. */
+export async function latestCustomerTs(
+  db: Db,
+  issueId: string,
+): Promise<string | null> {
+  const rows = await db.query(
+    "select ts from messages where issue_id = $1 and direction = 'customer' and ts is not null",
+    [issueId],
+  );
+  let latest: string | null = null;
+  for (const r of rows) {
+    const ts = String(r.ts);
+    if (latest === null || compareSlackTs(ts, latest) > 0) latest = ts;
+  }
+  return latest;
+}
+
+/** Numeric order of two Slack timestamps ("seconds.micros"); exact, since a double cannot hold 16 digits safely. */
+export function compareSlackTs(a: string, b: string): number {
+  const norm = (ts: string) => {
+    const [sec = "0", frac = ""] = ts.split(".");
+    return BigInt(sec + frac.padEnd(6, "0").slice(0, 6));
+  };
+  const x = norm(a);
+  const y = norm(b);
+  return x === y ? 0 : x > y ? 1 : -1;
 }
 
 export async function messagesForIssue(

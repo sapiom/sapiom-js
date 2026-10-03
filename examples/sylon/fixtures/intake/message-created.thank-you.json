@@ -5,6 +5,7 @@
     "event": {
       "ts": "1790890200.000300",
       "team": "T0EXAMPLE01",
+      "user_team": "T0CUSTOMER1",
       "text": "Thanks all, have a great weekend!",
       "type": "message",
       "user": "U0CUSTOMER1",

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { getConfig, setConfig } from "./_shared/config";
+import { getConfig, getConfigOr, setConfig } from "./_shared/config";
 import { memoryDb } from "./_shared/db";
 import { Events, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
@@ -22,6 +22,7 @@ describe("fleet.json", () => {
       "escalation",
       "controller",
       "urgent-pager",
+      "watchdog",
     ])
       expect(keys).toContain(k);
   });
@@ -69,6 +70,23 @@ describe("fleet.json", () => {
     expect(await getConfig(db, "nudge.minutes")).toBe(
       fleet.config["nudge.minutes"],
     );
+  });
+
+  it("removes an optional key the file omits on overwrite so readers fall back", async () => {
+    const db = await memoryDb();
+    await seedFleet(db, "setup");
+    await setConfig(db, "alerts.channel", "C0ALERTS01", "onboarding");
+    const values = { ...mergeConfig(undefined) } as Record<string, unknown>;
+    delete values["alerts.channel"];
+    // Without overwrite the onboarded value stays.
+    await seedFleet(db, "setup", { values: values as never });
+    expect(await getConfigOr(db, "alerts.channel", null)).toBe("C0ALERTS01");
+    const out = await seedFleet(db, "setup", {
+      overwrite: true,
+      values: values as never,
+    });
+    expect(out.removed).toEqual(["alerts.channel"]);
+    expect(await getConfigOr(db, "alerts.channel", null)).toBeNull();
   });
 
   it("flags every key left at its example value, and none once overridden", () => {

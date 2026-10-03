@@ -1,0 +1,16 @@
+{
+  "type": "issue.engineering_resolved",
+  "description": "linear-sync saw SAP-9999 reach Done and moved issue #1 to On You.",
+  "payload": {
+    "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
+    "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
+    "source": "slack",
+    "causationId": "linear-sync:a1b2c3d4-0000-4000-8000-0000000000a1:SAP-9999:done",
+    "slack": {
+      "channel": "C0CUSTOMER1",
+      "ts": "1790889355.981329"
+    },
+    "linearIdentifier": "SAP-9999",
+    "linearState": "Done"
+  }
+}
