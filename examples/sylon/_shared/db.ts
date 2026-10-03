@@ -90,11 +90,12 @@ function wrapPostgres(sql: PgSql | PgTx, inTx: boolean): Db {
 
 export async function connectPostgres(
   connectionString: string,
+  opts: { idleTimeoutSec?: number } = {},
 ): Promise<{ db: Db; close: () => Promise<void> }> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, {
     max: 2,
-    idle_timeout: 20,
+    idle_timeout: opts.idleTimeoutSec ?? 20,
     onnotice: () => {},
   });
   return { db: wrapPostgres(sql, false), close: () => sql.end({ timeout: 5 }) };
@@ -166,6 +167,23 @@ export async function memoryDb(): Promise<Db> {
 }
 
 // --- migrations ------------------------------------------------------------------------------
+
+/**
+ * Migrate only when something is missing. One query when the database is current, which is every
+ * step after setup has run; the locked per-migration path below runs only for a missing id.
+ */
+export async function ensureMigrated(db: Db): Promise<string[]> {
+  try {
+    const rows = await db.query<{ id: string }>(
+      "select id from schema_migrations",
+    );
+    const have = new Set(rows.map((r) => r.id));
+    if (MIGRATIONS.every((m) => have.has(m.id))) return [];
+  } catch {
+    // No schema_migrations table yet: a fresh database, so take the full path.
+  }
+  return migrate(db);
+}
 
 /** Apply every migration not yet recorded in `schema_migrations`. Safe to call from every run. */
 export async function migrate(db: Db): Promise<string[]> {
@@ -270,15 +288,56 @@ export async function withDb<R>(
     }
     return fn(await db);
   }
-  const { db, close } = await connectPostgres(
-    await resolveConnectionString(ctx),
-  );
-  try {
-    await migrate(db);
-    return await fn(db);
-  } finally {
-    await close();
+  return fn(await sharedDb(ctx));
+}
+
+/**
+ * Seconds an idle pooled connection stays open. Each step is its own process, which reports its
+ * completion over HTTP rather than by exiting, so a short timeout lets a finished step's process
+ * exit soon without making a later call in the same step reconnect.
+ */
+const STEP_IDLE_TIMEOUT_SEC = 2;
+
+interface SharedConnection {
+  conn: Promise<{ db: Db; close: () => Promise<void> }>;
+  migrated?: Promise<unknown>;
+}
+
+let shared: SharedConnection | undefined;
+
+/**
+ * One connection pool per step process, migrated once. Each `withDb` used to resolve the handle,
+ * open a TLS connection and re-check every migration in its own locked transaction (~35 round
+ * trips), and a step can call `withDb` several times; that cost ~3.5 s a step on deployed runs.
+ * A failed connect or migration is not cached, so the next call retries.
+ */
+async function sharedDb(ctx: DbCtx): Promise<Db> {
+  if (!shared) {
+    const entry: SharedConnection = {
+      conn: resolveConnectionString(ctx).then((cs) =>
+        connectPostgres(cs, { idleTimeoutSec: STEP_IDLE_TIMEOUT_SEC }),
+      ),
+    };
+    entry.conn.catch(() => {
+      if (shared === entry) shared = undefined;
+    });
+    shared = entry;
   }
+  const entry = shared;
+  const { db } = await entry.conn;
+  if (!entry.migrated) {
+    entry.migrated = ensureMigrated(db);
+    entry.migrated.catch(() => {
+      entry.migrated = undefined;
+    });
+  }
+  await entry.migrated;
+  return db;
+}
+
+/** Test hook: forget the process-wide connection (it is not closed). */
+export function resetSharedDb(): void {
+  shared = undefined;
 }
 
 /**

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { memoryDb, resolveConnectionString } from "./db";
+import {
+  memoryDb,
+  resolveConnectionString,
+  ensureMigrated,
+  type Db,
+} from "./db";
 
 describe("db", () => {
   it("creates every M1 table", async () => {
@@ -106,5 +111,42 @@ describe("resolveConnectionString", () => {
       ),
     ).rejects.toThrow("bad gateway");
     expect(created).toBe(0);
+  });
+});
+
+describe("ensureMigrated", () => {
+  const counting = (db: Db) => {
+    const seen: string[] = [];
+    const wrapped: Db = {
+      ...db,
+      query: (text: string, params?: unknown[]) => {
+        seen.push(text);
+        return db.query(text, params as never);
+      },
+    } as Db;
+    return { wrapped, seen };
+  };
+
+  it("costs one query when every migration is recorded", async () => {
+    const { wrapped, seen } = counting(await memoryDb());
+    expect(await ensureMigrated(wrapped)).toEqual([]);
+    expect(seen).toEqual(["select id from schema_migrations"]);
+  });
+
+  it("takes the full migration path when schema_migrations is missing", async () => {
+    const seen: string[] = [];
+    const stub = {
+      kind: "postgres",
+      query: async (text: string) => {
+        seen.push(text);
+        if (text === "select id from schema_migrations")
+          throw new Error('relation "schema_migrations" does not exist');
+        if (text.startsWith("select 1 from schema_migrations")) return [{}];
+        return [];
+      },
+      transaction: async <R>(fn: (tx: Db) => Promise<R>) => fn(stub),
+    } as unknown as Db;
+    expect(await ensureMigrated(stub)).toEqual([]);
+    expect(seen[1]).toMatch(/^create table if not exists schema_migrations/);
   });
 });
