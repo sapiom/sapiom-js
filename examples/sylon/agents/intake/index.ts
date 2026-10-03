@@ -31,6 +31,7 @@ import {
   assign,
   attachMessage,
   canTransition,
+  compareSlackTs,
   decideDraft,
   ensureAccount,
   eventLogged,
@@ -38,6 +39,7 @@ import {
   getIssue,
   issueByCustomerThread,
   issueByTriageRoot,
+  latestCustomerTs,
   linkMessage,
   lockIssue,
   messageBySlackTs,
@@ -379,17 +381,28 @@ const team = defineStep({
         userName: poster.name,
         text: e.text,
       });
-      // Under the row lock, so a customer message landing now keeps its On You: the later write wins
-      // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
-      const issue = await db.transaction(async (tx) => {
+      // A redelivery, or a team message older than the customer's latest, must not undo what that
+      // later message did: it would hand the ball back and supersede the follow-up's draft.
+      const moved = await db.transaction(async (tx) => {
         const locked = await lockIssue(tx, issueId);
-        return canTransition(locked.status, "on_customer")
-          ? setStatus(tx, locked.id, "on_customer")
-          : locked;
+        if (duplicate) return { issue: locked, applied: false };
+        const customerTs = await latestCustomerTs(tx, issueId);
+        if (customerTs && compareSlackTs(e.ts, customerTs) < 0)
+          return { issue: locked, applied: false };
+        // Under the row lock, so a customer message landing now keeps its On You: the later write wins
+        // only when it is legal. On Hold and Closed are not ours to move (no legal edge to on_customer).
+        return {
+          issue: canTransition(locked.status, "on_customer")
+            ? await setStatus(tx, locked.id, "on_customer")
+            : locked,
+          applied: true,
+        };
       });
+      const issue = moved.issue;
       // Their reply answers what the drafts were for; an Approve now would answer twice.
-      for (const draft of await pendingDrafts(db, issue.id))
-        await decideDraft(db, draft.id, "superseded", SUPERSEDED_BY);
+      if (moved.applied)
+        for (const draft of await pendingDrafts(db, issue.id))
+          await decideDraft(db, draft.id, "superseded", SUPERSEDED_BY);
       await recordRun(db, ctx, AGENT, issue.id);
 
       const triageChannel = await getConfig(db, "channels.triage");

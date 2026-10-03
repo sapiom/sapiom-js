@@ -449,6 +449,51 @@ describe("intake agent", () => {
       expect(await messagesForIssue(db, issueId)).toHaveLength(2);
     });
 
+    it("a redelivered team reply after a newer customer follow-up changes nothing", async () => {
+      const issueId = await openBug();
+      await run(teamReply(), makeCtx("exec-team").ctx);
+      const fup = structuredClone(
+        intakeFixture("message-created.follow-up.json").payload,
+      ) as { eventId: string; event: { ts: string; event_ts: string } };
+      fup.eventId = "Ev0INTAKEFUP2";
+      fup.event.ts = fup.event.event_ts = "1790890400.000500";
+      await run(fup, makeCtx("exec-fup").ctx);
+      const draft = await createDraft(db, { issueId, text: "answer" });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+
+      const again = makeCtx("exec-team-again");
+      expect((await run(teamReply(), again.ctx)).output).toMatchObject({
+        outcome: "team_reply",
+        duplicate: true,
+        status: "on_you",
+      });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+      expect((await getDraft(db, draft.id)).status).toBe("pending");
+    });
+
+    it("a team reply older than the customer's latest message changes nothing", async () => {
+      const issueId = await openBug();
+      await run(
+        intakeFixture("message-created.follow-up.json").payload,
+        makeCtx("exec-fup").ctx,
+      );
+      const draft = await createDraft(db, { issueId, text: "answer" });
+      const old = structuredClone(teamReply()) as {
+        eventId: string;
+        event: { ts: string; event_ts: string };
+      };
+      old.eventId = "Ev0INTAKETEAMOLD";
+      old.event.ts = old.event.event_ts = "1790890050.000300";
+      const out = await run(old, makeCtx("exec-team-old").ctx);
+      expect(out.output).toMatchObject({
+        outcome: "team_reply",
+        duplicate: false,
+        status: "on_you",
+      });
+      expect((await getIssue(db, issueId)).status).toBe("on_you");
+      expect((await getDraft(db, draft.id)).status).toBe("pending");
+    });
+
     it("leaves On Hold and Closed issues where they are", async () => {
       for (const status of ["on_hold", "closed"]) {
         setLocalDb(undefined);
