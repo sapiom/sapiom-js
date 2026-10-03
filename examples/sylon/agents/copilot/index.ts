@@ -201,7 +201,7 @@ async function newerPostedDraft(
 }
 
 /**
- * Covers thinking plus the forced tool call (SAP-3280): a routed label may think before it
+ * Covers thinking plus the forced tool call: a routed label may think before it
  * answers, and those tokens come out of the same cap.
  */
 const DRAFT_MAX_TOKENS = 8192;

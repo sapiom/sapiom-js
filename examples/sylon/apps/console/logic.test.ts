@@ -292,11 +292,11 @@ describe("linear links", () => {
     expect(
       linearIssueUrl(
         "https://linear.app/acme/project/sylon-issues-9fa8692f54ff",
-        "SAP-3723",
+        "ENG-123",
       ),
-    ).toBe("https://linear.app/acme/issue/SAP-3723");
-    expect(linearIssueUrl(null, "SAP-1")).toBeNull();
-    expect(linearIssueUrl("https://example.com/x", "SAP-1")).toBeNull();
+    ).toBe("https://linear.app/acme/issue/ENG-123");
+    expect(linearIssueUrl(null, "ENG-1")).toBeNull();
+    expect(linearIssueUrl("https://example.com/x", "ENG-1")).toBeNull();
   });
 });
 

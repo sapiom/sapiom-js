@@ -299,7 +299,7 @@ added to a running fleet with one deploy and one trigger.
    `fakeCtx({ isLocalTrace: true })`, which stubs Slack and gives the run an in-memory database.
 4. **Register it in `fleet.json`**: a project (`"optional": true` if a default install should
    leave it out) and its triggers.
-5. **Ship it:** `pnpm run setup --only urgent-pager`. On Sapiom Internal this created, deployed
+5. **Ship it:** `pnpm run setup --only urgent-pager`. In our own workspace this created, deployed
    and armed the agent in 37 seconds, and the next urgent message DMed on-call.
 
 A new source works the same way: an adapter (say, a Read.ai meeting adapter) emits the existing
@@ -344,4 +344,3 @@ The deployed agents always share the `sylon` database.
 | **Deploy detection is local.** setup skips a deploy when the bundle hash in `.sapiom/fleet-state.json` matches the live build; a fresh clone redeploys once.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | The server does not expose a content hash for a build.                                                                  |
 | **One Linear team; customers are recognised by Slack workspace.** Anyone outside `team.slack_team_ids` (default: the connector's own workspace) posting in a channel the bot is in is a customer, and the channel gets an account. The connector has no `conversations.info`, so shared channels cannot be detected. A team member's message is kept only in a channel that already has an account; elsewhere it is skipped and nothing is stored. A customer who posts from your workspace needs `customers.test_user_ids`. A team reply moves the issue to On Customer and supersedes pending drafts without redrawing their cards. No SLAs, email intake or board. | Out of scope for this example.                                                                                          |
 
-The contract the agents build against is `plans/sylon/interfaces.md` in the Sapiom monorepo.

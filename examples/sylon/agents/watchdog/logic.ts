@@ -194,7 +194,7 @@ export function actionItems(
   if (/no structured draft/i.test(e)) {
     items.push(
       "Reply to the customer by hand; the draft was not produced.",
-      "Check the copilot step logs for the model output (SAP-3726).",
+      "Check the copilot step logs for the model output.",
     );
   }
   if (/model_not_available|llm\.services\.sapiom\.ai.*→ (400|404)\b/i.test(e)) {

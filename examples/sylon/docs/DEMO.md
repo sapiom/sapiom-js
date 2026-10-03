@@ -1,7 +1,7 @@
 # Sylon demo: rehearsal checklist and failure drill
 
 Every command runs from `examples/sylon` with `SAPIOM_API_KEY` set to the org key. Times are from
-the Sapiom Internal runs on 2026-10-02.
+our own runs on 2026-10-02.
 
 ## Before the demo (T-30 min)
 

@@ -70,7 +70,7 @@ describe("actionItems", () => {
       "copilot: no structured draft in the model output",
     );
     expect(has(items, /Reply to the customer by hand/)).toBe(true);
-    expect(has(items, /SAP-3726/)).toBe(true);
+    expect(has(items, /copilot step logs/)).toBe(true);
   });
 
   it("points a missing config key at setup", () => {
