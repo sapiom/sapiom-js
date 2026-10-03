@@ -1123,7 +1123,10 @@ export class SessionManager {
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
-  private readonly outputListeners = new Map<string, Set<SessionDataListener>>();
+  private readonly outputListeners = new Map<
+    string,
+    Set<{ listener: SessionDataListener }>
+  >();
   private readonly credentialRemovalRelaunches = new Set<Promise<void>>();
   private readonly statusEmitter = new EventEmitter();
   private readonly activityEmitter = new EventEmitter();
@@ -2217,16 +2220,19 @@ export class SessionManager {
    */
   attach(id: string, listener: SessionDataListener): (() => void) | undefined {
     const handle = this.ptys.get(id);
-    if (!handle) return undefined;
-    if (handle.buffer) listener(handle.buffer);
+    if (!handle && this.sessions.get(id)?.status !== "starting") {
+      return undefined;
+    }
+    if (handle?.buffer) listener(handle.buffer);
+    const registration = { listener };
     let listeners = this.outputListeners.get(id);
     if (!listeners) {
       listeners = new Set();
       this.outputListeners.set(id, listeners);
     }
-    listeners.add(listener);
+    listeners.add(registration);
     return () => {
-      listeners.delete(listener);
+      listeners.delete(registration);
       if (listeners.size === 0 && this.outputListeners.get(id) === listeners) {
         this.outputListeners.delete(id);
       }
@@ -3067,7 +3073,11 @@ export class SessionManager {
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       this.recordReadinessOutput(handle, chunk, adapter);
       if (this.ptys.get(session.id) === handle) {
-        this.outputListeners.get(session.id)?.forEach((listener) => listener(chunk));
+        for (const registration of [
+          ...(this.outputListeners.get(session.id) ?? []),
+        ]) {
+          registration.listener(chunk);
+        }
       }
       this.recordActivity(session.id);
     });

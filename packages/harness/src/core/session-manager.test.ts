@@ -2354,6 +2354,8 @@ describe("SessionManager", () => {
 
   it("keeps terminal listeners across credential relaunch and ignores retired PTY output", async () => {
     let generation = 1;
+    const resumePreparationStarted = deferred<void>();
+    const allowResumePreparation = deferred<void>();
     const adapter = createFakeAdapter({
       canResume: vi.fn(async () => true),
     });
@@ -2366,6 +2368,10 @@ describe("SessionManager", () => {
           credentialBearing: generation === 1,
         },
       }),
+      prepareWorkspaceContext: async () => {
+        resumePreparationStarted.resolve();
+        await allowResumePreparation.promise;
+      },
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
@@ -2382,6 +2388,18 @@ describe("SessionManager", () => {
     );
     spawns[0]!.emitExit(0);
     await removal;
+    await resumePreparationStarted.promise;
+
+    const startingReceived: string[] = [];
+    let startingDetach: (() => void) | undefined;
+    try {
+      startingDetach = manager.attach(session.id, (chunk) =>
+        startingReceived.push(chunk),
+      );
+    } finally {
+      allowResumePreparation.resolve();
+    }
+    expect(startingDetach).toBeTypeOf("function");
     await manager.flush();
 
     expect(spawns).toHaveLength(2);
@@ -2389,10 +2407,63 @@ describe("SessionManager", () => {
     expect(received).toEqual([]);
     spawns[1]!.emitData("replacement output");
     expect(received).toEqual(["replacement output"]);
+    expect(startingReceived).toEqual(["replacement output"]);
 
     detach?.();
+    startingDetach?.();
     spawns[1]!.emitData("after detach");
     expect(received).toEqual(["replacement output"]);
+  });
+
+  it("keeps duplicate callback registrations independent", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const received: string[] = [];
+    const listener = (chunk: string) => received.push(chunk);
+    const detachFirst = manager.attach(session.id, listener);
+    const detachSecond = manager.attach(session.id, listener);
+
+    detachFirst?.();
+    spawns[0]!.emitData("still attached");
+    expect(received).toEqual(["still attached"]);
+
+    detachSecond?.();
+    spawns[0]!.emitData("detached");
+    expect(received).toEqual(["still attached"]);
+  });
+
+  it("snapshots terminal listeners when a listener attaches another during dispatch", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const received: string[] = [];
+    let nestedDetach: (() => void) | undefined;
+    const detach = manager.attach(session.id, (chunk) => {
+      received.push(`first:${chunk}`);
+      if (!nestedDetach) {
+        nestedDetach = manager.attach(session.id, (nestedChunk) => {
+          received.push(`nested:${nestedChunk}`);
+        });
+      }
+    });
+
+    spawns[0]!.emitData("current");
+    expect(received).toEqual(["first:current", "nested:current"]);
+
+    spawns[0]!.emitData("next");
+    expect(received).toEqual([
+      "first:current",
+      "nested:current",
+      "first:next",
+      "nested:next",
+    ]);
+    detach?.();
+    nestedDetach?.();
   });
 
   describe("onActivity", () => {
@@ -4670,6 +4741,8 @@ describe("SessionManager", () => {
     const resumed = manager.resume(session.id);
     await vi.waitFor(() => expect(buildCount).toBe(2));
     expect(manager.get(session.id)?.status).toBe("starting");
+    const received: string[] = [];
+    const detach = manager.attach(session.id, (chunk) => received.push(chunk));
 
     // Bootstrap exit bookkeeping can finish after kill() resolves. Its metadata
     // update must observe the claimed resume lifecycle, so server cleanup does
@@ -4686,6 +4759,10 @@ describe("SessionManager", () => {
 
     resumeConfig.resolve();
     await resumed;
+    expect(detach).toBeTypeOf("function");
+    spawns[1]!.emitData("resumed output");
+    expect(received).toEqual(["resumed output"]);
+    detach?.();
     unsubscribe();
     expect(manager.get(session.id)?.status).toBe("running");
   });
