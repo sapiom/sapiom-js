@@ -34,6 +34,16 @@ export function slaHoursFor(priority: string | null, table: SlaHours): number {
     : table.normal;
 }
 
+/** The `YYYY-MM-DD` date of `at` in the IANA zone `timeZone`. */
+export function localDay(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
+
 export function formatAge(ms: number): string {
   const minutes = Math.max(0, Math.floor(ms / 60_000));
   const hours = Math.floor(minutes / 60);

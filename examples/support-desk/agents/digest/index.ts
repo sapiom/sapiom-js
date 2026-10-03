@@ -3,6 +3,8 @@
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
 
+import fleet from "../../fleet.json";
+
 import { getConfigOr } from "../../_shared/config";
 import { withDb, type Db, type Row } from "../../_shared/db";
 import { listDesks, type Desk } from "../../_shared/desks";
@@ -14,9 +16,20 @@ import {
 } from "../../_shared/issues";
 import { post, userInfo, type SlackCtx } from "../../_shared/slack";
 
-import { DEFAULT_SLA_HOURS, digestMessage, type DigestIssue } from "./logic";
+import {
+  DEFAULT_SLA_HOURS,
+  digestMessage,
+  localDay,
+  type DigestIssue,
+} from "./logic";
 
 export const AGENT = agentSlug("digest");
+
+// A day is the schedule's local date, so a rerun in the evening still counts as that morning's digest.
+export const TIME_ZONE =
+  (fleet.triggers as { project: string; timezone?: string }[]).find(
+    (t) => t.project === "digest",
+  )?.timezone ?? "UTC";
 
 type Ctx = SlackCtx & { executionId: string };
 
@@ -42,14 +55,14 @@ async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
 
 /**
  * Post today's digest for every desk that has none yet. `now` defaults to the database clock, so a
- * sandbox with drift cannot move the day; the day is its UTC date.
+ * sandbox with drift cannot move the day.
  */
 export async function digest(ctx: Ctx, db: Db, now?: Date) {
   await recordRun(db, ctx, AGENT);
   const clock =
     now ??
     new Date((await db.query<{ now: Date }>("select now() as now"))[0].now);
-  const day = clock.toISOString().slice(0, 10);
+  const day = localDay(clock, TIME_ZONE);
   const sla = {
     ...DEFAULT_SLA_HOURS,
     ...(await getConfigOr(db, "digest.sla_hours", {})),

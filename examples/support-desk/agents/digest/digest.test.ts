@@ -16,11 +16,12 @@ import {
 } from "../../_shared/issues";
 import { fakeCtx } from "../../_shared/test-ctx";
 import { WATCHED_SLUGS } from "../watchdog/logic";
-import { agent, digest } from "./index";
+import { agent, digest, TIME_ZONE } from "./index";
 import {
   DEFAULT_SLA_HOURS,
   digestMessage,
   formatAge,
+  localDay,
   slaHoursFor,
   type DigestIssue,
 } from "./logic";
@@ -76,6 +77,20 @@ describe("sla and age", () => {
     expect(formatAge((3 * 24 + 4) * HOUR + 59 * 60_000)).toBe("3d 4h");
     expect(formatAge(5 * HOUR + 12 * 60_000)).toBe("5h 12m");
     expect(formatAge(-1000)).toBe("0h 0m");
+  });
+
+  it("dates a run in the schedule's zone, not in UTC", () => {
+    expect(TIME_ZONE).toBe("America/Los_Angeles");
+    // 18:00 Pacific on July 1 is already July 2 in UTC.
+    expect(localDay(new Date("2026-07-02T01:00:00Z"), TIME_ZONE)).toBe(
+      "2026-07-01",
+    );
+    expect(localDay(new Date("2026-07-01T16:00:00Z"), TIME_ZONE)).toBe(
+      "2026-07-01",
+    );
+    expect(localDay(new Date("2026-01-15T07:59:00Z"), TIME_ZONE)).toBe(
+      "2026-01-14",
+    );
   });
 });
 
@@ -315,6 +330,24 @@ describe("digest run", () => {
         skipped: [],
         failed: [],
       },
+    });
+  });
+
+  it("treats an evening rerun as the same day as the morning post", async () => {
+    const morning = new Date("2026-07-01T16:00:00Z");
+    const evening = new Date("2026-07-02T01:00:00Z");
+    const nextMorning = new Date("2026-07-02T16:00:00Z");
+    await digest(slackCtx().ctx as never, db, morning);
+    const rerun = slackCtx();
+    expect(await digest(rerun.ctx as never, db, evening)).toMatchObject({
+      day: "2026-07-01",
+      posted: [],
+    });
+    expect(rerun.posts()).toHaveLength(0);
+    const next = slackCtx();
+    expect(await digest(next.ctx as never, db, nextMorning)).toMatchObject({
+      day: "2026-07-02",
+      posted: ["support", "billing"],
     });
   });
 
