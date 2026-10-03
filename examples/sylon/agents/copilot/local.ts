@@ -32,14 +32,15 @@ export async function seedLocalFixtures(db: Db): Promise<void> {
   const account = await accountByChannel(db, CUSTOMER_CHANNEL);
   if (!account) return;
   await db.query(
-    `insert into issues (id, account_id, source, status, category, priority, title, customer_channel, customer_root_ts, triage_root_ts)
-     values ($1, $2, 'slack', 'new', 'question', 'normal', 'Webhook deliveries failing', $3, $4, $5)`,
+    `insert into issues (id, account_id, desk_id, source, status, category, priority, title, customer_channel, customer_root_ts, triage_root_ts)
+     values ($1, $2, $6, 'slack', 'new', 'question', 'normal', 'Webhook deliveries failing', $3, $4, $5)`,
     [
       FIXTURE_ISSUE,
       account.id,
       CUSTOMER_CHANNEL,
       CUSTOMER_ROOT_TS,
       TRIAGE_ROOT_TS,
+      account.deskId,
     ],
   );
   await db.query(

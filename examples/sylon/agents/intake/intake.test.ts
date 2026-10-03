@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, withDb, type Db } from "../../_shared/db";
 import { setConfig } from "../../_shared/config";
+import { upsertDesk } from "../../_shared/desks";
 import {
   accountByChannel,
   createDraft,
@@ -959,5 +960,160 @@ describe("intake agent", () => {
       ...b.slack("chat.postMessage"),
     ].filter((p) => String(p.text).startsWith("Closed by"));
     expect(closedBy).toHaveLength(1);
+  });
+
+  describe("desks", () => {
+    const bugIn = (channel: string, eventId = "Ev0DESKBUG1") => {
+      const p = structuredClone(
+        intakeFixture("message-created.bug.json").payload,
+      ) as { eventId: string; event: Record<string, unknown> };
+      p.eventId = eventId;
+      p.event.channel = channel;
+      return p;
+    };
+    const addTestDesk = () =>
+      upsertDesk(db, {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C0TESTTRI01",
+      });
+
+    it("files a listed channel under its desk and cards in that desk's triage channel", async () => {
+      const test = (await addTestDesk()).desk;
+      await setConfig(
+        db,
+        "channels.customer",
+        [
+          { channelId: "C0CUSTOMER1", accountName: "Example" },
+          { channelId: "C0TESTCUST1", accountName: "Test co", desk: "test" },
+        ],
+        "t",
+      );
+      const c = makeCtx("exec-desk-listed", JEV.bug);
+      const { output } = await run(bugIn("C0TESTCUST1"), c.ctx);
+      expect(output).toMatchObject({ outcome: "opened" });
+      const issue = await getIssue(db, output.issueId as string);
+      expect(issue.deskId).toBe(test.id);
+      expect((await accountByChannel(db, "C0TESTCUST1"))?.deskId).toBe(test.id);
+      const posts = c.slack("chat.postMessage");
+      expect(posts).toHaveLength(2);
+      expect(posts.every((p) => p.channel === "C0TESTTRI01")).toBe(true);
+    });
+
+    it("files an unlisted channel under the default desk", async () => {
+      await addTestDesk();
+      const c = makeCtx("exec-desk-default", JEV.bug);
+      const { output } = await run(bugIn("C0RANDOM01"), c.ctx);
+      const issue = await getIssue(db, output.issueId as string);
+      const support = (
+        await db.query<{ id: string }>(
+          "select id from desks where slug = 'support'",
+        )
+      )[0];
+      expect(issue.deskId).toBe(support.id);
+      expect(
+        c.slack("chat.postMessage").every((p) => p.channel === "C0TRIAGE001"),
+      ).toBe(true);
+    });
+
+    it("skips a channel that has no desk: an unknown slug, or no default desk", async () => {
+      await setConfig(
+        db,
+        "channels.customer",
+        [{ channelId: "C0TYPO0001", accountName: "Typo", desk: "nope" }],
+        "t",
+      );
+      const typo = makeCtx("exec-desk-typo");
+      expect((await run(bugIn("C0TYPO0001"), typo.ctx)).output).toMatchObject({
+        outcome: "no desk for channel",
+        issueId: null,
+      });
+
+      await upsertDesk(
+        db,
+        {
+          slug: "support",
+          name: "Support",
+          triageChannel: "C0TRIAGE001",
+          isDefault: false,
+        },
+        { overwrite: true },
+      );
+      const none = makeCtx("exec-desk-none");
+      expect(
+        (await run(bugIn("C0RANDOM01", "Ev0DESKBUG2"), none.ctx)).output,
+      ).toMatchObject({ outcome: "no desk for channel" });
+      for (const c of [typo, none]) {
+        expect(c.slack("chat.postMessage")).toHaveLength(0);
+        expect(c.emitted).toHaveLength(0);
+      }
+      expect(await db.query("select 1 from issues")).toHaveLength(0);
+      expect(await accountByChannel(db, "C0RANDOM01")).toBeNull();
+    });
+
+    it("ignores a click from another desk's triage channel, before any write", async () => {
+      await addTestDesk();
+      const bug = makeCtx("exec-bug", JEV.bug);
+      const { output } = await run(
+        intakeFixture("message-created.bug.json").payload,
+        bug.ctx,
+      );
+      const close = structuredClone(
+        fixture("slack/block-actions.issue-close.json").payload,
+      ) as {
+        actions: { value: string }[];
+        container: { channel_id: string };
+        channel: { id: string };
+      };
+      close.actions[0].value = output.issueId as string;
+      close.container.channel_id = "C0TESTTRI01";
+      close.channel.id = "C0TESTTRI01";
+      const c = makeCtx("exec-close-other-desk");
+      expect((await run(close, c.ctx)).output).toEqual({
+        skipped: `issue ${output.issueId} belongs to desk support, not test`,
+      });
+      expect((await getIssue(db, output.issueId as string)).status).toBe("new");
+      expect(c.slack("chat.postMessage")).toHaveLength(0);
+
+      // From its own desk's channel the same click closes it.
+      close.container.channel_id = "C0TRIAGE001";
+      close.channel.id = "C0TRIAGE001";
+      const own = makeCtx("exec-close-own-desk");
+      expect((await run(close, own.ctx)).output).toMatchObject({
+        outcome: "close",
+        changed: true,
+      });
+    });
+
+    it("stores a message from another desk's triage channel without attaching it to the issue", async () => {
+      await addTestDesk();
+      const bug = makeCtx("exec-bug", JEV.bug);
+      const { output } = await run(
+        intakeFixture("message-created.bug.json").payload,
+        bug.ctx,
+      );
+      const issue = await getIssue(db, output.issueId as string);
+      const note = bugIn("C0TESTTRI01", "Ev0DESKNOTE1") as {
+        event: Record<string, unknown>;
+      };
+      note.event.user = "U0TEAMMATE1";
+      note.event.ts = "1790890500.000500";
+      note.event.thread_ts = issue.triageRootTs;
+      const c = makeCtx("exec-note-other-desk");
+      expect((await run(note, c.ctx)).output).toMatchObject({
+        outcome: "internal",
+        issueId: null,
+      });
+      // The issue's own desk channel still attaches it.
+      const own = bugIn("C0TRIAGE001", "Ev0DESKNOTE2") as {
+        event: Record<string, unknown>;
+      };
+      own.event.user = "U0TEAMMATE1";
+      own.event.ts = "1790890500.000600";
+      own.event.thread_ts = issue.triageRootTs;
+      expect(
+        (await run(own, makeCtx("exec-note-own-desk").ctx)).output,
+      ).toMatchObject({ outcome: "internal", issueId: issue.id });
+    });
   });
 });

@@ -33,7 +33,7 @@ import {
   statusLabel,
   workingCard,
 } from "../../_shared/blocks";
-import { getConfig } from "../../_shared/config";
+import { deskForIssue } from "../../_shared/desks";
 import { withDb, type Db, type DbCtx } from "../../_shared/db";
 import { emit } from "../../_shared/emit";
 import { Envelope, SlackBlockActions } from "../../_shared/events";
@@ -256,11 +256,12 @@ async function requestDraft(
 async function postDraftFailedNote(
   ctx: SlackCtx,
   db: Db,
+  issue: Issue,
   triageRootTs: string,
 ): Promise<void> {
   try {
     await post(ctx, {
-      channel: await getConfig(db, "channels.triage"),
+      channel: (await deskForIssue(db, issue)).triageChannel,
       threadTs: triageRootTs,
       text: DRAFT_FAILED_NOTE,
     });
@@ -328,7 +329,7 @@ async function draftReply(
         if (!draft) {
           // A newer message's posted card is actionable; "reply by hand" next to it would be wrong.
           const newer = await newerPostedDraft(db, issue.id, trigger);
-          if (!newer) await postDraftFailedNote(ctx, db, triageRootTs);
+          if (!newer) await postDraftFailedNote(ctx, db, issue, triageRootTs);
           return terminate({
             issueId: issue.id,
             skipped: "no structured draft",
@@ -371,7 +372,7 @@ async function draftReply(
       }
     }
 
-    const triage = await getConfig(db, "channels.triage");
+    const triage = (await deskForIssue(db, issue)).triageChannel;
     const ours = Number(trigger.slack.ts);
     const current = issue;
     const mine = draft;
@@ -651,7 +652,7 @@ async function refreshIssueCard(
 ): Promise<void> {
   if (!issue.triageRootTs) return;
   try {
-    const triage = await getConfig(db, "channels.triage");
+    const triage = (await deskForIssue(db, issue)).triageChannel;
     const account = await getAccount(db, issue.accountId);
     await update(ctx, {
       channel: triage,

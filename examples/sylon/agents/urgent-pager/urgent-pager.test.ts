@@ -2,9 +2,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
+import { setConfig } from "../../_shared/config";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
+import { upsertDesk } from "../../_shared/desks";
 import {
   accountByChannel,
+  ensureAccount,
   messageBySourceEventId,
   openIssue,
   setTriageRoot,
@@ -76,6 +79,76 @@ describe("urgent-pager", () => {
       outcome: "already_paged",
     });
     expect(dms(retry.logs)).toEqual([]);
+  });
+
+  it("pages the issue's desk's on-call and links its desk's triage channel", async () => {
+    const test = (
+      await upsertDesk(db, {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C0TESTTRI01",
+        oncallSlackId: "U0TESTONCALL",
+      })
+    ).desk;
+    const account = await ensureAccount(db, {
+      name: "Test co",
+      slackChannelId: "C0TESTCUST1",
+      deskId: test.id,
+    });
+    const issue = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "urgent",
+      title: "Test desk outage",
+      customer: { channel: "C0TESTCUST1", ts: "1790889355.981329" },
+    });
+    await setTriageRoot(db, issue.id, "1790889360.000100");
+    const { ctx, logs } = fakeCtx({
+      isLocalTrace: true,
+      executionId: "page-d",
+    });
+    expect(
+      (await run({ ...urgent(), issueId: issue.id }, ctx)).output,
+    ).toMatchObject({
+      outcome: "paged",
+      oncall: "U0TESTONCALL",
+      link: "https://slack.com/archives/C0TESTTRI01/p1790889360000100",
+    });
+    expect(dms(logs)[0].channel).toBe("U0TESTONCALL");
+  });
+
+  it("falls back to the global on-call when the desk has none, and fails when neither exists", async () => {
+    const bare = (
+      await upsertDesk(db, {
+        slug: "bare",
+        name: "Bare",
+        triageChannel: "C0BARE",
+      })
+    ).desk;
+    const account = await ensureAccount(db, {
+      name: "Bare co",
+      slackChannelId: "C0BARECUST",
+      deskId: bare.id,
+    });
+    const issue = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "urgent",
+      title: "Bare outage",
+      customer: { channel: "C0BARECUST", ts: "1790889355.981329" },
+    });
+    const input = { ...urgent(), issueId: issue.id };
+    await expect(
+      run(input, fakeCtx({ isLocalTrace: true, executionId: "p-1" }).ctx),
+    ).rejects.toThrow(/oncallSlackId/);
+    await setConfig(db, "oncall.slack_id", "U0GLOBAL", "t");
+    const { ctx, logs } = fakeCtx({ isLocalTrace: true, executionId: "p-2" });
+    expect((await run(input, ctx)).output).toMatchObject({
+      oncall: "U0GLOBAL",
+    });
+    expect(dms(logs)[0].channel).toBe("U0GLOBAL");
   });
 
   it("pages once when two runs for one issue overlap", async () => {

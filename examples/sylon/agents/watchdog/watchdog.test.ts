@@ -2,8 +2,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { setConfig } from "../../_shared/config";
+import { deleteConfig, setConfig } from "../../_shared/config";
 import { memoryDb, type Db } from "../../_shared/db";
+import { upsertDesk } from "../../_shared/desks";
 import { fakeCtx } from "../../_shared/test-ctx";
 import { agent, requireKey, tick, type Deps } from "./index";
 import {
@@ -263,6 +264,19 @@ describe("tick", () => {
     const r = run(api([exec("11")]).fetch);
     await r.done;
     expect(posts(r.logs)[0].channel).toBe("C0ALERTS01");
+  });
+
+  it("alerts in the default desk's triage channel when no channel is configured", async () => {
+    await deleteConfig(db, "channels.triage");
+    await upsertDesk(db, {
+      slug: "support",
+      name: "Support",
+      triageChannel: "C0DESKTRI01",
+      isDefault: true,
+    });
+    const r = run(api([exec("11")]).fetch);
+    await r.done;
+    expect(posts(r.logs)[0].channel).toBe("C0DESKTRI01");
   });
 
   it("looks back one hour first, then from the stored cursor", async () => {

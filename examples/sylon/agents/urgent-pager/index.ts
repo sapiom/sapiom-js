@@ -1,5 +1,5 @@
 /**
- * urgent-pager: on `issue.created` with priority `urgent`, DM the on-call user (`oncall.slack_id`)
+ * urgent-pager: on `issue.created` with priority `urgent`, DM the issue's desk's on-call user
  * the issue title and a link to its triage thread. The live-added agent: one deploy and one
  * trigger (`pnpm run setup --only urgent-pager`), and no other agent changes.
  *
@@ -13,7 +13,12 @@
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 
 import { escapeMrkdwn, slackToPlain } from "../../_shared/blocks";
-import { getConfig } from "../../_shared/config";
+import { MissingConfigError } from "../../_shared/config";
+import {
+  deskForIssue,
+  oncallFor,
+  requireDefaultDesk,
+} from "../../_shared/desks";
 import { withDb } from "../../_shared/db";
 import { Events } from "../../_shared/events";
 import {
@@ -45,12 +50,14 @@ const page = defineStep({
         const issue = await lockIssue(tx, input.issueId).catch(() => null);
         if (await messageBySourceEventId(tx, pageKey(input.issueId)))
           return terminate({ outcome: "already_paged" });
-        const oncall = await getConfig(tx, "oncall.slack_id");
+        const desk = issue
+          ? await deskForIssue(tx, issue)
+          : await requireDefaultDesk(tx);
+        const oncall = await oncallFor(tx, desk);
+        if (!oncall)
+          throw new MissingConfigError(`desks.${desk.slug}.oncallSlackId`);
         const link = issue?.triageRootTs
-          ? permalink(
-              await getConfig(tx, "channels.triage"),
-              issue.triageRootTs,
-            )
+          ? permalink(desk.triageChannel, issue.triageRootTs)
           : permalink(
               input.slack.channel,
               input.slack.ts,

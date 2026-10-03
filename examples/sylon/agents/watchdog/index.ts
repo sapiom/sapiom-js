@@ -9,7 +9,7 @@
  * Credential: that route needs `org.read`, which the per-run key behind `ctx.sapiom` does not
  * hold. `pnpm run setup` mints a read-only key and stores it as this agent's secret
  * `SYLON_WATCHDOG_API_KEY`, which the engine injects as an environment variable. Channel:
- * `alerts.channel`, else `channels.triage`.
+ * `alerts.channel`, else the default desk's triage channel.
  *
  * State: `watchdog_reported` holds every execution already announced (the dedup) and
  * `watchdog_state` one cursor. A failure is posted, then recorded (post then record, a known
@@ -24,7 +24,8 @@ import {
 } from "@sapiom/agent";
 import { z } from "zod/v4";
 
-import { getConfig, getConfigOr } from "../../_shared/config";
+import { getConfigOr } from "../../_shared/config";
+import { requireDefaultDesk } from "../../_shared/desks";
 import { withDb, type Db } from "../../_shared/db";
 import { post, type SlackCtx } from "../../_shared/slack";
 
@@ -174,7 +175,8 @@ type TickCtx = SlackCtx & Pick<AgentExecutionContext, "executionId">;
 export async function tick(ctx: TickCtx, db: Db, deps: Deps) {
   const channel =
     (await getConfigOr(db, "alerts.channel", null)) ??
-    (await getConfig(db, "channels.triage"));
+    (await getConfigOr(db, "channels.triage", null)) ??
+    (await requireDefaultDesk(db)).triageChannel;
   const [{ now }] = await db.query<{ now: Date }>("select now() as now");
   const to = new Date(now);
   const from = lookbackFrom(await readCursor(db), to);

@@ -28,6 +28,7 @@ const answer = (id: string, body = "b"): KbArticle => ({
   title: `T ${id}`,
   body,
   enabled: true,
+  deskId: null,
   updatedBy: null,
   createdAt: new Date(),
   updatedAt: new Date(),

@@ -2,9 +2,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
+import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
   accountByChannel,
   createDraft,
+  ensureAccount,
   linkMessage,
   openIssue,
   setStatus,
@@ -244,5 +246,70 @@ describe("controller", () => {
     expect(out.output!.nudged).toEqual([]);
     expect(out.output!.notSent).toHaveLength(2);
     expect(retry.emitted).toHaveLength(0);
+  });
+
+  describe("desks", () => {
+    /** An open, unowned, undrafted issue on `deskId`, 10 minutes old. */
+    async function aged(deskId: string, channel: string, n: number) {
+      const account = await ensureAccount(db, {
+        name: `Acme ${n}`,
+        slackChannelId: channel,
+        deskId,
+      });
+      const issue = await openIssue(db, {
+        accountId: account.id,
+        source: "slack",
+        category: "question",
+        priority: "normal",
+        title: `desk issue ${n}`,
+        customer: { channel, ts: `1790200${n}00.000100` },
+        triageRootTs: `1790300${n}00.000100`,
+      });
+      await db.query(
+        "update issues set created_at = now() - interval '10 minutes' where id = $1",
+        [issue.id],
+      );
+      return issue;
+    }
+
+    it("applies each desk's nudge_minutes and nudges in that desk's triage channel", async () => {
+      const support = (await defaultDesk(db))!;
+      const slow = (
+        await upsertDesk(db, {
+          slug: "test",
+          name: "Test",
+          triageChannel: "C0TESTTRI01",
+          nudgeMinutes: 60,
+        })
+      ).desk;
+      const quick = (
+        await upsertDesk(db, {
+          slug: "vip",
+          name: "VIP",
+          triageChannel: "C0VIPTRI01",
+          nudgeMinutes: 2,
+        })
+      ).desk;
+      expect(support.nudgeMinutes).toBe(5);
+      const onSupport = await aged(support.id, "C0SUPCUST01", 1);
+      const onSlow = await aged(slow.id, "C0TESTCUST01", 2);
+      const onQuick = await aged(quick.id, "C0VIPCUST01", 3);
+      // Younger than the support desk's 5 minutes but older than the vip desk's 2.
+      await db.query(
+        "update issues set created_at = now() - interval '3 minutes' where id = $1",
+        [onQuick.id],
+      );
+
+      const r = await runController("exec-desks", { jevCheck: false });
+      const nudged = (r.done.output?.nudged as { issueId: string }[]).map(
+        (n) => n.issueId,
+      );
+      expect(new Set(nudged)).toEqual(new Set([onSupport.id, onQuick.id]));
+      expect(nudged).not.toContain(onSlow.id);
+      const channels = r.posts.map((p) => [p.threadTs, p.channel]);
+      expect(channels).toContainEqual([onSupport.triageRootTs, "C0TRIAGE001"]);
+      expect(channels).toContainEqual([onQuick.triageRootTs, "C0VIPTRI01"]);
+      expect(r.posts.some((p) => p.channel === "C0TESTTRI01")).toBe(false);
+    });
   });
 });

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
+import { upsertDesk } from "../../_shared/desks";
 import {
   createDraft,
   createDraftOnce,
@@ -934,6 +935,87 @@ describe("knowledge on the draft path", () => {
       t.llmCalls[0].request as { messages: { content: string }[] }
     ).messages[0].content;
     expect(prompt).toContain("# Deploy\nrun it");
+  });
+});
+
+describe("desks", () => {
+  const run = (t: ReturnType<typeof ctxFor>) =>
+    runAgent(fixture("issue/created.json").payload, t.ctx);
+  const promptOf = (t: ReturnType<typeof ctxFor>) =>
+    (t.llmCalls[0].request as { messages: { content: string }[] }).messages[0]
+      .content;
+
+  /** Moves the fixture issue onto a second desk, `test`, with its own triage channel. */
+  async function moveToTestDesk() {
+    const desk = (
+      await upsertDesk(db, {
+        slug: "test",
+        name: "Test",
+        triageChannel: "C0TESTTRI01",
+      })
+    ).desk;
+    await db.query("update issues set desk_id = $1 where id = $2", [
+      desk.id,
+      FIXTURE_ISSUE,
+    ]);
+    return desk;
+  }
+
+  it("posts the draft card and redraws the issue card in the issue's desk triage channel", async () => {
+    await moveToTestDesk();
+    const t = ctxFor("exec-desk-card");
+    const out = last(await run(t)).output!;
+    const [posted] = t.slack("chat.postMessage");
+    expect(posted).toMatchObject({
+      channel: "C0TESTTRI01",
+      threadTs: "1790889400.000200",
+    });
+    expect((await getDraft(db, out.draftId as string)).cardChannel).toBe(
+      "C0TESTTRI01",
+    );
+  });
+
+  it("posts the draft-failed note in the issue's desk triage channel", async () => {
+    await moveToTestDesk();
+    const t = ctxFor("exec-desk-note");
+    const llm = (
+      t.ctx.sapiom as { llm: { run: (s: unknown) => Promise<unknown> } }
+    ).llm;
+    const original = llm.run.bind(llm);
+    llm.run = async (spec) =>
+      (spec as { output: { name: string } }).output.name === "draft_reply"
+        ? { stop_reason: "end_turn", content: [{ type: "text", text: "Hi" }] }
+        : original(spec);
+    await run(t);
+    expect(t.slack("chat.postMessage")).toEqual([
+      expect.objectContaining({
+        channel: "C0TESTTRI01",
+        text: DRAFT_FAILED_NOTE,
+      }),
+    ]);
+  });
+
+  it("reads the issue's desk articles and the all-desks ones, never another desk's", async () => {
+    const test = await moveToTestDesk();
+    const other = (
+      await upsertDesk(db, {
+        slug: "other",
+        name: "Other",
+        triageChannel: "C0OTHERTRI",
+      })
+    ).desk;
+    const policy = (title: string, body: string, deskId: string | null) =>
+      createArticle(db, { kind: "policy", title, body, deskId }, "test");
+    await policy("Everyone", "EVERYONE-RULE", null);
+    await policy("Test only", "TEST-RULE", test.id);
+    await policy("Other only", "OTHER-RULE", other.id);
+
+    const t = ctxFor("exec-desk-kb");
+    await run(t);
+    const prompt = promptOf(t);
+    expect(prompt).toContain("EVERYONE-RULE");
+    expect(prompt).toContain("TEST-RULE");
+    expect(prompt).not.toContain("OTHER-RULE");
   });
 });
 

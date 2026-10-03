@@ -81,7 +81,7 @@ export async function gatherKnowledge(
   input: { issue: Issue; messages: readonly Message[] },
   deps: DocsDeps = docsDeps(ctx),
 ): Promise<Knowledge> {
-  const enabled = await listEnabled(db);
+  const enabled = await listEnabled(db, input.issue.deskId);
   const policies = enabled.filter((a) => a.kind === "policy");
   const allAnswers = enabled.filter((a) => a.kind === "answer");
   const inline = answersFitInline(allAnswers);

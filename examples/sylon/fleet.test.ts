@@ -9,7 +9,12 @@ import { memoryDb } from "./_shared/db";
 import { Events, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
 import { defaultDesk, deskBySlug, upsertDesk } from "./_shared/desks";
-import { exampleKeys, mergeConfig, mergeDesks, seedFleet } from "./_shared/seed";
+import {
+  exampleKeys,
+  mergeConfig,
+  mergeDesks,
+  seedFleet,
+} from "./_shared/seed";
 import fleet from "./fleet.json";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -115,7 +120,13 @@ describe("fleet.json", () => {
     const desk = (await deskBySlug(db, "support"))!;
     await upsertDesk(
       db,
-      { slug: "support", name: "Support", triageChannel: "C0TRIAGE001", nudgeMinutes: 30, isDefault: true },
+      {
+        slug: "support",
+        name: "Support",
+        triageChannel: "C0TRIAGE001",
+        nudgeMinutes: 30,
+        isDefault: true,
+      },
       { overwrite: true },
     );
     expect(await seedFleet(db, "setup")).toMatchObject({ desksSet: [] });
