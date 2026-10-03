@@ -12,7 +12,9 @@ export type SlaHours = typeof DEFAULT_SLA_HOURS;
 /** Slack's limits: characters in a section's text, blocks in a message. */
 export const MAX_SECTION_CHARS = 3000;
 export const MAX_BLOCKS = 50;
-const TITLE_MAX = 100;
+// Each free-text field is cut before escaping, so a line always fits a section with its alerts.
+const FIELD_MAX = 100;
+const field = (text: string) => escapeMrkdwn(text.slice(0, FIELD_MAX));
 
 export interface DigestIssue {
   number: number;
@@ -94,18 +96,17 @@ export function digestMessage(input: {
           `#${i.number}`,
         )
       : `#${i.number}`;
-    const title = escapeMrkdwn((i.title ?? "(untitled)").slice(0, TITLE_MAX));
+    const title = field(i.title ?? "(untitled)");
     const owner = i.ownerSlackId
-      ? escapeMrkdwn(owners.get(i.ownerSlackId) ?? i.ownerSlackId)
+      ? field(owners.get(i.ownerSlackId) ?? i.ownerSlackId)
       : "unassigned";
     const parts = [
-      `${ref} ${escapeMrkdwn(i.accountName)}: ${title}`,
+      `${ref} ${field(i.accountName)}: ${title}`,
       formatAge(now.getTime() - i.createdAt.getTime()),
       owner,
     ];
     if (i.pastSla) parts.push("*past SLA*");
-    // A line never exceeds a section on its own, whatever the account name's length.
-    return parts.join(" · ").slice(0, maxChars);
+    return parts.join(" · ");
   };
 
   // Match the Console's status order so readers can compare the digest with the board.

@@ -132,6 +132,15 @@ describe("digest message", () => {
     expect(out).not.toContain("x".repeat(101));
   });
 
+  it("keeps the alerts of an issue whose account name is very long", () => {
+    const out = body(
+      message([issue({ accountName: "&".repeat(3100), ageHours: 500 })]).blocks,
+    );
+    expect(out).toContain(`${"&amp;".repeat(100)}: `);
+    expect(out).not.toContain("&amp;".repeat(101));
+    expect(out).toMatch(/· unassigned · \*past SLA\*$/);
+  });
+
   it("flags past SLA in every open status, lists those first, then oldest first", () => {
     const young = issue({ priority: "normal", ageHours: 10 });
     const old = issue({ priority: "normal", ageHours: 20 });
