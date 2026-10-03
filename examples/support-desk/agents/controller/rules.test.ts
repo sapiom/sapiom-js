@@ -196,6 +196,12 @@ describe("customer_waiting", () => {
   });
 
   it("stays silent on a message Jev already judged as needing no reply", () => {
+    expect(skipKey("customer_waiting", "msg-1")).toBe(
+      "skip:customer_waiting:msg-1",
+    );
+    expect(nudgeKey("customer_waiting", "msg-1", 3)).toBe(
+      "customer_waiting:msg-1:3",
+    );
     const sent = [
       {
         issueId: "issue-1",

@@ -287,6 +287,18 @@ describe("controller", () => {
       Array(3).fill("issue.nudged"),
     );
     for (const e of second.emitted) expect(e.id).toMatch(/:2$/);
+    expect(second.logs.find((l) => l.msg === "controller scan")?.data).toEqual({
+      openIssues: 1,
+      due: 3,
+      nudges: 3,
+      skipped: [],
+    });
+    expect(second.done.output).toMatchObject({
+      notSent: [],
+      resolved: [],
+      skipped: [],
+      jevCheck: true,
+    });
   });
 
   it("a Jev failure on round 1 does not stop a later no-reply verdict from silencing the repeats", async () => {
