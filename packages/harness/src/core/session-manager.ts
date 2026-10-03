@@ -2216,7 +2216,9 @@ export class SessionManager {
   /**
    * Subscribe to a session's output. Replays the retained scrollback buffer
    * synchronously before returning so a reconnecting WS client sees recent
-   * output immediately. Returns undefined if the session has no live pty.
+   * output immediately. A session that is `starting` without a pty yet is
+   * also attachable; its listener receives the new pty's output once it
+   * spawns. Returns undefined otherwise when the session has no live pty.
    */
   attach(id: string, listener: SessionDataListener): (() => void) | undefined {
     const handle = this.ptys.get(id);
