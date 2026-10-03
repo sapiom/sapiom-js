@@ -1,0 +1,5 @@
+{
+  "type": "schedule_cron",
+  "description": "A scheduled watchdog fire: the cron trigger's stored input is empty.",
+  "payload": {}
+}

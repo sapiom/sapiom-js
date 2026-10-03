@@ -10,6 +10,7 @@ export const ConfigSchemas = {
   "linear.team_id": z.string().min(1),
   "linear.project_id": z.string().min(1),
   "channels.triage": z.string().min(1),
+  "alerts.channel": z.string().min(1),
   "channels.customer": z.array(
     z.object({ channelId: z.string().min(1), accountName: z.string().min(1) }),
   ),
@@ -29,6 +30,7 @@ export const ConfigSchemas = {
 export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "team.slack_team_ids",
   "channels.customer",
+  "alerts.channel",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
@@ -99,6 +101,12 @@ export async function setConfig<K extends ConfigKey>(
     [key, JSON.stringify(parsed), setBy],
   );
   // Invalidate, never set: the write may sit in a transaction that later rolls back.
+  cacheFor(db).delete(key);
+}
+
+/** Remove a key so readers fall back to their default. */
+export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
+  await db.query("delete from config where key = $1", [key]);
   cacheFor(db).delete(key);
 }
 
