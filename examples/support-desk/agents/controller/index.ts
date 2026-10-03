@@ -1,8 +1,5 @@
 /**
- * controller: the follow-up cron. Every run reads the open issues, applies the rules in
- * `rules.ts`, and posts each due nudge in the issue's triage thread, repeating on a backoff
- * (`nudge.repeat_minutes`) while it holds: no owner, no draft, a draft waiting for a decision, or a
- * customer waiting for a reply.
+ * SAP-3787: repeat reminders so an issue that stays stalled does not go quiet after its first nudge.
  *
  * Trigger: `schedule_cron` (`*\/2 * * * *` in fleet.json). The trigger's stored `input` may carry
  * `jevCheck: false` to skip the Jev "does this expect a reply?" check on `customer_waiting`.
@@ -51,6 +48,13 @@ export const EXPECTS_REPLY_MIN = 0.5;
 /** How much of the customer thread Jev sees, newest last. */
 const JEV_CONTEXT_MESSAGES = 6;
 
+/**
+ * Recorded when Jev says the message expects a reply, so its later rounds skip the question. A
+ * failed check records nothing, so the next round asks again.
+ */
+const replyKey = (kind: Nudge["kind"], refId: string): string =>
+  `reply:${kind}:${refId}`;
+
 const Input = z.object({ jevCheck: z.boolean().optional() });
 
 const NudgeSchema = z.object({
@@ -74,10 +78,6 @@ interface Snapshot {
   now: Date;
 }
 
-/**
- * Thresholds for `dueNudges`: each desk's own, the pre-desk `nudge.minutes` for an issue with none,
- * and the repeat gaps after round 1.
- */
 async function thresholds(db: Db) {
   return {
     minutes: await getConfigOr(db, "nudge.minutes", 30),
@@ -201,8 +201,12 @@ const scan = defineStep({
       const skipped: { issueId: string; key: string; expectsReply: number }[] =
         [];
       for (const n of candidates) {
-        // A later round is about a message Jev already passed in round 1.
-        if (n.kind !== "customer_waiting" || n.n > 1 || !jevCheck) {
+        const reply = replyKey(n.kind, n.refId);
+        if (
+          n.kind !== "customer_waiting" ||
+          !jevCheck ||
+          snap.sent.some((s) => s.issueId === n.issueId && s.kind === reply)
+        ) {
           nudges.push(n);
           continue;
         }
@@ -222,6 +226,7 @@ const scan = defineStep({
           continue;
         }
         if (p >= EXPECTS_REPLY_MIN) {
+          await recordNudge(db, n.issueId, reply);
           nudges.push(n);
         } else {
           // Remember the verdict for this message, so the next run neither nudges nor asks again.
@@ -267,10 +272,8 @@ const send = defineStep({
       const resolved: string[] = [];
       for (const n of input.nudges) {
         const sent = await db.transaction(async (tx) => {
-          // The issue may have moved since scan (taken, drafted, answered, held, closed): rerun the
-          // rules on its current rows and post only if this nudge is still due. Jev already passed
-          // this candidate in scan, so its skip records do not apply here. Its own key is left out
-          // so a retried send reaches recordNudge, which refuses the duplicate.
+          // Recheck live conditions because scan may be stale, while keeping scan's Jev decision.
+          // Exclude this round's key so an otherwise-due retry reaches recordNudge's duplicate check.
           const fresh = await snapshot(tx, n.issueId);
           const stillDue = dueNudges({
             ...fresh,

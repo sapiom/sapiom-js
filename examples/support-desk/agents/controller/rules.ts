@@ -1,13 +1,4 @@
-/**
- * The controller's follow-up rules: a pure function over plain rows and `now`, so every threshold
- * edge and the dedup are unit-testable without a database or a clock.
- *
- * Each nudge carries a dedup key `<kind>:<refId>:<n>` that the agent records in `nudges.kind`. The
- * ref is the thing the nudge is about (the pending draft, the last customer message, or the issue),
- * so a new draft or a new customer message restarts its rule at round 1. `n` is the round: while the
- * condition holds, round n+1 follows round n after the `repeatMinutes` gap, and a run between rounds
- * stays silent.
- */
+/** Plain rows and an explicit time keep threshold edges and round deduplication testable without a database. */
 import type { Direction, DraftStatus, IssueStatus } from "../../_shared/issues";
 
 /** The kinds `_shared/blocks.ts` `nudge()` labels. */
@@ -68,10 +59,7 @@ export interface Nudge {
 export const nudgeKey = (kind: NudgeKind, refId: string, n: number): string =>
   `${kind}:${refId}:${n}`;
 
-/**
- * Recorded when the Jev check decides the customer's last message expects no reply, so later runs
- * neither nudge nor ask Jev again about the same message, whatever the round.
- */
+/** Omits the round so a no-reply verdict silences every reminder for that message while the Jev check is on. */
 export const skipKey = (kind: NudgeKind, refId: string): string =>
   `skip:${kind}:${refId}`;
 
@@ -89,7 +77,7 @@ export interface RuleInput {
   repeatMinutes: readonly number[];
   /**
    * Whether Jev verdicts count (default true). With the check off, a `skip:` record no longer
-   * silences `customer_waiting`; keys of nudges actually sent always do.
+   * silences `customer_waiting`; each sent round still dedups its own key.
    */
   jevCheck?: boolean;
 }
@@ -123,7 +111,7 @@ export function postedAt(m: MessageRow): number {
 export const byThreadOrder = (a: MessageRow, b: MessageRow): number =>
   postedAt(a) - postedAt(b);
 
-/** The highest round of `<kind>:<refId>` in `rows`, and when it was sent. A key without a round predates rounds and counts as 1. */
+// Legacy keys count as round 1 so existing nudge history still controls repeat timing.
 function lastRound(
   rows: SentRow[],
   base: string,
@@ -143,13 +131,7 @@ function lastRound(
   return last;
 }
 
-/**
- * Every nudge round due at `now` and not yet sent. A condition's round 1 is due once it has held
- * for at least its desk's `nudge_minutes`; each later round once the `repeatMinutes` gap has passed
- * since the previous round, for as long as the condition holds. Closed issues and issues without a
- * triage card (nowhere to post) get none; on-hold issues get no `draft_pending` or
- * `customer_waiting`, since engineering owns the next move.
- */
+/** Engineering owns the next move on hold, so suppress draft and customer follow-ups there. */
 export function dueNudges(input: RuleInput): Nudge[] {
   const drafts = groupBy(input.drafts);
   const messages = groupBy(input.messages);

@@ -268,7 +268,7 @@ describe("controller", () => {
     expect(between.scanned.kind).toBe("terminate");
     expect(between.posts).toHaveLength(0);
 
-    // Test-only: age round 1 past the default 60-minute gap.
+    // Cross the repeat boundary without waiting for wall-clock time.
     await db.query(
       "update nudges set sent_at = now() - interval '61 minutes' where issue_id = $1",
       [waiting.id],
@@ -287,6 +287,46 @@ describe("controller", () => {
       Array(3).fill("issue.nudged"),
     );
     for (const e of second.emitted) expect(e.id).toMatch(/:2$/);
+  });
+
+  it("a Jev failure on round 1 does not stop a later no-reply verdict from silencing the repeats", async () => {
+    const issue = await seedIssue(db, {
+      title: "thanked while Jev was down",
+      customerText: "thanks, that fixed it!",
+      pendingDraft: true,
+    });
+    await backdate(db);
+    const kinds = (out: Directive) =>
+      (out.output!.nudged as { key: string }[])
+        .map((n) => n.key.split(":")[0])
+        .sort();
+    const down = ctxWithJev("exec-1");
+    down.ctx.sapiom.decisions.evaluate = async () => {
+      throw new Error("jev unavailable");
+    };
+    const scanned = await step("scan").run({}, down.ctx);
+    const first = await step("send").run(scanned.input, down.ctx);
+    expect(kinds(first)).toEqual([
+      "customer_waiting",
+      "draft_pending",
+      "no_owner",
+    ]);
+
+    const age = (interval: string) =>
+      db.query(
+        `update nudges set sent_at = now() - interval '${interval}' where issue_id = $1`,
+        [issue.id],
+      );
+    // Cross the repeat boundary without waiting for wall-clock time.
+    await age("61 minutes");
+    const second = await runController("exec-2");
+    expect(second.asked).toEqual(["thanks, that fixed it!"]);
+    expect(kinds(second.done)).toEqual(["draft_pending", "no_owner"]);
+
+    await age("5 hours");
+    const third = await runController("exec-3");
+    expect(third.asked).toEqual([]);
+    expect(kinds(third.done)).toEqual(["draft_pending", "no_owner"]);
   });
 
   it("with nudge.repeat_minutes set to [], nudges once", async () => {

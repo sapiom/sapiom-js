@@ -43,13 +43,13 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "team.slack_team_ids",
   "channels.customer",
   "alerts.channel",
+  "nudge.repeat_minutes",
   // Desk-owned now; a database installed before desks keeps them as fallbacks.
   "linear.team_id",
   "linear.project_id",
   "channels.triage",
   "oncall.slack_id",
   "nudge.minutes",
-  "nudge.repeat_minutes",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
