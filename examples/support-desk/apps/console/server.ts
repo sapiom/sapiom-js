@@ -31,7 +31,7 @@ import {
   resolveConnectionString,
   type Db,
 } from "../../_shared/db";
-import { issueMarker } from "../../_shared/fleet-id";
+import { FLEET_ID, fleetTitle, issueMarker } from "../../_shared/fleet-id";
 import {
   getDesk,
   linearTarget,
@@ -103,6 +103,12 @@ import {
   pageReceipts,
   type ReceiptSummary,
 } from "./logic";
+
+/** The page with this fleet's name in its title and heading (the file ships the default name). */
+const pageHtml = page.replaceAll(
+  "Support Desk Console",
+  `${fleetTitle(FLEET_ID)} Console`,
+);
 
 const PORT = Number(process.env.PORT) || 3000;
 const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
@@ -886,7 +892,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
     });
-    return void res.end(page);
+    return void res.end(pageHtml);
   }
   const table =
     req.method === "GET"

@@ -24,7 +24,7 @@ describe("fleet identity derivation", () => {
     expect(agentSlug("urgent-pager", "support-desk")).toBe(
       "support-desk-urgent-pager",
     );
-    expect(dbHandleFor("support-desk")).toBe("support_desk");
+    expect(dbHandleFor("support-desk")).toBe("support-desk");
     expect(consoleSlugFor("support-desk")).toBe("support-desk-console");
     expect(fleetTitle("support-desk")).toBe("Support Desk");
     expect(issueMarker("i-1", "support-desk")).toBe("support-desk:i-1");
@@ -65,5 +65,11 @@ describe("fleet identity derivation", () => {
     expect(PROJECTS.map((p) => p.slug)).toEqual(
       fleet.projects.map((p) => `${FLEET_ID}-${p.key}`),
     );
+  });
+
+  it("rejects ids too short for a database handle or too long for the Console slug", () => {
+    expect(() => assertFleetId("ab")).toThrow(/3-55 characters/);
+    expect(() => assertFleetId("a".repeat(56))).toThrow(/3-55 characters/);
+    expect(assertFleetId("a".repeat(55))).toHaveLength(55);
   });
 });

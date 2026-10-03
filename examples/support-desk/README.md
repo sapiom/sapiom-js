@@ -53,7 +53,7 @@ flowchart LR
 | Adapters      | `intake` reads `slack.*` and is the only agent that knows Slack message shapes. A later adapter (Read.ai, email) emits the same `issue.*`.                                              |
 | Domain events | `issue.created`, `issue.message_added`, `issue.escalate`, `issue.on_hold`, `issue.nudged`, `issue.engineering_resolved` (`_shared/events.ts`). Every payload carries `issueId`, `accountId`, `source`, `causationId`. |
 | Domain agents | copilot, escalation, controller, linear-sync, urgent-pager: they consume `issue.*` and the `slack.block_actions` for their own button prefix only.                                                   |
-| Shared state  | One Postgres (handle `support_desk`), written only through `_shared/issues.ts`; desks (`_shared/desks.ts`) and runtime config in its `desks` and `config` tables.                                    |
+| Shared state  | One Postgres (handle `support-desk`), written only through `_shared/issues.ts`; desks (`_shared/desks.ts`) and runtime config in its `desks` and `config` tables.                                    |
 
 ## Agents
 
@@ -153,14 +153,14 @@ unset (so a live fleet needs no re-seed):
 | Derived from `fleetId`       | Default `support-desk`     | `fleetId: "helpdesk"`  |
 | ---------------------------- | -------------------------- | ---------------------- |
 | Agent slug `<id>-<key>`      | `support-desk-intake`, ... | `helpdesk-intake`, ... |
-| Postgres handle (`-` to `_`) | `support_desk`             | `helpdesk`             |
+| Postgres handle (the id)     | `support-desk`             | `helpdesk`             |
 | Console App Link slug        | `support-desk-console`     | `helpdesk-console`     |
 | Console App Link name        | `Support Desk Console`     | `Helpdesk Console`     |
 | Linear issue marker          | `support-desk:<issueId>`   | `helpdesk:<issueId>`   |
 
-The id is lowercase words joined by hyphens, starting with a letter. There is no separate
-database-handle setting: the handle is always the id with hyphens as underscores, so
-`acme-help-desk` uses `acme_help_desk`.
+The id is 3-55 characters of lowercase words joined by hyphens, starting with a letter. There is no
+separate database-handle setting: the handle is the id itself, so `acme-help-desk` uses
+`acme-help-desk`.
 
 Deployed steps need the id at runtime (for their run records, the watchdog's watched slugs and the
 Linear marker), and a step has no config file. `pnpm run setup` and `pnpm run console:build` first
@@ -226,7 +226,7 @@ SAPIOM_API_KEY=<org key> pnpm run setup   # pnpm run, not `pnpm setup` (pnpm's o
 `no changes: the fleet is installed`:
 
 1. Probes the Slack and Linear connectors, and stops with what to connect if one is missing.
-2. Resolves or creates the fleet database (`support_desk` by default), applies migrations, seeds missing desks, config and accounts.
+2. Resolves or creates the fleet database (`support-desk` by default), applies migrations, seeds missing desks, config and accounts.
 3. Adds three starter policy articles when the knowledge base is empty.
 4. Links and deploys each project, skipping one whose bundle is already the live build.
 5. Lists each agent's triggers and attaches only the missing ones. The server dedups event
