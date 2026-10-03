@@ -47,6 +47,7 @@ our own runs on 2026-10-02.
 9. **Nudges.** After the desk's `nudgeMinutes` (5 in the demo), the controller posts "No owner yet", "Draft waiting
    for a decision" and "Customer is waiting for a reply" in the triage threads. To show it on demand, run
    `sapiom agents run --input '{"jevCheck":true}'` in `agents/controller`.
+   With an `sla` key set (README, SLAs), the nudges follow each priority's target instead.
 
 Afterwards: `pnpm run reset-demo`, and cancel the Linear issues the escalation created.
 
