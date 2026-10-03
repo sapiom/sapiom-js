@@ -74,7 +74,9 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
   /\/+$/,
   "",
 );
-const API_KEY = process.env.SAPIOM_API_KEY ?? "";
+/** The operator's key from publish; the platform's own read-only runtime key is the fallback. */
+const API_KEY =
+  process.env.SYLON_CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
 
 class HttpError extends Error {
   constructor(

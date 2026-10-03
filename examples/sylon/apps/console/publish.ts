@@ -61,7 +61,9 @@ async function main() {
     name: NAME,
     description:
       "Operate the Sylon demo: fleet switches, controller, board, latency timeline, failed events, cue cards.",
-    env: { SAPIOM_API_KEY: key },
+    // The platform reserves SAPIOM_API_KEY and injects its own org.read runtime key; the Console's
+    // switches, Run now and Replay need write access, so the operator's key rides under its own name.
+    env: { SYLON_CONSOLE_API_KEY: key },
   });
   // The server holds an org key; it must never be reachable by anyone outside the org.
   if (link.visibility !== "organization")
