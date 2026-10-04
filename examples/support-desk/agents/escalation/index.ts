@@ -19,6 +19,8 @@
  * - The move to On Hold and the `issue.on_hold` emit share a second locked transaction: a failed
  *   emit rolls the move back, and a closed or already On Hold issue emits nothing.
  * - Redraw the triage card after linking so triage can see the stored Linear link.
+ * - Reset the issue's controller timer: On Hold stops the draft and customer clocks and starts the
+ *   Linear check's backoff (`_shared/timers.ts`).
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
@@ -53,9 +55,10 @@ import {
   toLinearIssue,
   type LinearIssue,
 } from "../../_shared/linear";
-import { resolution } from "../linear-sync/rules";
+import { resolution } from "../../_shared/linear-check";
 import { issueSla } from "../../_shared/sla";
 import { permalink, post, update, userInfo } from "../../_shared/slack";
+import { rescheduleIssue } from "../../_shared/timers";
 
 export const AGENT = agentSlug("escalation");
 
@@ -96,8 +99,7 @@ async function replyKeys(db: Db, issueId: string, identifier: string) {
   const tracked = (text: string) =>
     text.includes(`Tracked as ${identifier}:`) ||
     text.endsWith(`Tracked as ${identifier}`);
-  const bare =
-    stored.length === 0 || stored.some((m) => tracked(m.text ?? ""));
+  const bare = stored.length === 0 || stored.some((m) => tracked(m.text ?? ""));
   const suffix = bare ? "" : `:${identifier}`;
   return {
     customer: `${customerReplyKey(issueId)}${suffix}`,
@@ -130,8 +132,9 @@ export function linearDescription(input: {
   threadUrl: string | null;
 }): string {
   return [
-    // First, so it falls inside the description preview `list_issues` returns.
-    `Support desk issue #${input.issue.number} · ${marker(input.issue.id)}`,
+    // First, so it falls inside the description preview `list_issues` returns. No bare `#n`:
+    // Linear autolinks it to a GitHub pull request of that number.
+    `Support desk ticket ${input.issue.number} · ${marker(input.issue.id)}`,
     "",
     `**Account:** ${input.accountName}`,
     `**Requested by:** ${
@@ -291,8 +294,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   // the stored reply keys, so it creates no second Linear issue and repeats no reply.
   const linked = await db.transaction(async (tx) => {
     let issue = await lockIssue(tx, issueId);
-    // A Closed issue leaves linear-sync's On Hold scan, so a Linear issue opened now would never
-    // be read.
+    // A Closed issue's Linear issue is never read, so one opened now would never bring it back.
     if (issue.status === "closed") {
       await replyOnce(ctx, tx, {
         key: `escalation:${issueId}:${input.causationId}`,
@@ -334,7 +336,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
         (await createIssue(ctx, {
           teamId,
           projectId,
-          title: issue.title || `Ticket #${issue.number}`,
+          title: issue.title || `Support desk ticket ${issue.number}`,
           description: linearDescription({
             issue,
             accountName: account.name,
@@ -494,7 +496,13 @@ const escalateStep = defineStep({
   terminal: true,
   inputSchema: EscalateInput,
   async run(input, ctx) {
-    return terminate(await withDb(ctx, (db) => escalate(ctx, db, input)));
+    return terminate(
+      await withDb(ctx, async (db) => {
+        const out = await escalate(ctx, db, input);
+        await rescheduleIssue(db, ctx, out.issueId);
+        return out;
+      }),
+    );
   },
 });
 

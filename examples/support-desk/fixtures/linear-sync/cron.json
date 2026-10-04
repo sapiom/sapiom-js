@@ -1,5 +1,0 @@
-{
-  "type": "schedule_cron",
-  "description": "A scheduled linear-sync fire: the cron trigger's stored input, default read cap.",
-  "payload": {}
-}

@@ -136,6 +136,11 @@ export const ConfigSchemas = {
    * `llms.txt`. Unset: drafts come from the team's articles only, and no docs are fetched or cited.
    */
   "knowledge.docs_url": DocsUrlSchema,
+  /**
+   * The Console's controller switch. While true no ticket timer is set and a tick that still fires
+   * sends nothing; turning it back on re-arms every open ticket.
+   */
+  "controller.paused": z.boolean(),
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -154,6 +159,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "digest.sla_hours",
   "sla",
   "knowledge.docs_url",
+  "controller.paused",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<

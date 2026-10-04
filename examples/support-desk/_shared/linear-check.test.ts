@@ -1,12 +1,14 @@
-/** The linear-sync agent: the pure state mapping, and the live path against a mocked Linear relay. */
+/**
+ * The On Hold check: the pure state mapping and backoff, and the live path against a mocked Linear
+ * relay. `sync` below does for every issue what the controller's tick does for its one.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { connectors } from "@sapiom/tools";
 
-import { fixture } from "../fixtures/index";
-import { localFleetDb, setLocalDb, type Db } from "../_shared/db";
-import { setConfig } from "../_shared/config";
-import { defaultDesk, upsertDesk } from "../_shared/desks";
+import { localFleetDb, type Db } from "./db";
+import { setConfig } from "./config";
+import { defaultDesk, upsertDesk } from "./desks";
 import {
   accountByChannel,
   getIssue,
@@ -16,18 +18,49 @@ import {
   setStatus,
   setTriageRoot,
   updateIssue,
-} from "../_shared/issues";
-import { EXAMPLE_SLA, fakeCtx } from "../_shared/test-ctx";
-import { agent, sync } from "./linear-sync/index";
-import { resolution, syncKey } from "./linear-sync/rules";
+} from "./issues";
+import {
+  checkLinear,
+  linearCheckDue,
+  nextLinearCheck,
+  redrawIfDirty,
+  resolution,
+  resolveByHand,
+  syncKey,
+  type LinearCheck,
+  type Resolution,
+} from "./linear-check";
+import { EXAMPLE_SLA, fakeCtx } from "./test-ctx";
 
-type Directive = { kind: string; output?: Record<string, unknown> };
-const run = (input: unknown, ctx: unknown) =>
-  (
-    agent.steps.sync as unknown as {
-      run: (i: unknown, c: unknown) => Promise<Directive>;
-    }
-  ).run(input, ctx);
+/**
+ * Every On Hold issue's tick at once: redraw a stale card, then read the Linear issue. Returns
+ * what was read, moved and failed.
+ */
+async function sync(ctx: never, db: Db) {
+  const rows = await db.query<{ id: string }>(
+    "select id from issues where card_dirty or (status = 'on_hold' and linear_identifier is not null) order by number",
+  );
+  const checks: LinearCheck[] = [];
+  for (const { id } of rows) {
+    const issue = await getIssue(db, id);
+    await redrawIfDirty(ctx, db, issue);
+    const check = await checkLinear(ctx, db, issue, "test-controller");
+    if (check) checks.push(check);
+  }
+  return {
+    checked: checks.length,
+    resolved: checks
+      .filter((c) => c.resolution)
+      .map((c) => ({
+        issueId: c.issueId,
+        linearIdentifier: c.linearIdentifier,
+        resolution: c.resolution,
+      })),
+    failed: checks
+      .filter((c) => c.error)
+      .map((c) => ({ issueId: c.issueId, error: c.error })),
+  };
+}
 
 describe("resolution", () => {
   it.each([
@@ -48,18 +81,43 @@ describe("resolution", () => {
   });
 });
 
-describe("linear-sync on a local trace", () => {
-  beforeEach(() => setLocalDb(undefined));
+describe("nextLinearCheck", () => {
+  const t0 = new Date("2026-10-04T10:00:00Z");
+  const at = (minutes: number) => new Date(t0.getTime() + minutes * 60_000);
 
-  it("runs on the cron fixture and finds nothing to do", async () => {
-    const { ctx, emitted } = fakeCtx({ isLocalTrace: true });
-    const done = await run(fixture("linear-sync/cron.json").payload, ctx);
-    expect(done.output).toMatchObject({ checked: 0, resolved: [], failed: [] });
-    expect(emitted).toHaveLength(0);
+  it.each([
+    ["never read", null, 60],
+    ["read before it went On Hold", at(-30), 60],
+    ["read at 30 min (a customer message)", at(30), 60],
+    ["read at the 1 h point", at(60), 300],
+    ["read at 2 h", at(120), 300],
+    ["read at the 5 h point", at(300), 300 + 1440],
+    ["read at 1 day", at(1440), 300 + 1440],
+    ["read at the first daily point", at(300 + 1440), 300 + 2 * 1440],
+    ["read 3 days in", at(3 * 1440), 300 + 3 * 1440],
+  ])("%s", (_, checkedAt, minutes) => {
+    expect(nextLinearCheck(t0, checkedAt)).toEqual(at(minutes));
+  });
+
+  it("is due only for an On Hold issue with a Linear link", () => {
+    const base = {
+      status: "on_hold" as const,
+      linearIdentifier: "SAP-1",
+      onHoldAt: t0,
+      updatedAt: t0,
+      linearCheckedAt: null,
+    };
+    expect(linearCheckDue(base)).toEqual(at(60));
+    expect(linearCheckDue({ ...base, status: "on_you" })).toBeNull();
+    expect(linearCheckDue({ ...base, linearIdentifier: null })).toBeNull();
+    // An issue escalated before on_hold_at existed counts from its last update.
+    expect(
+      linearCheckDue({ ...base, onHoldAt: null, updatedAt: at(10) }),
+    ).toEqual(at(70));
   });
 });
 
-describe("linear-sync against the relay (mocked fetch)", () => {
+describe("the On Hold check against the relay (mocked fetch)", () => {
   let db: Db;
   const ids: string[] = [];
   /** Linear state by identifier; a missing entry makes get_issue fail. */
@@ -148,11 +206,8 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     vi.unstubAllEnvs();
   });
 
-  const keyOf = async (
-    id: string,
-    identifier: string,
-    r: "done" | "canceled",
-  ) => syncKey(id, identifier, r, (await getIssue(db, id)).onHoldAt!.getTime());
+  const keyOf = async (id: string, identifier: string, r: Resolution) =>
+    syncKey(id, identifier, r, (await getIssue(db, id)).onHoldAt!.getTime());
   /** A live ctx whose Slack connector is `connectors.slack` with some methods replaced. */
   const withSlack = (overrides: Record<string, unknown>) => {
     const out = fakeCtx({ isLocalTrace: false });
@@ -242,6 +297,8 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     const first = await sync(failing as never, db);
     expect(first.failed).toHaveLength(1);
     expect((await getIssue(db, id)).status).toBe("on_hold");
+    // Not stamped: the check stays due, so the next tick retries the move.
+    expect((await getIssue(db, id)).linearCheckedAt).toBeNull();
 
     const { ctx: ok, emitted } = live();
     const second = await sync(ok as never, db);
@@ -351,20 +408,6 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     expect((await getIssue(db, broken)).status).toBe("on_hold");
     expect((await getIssue(db, fine)).status).toBe("on_you");
     expect(emitted).toHaveLength(1);
-  });
-
-  it("caps reads per tick and checks the least recently checked first", async () => {
-    for (let n = 1; n <= 3; n++) {
-      await newOnHold(n);
-      states[`SAP-${n}`] = { status: "In Progress", statusType: "started" };
-    }
-    const read = () =>
-      calls.filter((c) => c.tool).map((c) => c.args.id as string);
-    await sync(live().ctx as never, db, 2);
-    expect(read()).toEqual(["uuid-SAP-1", "uuid-SAP-2"]);
-    calls.length = 0;
-    await sync(live().ctx as never, db, 2);
-    expect(read()).toEqual(["uuid-SAP-3", "uuid-SAP-1"]);
   });
 
   it("keeps the triage post when the customer post fails, and does not repost it on the next tick", async () => {
@@ -502,5 +545,47 @@ describe("linear-sync against the relay (mocked fetch)", () => {
     expect(posts()).toHaveLength(2);
     expect(emitted).toHaveLength(2);
     expect(new Set(emitted.map((e) => e.id)).size).toBe(2);
+  });
+
+  it("Resolved moves the issue On You without reading Linear, once", async () => {
+    const id = await newOnHold(1);
+    const { ctx, emitted } = live();
+    const moved = await resolveByHand(
+      ctx as never,
+      db,
+      "C0TRIAGE001",
+      await getIssue(db, id),
+      "U0CLICKER1",
+    );
+    expect(moved?.status).toBe("on_you");
+    expect(calls.filter((c) => c.tool)).toHaveLength(0);
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].args).toMatchObject({
+      channel: "C0TRIAGE001",
+      threadTs: "1790889356.001",
+      text: "Marked resolved by <@U0CLICKER1> (<https://linear.app/x/issue/SAP-1|SAP-1>). Reply to the customer.",
+    });
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: "issue.engineering_resolved",
+        id: `issue.engineering_resolved:${await keyOf(id, "SAP-1", "resolved")}`,
+        payload: expect.objectContaining({
+          linearIdentifier: "SAP-1",
+          linearState: "Resolved in Slack",
+        }),
+      }),
+    ]);
+
+    // A second click finds it On You and does nothing.
+    const again = await resolveByHand(
+      ctx as never,
+      db,
+      "C0TRIAGE001",
+      await getIssue(db, id),
+      "U0CLICKER1",
+    );
+    expect(again).toBeNull();
+    expect(posts()).toHaveLength(1);
+    expect(emitted).toHaveLength(1);
   });
 });

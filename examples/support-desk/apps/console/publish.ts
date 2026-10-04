@@ -2,13 +2,13 @@
  * `pnpm run console:publish`: build the Console and publish it to the org-only App Link
  * `<fleetId>-console`. Running it again republishes to the same link.
  *
- * Three REST calls (create or update the link with its env map, upload the bundle, publish). The
- * env map carries only CONSOLE_API_KEY, the operator's key taken from this shell's
- * SAPIOM_API_KEY and never printed. The platform separately injects its own read-only (org.read)
- * SAPIOM_API_KEY at runtime; the Console writes with the operator key. Setting `env` replaces the
- * whole map, so a key dropped here is gone from the next wake.
+ * Three REST calls (create or update the link, upload the bundle, publish). The link carries no
+ * key: the platform injects its own runtime SAPIOM_API_KEY into every wake, and on an org-only
+ * link that key can write as the publisher, which is all the Console needs. The env map is sent
+ * empty on purpose: setting `env` replaces the whole map, so a republish also drops the
+ * CONSOLE_API_KEY an older version of this script stored.
  *
- * Needs SAPIOM_API_KEY in this shell: an org key with write access for the target org.
+ * Needs SAPIOM_API_KEY in this shell only to authenticate these calls; it is not stored.
  */
 import { readFileSync } from "node:fs";
 
@@ -66,11 +66,10 @@ async function main() {
     name: NAME,
     description:
       "Run the support desk: tickets with Approve, Escalate, Dismiss, Take and Close, accounts, knowledge, settings and the fleet's health.",
-    // The platform reserves SAPIOM_API_KEY and injects its own org.read runtime key; the Console's
-    // switches, Run now and Replay need write access, so the operator's key rides under its own name.
-    env: { CONSOLE_API_KEY: key },
+    // No key rides along: the platform's injected runtime key is the Console's credential.
+    env: {},
   });
-  // The server holds an org key; it must never be reachable by anyone outside the org.
+  // The runtime key writes as the publisher; the link must never be reachable outside the org.
   if (link.visibility !== "organization")
     throw new Error(
       `app link ${SLUG} is '${link.visibility}', not organization-only; refusing to publish`,

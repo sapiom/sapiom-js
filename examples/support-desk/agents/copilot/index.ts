@@ -13,6 +13,9 @@
  * the card has a 15 s budget. A retry still never drafts twice: the stored draft is keyed on the
  * event's causationId. The decision and its effects are separate steps so a failed effect retries
  * without the committed decision reading as someone else's.
+ *
+ * A posted draft, an Approve and a Dismiss each change what the controller waits on (no draft,
+ * draft pending, customer waiting), so each resets the issue's controller timer (`_shared/timers.ts`).
  */
 import {
   defineAgent,
@@ -68,6 +71,7 @@ import {
   showWorking,
   update,
 } from "../../_shared/slack";
+import { rescheduleIssue } from "../../_shared/timers";
 import {
   DRAFT_FAILED_NOTE,
   DraftOutput,
@@ -266,9 +270,7 @@ async function requestDraft(
 }
 
 function isMissingToolCall(err: unknown): err is { response: unknown } {
-  return (
-    err instanceof Error && err.name === "LlmStructuredOutputMissingError"
-  );
+  return err instanceof Error && err.name === "LlmStructuredOutputMissingError";
 }
 
 /**
@@ -497,7 +499,9 @@ const receive = defineStep({
     const trigger = DraftTrigger.safeParse(input);
     if (!trigger.success)
       return terminate({ skipped: "neither an issue event nor a click" });
-    return draftReply(trigger.data, ctx);
+    const out = await draftReply(trigger.data, ctx);
+    await db(ctx, (d) => rescheduleIssue(d, ctx, trigger.data.issueId));
+    return out;
   },
 });
 
@@ -541,6 +545,7 @@ const decide = defineStep({
             ts: click.container?.message_ts,
           },
         );
+        await rescheduleIssue(db, ctx, issueNow.id);
         return terminate({
           draftId: dismissed.draft.id,
           changed: dismissed.changed,
@@ -663,6 +668,7 @@ const apply = defineStep({
         channel: click.container?.channel_id,
         ts: click.container?.message_ts,
       });
+      await rescheduleIssue(db, ctx, issue.id);
       return terminate(out);
     });
   },

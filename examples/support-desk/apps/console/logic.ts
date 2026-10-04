@@ -228,14 +228,9 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
       "issues (Linear link, on_hold), messages, runs, events_log; creates the Linear issue, replies in both threads",
   },
   controller: {
-    emits: ["issue.nudged"],
+    emits: ["issue.nudged", "issue.engineering_resolved"],
     writes:
-      "nudges, runs, events_log; posts nudges in triage threads, DMs on-call and mentions the support group when an issue escalates",
-  },
-  "linear-sync": {
-    emits: ["issue.engineering_resolved"],
-    writes:
-      "issues (status, linear_checked_at, card_dirty), messages, runs, events_log; reads Linear; posts in triage threads",
+      "nudges, issues (timer, status, linear_checked_at, card_dirty), messages, runs, events_log; runs per ticket when its timer fires; posts nudges in triage threads, DMs on-call and mentions the support group when an issue escalates, reads Linear for On Hold tickets",
   },
   "urgent-pager": {
     emits: [],
@@ -255,6 +250,7 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
 
 /** What the agent listens to, from fleet.json `triggers`. */
 export function listensTo(key: string): string[] {
+  if (key === CONTROLLER) return ["per-ticket timers (schedule_once)"];
   return wantedTriggers(key).map(triggerLabel);
 }
 

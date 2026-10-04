@@ -1038,6 +1038,94 @@ describe("intake agent", () => {
     expect(closedBy).toHaveLength(1);
   });
 
+  describe("timers and Resolved", () => {
+    async function openedBug() {
+      const { output } = await run(
+        intakeFixture("message-created.bug.json").payload,
+        makeCtx("exec-bug", JEV.bug).ctx,
+      );
+      return output.issueId as string;
+    }
+    function click(verb: string, issueId: string) {
+      const c = structuredClone(
+        fixture("slack/block-actions.issue-close.json").payload,
+      ) as { actions: { action_id: string; value: string }[] };
+      c.actions[0].action_id = `issue.${verb}`;
+      c.actions[0].value = issueId;
+      return c;
+    }
+    async function escalated(issueId: string) {
+      await updateIssue(db, issueId, {
+        linearIssueId: "uuid-SAP-7",
+        linearIdentifier: "SAP-7",
+        linearUrl: "https://linear.app/x/issue/SAP-7",
+      });
+      await setStatus(db, issueId, "on_hold");
+    }
+
+    it("a new ticket gets a timer and Close clears it", async () => {
+      const issueId = await openedBug();
+      expect((await getIssue(db, issueId)).nextTickId).toMatch(/^local:/);
+      await run(click("close", issueId), makeCtx("exec-close").ctx);
+      expect(await getIssue(db, issueId)).toMatchObject({
+        status: "closed",
+        nextTickId: null,
+        nextTickAt: null,
+      });
+    });
+
+    it("Resolved moves an On Hold ticket On You, posts who resolved it, and a second click does nothing", async () => {
+      const issueId = await openedBug();
+      await escalated(issueId);
+      const c = makeCtx("exec-resolve");
+      const out = await run(click("resolve", issueId), c.ctx);
+      expect(out.output).toMatchObject({
+        outcome: "resolve",
+        changed: true,
+        status: "on_you",
+      });
+      expect(c.slack("chat.postMessage")).toEqual([
+        expect.objectContaining({
+          channel: "C0TRIAGE001",
+          text: "Marked resolved by <@U0TEAMMATE1> (<https://linear.app/x/issue/SAP-7|SAP-7>). Reply to the customer.",
+        }),
+      ]);
+      expect(c.emitted.map((e) => e.type)).toEqual([
+        "issue.engineering_resolved",
+      ]);
+      // The card is redrawn without the Resolved button.
+      const card = c.slack("chat.update").at(-1)!;
+      expect(JSON.stringify(card.blocks)).not.toContain("issue.resolve");
+      expect((await getIssue(db, issueId)).cardDirty).toBe(false);
+
+      const again = makeCtx("exec-resolve-2");
+      expect(
+        (await run(click("resolve", issueId), again.ctx)).output,
+      ).toMatchObject({ changed: false, status: "on_you" });
+      expect(again.slack("chat.postMessage")).toEqual([]);
+      expect(again.emitted).toEqual([]);
+    });
+
+    it("a customer message on an On Hold ticket reads its Linear issue", async () => {
+      const issueId = await openedBug();
+      await escalated(issueId);
+      const fup = makeCtx("exec-fup");
+      await run(
+        intakeFixture("message-created.follow-up.json").payload,
+        fup.ctx,
+      );
+      expect(
+        fup.logs.filter((l) => l.msg.startsWith("linear get_issue")),
+      ).toHaveLength(1);
+      // The local trace's Linear stub answers Todo: the ticket stays On Hold, the read is stamped.
+      expect(await getIssue(db, issueId)).toMatchObject({
+        status: "on_hold",
+        linearState: "Todo",
+      });
+      expect((await getIssue(db, issueId)).linearCheckedAt).not.toBeNull();
+    });
+  });
+
   describe("desks", () => {
     const bugIn = (channel: string, eventId = "Ev0DESKBUG1") => {
       const p = structuredClone(
@@ -1573,7 +1661,7 @@ describe("noteOpenLinear against the relay (mocked fetch)", () => {
       expect.objectContaining({
         args: {
           issueId: "uuid-SAP-9",
-          body: "Support issue #41 was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.",
+          body: "Support desk ticket 41 was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.",
         },
       }),
     ]);

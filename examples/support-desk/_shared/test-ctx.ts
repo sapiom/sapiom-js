@@ -41,6 +41,53 @@ export interface Emitted {
   id?: string;
 }
 
+/** One call the fake schedules client saw. */
+export interface ScheduleCall {
+  op: "create" | "cancel";
+  id: string;
+  at?: string;
+  input?: unknown;
+  definition?: string;
+}
+
+/**
+ * A fake `@sapiom/tools` `schedules` client: records each create and cancel. `pending()` is the
+ * set of schedules created and not cancelled.
+ */
+export function fakeSchedules() {
+  const calls: ScheduleCall[] = [];
+  let seq = 0;
+  const client = {
+    async create(spec: {
+      definition: string;
+      at?: string | Date;
+      input?: unknown;
+    }) {
+      const id = `sched-${++seq}`;
+      const at = spec.at instanceof Date ? spec.at.toISOString() : spec.at;
+      calls.push({
+        op: "create",
+        id,
+        at,
+        input: spec.input,
+        definition: spec.definition,
+      });
+      return { id, kind: "schedule_once", status: "active" } as never;
+    },
+    async cancel(id: string) {
+      calls.push({ op: "cancel", id });
+      return { id, status: "disabled" } as never;
+    },
+  };
+  const pending = () =>
+    calls.filter(
+      (c) =>
+        c.op === "create" &&
+        !calls.some((x) => x.op === "cancel" && x.id === c.id),
+    );
+  return { client, calls, pending };
+}
+
 export function fakeCtx(
   opts: {
     isLocalTrace?: boolean;
@@ -69,6 +116,7 @@ export function fakeCtx(
             };
           },
         };
+  const schedules = fakeSchedules();
   const ctx = {
     executionId: opts.executionId ?? "exec-test",
     agentName: "test-agent",
@@ -79,7 +127,7 @@ export function fakeCtx(
       error: log("error"),
       debug: log("debug"),
     },
-    sapiom: { events } as never,
+    sapiom: { events, schedules: schedules.client } as never,
   };
-  return { ctx, emitted, logs };
+  return { ctx, emitted, logs, schedules };
 }

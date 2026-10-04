@@ -43,6 +43,9 @@ const issue: Issue = {
   linearState: null,
   onHoldAt: null,
   cardDirty: false,
+  linearCheckedAt: null,
+  nextTickId: null,
+  nextTickAt: null,
   createdAt: now,
   updatedAt: now,
   closedAt: null,
@@ -123,6 +126,17 @@ describe("issueCard", () => {
     expect(buttons(issueCard({ ...issue, status: "closed" }, account))).toEqual(
       [],
     );
+  });
+
+  it("offers Resolved only while the issue is On Hold", () => {
+    expect(
+      buttons(
+        issueCard({ ...issue, ownerSlackId: "U1", status: "on_hold" }, account),
+      ),
+    ).toMatchObject([
+      { action_id: "issue.resolve", value: "iss-1" },
+      { action_id: "issue.close", value: "iss-1" },
+    ]);
   });
 
   it("escapes mrkdwn in customer text", () => {
