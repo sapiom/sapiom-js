@@ -1,6 +1,6 @@
 {
   "type": "issue.escalate",
-  "description": "Escalate a closed issue (localSeed seeds it closed on a local trace). Links Linear and replies, but does not move to on_hold or emit.",
+  "description": "Escalate a closed issue (localSeed seeds it closed on a local trace). A closed issue is not escalated: one triage line, no Linear issue, no emit.",
   "payload": {
     "issueId": "a1b2c3d4-0000-4000-8000-0000000000a1",
     "accountId": "a1b2c3d4-0000-4000-8000-000000000001",
