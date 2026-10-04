@@ -556,7 +556,6 @@ describe("escalation against the relay (mocked fetch)", () => {
       linearUrl: null,
     });
 
-    // The same causation again posts nothing.
     await escalate(ctx as never, db, input());
     expect(calls.filter((c) => c.method === "chat.postMessage")).toHaveLength(
       1,
