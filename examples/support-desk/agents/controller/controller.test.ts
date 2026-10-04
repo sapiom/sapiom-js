@@ -156,6 +156,15 @@ describe("controller", () => {
         `<https://slack.com/archives/C0TRIAGE001/p${String(p.threadTs).replace(".", "")}|#`,
       );
     }
+    expect(
+      first.posts
+        .map((p) => (p.blocks as { block_id: string }[])[0].block_id)
+        .sort(),
+    ).toEqual(
+      (first.done.output!.nudged as { issueId: string; key: string }[])
+        .map((n) => `sylon:nudge:${n.issueId}:${n.key}`)
+        .sort(),
+    );
     expect(first.emitted.map((e) => e.type)).toEqual(
       Array(6).fill("issue.nudged"),
     );
@@ -474,6 +483,9 @@ describe("controller", () => {
       expect(thread.channel).toBe("C0TRIAGE001");
       expect(thread.threadTs).toBe(issue.triageRootTs);
       expect(thread.text).toContain("<!subteam^S0SUPPORT1>");
+      expect((thread.blocks as { block_id: string }[])[0].block_id).toBe(
+        `sylon:nudge:${issue.id}:escalate:1`,
+      );
 
       const second = await runController("exec-2");
       expect(dms(second)).toHaveLength(0);

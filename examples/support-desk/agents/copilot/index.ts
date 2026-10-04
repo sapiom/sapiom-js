@@ -429,6 +429,7 @@ async function draftReply(
           threadTs: triageRootTs,
           text: cardText(current),
           blocks: copilotCard(own, current, titles),
+          key: `draft-card:${own.id}`,
         });
         own = await setDraftCard(tx, own.id, card);
         posted = true;
@@ -461,7 +462,6 @@ async function draftReply(
       cardTs: published.own.cardTs,
       status: published.own.status,
       confidence,
-      // False only for the run that posted the card.
       reused: !published.posted,
     });
   });
@@ -607,6 +607,7 @@ const apply = defineStep({
             channel: customerChannel,
             threadTs: customerRootTs,
             text: escapeMrkdwn(draft.text),
+            key: sourceEventId,
           });
           return (
             await linkMessage(tx, {

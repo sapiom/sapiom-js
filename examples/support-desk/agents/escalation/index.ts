@@ -199,6 +199,7 @@ async function replyOnce(
     channel: input.channel,
     threadTs: input.threadTs,
     text: input.text,
+    key: input.key,
   });
   await linkMessage(db, {
     issueId: input.issueId,

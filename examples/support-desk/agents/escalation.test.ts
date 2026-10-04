@@ -269,6 +269,12 @@ describe("escalation against the relay (mocked fetch)", () => {
     );
     expect(posts[1].args.text).toBe(CUSTOMER_REPLY);
     expect(posts[1].args.text).not.toMatch(/linear\.app|SAP-\d+/);
+    expect(
+      posts.map((p) => (p.args.blocks as { block_id: string }[])[0].block_id),
+    ).toEqual([
+      `sylon:escalation:${issueId}:triage`,
+      `sylon:${customerReplyKey(issueId)}`,
+    ]);
     expect(save.args.description).toContain(
       "**Requested by:** Dana (U0TEAMMATE1)",
     );
