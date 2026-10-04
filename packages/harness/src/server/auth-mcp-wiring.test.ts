@@ -376,6 +376,7 @@ describe("Agent Studio MCP authentication wiring", () => {
 
   it("resumes a Studio project session with its persisted identity after switching accounts", async () => {
     authFixture.credential = credential("key-a");
+    await rm(join(projectRoot, "sapiom.json"));
     await boot({
       machineId: "machine-test",
       identity: {
@@ -386,7 +387,6 @@ describe("Agent Studio MCP authentication wiring", () => {
         source: "cached",
       },
     });
-    await rm(join(projectRoot, "sapiom.json"));
     const settings = await fetch(
       `http://127.0.0.1:${server!.port}/api/settings`,
       {
@@ -466,8 +466,8 @@ describe("Agent Studio MCP authentication wiring", () => {
   });
 
   it("rejects a persisted session when a nested project takes ownership of its cwd", async () => {
-    await boot({ machineId: "machine-test" });
     await rm(join(projectRoot, "sapiom.json"));
+    await boot({ machineId: "machine-test" });
     const settings = await fetch(
       `http://127.0.0.1:${server!.port}/api/settings`,
       {
