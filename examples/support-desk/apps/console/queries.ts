@@ -1,10 +1,19 @@
 /**
  * The desk-scoped reads behind the Console's board, ticket and account drawers, metrics and
- * failed-events views. Plain SQL, kept apart from `server.ts` (which starts a listener on import)
- * so the scoping can be tested on pg-mem. Every query here takes the selected desk's id; none
- * returns another desk's issues.
+ * failed-events views, plus the `sla` key's reads and writes. Plain SQL, kept apart from
+ * `server.ts` (which starts a listener on import) so it can be tested on pg-mem. Every desk query
+ * takes the selected desk's id; none returns another desk's issues.
  */
+import { z } from "zod/v4";
+
+import {
+  ConfigSchemas,
+  deleteConfig,
+  getConfigOr,
+  setConfig,
+} from "../../_shared/config";
 import type { Db } from "../../_shared/db";
+import type { Sla } from "../../_shared/sla";
 
 export async function statusCounts(
   d: Db,
@@ -272,3 +281,38 @@ export async function receiptDesks(
   );
   return new Map(rows.map((r) => [r.receipt_id, r.desk_id]));
 }
+
+/** The customer-thread messages of the board's issues, for their SLA clocks. */
+export async function issueMessages(d: Db, issueIds: readonly string[]) {
+  if (!issueIds.length) return [];
+  return d.query<{
+    issue_id: string;
+    direction: string;
+    ts: string | null;
+    created_at: Date;
+  }>(
+    `select issue_id, direction, ts, created_at from messages
+      where issue_id = any($1) and direction <> 'internal'`,
+    [[...issueIds]],
+  );
+}
+
+// Attribute saved settings to the Console so their origin remains identifiable.
+export const SLA_EDITOR = "console";
+
+export const readSla = (d: Db): Promise<Sla | null> =>
+  getConfigOr(d, "sla", null);
+
+// Reject invalid settings before writing so a bad edit preserves the configured SLA.
+export async function saveSla(
+  d: Db,
+  body: unknown,
+): Promise<{ ok: true; sla: Sla } | { ok: false; error: string }> {
+  const parsed = ConfigSchemas.sla.safeParse(body);
+  if (!parsed.success)
+    return { ok: false, error: z.prettifyError(parsed.error) };
+  await setConfig(d, "sla", parsed.data, SLA_EDITOR);
+  return { ok: true, sla: parsed.data };
+}
+
+export const clearSla = (d: Db): Promise<void> => deleteConfig(d, "sla");

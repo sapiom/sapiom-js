@@ -919,6 +919,23 @@
               </div>
             </div>
           </section>
+
+          <section class="card" id="sla">
+            <h2>SLA <span class="note muted">every desk</span></h2>
+            <p class="hint">
+              First- and next-response targets per priority, in minutes; with
+              <code>businessHours: true</code> a target counts only minutes
+              inside the business window. Set, they replace the desks' nudge
+              minutes.
+            </p>
+            <textarea id="sla-json" spellcheck="false"></textarea>
+            <div class="row">
+              <button id="sla-save" class="mut primary">Save</button>
+              <button id="sla-clear" class="mut">Use nudge minutes</button>
+              <span id="sla-state" class="hint"></span>
+            </div>
+            <div id="sla-error" class="bad" style="white-space: pre-wrap"></div>
+          </section>
         </div>
       </section>
 
@@ -1342,15 +1359,15 @@
           : `open, ${rows.length}`;
         const selectedId = drawer?.kind === "ticket" ? drawer.id : null;
         $("board").innerHTML =
-          `<thead><tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>Owner</th><th>Draft</th><th>Linear</th><th>Age</th></tr></thead><tbody>` +
+          `<thead><tr><th>#</th><th>Title</th><th>Account</th><th>Status</th><th>Priority</th><th>SLA</th><th>Owner</th><th>Draft</th><th>Linear</th><th>Age</th></tr></thead><tbody>` +
           (rows.length
             ? rows
                 .map(
                   (i) =>
-                    `<tr tabindex="0" data-ticket="${esc(i.id)}" aria-selected="${i.id === selectedId}"><td class="num">#${i.number}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td><a href="#" data-account="${esc(i.accountId)}">${esc(i.account)}</a></td><td>${statusPill(i.status)}</td><td>${prio(i.priority)}</td><td>${i.owner ? esc(i.owner) : none}</td><td>${i.draft ? esc(i.draft) : none}</td><td>${linearCell(i)}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
+                    `<tr tabindex="0" data-ticket="${esc(i.id)}" aria-selected="${i.id === selectedId}"><td class="num">#${i.number}</td><td class="title"><div class="clamp" title="${esc(i.title)}">${esc(i.title)}</div></td><td><a href="#" data-account="${esc(i.accountId)}">${esc(i.account)}</a></td><td>${statusPill(i.status)}</td><td>${prio(i.priority)}</td><td class="${i.slaLabel?.includes("breached") ? "bad" : "muted"}">${i.slaLabel ? esc(i.slaLabel) : none}</td><td>${i.owner ? esc(i.owner) : none}</td><td>${i.draft ? esc(i.draft) : none}</td><td>${linearCell(i)}</td><td class="num muted">${age(i.createdAt)}</td></tr>`,
                 )
                 .join("")
-            : `<tr><td colspan="9" class="muted">${filter ? "No tickets with this status." : "No open tickets."}</td></tr>`) +
+            : `<tr><td colspan="10" class="muted">${filter ? "No tickets with this status." : "No open tickets."}</td></tr>`) +
           "</tbody>";
       }
       $("board").onclick = (e) => {
@@ -1678,6 +1695,109 @@
         $("set-digest").textContent = cronText(s.digest);
         $("set-notify").checked = f["linear_sync.notify_customer"];
       }
+      /** Prefilled when `sla` is unset: the README example. */
+      const SLA_EXAMPLE = {
+        businessHours: {
+          timeZone: "America/New_York",
+          days: [1, 2, 3, 4, 5],
+          start: "09:00",
+          end: "17:00",
+        },
+        targets: {
+          urgent: {
+            firstResponseMinutes: 15,
+            nextResponseMinutes: 15,
+            businessHours: false,
+          },
+          high: {
+            firstResponseMinutes: 60,
+            nextResponseMinutes: 60,
+            businessHours: false,
+          },
+          normal: {
+            firstResponseMinutes: 480,
+            nextResponseMinutes: 480,
+            businessHours: true,
+          },
+          low: {
+            firstResponseMinutes: 480,
+            nextResponseMinutes: 480,
+            businessHours: true,
+          },
+        },
+      };
+      // A tab switch must not replace edits not yet saved, nor an older response a newer one.
+      let slaDirty = false;
+      let slaSeq = 0;
+      // Bumped on every keystroke, so a save reloads the editor only if nothing was typed meanwhile.
+      let slaRev = 0;
+      $("sla-json").oninput = () => {
+        slaDirty = true;
+        slaRev++;
+      };
+      // The label follows the server, even when the editor keeps the operator's text.
+      function showSlaState(sla) {
+        $("sla-state").textContent = sla
+          ? "in use"
+          : "not set: the desks' nudge minutes apply (example shown)";
+      }
+      async function loadSla(force = false) {
+        if (slaDirty && !force) return;
+        const seq = ++slaSeq;
+        const rev = slaRev;
+        $("sla-error").textContent = "";
+        try {
+          const { sla } = await get("/api/sla");
+          if (seq !== slaSeq) return;
+          showSlaState(sla);
+          // Typing during the GET wins even over a forced reload.
+          if (slaRev !== rev || (slaDirty && !force)) return;
+          $("sla-json").value = JSON.stringify(sla || SLA_EXAMPLE, null, 2);
+          slaDirty = false;
+        } catch (e) {
+          $("sla-error").textContent = e.message;
+        }
+      }
+      /**
+       * One SLA write at a time: a PUT and a DELETE in flight together could land in either order and
+       * bring back a cleared SLA. Uses the page's busy flag, which syncButtons would otherwise undo.
+       */
+      async function slaWrite(request, done) {
+        const buttons = [$("sla-save"), $("sla-clear")];
+        for (const b of buttons) b.dataset.busy = "1";
+        syncButtons();
+        const rev = slaRev;
+        $("sla-error").textContent = "";
+        try {
+          try {
+            showSlaState((await request()).sla);
+          } catch (e) {
+            $("sla-error").textContent = e.message;
+            return;
+          }
+          log(done);
+          if (slaRev === rev) await loadSla(true);
+          refreshBoard();
+        } finally {
+          for (const b of buttons) b.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("sla-save").onclick = () => {
+        let body;
+        try {
+          body = JSON.parse($("sla-json").value);
+        } catch {
+          $("sla-error").textContent = "not valid JSON";
+          return;
+        }
+        return slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved");
+      };
+      $("sla-clear").onclick = () =>
+        slaWrite(
+          () => post("/api/sla", undefined, "DELETE"),
+          "SLA removed: the desks' nudge minutes apply",
+        );
       async function loadSettings() {
         const forDesk = desk;
         try {
@@ -2051,6 +2171,8 @@
         // Before loadDesks resolves no desk is selected; its continuation loads these.
         if (name === "kb" && desksReady) loadKb();
         if (name === "settings" && desksReady) loadSettings();
+        // Fleet-wide, so it loads even when the desk settings fail or no desk is ready yet.
+        if (name === "settings") loadSla();
       }
       for (const t of TABS) $(`tab-${t}`).onclick = () => showTab(t);
 

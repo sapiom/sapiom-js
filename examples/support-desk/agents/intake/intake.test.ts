@@ -28,7 +28,7 @@ import {
   updateIssue,
   type Issue,
 } from "../../_shared/issues";
-import { fakeCtx } from "../../_shared/test-ctx";
+import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import {
   decide,
   IS_ISSUE_MIN,
@@ -427,6 +427,23 @@ describe("intake agent", () => {
     expect((await run(close, c2.ctx)).output).toMatchObject({ changed: false });
     expect(c2.slack("chat.postMessage")).toHaveLength(0);
     expect(c2.logs.some((l) => l.msg.startsWith("linear "))).toBe(false);
+  });
+
+  it("with sla set, the first card shows the first-response deadline", async () => {
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    const bug = makeCtx("exec-sla", JEV.bug);
+    await run(intakeFixture("message-created.bug.json").payload, bug.ctx);
+    const card = bug.slack("chat.postMessage").find((p) => !p.threadTs)!;
+    expect(JSON.stringify(card.blocks)).toContain(
+      "*First response due:* <!date^",
+    );
+    // A follow-up redraws the card through refreshCard, still before any team reply.
+    const fup = makeCtx("exec-sla-fup");
+    await run(intakeFixture("message-created.follow-up.json").payload, fup.ctx);
+    const [redrawn] = fup.slack("chat.update");
+    expect(JSON.stringify(redrawn.blocks)).toContain(
+      "*First response due:* <!date^",
+    );
   });
 
   it("a follow-up on an On Hold issue stays On Hold", async () => {

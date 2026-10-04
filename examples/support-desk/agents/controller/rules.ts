@@ -1,5 +1,8 @@
 /** Plain rows and an explicit time keep threshold edges and round deduplication testable without a database. */
 import type { Direction, DraftStatus, IssueStatus } from "../../_shared/issues";
+import { byThreadOrder, slaDeadline, type Sla } from "../../_shared/sla";
+
+export { byThreadOrder, postedAt } from "../../_shared/sla";
 
 /** The kinds `_shared/blocks.ts` `nudge()` labels. */
 export const NUDGE_KINDS = [
@@ -17,6 +20,8 @@ export interface IssueRow {
   triageRootTs: string | null;
   /** The issue's desk, which sets its threshold in `RuleInput.deskMinutes`. */
   deskId?: string | null;
+  /** Keep priority in the snapshot so scan and send can evaluate the same SLA target. */
+  priority?: string | null;
   createdAt: Date;
 }
 
@@ -75,6 +80,8 @@ export interface RuleInput {
   deskMinutes?: Readonly<Record<string, number>>;
   /** Gap before each repeat round: after round n, `repeatMinutes[n - 1]`; the last gap repeats, `[]` = once. */
   repeatMinutes: readonly number[];
+  /** Response targets per priority; when set they replace `minutes` and `deskMinutes`. */
+  sla?: Sla | null;
   /**
    * Whether Jev verdicts count (default true). With the check off, a `skip:` record no longer
    * silences `customer_waiting`; each sent round still dedups its own key.
@@ -98,18 +105,6 @@ const newest = <T extends { createdAt: Date }>(rows: T[]): T | undefined =>
       !best || r.createdAt.getTime() > best.createdAt.getTime() ? r : best,
     undefined,
   );
-
-/**
- * Thread order: by Slack `ts`, so an event stored late still sorts where it was posted. Falls back
- * to the insert time only for a message without a `ts`.
- */
-export function postedAt(m: MessageRow): number {
-  const ts = m.ts === null ? NaN : Number(m.ts);
-  return Number.isFinite(ts) ? ts * 1000 : m.createdAt.getTime();
-}
-
-export const byThreadOrder = (a: MessageRow, b: MessageRow): number =>
-  postedAt(a) - postedAt(b);
 
 // Legacy keys count as round 1 so existing nudge history still controls repeat timing.
 function lastRound(
@@ -141,10 +136,23 @@ export function dueNudges(input: RuleInput): Nudge[] {
 
   for (const issue of input.issues) {
     if (issue.status === "closed" || !issue.triageRootTs) continue;
+    // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
+    const thread = (messages.get(issue.id) ?? [])
+      .filter((m) => m.direction !== "internal")
+      .sort(byThreadOrder);
     const thresholdMs =
       ((issue.deskId ? input.deskMinutes?.[issue.deskId] : undefined) ??
         input.minutes) * 60_000;
-    const old = (t: Date) => input.now.getTime() - t.getTime() >= thresholdMs;
+    const sla = input.sla;
+    const clock = thread.some((m) => m.direction === "agent")
+      ? "next_response"
+      : "first_response";
+    // Only the threshold moves with the SLA; each rule keeps its own start time.
+    const old = sla
+      ? (t: Date) =>
+          input.now.getTime() >=
+          slaDeadline(sla, issue.priority, clock, t).getTime()
+      : (t: Date) => input.now.getTime() - t.getTime() >= thresholdMs;
     const issueSent = sent.get(issue.id) ?? [];
     const add = (kind: NudgeKind, refId: string) => {
       const skip = skipKey(kind, refId);

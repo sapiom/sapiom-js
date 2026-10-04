@@ -54,6 +54,7 @@ import {
   type LinearIssue,
 } from "../../_shared/linear";
 import { resolution } from "../linear-sync/rules";
+import { issueSla } from "../../_shared/sla";
 import { permalink, post, update, userInfo } from "../../_shared/slack";
 
 export const AGENT = agentSlug("escalation");
@@ -465,7 +466,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   };
 }
 
-/** Redraw the triage card from the row; the card is a pure function of the issue and its account. */
+/** Recompute the SLA clock before redrawing so the card reflects current targets and thread history. */
 async function redrawCard(
   ctx: Ctx,
   db: Db,
@@ -478,7 +479,7 @@ async function redrawCard(
     channel: triageChannel,
     ts: issue.triageRootTs,
     text: issueCardText(issue, account),
-    blocks: issueCard(issue, account),
+    blocks: issueCard(issue, account, await issueSla(db, issue)),
   });
 }
 

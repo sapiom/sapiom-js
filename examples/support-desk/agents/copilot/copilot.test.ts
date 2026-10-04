@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../../fixtures/index";
+import { setConfig } from "../../_shared/config";
 import {
   localFleetDb,
   resetSharedDb,
@@ -27,7 +28,7 @@ import {
 } from "../../_shared/issues";
 import { localFetcher, setDocsFetcher } from "../../_shared/docs";
 import { createArticle } from "../../_shared/kb";
-import { fakeCtx } from "../../_shared/test-ctx";
+import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import {
   DRAFT_FAILED_NOTE,
   MAX_MESSAGE_CHARS,
@@ -654,6 +655,30 @@ describe("draft path", () => {
 });
 
 describe("click path", () => {
+  it("with sla set, the redrawn issue card shows the running clock", async () => {
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    // Posted after the approved reply will be, so the customer spoke last.
+    await linkMessage(db, {
+      issueId: FIXTURE_ISSUE,
+      source: "slack",
+      sourceEventId: "EvSlaLater",
+      direction: "customer",
+      slack: { channel: "C0CUSTOMER1", ts: "9999999999.000100" },
+      userId: "U0CUSTOMER1",
+      text: "still broken",
+    });
+    const t = ctxFor("exec-approve-sla");
+    await runAgent(
+      fixture("slack/block-actions.draft-approve.json").payload,
+      t.ctx,
+    );
+    const [card] = t.slack("chat.update");
+    expect(card.ts).toBe("1790889400.000200");
+    expect(JSON.stringify(card.blocks)).toContain(
+      "*Next response due:* <!date^",
+    );
+  });
+
   it("Approve posts the reply in the customer thread, moves to On Customer, and updates the card; a second click changes nothing", async () => {
     const click = fixture("slack/block-actions.draft-approve.json").payload;
     const t = ctxFor("exec-approve");

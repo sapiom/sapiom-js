@@ -22,7 +22,8 @@ import {
   updateIssue,
 } from "../_shared/issues";
 import { LinearRelayError } from "../_shared/linear";
-import { fakeCtx } from "../_shared/test-ctx";
+import { issueSla } from "../_shared/sla";
+import { EXAMPLE_SLA, fakeCtx } from "../_shared/test-ctx";
 import {
   LINEAR_PRIORITY,
   agent,
@@ -34,6 +35,12 @@ import {
   type EscalateInput,
 } from "./escalation/index";
 import { FLEET_ID, agentSlug } from "../_shared/fleet-id";
+
+// Wrapped so a test can see the redraw ask for the clock even when on hold stops it.
+vi.mock("../_shared/sla", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../_shared/sla")>();
+  return { ...real, issueSla: vi.fn(real.issueSla) };
+});
 
 type Directive = { kind: string; output?: Record<string, unknown> };
 const run = (input: unknown, ctx: unknown) =>
@@ -344,6 +351,18 @@ describe("escalation against the relay (mocked fetch)", () => {
       triageRootTs: "1790889366.000100",
     });
   }
+
+  it("with sla set, the redraw reads the issue's clock, which on hold stops", async () => {
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    vi.mocked(issueSla).mockClear();
+    await escalate(liveCtx().ctx as never, db, input());
+    expect(issueSla).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: issueId, status: "on_hold" }),
+    );
+    const card = calls.find((c) => c.method === "chat.update")!;
+    expect(JSON.stringify(card.args.blocks)).not.toContain("response");
+  });
 
   it("files the issue in its desk's Linear team and project and replies in its desk's triage channel", async () => {
     const issue = await issueOnDesk({

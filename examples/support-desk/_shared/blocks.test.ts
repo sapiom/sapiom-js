@@ -154,6 +154,26 @@ describe("issueCard", () => {
       textOf(issueCard({ ...linked, linearUrl: null }, account), "issue.facts"),
     ).toContain("*Linear:* SAP-12");
   });
+
+  it("adds the running SLA clock as a Slack date token", () => {
+    const dueAt = new Date("2026-10-01T00:15:00Z");
+    const facts = (sla: Parameters<typeof issueCard>[2], at = now) =>
+      textOf(issueCard(issue, account, sla, at), "issue.facts");
+    expect(facts({ kind: "first_response", dueAt })).toContain(
+      `*First response due:* <!date^${dueAt.getTime() / 1000}^{date_short_pretty} {time}|2026-10-01T00:15:00.000Z>`,
+    );
+    expect(facts({ kind: "next_response", dueAt })).toContain(
+      "*Next response due:* <!date^",
+    );
+    expect(facts({ kind: "first_response", dueAt }, dueAt)).toContain(
+      "*First response breached:* <!date^",
+    );
+  });
+
+  it("is unchanged without an SLA", () => {
+    expect(issueCard(issue, account, null)).toEqual(issueCard(issue, account));
+    expect(JSON.stringify(issueCard(issue, account))).not.toContain("response");
+  });
 });
 
 describe("draftCard", () => {

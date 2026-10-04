@@ -6,6 +6,7 @@
  * an agent with new buttons touches no existing agent.
  */
 import type { Account, Draft, Issue, IssueStatus } from "./issues";
+import type { SlaDue } from "./sla";
 import { permalink, type Block } from "./slack";
 
 export const ACTION_OWNERS = ["issue", "draft"] as const;
@@ -118,10 +119,23 @@ export function issueCardText(issue: Issue, account: Account): string {
 }
 
 /**
- * The triage card for an issue: number, account, classification, status, owner; Take and Close.
- * The title links to the customer message and the Linear identifier to the Linear issue.
+ * The SLA fact. Slack's date token shows `dueAt` in each reader's own time zone; the ISO text after
+ * `|` is what a client that cannot render it shows.
  */
-export function issueCard(issue: Issue, account: Account): Block[] {
+function slaFact(sla: Pick<SlaDue, "kind" | "dueAt">, now: Date): string {
+  const what =
+    sla.kind === "first_response" ? "First response" : "Next response";
+  const state = sla.dueAt.getTime() <= now.getTime() ? "breached" : "due";
+  const unix = Math.floor(sla.dueAt.getTime() / 1000);
+  return `*${what} ${state}:* <!date^${unix}^{date_short_pretty} {time}|${sla.dueAt.toISOString()}>`;
+}
+
+export function issueCard(
+  issue: Issue,
+  account: Account,
+  sla?: Pick<SlaDue, "kind" | "dueAt"> | null,
+  now: Date = new Date(),
+): Block[] {
   const facts = [
     `*Status:* ${statusLabel(issue.status)}`,
     `*Category:* ${issue.category ?? "unclassified"}`,
@@ -134,6 +148,7 @@ export function issueCard(issue: Issue, account: Account): Block[] {
       `*Linear:* ${issue.linearUrl ? mrkdwnLink(issue.linearUrl, id) : id}`,
     );
   }
+  if (sla) facts.push(slaFact(sla, now));
   const title = escapeMrkdwn(issue.title ?? "(untitled)");
   const customer = customerLink(issue);
   const blocks: Block[] = [

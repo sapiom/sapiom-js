@@ -60,6 +60,7 @@ import {
   type Message,
 } from "../../_shared/issues";
 import { articleTitles } from "../../_shared/kb";
+import { issueSla } from "../../_shared/sla";
 import {
   type SlackCtx,
   post,
@@ -681,7 +682,7 @@ async function refreshIssueCard(
       channel: triage,
       ts: issue.triageRootTs,
       text: issueCardText(issue, account),
-      blocks: issueCard(issue, account),
+      blocks: issueCard(issue, account, await issueSla(db, issue)),
     });
   } catch (err) {
     ctx.logger.warn("issue card refresh failed; continuing", {

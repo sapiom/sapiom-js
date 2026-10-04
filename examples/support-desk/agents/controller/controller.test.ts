@@ -6,6 +6,7 @@ import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
 import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
   accountByChannel,
+  assign,
   createDraft,
   ensureAccount,
   linkMessage,
@@ -13,7 +14,7 @@ import {
   setStatus,
   setTriageRoot,
 } from "../../_shared/issues";
-import { fakeCtx } from "../../_shared/test-ctx";
+import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import { agent } from "./index";
 
 type Directive = {
@@ -365,6 +366,28 @@ describe("controller", () => {
     const again = await runController("exec-2");
     expect(again.scanned.kind).toBe("terminate");
     expect(again.posts).toHaveLength(0);
+  });
+
+  it("with sla set, scan and send both use the priority's target", async () => {
+    await setConfig(db, "sla", EXAMPLE_SLA, "test");
+    const urgent = await seedIssue(db, { title: "urgent" });
+    const normal = await seedIssue(db, { title: "normal" });
+    await db.query("update issues set priority = 'urgent' where id = $1", [
+      urgent.id,
+    ]);
+    // Owned, so only no_draft is left to nudge.
+    await assign(db, urgent.id, "U0OWNER01");
+    await assign(db, normal.id, "U0OWNER01");
+    await db.query(
+      "update issues set created_at = now() - interval '16 minutes'",
+    );
+    const r = await runController("exec-sla", { jevCheck: false });
+    // Distinct priorities must remain distinct through both scan and send.
+    expect(
+      (r.done.output!.nudged as { key: string }[]).map((n) => n.key),
+    ).toEqual([`no_draft:${urgent.id}:1`]);
+    expect(r.done.output!.resolved).toEqual([]);
+    expect(r.posts).toHaveLength(1);
   });
 
   describe("desks", () => {
