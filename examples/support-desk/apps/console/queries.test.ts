@@ -12,7 +12,7 @@ import {
 import { createArticle, listArticles } from "../../_shared/kb";
 import { resetBoard } from "../../_shared/reset";
 import { fakeCtx } from "../../_shared/test-ctx";
-import { cardChannelOf, scopeReceipts } from "./logic";
+import { scopeReceipts, triageCardUrl } from "./logic";
 import {
   deskIssue,
   metricIssues,
@@ -171,10 +171,18 @@ describe("card links", () => {
         { overwrite: true },
       )
     ).desk;
+    const root = issue.triageRootTs!.replace(".", "");
     const [row] = await recentIssues(db, moved.id);
-    expect(cardChannelOf(row, moved.triageChannel)).toBe("C0TESTTRI");
+    expect(triageCardUrl(row, moved.triageChannel)).toBe(
+      `https://slack.com/archives/C0TESTTRI/p${root}`,
+    );
     const one = (await deskIssue(db, moved.id, issue.number))!;
-    expect(cardChannelOf(one, moved.triageChannel)).toBe("C0TESTTRI");
+    expect(triageCardUrl(one, moved.triageChannel)).toBe(
+      `https://slack.com/archives/C0TESTTRI/p${root}`,
+    );
+    expect(triageCardUrl(one, moved.triageChannel, "17909999.000100")).toBe(
+      `https://slack.com/archives/C0TESTTRI/p17909999000100?thread_ts=${issue.triageRootTs}&cid=C0TESTTRI`,
+    );
   });
 
   it("read a database not yet migrated to 082 and fall back to the desk's channel", async () => {
@@ -193,8 +201,12 @@ describe("card links", () => {
     const [row] = await recentIssues(old, desk.id);
     expect(row).toMatchObject({ title: "old card", account: "Acme" });
     expect(row).not.toHaveProperty("triage_channel");
-    expect(cardChannelOf(row, "C0TESTTRI")).toBe("C0TESTTRI");
+    expect(triageCardUrl(row, "C0TESTTRI")).toBe(
+      "https://slack.com/archives/C0TESTTRI/p17909000000100",
+    );
     const one = (await deskIssue(old, desk.id))!;
-    expect(cardChannelOf(one, "C0TESTTRI")).toBe("C0TESTTRI");
+    expect(triageCardUrl(one, "C0TESTTRI")).toBe(
+      "https://slack.com/archives/C0TESTTRI/p17909000000100",
+    );
   });
 });
