@@ -36,7 +36,8 @@ our own runs on 2026-10-02.
    no other agent changes.
 5. **Outage.** Intake classifies it urgent; the on-call user gets a DM with the title and a link
    to the triage thread, about 50 s after the post.
-6. **Question.** Copilot picks the docs deploy page, fetches it live, and drafts the answer with
+6. **Question.** With `knowledge.docs_url` set to your docs site (an unset key means no docs at
+   all), copilot picks the docs deploy page, fetches it live, and drafts the answer with
    the page linked under Sources. Add a policy or answer in the Console's Knowledge tab first to
    show a team edit changing the next draft with no redeploy.
    Click **Approve**: the reply lands in the customer thread and the card shows who sent it.

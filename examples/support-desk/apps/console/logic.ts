@@ -16,6 +16,7 @@ export interface FleetProject {
   slug: string;
   optional?: boolean;
   smoke?: boolean;
+  manual?: boolean;
 }
 
 export type FleetTrigger =
@@ -39,12 +40,12 @@ export interface AttachedTrigger {
   definitionSlug?: string;
 }
 
-/** The agents the Console operates: every fleet.json project except the smoke pair. */
+/** The agents the Console operates: every fleet.json project except the smoke pair and the run-by-hand setup agent. */
 export const AGENTS: FleetProject[] = (
   fleet.projects as Omit<FleetProject, "slug">[]
 )
   .map((p) => ({ ...p, slug: agentSlug(p.key) }))
-  .filter((p) => !p.smoke);
+  .filter((p) => !p.smoke && !p.manual);
 /** `triggers` only. `smokeTriggers` are never attached from the Console. */
 export const TRIGGERS = fleet.triggers as FleetTrigger[];
 
@@ -219,7 +220,7 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
   copilot: {
     emits: ["issue.escalate"],
     writes:
-      "drafts, messages, issues (status, summary), doc_cache, runs, events_log; reads kb_articles and docs.sapiom.ai; posts draft cards in triage and the approved reply in the customer thread",
+      "drafts, messages, issues (status, summary), doc_cache, runs, events_log; reads kb_articles and the configured docs site (knowledge.docs_url); posts draft cards in triage and the approved reply in the customer thread",
   },
   escalation: {
     emits: ["issue.on_hold"],
@@ -283,7 +284,10 @@ export const TABLES: [string, string][] = [
     "kb_articles",
     "the team's policies and answers the copilot drafts from (one desk's or all desks'), edited in the Knowledge tab",
   ],
-  ["doc_cache", "docs.sapiom.ai pages the copilot fetched, kept for an hour"],
+  [
+    "doc_cache",
+    "docs pages the copilot fetched from knowledge.docs_url, kept for an hour",
+  ],
   [
     "events_log",
     "every domain event an agent emitted, with its engine receipt id",

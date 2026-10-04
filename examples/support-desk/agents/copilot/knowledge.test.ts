@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { DocEntry } from "../../_shared/docs";
 import type { KbArticle } from "../../_shared/kb";
 import { fakeCtx } from "../../_shared/test-ctx";
+import { deleteConfig, setConfig } from "../../_shared/config";
 import { localFleetDb } from "../../_shared/db";
 import { createArticle } from "../../_shared/kb";
 import { gatherKnowledge } from "./gather";
@@ -18,7 +19,7 @@ import {
 
 const entry = (n: number): DocEntry => ({
   title: `Page ${n}`,
-  url: `https://docs.sapiom.ai/p${n}`,
+  url: `https://docs.example.com/p${n}`,
   description: `about ${n}`,
 });
 const INDEX = [1, 2, 3, 4, 5].map(entry);
@@ -93,7 +94,7 @@ describe("buildSelectionPrompt", () => {
     expect(prompt).not.toContain("first");
     expect(prompt).toContain("fourth");
     expect(prompt).not.toContain("SECRETNOTE");
-    expect(prompt).toContain("https://docs.sapiom.ai/p5 | Page 5: about 5");
+    expect(prompt).toContain("https://docs.example.com/p5 | Page 5: about 5");
     expect(prompt).not.toContain("<team_answers>");
   });
 
@@ -127,9 +128,15 @@ describe("gatherKnowledge", () => {
   };
   const input = { issue: { title: "t" } as never, messages: [] };
   const deps = (fetcher: (u: string) => Promise<string>) => ({ fetcher });
+  /** A fleet database with `knowledge.docs_url` naming the test index's site. */
+  const docsDb = async () => {
+    const db = await localFleetDb();
+    await setConfig(db, "knowledge.docs_url", "https://docs.example.com", "t");
+    return db;
+  };
 
   it("includes all answers without a selection of them when they are few", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     await createArticle(db, { kind: "answer", title: "A", body: "b" }, "t");
     const t = baseCtx({ docs: [INDEX[0].url] });
     const k = await gatherKnowledge(
@@ -150,7 +157,7 @@ describe("gatherKnowledge", () => {
   });
 
   it("selects among answers when they are too many to include whole", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     const big = "x".repeat(ANSWERS_INLINE_CHARS);
     const a = await createArticle(
       db,
@@ -169,7 +176,7 @@ describe("gatherKnowledge", () => {
   });
 
   it("a failed page read keeps the draft going; all failing flags docs unavailable", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     const t = baseCtx({ docs: [INDEX[0].url] });
     const k = await gatherKnowledge(
       t.ctx as never,
@@ -186,7 +193,7 @@ describe("gatherKnowledge", () => {
   });
 
   it("a failed selection call degrades instead of throwing", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     const t = baseCtx(undefined, true);
     const k = await gatherKnowledge(
       t.ctx as never,
@@ -198,7 +205,7 @@ describe("gatherKnowledge", () => {
   });
 
   it("a malformed selection response degrades", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     const t = baseCtx({ nope: 1 });
     const k = await gatherKnowledge(
       t.ctx as never,
@@ -210,7 +217,7 @@ describe("gatherKnowledge", () => {
   });
 
   it("a failed selection falls back to the most recent answers within the inline budget", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     const half = "x".repeat(Math.floor(ANSWERS_INLINE_CHARS * 0.6));
     const older = await createArticle(
       db,
@@ -237,7 +244,7 @@ describe("gatherKnowledge", () => {
   });
 
   it("names the pages that failed when only some selected pages load", async () => {
-    const db = await localFleetDb();
+    const db = await docsDb();
     const t = baseCtx({ docs: [INDEX[0].url, INDEX[1].url] });
     const k = await gatherKnowledge(
       t.ctx as never,
@@ -254,5 +261,103 @@ describe("gatherKnowledge", () => {
     expect(k.failedDocs).toEqual([INDEX[1].url]);
     expect(renderKnowledge(k)).toContain(INDEX[1].url);
     expect(renderKnowledge(k)).toContain("could not be read");
+  });
+
+  describe("without knowledge.docs_url", () => {
+    it("fetches nothing, skips selection and renders no docs section", async () => {
+      const db = await localFleetDb();
+      await createArticle(db, { kind: "policy", title: "P", body: "b" }, "t");
+      const t = baseCtx({ docs: [INDEX[0].url] });
+      const fetched: string[] = [];
+      const k = await gatherKnowledge(
+        t.ctx as never,
+        db,
+        input,
+        deps(async (u) => (fetched.push(u), llms)),
+      );
+      expect(fetched).toEqual([]);
+      expect(t.calls).toHaveLength(0);
+      expect(k).toMatchObject({
+        docs: [],
+        docsConfigured: false,
+        docsUnavailable: false,
+      });
+      expect(citable(k)).not.toContain(INDEX[0].url);
+      const rendered = renderKnowledge(k);
+      expect(rendered).not.toContain("<docs>");
+      expect(rendered).not.toContain("could not be read");
+    });
+
+    it("selects among many answers with a schema that has no docs", async () => {
+      const db = await localFleetDb();
+      const big = "x".repeat(ANSWERS_INLINE_CHARS);
+      const a = await createArticle(
+        db,
+        { kind: "answer", title: "A", body: big },
+        "t",
+      );
+      await createArticle(db, { kind: "answer", title: "B", body: "s" }, "t");
+      const t = baseCtx({ answers: [a.id] });
+      const k = await gatherKnowledge(
+        t.ctx as never,
+        db,
+        input,
+        deps(async () => {
+          throw new Error("must not fetch");
+        }),
+      );
+      expect(k.answers.map((x) => x.id)).toEqual([a.id]);
+      const spec = t.calls[0] as {
+        output: { schema: { properties: object; required: string[] } };
+        request: { messages: { content: string }[] };
+      };
+      expect(spec.output.schema.properties).not.toHaveProperty("docs");
+      expect(spec.output.schema.required).toEqual(["answers"]);
+      expect(spec.request.messages[0].content).not.toContain("docs_index");
+    });
+
+    it("a failed selection is not reported as a docs outage", async () => {
+      const db = await localFleetDb();
+      const big = "x".repeat(ANSWERS_INLINE_CHARS);
+      await createArticle(db, { kind: "answer", title: "A", body: big }, "t");
+      await createArticle(db, { kind: "answer", title: "B", body: "s" }, "t");
+      const t = baseCtx(undefined, true);
+      const k = await gatherKnowledge(t.ctx as never, db, input);
+      expect(k.docsUnavailable).toBe(false);
+    });
+
+    it("stops reading docs as soon as the key is removed", async () => {
+      const db = await docsDb();
+      await deleteConfig(db, "knowledge.docs_url");
+      const fetched: string[] = [];
+      const k = await gatherKnowledge(
+        baseCtx({ docs: [] }).ctx as never,
+        db,
+        input,
+        deps(async (u) => (fetched.push(u), llms)),
+      );
+      expect(fetched).toEqual([]);
+      expect(k.docsConfigured).toBe(false);
+    });
+
+    it("a warm worker sees the Console remove the key through another handle", async () => {
+      const db = await docsDb();
+      // The Console writes on its own handle, so the worker's per-Db config cache is not cleared.
+      const consoleDb = { ...db, query: db.query.bind(db) } as typeof db;
+      const fetched: string[] = [];
+      const draft = () =>
+        gatherKnowledge(
+          baseCtx({ docs: [] }).ctx as never,
+          db,
+          input,
+          deps(async (u) => (fetched.push(u), llms)),
+        );
+      expect((await draft()).docsConfigured).toBe(true);
+      await deleteConfig(consoleDb, "knowledge.docs_url");
+      fetched.length = 0;
+      const k = await draft();
+      expect(fetched).toEqual([]);
+      expect(k.docsConfigured).toBe(false);
+    });
   });
 });

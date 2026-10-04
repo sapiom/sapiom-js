@@ -17,7 +17,6 @@ import type {
   Issue,
   Message,
 } from "../../_shared/issues";
-import { DOCS_ORIGIN, isDocsUrl } from "../../_shared/docs";
 import type { Block } from "../../_shared/slack";
 import { renderKnowledge, type Knowledge } from "./knowledge";
 
@@ -82,7 +81,7 @@ export const SYSTEM_PROMPT = `You draft replies for a B2B support team that answ
 A teammate reviews every draft and approves, escalates or dismisses it, so be accurate rather than agreeable.
 
 Rules:
-- Answer only from the policies, team answers, docs pages and the thread. Never invent limits, prices, dates or features.
+- Answer only from the material provided (policies, team answers, docs pages when there are any) and the thread. Never invent limits, prices, dates or features.
 - Follow every policy. If the material provided does not cover the question, say what you will check and ask one clarifying question; set confidence at or below 0.4.
 - If it looks like a bug on our side, acknowledge it, say the team is looking into it, and ask for what engineering will need (ids, timestamps, examples).
 - Write like a helpful teammate: short, direct, no greeting line, no sign-off, no markdown headings. A short list is fine.
@@ -196,16 +195,27 @@ export function citedSources(draft: Draft): string[] {
 
 const SAFE_DOCS_PATH = /^[A-Za-z0-9._~\-/]+$/;
 
+/** An https url without credentials: a docs page (citations are limited to what the prompt gave). */
+function docsPage(source: string): URL | null {
+  try {
+    const u = new URL(source);
+    return u.protocol === "https:" && !u.username && !u.password ? u : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A docs url becomes a link named by its path; an article id becomes its title. */
 export function sourceLabel(
   source: string,
   titles: ReadonlyMap<string, string>,
 ): string {
-  if (isDocsUrl(source)) {
-    const path = new URL(source).pathname.replace(/^\//, "") || "docs";
+  const page = docsPage(source);
+  if (page) {
+    const path = page.pathname.replace(/^\//, "") || "docs";
     // Citations are stored text; only plain path characters may reach a Slack link.
     return SAFE_DOCS_PATH.test(path)
-      ? mrkdwnLink(`${DOCS_ORIGIN}/${path}`, escapeMrkdwn(path))
+      ? mrkdwnLink(`${page.origin}/${path}`, escapeMrkdwn(path))
       : escapeMrkdwn(path.replace(/[<>|]/g, ""));
   }
   return escapeMrkdwn(titles.get(source) ?? "removed article");

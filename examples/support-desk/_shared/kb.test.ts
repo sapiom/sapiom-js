@@ -118,7 +118,7 @@ describe("kb articles", () => {
     const titles = await articleTitles(db, [
       a.id,
       "not-a-uuid",
-      "https://docs.sapiom.ai/x",
+      "https://docs.example.com/x",
     ]);
     expect([...titles]).toEqual([[a.id, "P"]]);
   });

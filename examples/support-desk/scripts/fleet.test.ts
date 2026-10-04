@@ -27,7 +27,7 @@ const attached = (
 });
 
 describe("setup selection", () => {
-  it("deploys every project that is neither optional nor smoke by default", () => {
+  it("deploys every project that is not optional, smoke or manual by default", () => {
     expect(keys(selectProjects(parseArgs([])))).toEqual([
       "intake",
       "copilot",
@@ -37,6 +37,13 @@ describe("setup selection", () => {
       "watchdog",
       "digest",
     ]);
+  });
+
+  it("deploys the run-by-hand setup agent only when named, with no triggers", () => {
+    expect(keys(selectProjects(parseArgs([])))).not.toContain("setup");
+    const only = selectProjects(parseArgs(["--only", "setup"]));
+    expect(keys(only)).toEqual(["setup"]);
+    expect(triggersFor(only)).toEqual([]);
   });
 
   it("--only names exactly the projects to act on, optional ones included", () => {

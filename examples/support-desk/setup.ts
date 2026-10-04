@@ -20,7 +20,7 @@
  *    `smokeTriggers` are never attached. A trigger in `RETIRED_TRIGGERS` (scripts/fleet.ts) is detached.
  * 6. Write `.sapiom/fleet-state.json` (ids and hashes only).
  *
- * Selection: every project that is neither `optional` nor `smoke`; `--only <key>` acts on exactly
+ * Selection: every project that is not `optional`, `smoke` or `manual`; `--only <key>` acts on exactly
  * the named projects (optional ones included), `--skip <key>` leaves one out. Both repeat.
  * `--no-triggers` deploys without attaching triggers (it never detaches one).
  *

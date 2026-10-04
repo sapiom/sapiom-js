@@ -761,10 +761,24 @@
             The copilot reads these on every draft. A <strong>policy</strong> is
             a rule it always follows; an <strong>answer</strong> is a Q&amp;A it
             may quote. An article is for one desk or for all desks; this tab
-            lists the selected desk's articles and the all-desks ones. Public
-            docs are fetched live from docs.sapiom.ai and are not edited here.
-            Changes apply to the next draft.
+            lists the selected desk's articles and the all-desks ones. Changes
+            apply to the next draft.
           </p>
+          <div class="kb-form">
+            <label
+              >Public docs (all desks): a site that publishes
+              <code>llms.txt</code>, or the <code>llms.txt</code> URL itself.
+              Empty: the copilot drafts from these articles only.<input
+                id="kb-docs-url"
+                type="url"
+                placeholder="https://docs.example.com"
+            /></label>
+            <div class="row">
+              <button id="kb-docs-save" class="mut">Save docs source</button>
+              <button id="kb-docs-clear" class="mut">Remove</button>
+              <span id="kb-docs-state" class="hint"></span>
+            </div>
+          </div>
           <div id="kb-form" class="kb-form" hidden>
             <label
               >Kind<select id="kb-kind">
@@ -2039,6 +2053,43 @@
       }
 
       // --- knowledge -----------------------------------------------------------------------
+      function showDocsSource({ docsUrl, indexUrl }) {
+        $("kb-docs-url").value = docsUrl || "";
+        $("kb-docs-state").className = "hint";
+        $("kb-docs-state").textContent = docsUrl
+          ? `Reads ${indexUrl}; fetched pages are cached for an hour.`
+          : "Not set: no docs are fetched or cited.";
+      }
+      async function loadDocsSource() {
+        try {
+          showDocsSource(await get("/api/knowledge/source"));
+        } catch (e) {
+          $("kb-docs-state").className = "hint bad";
+          $("kb-docs-state").textContent = e.message;
+        }
+      }
+      async function saveDocsSource(btn, docsUrl) {
+        btn.dataset.busy = "1";
+        syncButtons();
+        try {
+          showDocsSource(
+            await post("/api/knowledge/source", { docsUrl }, "PUT"),
+          );
+          log(
+            docsUrl ? `docs source set to ${docsUrl}` : "docs source removed",
+          );
+        } catch (e) {
+          $("kb-docs-state").className = "hint bad";
+          $("kb-docs-state").textContent = e.message;
+        } finally {
+          btn.dataset.busy = "0";
+          syncButtons();
+        }
+      }
+      $("kb-docs-save").onclick = (e) =>
+        saveDocsSource(e.target, $("kb-docs-url").value.trim() || null);
+      $("kb-docs-clear").onclick = (e) => saveDocsSource(e.target, null);
+
       let kbArticles = [];
       let kbEditing = null; // an article id, "new", or null
       let kbConfirm = null; // the id whose Delete awaits a second click
@@ -2073,7 +2124,7 @@
         $("kb-list").className = "";
         $("kb-list").innerHTML = rows.length
           ? `<table><tr><th>Kind</th><th>Title</th><th>Desk</th><th>Enabled</th><th>Updated</th><th></th></tr>${rows.join("")}</table>`
-          : '<div class="muted">No articles yet. The copilot answers from the public docs alone.</div>';
+          : '<div class="muted">No articles yet. The copilot answers from the public docs alone, or, with no docs source set, asks a clarifying question and keeps confidence low.</div>';
         syncButtons();
       }
       function openKbForm(article) {
@@ -2171,6 +2222,7 @@
         if (name === "system" && !systemLoaded) loadSystem();
         // Before loadDesks resolves no desk is selected; its continuation loads these.
         if (name === "kb" && desksReady) loadKb();
+        if (name === "kb") loadDocsSource();
         if (name === "settings" && desksReady) loadSettings();
         // Fleet-wide, so it loads even when the desk settings fail or no desk is ready yet.
         if (name === "settings") loadSla();

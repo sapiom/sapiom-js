@@ -25,10 +25,7 @@
       "provider": "linear",
       "relaySlug": "linear",
       "discover": true,
-      "requiredBy": [
-        "escalation",
-        "linear-sync"
-      ]
+      "requiredBy": ["escalation", "linear-sync"]
     }
   ],
   "projects": [
@@ -64,6 +61,11 @@
     {
       "key": "digest",
       "path": "agents/digest"
+    },
+    {
+      "key": "setup",
+      "path": "agents/setup",
+      "manual": true
     },
     {
       "key": "smoke-ingest",
