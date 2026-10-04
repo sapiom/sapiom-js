@@ -123,6 +123,58 @@ export async function callSlack<T = Record<string, unknown>>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+/** Slack rejects a section whose text is longer than this. */
+export const MAX_SECTION_CHARS = 3000;
+
+/** Cuts a line longer than a section, never inside an `&amp;`-style entity or a surrogate pair. */
+function cutLine(line: string): string[] {
+  const pieces: string[] = [];
+  let rest = line;
+  while (rest.length > MAX_SECTION_CHARS) {
+    let at = MAX_SECTION_CHARS;
+    const amp = rest.lastIndexOf("&", at - 1);
+    const entity = amp > at - 5 ? /^&(amp|lt|gt);/.exec(rest.slice(amp)) : null;
+    if (entity && amp + entity[0].length > at) at = amp;
+    if (/[\uD800-\uDBFF]/.test(rest.charAt(at - 1))) at -= 1;
+    pieces.push(rest.slice(0, at));
+    rest = rest.slice(at);
+  }
+  pieces.push(rest);
+  return pieces;
+}
+
+/**
+ * Escaped mrkdwn as section blocks that each fit Slack's limit (SAP-3863), cut on line breaks.
+ * Only the first carries `blockId`: block ids must be unique in a message.
+ */
+export function mrkdwnSections(mrkdwn: string, blockId: string): Block[] {
+  let texts = [mrkdwn];
+  if (mrkdwn.length > MAX_SECTION_CHARS) {
+    texts = [];
+    let chunk: string | undefined;
+    for (const line of mrkdwn.split("\n"))
+      for (const piece of cutLine(line)) {
+        if (
+          chunk !== undefined &&
+          chunk.length + 1 + piece.length <= MAX_SECTION_CHARS
+        )
+          chunk += `\n${piece}`;
+        else {
+          if (chunk !== undefined) texts.push(chunk);
+          chunk = piece;
+        }
+      }
+    if (chunk !== undefined) texts.push(chunk);
+    // Slack rejects a section with blank text.
+    texts = texts.filter((t) => t.trim());
+  }
+  return texts.map((text, i) => ({
+    type: "section",
+    ...(i === 0 ? { block_id: blockId } : {}),
+    text: { type: "mrkdwn", text },
+  }));
+}
+
 // SAP-3721: recover a successful Slack post whose database record was not committed.
 async function findPosted(
   ctx: SlackCtx,
@@ -189,15 +241,7 @@ export async function post(
     if (earlier) return { channel: args.channel, ts: earlier };
     args.blocks = args.blocks?.length
       ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
-      : // One section is enough: the only long keyed text is an approved reply, and its draft card
-        // already carried the same text in one section (blocks.ts draft.body).
-        [
-          {
-            type: "section",
-            block_id: marker,
-            text: { type: "mrkdwn", text: args.text ?? "" },
-          },
-        ];
+      : mrkdwnSections(args.text ?? "", marker);
   }
   const out = await call(
     ctx,

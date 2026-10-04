@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  MAX_SECTION_CHARS,
   SlackMethodError,
   callSlack,
+  mrkdwnSections,
   permalink,
   post,
   postEphemeral,
@@ -266,6 +268,19 @@ describe("slack.ts", () => {
       });
     });
 
+    it("splits a long text-only post, the marker on the first section", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: { ok: true, messages: [{ ts: "1.0" }] },
+        postMessage: { ok: true, channel: "C1", ts: "1.2" },
+      });
+      const text = Array.from({ length: 70 }, () => "y".repeat(99)).join("\n");
+      await post(ctx, { channel: "C1", text, threadTs: "1.0", key: "k1" });
+      const blocks = calls[1]?.args.blocks as Section[];
+      expect(blocks).toEqual(mrkdwnSections(text, "sylon:k1"));
+      expect(blocks.length).toBe(3);
+      expect(blocks[0]?.block_id).toBe("sylon:k1");
+    });
+
     it("follows the cursor to a marker on a later page", async () => {
       const { ctx, calls } = ctxWithSlack({
         replies: (args: Record<string, unknown>) =>
@@ -369,5 +384,72 @@ describe("slack.ts", () => {
     expect(permalink("C1", "1790889355.981329")).toBe(
       "https://slack.com/archives/C1/p1790889355981329",
     );
+  });
+});
+
+type Section = {
+  type: string;
+  block_id?: string;
+  text: { type: string; text: string };
+};
+
+describe("mrkdwnSections", () => {
+  const sections = (text: string) => mrkdwnSections(text, "body") as Section[];
+  const texts = (text: string) => sections(text).map((s) => s.text.text);
+  const lines = (n: number, width: number) =>
+    Array.from({ length: n }, (_, i) => `${i}`.padEnd(width, "z")).join("\n");
+
+  it("keeps text up to the limit in one section, unchanged", () => {
+    for (const text of ["", "hi", "a".repeat(MAX_SECTION_CHARS)])
+      expect(mrkdwnSections(text, "body")).toEqual([
+        { type: "section", block_id: "body", text: { type: "mrkdwn", text } },
+      ]);
+  });
+
+  it("cuts a long text only on line breaks, each section within the limit", () => {
+    const text = lines(80, 99);
+    const out = texts(text);
+    expect(out.length).toBe(3);
+    for (const t of out) {
+      expect(t.length).toBeGreaterThan(0);
+      expect(t.length).toBeLessThanOrEqual(MAX_SECTION_CHARS);
+    }
+    expect(out.join("\n")).toBe(text);
+  });
+
+  it("hard-cuts only a line over the limit", () => {
+    const text = `short\n${"q".repeat(7000)}\ntail`;
+    expect(texts(text)).toEqual([
+      "short",
+      "q".repeat(3000),
+      "q".repeat(3000),
+      `${"q".repeat(1000)}\ntail`,
+    ]);
+  });
+
+  it.each([
+    ["&amp;", 2998],
+    ["&lt;", 2997],
+    ["&gt;", 2999],
+    ["\u{1F600}", 2999],
+  ])("never cuts inside %s at the limit", (unit, at) => {
+    const text = `${"a".repeat(at)}${unit}${"b".repeat(4000)}`;
+    const out = texts(text);
+    expect(out[0]?.endsWith("a")).toBe(true);
+    expect(out[1]?.startsWith(unit)).toBe(true);
+    expect(out.join("")).toBe(text);
+  });
+
+  it("drops blank lines at a cut instead of posting an empty section", () => {
+    const text = `${"a".repeat(2999)}\n\n   \n\n${"b".repeat(2999)}`;
+    const out = texts(text);
+    for (const t of out) expect(t.trim()).not.toBe("");
+    expect(out.join("").replace(/\s/g, "")).toBe(text.replace(/\s/g, ""));
+  });
+
+  it("puts the block id on the first section only", () => {
+    const out = sections(lines(80, 99));
+    expect(out[0]?.block_id).toBe("body");
+    for (const s of out.slice(1)) expect(s).not.toHaveProperty("block_id");
   });
 });

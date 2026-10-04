@@ -205,6 +205,34 @@ describe("draftCard", () => {
       ),
     ).toBe("*Draft reply for #7*");
   });
+
+  it("keeps a short draft in one draft.body section", () => {
+    expect(draftCard(draft, issue).map((b) => b.block_id)).toEqual([
+      "draft.header",
+      "draft.body",
+      "draft.actions",
+    ]);
+    expect(textOf(draftCard(draft, issue), "draft.body")).toBe(
+      "Thanks, looking now.",
+    );
+  });
+
+  it("splits a long draft into sections Slack accepts, buttons still last", () => {
+    const text = Array.from(
+      { length: 100 },
+      (_, i) => `Step ${i} & more: ${"x".repeat(60)}`,
+    ).join("\n");
+    const blocks = draftCard({ ...draft, text }, issue);
+    const body = blocks.slice(1, -1) as { text: { text: string } }[];
+    expect(text.length).toBeGreaterThan(7000);
+    expect(body.length).toBeGreaterThan(2);
+    for (const b of body) expect(b.text.text.length).toBeLessThanOrEqual(3000);
+    const ids = blocks.flatMap((b) => (b.block_id ? [b.block_id] : []));
+    expect(ids).toEqual(["draft.header", "draft.body", "draft.actions"]);
+    expect(body.map((b) => b.text.text).join("\n")).toBe(
+      text.replace(/&/g, "&amp;"),
+    );
+  });
 });
 
 describe("nudge", () => {

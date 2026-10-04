@@ -13,6 +13,7 @@ import {
   setLocalDb,
   type Db,
 } from "../../_shared/db";
+import { escapeMrkdwn } from "../../_shared/blocks";
 import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
   createDraft,
@@ -1207,6 +1208,85 @@ describe("desks", () => {
     expect(prompt).toContain("EVERYONE-RULE");
     expect(prompt).toContain("TEST-RULE");
     expect(prompt).not.toContain("OTHER-RULE");
+  });
+});
+
+describe("a draft over one Slack section (SAP-3863)", () => {
+  const LONG_REPLY = Array.from(
+    { length: 100 },
+    (_, i) => `Step ${i}: check the <raw> body & ${"retry ".repeat(10)}done`,
+  ).join("\n");
+  type Section = { type: string; block_id?: string; text?: { text: string } };
+  const sectionTexts = (blocks: Section[]) =>
+    blocks.filter((b) => b.type === "section").map((b) => b.text!.text);
+
+  it("posts a card Slack accepts, and Approve posts the reply split under its marker", async () => {
+    const t = ctxFor("exec-long", { ...DRAFTED, reply: LONG_REPLY });
+    const ds = await runAgent(fixture("issue/created.json").payload, t.ctx);
+    const draftId = last(ds).output!.draftId as string;
+    const [card] = t.slack("chat.postMessage");
+    const blocks = card.blocks as Section[];
+    expect(LONG_REPLY.length).toBeGreaterThan(7000);
+    expect(blocks.length).toBeLessThanOrEqual(50);
+    expect(sectionTexts(blocks).length).toBeGreaterThan(3);
+    for (const text of sectionTexts(blocks))
+      expect(text.length).toBeLessThanOrEqual(3000);
+    expect(blocks.at(-1)?.block_id).toBe("draft.actions");
+
+    const click = structuredClone(
+      fixture("slack/block-actions.draft-approve.json").payload,
+    ) as { actions: { value: string }[] };
+    click.actions[0].value = draftId;
+    const t2 = ctxFor("exec-long-approve");
+    const approved = await runAgent(click, t2.ctx);
+    expect(last(approved).output).toMatchObject({ status: "approved" });
+    const [reply] = t2.slack("chat.postMessage");
+    const sections = reply.blocks as Section[];
+    expect(sections.length).toBeGreaterThan(2);
+    expect(sections[0]?.block_id).toBe(`sylon:draft:${draftId}`);
+    for (const s of sections.slice(1)) expect(s.block_id).toBeUndefined();
+    for (const text of sectionTexts(sections))
+      expect(text.length).toBeLessThanOrEqual(3000);
+    expect(sectionTexts(sections).join("\n")).toBe(escapeMrkdwn(LONG_REPLY));
+    expect(await messageBySourceEventId(db, `draft:${draftId}`)).toMatchObject({
+      direction: "agent",
+      issueId: FIXTURE_ISSUE,
+    });
+  });
+
+  it("copilotCard keeps the meta line after the whole body, before the buttons or outcome", async () => {
+    const draft = await getDraft(db, FIXTURE_DRAFT);
+    const issue = await getIssue(db, FIXTURE_ISSUE);
+    const ids = (d: typeof draft, note?: string, replySent?: boolean) =>
+      copilotCard(d, issue, new Map(), note, replySent).map(
+        (b) => b.block_id ?? "body",
+      );
+    const long = { ...draft, status: "pending" as const, text: LONG_REPLY };
+    expect(ids({ ...draft, status: "pending" })).toEqual([
+      "draft.header",
+      "draft.body",
+      "draft.meta",
+      "draft.actions",
+    ]);
+    const longIds = ids(long);
+    expect(longIds.slice(0, 3)).toEqual(["draft.header", "draft.body", "body"]);
+    expect(longIds.slice(longIds.lastIndexOf("body") + 1)).toEqual([
+      "draft.meta",
+      "draft.actions",
+    ]);
+    const approved = copilotCard(
+      { ...long, status: "approved", decidedBy: "U9" },
+      issue,
+      new Map(),
+      "a note",
+      false,
+    );
+    expect(approved.slice(-3).map((b) => b.block_id)).toEqual([
+      "draft.meta",
+      "draft.outcome",
+      "draft.note",
+    ]);
+    expect(JSON.stringify(approved.at(-2))).toContain("reply not sent");
   });
 });
 

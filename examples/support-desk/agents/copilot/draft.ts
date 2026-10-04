@@ -246,7 +246,7 @@ export function copilotCard(
   const sources = citedSources(draft).map((s) => sourceLabel(s, titles));
   facts.push(`*Sources:* ${sources.length ? sources.join(", ") : "none"}`);
   // After the body, before the buttons or the outcome line.
-  blocks.splice(2, 0, {
+  blocks.splice(blocks.length - 1, 0, {
     type: "context",
     block_id: "draft.meta",
     elements: [{ type: "mrkdwn", text: facts.join("   ") }],

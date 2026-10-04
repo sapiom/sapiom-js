@@ -7,7 +7,7 @@
  */
 import type { Account, Draft, Issue, IssueStatus } from "./issues";
 import type { SlaDue } from "./sla";
-import { permalink, type Block } from "./slack";
+import { mrkdwnSections, permalink, type Block } from "./slack";
 
 export const ACTION_OWNERS = ["issue", "draft"] as const;
 export type ActionOwner = (typeof ACTION_OWNERS)[number];
@@ -202,11 +202,7 @@ export function draftCard(draft: Draft, issue: Issue): Block[] {
         text: `*Draft reply for #${issue.number}*${customer ? ` · ${mrkdwnLink(customer, "customer thread")}` : ""}`,
       },
     },
-    {
-      type: "section",
-      block_id: "draft.body",
-      text: { type: "mrkdwn", text: escapeMrkdwn(draft.text) },
-    },
+    ...mrkdwnSections(escapeMrkdwn(draft.text), "draft.body"),
   ];
   if (draft.status === "pending") {
     blocks.push({
