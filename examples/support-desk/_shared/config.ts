@@ -6,6 +6,21 @@ import { z } from "zod/v4";
 
 import type { Db } from "./db";
 
+/** SAP-3788 requires runtime-editable escalation thresholds and recipients. */
+export const DeskEscalationSchema = z.object({
+  levels: z
+    .array(z.number().int().positive())
+    .min(1)
+    .max(5)
+    .refine((l) => l.every((m, i) => i === 0 || m > l[i - 1]), {
+      message: "levels must be strictly ascending",
+    }),
+  /** A Slack user group id (`S…`), mentioned in the triage thread. */
+  groupId: z.string().min(1).optional(),
+  oncallSlackId: z.string().min(1).optional(),
+});
+export type DeskEscalation = z.infer<typeof DeskEscalationSchema>;
+
 export const ConfigSchemas = {
   /** Superseded by the desk's own value (`desks.linear_team_id`); read only when the desk has none. */
   "linear.team_id": z.string().min(1),
@@ -26,6 +41,8 @@ export const ConfigSchemas = {
   "oncall.slack_id": z.string().min(1),
   /** Superseded by `desks.nudge_minutes`. */
   "nudge.minutes": z.number().int().positive(),
+  /** Controller gaps between repeat nudges: after round n, entry n-1; the last one repeats, `[]` nudges once. */
+  "nudge.repeat_minutes": z.array(z.number().int().positive()),
   /** Slack workspaces whose members are our team. Unset: the workspace the connector is installed in. */
   "team.slack_team_ids": z.array(z.string().min(1)),
   /** Users treated as customers even when they post from our workspace, so one person can test with two accounts. */
@@ -34,6 +51,18 @@ export const ConfigSchemas = {
   "intake.reactions": z.boolean(),
   /** Tell the customer when engineering marks the Linear issue Done. Off until the desk is live. */
   "linear_sync.notify_customer": z.boolean(),
+  /** Per desk slug; a desk without an entry never escalates to a person. */
+  escalation: z.record(z.string().min(1), DeskEscalationSchema),
+  /** Hours an open issue may age, by priority, before the daily digest flags it; unset keys keep the default. */
+  "digest.sla_hours": z
+    .object({
+      urgent: z.number().positive(),
+      high: z.number().positive(),
+      normal: z.number().positive(),
+      low: z.number().positive(),
+    })
+    .partial()
+    .strict(),
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -41,12 +70,15 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "team.slack_team_ids",
   "channels.customer",
   "alerts.channel",
+  "nudge.repeat_minutes",
   // Desk-owned now; a database installed before desks keeps them as fallbacks.
   "linear.team_id",
   "linear.project_id",
   "channels.triage",
   "oncall.slack_id",
   "nudge.minutes",
+  "escalation",
+  "digest.sla_hours",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<
@@ -124,6 +156,43 @@ export async function setConfig<K extends ConfigKey>(
 export async function deleteConfig(db: Db, key: ConfigKey): Promise<void> {
   await db.query("delete from config where key = $1", [key]);
   cacheFor(db).delete(key);
+}
+
+// Uncached: the Console edits it from another process while a step process can stay warm.
+export async function escalations(db: Db): Promise<ConfigValue<"escalation">> {
+  const rows = await db.query<{ value: unknown }>(
+    "select value from config where key = 'escalation'",
+  );
+  return rows[0] ? ConfigSchemas.escalation.parse(rows[0].value) : {};
+}
+
+export async function deskEscalation(
+  db: Db,
+  slug: string,
+): Promise<DeskEscalation | null> {
+  return (await escalations(db))[slug] ?? null;
+}
+
+/** Lock the shared config row before merging so concurrent saves preserve other desks' entries. */
+export async function setDeskEscalation(
+  db: Db,
+  slug: string,
+  entry: DeskEscalation | null,
+  setBy: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.query(
+      "insert into config (key, value) values ('escalation', '{}'::jsonb) on conflict (key) do nothing",
+    );
+    const [row] = await tx.query<{ value: unknown }>(
+      "select value from config where key = 'escalation' for update",
+    );
+    const all = { ...ConfigSchemas.escalation.parse(row.value) };
+    if (entry) all[slug] = DeskEscalationSchema.parse(entry);
+    else delete all[slug];
+    await setConfig(tx, "escalation", all, setBy);
+  });
+  cacheFor(db).delete("escalation");
 }
 
 /** The account name for a customer channel, or null when the channel is not a customer channel. */

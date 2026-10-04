@@ -17,7 +17,8 @@
         "controller",
         "urgent-pager",
         "linear-sync",
-        "watchdog"
+        "watchdog",
+        "digest"
       ]
     },
     {
@@ -59,6 +60,10 @@
     {
       "key": "watchdog",
       "path": "agents/watchdog"
+    },
+    {
+      "key": "digest",
+      "path": "agents/digest"
     },
     {
       "key": "smoke-ingest",
@@ -126,6 +131,12 @@
       "project": "watchdog",
       "kind": "schedule_cron",
       "cron": "*/5 * * * *"
+    },
+    {
+      "project": "digest",
+      "kind": "schedule_cron",
+      "cron": "0 9 * * *",
+      "timezone": "America/Los_Angeles"
     }
   ],
   "smokeTriggers": [

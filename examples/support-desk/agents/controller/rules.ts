@@ -1,11 +1,4 @@
-/**
- * The controller's follow-up rules: a pure function over plain rows and `now`, so every threshold
- * edge and the dedup are unit-testable without a database or a clock.
- *
- * Each nudge carries a dedup key `<kind>:<refId>` that the agent records in `nudges.kind`. The ref
- * is the thing the nudge is about (the pending draft, the last customer message, or the issue), so
- * a new draft or a new customer message re-arms its rule while a repeat run stays silent.
- */
+/** Plain rows and an explicit time keep threshold edges and round deduplication testable without a database. */
 import type { Direction, DraftStatus, IssueStatus } from "../../_shared/issues";
 
 /** The kinds `_shared/blocks.ts` `nudge()` labels. */
@@ -49,6 +42,7 @@ export interface MessageRow {
 export interface SentRow {
   issueId: string;
   kind: string;
+  sentAt: Date;
 }
 
 export interface Nudge {
@@ -56,19 +50,18 @@ export interface Nudge {
   kind: NudgeKind;
   /** The draft id, the last customer message id, or the issue id. */
   refId: string;
-  /** `<kind>:<refId>`, recorded with `recordNudge`. */
+  /** The round, from 1. */
+  n: number;
+  /** `<kind>:<refId>:<n>`, recorded with `recordNudge`. */
   key: string;
 }
 
-export const nudgeKey = (kind: NudgeKind, refId: string): string =>
-  `${kind}:${refId}`;
+export const nudgeKey = (kind: NudgeKind, refId: string, n: number): string =>
+  `${kind}:${refId}:${n}`;
 
-/**
- * Recorded when the Jev check decides the customer's last message expects no reply, so later runs
- * neither nudge nor ask Jev again about the same message.
- */
+/** Omits the round so a no-reply verdict silences every reminder for that message while the Jev check is on. */
 export const skipKey = (kind: NudgeKind, refId: string): string =>
-  `skip:${nudgeKey(kind, refId)}`;
+  `skip:${kind}:${refId}`;
 
 export interface RuleInput {
   issues: IssueRow[];
@@ -80,9 +73,11 @@ export interface RuleInput {
   minutes: number;
   /** Each desk's `nudge_minutes`, by desk id. */
   deskMinutes?: Readonly<Record<string, number>>;
+  /** Gap before each repeat round: after round n, `repeatMinutes[n - 1]`; the last gap repeats, `[]` = once. */
+  repeatMinutes: readonly number[];
   /**
    * Whether Jev verdicts count (default true). With the check off, a `skip:` record no longer
-   * silences `customer_waiting`; keys of nudges actually sent always do.
+   * silences `customer_waiting`; each sent round still dedups its own key.
    */
   jevCheck?: boolean;
 }
@@ -116,15 +111,31 @@ export function postedAt(m: MessageRow): number {
 export const byThreadOrder = (a: MessageRow, b: MessageRow): number =>
   postedAt(a) - postedAt(b);
 
-/**
- * Every nudge due at `now` and not yet sent. A condition is due once it has held for at least
- * its desk's `nudge_minutes`. Closed issues and issues without a triage card (nowhere to post) get none; on-hold
- * issues get no `draft_pending` or `customer_waiting`, since engineering owns the next move.
- */
+// Legacy keys count as round 1 so existing nudge history still controls repeat timing.
+function lastRound(
+  rows: SentRow[],
+  base: string,
+): { n: number; sentAt: Date } | undefined {
+  let last: { n: number; sentAt: Date } | undefined;
+  for (const r of rows) {
+    const round =
+      r.kind === base
+        ? "1"
+        : r.kind.startsWith(`${base}:`)
+          ? r.kind.slice(base.length + 1)
+          : "";
+    if (!/^\d+$/.test(round)) continue;
+    const n = Number(round);
+    if (!last || n > last.n) last = { n, sentAt: r.sentAt };
+  }
+  return last;
+}
+
+/** Engineering owns the next move on hold, so suppress draft and customer follow-ups there. */
 export function dueNudges(input: RuleInput): Nudge[] {
   const drafts = groupBy(input.drafts);
   const messages = groupBy(input.messages);
-  const sent = new Set(input.sent.map((s) => `${s.issueId} ${s.kind}`));
+  const sent = groupBy(input.sent);
   const jevCheck = input.jevCheck ?? true;
   const due: Nudge[] = [];
 
@@ -134,11 +145,25 @@ export function dueNudges(input: RuleInput): Nudge[] {
       ((issue.deskId ? input.deskMinutes?.[issue.deskId] : undefined) ??
         input.minutes) * 60_000;
     const old = (t: Date) => input.now.getTime() - t.getTime() >= thresholdMs;
+    const issueSent = sent.get(issue.id) ?? [];
     const add = (kind: NudgeKind, refId: string) => {
-      const key = nudgeKey(kind, refId);
-      if (sent.has(`${issue.id} ${key}`)) return;
-      if (jevCheck && sent.has(`${issue.id} ${skipKey(kind, refId)}`)) return;
-      due.push({ issueId: issue.id, kind, refId, key });
+      const skip = skipKey(kind, refId);
+      if (jevCheck && issueSent.some((s) => s.kind === skip)) return;
+      const last = lastRound(issueSent, `${kind}:${refId}`);
+      if (last) {
+        const gaps = input.repeatMinutes;
+        if (gaps.length === 0) return;
+        const gapMs = gaps[Math.min(last.n, gaps.length) - 1] * 60_000;
+        if (input.now.getTime() - last.sentAt.getTime() < gapMs) return;
+      }
+      const n = (last?.n ?? 0) + 1;
+      due.push({
+        issueId: issue.id,
+        kind,
+        refId,
+        n,
+        key: nudgeKey(kind, refId, n),
+      });
     };
     const onHold = issue.status === "on_hold";
     const issueDrafts = drafts.get(issue.id) ?? [];
@@ -152,13 +177,109 @@ export function dueNudges(input: RuleInput): Nudge[] {
     if (!onHold && pending && old(pending.createdAt))
       add("draft_pending", pending.id);
 
-    // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
-    const last = (messages.get(issue.id) ?? [])
-      .filter((m) => m.direction !== "internal")
-      .sort(byThreadOrder)
-      .at(-1);
-    if (!onHold && last?.direction === "customer" && old(last.createdAt))
+    const last = lastCustomerMessage(messages.get(issue.id) ?? []);
+    if (!onHold && last && old(last.createdAt))
       add("customer_waiting", last.id);
+  }
+  return due;
+}
+
+function lastCustomerMessage(messages: MessageRow[]): MessageRow | undefined {
+  // Internal triage chatter is not a reply to the customer, so only the customer thread counts.
+  const last = messages
+    .filter((m) => m.direction !== "internal")
+    .sort(byThreadOrder)
+    .at(-1);
+  return last?.direction === "customer" ? last : undefined;
+}
+
+/** SAP-3788 requires paging for missing ownership or a waiting customer. */
+export const ESCALATION_KINDS = ["no_owner", "customer_waiting"] as const;
+export type EscalationKind = (typeof ESCALATION_KINDS)[number];
+
+/** Recorded in `nudges.kind`: one escalation per issue per level. */
+export const escalationKey = (level: number): string => `escalate:${level}`;
+
+export interface Escalation {
+  issueId: string;
+  deskId: string;
+  /** 1-based index into the desk's levels. */
+  level: number;
+  /** Every escalating condition that holds now, with how long it has held. */
+  reasons: { kind: EscalationKind; refId: string; minutes: number }[];
+  key: string;
+}
+
+export interface EscalationInput {
+  issues: IssueRow[];
+  messages: MessageRow[];
+  /** Escalation reads only which keys were sent, never when. */
+  sent: Pick<SentRow, "issueId" | "kind">[];
+  now: Date;
+  /** Minutes per level, by desk id; a desk not listed never escalates. */
+  levels: Readonly<Record<string, readonly number[]>>;
+  defaultDeskId?: string | null;
+  /** Reuse no-reply verdicts to avoid paging for customer acknowledgements. */
+  jevCheck?: boolean;
+}
+
+/** Select only the highest due level and suppress previously reached levels to avoid catch-up paging. */
+export function dueEscalations(input: EscalationInput): Escalation[] {
+  const messages = groupBy(input.messages);
+  const sent = groupBy(input.sent);
+  const jevCheck = input.jevCheck ?? true;
+  const now = input.now.getTime();
+  const due: Escalation[] = [];
+
+  for (const issue of input.issues) {
+    if (issue.status === "closed" || !issue.triageRootTs) continue;
+    const deskId = issue.deskId ?? input.defaultDeskId ?? "";
+    const levels = input.levels[deskId];
+    if (!levels?.length) continue;
+    const issueSent = new Set((sent.get(issue.id) ?? []).map((s) => s.kind));
+
+    const holding: { kind: EscalationKind; refId: string; since: Date }[] = [];
+    if (!issue.ownerSlackId)
+      holding.push({
+        kind: "no_owner",
+        refId: issue.id,
+        since: issue.createdAt,
+      });
+    const last = lastCustomerMessage(messages.get(issue.id) ?? []);
+    if (
+      issue.status !== "on_hold" &&
+      last &&
+      !(jevCheck && issueSent.has(skipKey("customer_waiting", last.id)))
+    )
+      holding.push({
+        kind: "customer_waiting",
+        refId: last.id,
+        since: last.createdAt,
+      });
+    if (holding.length === 0) continue;
+
+    const ageMs = now - Math.min(...holding.map((h) => h.since.getTime()));
+    let level = 0;
+    levels.forEach((m, i) => {
+      if (ageMs >= m * 60_000) level = i + 1;
+    });
+    if (level === 0) continue;
+    const sentLevels = [...issueSent]
+      .filter((k) => k.startsWith("escalate:"))
+      .map((k) => Number(k.slice("escalate:".length)));
+    if (sentLevels.some((l) => l >= level)) continue;
+
+    due.push({
+      issueId: issue.id,
+      deskId,
+      level,
+      reasons: holding.map((h) => ({
+        kind: h.kind,
+        refId: h.refId,
+        minutes: Math.floor((now - h.since.getTime()) / 60_000),
+      })),
+      key: escalationKey(level),
+    });
   }
   return due;
 }
