@@ -331,10 +331,12 @@ describe("no auto-bind on rescan (SAP-3834)", () => {
       await bindSession(port, session.id, cwd);
       // Installing dependencies triggers the automatic render, so the hook
       // sits after the dependency probe and source fingerprint, immediately
-      // before the child launch.
+      // before the child launch. They land in the parent folder, which module
+      // resolution reaches: a new entry inside cwd would dirty the workspace
+      // inventory on Linux and refuse the render before the boundary.
       await symlink(
         join(process.cwd(), "node_modules"),
-        join(cwd, "node_modules"),
+        join(dir, "node_modules"),
         "dir",
       );
       await vi.waitFor(() => expect(beforeLaunch).toHaveBeenCalledOnce(), {
