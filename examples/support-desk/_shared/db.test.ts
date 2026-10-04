@@ -43,6 +43,7 @@ describe("db", () => {
       { id: "070_knowledge" },
       { id: "080_desks" },
       { id: "081_desk_triage_unique" },
+      { id: "082_issue_triage_channel" },
       { id: "090_digests" },
       { id: "100_linear_state" },
       { id: "101_draft_summary" },
