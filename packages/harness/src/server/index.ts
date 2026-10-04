@@ -3643,7 +3643,9 @@ export const startServer = async (
   app.use(createAgentScaffoldRouter(scaffoldDeps));
   app.use(
     createWorkflowsRouter(enrichedWorkflowRegistry),
-    createFsRouter(),
+    createFsRouter({
+      isAgentPath: (agentPath) => workflowsCache.some((w) => w.path === agentPath),
+    }),
     createMacrosRouter({
       listMacros: () => DEFAULT_MACROS,
       findWorkflow: (workflowPath) =>
