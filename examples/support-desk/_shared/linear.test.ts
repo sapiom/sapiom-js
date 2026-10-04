@@ -3,13 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   LINEAR_TOOLS,
   LinearRelayError,
+  commentIssue,
   createIssue,
   getIssue,
   listTools,
 } from "./linear";
 import { fakeCtx } from "./test-ctx";
 
-/** A ctx whose `sapiom.connectors.linear` answers every call with `result` (or throws `err`). */
+/** Inject a connector so these tests exercise the wrapper without contacting Linear. */
 function ctxWithLinear(result: unknown, err?: unknown) {
   const calls: { name: string; args: unknown }[] = [];
   const linear = {
@@ -22,9 +23,9 @@ function ctxWithLinear(result: unknown, err?: unknown) {
       return result;
     },
   };
-  const { ctx } = fakeCtx();
+  const { ctx, logs } = fakeCtx();
   (ctx as { sapiom: unknown }).sapiom = { connectors: { linear } };
-  return { ctx: ctx as never, calls };
+  return { ctx: ctx as never, calls, logs };
 }
 
 const text = (o: unknown) => ({
@@ -90,5 +91,24 @@ describe("linear.ts", () => {
         .identifier,
     ).toBe("LOCAL-1");
     expect(calls).toEqual([]);
+  });
+
+  it("comments with save_comment, and sends nothing on a local trace", async () => {
+    const { ctx, calls } = ctxWithLinear(text({ id: "c-1" }));
+    await commentIssue(ctx, "u-42", "Closed in Slack");
+    expect(calls).toEqual([
+      {
+        name: LINEAR_TOOLS.comment,
+        args: { issueId: "u-42", body: "Closed in Slack" },
+      },
+    ]);
+
+    const local = ctxWithLinear(text({}));
+    (local.ctx as { isLocalTrace: boolean }).isLocalTrace = true;
+    await commentIssue(local.ctx, "u-42", "Closed in Slack");
+    expect(local.calls).toEqual([]);
+    expect(local.logs.map((l) => l.msg)).toEqual([
+      "linear save_comment (local trace, not sent)",
+    ]);
   });
 });
