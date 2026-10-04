@@ -1738,10 +1738,12 @@
       async function loadSla(force = false) {
         if (slaDirty && !force) return;
         const seq = ++slaSeq;
+        const rev = slaRev;
         $("sla-error").textContent = "";
         try {
           const { sla } = await get("/api/sla");
-          if (seq !== slaSeq || (slaDirty && !force)) return;
+          // Typing during the GET wins even over a forced reload.
+          if (seq !== slaSeq || slaRev !== rev || (slaDirty && !force)) return;
           $("sla-json").value = JSON.stringify(sla || SLA_EXAMPLE, null, 2);
           slaDirty = false;
           $("sla-state").textContent = sla

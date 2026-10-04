@@ -50,6 +50,15 @@ describe("console page SLA", () => {
     expect(page).toContain("slaRev++;");
     expect(write).toContain("const rev = slaRev;");
     expect(write).toContain("if (slaRev === rev) await loadSla(true);");
+    // ...and the reload itself drops its response if the operator types during its GET.
+    const load = page.slice(
+      page.indexOf("async function loadSla("),
+      page.indexOf("async function slaWrite("),
+    );
+    expect(load).toMatch(/const seq = \+\+slaSeq;\s*const rev = slaRev;/);
+    expect(load).toMatch(
+      /await get\("\/api\/sla"\);[\s\S]*?if \(seq !== slaSeq \|\| slaRev !== rev \|\| \(slaDirty && !force\)\) return;/,
+    );
     expect(page).toContain('slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved")');
     expect(page).toContain('() => post("/api/sla", undefined, "DELETE")');
   });
