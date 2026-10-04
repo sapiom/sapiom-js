@@ -282,12 +282,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     : input.issueId;
   await recordRun(db, ctx, AGENT, issueId);
   const desk = await deskForIssue(db, await getIssue(db, issueId));
-  const target = await linearTarget(db, desk);
-  if (!target)
-    throw new MissingConfigError(`desks.${desk.slug}.linearProjectId`);
-  const { teamId, projectId } = target;
   const triageChannel = desk.triageChannel;
-  const requester = await userInfo(ctx, input.requestedBy);
 
   // 1. Link and reply, under the row lock: a concurrent run waits here, then finds the link and
   // the stored reply keys, so it creates no second Linear issue and repeats no reply.
@@ -306,6 +301,13 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
       });
       return null;
     }
+    // Checked after the closed exit: a closed issue needs neither the Linear target nor the
+    // requester.
+    const target = await linearTarget(tx, desk);
+    if (!target)
+      throw new MissingConfigError(`desks.${desk.slug}.linearProjectId`);
+    const { teamId, projectId } = target;
+    const requester = await userInfo(ctx, input.requestedBy);
     let made: "existing" | "adopted" | "created" = "existing";
     let url = "";
     // A repeat escalation of an issue whose Linear issue is already Done or Canceled gets a new

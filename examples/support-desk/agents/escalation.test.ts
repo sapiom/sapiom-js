@@ -360,6 +360,22 @@ describe("escalation against the relay (mocked fetch)", () => {
     });
   });
 
+  it("a closed issue on a desk with no Linear target still gets its triage line", async () => {
+    const issue = await issueOnDesk({});
+    await setStatus(db, issue.id, "closed");
+    const out = await escalate(liveCtx().ctx as never, db, {
+      ...input(),
+      issueId: issue.id,
+    });
+    expect(out).toMatchObject({ outcome: "not_escalated", status: "closed" });
+    expect(
+      calls
+        .filter((c) => c.method === "chat.postMessage")
+        .map((c) => c.args.channel),
+    ).toEqual(["C0TESTTRI01"]);
+    expect(calls.filter((c) => c.method === "users.info")).toEqual([]);
+  });
+
   it("falls back to the global Linear keys only when the desk names none", async () => {
     await setConfig(db, "linear.team_id", "global-team", "t");
     await setConfig(db, "linear.project_id", "global-proj", "t");
