@@ -437,7 +437,7 @@ describe("intake agent", () => {
     expect(JSON.stringify(card.blocks)).toContain(
       "*First response due:* <!date^",
     );
-    // A follow-up redraws the card through refreshCard, still before any team reply.
+    // Exercise follow-up redraws so they cannot silently drop the running first-response clock.
     const fup = makeCtx("exec-sla-fup");
     await run(intakeFixture("message-created.follow-up.json").payload, fup.ctx);
     const [redrawn] = fup.slack("chat.update");

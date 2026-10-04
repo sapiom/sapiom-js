@@ -645,7 +645,7 @@ describe("with sla", () => {
   });
 
   it("counts business minutes for a normal issue opened Friday afternoon", () => {
-    // Fri 2026-10-02 16:30 New York (EDT); 480 business minutes end Mon 16:30.
+    // Span a weekend so the nudge cannot fire before the configured business time has elapsed.
     const input = {
       issues: [
         issue({

@@ -147,7 +147,7 @@ describe("digest message with sla set", () => {
   });
 
   it("does not flag an issue older than its age limit whose first response is still ahead", () => {
-    // Urgent: 4 h age limit, 8 h first-response target.
+    // Put the issue between the age cutoff and response target so the test distinguishes the two modes.
     const i = issue({ priority: "urgent", ageHours: 5 });
     expect(body(message([i]).blocks)).toContain("*past SLA*");
     expect(flagged(i)).toBe(false);

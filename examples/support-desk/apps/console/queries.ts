@@ -1,8 +1,6 @@
 /**
- * The desk-scoped reads behind the Console's board, ticket and account drawers, metrics and
- * failed-events views, plus the `sla` key's reads and writes. Plain SQL, kept apart from
- * `server.ts` (which starts a listener on import) so it can be tested on pg-mem. Every desk query
- * takes the selected desk's id; none returns another desk's issues.
+ * Keep SQL separate from the listening server so Console queries can be tested with pg-mem.
+ * Every desk query takes the selected desk's id, so none returns another desk's issues.
  */
 import { z } from "zod/v4";
 

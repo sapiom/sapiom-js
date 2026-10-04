@@ -7,7 +7,7 @@ import { OPEN_STATUSES, type IssueStatus } from "../../_shared/issues";
 import { permalink, type Block } from "../../_shared/slack";
 import { slaDue, type Sla, type SlaMessage } from "../../_shared/sla";
 
-/** Age limits per priority, read only while the `sla` response targets are unset. */
+/** Age limits per priority; the digest flags by them only while the `sla` response targets are unset. */
 export const DEFAULT_SLA_HOURS = { urgent: 4, high: 24, normal: 72, low: 168 };
 export type SlaHours = typeof DEFAULT_SLA_HOURS;
 

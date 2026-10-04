@@ -1,7 +1,4 @@
-/**
- * The Console's real request handler on pg-mem: `node:http` is stubbed to capture the handler
- * instead of listening, and the database connection resolves to an in-memory fleet database.
- */
+/** Capture the handler and use pg-mem so route tests require neither a listening socket nor PostgreSQL. */
 import { Readable } from "node:stream";
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -33,7 +30,6 @@ vi.mock("../../_shared/db", async (importOriginal) => ({
   connectPostgres: async () => ({ db: captured.db }),
 }));
 
-/** One request through the server's handler; resolves with the status and parsed JSON body. */
 function call(method: string, url: string, body?: unknown) {
   const req = Object.assign(
     Readable.from(

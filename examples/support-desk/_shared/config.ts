@@ -120,9 +120,8 @@ export const ConfigSchemas = {
   /** Per desk slug; a desk without an entry never escalates to a person. */
   escalation: z.record(z.string().min(1), DeskEscalationSchema),
   /**
-   * The daily digest's age threshold: hours an open issue may age, by priority, before it is flagged.
-   * Read only while `sla` is unset (with `sla`, the digest flags the breached response clock);
-   * unset keys keep the default.
+   * The daily digest's age threshold per priority, in hours; it flags by age only while `sla` is
+   * unset (with `sla`, by the breached response clock). Unset keys keep the default.
    */
   "digest.sla_hours": z
     .object({
