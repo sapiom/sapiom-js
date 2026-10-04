@@ -313,9 +313,9 @@ export interface LinearCheck {
 }
 
 /**
- * Read the On Hold issue's Linear issue and act on a terminal state. A Linear error is logged and
- * returned, never thrown: the read is stamped either way, so the backoff moves on, and the caller
- * (a tick, or intake on a customer message) carries on with its own work.
+ * Read the On Hold issue's Linear issue and act on a terminal state. An error is logged and
+ * returned, never thrown, so the caller (a tick, or intake on a customer message) carries on with
+ * its own work.
  */
 export async function checkLinear(
   ctx: Ctx,
@@ -331,15 +331,19 @@ export async function checkLinear(
     state: null,
     resolution: null,
   };
+  let terminal = false;
   try {
     const triageChannel =
       issue.triageChannel ?? (await deskForIssue(db, issue)).triageChannel;
     const linear = await getLinearIssue(ctx, issue.linearIssueId ?? identifier);
     out.state = linear.status ?? linear.statusType ?? null;
-    // The state is stored for the Console's board.
-    await markLinearChecked(db, issue.id, out.state);
     const r = resolution(linear);
-    if (!r) return out;
+    // The state is stored for the Console's board.
+    if (!r) {
+      await markLinearChecked(db, issue.id, out.state);
+      return out;
+    }
+    terminal = true;
     const moved = await resolveIssue(ctx, db, triageChannel, {
       issueId: issue.id,
       identifier,
@@ -348,6 +352,8 @@ export async function checkLinear(
       resolution: r,
       by,
     });
+    // Stamped only once the resolution is applied, so a failed post or move leaves the check due.
+    await markLinearChecked(db, issue.id, out.state);
     if (!moved) return out;
     out.resolution = r;
     await redrawCard(ctx, db, triageChannel, moved).catch((err) =>
@@ -357,7 +363,10 @@ export async function checkLinear(
       }),
     );
   } catch (err) {
-    await markLinearChecked(db, issue.id).catch(() => undefined);
+    // A failed read is stamped, so one broken Linear issue waits for the next backoff point. A
+    // Done or Canceled that could not be applied is not: its check stays due, and the next tick
+    // (an hour later at most) retries it; the per-post keys keep a retry from posting twice.
+    if (!terminal) await markLinearChecked(db, issue.id).catch(() => undefined);
     ctx.logger.error("linear check failed for issue", {
       issueId: issue.id,
       linearIdentifier: identifier,

@@ -1138,6 +1138,27 @@ async function putSla(body: Record<string, unknown>) {
   return { sla: saved.sla };
 }
 
+/**
+ * After a write that moves when tickets come due (nudge minutes, repeat gaps, escalation levels,
+ * SLA targets), reset every open ticket's timer, so a stored timer does not keep the old time. The
+ * write stands if the run cannot start; the response says so.
+ */
+async function retimed<T extends object>(write: Promise<T>) {
+  const res = await write;
+  try {
+    const run = await rearmTimers();
+    return { ...res, timers: { reset: true, run: run.id ?? null } };
+  } catch (err) {
+    return {
+      ...res,
+      timers: {
+        reset: false,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+}
+
 const PUT: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id], body) => updateKbArticle(id!, body)],
   [
@@ -1148,35 +1169,41 @@ const PUT: [RegExp, Handler][] = [
   [
     /^\/api\/escalation$/,
     (_, body, url) =>
-      withConsoleDb(async (d) => {
-        const desk = await deskOf(d, url);
-        const res = httpBody(await putEscalation(d, desk, body));
-        // The escalation on-call is on the Acting-as list.
-        memberLists.delete(desk.id);
-        return res;
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          const desk = await deskOf(d, url);
+          const res = httpBody(await putEscalation(d, desk, body)) as object;
+          // The escalation on-call is on the Acting-as list.
+          memberLists.delete(desk.id);
+          return res;
+        }),
+      ),
   ],
   [
     /^\/api\/settings\/desk$/,
     (_, body, url) =>
-      withConsoleDb(async (d) => {
-        const desk = await deskOf(d, url);
-        const res = await putDeskSettings(d, desk, body);
-        // The Linear project or the on-call may have changed; drop what was cached for the desk.
-        projects.delete(desk.id);
-        memberLists.delete(desk.id);
-        return settingsView(d, desk, res);
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          const desk = await deskOf(d, url);
+          const res = await putDeskSettings(d, desk, body);
+          // The Linear project or the on-call may have changed; drop what was cached for the desk.
+          projects.delete(desk.id);
+          memberLists.delete(desk.id);
+          return settingsView(d, desk, res);
+        }),
+      ),
   ],
   [
     /^\/api\/settings\/fleet$/,
     (_, body, url) =>
-      withConsoleDb(async (d) => {
-        const desk = await deskOf(d, url);
-        return settingsView(d, desk, await putFleetSettings(d, desk, body));
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          const desk = await deskOf(d, url);
+          return settingsView(d, desk, await putFleetSettings(d, desk, body));
+        }),
+      ),
   ],
-  [/^\/api\/sla$/, (_, body) => putSla(body)],
+  [/^\/api\/sla$/, (_, body) => retimed(putSla(body))],
 ];
 
 const DELETE: [RegExp, Handler][] = [
@@ -1184,10 +1211,12 @@ const DELETE: [RegExp, Handler][] = [
   [
     /^\/api\/sla$/,
     () =>
-      withConsoleDb(async (d) => {
-        await clearSla(d);
-        return { sla: null };
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          await clearSla(d);
+          return { sla: null };
+        }),
+      ),
   ],
 ];
 

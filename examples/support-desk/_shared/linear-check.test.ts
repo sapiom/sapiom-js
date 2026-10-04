@@ -297,6 +297,8 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
     const first = await sync(failing as never, db);
     expect(first.failed).toHaveLength(1);
     expect((await getIssue(db, id)).status).toBe("on_hold");
+    // Not stamped: the check stays due, so the next tick retries the move.
+    expect((await getIssue(db, id)).linearCheckedAt).toBeNull();
 
     const { ctx: ok, emitted } = live();
     const second = await sync(ok as never, db);

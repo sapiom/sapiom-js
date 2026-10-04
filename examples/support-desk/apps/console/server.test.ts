@@ -54,8 +54,26 @@ function call(method: string, url: string, body?: unknown) {
 }
 
 let db: Db;
+/** The Sapiom API calls the server made; answered offline below. */
+const apiCalls: { method: string; url: string; body: unknown }[] = [];
 
 beforeAll(async () => {
+  // Offline: the server's Sapiom API calls get canned answers, and the key is a placeholder.
+  vi.stubEnv("SAPIOM_API_KEY", "test-key");
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+    const method = init.method ?? "GET";
+    apiCalls.push({
+      method,
+      url,
+      body: init.body ? JSON.parse(init.body as string) : undefined,
+    });
+    const json = (v: unknown) => new Response(JSON.stringify(v));
+    if (url.endsWith("/v1/workflows/definitions?limit=200"))
+      return json([{ id: "def-ctl", slug: "support-desk-controller" }]);
+    if (url.endsWith("/v1/workflows/executions") && method === "POST")
+      return json({ id: "exec-rearm" });
+    return new Response("not found", { status: 404 });
+  });
   db = await memoryDb();
   captured.db = db;
   const desk = (
@@ -97,10 +115,19 @@ describe("console server SLA routes", () => {
     expect(bad.body.error).toMatch(/timeZone/);
     expect(await getConfigOr({ ...db }, "sla", null)).toBeNull();
 
+    apiCalls.length = 0;
+    // A saved target moves when tickets come due, so every open ticket's timer is reset.
     expect(await call("PUT", "/api/sla", EXAMPLE_SLA)).toEqual({
       status: 200,
-      body: { sla: EXAMPLE_SLA },
+      body: { sla: EXAMPLE_SLA, timers: { reset: true, run: "exec-rearm" } },
     });
+    expect(apiCalls.filter((c) => c.method === "POST")).toEqual([
+      {
+        method: "POST",
+        url: expect.stringMatching(/\/v1\/workflows\/executions$/),
+        body: { definitionId: "def-ctl", input: {} },
+      },
+    ]);
     expect(await call("GET", "/api/sla")).toEqual({
       status: 200,
       body: { sla: EXAMPLE_SLA },
@@ -112,7 +139,7 @@ describe("console server SLA routes", () => {
 
     expect(await call("DELETE", "/api/sla")).toEqual({
       status: 200,
-      body: { sla: null },
+      body: { sla: null, timers: { reset: true, run: "exec-rearm" } },
     });
     expect(await getConfigOr({ ...db }, "sla", null)).toBeNull();
   });

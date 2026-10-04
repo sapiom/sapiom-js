@@ -115,10 +115,15 @@ and keeps one `schedule_once` on the controller for it (stored in `issues.next_t
 - the next escalation level (see [Nudges and escalation to a person](#nudges-and-escalation-to-a-person));
 - for an On Hold issue, the next Linear check: 1 h after it went On Hold, 4 h after that, then daily.
 
-The same due time keeps the stored timer; a closed ticket's timer is cancelled. A tick re-reads
-the ticket, sends what is due through the same rules and dedups through `nudges`, so a duplicate
-or late tick sends nothing twice. A tick first arms a 30-minute retry, so a run that fails partway
-still comes back.
+The same due time keeps the stored timer; a closed ticket's timer is cancelled (Reset board
+cancels them too). A tick re-reads the ticket, sends what is due through the same rules and dedups
+through `nudges`, so a duplicate or late tick sends nothing twice. A tick first arms a 30-minute
+retry, so a run that fails partway still comes back; a Done that could not be applied, or a card
+redraw that failed, is retried within the hour.
+
+Saving nudge minutes, repeat gaps, escalation levels or SLA targets in the Console resets every
+open ticket's timer (one controller run). After changing them another way (the setup agent's
+`config`), run the controller once with input `{}`.
 
 When the Linear issue is Done or Canceled, the controller posts in the triage thread and moves
 the issue to On You; Done also emits `issue.engineering_resolved`. It posts in the customer thread

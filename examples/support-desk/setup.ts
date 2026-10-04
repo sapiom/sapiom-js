@@ -364,7 +364,7 @@ async function triggers(
       .get<AttachedTrigger[]>(`/definitions/${slug}/triggers`)
       .catch((err: unknown) => {
         // Never deployed in this org: nothing to detach.
-        if ((err as { status?: unknown })?.status === 404) return [];
+        if ((err as { code?: unknown })?.code === "HTTP_404") return [];
         throw err;
       });
     for (const old of attached.filter((a) => a.status !== "disabled")) {

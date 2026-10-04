@@ -854,6 +854,33 @@ describe("controller", () => {
       expect(await timer(issue.id)).toEqual({ id: null, at: null });
     });
 
+    it("a pause between scan and send stops the send", async () => {
+      const issue = await seedIssue(db, { title: "paused mid-run" });
+      await backdate(db);
+      const c = ctxWithJev("exec-mid");
+      const scanned = await step("scan").run({ issueId: issue.id }, c.ctx);
+      expect(scanned.kind).toBe("continue");
+      await setConfig(db, "controller.paused", true, "test");
+      const out = await step("send").run(scanned.input, c.ctx);
+      expect(out.output).toMatchObject({ skipped: "controller paused" });
+      expect(c.emitted).toEqual([]);
+      expect(await timer(issue.id)).toEqual({ id: null, at: null });
+    });
+
+    it("a card whose redraw failed brings the controller back to redraw it", async () => {
+      const issue = await seedIssue(db, { title: "dirty" });
+      await assign(db, issue.id, "U0OWNER01");
+      await createDraft(db, { issueId: issue.id, text: "Here." });
+      await db.query("update issues set card_dirty = true where id = $1", [
+        issue.id,
+      ]);
+      const r = await tick(issue.id);
+      expect(
+        r.logs.filter((l) => l.msg.startsWith("slack chat.update")),
+      ).toHaveLength(1);
+      expect((await getIssue(db, issue.id)).cardDirty).toBe(false);
+    });
+
     it("a run without an issue id sends nothing and sets every open ticket's timer", async () => {
       const a = await seedIssue(db, { title: "a" });
       const b = await seedIssue(db, { title: "b" });

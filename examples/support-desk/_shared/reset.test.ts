@@ -12,6 +12,7 @@ import {
 } from "./issues";
 import { resetBoard } from "./reset";
 import { fakeCtx } from "./test-ctx";
+import { rescheduleIssue } from "./timers";
 
 async function seeded() {
   const db = await localFleetDb();
@@ -46,6 +47,16 @@ describe("resetBoard", () => {
     for (const id of [carded.id, bare.id, closed.id])
       expect((await getIssue(db, id)).status).toBe("closed");
     expect(await resetBoard(db, ctx)).toEqual([]);
+  });
+
+  it("cancels each closed issue's controller timer", async () => {
+    const { db, carded } = await seeded();
+    const { ctx, schedules } = fakeCtx();
+    await rescheduleIssue(db, ctx as never, carded.id);
+    expect(schedules.pending()).toHaveLength(1);
+    await resetBoard(db, ctx as never);
+    expect(schedules.pending()).toEqual([]);
+    expect((await getIssue(db, carded.id)).nextTickId).toBeNull();
   });
 
   it("redraws cards through the client in ctx.sapiom, not the ambient connector", async () => {

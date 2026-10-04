@@ -157,6 +157,18 @@ describe("rescheduleIssue", () => {
     expect(due!.dueAt.getTime()).toBe(held.onHoldAt!.getTime() + 60 * 60_000);
   });
 
+  it("a stale card is due now, so its redraw is retried", async () => {
+    const issue = await seed();
+    await assign(db, issue.id, "U0OWNER01");
+    await createDraft(db, { issueId: issue.id, text: "Here." });
+    await db.query("update issues set card_dirty = true where id = $1", [
+      issue.id,
+    ]);
+    expect(await nextDue(db, await getIssue(db, issue.id))).toMatchObject({
+      reason: "card_redraw",
+    });
+  });
+
   it("does nothing for an issue that does not exist", async () => {
     const { ctx, schedules } = fakeCtx();
     const out = await rescheduleIssue(

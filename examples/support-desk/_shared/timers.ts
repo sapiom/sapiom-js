@@ -224,7 +224,7 @@ export async function escalationConfig(db: Db, desks: Desk[]) {
   };
 }
 
-export type DueReason = "nudge" | "escalation" | "linear_check";
+export type DueReason = "nudge" | "escalation" | "linear_check" | "card_redraw";
 
 export interface NextDue {
   dueAt: Date;
@@ -262,6 +262,10 @@ export async function nextDue(
       reason: "linear_check",
       detail: issue.linearIdentifier ?? "",
     });
+  // A status move whose card redraw failed: the tick redraws it, so come back now (after a tick
+  // that failed again, {@link STUCK_RETRY_MINUTES} later).
+  if (issue.cardDirty)
+    candidates.push({ dueAt: snap.now, reason: "card_redraw", detail: "" });
   return candidates.reduce<NextDue | null>(
     (best, c) => (!best || c.dueAt.getTime() < best.dueAt.getTime() ? c : best),
     null,

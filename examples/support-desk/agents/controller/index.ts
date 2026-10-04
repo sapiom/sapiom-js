@@ -338,6 +338,17 @@ const send = defineStep({
   }),
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
+      // Switched off since the scan: send nothing, and clear the timer as a paused scan would.
+      if (await getConfigOr(db, "controller.paused", false)) {
+        const timer = input.issueId
+          ? timerOut(await rescheduleIssue(db, ctx, input.issueId))
+          : undefined;
+        return terminate({
+          ...(input.issueId ? { issueId: input.issueId } : {}),
+          skipped: "controller paused",
+          timer,
+        });
+      }
       const limits = await thresholds(db);
       const desks = await listDesks(db);
       const fallbackDesk = desks.find((d) => d.isDefault);
