@@ -10129,6 +10129,12 @@ button.rail-footer-card:hover {
   margin-left: auto;
 }
 
+.project-map-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* The agent's panel, floating over the map's bottom-right corner (where the
    mock's card sits), just above the zoom controls: out of flow, so picking an
    agent never changes the board's width (design I1). */

@@ -16,10 +16,10 @@
  *
  *   The selected SESSION (`harness.activeSessionId`, persisted). Changed only
  *               by a session click, Start chat, a project's `+`, Cmd/Ctrl+N.
- *   The VIEW   (`view`, `lib/centre-pane.ts`): session, or a project's map. A
- *               project click changes the view and leaves the selected
- *               session alone, so it stays highlighted in the rail and one
- *               click brings it back.
+ *   The VIEW   (`view`, `lib/centre-pane.ts`): session, a project's map, or an
+ *               agent's canvas entered from that map. A project click changes
+ *               the view and leaves the selected session alone, so it stays
+ *               highlighted in the rail and one click brings it back.
  *
  * What the centre shows is ONE pure function of those (`centrePane`), and
  * which sessions a project lists is ONE function (`lib/rail-sessions.ts`) read
@@ -56,6 +56,7 @@ import {
 } from "./components/ConnectivityState";
 import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
+import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import { SessionBar } from "./components/SessionBar";
 import { RunSheet } from "./components/RunSheet";
@@ -454,7 +455,7 @@ export const App = (): JSX.Element => {
   } | null>(null);
   /**
    * WHAT THE CENTRE IS POINTED AT (design.md §1, the View slot): the selected
-   * session, or a project's Agent Map.
+   * session, a project's Agent Map, or an agent's canvas entered from that map.
    *
    * ONE slot. It replaced three that had to agree (a durable map selection, an
    * unresolved project, and a focused agent path), and every door had to clear
@@ -556,7 +557,7 @@ export const App = (): JSX.Element => {
   );
   const removeTriggerRef = useRef<HTMLButtonElement | null>(null);
   // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
-  // because it needs `state`, which exists only past the loading
+  // because it needs `state`/`openAgentCanvas`, which exist only past the loading
   // guard; the effects below reach it through the ref. The cold-start target rides
   // in on the ?agent=/?template= load-URL param; warm links come via the desktop bridge.
   const applyDeepLinkRef = useRef<((target: DeepLinkTarget) => void) | null>(
@@ -872,6 +873,8 @@ export const App = (): JSX.Element => {
       recordVisit({ kind: "composer", project: composerProject });
     } else if (view.kind === "project") {
       recordVisit({ kind: "agent-map", projectId: view.projectId });
+    } else if (view.kind === "agent") {
+      recordVisit({ kind: "agent", agentPath: view.path });
     } else if (activeSessionIdForNav) {
       recordVisit({
         kind: "session",
@@ -926,6 +929,13 @@ export const App = (): JSX.Element => {
           (scope) => scope.workspaceKey === visit.workspaceKey,
         )?.projectId;
         setView(projectId ? { kind: "project", projectId } : { kind: "session" });
+      } else if (visit.kind === "agent") {
+        const projectId = projectIdForAgent(visit.agentPath, harness.state);
+        setView(
+          projectId
+            ? { kind: "agent", projectId, path: visit.agentPath }
+            : { kind: "session" },
+        );
       } else {
         setView({ kind: "session" });
         if (visit.kind === "session") setActiveSessionId(visit.sessionId);
@@ -1096,6 +1106,12 @@ export const App = (): JSX.Element => {
   const showDead = centre.kind === "dead";
   const showWorkbench = centre.kind === "workbench";
   const conversationSession = showDead || showWorkbench ? activeSession : null;
+  const mapAgent =
+    centre.kind === "agent-canvas"
+      ? (state.workflows.find((workflow) =>
+          samePath(workflow.path, centre.path),
+        ) ?? null)
+      : null;
   /** The session the header names: only when its workbench or dead pane is
    *  the centre. A project view's header names the project instead. */
   const sessionBarSession = conversationSession;
@@ -1195,6 +1211,21 @@ export const App = (): JSX.Element => {
   };
 
   selectProjectRef.current = handleSelectProject;
+
+  /** Back to the project's map from an agent's canvas entered on it. */
+  const backToMap = (projectId: string): void => {
+    navGenerationRef.current += 1;
+    setView({ kind: "project", projectId });
+  };
+
+  /** Double click on the map, or Open canvas: the agent's canvas in the same
+   *  centre, with the way back in the header (flow 4.4). */
+  const openAgentCanvas = (projectId: string, path: string): void => {
+    navGenerationRef.current += 1;
+    leaveDestinations();
+    closeMobileDrawer();
+    setView({ kind: "agent", projectId, path });
+  };
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927):
@@ -1347,6 +1378,11 @@ export const App = (): JSX.Element => {
       setMapPanelPath((current) =>
         current && samePath(current, from) ? to : current,
       );
+      setView((current) =>
+        current.kind === "agent" && samePath(current.path, from)
+          ? { ...current, path: to }
+          : current,
+      );
       harness.showToast(`Moved ${basenameOf(to)} to ${to}.`, "info");
     } catch (err) {
       harness.showToast(errorMessage(err, `Couldn't move ${basenameOf(from)}.`));
@@ -1396,6 +1432,8 @@ export const App = (): JSX.Element => {
     shownProject && shownScope
       ? {
           label: projectLabelOf(shownProject),
+          agentName: centre.kind === "agent-canvas" ? (mapAgent?.name ?? basenameOf(centre.path)) : null,
+          onBackToMap: () => backToMap(shownProject),
           onNewAgent: () =>
             handleCreateAgentInProject(shownScope.cwd, projectLabelOf(shownProject)),
           onExpandMap:
@@ -1429,6 +1467,7 @@ export const App = (): JSX.Element => {
         onOpenSession={openSession}
         onStartChat={() => handleStartChat(agent, projectId)}
         startChatPending={startChatPending}
+        onEnterCanvas={() => openAgentCanvas(projectId, agent.path)}
         onChangeLocation={(to) => void handleMoveAgent(agent.path, to)}
         validateLocation={(to) => locationRefusal(agent.path, to)}
         onClose={() => setMapPanelPath(null)}
@@ -1795,23 +1834,17 @@ export const App = (): JSX.Element => {
   };
 
 
-  // Open a deep-linked agent if the user has it locally: its project's map
-  // with the agent's panel open; returns whether it was found. Assigned here
-  // (not in an effect) because it closes over `state`, which exists only past
-  // the loading guard — the deep-link effects above reach it through the ref.
+  // Open a deep-linked agent if the user has it locally: its canvas, in the
+  // centre of its project; returns whether it was found. Assigned here (not in
+  // an effect) because it closes over `state`, which exists only past the
+  // loading guard — the deep-link effects above reach it through the ref.
   focusExistingRef.current = (definitionId: string): boolean => {
     const match = state.workflows.find(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
     );
     if (!match) return false;
     const projectId = projectIdForAgent(match.path, state);
-    if (projectId) {
-      navGenerationRef.current += 1;
-      leaveDestinations();
-      closeMobileDrawer();
-      setMapPanelPath(match.path);
-      setView({ kind: "project", projectId });
-    }
+    if (projectId) openAgentCanvas(projectId, match.path);
     return true;
   };
   // A cloned agent has landed: bind the session that cloned it.
@@ -2050,53 +2083,6 @@ export const App = (): JSX.Element => {
       });
     })();
   };
-
-  /**
-   * ONE AGENT'S CANVAS, by path: served by the workflow-keyed route (IA-01),
-   * so no session is bound or started to draw it. Unmounted since the entered
-   * agent page was removed (flow-map-chat-overlay.md §5); the agent modal
-   * mounts it (design-map-chat.md §4.3, P4.2a), and a launched child agent
-   * opens in the same modal through `onOpenWorkflow`.
-   */
-  const renderAgentCanvas = (
-    agent: WorkflowInfo,
-    onOpenWorkflow: (path: string) => void,
-  ): JSX.Element => (
-    <CanvasPane
-      key={`agent:${agent.path}`}
-      sessionId={null}
-      lastMessage={harness.lastMessage}
-      subjectWorkflow={agent}
-      source={canvasSourceFor({
-        subjectPath: agent.path,
-        bindingPath: null,
-        sessionId: null,
-      })}
-      loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
-      overviewActive={false}
-      sessionExited={false}
-      expanded={false}
-      onToggleExpanded={() => {}}
-      macros={state.macros}
-      tasks={harness.tasks}
-      surface="board"
-      onOpenSteps={() => {}}
-      run={null}
-      runTarget={null}
-      runs={[]}
-      onSelectRun={() => {}}
-      preview={null}
-      deployState={harness.deployStateByPath.get(agent.path) ?? null}
-      onDismissDeploy={() => harness.dismissDeployState(agent.path)}
-      agentsBaseUrl={state.agentsBaseUrl}
-      onOpenCode={() => {}}
-      workflows={state.workflows}
-      onOpenWorkflow={onOpenWorkflow}
-      onRunMacro={(macro) => handleRunMacroForWorkflow(agent, macro)}
-      onInjectPrompt={() => {}}
-      onDescribeWorkflow={handleDescribeWithAI}
-    />
-  );
 
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
@@ -2358,10 +2344,12 @@ export const App = (): JSX.Element => {
               ) : centre.kind === "project-map" ? (
                 /* THE PROJECT VIEW (flow-navigation.md 4.3): the project's
                    Agent Map at full centre width, nothing beside it. Click an
-                   agent for its panel, floating over the map (4.4). Keyed by
-                   project, so switching projects is a fresh load rather than
-                   a mutation of the one on screen. */
-                <ProjectView>
+                   agent for its panel, floating over the map (4.4); double
+                   click, or the panel's Open canvas, enters the agent's canvas
+                   in this same centre. Keyed by project, so switching projects
+                   is a fresh load rather than a mutation of the one on
+                   screen. */
+                <ProjectView showing="map">
                   {mapMode?.kind === "map" ? (
                     <AgentMapPane
                       key={`${centre.projectId}:${harness.authRevision}`}
@@ -2371,6 +2359,9 @@ export const App = (): JSX.Element => {
                       workflows={state.workflows}
                       refreshWorkflows={harness.refreshWorkflows}
                       onPickAgent={(workflow) => setMapPanelPath(workflow.path)}
+                      onEnterAgent={(workflow) =>
+                        openAgentCanvas(centre.projectId, workflow.path)
+                      }
                       agentPanel={renderAgentPanel(centre.projectId)}
                       state={agentMapEntry.state.workspace}
                       unavailable={agentMapEntry.state.unavailable}
@@ -2392,7 +2383,69 @@ export const App = (): JSX.Element => {
                       }
                       selectedPath={mapPanelPath}
                       onPick={(agent) => setMapPanelPath(agent.path)}
+                      onEnter={(agent) =>
+                        openAgentCanvas(centre.projectId, agent.path)
+                      }
                       panel={renderAgentPanel(centre.projectId)}
+                    />
+                  )}
+                </ProjectView>
+              ) : centre.kind === "agent-canvas" ? (
+                <ProjectView showing="agent">
+                  {mapAgent ? (
+                    /* The agent's own canvas, entered from the map. Served by
+                       the workflow-keyed route (IA-01): it is a look at the
+                       agent, not at a session, so no session is bound or
+                       started for it. */
+                    <CanvasPane
+                      key={`agent:${mapAgent.path}`}
+                      sessionId={null}
+                      lastMessage={harness.lastMessage}
+                      subjectWorkflow={mapAgent}
+                      source={canvasSourceFor({
+                        subjectPath: mapAgent.path,
+                        bindingPath: null,
+                        sessionId: null,
+                      })}
+                      loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
+                      overviewActive={false}
+                      sessionExited={false}
+                      expanded={false}
+                      onToggleExpanded={() => {}}
+                      macros={state.macros}
+                      tasks={harness.tasks}
+                      surface="board"
+                      onOpenSteps={() => {}}
+                      run={null}
+                      runTarget={null}
+                      runs={[]}
+                      onSelectRun={() => {}}
+                      preview={null}
+                      deployState={
+                        harness.deployStateByPath.get(mapAgent.path) ?? null
+                      }
+                      onDismissDeploy={() =>
+                        harness.dismissDeployState(mapAgent.path)
+                      }
+                      agentsBaseUrl={state.agentsBaseUrl}
+                      onOpenCode={() => {}}
+                      workflows={state.workflows}
+                      onOpenWorkflow={(path) =>
+                        openAgentCanvas(centre.projectId, path)
+                      }
+                      onRunMacro={(macro) =>
+                        handleRunMacroForWorkflow(mapAgent, macro)
+                      }
+                      onInjectPrompt={() => {}}
+                      onDescribeWorkflow={handleDescribeWithAI}
+                    />
+                  ) : (
+                    <EmptyState
+                      className="canvas-empty"
+                      testId="project-agent-missing"
+                      icon="Folder"
+                      title="This agent is no longer here"
+                      body="It moved or was removed. Go back to the map to see the project's agents."
                     />
                   )}
                 </ProjectView>

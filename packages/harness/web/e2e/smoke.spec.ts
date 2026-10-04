@@ -12,12 +12,30 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 import {
-  CANVAS_UNMOUNTED,
+  NO_HOME,
   activeSessionId,
+  openAgentCanvas,
   openProjectMap,
   selectSession,
   startChatWithRfq,
 } from "./mock-navigation";
+
+/**
+ * leasing's board on its entered page, the interim way into an agent
+ * (SAP-3836 keeps it until the agent modal). With `fixture`, the bundled
+ * interactive fixture board (it answers hit / pick / node and posts its size)
+ * is swapped into the pane's own `srcdoc` frame, so the pane's source-window
+ * guard sees exactly what a generated board would send.
+ */
+async function openLeasingBoard(page: Page, fixture = true): Promise<void> {
+  await openAgentCanvas(page, "acme-app", "leasing");
+  await expect(page.locator(".canvas-iframe")).toBeVisible();
+  if (!fixture) return;
+  await page.evaluate(async () => {
+    const html = await (await fetch("/canvas/sess-boot/index.html")).text();
+    (document.querySelector(".canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+  });
+}
 
 // The mock demo seeds a run + auto-plays the chat conversation on load (see
 // the demo spec). These smoke tests exercise mechanics from a clean slate, so
@@ -311,7 +329,7 @@ test("creation IA: Add project is one folder question; a project's + starts a ch
 test("the selected session's bound agent drives macro gating", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.verbs);
   // The rail lists sessions, not agents (flow-navigation.md Q3).
   await expect(page.locator(".rail-workflows [data-testid^='workflow-']")).toHaveCount(0);
 
@@ -355,7 +373,7 @@ test("the selected session's bound agent drives macro gating", async ({
 test("inject macros are enabled once the boot session and a deployed workflow are active", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.verbs);
   await expect(page.getByTestId("rail-session-sess-boot")).toHaveAttribute(
     "data-agent",
     "leasing",
@@ -981,22 +999,6 @@ test.describe("command palette (Cmd+K / Cmd+P quick-jump)", () => {
   });
 });
 
-test("canvas pane shows its empty state for a session with nothing generated yet", async ({
-  page,
-}) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
-  // The boot session opens on its bundled board (first paint), so switch to
-  // the second leasing session — bound, no bundled doc — to see the honest
-  // empty state. (scratch is unbound, so it has no right pane at all.)
-  await selectSession(page, "sess-leasing-2");
-  await expect(page.locator(".canvas-empty")).toContainText(
-    "Nothing generated yet",
-  );
-  await expect(page.locator(".canvas-empty")).toContainText(
-    "Generated automatically from the bound agent",
-  );
-});
-
 test("settings popover: identity, telemetry toggle, and it persists across close/reopen", async ({
   page,
 }) => {
@@ -1045,7 +1047,7 @@ test.describe("workflow actions", () => {
   test("action bar shows the unified split Run control; the Prod globe stays; the deployed pill links to the dashboard", async ({
     page,
   }) => {
-    test.fixme(true, CANVAS_UNMOUNTED);
+    test.fixme(true, NO_HOME.verbs);
     // The main segment opens the last available target; the menu makes both
     // Local and Cloud explicit without separate Test/Run buttons.
     const localBtn = page.getByTestId("session-step-local");
@@ -1079,34 +1081,10 @@ test.describe("workflow actions", () => {
 
 });
 
-test("canvas empty state explains itself — no manual render action", async ({
-  page,
-}) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
-  // The second leasing session has no bundled doc, so its Canvas is the empty
-  // state (the boot session opens on its board).
-  await selectSession(page, "sess-leasing-2");
-  await expect(page.locator(".canvas-empty")).toContainText(
-    "Nothing generated yet",
-  );
-  // Short supporting line, no file-editing instructions (there is no editor in
-  // this harness). The diagram generates automatically from the bound agent
-  // — there is no manual render button anymore.
-  await expect(page.locator(".canvas-empty")).toContainText(
-    "Generated automatically from the bound agent",
-  );
-  await expect(page.locator(".canvas-empty")).not.toContainText(
-    ".sapiom/canvas/index.html",
-  );
-  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
-
-  await page.screenshot({ path: "web/e2e/screenshots/canvas-empty-state.png" });
-});
-
 test("steps tab shows its own empty state (not canvas copy) before anything is rendered", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.steps);
   // The second leasing session has no generated canvas content, so the Steps
   // tab hits the same early-return state as the board — but must talk about
   // steps. (The boot session opens on its board, which does post a step graph.)
@@ -1126,7 +1104,7 @@ test("steps tab shows its own empty state (not canvas copy) before anything is r
 test("the canvas is a single controlled surface — no separate preview tab or port suggestions", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  await openLeasingBoard(page, false);
   await expect(page.locator(".canvas-mode-toggle")).toHaveCount(0);
   await expect(page.getByTestId("preview-chip")).toHaveCount(0);
 
@@ -1145,46 +1123,14 @@ test("the canvas is a single controlled surface — no separate preview tab or p
     });
   });
   await expect(page.getByTestId("preview-chip")).toHaveCount(0);
-  // The port message changed nothing in the canvas — the board (the session's
-  // own generated content, rendered on first paint) is still all it shows.
-  await expect(page.locator(".canvas-iframe")).toBeVisible();
-});
-
-test("the seeded boot agent renders its board on first paint, and a canvas.reload keeps the iframe", async ({
-  page,
-}) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
-  // Demo visibility (docs/IA.md): the agent bound to sess-boot renders its
-  // board immediately — sess-boot ships a bundled canvas doc, so the demo
-  // opens on a live board (no click) rather than an empty pane. Non-doc mock
-  // sessions never mount an iframe (guarded elsewhere); this is the doc case.
-  await expect(page.locator(".canvas-empty")).toHaveCount(0);
-  await expect(page.locator(".canvas-iframe")).toHaveAttribute(
-    "src",
-    /^\/canvas\/sess-boot\/index\.html\?theme=(light|dark)$/,
-  );
-
-  // A canvas.reload (the real server fires one when the render is rewritten)
-  // re-renders in place — the iframe stays, never dropping to the empty state.
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (message: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-
-  await expect(page.locator(".canvas-empty")).toHaveCount(0);
+  // The port message changed nothing in the canvas — the agent's board is
+  // still all it shows.
   await expect(page.locator(".canvas-iframe")).toBeVisible();
 });
 
 test("a stale enrichment renders with the 'stale — Refresh' chip in the served canvas document", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
   // The chip is server-rendered (core/canvas-render.ts marks an enrichment
   // whose fingerprint no longer matches the sources) — serve the REAL
   // renderer's output for that state into the pane's iframe and assert the
@@ -1199,20 +1145,12 @@ test("a stale enrichment renders with the 'stale — Refresh' chip in the served
       <p class="canvas-subtitle">Handles lease applications end to end</p>
     </div>
   </body></html>`;
-  await page.route("**/canvas/sess-boot/**", async (route) => {
-    await route.fulfill({ contentType: "text/html", body: staleDocument });
-  });
-
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (message: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  // The entered page's board arrives as `srcdoc`; serve the stale document
+  // through that same frame.
+  await openLeasingBoard(page, false);
+  await page.evaluate((html) => {
+    (document.querySelector(".canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+  }, staleDocument);
 
   const frame = page.frameLocator(".canvas-iframe");
   await expect(frame.locator(".canvas-badge--stale")).toHaveText(
@@ -1227,7 +1165,10 @@ test("a stale enrichment renders with the 'stale — Refresh' chip in the served
 test("a pending canvas load shows a skeleton over the iframe — never a blank pane", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(
+    true,
+    "the stall seam was the session's served /canvas/<id>/ document; the entered page's board arrives inline from the agent graph route, which mock mode cannot hold open (SAP-3838 re-points this at the agent modal)",
+  );
   // Stall the canvas document so the load stays pending long enough to assert
   // on the skeleton deterministically.
   let releaseCanvas = (): void => {};
@@ -1270,75 +1211,15 @@ test("a pending canvas load shows a skeleton over the iframe — never a blank p
   await expect(page.locator(".canvas-iframe")).toBeVisible();
 });
 
-test("a mock session without a bundled canvas doc shows the empty state and never mounts an iframe", async ({
-  page,
-}) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
-  // Mock mode ships real documents only under public/canvas/<id>/ (today:
-  // sess-boot). Any other session's canvas URL is the static host's 404
-  // page on the deployed Pages build, so the pane must keep the honest
-  // empty state — no iframe, and no fetch of a non-doc canvas URL, ever.
-  const sessionsFetched = new Set<string>();
-  await page.route("**/canvas/**", async (route) => {
-    const match = /\/canvas\/([^/]+)/.exec(route.request().url());
-    if (match) sessionsFetched.add(match[1]);
-    await route.fulfill({
-      contentType: "text/html",
-      body: "<html><body>diagram</body></html>",
-    });
-  });
-
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (message: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
-  await expect(page.locator(".canvas-iframe")).toBeVisible();
-
-  // Start a chat with rfq: it starts in rfq-agent — a session with NO bundled
-  // demo document.
-  await startChatWithRfq(page);
-  await expect(page.getByTestId("session-context-title")).toContainText("rfq");
-
-  // Honest absence, not a 404 in a frame: the empty state renders…
-  await expect(page.locator(".canvas-empty")).toContainText(
-    "Nothing generated yet",
-  );
-  await expect(page.locator(".canvas-iframe")).toHaveCount(0);
-
-  // …and even an explicit reload event for the new session cannot force a
-  // frame (this is the exact path that iframed GitHub's 404 on Pages).
-  const newSessionId = await page
-    .getByTestId("session-context")
-    .getAttribute("data-session-id");
-  expect(newSessionId).not.toBe("sess-boot");
-  await page.evaluate((id) => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (message: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: id,
-    });
-  }, newSessionId);
-  await page.waitForTimeout(300);
-  await expect(page.locator(".canvas-iframe")).toHaveCount(0);
-  await expect(page.locator(".canvas-empty")).toContainText(
-    "Nothing generated yet",
-  );
-  expect(Array.from(sessionsFetched).every((id) => id === "sess-boot")).toBe(
-    true,
-  );
-});
-
 test.describe("background-task canvas states", () => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  // A board shows only its own session's tasks (CanvasPane filters on
+  // `sessionId`), and the entered page has no session.
+  test.beforeEach(() => {
+    test.fixme(
+      true,
+      "background-task activity is filtered to the board's session; the entered page has none until tasks are keyed by agent path (SAP-3839) and shown in the agent modal (SAP-3838)",
+    );
+  });
   const baseTask = {
     id: "task-1",
     macroId: "visualize",
@@ -1610,7 +1491,10 @@ test.describe("background-task canvas states", () => {
 });
 
 test.describe("agent action bar (status chip + right-anchored actions)", () => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  // Every test here drives the Run / Deploy controls beside a bound session.
+  test.beforeEach(() => {
+    test.fixme(true, NO_HOME.verbs);
+  });
   test("deployed workflow: the split Run is primary, the deployed pill links out, and Cloud fires a direct prod run", async ({
     page,
   }) => {
@@ -1853,7 +1737,6 @@ test.describe("resizable panes", () => {
 });
 
 test.describe("canvas iframe theme", () => {
-  test.fixme(true, CANVAS_UNMOUNTED);
   // Pin the OS to dark to prove the light product default still reaches the
   // iframe; the test then proves that a manual toggle reaches it too.
   test.use({ colorScheme: "dark" });
@@ -1861,22 +1744,16 @@ test.describe("canvas iframe theme", () => {
   test("the canvas iframe carries the app's theme and flips on toggle", async ({
     page,
   }) => {
-    await page.evaluate(() => {
-      (
-        window as unknown as {
-          __HARNESS_TEST__: { publish: (message: unknown) => void };
-        }
-      ).__HARNESS_TEST__.publish({
-        type: "canvas.reload",
-        harnessSessionId: "sess-boot",
-      });
-    });
-
-    const iframe = page.locator(".canvas-iframe");
-    await expect(iframe).toHaveAttribute("src", /theme=light/);
+    // The entered page's board is a `srcdoc` frame, which has no `?theme=`;
+    // the pane stamps the theme on the document's root instead.
+    await openLeasingBoard(page, false);
+    const root = page.frameLocator(".canvas-iframe").locator("html");
+    await expect(root).toHaveAttribute("data-theme", "light");
 
     await toggleTheme(page);
-    await expect(iframe).toHaveAttribute("src", /theme=dark/);
+    await expect(
+      page.frameLocator(".canvas-iframe").locator("html"),
+    ).toHaveAttribute("data-theme", "dark");
   });
 });
 
@@ -1911,22 +1788,10 @@ test("folder field: Enter fires the dialog's primary action", async ({
   await expect(page.getByTestId("workspace-group-rfq-agent")).toBeVisible();
 });
 
-test("canvas controls: the board widget zooms; the subheader's expand lifts the pane to an overlay", async ({
+test("canvas controls: the board widget zooms and fits", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
-  // Swap the empty state for the demo iframe first (same bus message the
-  // agent's canvas.reload event sends).
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  await openLeasingBoard(page);
   const iframe = page.locator(".canvas-iframe");
   await expect(iframe).toBeVisible();
 
@@ -1969,41 +1834,21 @@ test("canvas controls: the board widget zooms; the subheader's expand lifts the 
   // The gesture surface for drag-pan/wheel-zoom covers the board.
   await expect(page.getByTestId("canvas-pan-layer")).toBeVisible();
 
-  // The board widget carries zoom only — the panel-level expand lives in the
-  // right-pane tab bar, right beside the collapse-panel toggle.
+  // The board widget carries zoom only.
   await expect(controls.getByTestId("canvas-expand")).toHaveCount(0);
-  const expand = page.getByTestId("canvas-expand");
+});
 
-  // Expand: same node, fixed overlay — the iframe is not remounted. The
-  // overlay covers the subheader, so it carries its own exit control.
-  await expand.click();
-  await expect(page.locator(".canvas-frame-wrap")).toHaveClass(/is-expanded/);
-  await expect(page.locator(".canvas-frame-wrap")).toHaveCSS(
-    "position",
-    "fixed",
-  );
-  await expect(page.getByTestId("resize-handle-rail")).toHaveCount(0);
-  await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
-  await page.getByTestId("canvas-expand-exit").click();
-  await expect(page.locator(".canvas-frame-wrap")).not.toHaveClass(
-    /is-expanded/,
-  );
-  await expect(page.getByTestId("resize-handle-rail")).toBeVisible();
-  await expect(page.getByTestId("resize-handle-canvas")).toBeVisible();
-
-  // Escape works too.
-  await expand.click();
-  await expect(page.locator(".canvas-frame-wrap")).toHaveClass(/is-expanded/);
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".canvas-frame-wrap")).not.toHaveClass(
-    /is-expanded/,
+test("the canvas expand lifts the board to an overlay without remounting it", async () => {
+  test.fixme(
+    true,
+    "the board's expand control lived in the pane's tab bar beside a session; the entered page mounts the board with no expand (SAP-3838 gives the modal its own)",
   );
 });
 
 test("steps tab drills into a step's real transitions and slides back", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.steps);
   // The demo document posts its real graph ({type:"sapiom-canvas:graph"});
   // load it via the same reload event the agent fires.
   await page.evaluate(() => {
@@ -2137,7 +1982,7 @@ test("steps tab drills into a step's real transitions and slides back", async ({
 test("canvas repair sends the coding agent an Agent-terminology prompt", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.inject);
   const canvasBody = page.frameLocator(".canvas-iframe").locator("body");
   await expect(canvasBody).toBeVisible();
   // POST UNTIL IT LANDS. The board is an srcdoc iframe the shell re-renders, so
@@ -2200,7 +2045,7 @@ test("canvas repair sends the coding agent an Agent-terminology prompt", async (
 test("a detected dev server surfaces a Preview chip on the action bar", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.verbs);
   await expect(page.getByTestId("session-preview-chip")).toHaveCount(0);
   await page.evaluate(() => {
     (
@@ -2225,7 +2070,7 @@ test("a detected dev server surfaces a Preview chip on the action bar", async ({
 });
 
 test("an agent without an App Link gets no App Link chip", async ({ page }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.verbs);
   // The linked boot agent's bar, at rest: the read answered "no App Link", so
   // the bar is exactly what it was before the chip existed (SAP-3255).
   await expect(page.getByTestId("session-step-prod")).toBeVisible();
@@ -2235,7 +2080,7 @@ test("an agent without an App Link gets no App Link chip", async ({ page }) => {
 test("a published App Link sits beside the Preview chip, told apart by word and icon", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.verbs);
   // Pins anatomy only. Mock mode has no durable App Link, so `mockAppLink=live`
   // is a fixture opt-in, not evidence the read works (SAP-3255).
   await page.goto("/?seed=0&mockAppLink=live");
@@ -2280,7 +2125,7 @@ test("a published App Link sits beside the Preview chip, told apart by word and 
 test("an observed run renders per-step status and latency in the steps tab", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.runs);
   // Load the demo document's graph first and WAIT for the board: lastMessage
   // is a single slot, so back-to-back publishes in one tick would drop the
   // reload. Then announce the run the way the server's ExecutionDetector does.
@@ -2338,7 +2183,7 @@ test("an observed run renders per-step status and latency in the steps tab", asy
 test("an observed run renders its real steps even before anything is visualized", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.runs);
   // The second leasing session ships no bundled doc, so nothing is visualized
   // for it (no graph). A run announcement alone must still surface real
   // per-step truth in the Steps tab instead of "No steps yet". (The boot
@@ -2375,7 +2220,7 @@ test("an observed run renders its real steps even before anything is visualized"
 test("a second run never erases the first: the run picker recalls past runs", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
+  test.fixme(true, NO_HOME.runs);
   const publishRun = (executionId: string): Promise<void> =>
     page.evaluate((id) => {
       (
@@ -2432,23 +2277,13 @@ test("a second run never erases the first: the run picker recalls past runs", as
 test("board nodes get hover and selected states through the message contract", async ({
   page,
 }) => {
-  test.fixme(true, CANVAS_UNMOUNTED);
   // Between the extremes: the refit assertions below need both fitted zooms
   // (overview open and collapsed) off the widget's 50% floor AND below the
   // 100% cap, so a zoom CHANGE is observable. With the Canvas tab back to a
   // pure board (the snippets moved to the Code tab) the board is taller, so
   // 1000px would fit at the 100% cap; 820 keeps both zooms in between.
   await page.setViewportSize({ width: 1280, height: 820 });
-  await page.evaluate(() => {
-    (
-      window as unknown as {
-        __HARNESS_TEST__: { publish: (m: unknown) => void };
-      }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  await openLeasingBoard(page);
   const boardFrame = page.frameLocator(".canvas-frame-wrap iframe");
   // The intake node sits at the top of the cascade, safely above the
   // overview sheet that overlays the lower board.
@@ -2495,7 +2330,6 @@ test("board nodes get hover and selected states through the message contract", a
     "data-view",
     "board",
   );
-  await expect(page.getByTestId("right-tab-canvas")).toHaveClass(/is-active/);
   await expect(page.getByTestId("canvas-inspector-title")).toHaveText(
     "approve?",
   );

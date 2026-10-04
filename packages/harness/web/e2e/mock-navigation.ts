@@ -38,19 +38,37 @@ export async function openAgentPanel(
   await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", agent);
 }
 
+/** Open canvas on the agent's panel: its canvas in the same centre. */
+export async function openAgentCanvas(
+  page: Page,
+  project: string,
+  agent: string,
+): Promise<void> {
+  await openAgentPanel(page, project, agent);
+  await page.getByTestId("map-agent-open-canvas").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+}
+
 /**
- * Why a spec is fixme between SAP-3836 and SAP-3838. The agent's canvas, its
- * Steps and its verbs lost their mount point when the right pane beside a
- * session and the entered agent page were removed (flow-map-chat-overlay.md
- * §5). The agent modal (design-map-chat.md §4.3, P4.2a) mounts them again,
- * and that PR re-points these specs at it.
+ * Why a spec is fixme between SAP-3836 and SAP-3838. Each of these surfaces
+ * was mounted only in the pane beside a bound session, which SAP-3836 removed
+ * (flow-map-chat-overlay.md §5). The entered agent page (`openAgentCanvas`)
+ * is the interim way into an agent, and it mounts the board alone: no
+ * Secrets, no Steps surface, no Run/Deploy controls, no run evidence, and no
+ * session to type into. The agent modal (design-map-chat.md §4.3, P4.2a)
+ * gives them a home, and that PR re-points these specs at it.
  */
-export const CANVAS_UNMOUNTED =
-  "agent canvas unmounted until the agent modal (SAP-3838) re-points this spec";
+export const NO_HOME = {
+  secrets: "Secrets was mounted only beside a bound session; its next home is the agent modal (SAP-3838)",
+  steps: "the Steps surface was mounted only beside a bound session; its next home is the agent modal (SAP-3838)",
+  verbs: "the Run / Run locally / Deploy controls were mounted only beside a bound session; their next home is the agent modal (SAP-3838)",
+  runs: "run evidence on the board came from the session beside it; the entered page carries no runs until the agent modal (SAP-3838)",
+  inject: "canvas prompts typed into the session beside the board; the entered page has no session until the agent modal (SAP-3838)",
+} as const;
 
 /**
  * Start chat on the agent's panel: a NEW session bound to the agent, selected.
- * Resolves to the new session's id. This is the path that replaced focusing an agent row and
+ * Resolves to the new session's id. Nothing sits beside the session. This is the path that replaced focusing an agent row and
  * pressing its empty state's Start session.
  */
 export async function startChatWithAgent(

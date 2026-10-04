@@ -47,6 +47,8 @@ interface AgentMapPaneProps {
    * itself is the shell's, passed back as `agentPanel`.
    */
   onPickAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
+  /** Double click on an agent node: enter the agent's canvas in this centre. */
+  onEnterAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
   /** The picked agent's panel, floating over the map; null closes it. */
   agentPanel: JSX.Element | null;
   state: AgentMapWorkspacePaneState;
@@ -65,6 +67,7 @@ export function AgentMapPane({
   workflows,
   refreshWorkflows,
   onPickAgent,
+  onEnterAgent,
   agentPanel,
   state,
   initialization,
@@ -311,6 +314,9 @@ export function AgentMapPane({
         onSelectNode={(nodeId, control) =>
           void resolveAgent(nodeId, control, onPickAgent)
         }
+        onEnterNode={(nodeId, control) =>
+          void resolveAgent(nodeId, control, onEnterAgent)
+        }
         picked={picked}
         agentPanel={agentPanel}
         pending={pending}
@@ -392,6 +398,7 @@ function PopulatedAgentMap({
   onRetryStatus,
   selected,
   onSelectNode,
+  onEnterNode,
   picked,
   agentPanel,
   pending,
@@ -404,6 +411,7 @@ function PopulatedAgentMap({
   onRetryStatus: () => void;
   selected: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  onEnterNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   picked: PlanNodeId | null;
   agentPanel: JSX.Element | null;
   pending: PlanNodeId | null;
@@ -468,6 +476,7 @@ function PopulatedAgentMap({
           deployments={deployments}
           selectedNodeId={selected ?? (agentPanel ? picked : null)}
           onSelectNode={onSelectNode}
+          onEnterNode={onEnterNode}
           pendingNodeId={pending}
         />
         {!selected && agentPanel}

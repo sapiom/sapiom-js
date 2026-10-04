@@ -48,6 +48,10 @@ interface AgentMapCanvasProps {
   deployments: AgentMapDeployments;
   selectedNodeId: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
+  /** Double click on a node: the map's "enter" gesture (flow-navigation.md
+   *  4.4, Q7). Single click has already fired twice underneath, which only
+   *  re-opens the same panel. */
+  onEnterNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   pendingNodeId: PlanNodeId | null;
 }
 
@@ -75,6 +79,7 @@ export function AgentMapCanvas({
   deployments,
   selectedNodeId,
   onSelectNode,
+  onEnterNode,
   pendingNodeId,
 }: AgentMapCanvasProps): JSX.Element {
   const [view, setView] = useState<GraphView>(resetGraphView);
@@ -395,6 +400,9 @@ export function AgentMapCanvas({
                   aria-busy={pendingNodeId === node.id}
                   onClick={(event) =>
                     onSelectNode(node.id, event.currentTarget)
+                  }
+                  onDoubleClick={(event) =>
+                    onEnterNode(node.id, event.currentTarget)
                   }
                 >
                   <span className="agent-map-node-heading">

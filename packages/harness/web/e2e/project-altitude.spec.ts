@@ -70,7 +70,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId("agent-view")).toBeVisible();
 });
 
-test("a project's fold, its agent panel and Back/Forward all preserve the exact conversation", async ({ page }) => {
+test("a project's fold, its agent canvas and Back/Forward all preserve the exact conversation", async ({ page }) => {
   await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1");
   await expect(page.getByTestId("session-context")).toBeVisible();
   const before = await selectedRow(page);
@@ -87,10 +87,12 @@ test("a project's fold, its agent panel and Back/Forward all preserve the exact 
   await expect(page.getByTestId("rail-session-sess-boot")).toBeVisible();
   await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
   await expect(page.getByTestId("map-agent-panel")).toBeVisible();
+  await page.getByTestId("map-agent-open-canvas").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
   await page.getByTestId("session-nav-back").click();
-  await expect(page.getByTestId("agent-view")).toBeVisible();
-  await page.getByTestId("session-nav-forward").click();
   await expect(map).toHaveAttribute("data-project-id", projectId!);
+  await page.getByTestId("session-nav-forward").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
   expect(await selectedRow(page)).toEqual(before);
   expect(await actions(page)).toEqual(beforeActions);
 });
@@ -130,7 +132,7 @@ test("E3.4 — an agent on the map opens its panel and moves NOTHING else", asyn
   await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", "leasing");
 
   // The panel opened in place; the session pointer and the rail rows held.
-  await expect(page.getByTestId("project-map-pane")).toBeVisible();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "map");
   expect(await selectedRow(page)).toEqual(before);
   expect(await rowsOf(page, "acme-app")).toEqual(rowsBefore);
 });

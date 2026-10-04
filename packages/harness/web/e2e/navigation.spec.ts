@@ -11,7 +11,7 @@
  *  - A session, bound to an agent or not, has nothing beside it: no agent pane
  *    (flow-map-chat-overlay.md 4.4.1).
  *  - An agent on the map opens a panel in place: location with Change, its
- *    sessions, Start chat (4.4, Q7).
+ *    sessions, Start chat (4.4, Q7). Open canvas enters it in the same centre.
  *  - + on a project header is a new unbound chat at the root (4.5, Q11).
  *  - Cmd/Ctrl+1..9 is the Nth session of the selected project (Q2).
  *  - × ends a live session at once, no confirm, and hides an exited one
@@ -132,6 +132,7 @@ test("a project header puts its map in the centre at full width with no chat, an
   await page.getByTestId("project-select-acme-app").click();
   const pane = page.getByTestId("project-map-pane");
   await expect(pane).toBeVisible();
+  await expect(pane).toHaveAttribute("data-view", "map");
   await expect(page.getByTestId("session-context-title")).toHaveText("acme-app");
   await expect(page.getByTestId("session-project-map-chip")).toHaveText("Agent Map");
   await expect(page.getByTestId("project-map-new-agent")).toBeVisible();
@@ -196,18 +197,24 @@ test("clicking an agent on the map opens its panel; Start chat makes a bound ses
   await expectNothingBeside(page);
 });
 
-test("a session in the agent panel opens that session", async ({
+test("a session in the agent panel opens that session; Open canvas enters the agent and back returns to the map", async ({
   page,
 }) => {
   await page.getByTestId("rail-session-select-sess-bg").click();
   await expect.poll(() => activeSession(page)).toBe("sess-bg");
   await page.getByTestId("project-select-acme-app").click();
   await page.getByTestId("map-agent-leasing").click();
-  // No way into an agent page from the panel (flow-map-chat-overlay.md §5).
-  await expect(page.getByTestId("map-agent-open-canvas")).toHaveCount(0);
-  // The panel is the project view: the session did not move.
+  await page.getByTestId("map-agent-open-canvas").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+  await expect(page.getByTestId("session-map-agent-chip")).toHaveText("leasing");
+  await expect(page.getByTestId("agent-view")).toHaveCount(0);
+  // Entering an agent is still the project view: the session did not move.
   await expect(page.getByTestId("rail-session-sess-bg")).toHaveAttribute("data-selected", "true");
 
+  await page.getByTestId("project-map-back").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "map");
+
+  await page.getByTestId("map-agent-leasing").click();
   await page.getByTestId("map-agent-session-sess-leasing-2").click();
   await expect.poll(() => activeSession(page)).toBe("sess-leasing-2");
   await expect(page.getByTestId("project-map-pane")).toHaveCount(0);

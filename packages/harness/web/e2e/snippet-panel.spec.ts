@@ -16,11 +16,12 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { selectSession, startChatWithRfq, CANVAS_UNMOUNTED } from "./mock-navigation";
+import { selectSession, startChatWithRfq, NO_HOME } from "./mock-navigation";
 
-test.fixme(true, CANVAS_UNMOUNTED);
 
 test.beforeEach(async ({ page }) => {
+  // Every test here reads the snippets on the Steps / deploy surface.
+  test.fixme(true, NO_HOME.steps);
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   // The boot session is bound to leasing, so the right pane is leasing's.

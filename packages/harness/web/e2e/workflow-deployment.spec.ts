@@ -11,9 +11,7 @@
  */
 import { expect, test } from "@playwright/test";
 import { openDeploymentStudio, patch } from "./workflow-deployment.fixture";
-import { CANVAS_UNMOUNTED } from "./mock-navigation";
-
-test.fixme(true, CANVAS_UNMOUNTED);
+import { NO_HOME } from "./mock-navigation";
 
 const tag = (page: import("@playwright/test").Page) =>
   page.getByTestId("workflow-dashboard-link");
@@ -21,6 +19,9 @@ const tag = (page: import("@playwright/test").Page) =>
 test("a list outage keeps the bound agent's cloud tag, and a refresh recovers it", async ({
   page,
 }) => {
+  // The cloud tag lived in the pane beside a bound session, beside its
+  // Run / Deploy controls.
+  test.fixme(true, NO_HOME.verbs);
   await openDeploymentStudio(page);
   await patch(page, {});
   await expect(tag(page)).toHaveAttribute("data-deployment-state", "ready");

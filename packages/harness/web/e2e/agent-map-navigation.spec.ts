@@ -185,7 +185,20 @@ async function expectPanel(page: Page, path: string) {
   await expect(page.getByTestId("map-agent-panel-path")).toHaveText(path);
   await expect(page.getByTestId("agent-map-frame")).toBeVisible();
 }
-/** The board's rendered width: what nothing over the map may change (I1). */
+/** Open canvas on the panel: the agent's own board in the same centre. */
+async function expectAgentCanvas(page: Page) {
+  await page.getByTestId("map-agent-open-canvas").click();
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute(
+    "data-view",
+    "agent",
+  );
+  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("project-map-pane")
+      .locator('.canvas-frame-wrap[data-view="board"]'),
+  ).toBeVisible();
+}
 /** The board's size. Width is design I1; height too, because in the board's
  *  one-cell grid a sibling in flow would take a row rather than a column. */
 const boardSize = async (page: Page) => {
@@ -232,6 +245,11 @@ for (const mode of [
     // Navigation is client state now: nothing is written to the server's
     // per-project selection preference.
     expect((await calls(page)).writes).toBe(0);
+    await expectAgentCanvas(page);
+    expect(await evidence(page)).toEqual(before);
+    await page.getByTestId("project-map-back").click();
+    await expect(page.getByTestId("agent-map-live")).toBeVisible();
+    expect(await evidence(page)).toEqual(before);
     if (mode.startsWith("archived")) {
       // Another project's map is just as unable to move the session.
       await openMap(page, "polsia");
@@ -395,7 +413,7 @@ for (const action of [
   });
 }
 
-test("mobile keyboard activation opens the agent's panel with the rail closed", async ({
+test("mobile keyboard activation opens the agent's panel, then its canvas, with the rail closed", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
@@ -404,6 +422,7 @@ test("mobile keyboard activation opens the agent's panel with the rail closed", 
   await node(page).press("Space");
   await expect(page.getByTestId("map-agent-panel")).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
+  await expectAgentCanvas(page);
   expect(await evidence(page)).toEqual(before);
 });
 

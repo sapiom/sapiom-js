@@ -17,6 +17,7 @@ export function ProjectAgentGrid({
   onRetryGeneration,
   selectedPath,
   onPick,
+  onEnter,
   panel,
 }: {
   agents: readonly WorkflowInfo[];
@@ -26,6 +27,7 @@ export function ProjectAgentGrid({
   onRetryGeneration: (() => void) | null;
   selectedPath: string | null;
   onPick: (agent: WorkflowInfo) => void;
+  onEnter: (agent: WorkflowInfo) => void;
   panel: JSX.Element | null;
 }): JSX.Element {
   return (
@@ -82,6 +84,7 @@ export function ProjectAgentGrid({
             data-testid={`map-agent-${agent.name}`}
             aria-pressed={agent.path === selectedPath}
             onClick={() => onPick(agent)}
+            onDoubleClick={() => onEnter(agent)}
             {...trackingAttrs({ object: "agent" })}
           >
             <span className="project-agent-card-name">{agent.name}</span>

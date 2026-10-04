@@ -23,28 +23,28 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
-import { CANVAS_UNMOUNTED } from "./mock-navigation";
+import { openAgentCanvas, NO_HOME } from "./mock-navigation";
 
-test.fixme(true, CANVAS_UNMOUNTED);
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/** Navigate to a clean slate with the Canvas board visible. */
+/**
+ * Navigate to a clean slate with leasing's board on its entered page (the
+ * interim way into an agent). The bundled interactive fixture board is
+ * swapped into the pane's own `srcdoc` frame, so picks travel the same
+ * gesture-layer / hit path a generated board answers.
+ */
 const loadBoard = async (page: Page): Promise<void> => {
   await page.goto("/?seed=0");
   await expect(page.locator(".rail-workflows")).toBeVisible();
-  // Trigger canvas load so the board document populates the iframe.
-  await page.evaluate(() => {
-    (
-      window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }
-    ).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  await openAgentCanvas(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
+  await page.evaluate(async () => {
+    const html = await (await fetch("/canvas/sess-boot/index.html")).text();
+    (document.querySelector(".canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+  });
 };
 
 /** Click a board node through the gesture layer to populate the inspector. */
@@ -167,6 +167,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   });
 
   test("'Debug this step' injects the step context + question", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     await page.getByTestId("canvas-macro-debug").click();
 
     const inject = await lastInject(page);
@@ -179,6 +180,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   });
 
   test("'Why is this step slow / stuck?' injects the right question", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     await page.getByTestId("canvas-macro-slow").click();
 
     const inject = await lastInject(page);
@@ -187,6 +189,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   });
 
   test("'Explain this step' injects the right question", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     await page.getByTestId("canvas-macro-explain").click();
 
     const inject = await lastInject(page);
@@ -195,6 +198,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   });
 
   test("free-form Ask injects the typed question", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     const freeform = page.getByTestId("canvas-freeform-input");
     await freeform.fill("What does this step produce?");
     await clearLastInject(page);
@@ -212,6 +216,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   });
 
   test("Cmd+Enter in the free-form textarea submits", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     const freeform = page.getByTestId("canvas-freeform-input");
     await freeform.fill("Any edge cases?");
     await clearLastInject(page);
@@ -229,6 +234,7 @@ test.describe("debug macros — pre-run (no run data)", () => {
   });
 
   test("no $ cost appears in the injected context (cost-free contract)", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     await page.getByTestId("canvas-macro-debug").click();
     const inject = await lastInject(page);
     // The injected text must contain no dollar signs (no spend/cost data).
@@ -246,6 +252,7 @@ test.describe("debug macros — prod run data enriches the context", () => {
   });
 
   test("the step's run status appears in the injected context", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     // Announce a prod run so the inspector carries run truth.
     await publish(page, {
       type: "execution.started",
@@ -281,6 +288,7 @@ test.describe("debug macros — prod run data enriches the context", () => {
   });
 
   test("the 'Debug this step' button is styled primary on a failed step", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     await seedRunState(page, "exec-fail-intake", {
       executionId: "exec-fail-intake",
       status: "failed",
@@ -327,6 +335,7 @@ test.describe("debug macros — prod run data enriches the context", () => {
 
 test.describe("debug macros — offline stub run", () => {
   test("the macro bar appears after a local stub run and includes run status", async ({ page }) => {
+    test.fixme(true, NO_HOME.inject);
     await page.goto("/?seed=0");
     await expect(page.locator(".rail-workflows")).toBeVisible();
     await page.getByTestId("right-tab-steps").click();

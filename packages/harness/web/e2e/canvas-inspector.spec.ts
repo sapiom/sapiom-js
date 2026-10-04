@@ -16,18 +16,23 @@
  *   run truth (status, duration) — the Studio surface is cost-free.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { CANVAS_UNMOUNTED } from "./mock-navigation";
+import { NO_HOME, openAgentCanvas } from "./mock-navigation";
 
-test.fixme(true, CANVAS_UNMOUNTED);
-
+/**
+ * leasing's board on its entered page (the interim way into an agent). The
+ * pane serves the agent's document through `srcdoc`; the bundled interactive
+ * fixture board (the one that answers hit / pick / node) is swapped into that
+ * same frame, so the pane's source-window guard sees exactly what a generated
+ * board would send.
+ */
 const loadBoard = async (page: Page): Promise<void> => {
-  await page.evaluate(() => {
-    (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
-      type: "canvas.reload",
-      harnessSessionId: "sess-boot",
-    });
-  });
+  if ((await page.locator('[data-testid="project-map-pane"][data-view="agent"]').count()) === 0)
+    await openAgentCanvas(page, "acme-app", "leasing");
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
+  await page.evaluate(async () => {
+    const html = await (await fetch("/canvas/sess-boot/index.html")).text();
+    (document.querySelector(".canvas-iframe") as HTMLIFrameElement).srcdoc = html;
+  });
 };
 
 /** Waits out the auto-fit (the document posts its size async), then clicks
@@ -70,10 +75,9 @@ test("a board pick populates the inspector in place, with no tab switch", async 
 
   await pickNode(page, "intake");
 
-  // Same panel, now the picked step's live detail — and the right pane
-  // never left the Canvas tab.
+  // Same panel, now the picked step's live detail — and the board stays on
+  // screen.
   await expect(page.getByTestId("canvas-inspector-title")).toHaveText("intake");
-  await expect(page.getByTestId("right-tab-canvas")).toHaveClass(/is-active/);
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "board");
   const inspector = page.getByTestId("canvas-step-inspector");
   await expect(inspector).toContainText("Logs the incoming order");
@@ -83,12 +87,12 @@ test("a board pick populates the inspector in place, with no tab switch", async 
   );
   // Contract chips render from the posted graph.
   await expect(inspector).toContainText("records.read");
+});
 
-  // The drawer no longer carries step-navigation links — the chart is right
-  // there for that. "Open step" switches to the Steps tab and expands that
-  // step's row inline (its detail is a dropdown now, not a separate view).
+test("the inspector's Open step drills into that step's row on the Steps surface", async ({ page }) => {
+  test.fixme(true, NO_HOME.steps);
+  await pickNode(page, "intake");
   await page.getByTestId("canvas-inspector-open-steps").click();
-  await expect(page.getByTestId("right-tab-steps")).toHaveClass(/is-active/);
   await expect(page.locator(".canvas-frame-wrap")).toHaveAttribute("data-view", "steps");
   await expect(page.getByTestId("canvas-step-expand-intake")).toContainText("Logs the incoming order");
 });
@@ -164,9 +168,6 @@ test("a launched-agent node keeps its private identifiers and navigates to the a
     },
   });
 
-  await page.getByTestId("right-tab-steps").click();
-  await expect(page.getByTestId("canvas-step-row-launch:rfq")).toBeVisible();
-  await page.getByTestId("right-tab-canvas").click();
   await postFromCanvas(page, { type: "sapiom:node-click", stepName: "rfq" });
 
   await expect(page.getByTestId("canvas-inspector-title")).toHaveText("rfq");
@@ -175,16 +176,10 @@ test("a launched-agent node keeps its private identifiers and navigates to the a
   await expect(openAgent).toHaveText(/Open agent/);
   await openAgent.click();
 
-  // Opening the agent lands on a session bound to it in its own project, and
-  // the rail shows that session selected (flow-navigation.md 4.2).
-  const opened = page
-    .getByTestId("rail-project-rfq-agent")
-    .locator('.rail-session-row[data-selected="true"]');
-  await expect(opened).toHaveAttribute("data-agent", "rfq");
-  // The binding reads in the current session's ⌄ menu.
-  await page.getByTestId("session-menu").click();
-  await expect(page.getByTestId("session-workflow-chip")).toContainText("rfq");
-  await page.keyboard.press("Escape");
+  // From an entered agent page, opening the launched agent enters ITS page:
+  // a look at the agent, so no session is started.
+  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+  await expect(page.getByTestId("session-map-agent-chip")).toHaveText("rfq");
 });
 
 test("deselect restores the overview: Esc, the panel's close, and empty board space", async ({ page }) => {
@@ -320,6 +315,7 @@ test.describe("canvas overview drag-resize", () => {
 });
 
 test("an observed run's truth reaches the selected step's inspector", async ({ page }) => {
+  test.fixme(true, NO_HOME.runs);
   await page.evaluate(() => {
     (window as unknown as { __HARNESS_TEST__: { publish: (m: unknown) => void } }).__HARNESS_TEST__.publish({
       type: "execution.started",

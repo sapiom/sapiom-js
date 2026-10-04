@@ -5,9 +5,8 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq, CANVAS_UNMOUNTED } from "./mock-navigation";
+import { startChatWithRfq, NO_HOME } from "./mock-navigation";
 
-test.fixme(true, CANVAS_UNMOUNTED);
 
 type HarnessHook = {
   lastDirectAction?: { action: string; req: Record<string, unknown> };
@@ -36,6 +35,8 @@ async function openCloudSheet(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Every test here drives the Run / Run locally controls.
+  test.fixme(true, NO_HOME.verbs);
   await page.goto("/?seed=0");
   await expect(page.getByTestId("session-steps")).toBeVisible();
 });
