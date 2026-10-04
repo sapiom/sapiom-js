@@ -107,7 +107,10 @@ describe("desk-scoped reads", () => {
     const a = await issueOn(test, "a");
     const b = await issueOn(test, "b");
     await createDraft(db, { issueId: a.id, text: "first" });
-    await db.query("update drafts set status = 'superseded'");
+    // An earlier created_at: two drafts made in the same millisecond have no newest one.
+    await db.query(
+      "update drafts set status = 'superseded', created_at = now() - interval '1 minute'",
+    );
     await createDraft(db, { issueId: a.id, text: "second" });
     await markLinearChecked(db, a.id, "In Progress");
     const rows = await boardIssues(db, test.id);
