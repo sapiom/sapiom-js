@@ -93,7 +93,7 @@ const ISSUE_COLUMNS = `i.id, i.number, i.account_id, a.name as account, i.title,
 async function withDraftStatus(d: Db, rows: BoardRow[]): Promise<BoardRow[]> {
   if (!rows.length) return rows;
   const drafts = await d.query<{ issue_id: string; status: string }>(
-    "select issue_id, status from drafts where issue_id = any($1) order by created_at desc",
+    "select issue_id, status from drafts where issue_id = any($1) order by created_at desc, id desc",
     [rows.map((r) => r.id)],
   );
   const newest = new Map<string, string>();
@@ -144,7 +144,7 @@ export async function deskTicket(
   if (!rows[0]) return null;
   const [row] = await withDraftStatus(d, [toBoardRow(rows[0])]);
   const [pending] = await d.query<Record<string, unknown>>(
-    "select id, text, card_channel, card_ts from drafts where issue_id = $1 and status = 'pending' order by created_at desc limit 1",
+    "select id, text, card_channel, card_ts from drafts where issue_id = $1 and status = 'pending' order by created_at desc, id desc limit 1",
     [issueId],
   );
   return {

@@ -754,7 +754,7 @@ async function metrics(d: Db, desk: Desk, window: keyof typeof METRIC_WINDOWS) {
       : [],
     ids.length
       ? d.query<Record<string, unknown>>(
-          "select issue_id, card_ts, created_at from drafts where issue_id = any($1) order by issue_id, created_at asc",
+          "select issue_id, card_ts, created_at from drafts where issue_id = any($1) order by issue_id, created_at asc, id asc",
           [ids],
         )
       : [],
