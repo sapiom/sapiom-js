@@ -278,11 +278,21 @@ describe("report", () => {
     expect(await retry.done).toMatchObject({ outcome: "posted" });
   });
 
-  it("posts once when two deliveries of a failure run at the same time", async () => {
+  // pg-mem runs the two transactions one after the other. On Postgres the second insert waits on
+  // the first's uncommitted key instead; the outcome is the same.
+  it("posts once when two deliveries of a failure arrive together", async () => {
     const [a, b] = [run(event()), run(event())];
     const outcomes = [(await a.done).outcome, (await b.done).outcome].sort();
     expect(outcomes).toEqual(["already_reported", "posted"]);
     expect([...posts(a.logs), ...posts(b.logs)]).toHaveLength(1);
+  });
+
+  it("answers a redelivery without needing a channel", async () => {
+    await run(event()).done;
+    await db.query("delete from config where key = 'channels.triage'");
+    expect(await run(event()).done).toMatchObject({
+      outcome: "already_reported",
+    });
   });
 
   it("fails when there is no channel to alert", async () => {

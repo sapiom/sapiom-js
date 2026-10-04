@@ -68,25 +68,27 @@ export async function report(ctx: SlackCtx, db: Db, event: RunFailed) {
   if (!isWatched(event.slug))
     return { outcome: "not_this_fleet", slug: event.slug };
   const key = failureKey(event);
-  const channel = await alertChannel(db);
-  const issueNumber = await issueNumberOf(db, event.executionId);
-  const posted = await db.transaction(async (tx) => {
+  const channel = await db.transaction(async (tx) => {
     // Select first: pg-mem's `on conflict do nothing returning` returns the existing row.
     const seen = await tx.query(
       "select 1 from watchdog_alerts where failure_key = $1",
       [key],
     );
-    if (seen.length > 0) return false;
+    if (seen.length > 0) return null;
     const claimed = await tx.query(
       "insert into watchdog_alerts (failure_key, execution_id, agent) values ($1, $2, $3) on conflict do nothing returning failure_key",
       [key, event.executionId, event.slug],
     );
-    if (claimed.length === 0) return false;
-    const msg = failureMessage(describeFailure(event, issueNumber));
-    await post(ctx, { channel, text: msg.text, blocks: msg.blocks });
-    return true;
+    if (claimed.length === 0) return null;
+    // Resolved only once claimed: a redelivery needs no channel.
+    const to = await alertChannel(tx);
+    const msg = failureMessage(
+      describeFailure(event, await issueNumberOf(tx, event.executionId)),
+    );
+    await post(ctx, { channel: to, text: msg.text, blocks: msg.blocks });
+    return to;
   });
-  if (!posted)
+  if (channel === null)
     return { outcome: "already_reported", executionId: event.executionId };
   await db.query(
     `delete from watchdog_alerts where posted_at < now() - interval '${KEEP_ALERTS_DAYS} days'`,
