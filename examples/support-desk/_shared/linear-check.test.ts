@@ -198,7 +198,14 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
         const method = url.split("/methods/")[1];
         calls.push({ method, args: body });
         if (method === "conversations.history")
-          return new Response(JSON.stringify({ ok: true, messages: history }));
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              messages: history.filter(
+                (m) => Number(m.ts) > Number(body.oldest),
+              ),
+            }),
+          );
         return new Response(
           JSON.stringify({ channel: body.channel, ts: `1790900000.00${++ts}` }),
         );
@@ -487,16 +494,15 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
     ]);
     states["SAP-1"] = { status: "Done", statusType: "completed" };
     const key = await keyOf(id, "SAP-1", "done");
-    history = [
-      {
-        ts: "1790899999.000001",
-        bot_id: "B1",
-        blocks: [{ type: "section", block_id: `sylon:${key}` }],
-      },
-    ];
+    const posted = {
+      ts: `${Math.floor(Date.now() / 1000) - 60}.000100`,
+      bot_id: "B1",
+      blocks: [{ type: "section", block_id: `sylon:${key}` }],
+    };
+    history = [posted];
     await sync(live().ctx as never, db);
     expect(posts()).toHaveLength(0);
-    expect(await messageBySourceEventId(db, key)).toBeTruthy();
+    expect((await messageBySourceEventId(db, key))?.ts).toBe(posted.ts);
     expect((await getIssue(db, id)).status).toBe("on_you");
   });
 
