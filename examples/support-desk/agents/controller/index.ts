@@ -355,8 +355,8 @@ const scan = defineStep({
  * still due on its current rows, insert the `nudges` row, post in the triage
  * thread, emit `issue.nudged`, commit. A failed post or emit rolls the row back, so the retry (or
  * the next cron run) sends it again: nothing is lost. A second run racing this one blocks on the
- * uncommitted row and then sees it, so it never posts the same nudge. The only duplicate is a
- * post that succeeded right before the emit or the commit failed.
+ * uncommitted row and then sees it, so it never posts the same nudge. A post that succeeded right
+ * before the emit or the commit failed is found again by its marker (SAP-3721), not sent twice.
  */
 const send = defineStep({
   name: "send",

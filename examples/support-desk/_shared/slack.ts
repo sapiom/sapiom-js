@@ -13,7 +13,7 @@ import { connectors } from "@sapiom/tools";
 export type SlackCtx = Pick<
   AgentExecutionContext<Record<string, unknown>>,
   "isLocalTrace" | "logger"
-> & { sapiom?: unknown };
+> & { sapiom?: unknown; attempts?: number };
 
 export interface SlackMessageRow {
   ts: string;
@@ -123,7 +123,7 @@ export async function callSlack<T = Record<string, unknown>>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-/** The ts of the bot message in the thread whose blocks carry `marker`, if any (SAP-3721). */
+// SAP-3721: recover a successful Slack post whose database record was not committed.
 async function findPosted(
   ctx: SlackCtx,
   channel: string,
@@ -154,11 +154,8 @@ async function findPosted(
   return undefined;
 }
 
-/**
- * With `key` and `threadTs`, the post is idempotent: a retry finds the earlier post by the
- * `sylon:<key>` block_id it was stamped with and returns its ts instead of posting again. The
- * gateway drops Slack `metadata`, so the marker rides on the first block.
- */
+// SAP-3721: retries must recover posts whose database record failed.
+// The connector omits Slack metadata, so reconciliation requires a block marker.
 export async function post(
   ctx: SlackCtx,
   input: {
@@ -167,12 +164,20 @@ export async function post(
     blocks?: Block[];
     threadTs?: string;
     key?: string;
+    /**
+     * Skip the lookup on a step's first attempt: it shares the connector's per-account rate limit
+     * with every post. Only for a site whose earlier post can come only from a retry of this step.
+     */
+    lookupOnRetryOnly?: boolean;
   },
 ): Promise<{ channel: string; ts: string }> {
-  const { key, ...args } = input;
+  const { key, lookupOnRetryOnly, ...args } = input;
   if (key && args.threadTs) {
     const marker = `sylon:${key}`;
-    const earlier = await findPosted(ctx, args.channel, args.threadTs, marker);
+    const earlier =
+      lookupOnRetryOnly && ctx.attempts === 0
+        ? undefined
+        : await findPosted(ctx, args.channel, args.threadTs, marker);
     if (earlier) return { channel: args.channel, ts: earlier };
     args.blocks = args.blocks?.length
       ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
