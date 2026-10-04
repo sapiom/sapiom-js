@@ -11,6 +11,7 @@ import {
   assign,
   canTransition,
   createDraft,
+  createDraftOnce,
   decideDraft,
   ensureAccount,
   getIssue,
@@ -213,6 +214,23 @@ describe("issues.ts on a database", () => {
       draft: { status: "approved", decidedBy: "U1" },
     });
     expect(await pendingDrafts(db, issue.id)).toHaveLength(0);
+  });
+
+  it("stores the summary given with a draft, null without one", async () => {
+    const { issue } = await seed(db);
+    const withSummary = await createDraftOnce(db, {
+      issueId: issue.id,
+      text: "Hello",
+      causationId: "Ev1",
+      summary: "Export keeps failing.",
+    });
+    const without = await createDraftOnce(db, {
+      issueId: issue.id,
+      text: "Hello again",
+      causationId: "Ev2",
+    });
+    expect(withSummary.draft.summary).toBe("Export keeps failing.");
+    expect(without.draft.summary).toBeNull();
   });
 
   it("reports exactly one winner for concurrent nudges and links", async () => {

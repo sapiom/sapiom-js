@@ -55,6 +55,7 @@ const draft: Draft = {
   citations: null,
   causationId: null,
   confidence: null,
+  summary: null,
   status: "pending",
   decidedBy: null,
   decidedAt: null,

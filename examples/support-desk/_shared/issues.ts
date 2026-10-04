@@ -107,6 +107,8 @@ export interface Draft {
   /** The event that produced the draft (copilot); null for drafts made without one. */
   causationId: string | null;
   confidence: number | null;
+  /** The model's summary written with this draft; null on drafts made before it was stored. */
+  summary: string | null;
   status: DraftStatus;
   decidedBy: string | null;
   decidedAt: Date | null;
@@ -205,6 +207,7 @@ const toDraft = (r: Row): Draft => ({
   citations: r.citations ?? null,
   causationId: (r.causation_id as string | null) ?? null,
   confidence: r.confidence == null ? null : Number(r.confidence),
+  summary: (r.summary as string | null) ?? null,
   status: r.status as DraftStatus,
   decidedBy: (r.decided_by as string | null) ?? null,
   decidedAt: (r.decided_at as Date | null) ?? null,
@@ -702,11 +705,12 @@ export async function createDraft(
     cardTs?: string;
     causationId?: string;
     confidence?: number;
+    summary?: string;
   },
 ): Promise<Draft> {
   const rows = await db.query(
-    `insert into drafts (issue_id, text, citations, card_channel, card_ts, causation_id, confidence, status)
-     values ($1, $2, $3::text::jsonb, $4, $5, $6, $7, 'pending') returning *`,
+    `insert into drafts (issue_id, text, citations, card_channel, card_ts, causation_id, confidence, summary, status)
+     values ($1, $2, $3::text::jsonb, $4, $5, $6, $7, $8, 'pending') returning *`,
     [
       input.issueId,
       input.text,
@@ -715,6 +719,7 @@ export async function createDraft(
       input.cardTs ?? null,
       input.causationId ?? null,
       input.confidence ?? null,
+      input.summary ?? null,
     ],
   );
   return toDraft(one(rows, "draft"));
@@ -733,6 +738,7 @@ export async function createDraftOnce(
     citations?: unknown;
     causationId: string;
     confidence?: number;
+    summary?: string;
   },
 ): Promise<{ draft: Draft; created: boolean }> {
   // In a transaction so pg-mem (serialized transactions) agrees with Postgres under concurrency.
@@ -740,8 +746,8 @@ export async function createDraftOnce(
     const found = await draftForCausation(tx, input.issueId, input.causationId);
     if (found) return { draft: found, created: false };
     const rows = await tx.query(
-      `insert into drafts (issue_id, text, citations, causation_id, confidence, status)
-       values ($1, $2, $3::text::jsonb, $4, $5, 'pending')
+      `insert into drafts (issue_id, text, citations, causation_id, confidence, summary, status)
+       values ($1, $2, $3::text::jsonb, $4, $5, $6, 'pending')
        on conflict (issue_id, causation_id) do nothing returning *`,
       [
         input.issueId,
@@ -749,6 +755,7 @@ export async function createDraftOnce(
         json(input.citations),
         input.causationId,
         input.confidence ?? null,
+        input.summary ?? null,
       ],
     );
     if (rows[0]) return { draft: toDraft(rows[0]), created: true };
