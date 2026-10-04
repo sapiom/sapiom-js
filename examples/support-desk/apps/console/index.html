@@ -1735,6 +1735,12 @@
         slaDirty = true;
         slaRev++;
       };
+      // The label follows the server, even when the editor keeps the operator's text.
+      function showSlaState(sla) {
+        $("sla-state").textContent = sla
+          ? "in use"
+          : "not set: the desks' nudge minutes apply (example shown)";
+      }
       async function loadSla(force = false) {
         if (slaDirty && !force) return;
         const seq = ++slaSeq;
@@ -1742,13 +1748,12 @@
         $("sla-error").textContent = "";
         try {
           const { sla } = await get("/api/sla");
+          if (seq !== slaSeq) return;
+          showSlaState(sla);
           // Typing during the GET wins even over a forced reload.
-          if (seq !== slaSeq || slaRev !== rev || (slaDirty && !force)) return;
+          if (slaRev !== rev || (slaDirty && !force)) return;
           $("sla-json").value = JSON.stringify(sla || SLA_EXAMPLE, null, 2);
           slaDirty = false;
-          $("sla-state").textContent = sla
-            ? "in use"
-            : "not set: the desks' nudge minutes apply (example shown)";
         } catch (e) {
           $("sla-error").textContent = e.message;
         }
@@ -1765,7 +1770,7 @@
         $("sla-error").textContent = "";
         try {
           try {
-            await request();
+            showSlaState((await request()).sla);
           } catch (e) {
             $("sla-error").textContent = e.message;
             return;

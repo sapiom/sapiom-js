@@ -57,8 +57,11 @@ describe("console page SLA", () => {
     );
     expect(load).toMatch(/const seq = \+\+slaSeq;\s*const rev = slaRev;/);
     expect(load).toMatch(
-      /await get\("\/api\/sla"\);[\s\S]*?if \(seq !== slaSeq \|\| slaRev !== rev \|\| \(slaDirty && !force\)\) return;/,
+      /await get\("\/api\/sla"\);[\s\S]*?if \(slaRev !== rev \|\| \(slaDirty && !force\)\) return;/,
     );
+    // The status label follows each write's result, even when the reload is skipped.
+    expect(write).toContain("showSlaState((await request()).sla);");
+    expect(load).toMatch(/if \(seq !== slaSeq\) return;\s*showSlaState\(sla\);/);
     expect(page).toContain('slaWrite(() => post("/api/sla", body, "PUT"), "SLA saved")');
     expect(page).toContain('() => post("/api/sla", undefined, "DELETE")');
   });
