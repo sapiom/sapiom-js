@@ -207,6 +207,20 @@ describe("prepareDatabase", () => {
     expect(out.seeded?.set).toContain("customers.test_user_ids");
   });
 
+  it("a config-only rerun keeps the stored customer channels instead of fleet.json's example", async () => {
+    await prepareDatabase(
+      db,
+      input({ desks: [DESK], config: { "channels.customer": [] } }),
+    );
+    const out = await prepareDatabase(
+      db,
+      input({ config: { "customers.test_user_ids": ["U0TESTER01"] } }),
+    );
+    expect(out.seeded?.set).toEqual(["customers.test_user_ids"]);
+    expect(out.customerChannels).toBe(0);
+    expect(await db.query("select * from accounts")).toEqual([]);
+  });
+
   it("refuses fleet.json's example ids and bad config, writing nothing", async () => {
     await expect(
       prepareDatabase(

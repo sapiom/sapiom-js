@@ -28,7 +28,12 @@ import {
 } from "@sapiom/agent";
 import { z } from "zod/v4";
 
-import { getConfigOr, setConfig, type ConfigKey } from "../../_shared/config";
+import {
+  ConfigSchemas,
+  getConfigOr,
+  setConfig,
+  type ConfigKey,
+} from "../../_shared/config";
 import {
   DB_HANDLE,
   connectPostgres,
@@ -144,6 +149,14 @@ export async function prepareDatabase(
     const values = mergeConfig(
       input.config as Partial<FleetConfigValues> | undefined,
     );
+    // Without overwrite, a key the input omits keeps its stored value: check that value for
+    // fleet.json's examples and seed accounts from it, not fleet.json's placeholder.
+    if (!input.overwrite)
+      for (const row of await db.query<{ key: string; value: unknown }>(
+        "select key, value from config",
+      ))
+        if (row.key in ConfigSchemas && !(row.key in (input.config ?? {})))
+          values[row.key as ConfigKey] = row.value;
     const examples = exampleKeys(values, desks);
     if (examples.length)
       throw new Error(
