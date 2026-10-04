@@ -228,11 +228,14 @@ async function redrawCard(
 
 export async function sync(ctx: Ctx, db: Db, limit: number = READ_CAP) {
   await recordRun(db, ctx, AGENT);
-  // Each issue posts in its own desk's triage channel; an issue with no desk uses the default's.
+  // Each issue posts where its card is, else in its own desk's triage channel; an issue with no desk
+  // uses the default's.
   const desks = await listDesks(db);
   const channelFor = (issue: Issue): string | null =>
+    issue.triageChannel ??
     (desks.find((d) => d.id === issue.deskId) ?? desks.find((d) => d.isDefault))
-      ?.triageChannel ?? null;
+      ?.triageChannel ??
+    null;
 
   // Cards left stale by a failed redraw on an earlier tick; these issues are no longer On Hold.
   for (const issue of await cardDirty(db, READ_CAP)) {

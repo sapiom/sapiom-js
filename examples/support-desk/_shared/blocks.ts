@@ -225,7 +225,6 @@ const NUDGE_TEXT: Record<string, string> = {
 
 /**
  * A controller ping in the triage thread. Mentions the owner if set; offers Take when unowned.
- * With `triageChannel`, `#n` links to the issue's card (the row does not store the channel).
  */
 export function nudge(
   issue: Issue,

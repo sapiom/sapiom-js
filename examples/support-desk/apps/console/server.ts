@@ -48,7 +48,6 @@ import {
 } from "../../_shared/kb";
 import { callTool } from "../../_shared/linear";
 import { resetBoard } from "../../_shared/reset";
-import { permalink } from "../../_shared/slack";
 import replay from "../../scripts/replay.json";
 import page from "./index.html";
 import { getEscalation, putEscalation } from "./escalation";
@@ -68,6 +67,7 @@ import {
   agentByKey,
   METRIC_WINDOWS,
   agentPageUrl,
+  triageCardUrl,
   costOf,
   costSummary,
   cuesFromReplay,
@@ -255,9 +255,6 @@ async function withConsoleDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   }
 }
 
-const triageLink = (triage: string, ts: string | null) =>
-  ts ? permalink(triage, ts) : null;
-
 /** The selected desk, from `?desk=<slug>`, else the default desk. */
 async function deskOf(d: Db, url: URL): Promise<Desk> {
   const pick = pickDesk(await listDesks(d), url.searchParams.get("desk"));
@@ -295,7 +292,6 @@ function linearProject(d: Db, desk: Desk) {
 }
 
 async function board(d: Db, desk: Desk) {
-  const triage = desk.triageChannel;
   const project = await linearProject(d, desk);
   const recent = await recentIssues(d, desk.id);
   return {
@@ -314,14 +310,13 @@ async function board(d: Db, desk: Desk) {
         r.linear_identifier as string | null,
       ),
       createdAt: r.created_at,
-      cardUrl: triageLink(triage, r.triage_root_ts as string | null),
+      cardUrl: triageCardUrl(r, desk.triageChannel),
     })),
   };
 }
 
 /** The desk's newest issue (or its issue `number`), with its latency legs, runs and event receipts. */
 async function timeline(d: Db, desk: Desk, number?: number) {
-  const triage = desk.triageChannel;
   const issue = await deskIssue(d, desk.id, number);
   if (!issue) return { issue: null };
   const id = issue.id as string;
@@ -351,7 +346,7 @@ async function timeline(d: Db, desk: Desk, number?: number) {
       createdAt: issue.created_at,
       customerTs: firstMessage?.ts ?? null,
       triageRootTs: issue.triage_root_ts,
-      cardUrl: triageLink(triage, issue.triage_root_ts as string | null),
+      cardUrl: triageCardUrl(issue, desk.triageChannel),
     },
     latency: latencies({
       customerTs: (firstMessage?.ts as string | undefined) ?? null,
@@ -365,14 +360,9 @@ async function timeline(d: Db, desk: Desk, number?: number) {
       cardTs: r.card_ts,
       createdAt: r.created_at,
       confidence: r.confidence == null ? null : Number(r.confidence),
-      cardUrl:
-        r.card_ts && issue.triage_root_ts
-          ? permalink(
-              triage,
-              r.card_ts as string,
-              issue.triage_root_ts as string,
-            )
-          : null,
+      cardUrl: r.card_ts
+        ? triageCardUrl(issue, desk.triageChannel, r.card_ts as string)
+        : null,
     })),
     runs: runs.map((r) => ({
       executionId: r.execution_id,

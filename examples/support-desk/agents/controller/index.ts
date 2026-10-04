@@ -389,7 +389,8 @@ const send = defineStep({
           if (!stillDue || !issue.triageRootTs) return "resolved" as const;
           const desk = desks.find((d) => d.id === issue.deskId) ?? fallbackDesk;
           if (!desk) return "resolved" as const;
-          const triage = desk.triageChannel;
+          // The nudge threads under the card, wherever it was posted.
+          const triage = issue.triageChannel ?? desk.triageChannel;
           if (!(await recordNudge(tx, n.issueId, n.key))) return null;
           const card = await post(ctx, {
             channel: triage,
@@ -443,7 +444,8 @@ const send = defineStep({
           if (!oncall && !entry.groupId) return "unnotified" as const;
           if (!(await recordNudge(tx, e.issueId, e.key))) return null;
           const why = reasonsText(due);
-          const link = permalink(desk.triageChannel, issue.triageRootTs);
+          const triage = issue.triageChannel ?? desk.triageChannel;
+          const link = permalink(triage, issue.triageRootTs);
           const title = escapeMrkdwn(issue.title ?? "(untitled)");
           const dm = oncall
             ? await post(ctx, {
@@ -455,7 +457,7 @@ const send = defineStep({
             ? `<!subteam^${entry.groupId}>`
             : `<@${oncall}>`;
           const thread = await post(ctx, {
-            channel: desk.triageChannel,
+            channel: triage,
             threadTs: issue.triageRootTs,
             text: `${who} escalation (level ${due.level}) on #${issue.number}: ${why}.`,
           });

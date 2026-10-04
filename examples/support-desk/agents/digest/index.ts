@@ -36,7 +36,7 @@ type Ctx = SlackCtx & { executionId: string };
 /** A desk's open issues; an issue with no desk belongs to the default desk, as `deskForIssue` says. */
 async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
   const rows = await db.query(
-    `select i.number, i.status, i.priority, i.title, i.owner_slack_id, i.triage_root_ts, i.created_at, a.name as account_name
+    `select i.number, i.status, i.priority, i.title, i.owner_slack_id, i.triage_root_ts, i.triage_channel, i.created_at, a.name as account_name
      from issues i join accounts a on a.id = i.account_id
      where i.status <> 'closed' and (i.desk_id = $1${desk.isDefault ? " or i.desk_id is null" : ""})`,
     [desk.id],
@@ -49,6 +49,7 @@ async function openIssues(db: Db, desk: Desk): Promise<DigestIssue[]> {
     accountName: r.account_name as string,
     ownerSlackId: (r.owner_slack_id as string | null) ?? null,
     triageRootTs: (r.triage_root_ts as string | null) ?? null,
+    triageChannel: (r.triage_channel as string | null) ?? null,
     createdAt: new Date(r.created_at as Date),
   }));
 }

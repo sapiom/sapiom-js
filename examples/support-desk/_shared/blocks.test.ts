@@ -35,6 +35,7 @@ const issue: Issue = {
   customerChannel: "C1",
   customerRootTs: "1.0",
   triageRootTs: null,
+  triageChannel: null,
   ownerSlackId: null,
   linearIssueId: null,
   linearIdentifier: null,

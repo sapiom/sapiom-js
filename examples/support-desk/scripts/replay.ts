@@ -194,7 +194,7 @@ export function verdict(
 
 const isFleet = (slug: string) => slug.startsWith(`${FLEET_ID}-`);
 
-class Watcher {
+export class Watcher {
   private receipts = new Map<string, { type: string; done: boolean }>();
   private fires = new Set<string>();
   private seen = new Set<string>();
@@ -286,18 +286,16 @@ class Watcher {
       title: string;
       customer_root_ts: string | null;
       triage_root_ts: string | null;
-    }>(
-      `select id, number, priority, category, title, customer_root_ts, triage_root_ts
-         from issues where created_at >= $1 order by number`,
-      [since],
-    );
+      /** Absent on a database before 082_issue_triage_channel: replay does not migrate. */
+      triage_channel?: string | null;
+    }>(`select * from issues where created_at >= $1 order by number`, [since]);
     for (const i of issues) {
       if (!i.triage_root_ts || !this.fresh(`issue:${i.id}`)) continue;
       const gap = i.customer_root_ts
         ? `, ${tsGap(i.customer_root_ts, i.triage_root_ts)}s after the post`
         : "";
       log(
-        `issue #${i.number} [${i.priority} ${i.category}] ${i.title}: card${gap}  ${permalink(this.triage, i.triage_root_ts)}`,
+        `issue #${i.number} [${i.priority} ${i.category}] ${i.title}: card${gap}  ${permalink(i.triage_channel ?? this.triage, i.triage_root_ts)}`,
       );
     }
     const drafts = await this.db.query<{

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fixture } from "../../fixtures/index";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
-import { upsertDesk } from "../../_shared/desks";
+import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
   createDraft,
   createDraftOnce,
@@ -18,6 +18,7 @@ import {
   pendingDrafts,
   setDraftCard,
   setStatus,
+  setTriageRoot,
 } from "../../_shared/issues";
 import { setDocsFetcher } from "../../_shared/docs";
 import { createArticle } from "../../_shared/kb";
@@ -993,6 +994,71 @@ describe("desks", () => {
         text: DRAFT_FAILED_NOTE,
       }),
     ]);
+  });
+
+  describe("after the desk's triage channel moves", () => {
+    /** SAP-3722: distinguish the card's channel from the desk's channel to catch misaddressed updates. */
+    async function cardedThenMoved() {
+      await setTriageRoot(
+        db,
+        FIXTURE_ISSUE,
+        "C0TRIAGE001",
+        "1790889400.000200",
+      );
+      const support = (await defaultDesk(db))!;
+      await upsertDesk(
+        db,
+        { ...support, triageChannel: "C0NEW" },
+        { overwrite: true },
+      );
+    }
+
+    it("posts the draft card under the card, in its channel", async () => {
+      await cardedThenMoved();
+      const t = ctxFor("exec-moved-card");
+      const out = last(await run(t)).output!;
+      expect(t.slack("chat.postMessage")).toEqual([
+        expect.objectContaining({
+          channel: "C0TRIAGE001",
+          threadTs: "1790889400.000200",
+        }),
+      ]);
+      expect((await getDraft(db, out.draftId as string)).cardChannel).toBe(
+        "C0TRIAGE001",
+      );
+    });
+
+    it("posts the draft-failed note under the card, in its channel", async () => {
+      await cardedThenMoved();
+      const t = ctxFor("exec-moved-note");
+      const llm = (
+        t.ctx.sapiom as { llm: { run: (s: unknown) => Promise<unknown> } }
+      ).llm;
+      const original = llm.run.bind(llm);
+      llm.run = async (spec) =>
+        (spec as { output: { name: string } }).output.name === "draft_reply"
+          ? { stop_reason: "end_turn", content: [{ type: "text", text: "Hi" }] }
+          : original(spec);
+      await run(t);
+      expect(t.slack("chat.postMessage")).toEqual([
+        expect.objectContaining({
+          channel: "C0TRIAGE001",
+          text: DRAFT_FAILED_NOTE,
+        }),
+      ]);
+    });
+
+    it("Approve refreshes the issue card in its channel", async () => {
+      await cardedThenMoved();
+      const t = ctxFor("exec-moved-approve");
+      await runAgent(
+        fixture("slack/block-actions.draft-approve.json").payload,
+        t.ctx,
+      );
+      expect(
+        t.slack("chat.update").find((u) => u.ts === "1790889400.000200"),
+      ).toMatchObject({ channel: "C0TRIAGE001" });
+    });
   });
 
   it("reads the issue's desk articles and the all-desks ones, never another desk's", async () => {

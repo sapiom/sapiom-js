@@ -110,3 +110,43 @@ describe("081_desk_triage_unique", () => {
     await expect(insert("c", "C0X")).rejects.toThrow();
   });
 });
+
+describe("082_issue_triage_channel backfill", () => {
+  const sql = MIGRATIONS.find((m) => m.id === "082_issue_triage_channel")!.sql;
+
+  it("stores the desk's channel on carded issues only, the default desk's when desk_id is null", async () => {
+    const db = await memoryDb({ through: "081_desk_triage_unique" });
+    const [main] = await db.query<{ id: string }>(
+      "insert into desks (slug, name, triage_channel, is_default) values ('main', 'Main', 'C0MAIN', true) returning id",
+    );
+    const [other] = await db.query<{ id: string }>(
+      "insert into desks (slug, name, triage_channel) values ('other', 'Other', 'C0OTHER') returning id",
+    );
+    const [account] = await db.query<{ id: string }>(
+      "insert into accounts (name, slack_channel_id) values ('Acme', 'C0ACME') returning id",
+    );
+    const issue = async (
+      deskId: string | null,
+      triageRootTs: string | null,
+    ) => {
+      const [row] = await db.query<{ id: string }>(
+        "insert into issues (account_id, desk_id, source, triage_root_ts) values ($1, $2, 'slack', $3) returning id",
+        [account.id, deskId, triageRootTs],
+      );
+      return row.id;
+    };
+    const onOther = await issue(other.id, "1.1");
+    const noDesk = await issue(null, "2.2");
+    const uncarded = await issue(main.id, null);
+
+    for (const stmt of splitStatements(sql)) await db.query(stmt);
+
+    const channel = async (id: string) =>
+      (
+        await db.query("select triage_channel from issues where id = $1", [id])
+      )[0].triage_channel;
+    expect(await channel(onOther)).toBe("C0OTHER");
+    expect(await channel(noDesk)).toBe("C0MAIN");
+    expect(await channel(uncarded)).toBeNull();
+  });
+});

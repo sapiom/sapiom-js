@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { fixture } from "../../fixtures/index";
 import { setConfig } from "../../_shared/config";
 import { localFleetDb, setLocalDb, type Db } from "../../_shared/db";
-import { upsertDesk } from "../../_shared/desks";
+import { defaultDesk, upsertDesk } from "../../_shared/desks";
 import {
   accountByChannel,
   ensureAccount,
@@ -57,7 +57,7 @@ describe("urgent-pager", () => {
       title: "Production API returning 500s for every request",
       customer: { channel: "C0CUSTOMER1", ts: "1790889355.981329" },
     });
-    await setTriageRoot(db, issue.id, "1790889360.000100");
+    await setTriageRoot(db, issue.id, "C0TRIAGE001", "1790889360.000100");
     const input = { ...urgent(), issueId: issue.id };
 
     const first = fakeCtx({ isLocalTrace: true, executionId: "page-1" });
@@ -103,7 +103,7 @@ describe("urgent-pager", () => {
       title: "Test desk outage",
       customer: { channel: "C0TESTCUST1", ts: "1790889355.981329" },
     });
-    await setTriageRoot(db, issue.id, "1790889360.000100");
+    await setTriageRoot(db, issue.id, "C0TESTTRI01", "1790889360.000100");
     const { ctx, logs } = fakeCtx({
       isLocalTrace: true,
       executionId: "page-d",
@@ -116,6 +116,32 @@ describe("urgent-pager", () => {
       link: "https://slack.com/archives/C0TESTTRI01/p1790889360000100",
     });
     expect(dms(logs)[0].channel).toBe("U0TESTONCALL");
+  });
+
+  it("links the card in the channel it was posted in after its desk's channel moves", async () => {
+    const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
+    const issue = await openIssue(db, {
+      accountId: account.id,
+      source: "slack",
+      category: "bug",
+      priority: "urgent",
+      title: "Moved desk outage",
+      customer: { channel: "C0CUSTOMER1", ts: "1790889355.981329" },
+    });
+    await setTriageRoot(db, issue.id, "C0TRIAGE001", "1790889360.000100");
+    const support = (await defaultDesk(db))!;
+    await upsertDesk(
+      db,
+      { ...support, triageChannel: "C0NEW" },
+      { overwrite: true },
+    );
+    const { ctx } = fakeCtx({ isLocalTrace: true, executionId: "page-moved" });
+    expect(
+      (await run({ ...urgent(), issueId: issue.id }, ctx)).output,
+    ).toMatchObject({
+      outcome: "paged",
+      link: "https://slack.com/archives/C0TRIAGE001/p1790889360000100",
+    });
   });
 
   it("falls back to the global on-call when the desk has none, and fails when neither exists", async () => {

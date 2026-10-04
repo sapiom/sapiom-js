@@ -7,6 +7,7 @@
 import fleet from "../../fleet.json";
 import { agentSlug } from "../../_shared/fleet-id";
 import { KB_KINDS, UUID, type KbInput } from "../../_shared/kb";
+import { permalink } from "../../_shared/slack";
 
 export interface FleetProject {
   key: string;
@@ -303,6 +304,23 @@ export function linearIssueUrl(
   if (!projectUrl || !identifier) return null;
   const m = /^https:\/\/linear\.app\/([^/]+)\//.exec(projectUrl);
   return m ? `https://linear.app/${m[1]}/issue/${identifier}` : null;
+}
+
+/**
+ * The link to an issue row's triage card, or with `replyTs` to a reply under it (a draft card), in
+ * the channel stored with the card, else its desk's. The console does not migrate, so
+ * `triage_channel` is absent from rows of a database before 082.
+ */
+export function triageCardUrl(
+  issue: Record<string, unknown>,
+  deskChannel: string,
+  replyTs?: string,
+): string | null {
+  const root = issue.triage_root_ts as string | null | undefined;
+  if (!root) return null;
+  const channel =
+    (issue.triage_channel as string | null | undefined) ?? deskChannel;
+  return replyTs ? permalink(channel, replyTs, root) : permalink(channel, root);
 }
 
 export const agentPageUrl = (definitionId: string) =>

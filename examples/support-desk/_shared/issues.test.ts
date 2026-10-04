@@ -138,7 +138,7 @@ describe("issues.ts on a database", () => {
   it("assigns, roots the triage thread, and updates fields", async () => {
     const { issue } = await seed(db);
     await assign(db, issue.id, "U1");
-    await setTriageRoot(db, issue.id, "9.9");
+    await setTriageRoot(db, issue.id, "C0T", "9.9");
     await updateIssue(db, issue.id, {
       summary: "s",
       linearIdentifier: "SAP-1",
@@ -147,6 +147,8 @@ describe("issues.ts on a database", () => {
     const found = await issueByTriageRoot(db, "9.9");
     expect(found).toMatchObject({
       ownerSlackId: "U1",
+      triageChannel: "C0T",
+      triageRootTs: "9.9",
       summary: "s",
       linearIdentifier: "SAP-1",
       linearIssueId: "uuid-1",

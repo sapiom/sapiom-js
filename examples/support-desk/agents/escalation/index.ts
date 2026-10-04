@@ -280,12 +280,13 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     ? await seedLocalIssue(db, input)
     : input.issueId;
   await recordRun(db, ctx, AGENT, issueId);
-  const desk = await deskForIssue(db, await getIssue(db, issueId));
+  const current = await getIssue(db, issueId);
+  const desk = await deskForIssue(db, current);
   const target = await linearTarget(db, desk);
   if (!target)
     throw new MissingConfigError(`desks.${desk.slug}.linearProjectId`);
   const { teamId, projectId } = target;
-  const triageChannel = desk.triageChannel;
+  const triageChannel = current.triageChannel ?? desk.triageChannel;
   const requester = await userInfo(ctx, input.requestedBy);
 
   // 1. Link and reply, under the row lock: a concurrent run waits here, then finds the link and
