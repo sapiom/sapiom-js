@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import express from "express";
 import type { Server } from "node:http";
-import { createFsRouter, type FsListResponse } from "./fs.js";
+import { createFsRouter, revealCommand, type FsListResponse, type RevealCommand } from "./fs.js";
 
 let server: Server;
 let baseUrl: string;
@@ -218,5 +218,232 @@ describe("createFsRouter", () => {
     } finally {
       await fs.rm(bigDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("POST /api/fs/reveal", () => {
+  let revealServer: Server;
+  let revealUrl: string;
+  let root: string;
+  let agentDir: string;
+  let deletedAgentDir: string;
+  let fileAgentPath: string;
+  let outsideDir: string;
+  const revealed: RevealCommand[] = [];
+
+  beforeAll(async () => {
+    root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "harness-fs-reveal-")));
+    agentDir = path.join(root, "my agent");
+    deletedAgentDir = path.join(root, "gone");
+    outsideDir = path.join(root, "not-an-agent");
+    fileAgentPath = path.join(root, "now-a-file");
+    await fs.writeFile(fileAgentPath, "replaced");
+    await fs.mkdir(agentDir);
+    await fs.mkdir(outsideDir);
+    const registered = new Set([agentDir, deletedAgentDir, fileAgentPath]);
+    const app = express();
+    app.use(
+      createFsRouter({
+        findAgentPath: async (p) => (registered.has(p) ? p : null),
+        reveal: (cmd) => void revealed.push(cmd),
+        platform: "darwin",
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      revealServer = app.listen(0, "127.0.0.1", resolve);
+    });
+    const address = revealServer.address();
+    revealUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/api/fs/reveal`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => revealServer.close(() => resolve()));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    revealed.length = 0;
+  });
+
+  function post(body: unknown): Promise<Response> {
+    return fetch(revealUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("reveals a registered agent folder: 204 and the platform command", async () => {
+    const res = await post({ path: agentDir });
+    expect(res.status).toBe(204);
+    expect(revealed).toEqual([{ command: "open", args: ["-R", agentDir] }]);
+  });
+
+  it("normalizes the path before the registry check", async () => {
+    const res = await post({ path: path.join(agentDir, "..", "my agent") });
+    expect(res.status).toBe(204);
+    expect(revealed).toEqual([{ command: "open", args: ["-R", agentDir] }]);
+  });
+
+  it("refuses an existing folder outside the registry with 403 and spawns nothing", async () => {
+    const res = await post({ path: outsideDir });
+    expect(res.status).toBe(403);
+    expect(revealed).toEqual([]);
+  });
+
+  it("refuses a file inside a registered agent: only the agent folder itself", async () => {
+    const res = await post({ path: path.join(agentDir, "index.ts") });
+    expect(res.status).toBe(403);
+    expect(revealed).toEqual([]);
+  });
+
+  it("answers 403, not 404, for an unregistered path that does not exist", async () => {
+    const res = await post({ path: path.join(root, "nothing-here") });
+    expect(res.status).toBe(403);
+    expect(revealed).toEqual([]);
+  });
+
+  it("returns 404 for a registered agent whose folder no longer exists", async () => {
+    const res = await post({ path: deletedAgentDir });
+    expect(res.status).toBe(404);
+    expect(revealed).toEqual([]);
+  });
+
+  it("returns 404 for a registered agent whose folder was replaced by a file", async () => {
+    const res = await post({ path: fileAgentPath });
+    expect(res.status).toBe(404);
+    expect(revealed).toEqual([]);
+  });
+
+  it("passes a failing registry lookup to Express as a 500", async () => {
+    const app = express();
+    app.use(
+      createFsRouter({
+        findAgentPath: async () => {
+          throw new Error("registry unavailable");
+        },
+        reveal: (cmd) => void revealed.push(cmd),
+      }),
+    );
+    app.use((_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.status(500).end();
+    });
+    const s = await new Promise<Server>((resolve) => {
+      const srv = app.listen(0, "127.0.0.1", () => resolve(srv));
+    });
+    try {
+      const address = s.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const res = await fetch(`http://127.0.0.1:${port}/api/fs/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: agentDir }),
+      });
+      expect(res.status).toBe(500);
+      expect(revealed).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  });
+
+  it("answers 500 when the file manager cannot be started", async () => {
+    const app = express();
+    app.use(
+      createFsRouter({
+        findAgentPath: () => agentDir,
+        reveal: () => Promise.reject(new Error("spawn xdg-open ENOENT")),
+      }),
+    );
+    const s = await new Promise<Server>((resolve) => {
+      const srv = app.listen(0, "127.0.0.1", () => resolve(srv));
+    });
+    try {
+      const address = s.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const res = await fetch(`http://127.0.0.1:${port}/api/fs/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: agentDir }),
+      });
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { error: string }).error).toContain("ENOENT");
+    } finally {
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  });
+
+  it("rejects a missing or relative path with 400", async () => {
+    expect((await post({})).status).toBe(400);
+    expect((await post({ path: "my agent" })).status).toBe(400);
+    expect((await post({ path: 42 })).status).toBe(400);
+    expect(revealed).toEqual([]);
+  });
+
+  it("refuses everything when no registry lookup was provided", async () => {
+    const app = express();
+    app.use(createFsRouter({ reveal: (cmd) => void revealed.push(cmd) }));
+    const bare = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, "127.0.0.1", () => resolve(s));
+    });
+    try {
+      const address = bare.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const res = await fetch(`http://127.0.0.1:${port}/api/fs/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: agentDir }),
+      });
+      expect(res.status).toBe(403);
+      expect(revealed).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => bare.close(() => resolve()));
+    }
+  });
+});
+
+describe("POST /api/fs/reveal rate limit", () => {
+  it("answers 429 after 30 reveals in a minute", async () => {
+    const app = express();
+    const revealed: RevealCommand[] = [];
+    app.use(createFsRouter({ findAgentPath: () => os.tmpdir(), reveal: (cmd) => void revealed.push(cmd) }));
+    const s = await new Promise<Server>((resolve) => {
+      const srv = app.listen(0, "127.0.0.1", () => resolve(srv));
+    });
+    try {
+      const address = s.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const statuses: number[] = [];
+      for (let i = 0; i < 31; i++) {
+        const res = await fetch(`http://127.0.0.1:${port}/api/fs/reveal`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: os.tmpdir() }),
+        });
+        statuses.push(res.status);
+      }
+      expect(statuses.slice(0, 30).every((status) => status === 204)).toBe(true);
+      expect(statuses[30]).toBe(429);
+      expect(revealed).toHaveLength(30);
+    } finally {
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  });
+});
+
+describe("revealCommand", () => {
+  it("selects the folder in Finder on macOS", () => {
+    expect(revealCommand("/a/b c", "darwin")).toEqual({ command: "open", args: ["-R", "/a/b c"] });
+  });
+
+  it("selects the folder in Explorer on Windows, path quoted after the comma", () => {
+    expect(revealCommand("C:\\a\\b c", "win32")).toEqual({
+      command: "explorer.exe",
+      args: ['/select,"C:\\a\\b c"'],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("opens the folder with xdg-open elsewhere", () => {
+    expect(revealCommand("/a/b", "linux")).toEqual({ command: "xdg-open", args: ["/a/b"] });
   });
 });
