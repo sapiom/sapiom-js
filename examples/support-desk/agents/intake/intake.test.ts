@@ -28,6 +28,7 @@ import {
   updateIssue,
   type Issue,
 } from "../../_shared/issues";
+import type { Block } from "../../_shared/slack";
 import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import {
   decide,
@@ -243,6 +244,8 @@ describe("intake agent", () => {
     expect(issue.triageRootTs).toBeTruthy();
     const posts = bug.slack("chat.postMessage");
     expect(posts.filter((p) => !p.threadTs)).toHaveLength(1);
+    const { blocks } = posts.find((p) => !p.threadTs) as { blocks: Block[] };
+    expect(blocks[0].block_id).toBe(`sylon:card:${issueId}`);
     const mirror = posts.find((p) => p.threadTs) as { text: string };
     expect(mirror.text).toContain("@here");
     expect(mirror.text).not.toContain("<!here>");

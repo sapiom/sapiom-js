@@ -15,6 +15,7 @@ import {
   setTriageRoot,
   type IssueStatus,
 } from "../../_shared/issues";
+import type { Block } from "../../_shared/slack";
 import { fakeCtx } from "../../_shared/test-ctx";
 import { WATCHED_SLUGS } from "../watchdog/logic";
 import { agent, digest, TIME_ZONE } from "./index";
@@ -371,7 +372,14 @@ describe("digest run", () => {
   });
 
   it("posts once per desk per day, and again the next day", async () => {
-    await digest(slackCtx().ctx as never, db);
+    const first = slackCtx();
+    const { day } = await digest(first.ctx as never, db);
+    expect(
+      first.posts().map((p) => (p.args.blocks as Block[])[0].block_id),
+    ).toEqual([
+      `sylon:digest:${support.id}:${day}`,
+      `sylon:digest:${billing.id}:${day}`,
+    ]);
     const again = slackCtx();
     const out = await digest(again.ctx as never, db);
     expect(out).toMatchObject({ posted: [], skipped: ["support", "billing"] });

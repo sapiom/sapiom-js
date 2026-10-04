@@ -872,6 +872,7 @@ const announce = defineStep({
           channel: triageChannel,
           text: issueCardText(locked, account),
           blocks: issueCard(locked, account, await issueSla(tx, locked)),
+          key: `card:${locked.id}`,
         });
         return {
           issue: await setTriageRoot(tx, locked.id, triageChannel, card.ts),

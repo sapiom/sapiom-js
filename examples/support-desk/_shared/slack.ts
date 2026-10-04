@@ -88,6 +88,7 @@ export async function callSlack<T = Record<string, unknown>>(
   method: string,
   args: Record<string, unknown>,
   stub: () => T,
+  signal?: AbortSignal,
 ): Promise<T> {
   if (ctx.isLocalTrace) {
     ctx.logger.info(`slack ${method} (local trace, not sent)`, { args });
@@ -105,6 +106,7 @@ export async function callSlack<T = Record<string, unknown>>(
     method: "POST",
     headers: { "content-type": "application/json", "x-sapiom-api-key": key },
     body: JSON.stringify(args),
+    signal,
   });
   const text = await res.text();
   if (!res.ok) {
@@ -123,28 +125,39 @@ export async function callSlack<T = Record<string, unknown>>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-// SAP-3721: recover a successful Slack post whose database record was not committed.
+type MessagePage = Awaited<ReturnType<SlackApi["replies"]>>;
+
+// SAP-3721, SAP-3862: recover a successful Slack post whose database record was not committed.
+// With `threadTs` it reads the thread; without, the channel's recent history.
 async function findPosted(
   ctx: SlackCtx,
   channel: string,
-  threadTs: string,
+  threadTs: string | undefined,
   marker: string,
 ): Promise<string | undefined> {
+  const method = threadTs ? "conversations.replies" : "conversations.history";
+  // ponytail: a top-level retry more than a day after its post reposts; widen the window if one does.
+  const oldest = String(Math.floor(Date.now() / 1000) - 86_400);
+  // One deadline for the whole scan: callers hold an issue row lock or an uncommitted digest claim.
+  const signal = threadTs ? undefined : AbortSignal.timeout(5_000);
   let cursor: string | undefined;
   do {
-    const args = {
-      channel,
-      ts: threadTs,
-      limit: 1000,
-      ...(cursor ? { cursor } : {}),
-    };
-    const out = await call<Awaited<ReturnType<SlackApi["replies"]>>>(
-      ctx,
-      "conversations.replies",
-      args,
-      (s) => s.replies(args),
-      () => ({ ok: true as const, messages: [] }),
-    );
+    const page = cursor ? { cursor } : {};
+    const out: MessagePage = threadTs
+      ? await call<MessagePage>(
+          ctx,
+          method,
+          { channel, ts: threadTs, limit: 1000, ...page },
+          (s) => s.replies({ channel, ts: threadTs, limit: 1000, ...page }),
+          () => ({ ok: true as const, messages: [] }),
+        )
+      : await callSlack<MessagePage>(
+          ctx,
+          method,
+          { channel, oldest, limit: 200, ...page },
+          () => ({ ok: true as const, messages: [] }),
+          signal,
+        );
     const hit = (out.messages ?? []).find(
       (m) => m.bot_id && m.blocks?.some((b) => b.block_id === marker),
     );
@@ -152,7 +165,7 @@ async function findPosted(
     const next = out.has_more ? out.response_metadata?.next_cursor : undefined;
     // A repeated cursor would loop forever while the caller holds its issue row lock.
     if (next && next === cursor)
-      throw new Error("conversations.replies returned an unchanged cursor");
+      throw new Error(`${method} returned an unchanged cursor`);
     cursor = next;
   } while (cursor);
   return undefined;
@@ -171,7 +184,7 @@ export async function post(
   },
 ): Promise<{ channel: string; ts: string }> {
   const { key, ...args } = input;
-  if (key && args.threadTs) {
+  if (key) {
     const marker = `sylon:${key}`;
     // A failed lookup must not block the post: a rare duplicate costs less than a missing reply.
     const earlier = await findPosted(
@@ -180,10 +193,10 @@ export async function post(
       args.threadTs,
       marker,
     ).catch((err: unknown) => {
-      ctx.logger.warn("slack thread lookup failed; posting without dedupe", {
-        err: String(err),
-        key,
-      });
+      ctx.logger.warn(
+        `slack ${args.threadTs ? "thread" : "channel"} lookup failed; posting without dedupe`,
+        { err: String(err), key },
+      );
       return undefined;
     });
     if (earlier) return { channel: args.channel, ts: earlier };

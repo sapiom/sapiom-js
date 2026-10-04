@@ -96,6 +96,7 @@ export async function digest(ctx: Ctx, db: Db, now?: Date) {
         await post(ctx, {
           channel: desk.triageChannel,
           ...digestMessage({ desk, issues, owners, now: clock, day, sla }),
+          key: `digest:${desk.id}:${day}`,
         });
         return true;
       });

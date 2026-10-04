@@ -123,6 +123,8 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
   /** Linear state by identifier; a missing entry makes get_issue fail. */
   let states: Record<string, { status: string; statusType: string }>;
   let calls: { tool?: string; method: string; args: Record<string, unknown> }[];
+  /** What conversations.history answers: the triage channel's recent messages. */
+  let history: Record<string, unknown>[];
 
   const newOnHold = async (n: number, linear = `SAP-${n}`) => {
     const account = (await accountByChannel(db, "C0CUSTOMER1"))!;
@@ -151,6 +153,7 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
     ids.length = 0;
     states = {};
     calls = [];
+    history = [];
     let ts = 0;
     vi.stubGlobal(
       "fetch",
@@ -195,6 +198,8 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
         }
         const method = url.split("/methods/")[1];
         calls.push({ method, args: body });
+        if (method === "conversations.history")
+          return new Response(JSON.stringify({ ok: true, messages: history }));
         return new Response(
           JSON.stringify({ channel: body.channel, ts: `1790900000.00${++ts}` }),
         );
@@ -473,6 +478,26 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
     expect(posts()).toHaveLength(1);
     expect(posts()[0].args.channel).toBe("C0TRIAGE001");
     expect(posts()[0].args.threadTs).toBeUndefined();
+    expect((await getIssue(db, id)).status).toBe("on_you");
+  });
+
+  it("finds the top-level notice of an earlier attempt instead of posting it again", async () => {
+    const id = await newOnHold(1);
+    await db.query("update issues set triage_root_ts = null where id = $1", [
+      id,
+    ]);
+    states["SAP-1"] = { status: "Done", statusType: "completed" };
+    const key = await keyOf(id, "SAP-1", "done");
+    history = [
+      {
+        ts: "1790899999.000001",
+        bot_id: "B1",
+        blocks: [{ type: "section", block_id: `sylon:${key}` }],
+      },
+    ];
+    await sync(live().ctx as never, db);
+    expect(posts()).toHaveLength(0);
+    expect(await messageBySourceEventId(db, key)).toBeTruthy();
     expect((await getIssue(db, id)).status).toBe("on_you");
   });
 

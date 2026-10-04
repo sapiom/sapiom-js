@@ -318,11 +318,11 @@ describe("slack.ts", () => {
       expect(calls.map((c) => c.method)).toEqual(["replies", "postMessage"]);
     });
 
-    it("posts as before with no thread", async () => {
+    it("posts as before with no key", async () => {
       const { ctx, calls } = ctxWithSlack({
         postMessage: { ok: true, channel: "C1", ts: "1.2" },
       });
-      await post(ctx, { channel: "C1", text: "hi", key: "k1" });
+      await post(ctx, { channel: "C1", text: "hi" });
       expect(calls).toEqual([
         { method: "postMessage", args: { channel: "C1", text: "hi" } },
       ]);
@@ -361,6 +361,204 @@ describe("slack.ts", () => {
         key: "k1",
       });
       expect(out.ts).toMatch(/^\d+\.\d+$/);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("a keyed top-level post", () => {
+    const marked = (ts: string, extra: Record<string, unknown> = {}) => ({
+      ts,
+      bot_id: "B1",
+      blocks: [{ type: "section", block_id: "sylon:k1" }],
+      ...extra,
+    });
+
+    /** Stubs the gateway: `history` answers each conversations.history body. */
+    function gateway(
+      history: (body: Record<string, unknown>) => Response | Promise<Response>,
+    ) {
+      vi.stubEnv("SAPIOM_API_KEY", "sat_test");
+      vi.stubEnv("SAPIOM_TOOLS_BASE", "https://tools.example");
+      const seen: {
+        url: string;
+        headers: Record<string, string>;
+        body: Record<string, unknown>;
+        signal?: AbortSignal | null;
+      }[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          const body = JSON.parse(init.body as string);
+          seen.push({
+            url,
+            headers: init.headers as Record<string, string>,
+            body,
+            signal: init.signal,
+          });
+          return history(body);
+        }),
+      );
+      return seen;
+    }
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status });
+
+    it("returns the earlier post instead of posting again", async () => {
+      gateway(() =>
+        json({ ok: true, messages: [{ ts: "1.0" }, marked("1.5")] }),
+      );
+      const { ctx, calls } = ctxWithSlack();
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.5" });
+      expect(calls).toEqual([]);
+    });
+
+    it("reads the last day of the channel, then posts with the marker", async () => {
+      vi.useFakeTimers({ now: 1_790_000_000_000, toFake: ["Date"] });
+      try {
+        const seen = gateway(() => json({ ok: true, messages: [] }));
+        const { ctx, calls } = ctxWithSlack({
+          postMessage: { ok: true, channel: "C1", ts: "1.2" },
+        });
+        await post(ctx, { channel: "C1", text: "*hi*", key: "k1" });
+        expect(seen).toEqual([
+          expect.objectContaining({
+            url: "https://tools.example/connectors/v1/slack/methods/conversations.history",
+            headers: expect.objectContaining({
+              "x-sapiom-api-key": "sat_test",
+            }),
+            body: {
+              channel: "C1",
+              oldest: String(1_790_000_000 - 86_400),
+              limit: 200,
+            },
+          }),
+        ]);
+        expect(calls).toEqual([
+          {
+            method: "postMessage",
+            args: {
+              channel: "C1",
+              text: "*hi*",
+              blocks: [
+                {
+                  type: "section",
+                  block_id: "sylon:k1",
+                  text: { type: "mrkdwn", text: "*hi*" },
+                },
+              ],
+            },
+          },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("follows the cursor under one deadline for the whole scan", async () => {
+      const seen = gateway((body) =>
+        body.cursor === "p2"
+          ? json({ ok: true, messages: [marked("1.9")] })
+          : json({
+              ok: true,
+              messages: [{ ts: "1.0" }],
+              has_more: true,
+              response_metadata: { next_cursor: "p2" },
+            }),
+      );
+      const { ctx } = ctxWithSlack();
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.9" });
+      expect(seen.map((s) => s.body.cursor)).toEqual([undefined, "p2"]);
+      expect(seen[0].signal).toBeInstanceOf(AbortSignal);
+      expect(seen[1].signal).toBe(seen[0].signal);
+    });
+
+    it("stops paging on a repeated cursor and posts", async () => {
+      const seen = gateway(() =>
+        json({
+          ok: true,
+          messages: [{ ts: "1.0" }],
+          has_more: true,
+          response_metadata: { next_cursor: "p2" },
+        }),
+      );
+      const { ctx, calls } = ctxWithSlack({
+        postMessage: { ok: true, channel: "C1", ts: "1.6" },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(seen).toHaveLength(2);
+      expect(calls.map((c) => c.method)).toEqual(["postMessage"]);
+    });
+
+    it("ignores a marker on a message no bot posted", async () => {
+      gateway(() =>
+        json({ ok: true, messages: [marked("1.5", { bot_id: undefined })] }),
+      );
+      const { ctx, calls } = ctxWithSlack({
+        postMessage: { ok: true, channel: "C1", ts: "1.6" },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(calls.map((c) => c.method)).toEqual(["postMessage"]);
+    });
+
+    const failures: [string, () => void][] = [
+      [
+        "the gateway refuses the method",
+        () => gateway(() => json({ message: "unknown method" }, 400)),
+      ],
+      [
+        "SAPIOM_API_KEY is unset",
+        () => {
+          vi.stubEnv("SAPIOM_API_KEY", "");
+          vi.stubGlobal("fetch", vi.fn());
+        },
+      ],
+      [
+        "the deadline passes",
+        () =>
+          gateway(() => {
+            throw new DOMException("timed out", "TimeoutError");
+          }),
+      ],
+    ];
+    it.each(failures)(
+      "warns and posts with the marker when %s",
+      async (_, setup) => {
+        setup();
+        const { ctx, calls, logs } = ctxWithSlack({
+          postMessage: { ok: true, channel: "C1", ts: "1.6" },
+        });
+        await expect(
+          post(ctx, { channel: "C1", text: "hi", key: "k1" }),
+        ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+        expect(calls.map((c) => c.method)).toEqual(["postMessage"]);
+        expect(
+          (calls[0].args.blocks as { block_id: string }[])[0].block_id,
+        ).toBe("sylon:k1");
+        expect(logs).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            msg: "slack channel lookup failed; posting without dedupe",
+          }),
+        );
+      },
+    );
+
+    it("sends nothing on a local trace", async () => {
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      const { ctx, calls } = ctxWithSlack();
+      (ctx as { isLocalTrace: boolean }).isLocalTrace = true;
+      const out = await post(ctx, { channel: "C1", text: "hi", key: "k1" });
+      expect(out.ts).toMatch(/^\d+\.\d+$/);
+      expect(fetch).not.toHaveBeenCalled();
       expect(calls).toEqual([]);
     });
   });
