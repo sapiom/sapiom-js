@@ -173,13 +173,12 @@ export async function post(
     if (earlier) return { channel: args.channel, ts: earlier };
     args.blocks = args.blocks?.length
       ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
-      : [
-          {
-            type: "section",
-            block_id: marker,
-            text: { type: "mrkdwn", text: args.text ?? "" },
-          },
-        ];
+      : // A section's mrkdwn text caps at 3000 characters; a plain text post does not.
+        (args.text?.match(/[\s\S]{1,3000}/g) ?? [""]).map((text, i) => ({
+          type: "section",
+          ...(i === 0 ? { block_id: marker } : {}),
+          text: { type: "mrkdwn", text },
+        }));
   }
   const out = await call(
     ctx,
