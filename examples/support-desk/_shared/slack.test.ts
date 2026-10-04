@@ -25,7 +25,10 @@ function ctxWithSlack(
   const method = (name: string) => async (args: Record<string, unknown>) => {
     calls.push({ method: name, args });
     if (fail?.method === name) throw fail.err;
-    return answers[name] ?? { ok: true };
+    const answer = answers[name];
+    return typeof answer === "function"
+      ? answer(args)
+      : (answer ?? { ok: true });
   };
   const slack = Object.fromEntries(
     [
@@ -185,6 +188,180 @@ describe("slack.ts", () => {
       url: "https://tools.example/connectors/v1/slack/methods/pins.add",
       headers: { "x-sapiom-api-key": "sat_test" },
       body: { channel: "C1" },
+    });
+  });
+
+  describe("a keyed thread post", () => {
+    const marked = (ts: string, extra: Record<string, unknown> = {}) => ({
+      ts,
+      bot_id: "B1",
+      blocks: [{ type: "section", block_id: "sylon:k1" }],
+      ...extra,
+    });
+
+    it("returns the earlier post instead of posting again", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: { ok: true, messages: [{ ts: "1.0" }, marked("1.5")] },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.5" });
+      expect(calls.map((c) => c.method)).toEqual(["replies"]);
+    });
+
+    it("stamps the marker on the first block when the thread has no earlier post", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: { ok: true, messages: [{ ts: "1.0" }] },
+        postMessage: { ok: true, channel: "C1", ts: "1.2" },
+      });
+      const blocks = [
+        { type: "header", block_id: "draft.header" },
+        { type: "section", block_id: "draft.body" },
+      ];
+      await post(ctx, {
+        channel: "C1",
+        text: "hi",
+        blocks,
+        threadTs: "1.0",
+        key: "k1",
+      });
+      expect(calls).toEqual([
+        {
+          method: "replies",
+          args: { channel: "C1", ts: "1.0", limit: 1000 },
+        },
+        {
+          method: "postMessage",
+          args: {
+            channel: "C1",
+            text: "hi",
+            threadTs: "1.0",
+            blocks: [{ ...blocks[0], block_id: "sylon:k1" }, blocks[1]],
+          },
+        },
+      ]);
+    });
+
+    it("wraps a text-only post in one marked section block", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        postMessage: { ok: true, channel: "C1", ts: "1.2" },
+      });
+      await post(ctx, {
+        channel: "C1",
+        text: "*hi*",
+        threadTs: "1.0",
+        key: "k1",
+      });
+      expect(calls[1]?.args).toEqual({
+        channel: "C1",
+        text: "*hi*",
+        threadTs: "1.0",
+        blocks: [
+          {
+            type: "section",
+            block_id: "sylon:k1",
+            text: { type: "mrkdwn", text: "*hi*" },
+          },
+        ],
+      });
+    });
+
+    it("follows the cursor to a marker on a later page", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: (args: Record<string, unknown>) =>
+          args.cursor === "p2"
+            ? { ok: true, messages: [marked("1.9")] }
+            : {
+                ok: true,
+                messages: [{ ts: "1.0" }],
+                has_more: true,
+                response_metadata: { next_cursor: "p2" },
+              },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.9" });
+      expect(calls.map((c) => c.args)).toEqual([
+        { channel: "C1", ts: "1.0", limit: 1000 },
+        { channel: "C1", ts: "1.0", limit: 1000, cursor: "p2" },
+      ]);
+    });
+
+    it("stops paging on a repeated cursor and posts", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: {
+          ok: true,
+          messages: [{ ts: "1.0" }],
+          has_more: true,
+          response_metadata: { next_cursor: "p2" },
+        },
+        postMessage: { ok: true, channel: "C1", ts: "1.6" },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(calls.map((c) => c.method)).toEqual([
+        "replies",
+        "replies",
+        "postMessage",
+      ]);
+    });
+
+    it("ignores a marker on a message no bot posted", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        replies: { ok: true, messages: [marked("1.5", { bot_id: undefined })] },
+        postMessage: { ok: true, channel: "C1", ts: "1.6" },
+      });
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(calls.map((c) => c.method)).toEqual(["replies", "postMessage"]);
+    });
+
+    it("posts as before with no thread", async () => {
+      const { ctx, calls } = ctxWithSlack({
+        postMessage: { ok: true, channel: "C1", ts: "1.2" },
+      });
+      await post(ctx, { channel: "C1", text: "hi", key: "k1" });
+      expect(calls).toEqual([
+        { method: "postMessage", args: { channel: "C1", text: "hi" } },
+      ]);
+    });
+
+    it("warns and posts with the marker when the lookup fails", async () => {
+      const { ctx, calls, logs } = ctxWithSlack(
+        { postMessage: { ok: true, channel: "C1", ts: "1.6" } },
+        {
+          method: "replies",
+          err: Object.assign(new Error("x"), { status: 429 }),
+        },
+      );
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(calls.map((c) => c.method)).toEqual(["replies", "postMessage"]);
+      expect((calls[1].args.blocks as { block_id: string }[])[0].block_id).toBe(
+        "sylon:k1",
+      );
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          msg: "slack thread lookup failed; posting without dedupe",
+        }),
+      );
+    });
+
+    it("sends nothing on a local trace", async () => {
+      const { ctx, calls } = ctxWithSlack();
+      (ctx as { isLocalTrace: boolean }).isLocalTrace = true;
+      const out = await post(ctx, {
+        channel: "C1",
+        text: "hi",
+        threadTs: "1.0",
+        key: "k1",
+      });
+      expect(out.ts).toMatch(/^\d+\.\d+$/);
+      expect(calls).toEqual([]);
     });
   });
 

@@ -350,14 +350,8 @@ const scan = defineStep({
   },
 });
 
-/**
- * Post and record each nudge in one transaction: lock the issue and recheck that the nudge is
- * still due on its current rows, insert the `nudges` row, post in the triage
- * thread, emit `issue.nudged`, commit. A failed post or emit rolls the row back, so the retry (or
- * the next cron run) sends it again: nothing is lost. A second run racing this one blocks on the
- * uncommitted row and then sees it, so it never posts the same nudge. The only duplicate is a
- * post that succeeded right before the emit or the commit failed.
- */
+// Keep the nudge row and event log in one transaction so failures remain retryable.
+// SAP-3721: the Slack marker survives rollback, allowing retries to adopt the earlier post.
 const send = defineStep({
   name: "send",
   terminal: true,
@@ -397,6 +391,7 @@ const send = defineStep({
             threadTs: issue.triageRootTs,
             text: `Follow-up on #${issue.number}: ${n.kind.replace(/_/g, " ")}`,
             blocks: nudge(issue, n.kind, null, { triageChannel: triage }),
+            key: `nudge:${issue.id}:${n.key}`,
           });
           await emit(ctx, tx, "issue.nudged", {
             issueId: issue.id,
@@ -460,6 +455,7 @@ const send = defineStep({
             channel: triage,
             threadTs: issue.triageRootTs,
             text: `${who} escalation (level ${due.level}) on #${issue.number}: ${why}.`,
+            key: `nudge:${e.issueId}:${e.key}`,
           });
           return { dmTs: dm?.ts ?? null, threadTs: thread.ts };
         });

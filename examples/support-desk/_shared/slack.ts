@@ -123,6 +123,43 @@ export async function callSlack<T = Record<string, unknown>>(
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+// SAP-3721: recover a successful Slack post whose database record was not committed.
+async function findPosted(
+  ctx: SlackCtx,
+  channel: string,
+  threadTs: string,
+  marker: string,
+): Promise<string | undefined> {
+  let cursor: string | undefined;
+  do {
+    const args = {
+      channel,
+      ts: threadTs,
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    };
+    const out = await call<Awaited<ReturnType<SlackApi["replies"]>>>(
+      ctx,
+      "conversations.replies",
+      args,
+      (s) => s.replies(args),
+      () => ({ ok: true as const, messages: [] }),
+    );
+    const hit = (out.messages ?? []).find(
+      (m) => m.bot_id && m.blocks?.some((b) => b.block_id === marker),
+    );
+    if (hit) return hit.ts;
+    const next = out.has_more ? out.response_metadata?.next_cursor : undefined;
+    // A repeated cursor would loop forever while the caller holds its issue row lock.
+    if (next && next === cursor)
+      throw new Error("conversations.replies returned an unchanged cursor");
+    cursor = next;
+  } while (cursor);
+  return undefined;
+}
+
+// SAP-3721: retries must recover posts whose database record failed.
+// The connector omits Slack metadata, so reconciliation requires a block marker.
 export async function post(
   ctx: SlackCtx,
   input: {
@@ -130,14 +167,44 @@ export async function post(
     text?: string;
     blocks?: Block[];
     threadTs?: string;
+    key?: string;
   },
 ): Promise<{ channel: string; ts: string }> {
+  const { key, ...args } = input;
+  if (key && args.threadTs) {
+    const marker = `sylon:${key}`;
+    // A failed lookup must not block the post: a rare duplicate costs less than a missing reply.
+    const earlier = await findPosted(
+      ctx,
+      args.channel,
+      args.threadTs,
+      marker,
+    ).catch((err: unknown) => {
+      ctx.logger.warn("slack thread lookup failed; posting without dedupe", {
+        err: String(err),
+        key,
+      });
+      return undefined;
+    });
+    if (earlier) return { channel: args.channel, ts: earlier };
+    args.blocks = args.blocks?.length
+      ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
+      : // One section is enough: the only long keyed text is an approved reply, and its draft card
+        // already carried the same text in one section (blocks.ts draft.body).
+        [
+          {
+            type: "section",
+            block_id: marker,
+            text: { type: "mrkdwn", text: args.text ?? "" },
+          },
+        ];
+  }
   const out = await call(
     ctx,
     "chat.postMessage",
-    input,
-    (s) => s.postMessage(input),
-    () => ({ ok: true as const, channel: input.channel, ts: stubTs() }),
+    args,
+    (s) => s.postMessage(args),
+    () => ({ ok: true as const, channel: args.channel, ts: stubTs() }),
   );
   if (!out.ts)
     throw new SlackMethodError("chat.postMessage", 200, "no ts in response");
