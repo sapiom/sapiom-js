@@ -248,8 +248,20 @@ describe("revealAgentFolder", () => {
     await expect(revealAgentFolder(agent, { host: {}, fetch: offline, mock: false })).resolves.toBe(false);
   });
 
-  it("does not touch the network in mock mode", async () => {
+  it("touches neither the network nor the bridge in mock mode", async () => {
+    let bridgeCalls = 0;
+    const host = {
+      sapiomDesktop: {
+        checkForUpdates: noop,
+        revealPath: async () => {
+          bridgeCalls += 1;
+          return false;
+        },
+      },
+    };
     await expect(revealAgentFolder(agent, { host: {}, fetch: refuse, mock: true })).resolves.toBe(true);
+    await expect(revealAgentFolder(agent, { host, fetch: refuse, mock: true })).resolves.toBe(true);
+    expect(bridgeCalls).toBe(0);
   });
 });
 

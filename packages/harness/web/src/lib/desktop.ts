@@ -207,9 +207,12 @@ export interface RevealDeps {
  *
  * The desktop bridge when present; otherwise `POST /api/fs/reveal`, which the
  * server answers only for folders in its workflow registry. Mock mode has no
- * server and no OS to ask, so it resolves true without doing anything.
+ * server and its paths are fixtures, so it resolves true without asking the
+ * bridge or the server.
  */
 export async function revealAgentFolder(agentPath: string, deps: RevealDeps = {}): Promise<boolean> {
+  // Before the bridge: mock paths are fixtures, not folders on this machine.
+  if (deps.mock ?? isMockMode()) return true;
   const bridge = getDesktopBridge(deps.host ?? defaultHost());
   if (bridge?.revealPath) {
     try {
@@ -218,7 +221,6 @@ export async function revealAgentFolder(agentPath: string, deps: RevealDeps = {}
       return false;
     }
   }
-  if (deps.mock ?? isMockMode()) return true;
   try {
     const res = await (deps.fetch ?? fetch)("/api/fs/reveal", {
       method: "POST",

@@ -15,6 +15,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { json, Router, type Router as ExpressRouter } from "express";
+import rateLimit from "express-rate-limit";
 import { type FsDirEntry, type FsListResponse } from "../shared/types.js";
 import {
   isAgentProjectScanIgnoredDir,
@@ -77,12 +78,13 @@ function spawnReveal(cmd: RevealCommand): void {
 
 export interface FsRouterDeps {
   /**
-   * True when `resolvedPath` is the folder of an agent in the workflow
-   * registry. The reveal route acts only on these: it runs an OS command on a
-   * path from the request body, so it must not take arbitrary paths. Absent,
-   * every reveal is refused (403).
+   * The workflow registry's own path for the agent folder at `resolvedPath`,
+   * or null when no registered agent lives there. The reveal route acts only
+   * on these: it runs an OS command, so it must not take arbitrary paths, and
+   * it uses the registry's string rather than the request's from here on.
+   * Absent, every reveal is refused (403).
    */
-  isAgentPath?: (resolvedPath: string) => boolean | Promise<boolean>;
+  findAgentPath?: (resolvedPath: string) => string | null | Promise<string | null>;
   /** Injectable for tests; defaults to spawning the platform command detached. */
   reveal?: (cmd: RevealCommand) => void;
   /** Injectable for tests; defaults to `process.platform`. */
@@ -179,8 +181,25 @@ export function createFsRouter(deps: FsRouterDeps = {}): ExpressRouter {
     res.json(response);
   });
 
-  router.post("/api/fs/reveal", json(), async (req, res) => {
-    const rawPath: unknown = (req.body as { path?: unknown } | undefined)?.path;
+  // Each reveal opens a file-manager window; a burst is never a user clicking.
+  const revealRateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  router.post("/api/fs/reveal", revealRateLimiter, json(), async (req, res, next) => {
+    try {
+      await handleReveal(req.body, res);
+    } catch (err) {
+      // Express 4 does not forward a rejected handler promise; an async
+      // registry lookup that throws would otherwise go unhandled.
+      next(err);
+    }
+  });
+
+  async function handleReveal(body: unknown, res: import("express").Response): Promise<void> {
+    const rawPath: unknown = (body as { path?: unknown } | undefined)?.path;
     if (typeof rawPath !== "string" || !path.isAbsolute(rawPath)) {
       res.status(400).json({ error: "path must be an absolute path" });
       return;
@@ -188,20 +207,21 @@ export function createFsRouter(deps: FsRouterDeps = {}): ExpressRouter {
     const resolved = path.resolve(rawPath);
     // Registry before existence: answering 404 for unregistered paths would
     // tell any caller which arbitrary paths exist on this machine.
-    if (!deps.isAgentPath || !(await deps.isAgentPath(resolved))) {
+    const agentPath = deps.findAgentPath ? await deps.findAgentPath(resolved) : null;
+    if (!agentPath) {
       res.status(403).json({ error: `not a registered agent folder: ${resolved}` });
       return;
     }
-    try {
-      await fs.stat(resolved);
-    } catch {
-      // A registered agent whose folder was deleted since the last scan.
-      res.status(404).json({ error: `no such folder: ${resolved}` });
+    // A registered agent whose folder was deleted, or replaced by a file,
+    // since the last scan.
+    const isFolder = await fs.stat(agentPath).then((st) => st.isDirectory(), () => false);
+    if (!isFolder) {
+      res.status(404).json({ error: `no such folder: ${agentPath}` });
       return;
     }
-    reveal(revealCommand(resolved, platform));
+    reveal(revealCommand(agentPath, platform));
     res.status(204).end();
-  });
+  }
 
   return router;
 }
