@@ -3,10 +3,17 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+// Tests poll these PID files, so each must appear with its full content, never empty.
+const publishPid = (path, pid) => {
+  writeFileSync(`${path}.tmp`, String(pid));
+  renameSync(`${path}.tmp`, path);
+};
 
 const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
 const password = process.env.OPENCODE_SERVER_PASSWORD;
@@ -20,7 +27,7 @@ for (const specifier of config.plugin ?? []) {
   for (const key of keys) delete process.env[key];
   writeFileSync(readyPath, "ready\n", { flag: "wx", mode: 0o600 });
 }
-writeFileSync("runtime.pid", String(process.pid));
+publishPid("runtime.pid", process.pid);
 if (config.resistant) {
   const resistantSource =
     'process.on("SIGTERM",()=>{' +
@@ -32,7 +39,7 @@ if (config.resistant) {
     detached: true,
     stdio: "ignore",
   });
-  writeFileSync("runtime.tool.pid", String(resistant.pid));
+  publishPid("runtime.tool.pid", resistant.pid);
 }
 if (config.spawnOnTermMarker) {
   process.on("SIGTERM", () => {
@@ -57,7 +64,7 @@ if (config.startupExitWriter) {
     stdio: "ignore",
   });
   writer.unref();
-  writeFileSync("runtime.tool.pid", String(writer.pid));
+  publishPid("runtime.tool.pid", writer.pid);
   const deadline = Date.now() + 2_000;
   const observeWriter = setInterval(() => {
     if (existsSync(config.startupExitWriter)) process.exit(3);
