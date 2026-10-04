@@ -131,9 +131,9 @@ describe("cron time zone", () => {
     timezone: "America/Los_Angeles",
   } as const;
   const utc = {
-    project: "watchdog",
+    project: "controller",
     kind: "schedule_cron",
-    cron: "*/5 * * * *",
+    cron: "*/2 * * * *",
   } as const;
 
   it("fleet.json schedules the digest at 09:00 Pacific", () => {
@@ -148,7 +148,7 @@ describe("cron time zone", () => {
     });
     expect(triggerBody(utc)).toEqual({
       kind: "schedule_cron",
-      cron: "*/5 * * * *",
+      cron: "*/2 * * * *",
     });
   });
 
@@ -177,7 +177,7 @@ describe("cron time zone", () => {
         [
           attached({
             kind: "schedule_cron",
-            cron: "*/5 * * * *",
+            cron: "*/2 * * * *",
             timezone: "UTC",
           }),
         ],
@@ -189,7 +189,7 @@ describe("cron time zone", () => {
         [
           attached({
             kind: "schedule_cron",
-            cron: "*/5 * * * *",
+            cron: "*/2 * * * *",
             timezone: null,
           }),
         ],

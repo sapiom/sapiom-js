@@ -241,7 +241,7 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
   watchdog: {
     emits: [],
     writes:
-      "watchdog_state, watchdog_reported, watchdog_alerted; reads failed runs from the Sapiom API; posts each failure with action items",
+      "watchdog_alerts; posts each failed support desk run, from sapiom.run.failed, with action items",
   },
   digest: {
     emits: [],

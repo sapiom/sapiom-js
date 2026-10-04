@@ -47,6 +47,7 @@ describe("db", () => {
       { id: "090_digests" },
       { id: "100_linear_state" },
       { id: "101_draft_summary" },
+      { id: "102_watchdog_event" },
     ]);
   });
 

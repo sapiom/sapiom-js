@@ -102,7 +102,7 @@ describe("trigger diffing", () => {
     expect(isOn("digest", [cron("5", "0 9 * * *")])).toBe(false);
     expect(isOn("digest", [{ ...pacific, timezone: "UTC" }])).toBe(false);
     expect(
-      isOn("watchdog", [{ ...cron("6", "*/5 * * * *"), timezone: "UTC" }]),
+      isOn("controller", [{ ...cron("6", "*/2 * * * *"), timezone: "UTC" }]),
     ).toBe(true);
     expect(planSwitch("digest", true, [cron("5", "0 9 * * *")]).create).toEqual(
       [
@@ -128,11 +128,11 @@ describe("trigger diffing", () => {
     });
     expect(
       triggerBody({
-        project: "watchdog",
+        project: "controller",
         kind: "schedule_cron",
-        cron: "*/5 * * * *",
+        cron: "*/2 * * * *",
       }),
-    ).toEqual({ kind: "schedule_cron", cron: "*/5 * * * *" });
+    ).toEqual({ kind: "schedule_cron", cron: "*/2 * * * *" });
     expect(triggerStates("digest", [])).toEqual([
       {
         label: "cron 0 9 * * * America/Los_Angeles",

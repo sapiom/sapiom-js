@@ -1,6 +1,6 @@
 /**
- * The support desk event catalog: raw Slack events from the connector and the domain `issue.*` events
- * the agents emit to each other.
+ * The support desk event catalog: raw Slack events from the connector, the `sapiom.*` events the
+ * platform emits, and the domain `issue.*` events the agents emit to each other.
  *
  * Every schema is a loose `z.object()`. The engine hands a run the whole event payload, and a
  * strict schema would fail the run on any key Slack (or a newer producer) adds.
@@ -113,6 +113,32 @@ export const SlackEvents = {
 } as const;
 export type SlackEventType = keyof typeof SlackEvents;
 
+// --- Platform events (the engine → listeners) ---
+
+/**
+ * `sapiom.run.failed`: a run in this org ended failed. One event per failure; a resumed run that
+ * fails again is a new one. It carries no error text, because a step's error can hold a secret.
+ * The engine passes a run only the keys its entry schema declares, so every field is listed.
+ */
+export const RunFailed = z.object({
+  definitionId: z.string(),
+  slug: z.string(),
+  executionId: z.string(),
+  // The rest is description only, so a missing value must not fail the watchdog's run: its own
+  // failure raises no event.
+  definitionName: z.string().nullish(),
+  failedStep: z.string().nullish(),
+  /** 0-based; null when no step attempt failed (the run failed before its first step). */
+  attempt: z.number().int().nullish(),
+  /** `infra` (Sapiom's side) or `workload` (the step's own code); null when unattributed. */
+  faultClass: z.string().nullish(),
+  startedAt: z.string().nullish(),
+  finishedAt: z.string().nullish(),
+});
+export type RunFailed = z.infer<typeof RunFailed>;
+
+export const PlatformEvents = { "sapiom.run.failed": RunFailed } as const;
+
 // --- Domain events (agent → agent) ---
 
 export const Envelope = z.object({
@@ -150,8 +176,12 @@ export const Events = {
 export type EventType = keyof typeof Events;
 export type EventPayload<T extends EventType> = z.infer<(typeof Events)[T]>;
 
-/** Every event type a support desk run can be started by, raw or domain. */
-export const AllEvents = { ...SlackEvents, ...Events } as const;
+/** Every event type a support desk run can be started by: Slack, platform or domain. */
+export const AllEvents = {
+  ...SlackEvents,
+  ...PlatformEvents,
+  ...Events,
+} as const;
 export type AnyEventType = keyof typeof AllEvents;
 
 export function isEventType(type: string): type is EventType {

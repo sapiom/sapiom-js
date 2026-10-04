@@ -44,7 +44,8 @@ flowchart LR
   E --> L[Linear]
   L -. state read .-> S[linear-sync<br/>cron]
   S -- issue.engineering_resolved --> F
-  W[watchdog<br/>cron] -- failed runs --> A[alerts channel]
+  R[[sapiom.run.failed]] --> W[watchdog]
+  W -- failed runs --> A[alerts channel]
   I & P & E & K & U & S & W <--> DB[(fleet Postgres<br/>issues · messages · drafts<br/>nudges · config)]
 ```
 
@@ -64,7 +65,7 @@ flowchart LR
 | `escalation`          | `issue.escalate`                                                       | Opens one Linear issue, replies "Tracked as SAP-n" in the triage thread (the customer thread gets a neutral line, no link), moves the issue On Hold.                                                                                                                          |
 | `controller`          | cron, every 2 minutes                                                  | Nudges stalled issues in their triage thread, and repeats on a backoff while the reason holds. Escalates an issue left unowned or a customer left waiting to on-call and a support group, once per level (see Escalation to a person).                                        |
 | `linear-sync`         | cron, every 2 minutes                                                  | Reads the Linear state of On Hold issues (25 per run, least recently checked first). Done or Canceled: posts in the triage thread and moves the issue to On You; Done also emits `issue.engineering_resolved`.                                                                |
-| `watchdog`            | cron, every 5 minutes                                                  | Polls the Sapiom API for failed runs of the other fleet agents and posts one Slack message per failure: agent, step, error, link and action items.                                                                                                                            |
+| `watchdog`            | `sapiom.run.failed`                                                    | Posts one Slack message per failed run of the other fleet agents: agent, step, attempt, fault class, a link to the run and action items. Runs only when something fails.                                                                                                      |
 | `digest`              | cron, daily at 09:00 America/Los_Angeles                               | Posts one message per desk in its triage channel: open issues grouped by status, with age, owner, a link to the card, and the ones past their SLA (`digest.sla_hours`) flagged. Once per desk per day.                                                                        |
 | `urgent-pager` (opt.) | `issue.created`                                                        | DMs the on-call user when an issue is urgent. The live-added agent; see below.                                                                                                                                                                                                |
 
@@ -187,11 +188,11 @@ an install deployed as `helpdesk`:
 { "fleetId": "helpdesk" }
 ```
 
-Then run `pnpm run setup` (it redeploys each agent from the new code under the same slugs, finds
-the existing triggers and database, and provisions the `WATCHDOG_API_KEY` secret on the watchdog)
-and `pnpm run console:publish` (the Console reads `CONSOLE_API_KEY` now, so republish to set it).
-An older watchdog secret named `<PREFIX>_WATCHDOG_API_KEY`, from before the rename, and its API
-key are no longer read; delete them when convenient.
+Then run `pnpm run setup` (it redeploys each agent from the new code under the same slugs and
+finds the existing triggers and database) and `pnpm run console:publish` (the Console reads
+`CONSOLE_API_KEY` now, so republish to set it). The watchdog reads no key any more: a
+`WATCHDOG_API_KEY` or `<PREFIX>_WATCHDOG_API_KEY` secret on it, and the `org.read` API key behind
+it, can be deleted.
 
 ## Desks
 
@@ -284,21 +285,25 @@ thresholds from SLAs come later (SAP-3790); until then levels are explicit minut
 
 ### Failure alerts (watchdog)
 
-No event fires when a run fails, so the watchdog polls `GET /v1/workflows/executions?status=failed`
-for every fleet agent (itself and the smoke agents excluded) and posts one message per new failure.
-The first run looks back one hour; later runs start 30 minutes before the last successful poll, and
-`watchdog_reported` keeps each execution from being announced twice. More than 10 failures in one
-tick post 10 and one "and N more" line linking the Events page.
+The engine emits `sapiom.run.failed` when a run in the org ends failed, and the watchdog's event
+trigger starts one run per failure. It posts one message for a fleet agent's failure (itself and
+the smoke agents excluded). A trigger cannot filter on the payload, so another agent's failure in
+the same org also starts a watchdog run, which ends at once without a post. An org where nothing
+fails costs no watchdog runs.
 
+- **Message.** The agent, the failed step and attempt, the fault class (`infra`: Sapiom could not
+  run the step; `workload`: the step's code failed), the issue the run worked on, a link to the run
+  and action items. The event carries no error text, since a step's error can hold a secret; the
+  run page shows it.
 - **Channel.** `alerts.channel` in `fleet.local.json` (or the `config` table). When unset, alerts go to
   the default desk's triage channel.
-- **Credential.** That route needs `org.read`, which the per-run key behind `ctx.sapiom` does not
-  hold. `pnpm run setup` provisions it: it mints a child key with only `org.read` and stores it as
-  the watchdog's secret `WATCHDOG_API_KEY`, which Sapiom injects into the agent as an
-  environment variable. A rerun finds the secret and does nothing. The key running setup needs
-  `org.api_keys.write` and `org.write`; without them setup stops and tells you to create an
-  `org.read` key yourself and add it in the agent's Secrets tab. The key is never printed or
-  written to `.sapiom/fleet-state.json` (only its id).
+- **Credential.** None. The event is the input, so the watchdog calls no Sapiom API.
+- **Dedup.** `watchdog_alerts` records each failure posted, keyed on the run and when it finished,
+  so a redelivered event posts nothing and a resumed run that fails again posts again.
+- **Silent cases.** The engine does not send the watchdog its own failure. A failed Slack post fails
+  the watchdog's run, which the Runs page shows.
+- **Upgrading.** Setup attaches the event trigger but never detaches a trigger: cancel the
+  watchdog's old `*/5 * * * *` cron (Console, or `sapiom agents schedule`) after the upgrade.
 
 ### Daily digest
 

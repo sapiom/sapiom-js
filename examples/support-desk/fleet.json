@@ -129,8 +129,8 @@
     },
     {
       "project": "watchdog",
-      "kind": "schedule_cron",
-      "cron": "*/5 * * * *"
+      "kind": "event",
+      "eventType": "sapiom.run.failed"
     },
     {
       "project": "digest",
