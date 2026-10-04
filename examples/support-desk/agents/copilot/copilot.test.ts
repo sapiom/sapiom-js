@@ -26,7 +26,7 @@ import {
   setStatus,
   setTriageRoot,
 } from "../../_shared/issues";
-import { localFetcher, setDocsFetcher } from "../../_shared/docs";
+import { setDocsFetcher } from "../../_shared/docs";
 import { createArticle } from "../../_shared/kb";
 import { EXAMPLE_SLA, fakeCtx } from "../../_shared/test-ctx";
 import {
@@ -1440,7 +1440,6 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
 
   beforeEach(async () => {
     await resetSharedDb(async () => ({ db, close: async () => {} }));
-    setDocsFetcher(localFetcher);
   });
   afterEach(async () => {
     failOnce.linkMessage = false;
