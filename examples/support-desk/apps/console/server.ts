@@ -14,7 +14,8 @@
  * There is no login of its own: the App Link admits only signed-in org members, and its preview
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
  * fleet: fleet.json's triggers on fleet slugs, the controller's runs, and fires on fleet slugs.
- * The Knowledge tab's writes (`/api/kb`) touch only `kb_articles` and record `console` as editor.
+ * The Knowledge tab's writes touch only `kb_articles` (`/api/kb`) and the `knowledge.docs_url`
+ * config key (`/api/knowledge/source`), and record `console` as editor.
  *
  * Ticket actions (`/api/tickets/<id>/actions/<verb>`) emit the event the Slack button would, and
  * the agents handle it (see `actions.ts`); the Console writes no issue or draft itself.
@@ -74,7 +75,13 @@ import {
   statusCounts,
   type BoardRow,
 } from "./queries";
-import { getSettings, putDeskSettings, putFleetSettings } from "./settings";
+import {
+  getDocsSource,
+  getSettings,
+  putDeskSettings,
+  putDocsSource,
+  putFleetSettings,
+} from "./settings";
 import {
   AGENTS,
   AGENT_ROLES,
@@ -920,6 +927,10 @@ const GET: [RegExp, Handler][] = [
       ),
   ],
   [
+    /^\/api\/knowledge\/source$/,
+    () => withConsoleDb(async (d) => httpBody(await getDocsSource(d))),
+  ],
+  [
     /^\/api\/escalation$/,
     (_, __, url) =>
       withConsoleDb(async (d) =>
@@ -1082,6 +1093,11 @@ async function putSla(body: Record<string, unknown>) {
 
 const PUT: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id], body) => updateKbArticle(id!, body)],
+  [
+    /^\/api\/knowledge\/source$/,
+    (_, body) =>
+      withConsoleDb(async (d) => httpBody(await putDocsSource(d, body))),
+  ],
   [
     /^\/api\/escalation$/,
     (_, body, url) =>

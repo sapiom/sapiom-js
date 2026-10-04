@@ -5,6 +5,7 @@
 import { z } from "zod/v4";
 
 import type { Db } from "./db";
+import { parseDocsSource } from "./docs";
 
 /** SAP-3788 requires runtime-editable escalation thresholds and recipients. */
 export const DeskEscalationSchema = z.object({
@@ -70,6 +71,22 @@ export const SlaSchema = z.object({
   }),
 });
 
+/** A docs site's origin or its `llms.txt`, as {@link parseDocsSource} accepts it. */
+export const DocsUrlSchema = z
+  .string()
+  .trim()
+  .url()
+  .superRefine((url, ctx) => {
+    try {
+      parseDocsSource(url);
+    } catch (err) {
+      ctx.addIssue({
+        code: "custom",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
 export const ConfigSchemas = {
   /** Superseded by the desk's own value (`desks.linear_team_id`); read only when the desk has none. */
   "linear.team_id": z.string().min(1),
@@ -114,6 +131,11 @@ export const ConfigSchemas = {
     .strict(),
   /** Response targets per priority. Unset: the controller nudges after the desk's `nudge_minutes`. */
   sla: SlaSchema,
+  /**
+   * The public docs the copilot may read and cite, for every desk: a site that publishes
+   * `llms.txt`. Unset: drafts come from the team's articles only, and no docs are fetched or cited.
+   */
+  "knowledge.docs_url": DocsUrlSchema,
 } as const;
 
 /** Keys fleet.json may omit: readers apply a default, and setup seeds only the keys it has. */
@@ -131,6 +153,7 @@ export const OPTIONAL_KEYS: readonly ConfigKey[] = [
   "escalation",
   "digest.sla_hours",
   "sla",
+  "knowledge.docs_url",
 ];
 export type ConfigKey = keyof typeof ConfigSchemas;
 export type ConfigValue<K extends ConfigKey> = z.infer<

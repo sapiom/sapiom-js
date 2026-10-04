@@ -6,7 +6,9 @@ import { memoryDb, type Db } from "../../_shared/db";
 import { deskBySlug, upsertDesk, type Desk } from "../../_shared/desks";
 import {
   digestSchedule,
+  getDocsSource,
   getSettings,
+  putDocsSource,
   putDeskSettings,
   putFleetSettings,
 } from "./settings";
@@ -144,5 +146,47 @@ describe("fleet settings", () => {
       cron: "0 9 * * *",
       timezone: "America/Los_Angeles",
     });
+  });
+});
+
+describe("docs source", () => {
+  it("is unset on a fresh fleet", async () => {
+    expect((await getDocsSource(db)).body).toEqual({
+      docsUrl: null,
+      indexUrl: null,
+    });
+  });
+
+  it("sets a site, shows the index it reads, and removes it with null", async () => {
+    const res = await putDocsSource(db, {
+      docsUrl: "https://help.example.com/",
+    });
+    expect(res).toEqual({
+      status: 200,
+      body: {
+        docsUrl: "https://help.example.com/",
+        indexUrl: "https://help.example.com/llms.txt",
+      },
+    });
+    expect(await getConfigOr(db, "knowledge.docs_url", null)).toBe(
+      "https://help.example.com/",
+    );
+    await putDocsSource(db, { docsUrl: null });
+    expect(await getConfigOr(db, "knowledge.docs_url", null)).toBeNull();
+  });
+
+  it.each([
+    [{ docsUrl: "http://help.example.com" }, /https/],
+    [{ docsUrl: "https://help.example.com/?a=1" }, /query/],
+    [{ docsUrl: "not a url" }, /docsUrl/],
+    [{ docsUrl: "https://help.example.com", extra: 1 }, /settings|extra/],
+  ])("rejects %j", async (body, message) => {
+    const res = (await putDocsSource(db, body)) as {
+      status: number;
+      body: { error: string };
+    };
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(message);
+    expect(await getConfigOr(db, "knowledge.docs_url", null)).toBeNull();
   });
 });

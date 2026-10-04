@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../../fixtures/index";
-import { setConfig } from "../../_shared/config";
+import { deleteConfig, setConfig } from "../../_shared/config";
 import {
   localFleetDb,
   resetSharedDb,
@@ -93,8 +93,10 @@ const own = (file: string) =>
     readFileSync(path.join(DIR, "../../fixtures/copilot", file), "utf8"),
   ).payload as Record<string, unknown>;
 
+/** The docs site the tests configure; `knowledge.docs_url` is unset by default. */
+const DOCS_URL = "https://docs.example.com";
 /** The page the stubbed selection call picks; it is in the local trace's docs index. */
-const DEPLOY_PAGE = "https://docs.sapiom.ai/guides/deploy";
+const DEPLOY_PAGE = `${DOCS_URL}/getting-started`;
 
 const DRAFTED: DraftOutput = {
   summary: "Webhook signatures fail since this morning.",
@@ -162,6 +164,8 @@ let db: Db;
 beforeEach(async () => {
   db = await localFleetDb();
   await seedLocalFixtures(db);
+  // Most tests cover drafting with a docs site; "without a docs source" deletes the key.
+  await setConfig(db, "knowledge.docs_url", DOCS_URL, "test");
   setLocalDb(db);
 });
 
@@ -990,7 +994,7 @@ describe("click path", () => {
 describe("knowledge on the draft path", () => {
   const fakeIndex = async (url: string) =>
     url.endsWith("/llms.txt")
-      ? "- [Deploy](https://docs.sapiom.ai/guides/deploy): Deploy it.\n"
+      ? `- [Deploy](${DEPLOY_PAGE}): Deploy it.\n`
       : "# Deploy\nrun it";
   const run = (t: ReturnType<typeof ctxFor>) =>
     runAgent(fixture("issue/created.json").payload, t.ctx);
@@ -1061,6 +1065,69 @@ describe("knowledge on the draft path", () => {
       t.llmCalls[0].request as { messages: { content: string }[] }
     ).messages[0].content;
     expect(prompt).toContain("# Deploy\nrun it");
+  });
+});
+
+describe("without a docs source", () => {
+  const run = (t: ReturnType<typeof ctxFor>) =>
+    runAgent(fixture("issue/created.json").payload, t.ctx);
+  const promptOf = (t: ReturnType<typeof ctxFor>) =>
+    (t.llmCalls[0].request as { messages: { content: string }[] }).messages[0]
+      .content;
+  let fetched: string[];
+  beforeEach(async () => {
+    await deleteConfig(db, "knowledge.docs_url");
+    fetched = [];
+    setDocsFetcher(async (url) => {
+      fetched.push(url);
+      return `- [Deploy](${DEPLOY_PAGE}): Deploy it.\n`;
+    });
+  });
+  afterEach(() => setDocsFetcher(undefined));
+
+  it("drafts from team articles only: no fetch, no selection, no docs section", async () => {
+    const policy = await createArticle(
+      db,
+      { kind: "policy", title: "Tone", body: "TEAMPOLICY" },
+      "test",
+    );
+    const t = ctxFor("e", {
+      ...DRAFTED,
+      citations: [DEPLOY_PAGE, policy.id],
+    });
+    const out = last(await run(t)).output!;
+    expect(fetched).toEqual([]);
+    expect(t.selectCalls).toHaveLength(0);
+    const prompt = promptOf(t);
+    expect(prompt).toContain("TEAMPOLICY");
+    expect(prompt).not.toContain("<docs>");
+    expect(prompt).not.toContain("could not be read");
+    // Not capped as a docs outage: there are no docs to be missing.
+    expect(out.confidence).toBe(DRAFTED.confidence);
+    const draft = await getDraft(db, out.draftId as string);
+    expect(draft.citations).toEqual([policy.id]);
+  });
+
+  it("allows no citations at all when there are no articles either", async () => {
+    const t = ctxFor("e");
+    const out = last(await run(t)).output!;
+    const schema = (t.llmCalls[0].output as { schema: object }).schema as {
+      properties: { citations: { maxItems?: number } };
+    };
+    expect(schema.properties.citations.maxItems).toBe(0);
+    const draft = await getDraft(db, out.draftId as string);
+    expect(draft.citations).toEqual([]);
+    expect(JSON.stringify(t.slack("chat.postMessage"))).not.toContain(DOCS_URL);
+  });
+
+  it("reads the docs site the key names once it is set", async () => {
+    await setConfig(db, "knowledge.docs_url", DOCS_URL, "test");
+    const t = ctxFor("e");
+    const out = last(await run(t)).output!;
+    expect(fetched).toEqual([`${DOCS_URL}/llms.txt`, `${DEPLOY_PAGE}.md`]);
+    expect(promptOf(t)).toContain(`<page url="${DEPLOY_PAGE}"`);
+    const draft = await getDraft(db, out.draftId as string);
+    expect(draft.citations).toEqual([DEPLOY_PAGE]);
   });
 });
 
@@ -1244,21 +1311,21 @@ describe("draft helpers", () => {
   it("sourceLabel links docs pages and names articles, with a placeholder for a deleted one", () => {
     const titles = new Map([["id-1", "Refunds <b>"]]);
     expect(sourceLabel(DEPLOY_PAGE, titles)).toBe(
-      `<${DEPLOY_PAGE}|guides/deploy>`,
+      `<${DEPLOY_PAGE}|getting-started>`,
     );
     expect(sourceLabel("id-1", titles)).toBe("Refunds &lt;b&gt;");
     expect(sourceLabel("gone", titles)).toBe("removed article");
   });
 
   it("sourceLabel never lets a stored url inject Slack markup", () => {
-    const evil = "https://docs.sapiom.ai/a|b>c<!channel>";
+    const evil = "https://docs.example.com/a|b>c<!channel>";
     const out = sourceLabel(evil, new Map());
     expect(out).not.toContain("<");
     expect(out).not.toContain("|");
     expect(out).not.toContain(">");
-    expect(sourceLabel("https://docs.sapiom.ai/a%7Cb", new Map())).not.toMatch(
-      /^<https/,
-    );
+    expect(
+      sourceLabel("https://docs.example.com/a%7Cb", new Map()),
+    ).not.toMatch(/^<https/);
   });
 
   it("promptMessages keeps the first customer message and the latest ones, never internal notes", () => {
@@ -1289,6 +1356,7 @@ describe("draft helpers", () => {
         policies: [article("policy", "p1")],
         answers: [article("answer", "a1")],
         docs: [{ url: DEPLOY_PAGE, title: "Deploy", body: "page text" }],
+        docsConfigured: true,
         docsUnavailable: false,
       },
     });

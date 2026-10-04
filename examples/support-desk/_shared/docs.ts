@@ -1,16 +1,44 @@
 /**
- * The public docs as the copilot's reference: docs.sapiom.ai publishes `llms.txt` (one line per
- * page) and a markdown twin of every page at `<page url>.md`. Both are fetched live and cached in
- * `doc_cache`, so a docs change reaches the next draft within the TTL and nothing is redeployed.
+ * A public docs site as the copilot's reference, when the team configures one: `knowledge.docs_url`
+ * names a site that publishes `llms.txt` (one line per page) and a markdown twin of every page at
+ * `<page url>.md`. Both are fetched live and cached in `doc_cache`, so a docs change reaches the
+ * next draft within the TTL and nothing is redeployed. With the key unset the copilot drafts from
+ * the team's articles alone and nothing here runs.
  *
- * Only URLs under {@link DOCS_ORIGIN} are ever fetched, whatever the model or a customer names.
- * A deployed step uses plain `fetch` (see the Sapiom authoring guide: a `fetch` in a step is
- * ordinary author code); a local trace never touches the network.
+ * Only URLs on the configured site's origin are ever fetched, whatever the model or a customer
+ * names. A deployed step uses plain `fetch` (a `fetch` in a step is ordinary author code); a local
+ * trace never touches the network.
  */
 import type { Db } from "./db";
 
-export const DOCS_ORIGIN = "https://docs.sapiom.ai";
-export const INDEX_URL = `${DOCS_ORIGIN}/llms.txt`;
+/** Where one site's docs live: the index to read and the only origin pages may come from. */
+export interface DocsSource {
+  /** `https://host[:port]`, no trailing slash. */
+  origin: string;
+  /** The `llms.txt` the index is read from. */
+  indexUrl: string;
+}
+
+/**
+ * The source a `knowledge.docs_url` value names: a URL ending in `.txt` is the index itself; any
+ * other URL is a site (or a path on it) whose index is `<url>/llms.txt`. Throws unless the URL is
+ * https with no credentials, query or fragment.
+ */
+export function parseDocsSource(raw: string): DocsSource {
+  const u = new URL(raw);
+  if (u.protocol !== "https:") throw new Error("docs url must use https");
+  if (u.username || u.password)
+    throw new Error("docs url must not carry credentials");
+  if (u.search || u.hash)
+    throw new Error("docs url must not have a query or fragment");
+  const path = u.pathname.replace(/\/+$/, "");
+  return {
+    origin: u.origin,
+    indexUrl: /\.txt$/i.test(path)
+      ? `${u.origin}${path}`
+      : `${u.origin}${path}/llms.txt`,
+  };
+}
 
 /** How long a cached page or index is served before it is fetched again. */
 export const TTL_MS = 60 * 60 * 1000;
@@ -38,13 +66,13 @@ export interface DocsDeps {
   now?: () => Date;
 }
 
-/** True only for https URLs on the docs origin (no credentials, no other host or port). */
-export function isDocsUrl(raw: string): boolean {
+/** True only for https URLs on the source's origin (no credentials, no other host or port). */
+export function isDocsUrl(raw: string, source: DocsSource): boolean {
   try {
     const u = new URL(raw);
     return (
       u.protocol === "https:" &&
-      u.host === new URL(DOCS_ORIGIN).host &&
+      u.origin === source.origin &&
       !u.username &&
       !u.password
     );
@@ -54,23 +82,26 @@ export function isDocsUrl(raw: string): boolean {
 }
 
 /** The page URL without a trailing `.md`, query or fragment: the key pages are cited and cached by. */
-export function canonicalPageUrl(raw: string): string | null {
-  if (!isDocsUrl(raw)) return null;
+export function canonicalPageUrl(
+  raw: string,
+  source: DocsSource,
+): string | null {
+  if (!isDocsUrl(raw, source)) return null;
   const u = new URL(raw);
   const path = u.pathname.replace(/\.md$/, "").replace(/\/+$/, "");
-  return path ? `${DOCS_ORIGIN}${path}` : null;
+  return path ? `${source.origin}${path}` : null;
 }
 
 const ENTRY = /^\s*[-*]\s+\[([^\]]+)\]\(([^)\s]+)\)\s*(?::\s*(.*))?$/;
 
-/** The `- [Title](url): description` lines of llms.txt. Entries off the docs origin are dropped. */
-export function parseLlmsTxt(text: string): DocEntry[] {
+/** The `- [Title](url): description` lines of llms.txt. Entries off the source's origin are dropped. */
+export function parseLlmsTxt(text: string, source: DocsSource): DocEntry[] {
   const seen = new Set<string>();
   const entries: DocEntry[] = [];
   for (const line of text.split("\n")) {
     const m = ENTRY.exec(line);
     if (!m) continue;
-    const url = canonicalPageUrl(m[2]);
+    const url = canonicalPageUrl(m[2], source);
     if (!url || seen.has(url)) continue;
     seen.add(url);
     entries.push({
@@ -92,18 +123,23 @@ export function renderIndex(entries: readonly DocEntry[]): string {
     .join("\n");
 }
 
-/** The real fetcher. Redirects are refused so a response can never come from another origin. */
-export const httpFetcher: Fetcher = async (url) => {
-  if (!isDocsUrl(url))
-    throw new Error(`refusing to fetch outside ${DOCS_ORIGIN}`);
-  const res = await fetch(url, {
-    redirect: "manual",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers: { accept: "text/markdown, text/plain;q=0.9" },
-  });
-  if (!res.ok) throw new Error(`GET ${url} returned ${res.status}`);
-  return readCapped(res, url === INDEX_URL ? MAX_INDEX_BYTES : MAX_PAGE_BYTES);
-};
+/** The real fetcher for one source. Redirects are refused so a response can never come from another origin. */
+export function httpFetcher(source: DocsSource): Fetcher {
+  return async (url) => {
+    if (!isDocsUrl(url, source))
+      throw new Error(`refusing to fetch outside ${source.origin}`);
+    const res = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { accept: "text/markdown, text/plain;q=0.9" },
+    });
+    if (!res.ok) throw new Error(`GET ${url} returned ${res.status}`);
+    return readCapped(
+      res,
+      url === source.indexUrl ? MAX_INDEX_BYTES : MAX_PAGE_BYTES,
+    );
+  };
+}
 
 /** Reads at most `maxBytes` of the body and cancels the rest, so a huge or endless body costs nothing. */
 async function readCapped(res: Response, maxBytes: number): Promise<string> {
@@ -129,16 +165,17 @@ async function readCapped(res: Response, maxBytes: number): Promise<string> {
   return new TextDecoder().decode(all);
 }
 
-const LOCAL_INDEX = [
-  "- [Deploy an agent](https://docs.sapiom.ai/guides/deploy): Deploy a project and inspect its first run.",
-  "- [Web Scraping](https://docs.sapiom.ai/capabilities/scraping): Read pages as clean markdown or HTML.",
-].join("\n");
-
-/** What a local trace uses: a two-page index and stub pages, with no network. */
-export const localFetcher: Fetcher = async (url) =>
-  url === INDEX_URL
-    ? LOCAL_INDEX
-    : `# Stub page\n\nLocal trace: ${url} was not fetched.`;
+/** What a local trace uses: a two-page index on the source's origin and stub pages, with no network. */
+export function localFetcher(source: DocsSource): Fetcher {
+  const index = [
+    `- [Getting started](${source.origin}/getting-started): First steps.`,
+    `- [Troubleshooting](${source.origin}/troubleshooting): Common errors and fixes.`,
+  ].join("\n");
+  return async (url) =>
+    url === source.indexUrl
+      ? index
+      : `# Stub page\n\nLocal trace: ${url} was not fetched.`;
+}
 
 let override: Fetcher | undefined;
 
@@ -148,9 +185,14 @@ export function setDocsFetcher(fetcher: Fetcher | undefined): void {
 }
 
 /** `httpFetcher` on a deployed run, `localFetcher` on a local trace. */
-export function docsDeps(ctx: { isLocalTrace?: boolean }): DocsDeps {
+export function docsDeps(
+  ctx: { isLocalTrace?: boolean },
+  source: DocsSource,
+): DocsDeps {
   return {
-    fetcher: override ?? (ctx.isLocalTrace ? localFetcher : httpFetcher),
+    fetcher:
+      override ??
+      (ctx.isLocalTrace ? localFetcher(source) : httpFetcher(source)),
   };
 }
 
@@ -186,24 +228,29 @@ async function cached(
   }
 }
 
-export async function getIndex(db: Db, deps: DocsDeps): Promise<DocEntry[]> {
+export async function getIndex(
+  db: Db,
+  source: DocsSource,
+  deps: DocsDeps,
+): Promise<DocEntry[]> {
   // Validated before it is cached: an empty or malformed 200 must not shadow a good copy for the TTL.
-  const text = await cached(db, INDEX_URL, deps, async () => {
-    const body = await deps.fetcher(INDEX_URL);
-    if (parseLlmsTxt(body).length === 0)
+  const text = await cached(db, source.indexUrl, deps, async () => {
+    const body = await deps.fetcher(source.indexUrl);
+    if (parseLlmsTxt(body, source).length === 0)
       throw new Error("llms.txt lists no pages");
     return body;
   });
-  return parseLlmsTxt(text);
+  return parseLlmsTxt(text, source);
 }
 
-/** One page's markdown, capped at {@link MAX_PAGE_CHARS}. Throws for a URL off the docs origin. */
+/** One page's markdown, capped at {@link MAX_PAGE_CHARS}. Throws for a URL off the source's origin. */
 export async function getPage(
   db: Db,
+  source: DocsSource,
   url: string,
   deps: DocsDeps,
 ): Promise<string> {
-  const page = canonicalPageUrl(url);
+  const page = canonicalPageUrl(url, source);
   if (!page) throw new Error(`not a docs page: ${url}`);
   return cached(db, page, deps, async () => {
     const body = (await deps.fetcher(`${page}.md`)).trim();

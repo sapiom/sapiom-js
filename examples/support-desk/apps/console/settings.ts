@@ -1,6 +1,6 @@
 /**
  * The Settings tab: the selected desk's row in `desks`, and the fleet-wide config keys an operator
- * tunes. Every value is validated before it is written (the desk fields here, the config keys by
+ * tunes. Also the Knowledge tab's docs source (`knowledge.docs_url`), which is fleet-wide config too. Every value is validated before it is written (the desk fields here, the config keys by
  * their `_shared/config.ts` schemas), and the agents read both on their next run, so a change needs
  * no redeploy. Injecting Db lets specs exercise real SQL on pg-mem without starting the server.
  */
@@ -13,6 +13,7 @@ import {
   setConfig,
 } from "../../_shared/config";
 import type { Db } from "../../_shared/db";
+import { parseDocsSource } from "../../_shared/docs";
 import {
   deskBySlug,
   setDefaultDesk,
@@ -166,6 +167,32 @@ export async function putDeskSettings(
   if (isDefault && !desk.isDefault) await setDefaultDesk(db, desk.slug);
   const saved = await deskBySlug(db, desk.slug);
   return getSettings(db, saved ?? desk);
+}
+
+/** The docs site the copilot reads, or null; `null` in a PUT removes it. */
+export const DocsSourceSchema = z
+  .object({ docsUrl: ConfigSchemas["knowledge.docs_url"].nullable() })
+  .strict();
+
+/** The configured docs site and the `llms.txt` the copilot reads from it. */
+export async function getDocsSource(db: Db): Promise<Result> {
+  const docsUrl = await getConfigOr(db, "knowledge.docs_url", null);
+  return {
+    status: 200,
+    body: {
+      docsUrl,
+      indexUrl: docsUrl ? parseDocsSource(docsUrl).indexUrl : null,
+    },
+  };
+}
+
+export async function putDocsSource(db: Db, body: unknown): Promise<Result> {
+  const parsed = DocsSourceSchema.safeParse(body);
+  if (!parsed.success) return invalid(parsed.error);
+  const { docsUrl } = parsed.data;
+  if (docsUrl === null) await deleteConfig(db, "knowledge.docs_url");
+  else await setConfig(db, "knowledge.docs_url", docsUrl, EDITOR);
+  return getDocsSource(db);
 }
 
 export async function putFleetSettings(
