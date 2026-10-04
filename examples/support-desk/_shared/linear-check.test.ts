@@ -123,7 +123,6 @@ describe("the On Hold check against the relay (mocked fetch)", () => {
   /** Linear state by identifier; a missing entry makes get_issue fail. */
   let states: Record<string, { status: string; statusType: string }>;
   let calls: { tool?: string; method: string; args: Record<string, unknown> }[];
-  /** What conversations.history answers: the triage channel's recent messages. */
   let history: Record<string, unknown>[];
 
   const newOnHold = async (n: number, linear = `SAP-${n}`) => {

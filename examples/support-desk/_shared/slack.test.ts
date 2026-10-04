@@ -373,7 +373,6 @@ describe("slack.ts", () => {
       ...extra,
     });
 
-    /** Stubs the gateway: `history` answers each conversations.history body. */
     function gateway(
       history: (body: Record<string, unknown>) => Response | Promise<Response>,
     ) {

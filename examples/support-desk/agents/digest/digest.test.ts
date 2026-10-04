@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fixture } from "../../fixtures/index";
 import { setConfig } from "../../_shared/config";
@@ -286,6 +286,14 @@ describe("digest run", () => {
       .join("\n");
 
   beforeEach(async () => {
+    // The digest post is keyed, so it reads the channel history through the gateway first.
+    vi.stubEnv("SAPIOM_API_KEY", "sat_test");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(JSON.stringify({ ok: true, messages: [] })),
+      ),
+    );
     db = await localFleetDb();
     support = (await deskBySlug(db, "support"))!;
     billing = (
@@ -304,6 +312,11 @@ describe("digest run", () => {
     await open("C0CUSTOMER1", "support orphan", { deskId: null });
     await open("C0CUSTOMER1", "support done", { status: "closed" });
     await open("C0CUSTOMER2", "billing one", { owner: "U0GONE" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("after a desk's triage channel moves, posts in the new channel and links each card where it was posted", async () => {

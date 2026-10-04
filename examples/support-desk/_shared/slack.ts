@@ -128,7 +128,6 @@ export async function callSlack<T = Record<string, unknown>>(
 type MessagePage = Awaited<ReturnType<SlackApi["replies"]>>;
 
 // SAP-3721, SAP-3862: recover a successful Slack post whose database record was not committed.
-// With `threadTs` it reads the thread; without, the channel's recent history.
 async function findPosted(
   ctx: SlackCtx,
   channel: string,
@@ -163,7 +162,7 @@ async function findPosted(
     );
     if (hit) return hit.ts;
     const next = out.has_more ? out.response_metadata?.next_cursor : undefined;
-    // A repeated cursor would loop forever while the caller holds its issue row lock.
+    // A repeated cursor never advances: stop rather than hold the caller's row lock or transaction.
     if (next && next === cursor)
       throw new Error(`${method} returned an unchanged cursor`);
     cursor = next;
