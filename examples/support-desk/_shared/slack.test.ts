@@ -308,23 +308,27 @@ describe("slack.ts", () => {
       ]);
     });
 
-    it("posts nothing when the lookup fails", async () => {
-      const { ctx, calls } = ctxWithSlack(
-        {},
+    it("warns and posts with the marker when the lookup fails", async () => {
+      const { ctx, calls, logs } = ctxWithSlack(
+        { postMessage: { ok: true, channel: "C1", ts: "1.6" } },
         {
           method: "replies",
-          err: Object.assign(new Error("x"), { status: 502 }),
+          err: Object.assign(new Error("x"), { status: 429 }),
         },
       );
-      const thrown = await post(ctx, {
-        channel: "C1",
-        text: "hi",
-        threadTs: "1.0",
-        key: "k1",
-      }).catch((e: unknown) => e);
-      expect(thrown).toBeInstanceOf(SlackMethodError);
-      expect(thrown).toMatchObject({ method: "conversations.replies" });
-      expect(calls.map((c) => c.method)).toEqual(["replies"]);
+      await expect(
+        post(ctx, { channel: "C1", text: "hi", threadTs: "1.0", key: "k1" }),
+      ).resolves.toEqual({ channel: "C1", ts: "1.6" });
+      expect(calls.map((c) => c.method)).toEqual(["replies", "postMessage"]);
+      expect((calls[1].args.blocks as { block_id: string }[])[0].block_id).toBe(
+        "sylon:k1",
+      );
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          msg: "slack thread lookup failed; posting without dedupe",
+        }),
+      );
     });
 
     it("sends nothing on a local trace", async () => {

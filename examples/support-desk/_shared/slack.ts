@@ -169,7 +169,19 @@ export async function post(
   const { key, ...args } = input;
   if (key && args.threadTs) {
     const marker = `sylon:${key}`;
-    const earlier = await findPosted(ctx, args.channel, args.threadTs, marker);
+    // A failed lookup must not block the post: a rare duplicate costs less than a missing reply.
+    const earlier = await findPosted(
+      ctx,
+      args.channel,
+      args.threadTs,
+      marker,
+    ).catch((err: unknown) => {
+      ctx.logger.warn("slack thread lookup failed; posting without dedupe", {
+        err: String(err),
+        key,
+      });
+      return undefined;
+    });
     if (earlier) return { channel: args.channel, ts: earlier };
     args.blocks = args.blocks?.length
       ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]
