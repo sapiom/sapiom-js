@@ -264,11 +264,17 @@ async function rearmTimers() {
   const slug = agentByKey(CONTROLLER)!.slug;
   const definitionId = (await definitionIds()).get(slug);
   if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
-  // The public API starts a run by definition id; the by-slug route is engine-internal.
-  return sapiom<{ id?: string }>("POST", "/v1/workflows/executions", {
-    definitionId,
-    input: {},
-  });
+  // The public API starts a run by definition id; the by-slug route is engine-internal. It answers
+  // `{ status, executionId }`.
+  const started = await sapiom<{ executionId?: string; status?: string }>(
+    "POST",
+    "/v1/workflows/executions",
+    { definitionId, input: {} },
+  );
+  return {
+    executionId: started.executionId ?? null,
+    status: started.status ?? null,
+  };
 }
 
 /** Turn one agent on or off; returns the trigger ids it created, resumed and deleted. */
@@ -289,7 +295,7 @@ async function setAgent(key: string, on: boolean) {
       await setConfig(d, "controller.paused", !on, "console");
       return was;
     });
-    let run: { id?: string };
+    let run: { executionId: string | null };
     try {
       run = await rearmTimers();
     } catch (err) {
@@ -308,7 +314,7 @@ async function setAgent(key: string, on: boolean) {
       created: [],
       resumed: [],
       deleted: [],
-      ...(run.id ? { run: run.id } : {}),
+      ...(run.executionId ? { run: run.executionId } : {}),
     };
   }
   const plan = planSwitch(key, on, attached);
@@ -1166,7 +1172,7 @@ async function retimed<T extends object>(write: Promise<T>) {
   const res = await write;
   try {
     const run = await rearmTimers();
-    return { ...res, timers: { reset: true, run: run.id ?? null } };
+    return { ...res, timers: { reset: true, run: run.executionId } };
   } catch (err) {
     return {
       ...res,

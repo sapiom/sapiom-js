@@ -1507,7 +1507,7 @@ describe("noteOpenLinear against the relay (mocked fetch)", () => {
       expect.objectContaining({
         args: {
           issueId: "uuid-SAP-9",
-          body: "Support issue #41 was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.",
+          body: "Support desk ticket 41 was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.",
         },
       }),
     ]);

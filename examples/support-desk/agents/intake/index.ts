@@ -1040,7 +1040,7 @@ export async function noteOpenLinear(
     await commentIssue(
       ctx,
       linear.id,
-      `Support issue #${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
+      `Support desk ticket ${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
     );
   } catch (err) {
     ctx.logger.warn("open Linear comment not added", {

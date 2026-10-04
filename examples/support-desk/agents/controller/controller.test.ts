@@ -824,6 +824,35 @@ describe("controller", () => {
       });
     });
 
+    it("a round due seconds after the tick gets the short lead, not the hour-long stuck retry", async () => {
+      // Live case: the draft card lands about 20 s after the issue card, so draft_pending comes
+      // due seconds after no_owner's tick has run.
+      const issue = await seedIssue(db, { title: "draft just behind" });
+      await db.query(
+        "update issues set created_at = now() - interval '6 minutes' where id = $1",
+        [issue.id],
+      );
+      await createDraft(db, { issueId: issue.id, text: "Try this." });
+      await db.query(
+        "update drafts set created_at = now() - interval '292 seconds' where issue_id = $1",
+        [issue.id],
+      );
+      const r = await tick(issue.id);
+      expect(
+        (r.done.output!.nudged as { key: string }[]).map((n) => n.key),
+      ).toEqual([`no_owner:${issue.id}:1`]);
+      const [{ now }] = await db.query<{ now: Date }>("select now() as now");
+      const at = (await timer(issue.id)).at!.getTime();
+      // draft_pending is due in about 8 s: the next tick is 30 s out, not 60 min.
+      expect(at - new Date(now).getTime()).toBeLessThanOrEqual(31_000);
+      expect(r.done.output!.timer).toMatchObject({
+        due: {
+          reason: "nudge",
+          detail: expect.stringMatching(/^draft_pending:/),
+        },
+      });
+    });
+
     it("a tick with nothing due sends nothing and sets the timer at the first due time", async () => {
       const issue = await seedIssue(db, { title: "fresh" });
       const r = await tick(issue.id);

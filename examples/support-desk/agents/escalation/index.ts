@@ -132,8 +132,9 @@ export function linearDescription(input: {
   threadUrl: string | null;
 }): string {
   return [
-    // First, so it falls inside the description preview `list_issues` returns.
-    `Support desk issue #${input.issue.number} · ${marker(input.issue.id)}`,
+    // First, so it falls inside the description preview `list_issues` returns. No bare `#n`:
+    // Linear autolinks it to a GitHub pull request of that number.
+    `Support desk ticket ${input.issue.number} · ${marker(input.issue.id)}`,
     "",
     `**Account:** ${input.accountName}`,
     `**Requested by:** ${
@@ -335,7 +336,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
         (await createIssue(ctx, {
           teamId,
           projectId,
-          title: issue.title || `Ticket #${issue.number}`,
+          title: issue.title || `Support desk ticket ${issue.number}`,
           description: linearDescription({
             issue,
             accountName: account.name,
