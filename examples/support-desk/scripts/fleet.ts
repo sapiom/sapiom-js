@@ -16,6 +16,8 @@ export interface FleetProject {
   optional?: boolean;
   /** E2's pipe test; never deployed by default, and its triggers live in `smokeTriggers`. */
   smoke?: boolean;
+  /** Run by hand, never triggered (agents/setup): deployed only when named with `--only`. */
+  manual?: boolean;
 }
 
 export type FleetTrigger =
@@ -82,7 +84,7 @@ export function parseArgs(argv: string[]): SetupArgs {
 }
 
 /**
- * Projects this run links and deploys. Default: every project that is neither optional nor smoke.
+ * Projects this run links and deploys. Default: every project that is not optional, smoke or manual.
  * `--only` names exactly the projects to act on (optional ones included); `--skip` removes some.
  */
 export function selectProjects(
@@ -97,7 +99,7 @@ export function selectProjects(
       );
   const base = args.only.length
     ? projects.filter((p) => args.only.includes(p.key))
-    : projects.filter((p) => !p.optional && !p.smoke);
+    : projects.filter((p) => !p.optional && !p.smoke && !p.manual);
   return base.filter((p) => !args.skip.includes(p.key));
 }
 

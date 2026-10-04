@@ -11,6 +11,7 @@
     "console:build": "tsx scripts/sync-fleet-id.ts && tsx apps/console/build.ts",
     "console:publish": "tsx scripts/sync-fleet-id.ts && tsx apps/console/publish.ts",
     "format": "prettier --write \"**/*.{ts,json,md}\"",
+    "linear:list": "tsx scripts/linear-list.ts",
     "replay": "tsx scripts/replay.ts",
     "reset-demo": "tsx scripts/reset-demo.ts"
   },

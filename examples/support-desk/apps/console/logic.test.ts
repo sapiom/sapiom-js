@@ -56,7 +56,7 @@ const INTAKE_ALL = [
 ];
 
 describe("fleet agents", () => {
-  it("are fleet.json's projects without the smoke pair", () => {
+  it("are fleet.json's projects without the smoke pair and the setup agent", () => {
     expect(AGENTS.map((a) => a.key)).toEqual([
       "intake",
       "copilot",

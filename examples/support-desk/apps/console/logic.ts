@@ -16,6 +16,7 @@ export interface FleetProject {
   slug: string;
   optional?: boolean;
   smoke?: boolean;
+  manual?: boolean;
 }
 
 export type FleetTrigger =
@@ -39,12 +40,12 @@ export interface AttachedTrigger {
   definitionSlug?: string;
 }
 
-/** The agents the Console operates: every fleet.json project except the smoke pair. */
+/** The agents the Console operates: every fleet.json project except the smoke pair and the run-by-hand setup agent. */
 export const AGENTS: FleetProject[] = (
   fleet.projects as Omit<FleetProject, "slug">[]
 )
   .map((p) => ({ ...p, slug: agentSlug(p.key) }))
-  .filter((p) => !p.smoke);
+  .filter((p) => !p.smoke && !p.manual);
 /** `triggers` only. `smokeTriggers` are never attached from the Console. */
 export const TRIGGERS = fleet.triggers as FleetTrigger[];
 
