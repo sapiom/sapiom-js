@@ -26,6 +26,8 @@ export interface StartOpenCodeServerOptions {
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   beforeLaunch?: (identity: OpenCodeProcessIdentity) => void | Promise<void>;
+  /** Offer the model the `handoff` tool (the project map chat only). */
+  handoffTool?: boolean;
 }
 export interface OpenCodeCleanupProof {
   path: string;
@@ -237,7 +239,17 @@ export function studioPluginSource(options: {
   hookUrl: string;
   readyPath: string;
   toolHomeEnvironment: NodeJS.ProcessEnv;
+  handoffTool?: boolean;
 }): string {
+  const tools = options.handoffTool
+    ? `
+    tool: {
+      handoff: {
+        ...${JSON.stringify(handoffTool)},
+        execute: async (args) => executeHandoff(args),
+      },
+    },`
+    : "";
   return `import { writeFile } from "node:fs/promises";
 import { createStudioCompletionHooks } from ${JSON.stringify(options.hookUrl)};
 const keys = ${JSON.stringify(runtimeCredentialKeys)};
@@ -253,13 +265,7 @@ export const SapiomCredentialIsolation = async (input) => {
   });
   await writeFile(${JSON.stringify(options.readyPath)}, "ready\\n", { flag: "wx", mode: 0o600 });
   return {
-    ...completionHooks,
-    tool: {
-      handoff: {
-        ...${JSON.stringify(handoffTool)},
-        execute: async (args) => executeHandoff(args),
-      },
-    },
+    ...completionHooks,${tools}
     "shell.env": async (_input, output) => {
       for (const key of keys) {
         delete process.env[key];
@@ -276,6 +282,7 @@ export const SapiomCredentialIsolation = async (input) => {
 async function createCredentialIsolationPlugin(
   launchRoot: string,
   toolHomeEnvironment: NodeJS.ProcessEnv,
+  handoffTool: boolean,
 ): Promise<{ pluginUrl: string; readyPath: string }> {
   const pluginPath = join(launchRoot, "credential-isolation.mjs");
   const readyPath = join(launchRoot, "credential-isolation.ready");
@@ -298,6 +305,7 @@ async function createCredentialIsolationPlugin(
     hookUrl: pathToFileURL(hookPath).href,
     readyPath,
     toolHomeEnvironment,
+    handoffTool,
   });
   await writeFile(pluginPath, source, { mode: 0o600 });
   return { pluginUrl: pathToFileURL(pluginPath).href, readyPath };
@@ -592,6 +600,7 @@ export async function startOpenCodeServer(
   const { pluginUrl, readyPath } = await createCredentialIsolationPlugin(
     launchRoot,
     toolHomeEnvironment,
+    options.handoffTool ?? false,
   );
   const isolatedHome = join(launchRoot, "home");
   const directories = {

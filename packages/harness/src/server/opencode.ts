@@ -113,15 +113,27 @@ export function createOpenCodeRouter(
           return;
         }
         const previous = await associations.ensure(hosted).catch(() => null);
-        // A running answer must not keep spending into a hidden conversation.
-        if (previous)
-          await hosted.server
+        // A running answer must not keep spending into a hidden conversation:
+        // without a confirmed stop, keep the current one and let New chat retry.
+        if (previous) {
+          const stopped = await hosted.server
             .fetch(`/session/${previous}/abort`, {
               method: "POST",
-              signal: AbortSignal.timeout(5000),
+              signal: AbortSignal.any([
+                hosted.signal,
+                AbortSignal.timeout(5000),
+              ]),
             })
-            .then((response) => response.body?.cancel())
-            .catch(() => {});
+            .then(async (response) => {
+              await response.body?.cancel();
+              return response.ok;
+            })
+            .catch(() => false);
+          if (!stopped) {
+            sendFailure(res, openCodeTransportFailure("transport_unavailable"));
+            return;
+          }
+        }
         host.forget(hosted);
         const next = await associations.reset(hosted);
         host.observe(hosted, next);
@@ -170,7 +182,7 @@ export function createOpenCodeRouter(
               body: JSON.stringify({
                 ...req.body,
                 ...openCodeCompletionPrompt({
-                  noShell: mapChatProjectId(id) !== null,
+                  mapChat: mapChatProjectId(id) !== null,
                 }),
                 // Saved conversations may still remember a retired model.
                 model: hosted.model,

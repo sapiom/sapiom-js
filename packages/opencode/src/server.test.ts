@@ -427,8 +427,27 @@ describe("packaged OpenCode runtime", () => {
           hookUrl: pathToFileURL(hook).href,
           readyPath: join(directory, "ready"),
           toolHomeEnvironment: {},
+          handoffTool: true,
         }),
       );
+      // A Studio session's Assistant does its own work: no handoff tool.
+      const plain = join(local, "plain.mjs");
+      await writeFile(
+        plain,
+        studioPluginSource({
+          hookUrl: pathToFileURL(hook).href,
+          readyPath: join(directory, "plain-ready"),
+          toolHomeEnvironment: {},
+        }),
+      );
+      const plainHooks = await (
+        (await import(pathToFileURL(plain).href)) as {
+          SapiomCredentialIsolation: (
+            input: unknown,
+          ) => Promise<Record<string, unknown>>;
+        }
+      ).SapiomCredentialIsolation({ client: {} });
+      expect(plainHooks).not.toHaveProperty("tool");
       const module = (await import(pathToFileURL(plugin).href)) as {
         SapiomCredentialIsolation: (input: unknown) => Promise<{
           tool: Record<

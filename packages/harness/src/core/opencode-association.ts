@@ -14,6 +14,7 @@ export { isConversationId } from "../shared/assistant-state.js";
 /** One native conversation per host key; the host holds the owner lock. */
 export class OpenCodeAssociations {
   private pending = new WeakMap<HostedOpenCode, Promise<string>>();
+  private resetting = new WeakMap<HostedOpenCode, Promise<string>>();
 
   ensure(hosted: HostedOpenCode): Promise<string> {
     const existing = this.pending.get(hosted);
@@ -26,8 +27,14 @@ export class OpenCodeAssociations {
     return pending;
   }
 
-  /** Starts a new conversation and saves it in place of the current one. */
+  /**
+   * Starts a new conversation and saves it in place of the current one.
+   * Overlapping resets share one new conversation, so no caller is handed an
+   * id that a second reset has already replaced.
+   */
   reset(hosted: HostedOpenCode): Promise<string> {
+    const running = this.resetting.get(hosted);
+    if (running) return running;
     const previous = this.pending.get(hosted) ?? Promise.resolve("");
     const pending: Promise<string> = previous
       .catch(() => "")
@@ -45,6 +52,13 @@ export class OpenCodeAssociations {
         throw error;
       });
     this.pending.set(hosted, pending);
+    this.resetting.set(hosted, pending);
+    void pending
+      .finally(() => {
+        if (this.resetting.get(hosted) === pending)
+          this.resetting.delete(hosted);
+      })
+      .catch(() => {});
     return pending;
   }
 

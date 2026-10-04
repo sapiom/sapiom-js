@@ -15,6 +15,7 @@ import { scopedOpenCodeEvent } from "./opencode-events.js";
 
 const mapKey = "map:project_018f0000-0000-4000-8000-000000000001";
 let root: string;
+let abortFails: boolean;
 let origin: string;
 let router: Router;
 let enabled: boolean;
@@ -44,6 +45,7 @@ async function listen(app: express.Express): Promise<string> {
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "studio-opencode-route-"));
   enabled = true;
+  abortFails = false;
   created = 0;
   requests.length = streams.length = 0;
   sessions.clear();
@@ -90,7 +92,9 @@ beforeEach(async () => {
     res.status(204).end();
   });
   engine.post("/session/:id/abort", (_req, res) => {
-    res.json(true);
+    if (abortFails)
+      res.status(503).json({ error: "private native diagnostics" });
+    else res.json(true);
   });
   engine.get(["/permission", "/question"], (_req, res) => {
     res.json([
@@ -326,9 +330,9 @@ describe("Studio-scoped OpenCode transport", () => {
       system: expect.stringContaining("StudioAssistantResult/v2:"),
     });
     expect(native.body).not.toHaveProperty("format");
-    // A Studio session's Assistant keeps its shell; only the map chat has none.
-    expect((native.body as { system: string }).system).not.toContain(
-      "This chat has no shell",
+    // A Studio session's Assistant keeps its shell and does its own work.
+    expect((native.body as { system: string }).system).not.toMatch(
+      /no shell|handoff/,
     );
     expect(native.headers.authorization).toBe("Basic native-only");
     for (const name of ["x-harness-token", "cookie", "x-opencode-directory"])
@@ -631,6 +635,23 @@ describe("map chat transport", () => {
     expect(
       (await request("map:map:project/attach", { method: "POST" })).status,
     ).toBe(400);
+  });
+
+  it("keeps the current conversation when New chat cannot confirm the old answer stopped", async () => {
+    const first = await attach(mapKey);
+    abortFails = true;
+    const reset = await request(`${mapKey}/reset`, { method: "POST" });
+    expect(reset.status).toBe(503);
+    expect(await reset.json()).toEqual({
+      error: openCodeTransportFailure("transport_unavailable"),
+    });
+    expect(forget).not.toHaveBeenCalled();
+    expect(await attach(mapKey)).toBe(first);
+    expect(created).toBe(1);
+    abortFails = false;
+    const retried = await request(`${mapKey}/reset`, { method: "POST" });
+    expect(retried.status).toBe(200);
+    expect((await retried.json()).conversationId).not.toBe(first);
   });
 
   it("starts a new conversation on reset when the saved history is missing", async () => {

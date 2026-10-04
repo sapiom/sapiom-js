@@ -504,6 +504,12 @@ describe("pinned OpenCode 1.18.29", () => {
     ).toEqual([
       expect.objectContaining({ name: "probe_add", arguments: { a: 2, b: 3 } }),
     ]);
+    // Without handoffTool (a Studio session's Assistant) the tool is absent.
+    expect(
+      synthetic.state.modelRequests.flatMap((body) =>
+        (body.tools ?? []).map((tool) => tool.name),
+      ),
+    ).not.toContain("handoff");
     for (const body of synthetic.state.modelRequests) {
       expect(body).toMatchObject({
         model: "gpt-luna",
@@ -582,6 +588,7 @@ describe("pinned OpenCode 1.18.29", () => {
       cwd: root,
       stateRoot: join(root, "state"),
       startupTimeoutMs: nativeStartupTimeoutMs,
+      handoffTool: true,
       config: createSapiomOpenCodeConfig({
         bridgeUrl: `${synthetic.origin}/runtime`,
         runtimeToken: token,

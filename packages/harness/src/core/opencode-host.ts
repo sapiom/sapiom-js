@@ -158,7 +158,7 @@ export class OpenCodeHost {
   constructor(private readonly options: Options) {
     this.assistantAccess = options.access.getBrowserState();
     this.workspaceTimer = setInterval(() => {
-      this.retireIdle();
+      void this.retireIdle().catch(() => {});
       for (const [id, entry] of this.entries) {
         void this.workspace(id)
           .then(async (workspace) => {
@@ -242,17 +242,46 @@ export class OpenCodeHost {
       entry.lastActive = this.now();
     };
   }
-  /** Stops map chats with no open request for mapChatIdleMs. */
-  retireIdle(): void {
+  /**
+   * Stops map chats with no open request for mapChatIdleMs whose native
+   * runtime is not still answering: a prompt_async returns on admission, so
+   * an answer can outlive every request that holds the host.
+   */
+  async retireIdle(): Promise<void> {
     const now = this.now();
-    for (const [id, entry] of this.entries)
-      if (
-        mapChatProjectId(id) !== null &&
-        entry.hosted &&
-        entry.holds === 0 &&
-        now - entry.lastActive >= mapChatIdleMs
-      )
-        void this.retire(id);
+    await Promise.all(
+      [...this.entries].map(async ([id, entry]) => {
+        const hosted = entry.hosted;
+        if (
+          mapChatProjectId(id) === null ||
+          !hosted ||
+          entry.holds !== 0 ||
+          now - entry.lastActive < mapChatIdleMs
+        )
+          return;
+        let busy = true;
+        try {
+          const statuses = await hosted.server.fetchJson<
+            Record<string, { type?: string }>
+          >("/session/status", { signal: AbortSignal.timeout(5000) });
+          busy = Object.values(statuses).some(
+            (status) => status?.type !== "idle",
+          );
+        } catch {
+          // Unknown is not idle; a dead runtime retires through `exited`.
+        }
+        if (busy) {
+          entry.lastActive = this.now();
+          return;
+        }
+        if (
+          this.entries.get(id) === entry &&
+          entry.holds === 0 &&
+          this.now() - entry.lastActive >= mapChatIdleMs
+        )
+          await this.retire(id);
+      }),
+    );
   }
   /** Ends the current observation so a reset conversation can be observed. */
   forget(hosted: HostedOpenCode): void {
@@ -504,14 +533,16 @@ export class OpenCodeHost {
       entry.unlock = release;
       await this.validate(entry);
       entry.credential = this.options.bridge.issue();
+      const mapChat =
+        mapChatProjectId(entry.workspace.harnessSessionId) !== null;
       const config = createSapiomOpenCodeConfig({
         bridgeUrl: `${this.options.origin()}/opencode-runtime/${entry.credential.id}`,
         runtimeToken: entry.credential.token,
         model: this.options.bridge.model,
         // The map chat's transport has no reply path for a permission prompt,
         // and it has no shell (I4).
-        neverAsk: mapChatProjectId(entry.workspace.harnessSessionId) !== null,
-        noShell: mapChatProjectId(entry.workspace.harnessSessionId) !== null,
+        neverAsk: mapChat,
+        noShell: mapChat,
       });
       startupAttempted = true;
       server = await (this.options.start ?? startOpenCodeServer)({
@@ -520,6 +551,7 @@ export class OpenCodeHost {
         config,
         signal: entry.abort.signal,
         beforeLaunch: (identity) => release.protectProcess(identity),
+        handoffTool: mapChat,
       });
       void server.exited
         .then(() => {

@@ -773,6 +773,9 @@ describe("project map chat host", () => {
     // bash is OpenCode 1.18.29's only shell tool; unset means allowed.
     expect(start.mock.calls[0][0].config.permission?.bash).toBe("deny");
     expect(start.mock.calls[1][0].config.permission?.bash).toBeUndefined();
+    // Only the map chat offers the handoff tool.
+    expect(start.mock.calls[0][0].handoffTool).toBe(true);
+    expect(start.mock.calls[1][0].handoffTool).toBe(false);
   });
 
   it("denies every ask for the map chat only", async () => {
@@ -818,20 +821,42 @@ describe("project map chat host", () => {
       createObserver,
       now: () => now,
     });
+    let status = "busy";
+    const fetchJson = vi.fn(async () => ({ ses_a: { type: status } }));
+    start.mockResolvedValue({
+      pid: 123,
+      exited: neverExited,
+      fetch: vi.fn(),
+      fetchJson,
+      close,
+    });
     try {
       const map = await idle.ensure(key);
       const session = await idle.ensure("studio-a");
       const release = idle.hold(map);
       now = mapChatIdleMs * 2;
-      idle.retireIdle();
+      await idle.retireIdle();
       expect(map.signal.aborted).toBe(false);
+      expect(fetchJson).not.toHaveBeenCalled();
       release();
       release();
       now += mapChatIdleMs - 1;
-      idle.retireIdle();
+      await idle.retireIdle();
+      expect(map.signal.aborted).toBe(false);
+      // Idle by requests, but the native runtime is still answering.
+      now += 1;
+      await idle.retireIdle();
+      expect(fetchJson).toHaveBeenCalledWith(
+        "/session/status",
+        expect.anything(),
+      );
+      expect(map.signal.aborted).toBe(false);
+      status = "idle";
+      now += mapChatIdleMs - 1;
+      await idle.retireIdle();
       expect(map.signal.aborted).toBe(false);
       now += 1;
-      idle.retireIdle();
+      await idle.retireIdle();
       expect(map.signal.aborted).toBe(true);
       expect(session.signal.aborted).toBe(false);
       await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
