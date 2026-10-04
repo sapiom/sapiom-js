@@ -57,6 +57,27 @@ test.describe("plan card", () => {
     await expect(menu).not.toBeVisible();
   });
 
+  test("keeps the readout clear of the Upgrade pill at the rail's minimum width", async ({
+    page,
+  }) => {
+    await page.evaluate(() => {
+      localStorage.setItem("sapiom-harness-pane-widths", JSON.stringify({ rail: 180 }));
+    });
+    await page.reload();
+    await expect(page.getByTestId("plan-card")).toBeVisible();
+
+    // The copy column shrinks with the rail, so the money line has to clip:
+    // painted at full length it runs straight under the CTA beside it.
+    const readout = page.getByTestId("plan-balance");
+    const clipped = await readout.evaluate((el) => el.scrollWidth > el.clientWidth);
+    const readoutBox = (await readout.boundingBox())!;
+    const upgradeBox = (await page.getByTestId("plan-upgrade").boundingBox())!;
+    expect(readoutBox.x + readoutBox.width, "readout ends before the pill").toBeLessThanOrEqual(
+      upgradeBox.x + 0.5,
+    );
+    expect(clipped, "a value with nowhere to go is ellipsised, not overflowing").toBe(true);
+  });
+
   test("sits above the account row inside one footer block", async ({ page }) => {
     const footer = page.locator(".rail-footer");
     await expect(footer.getByTestId("plan-card")).toBeVisible();

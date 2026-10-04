@@ -1,7 +1,7 @@
 import { AssistantActivity } from "./AssistantActivity";
 import type { AssistantProjection } from "../lib/assistant-state";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { JSX, RefObject } from "react";
 import type {
   AppState,
   EditorKind,
@@ -1015,6 +1015,7 @@ export function WorkflowsRail({
             fixture in demo); a view with nothing to state renders nothing. */}
         <PlanCard plan={accountPlan} />
         <ProfileRow
+          railRef={railRef}
           onToast={onToast}
           authenticated={authenticated}
           organizationName={organizationName}
@@ -1064,6 +1065,7 @@ type ProfileAuthProgress =
   | { status: "error"; message: string };
 
 function ProfileRow({
+  railRef,
   authenticated,
   organizationName,
   telemetryOptIn,
@@ -1084,6 +1086,8 @@ function ProfileRow({
   onSelectOverview,
   onToast,
 }: {
+  /** The rail itself: the edge the profile menu opens beside. */
+  railRef: RefObject<HTMLElement | null>;
   authenticated: boolean;
   organizationName: string | null;
   telemetryOptIn: boolean;
@@ -1234,8 +1238,8 @@ function ProfileRow({
         open={settingsOpen}
         anchorRef={triggerRef}
         onDismiss={closeSettings}
-        placement="up-start"
-        matchWidth
+        placement="right-end"
+        besideRef={railRef}
         className="settings-popover"
         testid="settings-popover"
       >
@@ -1257,12 +1261,15 @@ function ProfileRow({
         />
       </AnchoredPopover>
 
+      {/* Like the settings panel above: BESIDE the rail, bottom edges aligned.
+          A panel that floats over the rail on the rail's own footprint reads as
+          nothing having happened; clearing the rail gives it its own ground. */}
       <AnchoredPopover
         open={menuOpen}
         anchorRef={triggerRef}
         onDismiss={closeMenu}
-        placement="up-start"
-        matchWidth
+        placement="right-end"
+        besideRef={railRef}
         className="profile-menu"
         role="menu"
         testid="profile-menu"
