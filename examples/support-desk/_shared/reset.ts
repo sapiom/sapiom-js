@@ -25,7 +25,7 @@ export interface ResetOutcome {
 }
 
 /**
- * Close every open issue and redraw its card in its desk's triage channel. With `deskId`, only
+ * Close every open issue and redraw its card in the channel it was posted in. With `deskId`, only
  * that desk's issues. `dryRun` lists what would close and writes nothing.
  */
 export async function resetBoard(

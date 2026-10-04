@@ -1,7 +1,5 @@
--- An issue's triage card stays in the channel it was posted in, even after its desk's triage
--- channel moves (SAP-3722). Existing cards are assumed to sit in their desk's current channel, the
--- same desk deskForIssue picks (default desk when desk_id is null). update ... from, not a
--- correlated subquery: pg-mem runs the former.
+-- SAP-3722: preserve card addressing across desk channel changes.
+-- Legacy cards have no recorded channel, so backfill assumes their desk still holds them.
 
 alter table issues add column triage_channel text;
 
