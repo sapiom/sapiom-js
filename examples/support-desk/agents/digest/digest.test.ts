@@ -12,6 +12,7 @@ import {
   openIssue,
   recordDigest,
   setStatus,
+  setTriageRoot,
   type IssueStatus,
 } from "../../_shared/issues";
 import { fakeCtx } from "../../_shared/test-ctx";
@@ -41,6 +42,7 @@ const issue = (over: Partial<DigestIssue> & { ageHours?: number } = {}) => {
     accountName: "Acme",
     ownerSlackId: null,
     triageRootTs: `1790000000.${String(n).padStart(6, "0")}`,
+    triageChannel: null,
     createdAt: new Date(NOW.getTime() - ageHours * HOUR),
     ...rest,
   };
@@ -301,6 +303,23 @@ describe("digest run", () => {
     await open("C0CUSTOMER1", "support orphan", { deskId: null });
     await open("C0CUSTOMER1", "support done", { status: "closed" });
     await open("C0CUSTOMER2", "billing one", { owner: "U0GONE" });
+  });
+
+  it("after a desk's triage channel moves, posts in the new channel and links each card where it was posted", async () => {
+    const moved = await open("C0CUSTOMER1", "moved card");
+    await setTriageRoot(db, moved.id, "C0TRIAGE001", moved.triageRootTs!);
+    await upsertDesk(
+      db,
+      { ...support, triageChannel: "C0NEW" },
+      { overwrite: true },
+    );
+    const { ctx, posts } = slackCtx();
+    await digest(ctx as never, db);
+    const post = posts().find((p) => p.args.channel === "C0NEW")!;
+    const ts = moved.triageRootTs!.replace(".", "");
+    expect(textOf(post)).toContain(
+      `<https://slack.com/archives/C0TRIAGE001/p${ts}|#${moved.number}>`,
+    );
   });
 
   it("posts each desk's own issues in its own triage channel, desk-less issues on the default desk", async () => {

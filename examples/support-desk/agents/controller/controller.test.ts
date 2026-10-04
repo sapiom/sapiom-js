@@ -512,6 +512,30 @@ describe("controller", () => {
       expect(await recorded(issue.id)).toEqual(["escalate:1", "escalate:2"]);
     });
 
+    it("after the desk's triage channel moves, links and threads under the card where it was posted", async () => {
+      await escalate({ groupId: "S0SUPPORT1" });
+      const issue = await seedIssue(db, { title: "moved" });
+      await setTriageRoot(db, issue.id, "C0TRIAGE001", issue.triageRootTs!);
+      const support = (await defaultDesk(db))!;
+      await upsertDesk(
+        db,
+        { ...support, triageChannel: "C0NEW" },
+        { overwrite: true },
+      );
+      await backdate(db);
+      const r = await runController("exec-moved");
+      expect(escalated(r)).toEqual(["escalate:1"]);
+      expect(dms(r)[0].text).toContain(
+        `https://slack.com/archives/C0TRIAGE001/p${issue.triageRootTs!.replace(".", "")}`,
+      );
+      expect(threadPosts(r)).toEqual([
+        expect.objectContaining({
+          channel: "C0TRIAGE001",
+          threadTs: issue.triageRootTs,
+        }),
+      ]);
+    });
+
     it("sends one escalation naming both conditions, aged from the oldest", async () => {
       await escalate({ groupId: "S0SUPPORT1" });
       const issue = await seedIssue(db, {
