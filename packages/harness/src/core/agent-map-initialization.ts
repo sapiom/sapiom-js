@@ -173,8 +173,6 @@ export class AgentMapInitializationCoordinator {
         let current = await journal.read();
         const project = await this.options.project(projectId);
         if (this.closed || !project) return current;
-        if (current && current.userId !== project.userId)
-          throw new AgentMapInitializationFailure("storage_unavailable");
         if (hasAuthoredAgentMap(aggregate)) {
           if (
             current &&
@@ -300,8 +298,7 @@ export class AgentMapInitializationCoordinator {
         const current = await journal.read();
         if (current?.status !== "queued") return null;
         const project = await this.options.project(projectId);
-        if (!this.eligible(project) || project.userId !== current.userId)
-          return null;
+        if (!this.eligible(project)) return null;
         if (hasAuthoredAgentMap(aggregate)) {
           const skipped = {
             ...current,
@@ -369,7 +366,6 @@ export class AgentMapInitializationCoordinator {
           if (this.closed) throw new AgentMapInitializationFailure("cancelled");
           if (
             !this.eligible(current) ||
-            current.userId !== record.userId ||
             current.agents
               .map(({ agentId }) => agentId)
               .sort()

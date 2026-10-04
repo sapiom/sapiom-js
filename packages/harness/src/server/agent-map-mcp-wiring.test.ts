@@ -71,6 +71,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
     port: 0,
     bootToken: "boot-token",
     telemetryOptIn: false,
+    machineId: "machine-1",
     identity: {
       userId: "user-1",
       tenantId: "tenant-1",
@@ -107,7 +108,7 @@ it("uses the actual ephemeral port and revokes private MCP launch authority on e
   expect(hostResponse.status).toBe(200);
   expect(await hostResponse.json()).toEqual({
     protocolVersion: 1, host: "sapiom-studio", stateRoot: root,
-    projectId, sessionId: session.id, userId: "user-1", generation: 1,
+    projectId, sessionId: session.id, userId: "local:machine-1", generation: 1,
     capabilities: ["session-context"],
   });
 
@@ -726,4 +727,3 @@ it.each([false, true])("retains a first project's scope during preparation and r
   expect(server.sessionManager.list()).toHaveLength(1);
   expect(server.sessionManager.listPendingCreates()).toEqual([]);
 });
-

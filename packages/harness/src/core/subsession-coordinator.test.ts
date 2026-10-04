@@ -389,6 +389,17 @@ describe("SubsessionCoordinator", () => {
     expect(JSON.stringify(telemetry)).not.toContain("Run the focused tests");
   });
 
+  it("accepts a caller identity attributed to a different account", async () => {
+    const { coordinator, caller, manager, unsubscribe } = await fixture();
+    const switchedAttribution = { ...caller, userId: "account-after-switch" };
+
+    const result = await coordinator.execute(switchedAttribution, request);
+    unsubscribe();
+
+    expect(result.results[0]).toMatchObject({ outcome: "created" });
+    expect(manager.list()).toHaveLength(2);
+  });
+
   it("idempotently releases and closes the exact real child session", async () => {
     const { coordinator, caller, manager, store, spawned, telemetry, unsubscribe } =
       await fixture();

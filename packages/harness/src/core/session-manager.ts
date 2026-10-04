@@ -107,7 +107,6 @@ function sameProjectAgent(
 ): boolean {
   return (
     left.projectId === right.projectId &&
-    left.userId === right.userId &&
     left.sessionId === right.sessionId
   );
 }
@@ -635,7 +634,6 @@ interface PtyHandle {
   pendingReadinessFrame: string | null;
   /** Whether the pending synchronized repaint has produced visible text. */
   pendingReadinessFrameHasContent: boolean;
-  emitter: EventEmitter;
   /** Epoch ms this pty was spawned — anchors the Claude hook-timeout fallback. */
   spawnedAt: number;
   /** Epoch ms the current non-blocking readiness candidate began. A recognized
@@ -917,8 +915,8 @@ export class SessionManager {
     return this.kill(id);
   }
 
-  /** Stop credential-bearing PTYs launched no later than the removed generation. */
-  async terminateCredentialBearingSessions(
+  /** Retire credential-bearing PTYs before scheduling keyless resumes. */
+  async relaunchCredentialBearingSessions(
     throughGeneration: number,
   ): Promise<void> {
     const targets = [...this.ptys.entries()].flatMap(([id, handle]) =>
@@ -928,10 +926,75 @@ export class SessionManager {
         : [],
     );
     await Promise.all(
-      targets.map(({ id, runtimeEpoch }) =>
-        this.killIfRuntime(id, runtimeEpoch),
-      ),
+      targets.map(async ({ id, runtimeEpoch }) => {
+        const session = this.sessions.get(id);
+        let resumable = false;
+        if (session?.agentSessionId && !this.subsessionBindings.has(id)) {
+          try {
+            resumable = await this.getAdapter(session.harness).canResume(
+              session.agentSessionId,
+              session.cwd,
+            );
+          } catch {
+            resumable = false;
+          }
+        }
+        if (this.ptys.get(id)?.runtimeEpoch !== runtimeEpoch) return;
+
+        const previousMcpAuthState = session?.mcpAuthState;
+        if (resumable && session) {
+          session.mcpAuthState = "restarting";
+          this.emitStatus(session, runtimeEpoch);
+        }
+
+        const killed = await this.killIfRuntime(id, runtimeEpoch);
+        if (!killed) {
+          if (
+            resumable &&
+            session &&
+            this.sessions.get(id) === session &&
+            session.mcpAuthState === "restarting"
+          ) {
+            if (previousMcpAuthState === undefined) {
+              delete session.mcpAuthState;
+            } else {
+              session.mcpAuthState = previousMcpAuthState;
+            }
+            this.emitStatus(session);
+          }
+          return;
+        }
+        if (!resumable || !session) return;
+
+        session.mcpAuthState = "restarting";
+        this.emitStatus(session);
+        this.trackCredentialRemovalResume(id);
+      }),
     );
+  }
+
+  private trackCredentialRemovalResume(id: string): void {
+    const session = this.sessions.get(id);
+    const relaunch = this.resume(id)
+      .then(() => {})
+      .catch(() => {
+        if (
+          session &&
+          this.sessions.get(id) === session &&
+          !this.ptys.has(id) &&
+          session.mcpAuthState === "restarting"
+        ) {
+          session.mcpAuthState = "not-applicable";
+          this.emitStatus(session);
+        }
+        console.error("[harness] credential-removal session relaunch failed", {
+          sessionId: id,
+        });
+      });
+    const tracked = relaunch.finally(() => {
+      this.credentialRemovalRelaunches.delete(tracked);
+    });
+    this.credentialRemovalRelaunches.add(tracked);
   }
 
 
@@ -1079,6 +1142,11 @@ export class SessionManager {
 
   private readonly sessions = new Map<string, HarnessSession>();
   private readonly ptys = new Map<string, PtyHandle>();
+  private readonly outputListeners = new Map<
+    string,
+    Set<{ listener: SessionDataListener }>
+  >();
+  private readonly credentialRemovalRelaunches = new Set<Promise<void>>();
   private readonly statusEmitter = new EventEmitter();
   private readonly activityEmitter = new EventEmitter();
   /** Epoch ms of the last `onActivity` broadcast per session — see `recordActivity()`. */
@@ -1391,7 +1459,7 @@ export class SessionManager {
     return adapter;
   }
 
-  /** Recheck the immutable project principal immediately before spawning. */
+  /** Recheck that the resolved project scope is still current before spawning. */
   private async revalidateAgentMapIdentity(
     sessionId: string,
     cwd: string,
@@ -1545,6 +1613,14 @@ export class SessionManager {
           `Sessions that ended before their first prompt are never written to the coding agent's history, so there is nothing to resume — start a new session in this directory instead.`,
       );
     }
+    const agentMapIdentity = await this.resolveAgentMapIdentity(
+      id,
+      session.cwd,
+      session.agentMapIdentity,
+    );
+    if (bindingTransition && agentMapIdentity.projectId !== bindingTransition.next.projectId) {
+      throw new ProjectSessionScopeUnavailableError(id);
+    }
     if (bindingTransition) {
       const current = this.subsessionBindings.get(id)!;
       // A failed spawn may leave the exact next marker durably committed.
@@ -1559,11 +1635,6 @@ export class SessionManager {
         }
       }
     }
-    const agentMapIdentity = await this.resolveAgentMapIdentity(
-      id,
-      session.cwd,
-      session.agentMapIdentity,
-    );
     session.agentMapIdentity = structuredClone(agentMapIdentity);
     // Claim the pre-PTY resume window before generated launch state is built.
     // Exit observers may finish asynchronous bookkeeping after kill() resolves;
@@ -2164,14 +2235,29 @@ export class SessionManager {
   /**
    * Subscribe to a session's output. Replays the retained scrollback buffer
    * synchronously before returning so a reconnecting WS client sees recent
-   * output immediately. Returns undefined if the session has no live pty.
+   * output immediately. A session that is `starting` without a pty yet is
+   * also attachable; its listener receives the new pty's output once it
+   * spawns. Returns undefined otherwise when the session has no live pty.
    */
   attach(id: string, listener: SessionDataListener): (() => void) | undefined {
     const handle = this.ptys.get(id);
-    if (!handle) return undefined;
-    if (handle.buffer) listener(handle.buffer);
-    handle.emitter.on("data", listener);
-    return () => handle.emitter.off("data", listener);
+    if (!handle && this.sessions.get(id)?.status !== "starting") {
+      return undefined;
+    }
+    if (handle?.buffer) listener(handle.buffer);
+    const registration = { listener };
+    let listeners = this.outputListeners.get(id);
+    if (!listeners) {
+      listeners = new Set();
+      this.outputListeners.set(id, listeners);
+    }
+    listeners.add(registration);
+    return () => {
+      listeners.delete(registration);
+      if (listeners.size === 0 && this.outputListeners.get(id) === listeners) {
+        this.outputListeners.delete(id);
+      }
+    };
   }
 
   onStatusChange(listener: SessionStatusListener): () => void {
@@ -2807,6 +2893,9 @@ export class SessionManager {
     while (this.projectCreateQueues.size > 0) {
       await Promise.all([...this.projectCreateQueues.values()]);
     }
+    while (this.credentialRemovalRelaunches.size > 0) {
+      await Promise.all([...this.credentialRemovalRelaunches]);
+    }
     await this.agentSessionIdentityQueue;
     await this.subsessionBindingQueue;
     await this.writeQueue;
@@ -2956,8 +3045,6 @@ export class SessionManager {
       throw error;
     }
 
-    const emitter = new EventEmitter();
-    emitter.setMaxListeners(0);
     let resolveExited!: () => void;
     const exited = new Promise<void>((resolve) => {
       resolveExited = resolve;
@@ -2973,7 +3060,6 @@ export class SessionManager {
       pendingReadinessPrefix: "",
       pendingReadinessFrame: null,
       pendingReadinessFrameHasContent: false,
-      emitter,
       spawnedAt: Date.now(),
       readinessCandidateAt: null,
       lastOutputAt: null,
@@ -3007,7 +3093,13 @@ export class SessionManager {
       handle.bracketedPaste = trackBracketedPaste(handle.bracketedPaste, chunk);
       handle.buffer = (handle.buffer + chunk).slice(-SCROLLBACK_BYTES);
       this.recordReadinessOutput(handle, chunk, adapter);
-      handle.emitter.emit("data", chunk);
+      if (this.ptys.get(session.id) === handle) {
+        for (const registration of [
+          ...(this.outputListeners.get(session.id) ?? []),
+        ]) {
+          registration.listener(chunk);
+        }
+      }
       this.recordActivity(session.id);
     });
 

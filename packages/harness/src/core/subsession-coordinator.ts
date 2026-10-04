@@ -233,7 +233,6 @@ export class SubsessionCoordinator {
     if (
       !caller?.agentMapIdentity ||
       caller.agentMapIdentity.projectId !== identity.projectId ||
-      caller.agentMapIdentity.userId !== identity.userId ||
       caller.agentMapIdentity.sessionId !== identity.sessionId
     ) {
       throw new SubsessionCoordinatorError(

@@ -2,9 +2,9 @@
 
 Agent Studio stores one project Agent Map and one project build plan as
 immutable version histories. Every ordinary project session receives the same
-map and build-plan MCP tools. Trusted `{ projectId, userId, sessionId }` scope
-comes only from the private session capability; tool input cannot select or
-override it.
+map and build-plan MCP tools. Trusted project/session scope comes only from the
+private session capability; its `userId` field is attribution, not authority,
+and tool input cannot select or override that scope.
 
 ## Coding-agent guidance and discovery
 

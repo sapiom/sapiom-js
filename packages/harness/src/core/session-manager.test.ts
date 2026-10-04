@@ -381,6 +381,49 @@ describe("SessionManager", () => {
     expect(manager.list().filter(({ id }) => id === sessionId)).toHaveLength(1);
   });
 
+  it("rejects a bound resume when its freshly resolved project scope is unavailable", async () => {
+    const identity = (sessionId: string) => ({
+      projectId: "project_00000000-0000-4000-8000-000000000001",
+      userId: "user-1",
+      sessionId,
+    });
+    const resolveAgentMapIdentity = vi
+      .fn()
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
+      .mockImplementationOnce(async (sessionId: string) => {
+        throw new ProjectSessionScopeUnavailableError(sessionId);
+      });
+    const { manager, adapter, spawns } = makeManager({
+      resolveAgentMapIdentity,
+    });
+    const sessionId = "00000000-0000-4000-8000-000000000117";
+    const input = delegatedCreate(sessionId);
+    const expected = marker(sessionId);
+    const next = marker(sessionId, 2, 2);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      expected,
+      input.trusted,
+    );
+    await manager.setAgentSessionId(sessionId, "agent-bound-scope-unavailable");
+    spawns[0]!.emitExit(0);
+    await manager.flush();
+    const beforeResume = structuredClone(manager.get(sessionId));
+
+    await expect(manager.resumeBound(sessionId, expected, next)).rejects.toBeInstanceOf(
+      ProjectSessionScopeUnavailableError,
+    );
+
+    expect(manager.get(sessionId)).toEqual(beforeResume);
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(1);
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(4);
+  });
+
   it("retries the exact bound resume after the advanced marker outlives a spawn failure", async () => {
     const initial = createFakePty();
     const resumedPty = createFakePty();
@@ -815,9 +858,11 @@ describe("SessionManager", () => {
     };
     await writeFile(sessionsPath, JSON.stringify([session]), "utf8");
     const migrations = vi.fn();
+    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity: async () => identity,
       onProjectAgentIdentityMigration: migrations,
+      onProjectBootstrapSession,
     });
 
     await manager.init();
@@ -834,6 +879,21 @@ describe("SessionManager", () => {
     });
     expect(adapter.resume).toHaveBeenCalledTimes(1);
     expect(spawns).toHaveLength(1);
+    expect(onProjectBootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: session.id,
+        projectBootstrap: session.projectBootstrap,
+      }),
+      "resumed",
+      expect.any(String),
+    );
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(
+      persisted.find((candidate) => candidate.id === session.id)
+        ?.projectBootstrap,
+    ).toEqual(session.projectBootstrap);
   });
 
   it("drops malformed or conflicting legacy identity records from the registry on load", async () => {
@@ -900,6 +960,10 @@ describe("SessionManager", () => {
       [{ sessionId: malformed.id, outcome: "dropped" }],
       [{ sessionId: conflicting.id, outcome: "dropped" }],
     ]);
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as unknown[];
+    expect(persisted).toEqual([]);
     await expect(manager.resume(malformed.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
@@ -908,10 +972,6 @@ describe("SessionManager", () => {
     );
     expect(adapter.canResume).not.toHaveBeenCalled();
     expect(spawns).toEqual([]);
-    const persisted = JSON.parse(
-      await readFile(sessionsPath, "utf8"),
-    ) as unknown[];
-    expect(persisted).toEqual([]);
   });
 
   it("lists only sessions with a valid identity when the registry mixes valid and malformed records", async () => {
@@ -1067,7 +1127,7 @@ describe("SessionManager", () => {
     ]);
   });
 
-  it("drops a malformed legacy planner record with no identity and keeps a malformed bootstrap record that has one", async () => {
+  it("drops malformed planner metadata and rejects resume for a kept record with rejected metadata", async () => {
     const base = {
       agentSessionId: "provider-session",
       harness: "claude-code",
@@ -1102,8 +1162,12 @@ describe("SessionManager", () => {
       "utf8",
     );
     const migrations = vi.fn();
+    const resolveAgentMapIdentity = vi.fn();
+    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       onProjectAgentIdentityMigration: migrations,
+      resolveAgentMapIdentity,
+      onProjectBootstrapSession,
     });
 
     await manager.init();
@@ -1113,17 +1177,30 @@ describe("SessionManager", () => {
       [{ sessionId: malformedPlanning.id, outcome: "dropped" }],
       [{ sessionId: malformedBootstrap.id, outcome: "rejected" }],
     ]);
+    expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
+      [malformedBootstrap],
+    );
+
     await expect(manager.resume(malformedPlanning.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
     await expect(manager.resume(malformedBootstrap.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
+    expect(manager.get(malformedBootstrap.id)).toMatchObject({
+      agentMapIdentity: malformedBootstrap.agentMapIdentity,
+      projectBootstrap: "not-an-object",
+      status: "exited",
+    });
+    const persistedAfterResume = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as unknown[];
+    expect(persistedAfterResume).toEqual([malformedBootstrap]);
+    expect(onProjectBootstrapSession).not.toHaveBeenCalled();
+    expect(resolveAgentMapIdentity).not.toHaveBeenCalled();
     expect(adapter.canResume).not.toHaveBeenCalled();
-    expect(spawns).toEqual([]);
-    expect(JSON.parse(await readFile(sessionsPath, "utf8")) as unknown).toEqual(
-      [malformedBootstrap],
-    );
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(spawns).toHaveLength(0);
   });
 
   it("routes write() and resize() to the underlying pty", async () => {
@@ -2273,6 +2350,120 @@ describe("SessionManager", () => {
     detach?.();
     spawns[0]?.emitData("ignored");
     expect(received).toEqual(["hello world", "!"]);
+  });
+
+  it("keeps terminal listeners across credential relaunch and ignores retired PTY output", async () => {
+    let generation = 1;
+    const resumePreparationStarted = deferred<void>();
+    const allowResumePreparation = deferred<void>();
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async () => true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: generation === 1,
+        },
+      }),
+      prepareWorkspaceContext: async () => {
+        resumePreparationStarted.resolve();
+        await allowResumePreparation.promise;
+      },
+    });
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-resumable");
+
+    const received: string[] = [];
+    const detach = manager.attach(session.id, (chunk) => received.push(chunk));
+    generation = 2;
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() =>
+      expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce(),
+    );
+    spawns[0]!.emitExit(0);
+    await removal;
+    await resumePreparationStarted.promise;
+
+    const startingReceived: string[] = [];
+    let startingDetach: (() => void) | undefined;
+    try {
+      startingDetach = manager.attach(session.id, (chunk) =>
+        startingReceived.push(chunk),
+      );
+    } finally {
+      allowResumePreparation.resolve();
+    }
+    expect(startingDetach).toBeTypeOf("function");
+    await manager.flush();
+
+    expect(spawns).toHaveLength(2);
+    spawns[0]!.emitData("retired output");
+    expect(received).toEqual([]);
+    spawns[1]!.emitData("replacement output");
+    expect(received).toEqual(["replacement output"]);
+    expect(startingReceived).toEqual(["replacement output"]);
+
+    detach?.();
+    startingDetach?.();
+    spawns[1]!.emitData("after detach");
+    expect(received).toEqual(["replacement output"]);
+  });
+
+  it("keeps duplicate callback registrations independent", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const received: string[] = [];
+    const listener = (chunk: string) => received.push(chunk);
+    const detachFirst = manager.attach(session.id, listener);
+    const detachSecond = manager.attach(session.id, listener);
+
+    detachFirst?.();
+    spawns[0]!.emitData("still attached");
+    expect(received).toEqual(["still attached"]);
+
+    detachSecond?.();
+    spawns[0]!.emitData("detached");
+    expect(received).toEqual(["still attached"]);
+  });
+
+  it("snapshots terminal listeners when a listener attaches another during dispatch", async () => {
+    const { manager, spawns } = makeManager();
+    const session = await manager.create({
+      cwd: "/tmp/proj",
+      harness: "claude-code",
+    });
+    const received: string[] = [];
+    let nestedDetach: (() => void) | undefined;
+    const detach = manager.attach(session.id, (chunk) => {
+      received.push(`first:${chunk}`);
+      if (!nestedDetach) {
+        nestedDetach = manager.attach(session.id, (nestedChunk) => {
+          received.push(`nested:${nestedChunk}`);
+        });
+      }
+    });
+
+    spawns[0]!.emitData("current");
+    expect(received).toEqual(["first:current", "nested:current"]);
+
+    spawns[0]!.emitData("next");
+    expect(received).toEqual([
+      "first:current",
+      "nested:current",
+      "first:next",
+      "nested:next",
+    ]);
+    detach?.();
+    nestedDetach?.();
   });
 
   describe("onActivity", () => {
@@ -4298,42 +4489,260 @@ describe("SessionManager", () => {
     });
   });
 
-  it("terminates only credential-bearing MCP runtimes at or before the removal generation", async () => {
-    let launchCount = 0;
+  it("relaunches resumable removed-credential sessions after killing their old runtimes", async () => {
     let generation = 1;
+    let launchCount = 0;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async (agentSessionId: string) =>
+        agentSessionId === "provider-resumable",
+      ),
+    });
+    const resumePreparationStarted = deferred<void>();
+    const allowResumePreparation = deferred<void>();
     const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      prepareWorkspaceContext: async () => {
+        resumePreparationStarted.resolve();
+        await allowResumePreparation.promise;
+      },
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: launchCount++ < 3,
+        },
+      }),
+    });
+    const resumable = await manager.create({
+      cwd: "/tmp/resumable-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(resumable.id, "provider-resumable");
+    const unavailable = await manager.create({
+      cwd: "/tmp/unavailable-with-key",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(unavailable.id, "provider-unavailable");
+    const noProviderSession = await manager.create({
+      cwd: "/tmp/no-provider-session-with-key",
+      harness: "claude-code",
+    });
+    const oldRuntime = manager.getRuntimeEpoch(resumable.id);
+    generation = 2;
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() =>
+      expect(spawns.slice(0, 3).every(({ pty }) => pty.kill.mock.calls.length > 0)).toBe(
+        true,
+      ),
+    );
+    spawns[0]!.emitExit(0);
+    spawns[1]!.emitExit(0);
+    spawns[2]!.emitExit(0);
+    try {
+      await removal;
+      await resumePreparationStarted.promise;
+      expect(manager.get(resumable.id)?.status).toBe("starting");
+      expect(spawns).toHaveLength(3);
+    } finally {
+      allowResumePreparation.resolve();
+    }
+    await manager.flush();
+
+    expect(manager.get(resumable.id)).toMatchObject({ status: "running" });
+    expect(manager.get(unavailable.id)?.status).toBe("exited");
+    expect(manager.get(noProviderSession.id)?.status).toBe("exited");
+    expect(manager.getRuntimeEpoch(resumable.id)).not.toBe(oldRuntime);
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(adapter.canResume).toHaveBeenCalledTimes(3);
+    expect(spawns).toHaveLength(4);
+  });
+
+  it("does not let a late credential check overwrite a replacement runtime", async () => {
+    const canResumeResult = deferred<boolean>();
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn()
+        .mockImplementationOnce(() => canResumeResult.promise)
+        .mockResolvedValue(true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/credential-race",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-credential-race");
+    generation = 2;
+    manager.reconcileMcpCredentialGeneration(generation);
+
+    const emittedStates: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => {
+      if (updated.id === session.id) emittedStates.push(updated.mcpAuthState);
+    });
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() => expect(adapter.canResume).toHaveBeenCalledOnce());
+
+    const oldRuntimeExit = manager.kill(session.id);
+    expect(spawns[0]!.pty.kill).toHaveBeenCalledOnce();
+    spawns[0]!.emitExit(0);
+    await oldRuntimeExit;
+
+    await expect(manager.resume(session.id)).resolves.toMatchObject({
+      id: session.id,
+      status: "running",
+      mcpAuthState: "current",
+    });
+    expect(spawns).toHaveLength(2);
+
+    canResumeResult.resolve(true);
+    await removal;
+
+    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(emittedStates).not.toContain("restarting");
+
+    manager.reconcileMcpCredentialGeneration(3);
+    expect(manager.get(session.id)?.mcpAuthState).toBe("restart-required");
+  });
+
+  it("restores the prior auth state when the exact-runtime kill declines", async () => {
+    const { manager, adapter, spawns } = makeManager({
+      currentCredentialGeneration: () => 1,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: { generation: 1, credentialBearing: true },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/credential-kill-race",
+      harness: "claude-code",
+    });
+    await manager.setAgentSessionId(session.id, "provider-kill-race");
+    delete session.mcpAuthState;
+    const killIfRuntime = vi
+      .spyOn(manager, "killIfRuntime")
+      .mockResolvedValue(false);
+    const emittedStates: Array<HarnessSession["mcpAuthState"]> = [];
+    manager.onStatusChange((updated) => {
+      if (updated.id === session.id) emittedStates.push(updated.mcpAuthState);
+    });
+
+    await manager.relaunchCredentialBearingSessions(1);
+
+    expect(killIfRuntime).toHaveBeenCalledWith(
+      session.id,
+      manager.getRuntimeEpoch(session.id),
+    );
+    expect(spawns[0]!.pty.kill).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+    expect(manager.get(session.id)).not.toHaveProperty("mcpAuthState");
+    expect(emittedStates).toEqual(["restarting", undefined]);
+  });
+
+  it("kills credential-bearing bound subsessions without ordinary relaunch", async () => {
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      canResume: vi.fn(async () => true),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
       currentCredentialGeneration: () => generation,
       buildLaunchOpts: async () => ({
         mcpCredentialLaunch: {
           generation,
-          credentialBearing: launchCount++ !== 1,
+          credentialBearing: generation === 1,
         },
       }),
     });
-    const credentialBearing = await manager.create({
-      cwd: "/tmp/with-key",
-      harness: "claude-code",
-    });
-    const signedOut = await manager.create({
-      cwd: "/tmp/without-key",
-      harness: "claude-code",
-    });
+    const sessionId = "00000000-0000-4000-8000-000000000118";
+    const input = delegatedCreate(sessionId);
+    const expected = marker(sessionId);
+    const next = marker(sessionId, 2, 2);
+    await manager.createReserved(
+      sessionId,
+      { cwd: input.cwd, harness: input.harness },
+      expected,
+      input.trusted,
+    );
+    await manager.setAgentSessionId(
+      sessionId,
+      "agent-bound-credential-removal",
+      "startup",
+      manager.getRuntimeEpoch(sessionId)!,
+    );
     generation = 2;
-    const newer = await manager.create({
-      cwd: "/tmp/newer-key",
+
+    const removal = manager.relaunchCredentialBearingSessions(1);
+    await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+    spawns[0]!.emitExit(0);
+    await removal;
+    await manager.flush();
+
+    expect(manager.get(sessionId)).toMatchObject({
+      status: "exited",
+    });
+    expect(manager.get(sessionId)?.mcpAuthState).not.toBe("restarting");
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(expected);
+    expect(adapter.canResume).not.toHaveBeenCalled();
+    expect(adapter.resume).not.toHaveBeenCalled();
+
+    await expect(
+      manager.resumeBound(sessionId, expected, next),
+    ).resolves.toMatchObject({ id: sessionId, status: "running" });
+    expect(adapter.canResume).toHaveBeenCalledOnce();
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(manager.getSubsessionBinding(sessionId)).toEqual(next);
+  });
+
+  it("does not reject credential removal when the keyless resume fails", async () => {
+    let generation = 1;
+    const adapter = createFakeAdapter({
+      resume: vi.fn(() => {
+        throw new Error("resume failed");
+      }),
+    });
+    const { manager, spawns } = makeManager({
+      adapter,
+      currentCredentialGeneration: () => generation,
+      buildLaunchOpts: async () => ({
+        mcpCredentialLaunch: {
+          generation,
+          credentialBearing: generation === 1,
+        },
+      }),
+    });
+    const session = await manager.create({
+      cwd: "/tmp/resume-failure-with-key",
       harness: "claude-code",
     });
+    await manager.setAgentSessionId(session.id, "provider-resume-failure");
+    generation = 2;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const terminating = manager.terminateCredentialBearingSessions(1);
+    const removal = manager.relaunchCredentialBearingSessions(1);
     await vi.waitFor(() => expect(spawns[0]!.pty.kill).toHaveBeenCalled());
-    expect(spawns[1]!.pty.kill).not.toHaveBeenCalled();
-    expect(spawns[2]!.pty.kill).not.toHaveBeenCalled();
-
     spawns[0]!.emitExit(0);
-    await terminating;
-    expect(manager.get(credentialBearing.id)?.status).toBe("exited");
-    expect(manager.get(signedOut.id)?.status).toBe("running");
-    expect(manager.get(newer.id)?.status).toBe("running");
+    await expect(removal).resolves.toBeUndefined();
+    await manager.flush();
+
+    expect(manager.get(session.id)).toMatchObject({
+      status: "exited",
+      mcpAuthState: "not-applicable",
+    });
+    expect(adapter.resume).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "[harness] credential-removal session relaunch failed",
+      { sessionId: session.id },
+    );
+    consoleError.mockRestore();
   });
 
 
@@ -4419,6 +4828,8 @@ describe("SessionManager", () => {
     const resumed = manager.resume(session.id);
     await vi.waitFor(() => expect(buildCount).toBe(2));
     expect(manager.get(session.id)?.status).toBe("starting");
+    const received: string[] = [];
+    const detach = manager.attach(session.id, (chunk) => received.push(chunk));
 
     // Bootstrap exit bookkeeping can finish after kill() resolves. Its metadata
     // update must observe the claimed resume lifecycle, so server cleanup does
@@ -4435,6 +4846,10 @@ describe("SessionManager", () => {
 
     resumeConfig.resolve();
     await resumed;
+    expect(detach).toBeTypeOf("function");
+    spawns[1]!.emitData("resumed output");
+    expect(received).toEqual(["resumed output"]);
+    detach?.();
     unsubscribe();
     expect(manager.get(session.id)?.status).toBe("running");
   });
@@ -4591,6 +5006,8 @@ describe("SessionManager", () => {
         cwd: "/tmp/proj",
         harness,
       });
+      const received: string[] = [];
+      const detach = manager.attach(session.id, (chunk) => received.push(chunk));
       await manager.setAgentSessionId(session.id, "agent-session-1");
       generation = 2;
       manager.reconcileMcpCredentialGeneration(generation);
@@ -4608,6 +5025,10 @@ describe("SessionManager", () => {
         mcpAuthState: "current",
       });
       expect(spawns).toHaveLength(2);
+      spawns[0]!.emitData("retired runtime output");
+      spawns[1]!.emitData("replacement runtime output");
+      expect(received).toEqual(["replacement runtime output"]);
+      detach?.();
       expect(adapter.resume).toHaveBeenCalledWith(
         "agent-session-1",
         expect.objectContaining({ harnessSessionId: session.id }),
@@ -5824,47 +6245,73 @@ describe("SessionManager", () => {
   });
 
 
-  it("fails resume closed when neutral project scope cannot be revalidated and preserves the session identity", async () => {
+  it("rejects resume when persisted project scope is unavailable without changing session state", async () => {
     const identity = (sessionId: string) => ({
       projectId: "project-1",
       userId: "user-1",
       sessionId,
     });
-    const resolveAgentMapIdentity = vi
-      .fn()
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => identity(sessionId))
-      .mockImplementationOnce(async (sessionId: string) => {
-        throw new ProjectSessionScopeUnavailableError(sessionId);
-      });
+    let projectRemoved = false;
+    const resolveAgentMapIdentity = vi.fn(
+      async (
+        sessionId: string,
+        _cwd?: string,
+        persisted?: { projectId: string; userId: string; sessionId: string },
+      ) => {
+        if (projectRemoved && persisted) {
+          throw new ProjectSessionScopeUnavailableError(sessionId);
+        }
+        return persisted ?? identity(sessionId);
+      },
+    );
+    const onProjectBootstrapSession = vi.fn();
     const { manager, adapter, spawns } = makeManager({
       resolveAgentMapIdentity,
+      onProjectBootstrapSession,
     });
     const session = await manager.create({
       cwd: "/tmp/proj",
       harness: "claude-code",
     });
     await manager.setAgentSessionId(session.id, "provider-project-session");
+    await manager.setProjectBootstrapMetadata(session.id, {
+      projectId: "project-1",
+      userId: "user-1",
+      targetSessionId: session.id,
+      bootstrap: { status: "pending" },
+      queuedInputIds: ["retained-input"],
+    });
     spawns[0]?.emitExit(0);
     await manager.flush();
-    const beforeResume = structuredClone(manager.get(session.id));
+    const persistedIdentity = structuredClone(session.agentMapIdentity);
+    const persistedBootstrap = structuredClone(session.projectBootstrap);
+    const callsBeforeResume = resolveAgentMapIdentity.mock.calls.length;
+    projectRemoved = true;
 
     await expect(manager.resume(session.id)).rejects.toBeInstanceOf(
       ProjectSessionScopeUnavailableError,
     );
 
+    expect(resolveAgentMapIdentity).toHaveBeenCalledTimes(callsBeforeResume + 1);
     expect(resolveAgentMapIdentity).toHaveBeenLastCalledWith(
       session.id,
       session.cwd,
-      session.agentMapIdentity,
+      persistedIdentity,
     );
-    expect(manager.get(session.id)).toEqual(beforeResume);
-    expect(manager.get(session.id)?.agentMapIdentity).toEqual({
-      projectId: "project-1",
-      userId: "user-1",
-      sessionId: session.id,
+    expect(manager.get(session.id)).toMatchObject({
+      status: "exited",
+      agentMapIdentity: persistedIdentity,
+      projectBootstrap: persistedBootstrap,
     });
+    const persisted = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as HarnessSession[];
+    expect(persisted.find((candidate) => candidate.id === session.id))
+      .toMatchObject({
+        agentMapIdentity: persistedIdentity,
+        projectBootstrap: persistedBootstrap,
+      });
+    expect(onProjectBootstrapSession).not.toHaveBeenCalled();
     expect(adapter.resume).not.toHaveBeenCalled();
     expect(spawns).toHaveLength(1);
   });
