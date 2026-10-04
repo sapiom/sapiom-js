@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
   await openProject(page, "acme-app");
 });
 
-test("each project's pan and zoom survive another project and an agent Canvas", async ({
+test("each project's pan and zoom survive another project and a session", async ({
   page,
 }) => {
   const initial = await transform(page);
@@ -40,10 +40,10 @@ test("each project's pan and zoom survive another project and an agent Canvas", 
 
   await openProject(page, "acme-app");
   await expect.poll(() => transform(page)).toBe(acmeView);
-  // A session's agent Canvas in between: the session bound to leasing.
+  // A session in between: the map leaves the centre entirely.
   await selectSession(page, "sess-boot");
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  await expect(page.getByTestId("right-panel-board")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toBeVisible();
   await openProject(page, "acme-app");
   await expect.poll(() => transform(page)).toBe(acmeView);
   await openProject(page, "polsia");

@@ -6,10 +6,15 @@ export function findVisualizeMacro(macros: MacroDef[]): MacroDef | undefined {
 }
 
 /** Shared gating logic for any surface that runs a macro against a specific workflow (the docked action strip, the canvas empty-state CTA). */
+/**
+ * No reason names a session: agent verbs are addressed by the agent's path,
+ * never by a session (flow-map-chat-overlay.md 4.4b). The "Start a session
+ * first" gate this replaced disabled Visualize and every inject macro on any
+ * surface with no live session beside it.
+ */
 export function macroDisabledReason(
   macro: MacroDef,
   workflow: WorkflowInfo | null,
-  activeSessionId: string | null,
 ): string | null {
   if (macro.requiresWorkflow) {
     if (!workflow) return "Select an agent first";
@@ -21,9 +26,6 @@ export function macroDisabledReason(
       return "Not deployed yet";
     }
   }
-  // Both "inject" (types into the pty) and "render-canvas" (the deterministic
-  // Visualize path) need a real session to act against — only "open-url" doesn't.
-  if (macro.action.kind !== "open-url" && !activeSessionId) return "Start a session first";
   return null;
 }
 

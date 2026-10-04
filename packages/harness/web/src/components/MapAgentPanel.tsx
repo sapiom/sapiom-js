@@ -11,8 +11,7 @@ import { Icon } from "./Icon";
 /**
  * The agent, opened in place on the project's map (flow-navigation.md 4.4,
  * Q7): its name, where it lives with a Change action, its sessions, and
- * Start chat. Single click on the map opens this; double click enters the
- * agent's canvas, and Open canvas here is the same move for a keyboard.
+ * Start chat. Single click on the map opens this, floating over the map.
  *
  * This is where agents are managed now that the rail lists none (Q3). The ask
  * was "see my agents, and occasionally control the paths", so the path is the
@@ -27,7 +26,6 @@ export function MapAgentPanel({
   onOpenSession,
   onStartChat,
   startChatPending,
-  onEnterCanvas,
   onChangeLocation,
   validateLocation,
   onClose,
@@ -42,7 +40,6 @@ export function MapAgentPanel({
   onStartChat: () => void;
   /** A Start chat is between create and bind; a second press would make two. */
   startChatPending: boolean;
-  onEnterCanvas: () => void;
   /** Runs after the confirm, with the path the user typed. */
   onChangeLocation: (to: string) => void;
   /** Why a typed path cannot be the new location, or null when it can. */
@@ -221,17 +218,6 @@ export function MapAgentPanel({
         >
           <Icon name="MessageSquare" size={14} /> Start chat
         </button>
-        {/* The double click's twin, for a keyboard and for anyone who does
-            not guess that a node can be entered. */}
-        <button
-          type="button"
-          className="btn-line"
-          data-testid="map-agent-open-canvas"
-          data-tooltip={`Open ${agent.name}'s canvas`}
-          onClick={onEnterCanvas}
-        >
-          Open canvas <Icon name="ChevronRight" size={12} />
-        </button>
       </div>
 
       {confirming && (
@@ -257,7 +243,7 @@ export function MapAgentPanel({
  * The one confirm before an agent's directory moves on disk. It names both
  * paths, because "move this agent?" with no destination on screen is the
  * accidental move the rail's drag used to make (flow-navigation.md 4.4.3).
- * Same anatomy as EndSessionConfirm: focus opens on the safe action, and
+ * Same anatomy as RemoveProjectConfirm: focus opens on the safe action, and
  * Escape or a backdrop click keep the agent where it is.
  */
 function ChangeLocationConfirm({

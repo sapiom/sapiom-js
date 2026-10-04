@@ -165,65 +165,8 @@ body {
   box-shadow: var(--shadow-soft);
 }
 
-/* ---- Graph block (tabs + board) — the raised, forefront surface --------
-   The white pane is LIFTED off the grey shell (rail + terminal) by a soft
-   left-edge shadow, so it reads as the forefront panel rather than another
-   flat block that merely happens to be a lighter grey. Matches the web app's
-   shell depth (--shell-pane-shadow in the reference). */
-.right-pane {
-  background: var(--surface-raised);
-  /* Left-edge shadow lifts the raised graph column off the grey shell, kept
-     clearly visible against the (darker) shell. It must paint OVER the terminal,
-     which is the subtle part: xterm's `.xterm-viewport` is `position: absolute`
-     with an opaque --bg background, so it paints AFTER a *static* sibling. As a
-     static block the right-pane's shadow was overpainted from the terminal's top
-     down — the lift appeared to "stop" exactly where the terminal scroll area
-     began. The desktop rule below gives the pane its own stacking level so the
-     shadow clears the viewport for the full column height. */
-  box-shadow: -4px 0 16px -6px color-mix(in srgb, var(--ink) 24%, transparent);
-}
-
-/* Desktop only: raise the pane above the terminal's absolutely-positioned,
-   opaque viewport so the left-edge lift shadow paints the FULL column height.
-   Scoped to min-width:769px — the complement of MOBILE_SHELL_QUERY
-   (max-width:768px, use-pane-widths.ts) — because on the mobile shell
-   `.right-pane` is a `position: fixed` bottom sheet; a positioned/z-index
-   override there would break its geometry (it regressed mobile.spec.ts once). */
-@media (min-width: 769px) {
-  .right-pane {
-    position: relative;
-    z-index: 1;
-  }
-}
-
-.right-pane-tabs {
-  background: transparent;
-}
-
-.right-pane-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp1);
-  border-radius: var(--radius);
-  height: var(--control-h-xs);
-  padding: 0 var(--sp3);
-  font-weight: 510;
-}
-
-.right-pane-tab:hover {
-  background: var(--surface-hover, var(--bg-hover));
-}
-
-.right-pane-tab.is-active {
-  background: var(--active-shade);
-  border-color: var(--ui-line, var(--border));
-  box-shadow: none;
-  color: var(--text);
-}
-
-/* ---- Canvas / studio panes: transparent — they show the graph block ---- */
-.canvas-pane,
-.right-pane-panel {
+/* ---- Canvas pane: transparent — it shows the surface it sits on ------ */
+.canvas-pane {
   background: transparent;
 }
 
@@ -345,43 +288,6 @@ body {
   animation: refine-content-in var(--base, 0.22s) var(--ease) both;
 }
 
-/* The canvas slides open/shut horizontally: App gives the .app grid two columns
-   and animates the canvas column's width to/from 0 (right-to-left on open, and
-   the reverse on close). On desktop the collapsed pane stays in layout at
-   0 width (clipped) rather than display:none, so the pane AND its left-edge lift
-   shadow actually slide, both directions. The mobile sheet keeps its own
-   display:none + bottom-up entrance (it is out of the grid). */
-@media (min-width: 769px) {
-  /* The canvas column eases open/shut. The transition is ALWAYS present on the
-     workbench (not gated on the slide) because grid-template-columns only
-     animates when the transition is already established a frame before the width
-     changes — adding it in the same commit as the collapse makes the browser
-     jump instead. The pin below (what stops the squish) is what's scoped to the
-     slide; a resize drag/reset instead suppresses this via .canvas-dragging. */
-  .app.canvas-animated {
-    transition: grid-template-columns var(--base, 0.22s) var(--ease);
-  }
-  .app.canvas-animated.canvas-dragging {
-    transition: none;
-  }
-  /* During the slide the collapsed pane stays in layout at 0 width (clipped) so
-     the pane AND its left-edge lift shadow slide, rather than vanishing. Once
-     settled it reverts to the base display:none (no lingering shadow sliver). */
-  .app.canvas-animated.canvas-sliding .right-pane.is-collapsed {
-    display: flex;
-  }
-  /* DURING the slide only: pin the pane content to the expanded width (--rp-w,
-     kept current by a ResizeObserver, frozen for the slide) and right-align it,
-     so as the column shrinks the content is CLIPPED from the left rather than
-     reflowing — a clean drawer slide, not a squish. Gated on .canvas-sliding so
-     that once settled the content sizes naturally: a collapsed pane's content
-     goes to zero width (reads as hidden), an expanded pane's tracks the column. */
-  .app.canvas-animated.canvas-sliding .right-pane > * {
-    width: var(--rp-w, 100%);
-    align-self: flex-end;
-  }
-}
-
 @keyframes composer-leave {
   from {
     opacity: 1;
@@ -405,8 +311,5 @@ body {
   .agent-view,
   .composer-home.is-leaving {
     animation-duration: 1ms;
-  }
-  .app.canvas-animated {
-    transition-duration: 1ms;
   }
 }

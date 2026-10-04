@@ -27,10 +27,6 @@ const session = (
   sessionId,
   agentPath,
 });
-const agent = (agentPath: string): NavigationVisit => ({
-  kind: "agent",
-  agentPath,
-});
 const project = (
   workspaceKey: string,
   root = "/repo",
@@ -60,7 +56,7 @@ const stateOf = (
 
 describe("sameNavigationVisit", () => {
   it("is false across different kinds", () => {
-    expect(sameNavigationVisit(session("s1", "/a"), agent("/a"))).toBe(false);
+    expect(sameNavigationVisit(session("s1", "/a"), agentMap("/a"))).toBe(false);
     expect(sameNavigationVisit(composer, templates)).toBe(false);
   });
   it("compares sessions by sessionId, ignoring agentPath", () => {
@@ -70,10 +66,6 @@ describe("sameNavigationVisit", () => {
     expect(sameNavigationVisit(session("s1", "/a"), session("s2", "/a"))).toBe(
       false,
     );
-  });
-  it("compares agents by agentPath", () => {
-    expect(sameNavigationVisit(agent("/a"), agent("/a"))).toBe(true);
-    expect(sameNavigationVisit(agent("/a"), agent("/b"))).toBe(false);
   });
   it("compares projects by their opaque server identity", () => {
     expect(
@@ -110,11 +102,11 @@ describe("canGoBack / canGoForward", () => {
     expect(canGoForward(EMPTY_NAVIGATION_HISTORY)).toBe(false);
   });
   it("canGoBack is false at index 0, true beyond", () => {
-    expect(canGoBack(stateOf([agent("/a")], 0))).toBe(false);
-    expect(canGoBack(stateOf([agent("/a"), agent("/b")], 1))).toBe(true);
+    expect(canGoBack(stateOf([agentMap("/a")], 0))).toBe(false);
+    expect(canGoBack(stateOf([agentMap("/a"), agentMap("/b")], 1))).toBe(true);
   });
   it("canGoForward is false at the tip, true before it", () => {
-    const s = stateOf([agent("/a"), agent("/b")], 1);
+    const s = stateOf([agentMap("/a"), agentMap("/b")], 1);
     expect(canGoForward(s)).toBe(false);
     expect(canGoForward({ ...s, index: 0 })).toBe(true);
   });
@@ -122,13 +114,13 @@ describe("canGoBack / canGoForward", () => {
 
 describe("pushNavigationVisit", () => {
   it("seeds an empty history", () => {
-    const next = pushNavigationVisit(EMPTY_NAVIGATION_HISTORY, agent("/a"));
-    expect(next).toEqual({ entries: [agent("/a")], index: 0 });
+    const next = pushNavigationVisit(EMPTY_NAVIGATION_HISTORY, agentMap("/a"));
+    expect(next).toEqual({ entries: [agentMap("/a")], index: 0 });
   });
 
   it("is a no-op (same reference) when the tip is byte-identical", () => {
-    const s = stateOf([agent("/a")], 0);
-    expect(pushNavigationVisit(s, agent("/a"))).toBe(s);
+    const s = stateOf([agentMap("/a")], 0);
+    expect(pushNavigationVisit(s, agentMap("/a"))).toBe(s);
   });
 
   it("refreshes the tip in place when it is the same place told more precisely", () => {
@@ -142,61 +134,61 @@ describe("pushNavigationVisit", () => {
   });
 
   it("appends a genuinely different place and advances the index", () => {
-    const s = stateOf([agent("/a")], 0);
-    const next = pushNavigationVisit(s, agent("/b"));
-    expect(next.entries).toEqual([agent("/a"), agent("/b")]);
+    const s = stateOf([agentMap("/a")], 0);
+    const next = pushNavigationVisit(s, agentMap("/b"));
+    expect(next.entries).toEqual([agentMap("/a"), agentMap("/b")]);
     expect(next.index).toBe(1);
   });
 
   it("truncates the forward branch when pushing from the middle", () => {
     // At index 0 of [a, b, c]; pushing d drops b and c (browser-style).
-    const s = stateOf([agent("/a"), agent("/b"), agent("/c")], 0);
-    const next = pushNavigationVisit(s, agent("/d"));
-    expect(next.entries).toEqual([agent("/a"), agent("/d")]);
+    const s = stateOf([agentMap("/a"), agentMap("/b"), agentMap("/c")], 0);
+    const next = pushNavigationVisit(s, agentMap("/d"));
+    expect(next.entries).toEqual([agentMap("/a"), agentMap("/d")]);
     expect(next.index).toBe(1);
   });
 
   it("caps the stack at MAX_ENTRIES (50), keeping the most recent", () => {
     let s: NavigationHistoryState = EMPTY_NAVIGATION_HISTORY;
-    for (let i = 0; i < 60; i++) s = pushNavigationVisit(s, agent(`/a${i}`));
+    for (let i = 0; i < 60; i++) s = pushNavigationVisit(s, agentMap(`/a${i}`));
     expect(s.entries).toHaveLength(50);
     expect(s.index).toBe(49);
-    expect(s.entries[0]).toEqual(agent("/a10")); // the oldest 10 fell off
-    expect(s.entries[49]).toEqual(agent("/a59"));
+    expect(s.entries[0]).toEqual(agentMap("/a10")); // the oldest 10 fell off
+    expect(s.entries[49]).toEqual(agentMap("/a59"));
   });
 });
 
 describe("moveNavigation", () => {
   it("returns the state unchanged and no visit at the back boundary", () => {
-    const s = stateOf([agent("/a")], 0);
+    const s = stateOf([agentMap("/a")], 0);
     const moved = moveNavigation(s, "back");
     expect(moved.visit).toBeNull();
     expect(moved.state).toBe(s);
   });
   it("returns the state unchanged and no visit at the forward boundary", () => {
-    const s = stateOf([agent("/a"), agent("/b")], 1);
+    const s = stateOf([agentMap("/a"), agentMap("/b")], 1);
     const moved = moveNavigation(s, "forward");
     expect(moved.visit).toBeNull();
     expect(moved.state).toBe(s);
   });
   it("steps back to the previous visit", () => {
-    const s = stateOf([agent("/a"), agent("/b")], 1);
+    const s = stateOf([agentMap("/a"), agentMap("/b")], 1);
     const moved = moveNavigation(s, "back");
     expect(moved.state.index).toBe(0);
-    expect(moved.visit).toEqual(agent("/a"));
+    expect(moved.visit).toEqual(agentMap("/a"));
   });
   it("steps forward to the next visit", () => {
-    const s = stateOf([agent("/a"), agent("/b")], 0);
+    const s = stateOf([agentMap("/a"), agentMap("/b")], 0);
     const moved = moveNavigation(s, "forward");
     expect(moved.state.index).toBe(1);
-    expect(moved.visit).toEqual(agent("/b"));
+    expect(moved.visit).toEqual(agentMap("/b"));
   });
   it("round-trips back then forward to the same tip", () => {
-    const s = stateOf([agent("/a"), project("workspace-b"), agent("/c")], 2);
+    const s = stateOf([agentMap("/a"), project("workspace-b"), agentMap("/c")], 2);
     const back = moveNavigation(s, "back");
     expect(back.visit).toEqual(project("workspace-b"));
     const fwd = moveNavigation(back.state, "forward");
     expect(fwd.state.index).toBe(2);
-    expect(fwd.visit).toEqual(agent("/c"));
+    expect(fwd.visit).toEqual(agentMap("/c"));
   });
 });

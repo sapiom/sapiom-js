@@ -38,21 +38,19 @@ export async function openAgentPanel(
   await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", agent);
 }
 
-/** Open canvas on the agent's panel: its canvas in the same centre. */
-export async function openAgentCanvas(
-  page: Page,
-  project: string,
-  agent: string,
-): Promise<void> {
-  await openAgentPanel(page, project, agent);
-  await page.getByTestId("map-agent-open-canvas").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
-}
+/**
+ * Why a spec is fixme between SAP-3836 and SAP-3838. The agent's canvas, its
+ * Steps and its verbs lost their mount point when the right pane beside a
+ * session and the entered agent page were removed (flow-map-chat-overlay.md
+ * §5). The agent modal (design-map-chat.md §4.3, P4.2a) mounts them again,
+ * and that PR re-points these specs at it.
+ */
+export const CANVAS_UNMOUNTED =
+  "agent canvas unmounted until the agent modal (SAP-3838) re-points this spec";
 
 /**
- * Start chat on the agent's panel: a NEW session bound to the agent, selected,
- * with the agent's Canvas / Steps / Secrets in the right pane. Resolves to the
- * new session's id. This is the path that replaced focusing an agent row and
+ * Start chat on the agent's panel: a NEW session bound to the agent, selected.
+ * Resolves to the new session's id. This is the path that replaced focusing an agent row and
  * pressing its empty state's Start session.
  */
 export async function startChatWithAgent(

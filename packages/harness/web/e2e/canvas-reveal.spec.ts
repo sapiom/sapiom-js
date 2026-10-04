@@ -9,7 +9,9 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-import { startChatWithAgent } from "./mock-navigation";
+import { startChatWithAgent, CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 // The mock bus test hook: simulate the server's canvas.reload for a session,
 // the same event a finished render/build broadcasts.

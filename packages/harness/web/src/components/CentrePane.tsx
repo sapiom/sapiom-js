@@ -5,25 +5,19 @@ import { EmptyState } from "./EmptyState";
 
 /**
  * The project view's frame (flow-navigation.md 4.3, D45, D49): the project's
- * Agent Map at the FULL centre width, or the canvas of an agent entered from
- * it. No chat and no right pane beside it, ever: the map squeezed into a pane
- * beside a conversation is what the requester asked to stop ("it would take up
- * the full view in the middle rather than having to share real estate with the
- * chat"). `data-view` says which of the two it holds.
+ * Agent Map at the FULL centre width. No chat and no right pane beside it,
+ * ever: the map squeezed into a pane beside a conversation is what the
+ * requester asked to stop ("it would take up the full view in the middle
+ * rather than having to share real estate with the chat"). No entered agent
+ * page either (flow-map-chat-overlay.md §5).
  */
 export function ProjectView({
-  showing,
   children,
 }: {
-  showing: "map" | "agent";
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div
-      className="project-map-pane"
-      data-testid="project-map-pane"
-      data-view={showing}
-    >
+    <div className="project-map-pane" data-testid="project-map-pane">
       {children}
     </div>
   );

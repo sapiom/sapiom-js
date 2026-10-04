@@ -425,7 +425,7 @@ input {
 }
 
 /* Brand header row at the top of the rail — shares --pane-header-h with the
-   session bar and right-pane tabs so the app's top edge is one 56px line. */
+   session bar so the app's top edge is one 56px line. */
 .brand-header {
   flex: 0 0 auto;
   display: flex;
@@ -528,16 +528,14 @@ input {
 }
 
 /* The app's top line is the window's drag handle; every control on it opts back
-   out. Only these three chrome bars are draggable — never the panes below. */
+   out. Only these two chrome bars are draggable — never the panes below. */
 :root[data-window-frame="macos"] .brand-header,
-:root[data-window-frame="macos"] .session-bar,
-:root[data-window-frame="macos"] .right-pane-tabs {
+:root[data-window-frame="macos"] .session-bar {
   -webkit-app-region: drag;
 }
 
 :root[data-window-frame="macos"] .brand-header :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]),
-:root[data-window-frame="macos"] .session-bar :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]),
-:root[data-window-frame="macos"] .right-pane-tabs :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]) {
+:root[data-window-frame="macos"] .session-bar :is(button, a, input, [role="tab"], [role="button"], [role="menuitem"]) {
   -webkit-app-region: no-drag;
 }
 
@@ -574,10 +572,9 @@ input {
   box-shadow: var(--shadow-xs);
 }
 
-/* An inline confirm (EndSessionConfirm) renders its full-screen backdrop INSIDE
-   the draggable session bar. Without opting out, a backdrop click landing in
-   the top drag strip is eaten as a window-move instead of dismissing — so the
-   whole scrim opts out (harmless for the top-level modal backdrops). */
+/* A modal's full-screen backdrop covers the window's top drag strip. Without
+   opting out, a backdrop click landing there is eaten as a window-move instead
+   of dismissing, so the whole scrim opts out. */
 :root[data-window-frame="macos"] .modal-backdrop {
   -webkit-app-region: no-drag;
 }
@@ -680,17 +677,6 @@ input {
 .theme-toggle:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-/* Mobile's CLI-primary layout names the sheet it opens. Desktop keeps the
-   compact icon because the map is already visibly beside the coding-agent CLI. */
-.theme-toggle.right-expand-labeled {
-  width: auto;
-  min-width: max-content;
-  aspect-ratio: auto;
-  gap: var(--sp1);
-  padding: 0 var(--sp2);
-  white-space: nowrap;
 }
 
 /* --------------------------------------------------------------------------
@@ -861,10 +847,6 @@ input {
 
 .pane-resize-handle-rail {
   transform: translateX(-50%);
-}
-
-.pane-resize-handle-canvas {
-  transform: translateX(50%);
 }
 
 .center-pane {
@@ -2374,7 +2356,7 @@ button.rail-footer-card:hover {
 /* Session bar ------------------------------------------------------------ */
 
 /* The main panel's header row — same --pane-header-h as the rail's brand
-   header and the right pane's tabs, so all three tops align as one line. */
+   header, so both tops align as one line. */
 .session-bar {
   display: flex;
   align-items: center;
@@ -3913,8 +3895,11 @@ button.rail-footer-card:hover {
   background: var(--surface-raised);
 }
 
+/* One cell: the board alone. Nothing beside it takes its width (design I1);
+   the agent's panel floats over it. */
 .agent-map-live-body {
-  display: flex;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
 }
@@ -4003,10 +3988,6 @@ button.rail-footer-card:hover {
   flex-shrink: 0;
 }
 
-.agent-map-inspector .agent-map-deployment {
-  white-space: normal;
-}
-
 .agent-map-deployment[data-deployment-state="deployed"] {
   color: var(--green);
 }
@@ -4025,16 +4006,6 @@ button.rail-footer-card:hover {
   inset: 0;
   width: 100%;
   height: 100%;
-}
-
-.agent-map-node-wrap.has-info > .agent-map-node {
-  padding-right: calc(var(--control-h-xs) + var(--sp2));
-}
-
-.agent-map-node-info {
-  position: absolute;
-  top: var(--sp1);
-  right: var(--sp1);
 }
 
 .agent-map-node {
@@ -4090,46 +4061,6 @@ button.rail-footer-card:hover {
   align-items: center;
   gap: var(--sp2);
   width: 100%;
-}
-
-.agent-map-inspector {
-  z-index: 1;
-  width: min(var(--col-w), 42%);
-  padding: var(--sp4);
-  overflow: auto;
-  border-left: 1px solid var(--ui-line);
-  background: var(--surface-raised);
-}
-
-.agent-map-inspector-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--sp3);
-}
-
-.agent-map-inspector-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
-  flex: 0 0 auto;
-}
-
-.agent-map-inspector h3,
-.agent-map-inspector h4,
-.agent-map-inspector p,
-.agent-map-inspector ul {
-  margin: 0;
-}
-
-.agent-map-inspector section {
-  display: grid;
-  gap: var(--sp1);
-  margin-top: var(--sp4);
-}
-
-.agent-map-inspector ul {
-  padding-left: var(--sp4);
 }
 
 .workflow-actions-header {
@@ -5966,8 +5897,8 @@ button.rail-footer-card:hover {
   padding: 0 var(--pane-pad-x) var(--sp1);
 }
 
-/* Matches the right-pane tab recipe: quiet at rest, outlined when active —
-   one tab language across the studio. */
+/* Quiet at rest, outlined when active — one tab language across the
+   studio. */
 .snippet-tab {
   padding: 3px var(--sp2);
   font-size: var(--type-meta);
@@ -7913,195 +7844,6 @@ button.rail-footer-card:hover {
 
 /* Prompt bar ------------------------------------------------------------ */
 
-/* Right pane: Canvas | Skills segmented switch -------------------------- */
-
-/* The right pane hosts both the canvas and the skills panel. A segmented
-   control at the top switches between them. The canvas is always mounted
-   (display:none via .is-hidden) so a running Visualize enrichment task is
-   never disturbed when the user flips to Skills. */
-.right-pane {
-  display: flex;
-  flex-direction: column;
-  /* Block surface (the raised white graph pane) is owned by refine.css's
-     three-block model and declared there ONLY — so import order can't silently
-     flip the pane back to grey. Do not re-add a background here. */
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  /* The pane is resizable down to its 320px floor — its own width, not the
-     viewport, drives the narrow steps below. */
-  container: rightpane / inline-size;
-}
-
-/* Four tabs + the collapse control must fit the 320px floor: tighten the
-   segment padding and strip inset before anything can overflow. */
-@container rightpane (max-width: 360px) {
-  .right-pane-tabs {
-    gap: 2px;
-    padding: 0 var(--sp2);
-  }
-
-  .right-pane-tab {
-    padding: 3px var(--sp2);
-  }
-}
-
-/* Segmented control row — same --pane-header-h as the brand header and
-   session bar so the app's top edge reads as one continuous line. */
-.right-pane-tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
-  flex-shrink: 0;
-  height: var(--pane-header-h);
-  padding: 0 var(--pane-pad-x);
-  /* Surface (transparent — it shows the graph block) is owned by refine.css's
-     three-block model and declared there ONLY, so import order can't flip it. */
-}
-
-/* Individual segment buttons — small, rounded pills (fill bg-1 / subtle
-   shadow when active). */
-.right-pane-tab {
-  padding: 3px 10px;
-  font-size: var(--type-label);
-  font-weight: 500;
-  color: var(--text-faint);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.right-pane-tab:hover {
-  color: var(--text-dim);
-  background: var(--bg-hover);
-}
-
-.right-pane-tab:disabled,
-.right-pane-tab:disabled:hover {
-  color: var(--text-faint);
-  background: transparent;
-  cursor: default;
-  opacity: 0.55;
-}
-
-.right-pane-tab.is-active {
-  color: var(--text);
-  background: var(--bg-1);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-xs);
-}
-
-.right-pane-tab:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-/* Panel slot — fills the remaining height below the segmented switch. */
-.right-pane-panel {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* Canvas keep-alive: hidden via display:none rather than unmounting so
-   React state (probing, reloadKey, task-tracking) survives a tab flip. */
-.right-pane-panel.is-hidden {
-  display: none;
-}
-
-/* Whole-pane collapse works the same way — CSS-hidden, never unmounted. */
-.right-pane.is-collapsed {
-  display: none;
-}
-
-/* The canvas expand + collapse-panel toggles sit together, right-anchored at
-   the end of the tab bar. */
-.right-pane-corner {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--sp1);
-}
-
-/* Deploy pill in the canvas tab bar — the board dropped its subheader, so the
-   deploy status + dashboard link sit up here beside expand/collapse. */
-.right-pane-deployed {
-  flex: 0 0 auto;
-  gap: 4px;
-}
-
-/* The canvas-pane child panel must fill the slot fully. */
-:is(.right-pane-panel, .right-pane-altitude) > .canvas-pane {
-  flex: 1;
-  min-height: 0;
-}
-
-/* BOARD altitude, wrapped so it can be hidden while the project's map is on
-   screen WITHOUT unmounting — CanvasPane keeps its probe state, reload key and
-   background-task tracking across a trip up to the project and back. */
-.right-pane-altitude {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-.right-pane-altitude.is-hidden {
-  display: none;
-}
-
-/* The way back UP to the project map, at the head of the tab row. Reads as a
-   breadcrumb, not a tab: no pill, and it gives up its label before the tabs
-   give up theirs in a narrow pane. */
-.right-pane-up {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 40%;
-  padding: 3px 6px 3px 2px;
-  color: var(--text-faint);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-md);
-  font-size: var(--type-label);
-  cursor: pointer;
-}
-
-.right-pane-up:hover {
-  color: var(--text-dim);
-  background: var(--bg-hover);
-}
-
-.right-pane-up:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
-.right-pane-up-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Below the pane's own narrow breakpoint the label goes before the tabs do —
-   the glyph still says "up", and Canvas/Steps must stay readable. */
-@container rightpane (max-width: 400px) {
-  .right-pane-up-label {
-    display: none;
-  }
-}
-
 /* Scrollbars — thin thumb-only styling, matching the product's own
    (rgba(161, 161, 170, 0.75), 8px, no visible track) in both themes. */
 ::-webkit-scrollbar {
@@ -8147,11 +7889,10 @@ button.rail-footer-card:hover {
 
 /* Mobile shell (<=768px) ------------------------------------------------- */
 
-/* Below 768px the three-pane shell folds into one column: the center pane
-   owns the full viewport, the workspace rail becomes an overlay drawer and
-   the right pane a bottom sheet. Both reuse the SAME collapse state as the
-   desktop expand/collapse buttons (App.tsx defaults them to collapsed on
-   small viewports), so no second layout system exists — the breakpoint here
+/* Below 768px the shell folds into one column: the center pane owns the full
+   viewport and the workspace rail becomes an overlay drawer. It reuses the
+   SAME collapse state as the desktop expand/collapse button (App.tsx defaults
+   it to collapsed on small viewports), so no second layout system exists — the breakpoint here
    must stay in lockstep with MOBILE_SHELL_QUERY in use-pane-widths.ts. */
 
 /* Tap-to-dismiss layer behind the drawer/sheet. App only renders it on the
@@ -8194,41 +7935,18 @@ button.rail-footer-card:hover {
     box-shadow: var(--shadow-lg);
     animation: shell-drawer-in 300ms var(--ease);
   }
-
-  /* Bottom sheet: fixed over the center pane, one header height of the page
-     left visible as context. Still never unmounted (the .is-collapsed rule
-     above still applies), so a running Visualize enrichment survives
-     opening and closing it. */
-  .right-pane {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    top: var(--pane-header-h);
-    z-index: 80;
-    border-top: 1px solid var(--border-strong);
-    box-shadow: var(--shadow-lg);
-    animation: shell-sheet-in 300ms var(--ease);
-  }
 }
 
-/* Entrances only — dismissal unmounts (drawer) or display:none's (sheet)
-   the element, so there is no exit frame to animate. */
+/* Entrance only — dismissal unmounts the drawer, so there is no exit frame
+   to animate. */
 @keyframes shell-drawer-in {
   from {
     transform: translateX(-100%);
   }
 }
 
-@keyframes shell-sheet-in {
-  from {
-    transform: translateY(100%);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .rail-workflows,
-  .right-pane,
   .shell-scrim {
     animation: none;
   }
@@ -8536,7 +8254,6 @@ button.rail-footer-card:hover {
    the way back, and centres on a reading measure so a wide window does not
    stretch cards to the full monitor. */
 .app.is-browsing > .center-pane,
-.app.is-browsing > .right-pane,
 .app.is-browsing > .pane-resize-handle {
   display: none;
 }
@@ -10412,29 +10129,37 @@ button.rail-footer-card:hover {
   margin-left: auto;
 }
 
-.project-map-back {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* The agent's panel, in the step inspector's slot on the map. */
+/* The agent's panel, floating over the map's bottom-right corner (where the
+   mock's card sits), just above the zoom controls: out of flow, so picking an
+   agent never changes the board's width (design I1). */
 .map-agent-panel {
+  --map-agent-panel-bottom: calc(
+    var(--sp3, 12px) * 2 + var(--control-h-xs) + var(--sp1) * 2
+  );
+  position: absolute;
+  right: var(--sp3, 12px);
+  bottom: var(--map-agent-panel-bottom);
   z-index: 1;
   display: flex;
   flex-direction: column;
   gap: var(--sp4, 16px);
-  width: min(360px, 42%);
+  width: min(360px, calc(100% - var(--sp3, 12px) * 2));
+  max-height: calc(100% - var(--map-agent-panel-bottom) - var(--sp3, 12px));
   padding: var(--sp4, 16px);
   overflow: auto;
-  border-left: 1px solid var(--ui-line);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-md);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
 }
 
 .project-agent-grid-panel .map-agent-panel {
+  position: static;
   width: 100%;
-  border-left: none;
-  border-top: 1px solid var(--ui-line);
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .map-agent-panel-head {
@@ -10683,12 +10408,6 @@ button.rail-footer-card:hover {
   border: 1px solid var(--ui-line);
   border-radius: var(--radius-md);
   overflow: hidden;
-}
-
-/* A session with no bound agent has no right pane at all (design.md I3):
-   absent, not a closed pane with a reopen control. */
-.right-pane[data-absent] {
-  visibility: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {

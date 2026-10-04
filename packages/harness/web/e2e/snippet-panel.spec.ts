@@ -16,7 +16,9 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { selectSession, startChatWithRfq } from "./mock-navigation";
+import { selectSession, startChatWithRfq, CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0");

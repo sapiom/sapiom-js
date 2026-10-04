@@ -422,18 +422,12 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
     const researchReport = page.getByRole("button", {
       name: "ResearchReport, artifact",
     });
+    // A non-agent pick is a selection only (no inspector, flow §5); Escape
+    // clears it and leaves focus where it was.
     await researchReport.click();
-    const inspector = page.getByTestId("agent-map-inspector");
-    await expect(inspector).toContainText("Purpose");
-    await expect(inspector).toContainText("Contracts");
-    await expect(inspector).toContainText("Project agent");
-    await page.getByRole("button", { name: "Close node details" }).click();
-    await expect(inspector).toHaveCount(0);
-    await expect(researchReport).toBeFocused();
-
-    await researchReport.click();
+    await expect(researchReport).toHaveAttribute("aria-pressed", "true");
     await page.keyboard.press("Escape");
-    await expect(inspector).toHaveCount(0);
+    await expect(researchReport).toHaveAttribute("aria-pressed", "false");
     await expect(researchReport).toBeFocused();
 
     await page.getByRole("button", { name: "Zoom in" }).click();
@@ -486,10 +480,6 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
         ),
       )
       .toBe(transformedView);
-    await page.getByText("Campaign Marketing", { exact: true }).click();
-    await expect(
-      page.getByTestId("agent-map-latest-attribution"),
-    ).toContainText("Project agent");
     await expect(nodes).toHaveCount(6);
   });
 
@@ -555,9 +545,8 @@ test.describe("SAP-3148 project Agent Map navigation", () => {
       .toBe(true);
     await expect(page.getByTestId("agent-view")).toBeVisible();
     await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-    await expect(page.getByTestId("right-tab-canvas")).toContainText("Canvas");
-    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
-    await expect(page.locator(".canvas-iframe")).toBeVisible();
+    // Bound or not, nothing sits beside a session (flow 4.4.1).
+    await expect(page.locator(".right-pane")).toHaveCount(0);
     expect((await rowsOf(page, "acme-app")).sort()).toEqual([...rowsBefore].sort());
 
     await page.getByTestId("session-menu").click();

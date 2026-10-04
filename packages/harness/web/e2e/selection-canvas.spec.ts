@@ -31,10 +31,22 @@ import type { Page } from "@playwright/test";
 
 import {
   activeSessionId,
-  openAgentCanvas,
+  CANVAS_UNMOUNTED,
   selectSession,
   startChatWithAgent,
 } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
+
+/** The entered agent page these tests opened is gone (SAP-3836); the agent
+ *  modal (SAP-3838) is where they re-point. */
+const openAgentCanvas = async (
+  _page: Page,
+  _project: string,
+  _agent: string,
+): Promise<void> => {
+  throw new Error(CANVAS_UNMOUNTED);
+};
 
 /** A new chat bound to `name`, from its panel on polsia's map. */
 const chatWith = (page: Page, name: string): Promise<string> =>

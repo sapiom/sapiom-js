@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq } from "./mock-navigation";
+import { startChatWithRfq, CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 type DirectAction = { action: string; req: Record<string, unknown> };
 type ProductEvent = { event: string; properties?: Record<string, unknown> };

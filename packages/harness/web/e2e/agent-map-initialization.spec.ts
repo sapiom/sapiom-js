@@ -293,8 +293,8 @@ for (const count of [1, 10, 50, 100])
       })
       .toBe(true);
     await page.getByTestId(`agent-map-node-${id("node", 1000)}`).click();
-    await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
     const selection = page.getByTestId(`agent-map-node-${id("node", 1000)}`);
+    await expect(selection).toHaveAttribute("aria-pressed", "true");
     await viewport.hover();
     await page.mouse.wheel(0, 90);
     const before = await subject.evaluate(
@@ -348,6 +348,5 @@ for (const count of [1, 10, 50, 100])
       ),
     ).toBe(before);
     await expect(selection).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
     await page.getByRole("button", { name: "Fit Agent Map to view" }).click();
   });

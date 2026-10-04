@@ -265,18 +265,9 @@ for (const identity of ["ready", "missing-project", "older-protocol"] as const) 
       "sess-authority-polsia",
     );
     await expect(page.getByTestId("project-map-pane")).toHaveCount(0);
-    // Bound to rollup, so the right pane is that agent's Canvas/Steps.
-    await expect(page.locator(".right-pane")).not.toHaveAttribute(
-      "data-absent",
-      "true",
-    );
-    const expand = page.getByRole("button", {
-      name: "Expand canvas panel",
-      exact: true,
-    });
-    if (await expand.isVisible()) await expand.click();
-    await expect(page.getByTestId("right-panel-board")).toBeVisible();
-    await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
+    // Bound to rollup, and still nothing beside the session (flow 4.4.1).
+    await expect(page.getByTestId("agent-view")).toBeVisible();
+    await expect(page.locator(".right-pane")).toHaveCount(0);
     const after = await evidence(page);
     expect(after.actions).toEqual(before.actions);
     expect(after.legacy).toEqual([0, 0, 0]);
@@ -393,7 +384,7 @@ test("durable map ignores old graph events and opens the exact agent's panel wit
   ).toEqual(eventsBefore);
 
   const id = "node_00000000-0000-7000-8000-000000000101";
-  await page.getByTestId(`agent-map-info-${id}`).click();
+  await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000103").click();
   expect(await evidence(page)).toEqual(before);
   await page.getByTestId(`agent-map-node-${id}`).click();
   await expect(page.getByTestId("map-agent-panel")).toBeVisible();

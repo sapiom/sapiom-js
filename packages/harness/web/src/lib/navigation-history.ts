@@ -17,13 +17,12 @@ export interface ComposerVisitProject {
 /**
  * One place the user was working. Distinct from past-session "history" (ended
  * CLIs on disk): this is the visit stack behind the header's back/forward
- * chrome, and it covers every screen the shell can show — a session, a focused
- * agent, a project graph, a past-session review, the composer home, and the
+ * chrome, and it covers every screen the shell can show — a session, a
+ * project graph, a past-session review, the composer home, and the
  * template catalog.
  */
 export type NavigationVisit =
   | { kind: "session"; sessionId: string; agentPath: string | null }
-  | { kind: "agent"; agentPath: string }
   | { kind: "agent-map"; projectId: StudioProjectId }
   | {
       kind: "project";
@@ -54,8 +53,6 @@ export function sameNavigationVisit(
   if (a.kind !== b.kind) return false;
   if (a.kind === "session" && b.kind === "session")
     return a.sessionId === b.sessionId;
-  if (a.kind === "agent" && b.kind === "agent")
-    return a.agentPath === b.agentPath;
   if (a.kind === "agent-map" && b.kind === "agent-map")
     return a.projectId === b.projectId;
   if (a.kind === "project" && b.kind === "project") {

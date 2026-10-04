@@ -40,8 +40,12 @@ test("renders the saved map through a lazy local worker with measured cards/labe
   await page.getByTestId("project-select-acme-app").click();
   await expect(map(page)).toHaveAttribute("data-layout-state", "ready");
   const before = await identities(page);
-  const selected = page.locator(".agent-map-node").first();
-  await page.locator(".agent-map-node-info").first().click();
+  // A resource: a pick that selects it and resolves nothing, so its card's
+  // text (no "Opening…") is the same before and after.
+  const selected = page.getByTestId(
+    "agent-map-node-node_00000000-0000-7000-8000-000000000103",
+  );
+  await selected.click();
   // The map is the centre at full width (flow-navigation.md 4.3), so there is
   // no separate full view: folding the rail is the pane resize that remains.
   await page.getByTestId("rail-collapse").click();
@@ -51,7 +55,6 @@ test("renders the saved map through a lazy local worker with measured cards/labe
   expect(new URL(workers[0]!).origin).toBe(new URL(page.url()).origin);
   expect(workers[0]).toContain("elk-worker.min");
   await expect(selected).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
   const dimensions = await page.evaluate(() => {
     const input = (window as unknown as { layoutInput: ElkNode }).layoutInput;
     const cards = [

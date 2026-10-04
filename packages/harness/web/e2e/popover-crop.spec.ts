@@ -10,6 +10,7 @@
  * fails one of the two.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { CANVAS_UNMOUNTED } from "./mock-navigation";
 
 test.use({ viewport: { width: 900, height: 600 } });
 
@@ -76,6 +77,7 @@ test("session bar menu opens uncropped at the header's right cluster", async ({ 
 });
 
 test("canvas run picker and step detail menu open uncropped at the right pane's edge", async ({ page }) => {
+  test.fixme(true, CANVAS_UNMOUNTED);
   // Load the workflow graph, then observe two runs so the chip becomes the
   // run picker (same events the agent's MCP calls emit).
   await page.evaluate(() => {

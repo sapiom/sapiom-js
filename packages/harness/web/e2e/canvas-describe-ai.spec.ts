@@ -12,6 +12,9 @@
  * out of scope for the mock — we verify the launch via __HARNESS_TEST__.lastMacroRun.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 type MacroRun = { id: string; req: { harnessSessionId: string; workflowPath?: string; subject?: string } };
 

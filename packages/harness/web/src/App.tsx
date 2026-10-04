@@ -1,28 +1,25 @@
 /**
  * Harness SPA shell (plans/studio-navigation/flow-navigation.md, design.md).
  *
- * Three objects on screen, one mental model:
+ * Two objects on screen, one mental model:
  *  1. THE RAIL — projects, each with its sessions under it (Project ›
  *     Sessions). One click reaches any session in any project. No agents,
  *     directories or Group axis: agents live on the project's map.
  *  2. THE CENTRE — ONE thing at a time: the selected session's workbench, or
  *     the selected project's Agent Map at full width. Never the two side by
  *     side; the map sharing the width with the chat is what the requester
- *     called out as the important part of the ask.
- *  3. THE RIGHT PANE — only beside a session, and only when that session is
- *     bound to an agent: that agent's Canvas, Steps and Secrets. Closeable,
- *     and the open/closed choice is the user's alone. The canvas stays mounted
- *     behind CSS when another tab is active, or when the pane is closed, so a
- *     running Visualize enrichment is never disturbed.
+ *     called out as the important part of the ask. Nothing sits beside a
+ *     session: agent detail belongs to the project view
+ *     (flow-map-chat-overlay.md 4.4.1).
  *
  * Two values decide all of it, and they are independent on purpose:
  *
  *   The selected SESSION (`harness.activeSessionId`, persisted). Changed only
  *               by a session click, Start chat, a project's `+`, Cmd/Ctrl+N.
- *   The VIEW   (`view`, `lib/centre-pane.ts`): session, a project's map, or an
- *               agent's canvas entered from that map. A project click changes
- *               the view and leaves the selected session alone, so it stays
- *               highlighted in the rail and one click brings it back.
+ *   The VIEW   (`view`, `lib/centre-pane.ts`): session, or a project's map. A
+ *               project click changes the view and leaves the selected
+ *               session alone, so it stays highlighted in the rail and one
+ *               click brings it back.
  *
  * What the centre shows is ONE pure function of those (`centrePane`), and
  * which sessions a project lists is ONE function (`lib/rail-sessions.ts`) read
@@ -31,7 +28,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -60,10 +56,8 @@ import {
 } from "./components/ConnectivityState";
 import { McpAuthRestartNotice } from "./components/McpAuthRestartNotice";
 import { DeadSessionPane, PastSessionPane } from "./components/DeadSessionPane";
-import { EmptyState } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import { SessionBar } from "./components/SessionBar";
-import { SessionStepsBar } from "./components/SessionStepsBar";
 import { RunSheet } from "./components/RunSheet";
 import { TelemetryNotice } from "./components/TelemetryNotice";
 import { TemplatesPanel } from "./components/TemplatesPanel";
@@ -111,12 +105,8 @@ import { planProjectRemoval } from "./lib/project-membership";
 import { refuseMove } from "./lib/agent-move";
 import {
   canvasSourceFor,
-  mergeSubjectRuns,
   projectRootForAgent,
   rootContains,
-  runsForSubject,
-  selectedRunForSubject,
-  shownRunForSubject,
 } from "./lib/session-scope";
 import {
   railSessions,
@@ -126,13 +116,10 @@ import {
 } from "./lib/rail-sessions";
 import {
   centrePane,
-  hasRightPane,
   shownProjectId,
   type CentreView,
 } from "./lib/centre-pane";
 import { studioScopeForAgent } from "./lib/agent-map";
-import { inputContractFromCanvasGraph } from "./lib/run-input";
-import { agentUrl } from "./lib/urls";
 import {
   getDesktopBridge,
   type DeepLinkAgentTarget,
@@ -174,30 +161,20 @@ import {
   type NewSessionAttachment,
 } from "./lib/new-session-attachments";
 import {
-  CANVAS_MIN,
   RAIL_MIN,
   isMobileShell,
   useMobileShell,
   usePaneWidths,
 } from "./lib/use-pane-widths";
-import {
-  useHarnessState,
-  type ObservedRun,
-  type RunTarget,
-} from "./lib/use-harness-state";
+import { useHarnessState, type RunTarget } from "./lib/use-harness-state";
 import { useAgentMapEntry } from "./lib/use-agent-map-entry";
 import { agentMapLoader } from "./lib/agent-map-loader";
 import type { AgentMapWorkspaceResponse } from "@sapiom/agent-map";
 import {
-  deploymentStateLabel,
-  deploymentStateTitle,
   isWorkflowRunnable,
   prodRunBlockedToast,
   workflowDeploymentState,
 } from "./lib/workflow-deployment";
-import { SecretsPanel } from "./components/SecretsPanel";
-
-type RightTab = "canvas" | "steps" | "secrets";
 
 /**
  * The roots this install knows it has opened: the fallback answer to "where
@@ -477,7 +454,7 @@ export const App = (): JSX.Element => {
   } | null>(null);
   /**
    * WHAT THE CENTRE IS POINTED AT (design.md §1, the View slot): the selected
-   * session, a project's Agent Map, or an agent's canvas entered from that map.
+   * session, or a project's Agent Map.
    *
    * ONE slot. It replaced three that had to agree (a durable map selection, an
    * unresolved project, and a focused agent path), and every door had to clear
@@ -559,8 +536,8 @@ export const App = (): JSX.Element => {
     });
   }, [pendingProject, harness.state?.workspaceScopes]);
   const viewProjectId = view.kind === "session" ? null : view.projectId;
-  /** The centre map's full view. Its own flag, so leaving the map can never
-   *  hand an expanded frame to the right pane's canvas. */
+  /** The centre map's full view. Its own flag, so leaving the map always
+   *  lowers it. */
   const [mapExpanded, setMapExpanded] = useState(false);
   useEffect(() => {
     if (view.kind !== "project") setMapExpanded(false);
@@ -579,7 +556,7 @@ export const App = (): JSX.Element => {
   );
   const removeTriggerRef = useRef<HTMLButtonElement | null>(null);
   // "Open in Studio" deep links (sapiom://agent/<id>). The applier is a ref
-  // because it needs `state`/`openAgentCanvas`, which exist only past the loading
+  // because it needs `state`, which exists only past the loading
   // guard; the effects below reach it through the ref. The cold-start target rides
   // in on the ?agent=/?template= load-URL param; warm links come via the desktop bridge.
   const applyDeepLinkRef = useRef<((target: DeepLinkTarget) => void) | null>(
@@ -615,16 +592,6 @@ export const App = (): JSX.Element => {
       harness.showToast(errorMessage(error, "Could not start sign-in."));
     });
   }, [harness.showToast, harness.startAuth]);
-  // Right tab is part of the held arrangement: restored on reload.
-  // Guard against a stored value for a tab that no longer exists ("skills",
-  // and now "code" — its snippets moved to the deploy surface) — fall back to
-  // canvas rather than rendering nothing.
-  const [rightTab, setRightTab] = useState<RightTab>(() => {
-    const stored = loadUiPrefs().rightTab;
-    return stored === "canvas" || stored === "steps" || stored === "secrets"
-      ? stored
-      : "canvas";
-  });
   // A PAST session under review: picked from the history menu, shown
   // in the terminal slot as a review pane — resuming/starting is the pane's
   // explicit action, never a side effect of the click that got here.
@@ -741,21 +708,9 @@ export const App = (): JSX.Element => {
     if (pendingPromptsRef.current.size === 0) return;
     for (const id of [...pendingPromptsRef.current.keys()]) tryFlushPrompt(id);
   }, [harness.state?.sessions, tryFlushPrompt]);
-  // Panel collapse: the rail unmounts (no state to preserve); the right pane
-  // hides via CSS so a running Visualize enrichment survives the collapse.
+  // Panel collapse: the rail unmounts (no state to preserve).
   const [railCollapsed, setRailCollapsed] = useState(
     () => isMobileShell() || (loadUiPrefs().railCollapsed ?? false),
-  );
-  const [rightCollapsed, setRightCollapsed] = useState(
-    () => isMobileShell() || (loadUiPrefs().rightCollapsed ?? false),
-  );
-  // Right-surface full-screen expand — lifted here so its control sits next to
-  // the collapse-panel toggle in the shared tab bar. The right pane's
-  // CanvasPane lifts its own frame without remounting the graph.
-  const [canvasExpanded, setCanvasExpanded] = useState(false);
-  const toggleCanvasExpanded = useCallback(
-    () => setCanvasExpanded((value) => !value),
-    [],
   );
 
   // Back/forward across every screen the shell can show. The stack is fed by
@@ -763,79 +718,7 @@ export const App = (): JSX.Element => {
   // a new way into a view is navigable the day it lands.
   const navHistory = useNavigationHistory();
 
-  const {
-    widths,
-    canvasResizing,
-    railResizing,
-    startRailDrag,
-    startCanvasDrag,
-    resetRail,
-    resetCanvas,
-  } = usePaneWidths();
-  // The canvas slides open/shut by animating its grid column to/from 0 (the
-  // transition is always-on in refine.css). During that slide the pane's content
-  // must NOT reflow (squish) with the moving column — so a ResizeObserver keeps a
-  // --rp-w custom property equal to the pane's settled EXPANDED width, and while
-  // `paneSliding` is set the content is pinned to --rp-w and right-aligned, so a
-  // shrinking column CLIPS it from the left (a drawer slide) rather than squeezing
-  // it, and a growing one REVEALS it the same way. Once the slide ends the pin
-  // drops: the collapsed pane's content truly goes to zero (reads as hidden), and
-  // an expanded pane's content tracks the column again (window resize / drag).
-  // --rp-w is frozen for the length of a slide so it holds the pre-slide width in
-  // both directions.
-  const [paneSliding, setPaneSliding] = useState(false);
-  const rightCollapsedRef = useRef(false);
-  const paneSlidingRef = useRef(false);
-  const paneElRef = useRef<HTMLDivElement | null>(null);
-  const rightPaneTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const paneObserverRef = useRef<ResizeObserver | null>(null);
-  const captureExpandedWidth = useCallback(
-    (el: HTMLDivElement | null): void => {
-      if (el && !rightCollapsedRef.current)
-        el.style.setProperty("--rp-w", `${el.offsetWidth}px`);
-    },
-    [],
-  );
-  const setRightPaneEl = useCallback(
-    (el: HTMLDivElement | null) => {
-      paneObserverRef.current?.disconnect();
-      paneElRef.current = el;
-      if (!el) {
-        paneObserverRef.current = null;
-        return;
-      }
-      // Track the expanded width on live resizes (window, rail drag), but NOT
-      // mid-slide — the guard freezes --rp-w so the content clips at the pre-slide
-      // width. A slide's own resizes are therefore skipped, which is why the
-      // slide-end effect below re-captures the settled width.
-      const observer = new ResizeObserver(() => {
-        if (!paneSlidingRef.current) captureExpandedWidth(el);
-      });
-      observer.observe(el);
-      paneObserverRef.current = observer;
-    },
-    [captureExpandedWidth],
-  );
-  rightCollapsedRef.current = rightCollapsed;
-  paneSlidingRef.current = paneSliding;
-
-  // Mark the slide as in flight whenever the collapse state flips, so refine.css
-  // pins the content (via .canvas-sliding) for the transition's length. Only the
-  // collapse/expand toggle animates; a resize-handle drag/reset (no collapse flip)
-  // stays instant. ~260ms covers the 0.22s transition plus a small buffer; when it
-  // clears we re-capture the settled EXPANDED width into --rp-w (the observer
-  // skipped the slide's own resizes, and after an expand settles there is no
-  // further resize to trigger one) so the NEXT collapse pins to the right width.
-  useLayoutEffect(() => {
-    if (isMobile) return;
-    setPaneSliding(true);
-    const timer = window.setTimeout(() => {
-      setPaneSliding(false);
-      captureExpandedWidth(paneElRef.current);
-    }, 260);
-    return () => window.clearTimeout(timer);
-  }, [rightCollapsed, isMobile, captureExpandedWidth]);
-
+  const { widths, railResizing, startRailDrag, resetRail } = usePaneWidths();
   // Cmd+K (any platform) or Cmd/Ctrl+P — "jump to" like Cmd+P in Cursor/VS Code.
   // Cmd/Ctrl+1..9 selects the Nth session of the SELECTED project in rail
   // order (flow-navigation.md Q2): the project whose map is showing, else the
@@ -846,29 +729,6 @@ export const App = (): JSX.Element => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       const key = e.key.toLowerCase();
-      if (key === "escape" && isMobile && !rightCollapsed) {
-        // The nearest open layer owns Escape. Dismissable menus/dialogs mark
-        // the event handled at document; App-owned overlays are guarded by
-        // state so their own focus restoration wins over the sheet trigger.
-        if (
-          e.defaultPrevented ||
-          paletteOpen ||
-          settingsOpen ||
-          templatesOpen ||
-          overviewOpen ||
-          document.querySelector(
-            '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"]',
-          )
-        ) {
-          return;
-        }
-        e.preventDefault();
-        setRightCollapsed(true);
-        window.requestAnimationFrame(() =>
-          rightPaneTriggerRef.current?.focus(),
-        );
-        return;
-      }
       if ((e.metaKey || e.ctrlKey) && (key === "k" || key === "p")) {
         // A LAYER ON TOP SWALLOWS THE SHORTCUT. Unguarded, ⌘K stacked the
         // palette over an open dialog and native Tab then walked out of the
@@ -915,12 +775,6 @@ export const App = (): JSX.Element => {
     hiddenSessionIds,
     pendingBindIds,
     viewProjectId,
-    isMobile,
-    rightCollapsed,
-    paletteOpen,
-    settingsOpen,
-    templatesOpen,
-    overviewOpen,
   ]);
 
   // Opening the palette loads history for the same directories the rail's
@@ -971,7 +825,6 @@ export const App = (): JSX.Element => {
       // Reviewing a finished session (active session has exited) is the observe
       // arc — without this the dead-session view falls through to `unknown`.
       inspectingDeadSession: active?.status === "exited",
-      rightTab,
     };
     registerViewContext(view);
     // Which coding agent is on screen, as a super-property, so an autocaptured
@@ -980,25 +833,21 @@ export const App = (): JSX.Element => {
     // after it was unattributable. Null when nothing is active, rather than
     // leaving the last session's agent stamped on an empty workbench.
     syncHarnessKind(active?.harness ?? null);
-  }, [st, harness.activeSessionId, settingsOpen, templatesOpen, rightTab]);
+  }, [st, harness.activeSessionId, settingsOpen, templatesOpen]);
 
-  // Crossing the breakpoint resets both panes to that mode's default.
+  // Crossing the breakpoint resets the rail to that mode's default.
   const prevMobile = useRef(isMobile);
   useEffect(() => {
     if (prevMobile.current === isMobile) return;
     prevMobile.current = isMobile;
     setRailCollapsed(isMobile);
-    setRightCollapsed(isMobile);
   }, [isMobile]);
 
-  // Persist the arrangement. Mobile's forced-collapsed defaults are
-  // mode behavior, not a user choice.
+  // Persist the arrangement. Mobile's forced-collapsed default is mode
+  // behavior, not a user choice.
   useEffect(() => {
-    if (!isMobile) saveUiPrefs({ railCollapsed, rightCollapsed });
-  }, [railCollapsed, rightCollapsed, isMobile]);
-  useEffect(() => {
-    saveUiPrefs({ rightTab });
-  }, [rightTab]);
+    if (!isMobile) saveUiPrefs({ railCollapsed });
+  }, [railCollapsed, isMobile]);
 
   // The place the shell is showing, in the same precedence `centrePane` uses.
   // It is derived rather than pushed at each door so every screen is
@@ -1023,8 +872,6 @@ export const App = (): JSX.Element => {
       recordVisit({ kind: "composer", project: composerProject });
     } else if (view.kind === "project") {
       recordVisit({ kind: "agent-map", projectId: view.projectId });
-    } else if (view.kind === "agent") {
-      recordVisit({ kind: "agent", agentPath: view.path });
     } else if (activeSessionIdForNav) {
       recordVisit({
         kind: "session",
@@ -1079,13 +926,6 @@ export const App = (): JSX.Element => {
           (scope) => scope.workspaceKey === visit.workspaceKey,
         )?.projectId;
         setView(projectId ? { kind: "project", projectId } : { kind: "session" });
-      } else if (visit.kind === "agent") {
-        const projectId = projectIdForAgent(visit.agentPath, harness.state);
-        setView(
-          projectId
-            ? { kind: "agent", projectId, path: visit.agentPath }
-            : { kind: "session" },
-        );
       } else {
         setView({ kind: "session" });
         if (visit.kind === "session") setActiveSessionId(visit.sessionId);
@@ -1163,9 +1003,8 @@ export const App = (): JSX.Element => {
   }, [harness.loading]);
 
   // After a deep-link clone lands, the workspace rescan surfaces the agent with a
-  // matching definitionId — bind the cloning session to it then, closing the
-  // "clone → display" loop in the right pane without moving the centre off
-  // the chat that is doing the clone.
+  // matching definitionId — bind the cloning session to it then, without
+  // moving the centre off the chat that is doing the clone.
   useEffect(() => {
     const wantId = pendingCloneFocusRef.current;
     if (wantId && bindClonedRef.current?.(wantId)) {
@@ -1257,87 +1096,6 @@ export const App = (): JSX.Element => {
   const showDead = centre.kind === "dead";
   const showWorkbench = centre.kind === "workbench";
   const conversationSession = showDead || showWorkbench ? activeSession : null;
-  const mapAgent =
-    centre.kind === "agent-canvas"
-      ? (state.workflows.find((workflow) =>
-          samePath(workflow.path, centre.path),
-        ) ?? null)
-      : null;
-  /**
-   * The right pane EXISTS only beside a session bound to an agent (I3), and is
-   * then about that agent. Absent is not collapsed: `rightCollapsed` is the
-   * user's open/closed choice, and nothing here writes it, so it survives an
-   * unbound session for the next bound one.
-   */
-  const rightPaneExists = hasRightPane(centre, boundWorkflow != null);
-  const rightPaneWorkflow = rightPaneExists ? boundWorkflow : null;
-  const rightPaneShown = rightPaneExists && !rightCollapsed;
-  const shownTab: RightTab = rightTab;
-  /** Which of the two canvas entry points can serve that agent's board. */
-  const canvasSource = canvasSourceFor({
-    subjectPath: rightPaneWorkflow?.path ?? null,
-    bindingPath: boundWorkflowPath,
-    sessionId: harness.activeSessionId,
-  });
-  const expandRightPane = (): void => {
-    setRightCollapsed(false);
-  };
-  const collapseRightPane = (): void => {
-    setRightCollapsed(true);
-    if (isMobile) {
-      window.requestAnimationFrame(() => rightPaneTriggerRef.current?.focus());
-    }
-  };
-  const rightPaneDeploymentState = rightPaneWorkflow
-    ? workflowDeploymentState(
-        rightPaneWorkflow,
-        harness.lastDeployErrorFor(rightPaneWorkflow.path),
-      )
-    : null;
-  /**
-   * Run evidence for the right pane's agent (SAP-2931): what the ACTIVE
-   * session announced, plus what any OTHER live session announced for this
-   * same agent and this one never heard, both through `mergeSubjectRuns` and
-   * its window, so the picker never offers more runs than the client retains.
-   */
-  const subjectPath = rightPaneWorkflow?.path ?? null;
-  const activeRunIds = harness.activeSessionId
-    ? (harness.runIdsBySession.get(harness.activeSessionId) ?? [])
-    : [];
-  const activeSessionAnnounced: ObservedRun[] = activeRunIds
-    .map((executionId) => harness.runsByExecution.get(executionId))
-    .filter((observed): observed is ObservedRun => observed !== undefined);
-  // Everything any other session announced, oldest first by observation time —
-  // the same tail-is-newest convention the per-session lists use, so the
-  // window keeps the same end whichever source a run came from.
-  const announcedElsewhere: ObservedRun[] = [
-    ...harness.runsByExecution.values(),
-  ]
-    .filter((observed) => !activeRunIds.includes(observed.run.executionId))
-    .sort((a, b) => a.observedAt - b.observedAt);
-  const activeSessionRuns: ObservedRun[] = mergeSubjectRuns(
-    runsForSubject(activeSessionAnnounced, subjectPath),
-    runsForSubject(announcedElsewhere, subjectPath),
-  );
-  // The shown run: the active session's own pick while it still belongs to this
-  // agent, else the agent's newest.
-  const activeObservedRun = shownRunForSubject(
-    activeSessionRuns,
-    selectedRunForSubject(
-      activeSessionRuns,
-      harness.activeSessionId
-        ? (harness.runsBySession.get(harness.activeSessionId) ?? null)
-        : null,
-      subjectPath,
-    ),
-  );
-  // The action button's honest "running" signal: tied to the SHOWN run's real
-  // status, not the brief `directActionSettleSeq` pending ring (which clears at
-  // hand-off). null unless the visible run is still running.
-  const runningTarget: RunTarget | null =
-    activeObservedRun?.run.status === "running"
-      ? activeObservedRun.target
-      : null;
   /** The session the header names: only when its workbench or dead pane is
    *  the centre. A project view's header names the project instead. */
   const sessionBarSession = conversationSession;
@@ -1360,7 +1118,7 @@ export const App = (): JSX.Element => {
 
   /**
    * A PROJECT HEADER (flow-navigation.md 4.3): its Agent Map takes the centre
-   * at full width, with no chat and no right pane. The selected session is NOT
+   * at full width, with no chat beside it. The selected session is NOT
    * touched (design.md I5): it stays highlighted in the rail and one click
    * brings it back, so a project click never ends, hides or swaps work.
    */
@@ -1437,21 +1195,6 @@ export const App = (): JSX.Element => {
   };
 
   selectProjectRef.current = handleSelectProject;
-
-  /** Back to the project's map from an agent's canvas entered on it. */
-  const backToMap = (projectId: string): void => {
-    navGenerationRef.current += 1;
-    setView({ kind: "project", projectId });
-  };
-
-  /** Double click on the map, or Open canvas: the agent's canvas in the same
-   *  centre, with the way back in the header (flow 4.4). */
-  const openAgentCanvas = (projectId: string, path: string): void => {
-    navGenerationRef.current += 1;
-    leaveDestinations();
-    closeMobileDrawer();
-    setView({ kind: "agent", projectId, path });
-  };
 
   /**
    * The ONE answer to "where does a session for this agent boot" (SAP-2927):
@@ -1530,8 +1273,7 @@ export const App = (): JSX.Element => {
   /**
    * NEW CHAT FROM THE RAIL (flow 4.5, Q11): a project header's `+` starts a
    * session at the project ROOT, unbound, and selects it. Unbound on purpose:
-   * the `+` names a project, not an agent, so the right pane stays absent until
-   * the session binds to one (Q5).
+   * the `+` names a project, not an agent (Q5).
    */
   const handleNewChat = (project: RailProject): void => {
     void createSessionAt(project.root, selectedHarness).catch((err: unknown) => {
@@ -1605,11 +1347,6 @@ export const App = (): JSX.Element => {
       setMapPanelPath((current) =>
         current && samePath(current, from) ? to : current,
       );
-      setView((current) =>
-        current.kind === "agent" && samePath(current.path, from)
-          ? { ...current, path: to }
-          : current,
-      );
       harness.showToast(`Moved ${basenameOf(to)} to ${to}.`, "info");
     } catch (err) {
       harness.showToast(errorMessage(err, `Couldn't move ${basenameOf(from)}.`));
@@ -1659,8 +1396,6 @@ export const App = (): JSX.Element => {
     shownProject && shownScope
       ? {
           label: projectLabelOf(shownProject),
-          agentName: centre.kind === "agent-canvas" ? (mapAgent?.name ?? basenameOf(centre.path)) : null,
-          onBackToMap: () => backToMap(shownProject),
           onNewAgent: () =>
             handleCreateAgentInProject(shownScope.cwd, projectLabelOf(shownProject)),
           onExpandMap:
@@ -1694,7 +1429,6 @@ export const App = (): JSX.Element => {
         onOpenSession={openSession}
         onStartChat={() => handleStartChat(agent, projectId)}
         startChatPending={startChatPending}
-        onEnterCanvas={() => openAgentCanvas(projectId, agent.path)}
         onChangeLocation={(to) => void handleMoveAgent(agent.path, to)}
         validateLocation={(to) => locationRefusal(agent.path, to)}
         onClose={() => setMapPanelPath(null)}
@@ -1753,9 +1487,8 @@ export const App = (): JSX.Element => {
    *
    * One screen, every entrance: New project after its folder step, the map
    * header's New agent, an empty project's name (D36), and template Use. The
-   * project is stated on the screen, never chosen there. No right pane: there
-   * is nothing to project until submit. Its Back returns to the session it was
-   * opened over, never to a map the screen replaced.
+   * project is stated on the screen, never chosen there. Its Back returns to
+   * the session it was opened over, never to a map the screen replaced.
    */
   const composeInProject = (project: ComposerProject): void => {
     navGenerationRef.current += 1;
@@ -2062,21 +1795,26 @@ export const App = (): JSX.Element => {
   };
 
 
-  // Open a deep-linked agent if the user has it locally: its canvas, in the
-  // centre of its project; returns whether it was found. Assigned here (not in
-  // an effect) because it closes over `state`, which exists only past the
-  // loading guard — the deep-link effects above reach it through the ref.
+  // Open a deep-linked agent if the user has it locally: its project's map
+  // with the agent's panel open; returns whether it was found. Assigned here
+  // (not in an effect) because it closes over `state`, which exists only past
+  // the loading guard — the deep-link effects above reach it through the ref.
   focusExistingRef.current = (definitionId: string): boolean => {
     const match = state.workflows.find(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
     );
     if (!match) return false;
     const projectId = projectIdForAgent(match.path, state);
-    if (projectId) openAgentCanvas(projectId, match.path);
+    if (projectId) {
+      navGenerationRef.current += 1;
+      leaveDestinations();
+      closeMobileDrawer();
+      setMapPanelPath(match.path);
+      setView({ kind: "project", projectId });
+    }
     return true;
   };
-  // A cloned agent has landed: bind the session that cloned it, so its board
-  // is in the right pane beside the chat that made it.
+  // A cloned agent has landed: bind the session that cloned it.
   bindClonedRef.current = (definitionId: string): boolean => {
     const match = state.workflows.find(
       (w) => w.definitionId != null && String(w.definitionId) === definitionId,
@@ -2212,20 +1950,6 @@ export const App = (): JSX.Element => {
       // gated (require a workflow / a deploy), so a missing prerequisite here is
       // a no-op, never a silent revert to the Claude Code path.
       const direct = directActionKind(macro.id);
-      // Reveal + focus the Steps pane the instant an action will actually run,
-      // BEFORE the (possibly slow) bind round-trip, so the run/deploy lands in a
-      // view the user is already looking at. Gated so a click that will only
-      // toast (prod-run with no ready build; run/deploy with no workflow) never
-      // yanks the view. Matches the dispatch guards below exactly.
-      const willActNow =
-        ((direct === "deploy" || direct === "run-local") && workflow != null) ||
-        (direct === "prod-run" &&
-          workflow?.definitionId != null &&
-          isWorkflowRunnable(workflow));
-      if (willActNow) {
-        setRightTab("steps");
-        setRightCollapsed(false);
-      }
       let sessionId = harness.activeSessionId;
       if (workflow)
         sessionId = (await handleBindWorkflow(workflow.path)) ?? sessionId;
@@ -2282,11 +2006,9 @@ export const App = (): JSX.Element => {
   const handleLaunchRun = (input: unknown): void => {
     const request = runRequest;
     if (!request) return;
-    // The launch surface closes immediately and the execution becomes the
-    // Steps pane's subject while binding / network work continues.
+    // The launch surface closes immediately while binding / network work
+    // continues.
     setRunRequest(null);
-    setRightTab("steps");
-    setRightCollapsed(false);
     void (async () => {
       const sessionId =
         (await handleBindWorkflow(request.workflow.path)) ??
@@ -2328,6 +2050,53 @@ export const App = (): JSX.Element => {
       });
     })();
   };
+
+  /**
+   * ONE AGENT'S CANVAS, by path: served by the workflow-keyed route (IA-01),
+   * so no session is bound or started to draw it. Unmounted since the entered
+   * agent page was removed (flow-map-chat-overlay.md §5); the agent modal
+   * mounts it (design-map-chat.md §4.3, P4.2a), and a launched child agent
+   * opens in the same modal through `onOpenWorkflow`.
+   */
+  const renderAgentCanvas = (
+    agent: WorkflowInfo,
+    onOpenWorkflow: (path: string) => void,
+  ): JSX.Element => (
+    <CanvasPane
+      key={`agent:${agent.path}`}
+      sessionId={null}
+      lastMessage={harness.lastMessage}
+      subjectWorkflow={agent}
+      source={canvasSourceFor({
+        subjectPath: agent.path,
+        bindingPath: null,
+        sessionId: null,
+      })}
+      loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
+      overviewActive={false}
+      sessionExited={false}
+      expanded={false}
+      onToggleExpanded={() => {}}
+      macros={state.macros}
+      tasks={harness.tasks}
+      surface="board"
+      onOpenSteps={() => {}}
+      run={null}
+      runTarget={null}
+      runs={[]}
+      onSelectRun={() => {}}
+      preview={null}
+      deployState={harness.deployStateByPath.get(agent.path) ?? null}
+      onDismissDeploy={() => harness.dismissDeployState(agent.path)}
+      agentsBaseUrl={state.agentsBaseUrl}
+      onOpenCode={() => {}}
+      workflows={state.workflows}
+      onOpenWorkflow={onOpenWorkflow}
+      onRunMacro={(macro) => handleRunMacroForWorkflow(agent, macro)}
+      onInjectPrompt={() => {}}
+      onDescribeWorkflow={handleDescribeWithAI}
+    />
+  );
 
   return (
     <div className="app-shell" data-rail-collapsed={railCollapsed || undefined}>
@@ -2444,7 +2213,7 @@ export const App = (): JSX.Element => {
         </div>
       )}
 
-      {!railCollapsed && !isMobile && !canvasExpanded && (
+      {!railCollapsed && !isMobile && (
         <div
           className="pane-resize-handle pane-resize-handle-rail"
           style={{ left: widths.rail }}
@@ -2480,52 +2249,14 @@ export const App = (): JSX.Element => {
             // Templates AND the Overview are both full-width destinations that
             // stand in for the workbench — `.is-browsing` hides the panes for
             // either.
-            (templatesOpen ? " is-browsing" : "") +
-            // The workbench animates the canvas column open/closed (see
-            // .app.canvas-animated). Off while browsing, on mobile, and where
-            // there is no right pane, where the single-column switch should be
-            // instant.
-            (!templatesOpen && !isMobile && rightPaneExists
-              ? " canvas-animated"
-              : "") +
-            // Present only DURING an open/close slide: it pins the pane content
-            // to its expanded width so it CLIPS instead of squishing. Dropped
-            // when settled, so a collapsed pane's content truly goes to zero.
-            (paneSliding ? " canvas-sliding" : "") +
-            // A resize-handle drag or double-click reset suppresses the open/close
-            // ease, so the pane snaps to the cursor / equal split instead of
-            // lagging the always-on transition by 0.22s.
-            (canvasResizing ? " canvas-dragging" : "")
+            (templatesOpen ? " is-browsing" : "")
           }
-          style={{
-            gridTemplateColumns:
-              // Browsing, the project's map, the composer and an unbound
-              // session take the whole width: only a session bound to an agent
-              // has a right pane (design.md I3).
-              templatesOpen || isMobile || !rightPaneExists
-                ? "minmax(0, 1fr)"
-                : // Two tracks always, so the canvas column can animate to 0 on
-                  // collapse — the pane (and its left-edge shadow) slides shut,
-                  // and back open, instead of blinking via display:none.
-                  `minmax(${CANVAS_MIN}px, 1fr) ${
-                    rightCollapsed
-                      ? widths.canvas == null
-                        ? "0fr"
-                        : "0px"
-                      : widths.canvas == null
-                        ? "1fr"
-                        : // Clamp the pinned width to what the shell can hold
-                          // (the terminal keeps its floor), so a width saved on a
-                          // wide monitor doesn't overflow a narrower window.
-                          `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`
-                  }`,
-          }}
+          style={{ gridTemplateColumns: "minmax(0, 1fr)" }}
         >
           {/* Templates is a DESTINATION, not a session sub-view: it stands in
               for the workbench rather than sitting inside it, and brings its own
               header with the way back. Added as a sibling, with `.is-browsing`
-              hiding the panes in CSS — the right pane must never unmount, since
-              a running Visualize enrichment lives there. */}
+              hiding the centre pane in CSS. */}
           {templatesOpen && (
             <TemplatesPanel
               onExit={() => setTemplatesOpen(false)}
@@ -2562,55 +2293,7 @@ export const App = (): JSX.Element => {
               onExpandRail={
                 railCollapsed ? () => setRailCollapsed(false) : null
               }
-              onExpandRight={
-                rightPaneExists && rightCollapsed ? expandRightPane : null
-              }
-              expandRightLabel="Expand canvas panel"
-              expandRightRef={rightPaneTriggerRef}
               projectView={projectViewHeader}
-              /* The agent action cluster. Its subject AND its gating are the
-                 right pane's agent — the session's bound agent — so the verbs
-                 and the board can never disagree about what they act on
-                 (SAP-2931). Only beside a session: the project view has no
-                 session to run them in. */
-              actions={
-                rightPaneWorkflow ? (
-                  <SessionStepsBar
-                    workflow={rightPaneWorkflow}
-                    activeSessionId={
-                      showWorkbench ? harness.activeSessionId : null
-                    }
-                    sessionReady={
-                      showWorkbench &&
-                      activeSession?.ready === true &&
-                      activeSession.status !== "exited"
-                    }
-                    macros={state.macros}
-                    onRunMacro={(macro) =>
-                      handleRunMacroForWorkflow(rightPaneWorkflow, macro)
-                    }
-                    onRequestRun={(target, returnFocus) =>
-                      setRunRequest({
-                        workflow: rightPaneWorkflow,
-                        target,
-                        returnFocus,
-                      })
-                    }
-                    preview={
-                      showWorkbench && activeSession
-                        ? (harness.previewBySession.get(activeSession.id) ??
-                          null)
-                        : null
-                    }
-                    lastDeployError={harness.lastDeployErrorFor(
-                      rightPaneWorkflow.path,
-                    )}
-                    authenticated={state.authenticated}
-                    directActionSettleSeq={harness.directActionSettleSeq}
-                    runningTarget={runningTarget}
-                  />
-                ) : null
-              }
             />
 
             {sessionBarSession &&
@@ -2674,13 +2357,11 @@ export const App = (): JSX.Element => {
                 />
               ) : centre.kind === "project-map" ? (
                 /* THE PROJECT VIEW (flow-navigation.md 4.3): the project's
-                   Agent Map at full centre width, no chat, no right pane.
-                   Click an agent for its panel in place (4.4); double click,
-                   or the panel's Open canvas, enters the agent's canvas in
-                   this same centre. Keyed by project, so switching projects
-                   is a fresh load rather than a mutation of the one on
-                   screen. */
-                <ProjectView showing="map">
+                   Agent Map at full centre width, nothing beside it. Click an
+                   agent for its panel, floating over the map (4.4). Keyed by
+                   project, so switching projects is a fresh load rather than
+                   a mutation of the one on screen. */
+                <ProjectView>
                   {mapMode?.kind === "map" ? (
                     <AgentMapPane
                       key={`${centre.projectId}:${harness.authRevision}`}
@@ -2690,9 +2371,6 @@ export const App = (): JSX.Element => {
                       workflows={state.workflows}
                       refreshWorkflows={harness.refreshWorkflows}
                       onPickAgent={(workflow) => setMapPanelPath(workflow.path)}
-                      onEnterAgent={(workflow) =>
-                        openAgentCanvas(centre.projectId, workflow.path)
-                      }
                       agentPanel={renderAgentPanel(centre.projectId)}
                       state={agentMapEntry.state.workspace}
                       unavailable={agentMapEntry.state.unavailable}
@@ -2714,69 +2392,7 @@ export const App = (): JSX.Element => {
                       }
                       selectedPath={mapPanelPath}
                       onPick={(agent) => setMapPanelPath(agent.path)}
-                      onEnter={(agent) =>
-                        openAgentCanvas(centre.projectId, agent.path)
-                      }
                       panel={renderAgentPanel(centre.projectId)}
-                    />
-                  )}
-                </ProjectView>
-              ) : centre.kind === "agent-canvas" ? (
-                <ProjectView showing="agent">
-                  {mapAgent ? (
-                    /* The agent's own canvas, entered from the map. Served by
-                       the workflow-keyed route (IA-01): it is a look at the
-                       agent, not at a session, so no session is bound or
-                       started for it. */
-                    <CanvasPane
-                      key={`agent:${mapAgent.path}`}
-                      sessionId={null}
-                      lastMessage={harness.lastMessage}
-                      subjectWorkflow={mapAgent}
-                      source={canvasSourceFor({
-                        subjectPath: mapAgent.path,
-                        bindingPath: null,
-                        sessionId: null,
-                      })}
-                      loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
-                      overviewActive={false}
-                      sessionExited={false}
-                      expanded={false}
-                      onToggleExpanded={() => {}}
-                      macros={state.macros}
-                      tasks={harness.tasks}
-                      surface="board"
-                      onOpenSteps={() => {}}
-                      run={null}
-                      runTarget={null}
-                      runs={[]}
-                      onSelectRun={() => {}}
-                      preview={null}
-                      deployState={
-                        harness.deployStateByPath.get(mapAgent.path) ?? null
-                      }
-                      onDismissDeploy={() =>
-                        harness.dismissDeployState(mapAgent.path)
-                      }
-                      agentsBaseUrl={state.agentsBaseUrl}
-                      onOpenCode={() => {}}
-                      workflows={state.workflows}
-                      onOpenWorkflow={(path) =>
-                        openAgentCanvas(centre.projectId, path)
-                      }
-                      onRunMacro={(macro) =>
-                        handleRunMacroForWorkflow(mapAgent, macro)
-                      }
-                      onInjectPrompt={() => {}}
-                      onDescribeWorkflow={handleDescribeWithAI}
-                    />
-                  ) : (
-                    <EmptyState
-                      className="canvas-empty"
-                      testId="project-agent-missing"
-                      icon="Folder"
-                      title="This agent is no longer here"
-                      body="It moved or was removed. Go back to the map to see the project's agents."
                     />
                   )}
                 </ProjectView>
@@ -2887,264 +2503,6 @@ export const App = (): JSX.Element => {
               )}
             </div>
           </div>
-
-          {rightPaneShown && !isMobile && !canvasExpanded && (
-            <div
-              className="pane-resize-handle pane-resize-handle-canvas"
-              // Track the canvas column's ACTUAL edge, not the requested width.
-              // The column track is clamped to `100% − CANVAS_MIN` (the
-              // terminal's floor), so the handle uses the same expression to
-              // stay welded to the board's edge at every width. (null = the
-              // 1fr/1fr split, always at 50%.)
-              style={{
-                right:
-                  widths.canvas == null
-                    ? "50%"
-                    : `min(${widths.canvas}px, calc(100% - ${CANVAS_MIN}px))`,
-              }}
-              onPointerDown={startCanvasDrag}
-              onDoubleClick={resetCanvas}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize canvas pane"
-              data-testid="resize-handle-canvas"
-            />
-          )}
-
-          {isMobile && rightPaneShown && (
-            <div
-              className="shell-scrim"
-              data-testid="right-sheet-scrim"
-              aria-hidden="true"
-              onClick={collapseRightPane}
-            />
-          )}
-
-          {/* Right pane: the session's bound agent — Canvas | Steps | Secrets
-              (flow-navigation.md 4.2.2, Q5). No Agent Map tab: the map is the
-              project view's centre (design.md I4). Collapsed or absent via CSS,
-              never unmounted, so a running Visualize enrichment survives both.
-              `data-absent` marks a session with no agent, which has no pane at
-              all rather than a closed one. */}
-          <div
-            ref={setRightPaneEl}
-            className={
-              "right-pane" + (rightPaneShown ? "" : " is-collapsed")
-            }
-            data-testid="right-pane"
-            data-absent={!rightPaneExists || undefined}
-            inert={!rightPaneShown ? true : undefined}
-          >
-            <div
-              className="right-pane-tabs"
-              role="tablist"
-              aria-label="Right pane"
-            >
-              <button
-                role="tab"
-                aria-selected={shownTab === "canvas"}
-                className={
-                  "right-pane-tab" + (shownTab === "canvas" ? " is-active" : "")
-                }
-                onClick={() => setRightTab("canvas")}
-                data-testid="right-tab-canvas"
-              >
-                <Icon name="Workflow" size={14} />
-                Canvas
-              </button>
-              <button
-                role="tab"
-                aria-selected={shownTab === "steps"}
-                className={
-                  "right-pane-tab" + (shownTab === "steps" ? " is-active" : "")
-                }
-                onClick={() => setRightTab("steps")}
-                data-testid="right-tab-steps"
-              >
-                <Icon name="List" size={14} />
-                Steps
-              </button>
-              {/* The environment an agent resolves is a projection of that
-                  agent, exactly like its structure (Canvas) and its steps — so
-                  it earns a tab rather than a nested screen. */}
-              <button
-                role="tab"
-                aria-selected={shownTab === "secrets"}
-                className={
-                  "right-pane-tab" +
-                  (shownTab === "secrets" ? " is-active" : "")
-                }
-                onClick={() => setRightTab("secrets")}
-                data-testid="right-tab-secrets"
-              >
-                <Icon name="Shield" size={14} />
-                Secrets
-              </button>
-              <div className="right-pane-corner">
-                {/* Cloud-status pill → dashboard. The board has no subheader,
-                    so the link/build state lives here in the tab bar. */}
-                {shownTab === "canvas" &&
-                  rightPaneWorkflow?.definitionId != null &&
-                  rightPaneDeploymentState === "unavailable" && (
-                    /* Not a link: this account can't open that dashboard page. */
-                    <span
-                      className="status-tag right-pane-deployed"
-                      data-testid="agent-unavailable-tag"
-                      data-deployment-state="unavailable"
-                      data-tooltip={deploymentStateTitle("unavailable")}
-                    >
-                      <Icon name="CloudOff" size={12} />
-                      {deploymentStateLabel("unavailable")}
-                    </span>
-                  )}
-                {shownTab === "canvas" &&
-                  rightPaneWorkflow?.definitionId != null &&
-                  rightPaneDeploymentState !== "unavailable" && (
-                    <a
-                      className="status-tag status-tag-action workflow-deployed-tag right-pane-deployed"
-                      data-testid="workflow-dashboard-link"
-                      data-deployment-state={
-                        rightPaneDeploymentState ?? undefined
-                      }
-                      href={agentUrl(rightPaneWorkflow.definitionId)}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={`${rightPaneDeploymentState} — open in the Sapiom dashboard`}
-                      data-tooltip="Open this agent in the Sapiom dashboard"
-                    >
-                      <Icon name="Cloud" size={12} />
-                      {deploymentStateLabel(
-                        rightPaneDeploymentState ?? "linked",
-                      )}
-                    </a>
-                  )}
-                {/* Only with a pane to expand: the project view's header
-                    carries the map's own full view under the same testid. */}
-                {rightPaneExists && (
-                  <button
-                    className="theme-toggle"
-                    data-testid="canvas-expand"
-                    hidden={canvasExpanded}
-                    aria-label={
-                      shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
-                    }
-                    title={
-                      shownTab === "steps" ? "Open Focus mode" : "Expand canvas"
-                    }
-                    onClick={toggleCanvasExpanded}
-                  >
-                    <Icon name="Maximize2" size={15} />
-                  </button>
-                )}
-                <button
-                  className="theme-toggle right-pane-collapse"
-                  data-testid="right-collapse"
-                  aria-label="Collapse canvas panel"
-                  title="Collapse canvas panel"
-                  onClick={collapseRightPane}
-                >
-                  <Icon name="PanelRightClose" size={15} />
-                </button>
-              </div>
-            </div>
-
-            {/* Secrets is a SIBLING panel, not a mode on the board: it reads a
-                different source entirely (the vault + this machine's pending
-                store) and shares no state with the canvas. Mounted only while
-                selected — unlike the board, it holds no probe state or reload
-                key worth preserving, and keeping a credential list mounted
-                behind another tab buys nothing. */}
-            {shownTab === "secrets" && (
-              <div
-                className="right-pane-panel"
-                data-testid="right-panel-secrets"
-              >
-                <SecretsPanel
-                  api={harness.api}
-                  workflow={rightPaneWorkflow}
-                  onToast={harness.showToast}
-                />
-              </div>
-            )}
-            <div
-              className={
-                "right-pane-panel" +
-                (shownTab === "secrets" ? " is-hidden" : "")
-              }
-              data-testid="right-panel-canvas"
-            >
-              <div className="right-pane-altitude" data-testid="right-panel-board">
-                <CanvasPane
-                  sessionId={harness.activeSessionId}
-                  lastMessage={harness.lastMessage}
-                  subjectWorkflow={rightPaneWorkflow}
-                  source={canvasSource}
-                  loadWorkflowGraph={shellApi.getWorkflowGraph.bind(shellApi)}
-                  overviewActive={!rightPaneExists}
-                  sessionExited={showDead}
-                  onGraphChange={(workflowPath, graph) => {
-                    const contract = inputContractFromCanvasGraph(graph);
-                    if (contract)
-                      visibleInputContractsRef.current.set(
-                        workflowPath,
-                        contract,
-                      );
-                  }}
-                  expanded={canvasExpanded}
-                  onToggleExpanded={toggleCanvasExpanded}
-                  macros={state.macros}
-                  tasks={harness.tasks}
-                  surface={shownTab === "steps" ? "steps" : "board"}
-                  onOpenSteps={() => setRightTab("steps")}
-                  run={activeObservedRun?.run ?? null}
-                  runTarget={activeObservedRun?.target ?? null}
-                  runs={activeSessionRuns}
-                  onSelectRun={(executionId) => {
-                    if (harness.activeSessionId)
-                      harness.selectRun(harness.activeSessionId, executionId);
-                  }}
-                  preview={
-                    harness.activeSessionId
-                      ? (harness.previewBySession.get(
-                          harness.activeSessionId,
-                        ) ?? null)
-                      : null
-                  }
-                  deployState={
-                    rightPaneWorkflow
-                      ? (harness.deployStateByPath.get(
-                          rightPaneWorkflow.path,
-                        ) ?? null)
-                      : null
-                  }
-                  onDismissDeploy={() => {
-                    if (rightPaneWorkflow)
-                      harness.dismissDeployState(rightPaneWorkflow.path);
-                  }}
-                  agentsBaseUrl={state.agentsBaseUrl}
-                  onOpenCode={() => setRightTab("steps")}
-                  workflows={state.workflows}
-                  onOpenWorkflow={(path) => void handleBindWorkflow(path)}
-                  /* The pane's own CTAs (Visualize, a failed task's Retry) act on
-                   the agent the pane is DRAWING. */
-                  onRunMacro={(macro) =>
-                    handleRunMacroForWorkflow(rightPaneWorkflow, macro)
-                  }
-                  onInjectPrompt={(text) => {
-                    if (harness.activeSessionId)
-                      void harness
-                        .injectInput(harness.activeSessionId, text)
-                        .catch((err) =>
-                          harness.showToast(
-                            errorMessage(err, "Could not send the prompt to Terminal."),
-                          ),
-                        );
-                  }}
-                  onDescribeWorkflow={handleDescribeWithAI}
-                />
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -3248,15 +2606,6 @@ export const App = (): JSX.Element => {
                 meta: "Left pane",
                 icon: "Menu",
                 run: () => setRailCollapsed((collapsed) => !collapsed),
-              },
-              {
-                id: "toggle-right",
-                label: rightCollapsed
-                  ? "Show canvas panel"
-                  : "Hide canvas panel",
-                meta: "Right pane",
-                icon: rightCollapsed ? "PanelRightOpen" : "PanelRightClose",
-                run: () => setRightCollapsed((collapsed) => !collapsed),
               },
               ...(activeSession
                 ? [

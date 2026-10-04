@@ -20,7 +20,6 @@ import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
 interface SessionStepsBarProps {
   workflow: WorkflowInfo;
-  activeSessionId: string | null;
   /** The active session is live and accepting input. */
   sessionReady: boolean;
   macros: MacroDef[];
@@ -69,7 +68,6 @@ function appLinkLabel(url: string): string {
  */
 export function SessionStepsBar({
   workflow,
-  activeSessionId,
   sessionReady,
   macros,
   onRunMacro,
@@ -307,7 +305,7 @@ export function SessionStepsBar({
           authReason ??
           funnelReason ??
           readyReason ??
-          (action.macro ? macroDisabledReason(action.macro, workflow, activeSessionId) : null);
+          (action.macro ? macroDisabledReason(action.macro, workflow) : null);
         // The run's REAL status drives this (not the hand-off pending ring), so
         // Test/Run stay lit for the whole execution the user is watching.
         const isRunningAction = false;

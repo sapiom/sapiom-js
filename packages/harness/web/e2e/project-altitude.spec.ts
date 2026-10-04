@@ -3,8 +3,8 @@
  * 4.3, 4.4; design.md I2, I4, I5).
  *
  * The centre is ONE thing: a session's workbench, or a project's Agent Map at
- * full width. The map is never a right-pane tab beside a chat, and a project
- * click never moves the selected session. These replace the SAP-2980 specs
+ * full width. Nothing sits beside either, and a project click never moves the
+ * selected session. These replace the SAP-2980 specs
  * that asserted the opposite (the map filling the RIGHT pane while the
  * conversation kept the centre).
  */
@@ -67,10 +67,10 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/?seed=0&mockStudioProjects=present");
   await expect(page.locator(".rail-workflows")).toBeVisible();
   await selectSession(page, "sess-boot");
-  await expect(page.getByTestId("right-panel-board")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toBeVisible();
 });
 
-test("a project's fold, its agent canvas and Back/Forward all preserve the exact conversation", async ({ page }) => {
+test("a project's fold, its agent panel and Back/Forward all preserve the exact conversation", async ({ page }) => {
   await page.goto("/?seed=0&mockFixtures=deep&mockStudioProjects=present&mockAgentMapGolden=1");
   await expect(page.getByTestId("session-context")).toBeVisible();
   const before = await selectedRow(page);
@@ -87,17 +87,15 @@ test("a project's fold, its agent canvas and Back/Forward all preserve the exact
   await expect(page.getByTestId("rail-session-sess-boot")).toBeVisible();
   await page.getByTestId("agent-map-node-node_00000000-0000-7000-8000-000000000101").click();
   await expect(page.getByTestId("map-agent-panel")).toBeVisible();
-  await page.getByTestId("map-agent-open-canvas").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
   await page.getByTestId("session-nav-back").click();
-  await expect(map).toHaveAttribute("data-project-id", projectId!);
+  await expect(page.getByTestId("agent-view")).toBeVisible();
   await page.getByTestId("session-nav-forward").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "agent");
+  await expect(map).toHaveAttribute("data-project-id", projectId!);
   expect(await selectedRow(page)).toEqual(before);
   expect(await actions(page)).toEqual(beforeActions);
 });
 
-test("E3.1/E3.6 — the project's map fills the CENTRE at full width; no chat and no right pane beside it", async ({
+test("E3.1/E3.6 — the project's map fills the CENTRE at full width; no chat beside it", async ({
   page,
 }) => {
   await expect(page.locator(".harness-terminal")).toBeVisible();
@@ -107,10 +105,9 @@ test("E3.1/E3.6 — the project's map fills the CENTRE at full width; no chat an
   const pane = page.getByTestId("project-map-pane");
   await expect(pane).toBeVisible();
   await expect(page.locator(".harness-terminal")).toHaveCount(0);
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
-  await expect(page.getByTestId("resize-handle-canvas")).toHaveCount(0);
+  await expect(page.locator(".right-pane")).toHaveCount(0);
 
-  // ONE column, measured: the map spans the width the chat and its pane shared.
+  // ONE column, measured: the map spans the width the chat had.
   const [mapBox, appBox] = await Promise.all([
     pane.boundingBox(),
     page.locator(".app").boundingBox(),
@@ -133,7 +130,7 @@ test("E3.4 — an agent on the map opens its panel and moves NOTHING else", asyn
   await expect(page.getByTestId("map-agent-panel")).toHaveAttribute("data-agent", "leasing");
 
   // The panel opened in place; the session pointer and the rail rows held.
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute("data-view", "map");
+  await expect(page.getByTestId("project-map-pane")).toBeVisible();
   expect(await selectedRow(page)).toEqual(before);
   expect(await rowsOf(page, "acme-app")).toEqual(rowsBefore);
 });
@@ -163,31 +160,6 @@ test("E3.3 — sessions bound to different agents all stay in their project's ra
   expect(await rowsOf(page, "polsia")).toEqual(before);
 });
 
-test("E3.9/E3.10 — the right pane is one agent's Canvas, Steps and Secrets, and a trip to the map keeps the tab", async ({
-  page,
-}) => {
-  await page.getByTestId("right-tab-steps").click();
-  await expect(page.getByTestId("right-tab-steps")).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  // Three tabs, no Code and no Agent Map: the map is the project view's centre.
-  await expect(page.getByTestId("right-tab-code")).toHaveCount(0);
-  await expect(page.locator(".right-pane-tab")).toHaveCount(3);
-  await expect(page.getByTestId("right-tab-canvas")).toHaveText("Canvas");
-
-  await page.getByTestId("project-select-acme-app").click();
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
-
-  // The held Steps intent comes back with the session.
-  await selectSession(page, "sess-boot");
-  await expect(page.getByTestId("right-tab-steps")).toBeEnabled();
-  await expect(page.getByTestId("right-tab-steps")).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-});
-
 test("Cmd/Ctrl+1..9 addresses the rows the rail renders for the shown project", async ({
   page,
 }) => {
@@ -215,10 +187,9 @@ test("Cmd/Ctrl+1..9 addresses the rows the rail renders for the shown project", 
     "sess-polsia-mailer",
   );
   // A number key is exact conversation navigation, like a row click: the map
-  // gives way to that session's workbench and its agent's pane.
+  // gives way to that session's workbench.
   await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
   await expect(page.getByTestId("agent-view")).toBeVisible();
-  await expect(page.getByTestId("right-tab-canvas")).toBeEnabled();
   await page.keyboard.press("ControlOrMeta+1");
   await expect(page.getByTestId("session-context")).toHaveAttribute(
     "data-session-id",

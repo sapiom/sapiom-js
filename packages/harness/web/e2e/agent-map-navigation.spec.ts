@@ -6,8 +6,8 @@ const nodeId = (n = 101) =>
   `node_00000000-0000-7000-8000-${String(n).padStart(12, "0")}`;
 const node = (page: Page, n = 101) =>
   page.getByTestId(`agent-map-node-${nodeId(n)}`);
-const info = (page: Page, n = 101) =>
-  page.getByTestId(`agent-map-info-${nodeId(n)}`);
+/** The golden map's Research Database: a resource, which opens no panel. */
+const RESOURCE = 103;
 type Probe = {
   targets: number;
   completed: number;
@@ -184,22 +184,14 @@ async function expectPanel(page: Page, path: string) {
   await expect(page.getByTestId("map-agent-panel")).toBeVisible();
   await expect(page.getByTestId("map-agent-panel-path")).toHaveText(path);
   await expect(page.getByTestId("agent-map-frame")).toBeVisible();
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
 }
-/** Open canvas on the panel: the agent's own board in the same centre. */
-async function expectAgentCanvas(page: Page) {
-  await page.getByTestId("map-agent-open-canvas").click();
-  await expect(page.getByTestId("project-map-pane")).toHaveAttribute(
-    "data-view",
-    "agent",
-  );
-  await expect(page.getByTestId("agent-map-frame")).toHaveCount(0);
-  await expect(
-    page
-      .getByTestId("project-map-pane")
-      .locator('.canvas-frame-wrap[data-view="board"]'),
-  ).toBeVisible();
-}
+/** The board's rendered width: what nothing over the map may change (I1). */
+/** The board's size. Width is design I1; height too, because in the board's
+ *  one-cell grid a sibling in flow would take a row rather than a column. */
+const boardSize = async (page: Page) => {
+  const box = (await page.getByTestId("agent-map-viewport").boundingBox())!;
+  return { width: Math.round(box.width), height: Math.round(box.height) };
+};
 const LEASING = "/Users/demo/acme-app/leasing";
 
 for (const mode of [
@@ -240,11 +232,6 @@ for (const mode of [
     // Navigation is client state now: nothing is written to the server's
     // per-project selection preference.
     expect((await calls(page)).writes).toBe(0);
-    await expectAgentCanvas(page);
-    expect(await evidence(page)).toEqual(before);
-    await page.getByTestId("project-map-back").click();
-    await expect(page.getByTestId("agent-map-live")).toBeVisible();
-    expect(await evidence(page)).toEqual(before);
     if (mode.startsWith("archived")) {
       // Another project's map is just as unable to move the session.
       await openMap(page, "polsia");
@@ -269,27 +256,26 @@ test("same-name agents use the exact ID and path; one refresh finds a newly disc
   expect((await calls(page)).refreshes).toBe(2);
 });
 
-test("Info and resource inspection preserve the map and return keyboard focus", async ({
+test("picking an agent node and a resource node leaves the board's size unchanged", async ({
   page,
 }) => {
   await open(page);
   await probe(page);
-  await info(page).click();
-  await expect(page.getByTestId("agent-map-inspector")).toContainText(
-    "Purpose",
-  );
-  await page.keyboard.press("Escape");
-  await expect(info(page)).toBeFocused();
-  await node(page, 103).press("Enter");
-  await page.getByTestId("agent-map-inspector-close").click();
-  await expect(node(page, 103)).toBeFocused();
-  expect(await calls(page)).toMatchObject({ targets: 0, writes: 0 });
-  await node(page, 106).click();
-  await expect(page.getByTestId("agent-map-inspector")).toContainText(
-    "No implementation is linked yet.",
-  );
-  await expect(page.getByTestId("agent-map-frame")).toBeVisible();
+  const atRest = await boardSize(page);
+  await node(page).click();
+  await expectPanel(page, LEASING);
+  expect(await boardSize(page)).toEqual(atRest);
+  // The floating panel may lie over the resource; close it first.
+  await page.getByTestId("map-agent-panel-close").click();
+  await node(page, RESOURCE).click();
+  await expect(node(page, RESOURCE)).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+  expect(await boardSize(page)).toEqual(atRest);
+  // A resource pick is a selection only: announced, and nothing resolved.
+  await expect(page.locator(".agent-map-live [aria-live]")).toHaveText(
+    "Selected Research Database",
+  );
+  expect(await calls(page)).toMatchObject({ targets: 1, writes: 0 });
 });
 
 for (const [code, message] of [
@@ -297,32 +283,37 @@ for (const [code, message] of [
   ["target_ambiguous", "one implementation"],
   ["discovery_unavailable", "Try again"],
 ]) {
-  test(`keeps ${code} failures in the inspector`, async ({ page }) => {
+  test(`shows ${code} failures in the map header`, async ({ page }) => {
     await open(page);
     await probe(page, { error: code });
+    const atRest = await boardSize(page);
     await node(page).click();
-    const inspector = page.getByTestId("agent-map-inspector");
-    await expect(inspector).toContainText(message);
-    await expect(inspector).not.toContainText("private server detail");
+    const error = page.getByTestId("agent-map-open-error");
+    await expect(error).toContainText(message);
+    await expect(error).not.toContainText("private server detail");
+    await expect(node(page)).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("map-agent-panel")).toHaveCount(0);
+    expect(await boardSize(page)).toEqual(atRest);
+    await page.keyboard.press("Escape");
+    await expect(error).toHaveCount(0);
     expect((await calls(page)).writes).toBe(0);
   });
 }
 
 for (const action of [
-  "Info",
+  "a resource pick",
   "another project",
   "another node",
   "auth change",
   "map change",
   "leaving the map",
-  "refresh then Info",
+  "refresh then a resource pick",
 ]) {
   test(`a delayed reply cannot open a panel after ${action}`, async ({
     page,
   }) => {
     await open(page, "", "polsia");
-    const refreshing = action === "refresh then Info";
+    const refreshing = action === "refresh then a resource pick";
     const path = "/Users/demo/polsia/backend/src/agents/ads";
     await probe(
       page,
@@ -341,7 +332,8 @@ for (const action of [
           ),
         )
         .toBe(true);
-    if (action === "Info" || refreshing) await info(page).click();
+    if (action === "a resource pick" || refreshing)
+      await node(page, RESOURCE).click();
     if (action === "another project") await openMap(page, "acme-app");
     if (action === "another node") {
       await node(page, 102).click();
@@ -403,7 +395,7 @@ for (const action of [
   });
 }
 
-test("mobile keyboard activation opens the agent's panel, then its canvas, with the rail closed", async ({
+test("mobile keyboard activation opens the agent's panel with the rail closed", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
@@ -412,42 +404,7 @@ test("mobile keyboard activation opens the agent's panel, then its canvas, with 
   await node(page).press("Space");
   await expect(page.getByTestId("map-agent-panel")).toBeVisible();
   await expect(page.locator(".rail-workflows")).toHaveCount(0);
-  await expectAgentCanvas(page);
   expect(await evidence(page)).toEqual(before);
-});
-
-test("ending a bound session keeps its own Canvas in the right pane", async ({
-  page,
-}) => {
-  await page.goto("/?seed=0&mockStudioProjects=present");
-  await expect(page.getByTestId("session-context")).toBeVisible();
-  await page.getByTestId("rail-session-select-sess-boot").click();
-  const iframe = page.getByTestId("right-panel-board").locator(".canvas-iframe");
-  await expect(iframe).toBeVisible();
-  const source = await iframe.getAttribute("src");
-  await updateSession(page, "sess-boot", {
-    boundWorkflowPath: LEASING,
-    status: "exited",
-  });
-  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-  await expect(iframe).toHaveAttribute("src", source!);
-  await expect(page.locator(".right-pane")).not.toHaveAttribute("data-absent", "true");
-});
-
-test("an unbound session has no right pane, live or ended (design.md I3)", async ({
-  page,
-}) => {
-  await page.goto("/?seed=0&mockStudioProjects=present");
-  await expect(page.getByTestId("session-context")).toBeVisible();
-  await updateSession(page, "sess-boot", { boundWorkflowPath: null });
-  await page.getByTestId("rail-session-select-sess-boot").click();
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
-  await updateSession(page, "sess-boot", {
-    boundWorkflowPath: null,
-    status: "exited",
-  });
-  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-  await expect(page.locator(".right-pane")).toHaveAttribute("data-absent", "true");
 });
 
 test("deployment refresh preserves a pending node resolution", async ({ page }) => {

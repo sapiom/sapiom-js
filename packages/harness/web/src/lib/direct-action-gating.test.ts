@@ -318,17 +318,19 @@ describe("macroDisabledReason — existing gating not regressed", () => {
   it("returns null when all conditions met", () => {
     const macro = makeMacro({ requiresWorkflow: true, action: { kind: "inject", text: "x" } });
     const wf = makeWorkflow();
-    expect(macroDisabledReason(macro, wf, "sess-1")).toBeNull();
+    expect(macroDisabledReason(macro, wf)).toBeNull();
   });
 
   it("requiresWorkflow: returns 'Select an agent first' when no agent is selected", () => {
     const macro = makeMacro({ requiresWorkflow: true });
-    expect(macroDisabledReason(macro, null, "sess-1")).toBe("Select an agent first");
+    expect(macroDisabledReason(macro, null)).toBe("Select an agent first");
   });
 
-  it("non-open-url + no session: returns 'Start a session first'", () => {
-    const macro = makeMacro({ requiresWorkflow: false, action: { kind: "inject", text: "x" } });
-    expect(macroDisabledReason(macro, null, null)).toBe("Start a session first");
+  it("inject and render-canvas: never gated on a session (flow 4.4b)", () => {
+    const inject = makeMacro({ requiresWorkflow: true, action: { kind: "inject", text: "x" } });
+    const render = makeMacro({ requiresWorkflow: true, action: { kind: "render-canvas" } });
+    expect(macroDisabledReason(inject, makeWorkflow())).toBeNull();
+    expect(macroDisabledReason(render, makeWorkflow())).toBeNull();
   });
 
   it("open-url: does not require session", () => {
@@ -336,6 +338,6 @@ describe("macroDisabledReason — existing gating not regressed", () => {
       requiresWorkflow: false,
       action: { kind: "open-url", url: "https://example.com" },
     });
-    expect(macroDisabledReason(macro, null, null)).toBeNull();
+    expect(macroDisabledReason(macro, null)).toBeNull();
   });
 });

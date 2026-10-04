@@ -30,7 +30,6 @@ import type { AgentMapWorkspacePaneState } from "../lib/use-agent-map-entry";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 import { EmptyState } from "./EmptyState";
 import { AgentMapCanvas } from "./AgentMapCanvas";
-import { AgentMapInspector } from "./AgentMapInspector";
 import { Icon } from "./Icon";
 
 interface AgentMapPaneProps {
@@ -48,9 +47,7 @@ interface AgentMapPaneProps {
    * itself is the shell's, passed back as `agentPanel`.
    */
   onPickAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
-  /** Double click on an agent node: enter the agent's canvas in this centre. */
-  onEnterAgent: (workflow: WorkflowInfo, target: AgentMapNodeTarget) => void;
-  /** The picked agent's panel, drawn in the inspector's slot; null closes it. */
+  /** The picked agent's panel, floating over the map; null closes it. */
   agentPanel: JSX.Element | null;
   state: AgentMapWorkspacePaneState;
   initialization?: AgentMapInitializationStatus | null;
@@ -68,7 +65,6 @@ export function AgentMapPane({
   workflows,
   refreshWorkflows,
   onPickAgent,
-  onEnterAgent,
   agentPanel,
   state,
   initialization,
@@ -80,9 +76,12 @@ export function AgentMapPane({
 }: AgentMapPaneProps): JSX.Element {
   const value = state.status === "ready" ? state.value : null;
   const proposal = value?.proposal ?? null;
+  // A picked node that opens no panel (a resource, a step, or an agent whose
+  // folder could not be found): highlighted, announced, and nothing else. No
+  // inspector beside the map (flow-map-chat-overlay.md §5).
   const [selected, setSelected] = useState<PlanNodeId | null>(null);
-  // The agent node whose panel is open. Held apart from `selected`, which is
-  // the inspector's: an agent's panel replaces the inspector in its slot.
+  // The agent node whose panel is open. Held apart from `selected`: a
+  // selection hides the panel, which then belongs to another node.
   const [picked, setPicked] = useState<PlanNodeId | null>(null);
   useEffect(() => {
     if (!agentPanel) setPicked(null);
@@ -173,7 +172,7 @@ export function AgentMapPane({
     };
   }, [value, visible]);
 
-  const inspect = (nodeId: PlanNodeId, control: HTMLButtonElement): void => {
+  const selectNode = (nodeId: PlanNodeId, control: HTMLButtonElement): void => {
     generation.current += 1;
     returnFocus.current = control;
     setPending(null);
@@ -190,7 +189,7 @@ export function AgentMapPane({
     const node = proposal?.nodes.find((candidate) => candidate.id === nodeId);
     if (!visible || !value || !node) return;
     if (node.kind !== "agent" && node.kind !== "subagent")
-      return inspect(nodeId, control);
+      return selectNode(nodeId, control);
     const request = ++generation.current;
     const isCurrent = () =>
       generation.current === request &&
@@ -236,7 +235,7 @@ export function AgentMapPane({
     }
   }, [proposal, selected]);
 
-  const closeInspector = useCallback((): void => {
+  const clearSelection = useCallback((): void => {
     generation.current += 1;
     setSelected(null);
     setPending(null);
@@ -245,19 +244,19 @@ export function AgentMapPane({
   }, []);
 
   // Match the per-agent graph's full-view contract: Escape unwinds one layer
-  // at a time, closing node detail before it lowers the map overlay.
+  // at a time, clearing the selection before it lowers the map overlay.
   useEffect(() => {
     if (!expanded) return;
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      if (selected !== null) closeInspector();
+      if (selected !== null) clearSelection();
       else if (expanded) onToggleExpanded();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [closeInspector, expanded, onToggleExpanded, selected]);
+  }, [clearSelection, expanded, onToggleExpanded, selected]);
 
   let content: JSX.Element;
   if (state.status === "error" && unavailable) {
@@ -312,15 +311,11 @@ export function AgentMapPane({
         onSelectNode={(nodeId, control) =>
           void resolveAgent(nodeId, control, onPickAgent)
         }
-        onEnterNode={(nodeId, control) =>
-          void resolveAgent(nodeId, control, onEnterAgent)
-        }
-        onInspectNode={inspect}
         picked={picked}
         agentPanel={agentPanel}
         pending={pending}
         openError={openError}
-        onCloseInspector={closeInspector}
+        onClearSelection={clearSelection}
       />
     );
   } else if (
@@ -397,13 +392,11 @@ function PopulatedAgentMap({
   onRetryStatus,
   selected,
   onSelectNode,
-  onEnterNode,
-  onInspectNode,
   picked,
   agentPanel,
   pending,
   openError,
-  onCloseInspector,
+  onClearSelection,
 }: {
   viewportStore: GraphViewportStore;
   value: AgentMapWorkspaceResponse;
@@ -411,13 +404,11 @@ function PopulatedAgentMap({
   onRetryStatus: () => void;
   selected: PlanNodeId | null;
   onSelectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
-  onEnterNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
-  onInspectNode: (nodeId: PlanNodeId, control: HTMLButtonElement) => void;
   picked: PlanNodeId | null;
   agentPanel: JSX.Element | null;
   pending: PlanNodeId | null;
   openError: string | null;
-  onCloseInspector: () => void;
+  onClearSelection: () => void;
 }): JSX.Element {
   const proposal = value.proposal!;
   const failed = [...deployments.values()].filter(
@@ -433,7 +424,7 @@ function PopulatedAgentMap({
         if (event.key !== "Escape" || !selected) return;
         event.preventDefault();
         event.stopPropagation();
-        onCloseInspector();
+        onClearSelection();
       }}
     >
       <div className="agent-map-live-header">
@@ -458,6 +449,17 @@ function PopulatedAgentMap({
             </button>
           </div>
         )}
+        {/* Why a picked agent could not be opened. The header row, not a
+            panel beside the board, so the board's width never changes. */}
+        {openError && (
+          <span
+            className="agent-map-deployment-message"
+            role="alert"
+            data-testid="agent-map-open-error"
+          >
+            {openError}
+          </span>
+        )}
       </div>
       <div className="agent-map-live-body">
         <AgentMapCanvas
@@ -466,22 +468,11 @@ function PopulatedAgentMap({
           deployments={deployments}
           selectedNodeId={selected ?? (agentPanel ? picked : null)}
           onSelectNode={onSelectNode}
-          onEnterNode={onEnterNode}
-          onInspectNode={onInspectNode}
           pendingNodeId={pending}
         />
-        {!selected && picked && agentPanel}
-        {selected && (
-          <AgentMapInspector
-            snapshot={value}
-            nodeId={selected}
-            deployment={deployments.get(selected)}
-            onClose={onCloseInspector}
-            openError={openError}
-          />
-        )}
+        {!selected && agentPanel}
       </div>
-      <p className="sr-only" aria-live="polite">
+      <p className="visually-hidden" aria-live="polite">
         {pending
           ? "Opening agent…"
           : selected

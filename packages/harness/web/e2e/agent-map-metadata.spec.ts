@@ -13,10 +13,6 @@ for (const theme of ["light", "dark"] as const) {
       "data-layout-state",
       "ready",
     );
-    await page
-      .getByTestId("agent-map-info-node_00000000-0000-7000-8000-000000000101")
-      .click();
-    await expect(page.getByTestId("agent-map-inspector")).toBeVisible();
     await page.evaluate((value) => {
       document.documentElement.dataset.theme = value;
     }, theme);
@@ -40,7 +36,6 @@ for (const theme of ["light", "dark"] as const) {
     for (const selector of [
       ".agent-map-live-header .agent-map-node-meta",
       ".agent-map-node .agent-map-node-meta",
-      ".agent-map-inspector .agent-map-node-meta",
     ]) {
       const metadata = page.locator(selector);
       await expect(metadata.first()).toBeVisible();

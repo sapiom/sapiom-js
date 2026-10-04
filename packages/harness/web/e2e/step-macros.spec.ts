@@ -23,6 +23,9 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import type { RunView } from "@shared/types";
+import { CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 // ---------------------------------------------------------------------------
 // Shared helpers

@@ -1,14 +1,13 @@
 import { AssistantActivity } from "./AssistantActivity";
 import type { AssistantProjection } from "../lib/assistant-state";
 import { useEffect, useRef, useState } from "react";
-import type { JSX, ReactNode, RefObject } from "react";
+import type { JSX } from "react";
 import type { HarnessSession } from "@shared/types";
 
 import { HARNESS_LABELS } from "../lib/history-meta";
 import { basenameOf } from "../lib/paths";
 import type { ToastTone } from "../lib/toast";
 import { AnchoredPopover } from "./AnchoredPopover";
-import { EndSessionConfirm } from "./EndSessionConfirm";
 import { Icon } from "./Icon";
 import { trackingAttrs } from "../lib/analytics/tracking-attrs";
 
@@ -46,13 +45,8 @@ interface SessionBarProps {
   busy: boolean;
   /** Set while the rail is collapsed — renders the expand affordance first. */
   onExpandRail: (() => void) | null;
-  /** Set while the right pane is collapsed — renders the expand affordance last. */
-  onExpandRight: (() => void) | null;
-  /** Accessible (and optionally visible) name for the right-pane affordance. */
-  expandRightLabel?: string;
-  showExpandRightLabel?: boolean;
-  expandRightRef?: RefObject<HTMLButtonElement | null>;
-  /** Ends a live session — kills its PTY; it stays resumable from history. */
+  /** Ends a live session at once, no confirm (flow-map-chat-overlay.md 4.5):
+   *  kills its PTY; the row stays, exited, and resumable from history. */
   onCloseSession: (id: string) => void;
   /** Opens the session's directory in the user's editor. */
   onOpenInEditor: (path: string) => void;
@@ -61,22 +55,16 @@ interface SessionBarProps {
   /** Push a message onto the app's toast rail. Defaults to the "error" tone;
    *  result announcements opt into "info". */
   onToast: (message: string, tone?: ToastTone) => void;
-  /** The agent action cluster (globe/Test/Run/Deploy), right-anchored. */
-  actions?: ReactNode;
   /**
-   * Set while a project's Agent Map (or an agent's canvas entered from it) is
-   * the centre (flow-navigation.md 4.3, 4.4). The header reads
-   * `project · Agent Map`, or `← project · agent` with the way back, and
-   * carries New agent (Q11), over the agents it adds to.
+   * Set while a project's Agent Map is the centre (flow-navigation.md 4.3).
+   * The header reads `project · Agent Map` and carries New agent (Q11), over
+   * the agents it adds to.
    */
   projectView?: ProjectViewHeader | null;
 }
 
 export interface ProjectViewHeader {
   label: string;
-  /** The agent whose canvas was entered from the map, if any. */
-  agentName: string | null;
-  onBackToMap: () => void;
   onNewAgent: () => void;
   /** Full view for a drawn map; null when there is no map to enlarge. */
   onExpandMap: (() => void) | null;
@@ -86,8 +74,9 @@ export interface ProjectViewHeader {
  * The single main-panel header. The rail is the session switcher now
  * (flow-navigation.md Q2), so there is no tab strip: the header names the
  * session on screen, and its title IS the session's options menu (Copy path /
- * Rename / Open in editor / End session), live or exited alike. Agent actions
- * remain right-anchored on the same row.
+ * Rename / Open in editor / End session), live or exited alike. No agent
+ * verbs beside a session: agent detail is the project view's
+ * (flow-map-chat-overlay.md 4.4.1).
  */
 export function SessionBar({
   assistant,
@@ -103,18 +92,12 @@ export function SessionBar({
   boundWorkflowName,
   busy,
   onExpandRail,
-  onExpandRight,
-  expandRightLabel = "Expand canvas panel",
-  showExpandRightLabel = false,
-  expandRightRef,
   onCloseSession,
   onOpenInEditor,
   editorLabel,
   onToast,
-  actions = null,
   projectView = null,
 }: SessionBarProps): JSX.Element {
-  const [confirmingClose, setConfirmingClose] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
@@ -127,7 +110,6 @@ export function SessionBar({
   useEffect(() => {
     setMenuOpen(false);
     setRenaming(false);
-    setConfirmingClose(false);
   }, [activeSession?.id]);
 
   return (
@@ -150,44 +132,21 @@ export function SessionBar({
         data-session-id={activeSession?.id ?? ""}
       >
         {projectView ? (
-          /* A project is selected: the centre is its Agent Map, or an agent's
-             canvas entered from it, with the way back. */
+          /* A project is selected: the centre is its Agent Map. */
           <div className="session-current session-current-static">
-            {projectView.agentName ? (
-              <button
-                type="button"
-                className="theme-toggle project-map-back"
-                data-testid="project-map-back"
-                aria-label={`Back to ${projectView.label}'s Agent Map`}
-                data-tooltip="Back to the Agent Map"
-                onClick={projectView.onBackToMap}
-              >
-                <Icon name="ArrowLeft" size={14} />
-              </button>
-            ) : (
-              <Icon name="Waypoints" size={14} />
-            )}
+            <Icon name="Waypoints" size={14} />
             <span
               className="session-context-title"
               data-testid="session-context-title"
             >
               {projectView.label}
             </span>
-            {projectView.agentName ? (
-              <span
-                className="session-project-chip"
-                data-testid="session-map-agent-chip"
-              >
-                {projectView.agentName}
-              </span>
-            ) : (
-              <span
-                className="session-project-chip"
-                data-testid="session-project-map-chip"
-              >
-                Agent Map
-              </span>
-            )}
+            <span
+              className="session-project-chip"
+              data-testid="session-project-map-chip"
+            >
+              Agent Map
+            </span>
           </div>
         ) : overviewMode ? (
           <div className="session-current session-current-static">
@@ -393,17 +352,15 @@ export function SessionBar({
               data-testid="session-end-btn"
               onClick={() => {
                 closeMenu();
-                setConfirmingClose(true);
+                onCloseSession(activeSession.id);
               }}
             >
               <Icon name="X" size={13} />
-              End session…
+              End session
             </button>
           )}
         </AnchoredPopover>
       )}
-
-      {actions}
 
       {projectView && (
         <div className="project-view-actions">
@@ -431,34 +388,6 @@ export function SessionBar({
             </button>
           )}
         </div>
-      )}
-
-      {onExpandRight && (
-        <button
-          ref={expandRightRef}
-          className={
-            "theme-toggle" +
-            (showExpandRightLabel ? " right-expand-labeled" : "")
-          }
-          data-testid="right-expand"
-          aria-label={expandRightLabel}
-          title={expandRightLabel}
-          onClick={onExpandRight}
-        >
-          <Icon name="PanelRightOpen" size={15} />
-          {showExpandRightLabel && <span>{expandRightLabel}</span>}
-        </button>
-      )}
-
-      {confirmingClose && activeSession && (
-        <EndSessionConfirm
-          triggerRef={menuTriggerRef}
-          onCancel={() => setConfirmingClose(false)}
-          onConfirm={() => {
-            setConfirmingClose(false);
-            onCloseSession(activeSession.id);
-          }}
-        />
       )}
     </div>
   );

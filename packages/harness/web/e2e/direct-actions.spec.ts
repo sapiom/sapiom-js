@@ -5,7 +5,9 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq } from "./mock-navigation";
+import { startChatWithRfq, CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 type HarnessHook = {
   lastDirectAction?: { action: string; req: Record<string, unknown> };

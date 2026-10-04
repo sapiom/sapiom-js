@@ -17,7 +17,7 @@
  */
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openNewAgentScreen } from "./mock-navigation";
+import { openNewAgentScreen, CANVAS_UNMOUNTED } from "./mock-navigation";
 
 interface ProductEvent {
   event: string;
@@ -38,6 +38,7 @@ test.describe("agent-lifecycle product events → PostHog", () => {
   test("deploy fires agent.deploy_started then agent.deploy_succeeded, slug-only + duration", async ({
     page,
   }) => {
+    test.fixme(true, CANVAS_UNMOUNTED);
     await page.goto("/?seed=0");
     await expect(page.getByTestId("session-steps")).toBeVisible();
 

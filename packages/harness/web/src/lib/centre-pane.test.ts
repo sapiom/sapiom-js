@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   centrePane,
-  hasRightPane,
   shownProjectId,
   type Centre,
   type CentreInput,
@@ -18,7 +17,6 @@ import {
 const VIEWS: Record<string, CentreView> = {
   session: { kind: "session" },
   project: { kind: "project", projectId: "p1" },
-  agent: { kind: "agent", projectId: "p1", path: "/p1/leasing" },
 };
 const SESSIONS: Record<string, CentreInput["session"]> = {
   none: null,
@@ -40,7 +38,6 @@ describe("centrePane: one View × session state, one kind", () => {
   const expected: Record<string, Record<string, Centre["kind"]>> = {
     session: { none: "no-session", live: "workbench", starting: "workbench", exited: "dead" },
     project: { none: "project-map", live: "project-map", starting: "project-map", exited: "project-map" },
-    agent: { none: "agent-canvas", live: "agent-canvas", starting: "agent-canvas", exited: "agent-canvas" },
   };
   for (const [viewName, view] of Object.entries(VIEWS)) {
     for (const [sessionName, session] of Object.entries(SESSIONS)) {
@@ -56,14 +53,6 @@ describe("centrePane: one View × session state, one kind", () => {
     expect(centre).toEqual({ kind: "project-map", projectId: "p1" });
   });
 
-  it("carries the agent path into the agent canvas", () => {
-    expect(centrePane(base({ view: VIEWS.agent! }))).toEqual({
-      kind: "agent-canvas",
-      projectId: "p1",
-      path: "/p1/leasing",
-    });
-  });
-
   it("review and the new-agent screen win over every view", () => {
     for (const view of Object.values(VIEWS)) {
       expect(centrePane(base({ view, session: SESSIONS.live!, reviewing: true })).kind).toBe("review");
@@ -77,34 +66,9 @@ describe("centrePane: one View × session state, one kind", () => {
   });
 });
 
-describe("hasRightPane: only beside a bound session", () => {
-  const kinds: Centre[] = [
-    { kind: "review" },
-    { kind: "composer" },
-    { kind: "project-map", projectId: "p1" },
-    { kind: "agent-canvas", projectId: "p1", path: "/p1/a" },
-    { kind: "dead", sessionId: "s1" },
-    { kind: "workbench", sessionId: "s1" },
-    { kind: "no-session" },
-    { kind: "no-project" },
-  ];
-
-  it("exists for a workbench or dead pane bound to an agent, and nowhere else", () => {
-    expect(kinds.filter((centre) => hasRightPane(centre, true)).map((c) => c.kind)).toEqual([
-      "dead",
-      "workbench",
-    ]);
-  });
-
-  it("is absent beside an unbound session", () => {
-    for (const centre of kinds) expect(hasRightPane(centre, false)).toBe(false);
-  });
-});
-
 describe("shownProjectId", () => {
-  it("names the project only for the map and the agent canvas", () => {
+  it("names the project only for the map", () => {
     expect(shownProjectId({ kind: "project-map", projectId: "p1" })).toBe("p1");
-    expect(shownProjectId({ kind: "agent-canvas", projectId: "p2", path: "/x" })).toBe("p2");
     expect(shownProjectId({ kind: "workbench", sessionId: "s1" })).toBeNull();
   });
 });

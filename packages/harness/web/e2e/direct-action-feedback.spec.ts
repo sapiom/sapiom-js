@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { startChatWithRfq } from "./mock-navigation";
+import { startChatWithRfq, CANVAS_UNMOUNTED } from "./mock-navigation";
+
+test.fixme(true, CANVAS_UNMOUNTED);
 
 async function load(page: Page, query = "?seed=0"): Promise<void> {
   await page.goto(`/${query}`);

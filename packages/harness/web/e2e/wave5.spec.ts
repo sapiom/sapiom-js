@@ -67,7 +67,7 @@ test.describe("command palette sections and highlighting", () => {
 // Dead session context
 // ---------------------------------------------------------------------------
 
-test("the dead-session pane shows the record's real metadata and the canvas invites a resume", async ({ page }) => {
+test("the dead-session pane shows the record's real metadata", async ({ page }) => {
   await page.getByTestId("rail-history").click();
   await expect(page.getByTestId("past-sessions-card")).toBeVisible();
   await page.getByTestId("exited-session-sess-leasing").click();
@@ -77,31 +77,6 @@ test("the dead-session pane shows the record's real metadata and the canvas invi
   await expect(detail).toContainText("Coding agent");
   await expect(detail).toContainText("Claude Code");
   await expect(detail).toContainText("Ended");
-
-  // The right pane is a BOUND session's agent (design.md I3); sess-leasing is
-  // unbound, so end a bound one to see its pane. It stays selected as ended.
-  await page.getByTestId("rail-session-sess-leasing-2").hover();
-  await page.getByTestId("rail-session-close-sess-leasing-2").click();
-  await page.getByTestId("end-session-confirm-btn").click();
-  await expect(page.getByTestId("rail-session-sess-leasing-2")).toHaveAttribute(
-    "data-mark",
-    "exited",
-  );
-  await page.getByTestId("rail-session-select-sess-leasing-2").click();
-  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
-
-  // The right pane stops inviting a Visualize that cannot run.
-  await expect(page.getByTestId("canvas-empty-exited")).toContainText("Session ended");
-  await expect(page.getByTestId("canvas-empty-exited")).toContainText(
-    "Resume the session to see the agent's diagram here.",
-  );
-  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
-
-  // Steps is the AGENT's: leasing's run evidence (announced by its other
-  // session) still shows there, and nothing invites a run in an ended session.
-  await page.getByTestId("right-tab-steps").click();
-  await expect(page.getByTestId("canvas-visualize-cta")).toHaveCount(0);
-  await expect(page.getByTestId("dead-session-pane")).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -116,7 +91,7 @@ test("the Overview opens over the workbench and dismisses on click-out", async (
 
   // A modal over the app, not a destination replacing it: the workbench stays
   // mounted behind the scrim, so closing costs the session nothing.
-  await expect(page.locator(".right-pane")).toBeVisible();
+  await expect(page.getByTestId("agent-view")).toBeVisible();
 
   // Clicking the scrim (outside the card) closes it, like every other modal.
   await overview.click({ position: { x: 5, y: 5 } });

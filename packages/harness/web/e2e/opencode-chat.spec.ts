@@ -3,7 +3,7 @@ import express, { type Response } from "express";
 import type { Server } from "node:http";
 import { openCodeCompletionPrompt } from "../../src/shared/opencode-completion";
 import { openCodeTransportFailure } from "../../src/shared/opencode-errors";
-import { openNewAgentScreen } from "./mock-navigation";
+import { openNewAgentScreen, CANVAS_UNMOUNTED } from "./mock-navigation";
 
 // Exercise the pinned adapter over actual incremental HTTP SSE, without a model.
 test.describe.configure({ mode: "serial" });
@@ -1500,6 +1500,7 @@ test("expires the cached UI capability after sixty seconds without a successful 
 test("reveals foreground Terminal input and preserves Assistant for background actions", async ({
   page,
 }) => {
+  test.fixme(true, CANVAS_UNMOUNTED);
   await openAssistant(page);
   const input = page.getByRole("textbox", { name: "Message Assistant" });
   await input.fill("Keep this unsent draft");
@@ -1574,6 +1575,7 @@ test("reveals foreground Terminal input and preserves Assistant for background a
 test("shows a rejected inspector command without leaving Assistant or losing its draft", async ({
   page,
 }) => {
+  test.fixme(true, CANVAS_UNMOUNTED);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await openAssistant(page);

@@ -25,7 +25,9 @@ const id = (n = 101) =>
   `node_00000000-0000-7000-8000-${String(n).padStart(12, "0")}`;
 const node = (page: Page, n = 101) =>
   page.getByTestId(`agent-map-node-${id(n)}`);
-const inspector = (page: Page) => page.getByTestId("agent-map-inspector");
+/** The node's own deployment badge: the map's one place for it now. */
+const badge = (page: Page, n = 101) =>
+  node(page, n).locator(".agent-map-deployment");
 const bulks = (page: Page) =>
   page.evaluate(() => (window as TestWindow).__deployment.bulks);
 async function mapChange(page: Page, changes: Partial<Probe>) {
@@ -152,9 +154,10 @@ async function evidence(page: Page) {
     ].map((key) => (calls[key] as unknown[] | undefined)?.length ?? 0);
   });
 }
-// The rail lists sessions, not agents (flow-navigation.md Q3), so the badge
-// the map and the inspector agree on no longer has a rail twin to agree with.
-test("mixed badges agree with the inspector and refresh without changing the map", async ({
+// The rail lists sessions, not agents (flow-navigation.md Q3), and the
+// inspector is gone (flow-map-chat-overlay.md §5): the node's badge, state and
+// title are the one deployment readout, and they must agree with each other.
+test("mixed badges agree with the node's state and refresh without changing the map", async ({
   page,
 }) => {
   await open(page);
@@ -172,12 +175,9 @@ test("mixed badges agree with the inspector and refresh without changing the map
       /Draft|Deployed|Proposed/,
     );
   }
-  await page.getByTestId(`agent-map-info-${id()}`).click();
-  await expect(inspector(page).locator(".status-tag")).toHaveText("Deployed");
+  await expect(badge(page)).toHaveText("Deployed");
   const deployedTitle = "Deployed to Sapiom with a ready build.";
   await expect(node(page)).toHaveAttribute("title", deployedTitle);
-  await expect(inspector(page).locator(".status-tag"))
-    .toHaveAttribute("title", deployedTitle);
   await screenshot(page, "desktop");
   const before = await evidence(page);
   const transform = await page
@@ -185,7 +185,7 @@ test("mixed badges agree with the inspector and refresh without changing the map
     .getAttribute("style");
   await patch(page, { ready: false });
   await expect(node(page)).toHaveAttribute("data-deployment-state", "draft");
-  await expect(inspector(page).locator(".status-tag")).toHaveText("Draft");
+  await expect(badge(page)).toHaveText("Draft");
   await expect(node(page)).toHaveAttribute("title", "Cloud build in progress.");
   await patch(page, { ready: true });
   await expect(node(page)).toHaveAttribute("data-deployment-state", "deployed");
@@ -201,7 +201,7 @@ test("mixed badges agree with the inspector and refresh without changing the map
   ).toBe(0);
   // The map is the centre on a phone too: no sheet to open first.
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(inspector(page)).toBeVisible();
+  await expect(badge(page)).toBeVisible();
   await screenshot(page, "mobile");
 });
 
@@ -210,7 +210,6 @@ for (const failure of ["bulk", "list", "nested"] as const) {
     page,
   }) => {
     await open(page);
-    await page.getByTestId(`agent-map-info-${id()}`).click();
     const before = await evidence(page);
     const transform = await page
       .getByTestId("agent-map-subject")
@@ -228,8 +227,7 @@ for (const failure of ["bulk", "list", "nested"] as const) {
     await expect(page.getByTestId("agent-map-deployment-error")).toHaveText("Retry status");
     await expect(node(page)).toHaveAttribute("title", "Deployed to Sapiom with a ready build.");
     await expect(node(page)).toHaveAccessibleName(/Research, agent, Deployed$/);
-    await expect(inspector(page).locator(".status-tag")).toHaveText("Deployed");
-    await expect(inspector(page).getByRole("status")).toHaveCount(0);
+    await expect(badge(page)).toHaveText("Deployed");
     expect(
       await page.getByTestId("agent-map-subject").getAttribute("style"),
     ).toBe(transform);
@@ -240,7 +238,6 @@ for (const failure of ["bulk", "list", "nested"] as const) {
         "data-deployment-state",
         "draft",
       );
-      await expect(inspector(page).getByRole("status")).toHaveCount(0);
     }
     await patch(
       page,
