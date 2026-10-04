@@ -260,8 +260,10 @@ launch flag while preserving unrelated user shell settings.
 
 Every session whose working directory resolves to a Studio project is an
 ordinary writable coding session with the same server-derived
-`{ projectId, userId, sessionId }` principal, project-agent prompt appendix, and
-Agent Map tools. Assignment or bootstrap metadata is context only and cannot
+`{ projectId, sessionId }` identity, project-agent prompt appendix, and Agent
+Map tools. Its persisted `userId` field is attribution only (`local:<machineId>`
+for new identities, or the account at creation) and is never compared with the
+signed-in account. Assignment or bootstrap metadata is context only and cannot
 change the prompt profile, tools, filesystem policy, or implementation
 authority.
 
@@ -302,11 +304,11 @@ tested migration decoders. Live clients use the generic session routes.
 #### Embedder migration
 
 The public `HarnessSession.agentMapIdentity` is now the exported
-`ProjectAgentSession { projectId, userId, sessionId }`. Embedders must stop
-reading the removed `role` and `assignment` fields; those fields no longer
-describe live authority. `AgentMapToolEvent.role` is also removed; consumers use
-neutral project, session, tool, and outcome fields. Persisted pre-upgrade
-project-session data is migration input only.
+`ProjectAgentSession { projectId, userId, sessionId }`; `userId` is attribution,
+not authority. Embedders must stop reading the removed `role` and `assignment`
+fields; those fields no longer describe live authority. `AgentMapToolEvent.role`
+is also removed; consumers use neutral project, session, tool, and outcome
+fields. Persisted pre-upgrade project-session data is migration input only.
 Read the optional `projectBootstrap` field when displaying bootstrap lifecycle
 state for sessions that already carry it; opening or adding a project no longer
 creates a session or a bootstrap turn (the user's first idea starts the first
@@ -336,8 +338,11 @@ buckets.
 The browser/host token gates `/api` routes and is never injected into a coding
 agent PTY. Each PTY instead receives session-bound ingest and Agent Map
 capabilities. Project scope is re-derived from trusted server state before every
-launch or resume; capabilities rotate on resume, revoke on exit or principal
-change, expire when inactive, and fail closed outside their project.
+launch or resume; capabilities rotate on resume, revoke on exit, expire when
+inactive, and fail closed outside their project. Signing in or out does not
+revoke a session's capabilities. Disconnecting an account only restarts
+credential-bearing runtimes without the removed key; the session ID and
+conversation are preserved.
 
 ### Project contract helpers
 
@@ -459,9 +464,9 @@ surface. It requires a Studio-issued bearer capability scoped to one trusted
 project/session identity; callers cannot supply or change that identity.
 
 Studio injects the capability privately at process launch. Successful use
-renews its inactivity lease, while session exit, resume rotation, signed-in
-principal changes, and server shutdown revoke it. Consumers should not copy,
-persist, log, or reuse the capability outside the launched session.
+renews its inactivity lease, while session exit, resume rotation, and server
+shutdown revoke it. Consumers should not copy, persist, log, or reuse the
+capability outside the launched session.
 
 Every trusted project session receives the same nine project-wide tools:
 
