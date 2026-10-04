@@ -120,18 +120,28 @@ describe("escalation on a local trace", () => {
     expect(logs.some((l) => l.msg.startsWith("linear save_issue"))).toBe(false);
   });
 
-  it("links a closed issue and replies, but neither moves it nor emits", async () => {
-    const { ctx, emitted } = fakeCtx({
+  it("does not escalate a closed issue: one triage line, no Linear, no emit", async () => {
+    const { ctx, emitted, logs } = fakeCtx({
       isLocalTrace: true,
       executionId: "esc-closed",
     });
     const done = await run(local("escalate.closed.json").payload, ctx);
     expect(done.output).toMatchObject({
-      outcome: "linked_closed",
+      outcome: "not_escalated",
       status: "closed",
-      linearIdentifier: "LOCAL-1",
+      skipped: "issue is closed",
     });
+    expect(done.output).not.toHaveProperty("linearIdentifier");
     expect(emitted).toHaveLength(0);
+    expect(logs.some((l) => l.msg.startsWith("linear save_issue"))).toBe(false);
+    const posts = logs.filter((l) =>
+      l.msg.startsWith("slack chat.postMessage"),
+    );
+    expect(
+      posts.map((p) => (p.data as { args: { text: string } }).args.text),
+    ).toEqual([
+      expect.stringMatching(/^Not escalated: issue #\d+ is closed\.$/),
+    ]);
   });
 });
 
@@ -476,18 +486,60 @@ describe("escalation against the relay (mocked fetch)", () => {
     expect(emitted).toEqual([]);
   });
 
-  it("closed issues are linked but not moved", async () => {
+  it("a closed issue is not escalated: no Linear call, one triage line, nothing else", async () => {
     await setStatus(db, issueId, "closed");
+    const { number } = await getIssue(db, issueId);
     const { ctx, emitted } = liveCtx();
     const out = await escalate(ctx as never, db, input());
-    expect(out).toMatchObject({ outcome: "linked_closed", status: "closed" });
+    expect(out).toEqual({
+      issueId,
+      outcome: "not_escalated",
+      status: "closed",
+      skipped: "issue is closed",
+    });
     expect(emitted).toEqual([]);
-    expect((await getIssue(db, issueId)).linearIdentifier).toBe("SAP-900");
-    const card = calls.find((c) => c.method === "chat.update")!;
-    expect(card.args.text).toContain("[Closed]");
-    expect(JSON.stringify(card.args.blocks)).toContain(
-      "*Linear:* <https://linear.app/x/issue/SAP-900|SAP-900>",
+    expect(calls.filter((c) => c.method === "mcp")).toEqual([]);
+    expect(calls.filter((c) => c.method === "chat.update")).toEqual([]);
+    const posts = calls.filter((c) => c.method === "chat.postMessage");
+    expect(posts.map((p) => p.args)).toEqual([
+      expect.objectContaining({
+        channel: "C0TRIAGE001",
+        threadTs: "1790889356.000100",
+        text: `Not escalated: issue #${number} is closed.`,
+      }),
+    ]);
+    expect(
+      await messageBySourceEventId(db, `escalation:${issueId}:1790889700.1004`),
+    ).toMatchObject({ direction: "internal" });
+    expect(await getIssue(db, issueId)).toMatchObject({
+      status: "closed",
+      linearIssueId: null,
+      linearIdentifier: null,
+      linearUrl: null,
+    });
+
+    // The same causation again posts nothing.
+    await escalate(ctx as never, db, input());
+    expect(calls.filter((c) => c.method === "chat.postMessage")).toHaveLength(
+      1,
     );
+  });
+
+  it("a closed issue linked to a Done Linear issue opens no new one", async () => {
+    await updateIssue(db, issueId, {
+      linearIssueId: "uuid-SAP-5",
+      linearIdentifier: "SAP-5",
+      linearUrl: "https://linear.app/x/issue/SAP-5",
+    });
+    await setStatus(db, issueId, "closed");
+    existingState = { status: "Done", statusType: "completed" };
+    const { ctx, emitted } = liveCtx();
+    const out = await escalate(ctx as never, db, input());
+    expect(out).toMatchObject({ outcome: "not_escalated", status: "closed" });
+    expect(emitted).toEqual([]);
+    expect(calls.filter((c) => c.tool === "save_issue")).toEqual([]);
+    expect(calls.filter((c) => c.tool === "get_issue")).toEqual([]);
+    expect((await getIssue(db, issueId)).linearIdentifier).toBe("SAP-5");
   });
 
   it("a repeat escalation whose Linear issue is already Done opens a new Linear issue and replies in both threads", async () => {

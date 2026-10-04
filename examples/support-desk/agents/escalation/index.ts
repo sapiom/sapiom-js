@@ -13,8 +13,9 @@
  *   retry after Linear created the issue but before the commit adopts it instead of opening a
  *   second.
  * - Replies are keyed in `messages`, so a retry posts only what was not recorded. An issue that is
- *   linked, has its customer reply, and is On Hold (or Closed) is already escalated: the run
- *   replies with the existing identifier in triage and emits nothing.
+ *   linked, has its customer reply, and is On Hold is already escalated: the run replies with the
+ *   existing identifier in triage and emits nothing.
+ * - A Closed issue gets no Linear issue and no replies: one triage line says it was not escalated.
  * - The move to On Hold and the `issue.on_hold` emit share a second locked transaction: a failed
  *   emit rolls the move back, and a closed or already On Hold issue emits nothing.
  * - Every run that ends with the issue linked redraws the triage card from the row.
@@ -292,6 +293,19 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
   // the stored reply keys, so it neither creates nor posts.
   const linked = await db.transaction(async (tx) => {
     let issue = await lockIssue(tx, issueId);
+    // A Closed issue leaves linear-sync's On Hold scan, so a Linear issue opened now would never
+    // be read.
+    if (issue.status === "closed") {
+      await replyOnce(ctx, tx, {
+        key: `escalation:${issueId}:${input.causationId}`,
+        channel: triageChannel,
+        threadTs: issue.triageRootTs,
+        text: `Not escalated: issue #${issue.number} is closed.`,
+        direction: "internal",
+        issueId,
+      });
+      return null;
+    }
     let made: "existing" | "adopted" | "created" = "existing";
     let url = "";
     // A repeat escalation of an issue whose Linear issue is already Done or Canceled gets a new
@@ -348,11 +362,7 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
 
     const keys = await replyKeys(tx, issueId, identifier);
     const replied = await messageBySourceEventId(tx, keys.customer);
-    if (
-      made === "existing" &&
-      replied &&
-      (issue.status === "on_hold" || issue.status === "closed")
-    ) {
+    if (made === "existing" && replied && issue.status === "on_hold") {
       await replyOnce(ctx, tx, {
         key: `escalation:${issueId}:${input.causationId}`,
         channel: triageChannel,
@@ -383,6 +393,15 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
     return { issue, base, already: false as const, triageTs, customerTs };
   });
 
+  if (!linked)
+    return {
+      issueId,
+      outcome: "not_escalated",
+      status: "closed",
+      skipped: "issue is closed",
+      // Keeps `made` readable on every outcome of the union.
+      made: undefined,
+    };
   if (linked.already) {
     await redrawCard(ctx, db, triageChannel, linked.issue);
     return {
@@ -414,7 +433,8 @@ export async function escalate(ctx: Ctx, db: Db, input: EscalateInput) {
 
   await redrawCard(ctx, db, triageChannel, parked.issue);
   if (parked.issue.status === "closed") {
-    // closed → on_hold is not a legal move; the link and replies stand, and the output says so.
+    // Reached only when a Close lands between the two transactions. That Close saw the link, so its
+    // open-ticket note (SAP-3794) flags the Linear issue; closed → on_hold is not a legal move.
     return {
       ...linked.base,
       ...replies,
