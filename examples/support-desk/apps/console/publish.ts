@@ -12,15 +12,13 @@
  */
 import { readFileSync } from "node:fs";
 
-import {
-  FLEET_ID,
-  consoleSlugFor,
-  fleetTitle,
-} from "../../_shared/fleet-id";
+import { FLEET_ID, consoleSlugFor } from "../../_shared/fleet-id";
+import { readLocalFleetFile, resolveFleetTitle } from "../../scripts/fleet-id";
 import { buildConsole } from "./build";
 
+/** The slug keeps the fleet id, so a rename keeps the link and its URL; only the name changes. */
 const SLUG = consoleSlugFor(FLEET_ID);
-const NAME = `${fleetTitle(FLEET_ID)} Console`;
+const NAME = resolveFleetTitle(readLocalFleetFile());
 const PORT = 3000;
 const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
   /\/+$/,
@@ -67,7 +65,7 @@ async function main() {
     slug: SLUG,
     name: NAME,
     description:
-      "Operate the support desk demo: fleet switches, controller, board, latency timeline, failed events, cue cards.",
+      "Run the support desk: tickets with Approve, Escalate, Dismiss, Take and Close, accounts, knowledge, settings and the fleet's health.",
     // The platform reserves SAPIOM_API_KEY and injects its own org.read runtime key; the Console's
     // switches, Run now and Replay need write access, so the operator's key rides under its own name.
     env: { CONSOLE_API_KEY: key },

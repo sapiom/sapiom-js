@@ -278,6 +278,12 @@ describe("linear-sync against the relay (mocked fetch)", () => {
       [id],
     );
     expect(rows[0].linear_checked_at).not.toBeNull();
+    expect((await getIssue(db, id)).linearState).toBe("In Progress");
+
+    // The next read replaces the stored state.
+    states["SAP-1"] = { status: "In Review", statusType: "started" };
+    await sync(live().ctx as never, db);
+    expect((await getIssue(db, id)).linearState).toBe("In Review");
   });
 
   it("tells the customer on Done only when notify_customer is true", async () => {

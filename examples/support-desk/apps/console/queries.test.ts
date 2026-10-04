@@ -3,16 +3,27 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { memoryDb, type Db } from "../../_shared/db";
 import { upsertDesk, type Desk } from "../../_shared/desks";
-import { logEvent, ensureAccount, openIssue } from "../../_shared/issues";
+import {
+  createDraft,
+  linkMessage,
+  logEvent,
+  ensureAccount,
+  markLinearChecked,
+  openIssue,
+  setStatus,
+} from "../../_shared/issues";
 import { createArticle, listArticles } from "../../_shared/kb";
 import { resetBoard } from "../../_shared/reset";
 import { fakeCtx } from "../../_shared/test-ctx";
 import { scopeReceipts } from "./logic";
 import {
-  deskIssue,
+  boardIssues,
+  deskAccount,
+  deskPeople,
+  deskTicket,
   metricIssues,
+  parseBoardFilter,
   receiptDesks,
-  recentIssues,
   statusCounts,
 } from "./queries";
 
@@ -64,22 +75,101 @@ describe("desk-scoped reads", () => {
     await issueOn(support, "support one");
     expect(await statusCounts(db, test.id)).toEqual({ new: 2 });
     expect(await statusCounts(db, support.id)).toEqual({ new: 1 });
-    expect((await recentIssues(db, test.id)).map((r) => r.title)).toEqual([
+    expect((await boardIssues(db, test.id)).map((r) => r.title)).toEqual([
       "test two",
       "test one",
     ]);
-    expect((await recentIssues(db, support.id)).map((r) => r.title)).toEqual([
+    expect((await boardIssues(db, support.id)).map((r) => r.title)).toEqual([
       "support one",
     ]);
   });
 
-  it("finds the desk's newest issue, and an issue number only on its own desk", async () => {
-    const a = await issueOn(test, "test one");
-    const b = await issueOn(support, "support one");
-    expect((await deskIssue(db, test.id))?.id).toBe(a.id);
-    expect((await deskIssue(db, support.id))?.id).toBe(b.id);
-    expect((await deskIssue(db, test.id, a.number))?.id).toBe(a.id);
-    expect(await deskIssue(db, test.id, b.number)).toBeUndefined();
+  it("shows open tickets by default and one status on a filter", async () => {
+    await issueOn(test, "open one");
+    const b = await issueOn(test, "closed one");
+    await setStatus(db, b.id, "closed");
+    const titles = async (f: Parameters<typeof boardIssues>[2]) =>
+      (await boardIssues(db, test.id, f)).map((r) => r.title);
+    expect(await titles("open")).toEqual(["open one"]);
+    expect(await titles("closed")).toEqual(["closed one"]);
+    expect(await titles("new")).toEqual(["open one"]);
+    expect(parseBoardFilter(null)).toBe("open");
+    expect(parseBoardFilter("on_hold")).toBe("on_hold");
+    expect(parseBoardFilter("deleted")).toBeNull();
+  });
+
+  it("gives each row its newest draft status and the Linear state linear-sync stored", async () => {
+    const a = await issueOn(test, "a");
+    const b = await issueOn(test, "b");
+    await createDraft(db, { issueId: a.id, text: "first" });
+    await db.query("update drafts set status = 'superseded'");
+    await createDraft(db, { issueId: a.id, text: "second" });
+    await markLinearChecked(db, a.id, "In Progress");
+    const rows = await boardIssues(db, test.id);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(a.id)).toMatchObject({
+      draftStatus: "pending",
+      linearState: "In Progress",
+    });
+    expect(byId.get(b.id)).toMatchObject({
+      draftStatus: null,
+      linearState: null,
+    });
+  });
+
+  it("opens a ticket only on its own desk, with its pending draft", async () => {
+    const a = await issueOn(test, "mine");
+    const b = await issueOn(support, "theirs");
+    const draft = await createDraft(db, {
+      issueId: a.id,
+      text: "Try again",
+      cardChannel: "C0TESTTRI",
+      cardTs: "1790200000.000100",
+    });
+    const t = await deskTicket(db, test.id, a.id);
+    expect(t?.pendingDraft).toEqual({
+      id: draft.id,
+      text: "Try again",
+      cardChannel: "C0TESTTRI",
+      cardTs: "1790200000.000100",
+    });
+    expect(await deskTicket(db, test.id, b.id)).toBeNull();
+    expect((await deskTicket(db, support.id, b.id))?.pendingDraft).toBeNull();
+  });
+
+  it("summarizes an account of the desk, and refuses another desk's", async () => {
+    const a = await issueOn(test, "open");
+    const b = await issueOn(test, "closed recently");
+    const c = await issueOn(test, "closed long ago");
+    await setStatus(db, b.id, "closed");
+    await setStatus(db, c.id, "closed");
+    await db.query(
+      "update issues set closed_at = now() - interval '40 days' where id = $1",
+      [c.id],
+    );
+    await linkMessage(db, {
+      issueId: a.id,
+      source: "slack",
+      sourceEventId: "ev-1",
+      direction: "customer",
+      slack: { channel: "C0CUSTTEST", ts: "1790300000.000100" },
+      userId: "U0CUST",
+      text: "hello",
+    });
+    const view = await deskAccount(db, test.id, a.accountId);
+    expect(view).toMatchObject({
+      name: "Acct test",
+      channelId: "C0CUSTTEST",
+      open: 1,
+      closedLast30Days: 1,
+    });
+    expect(view?.lastContactAt).toBeInstanceOf(Date);
+    expect(view?.tickets.map((t) => t.title)).toEqual([
+      "closed long ago",
+      "closed recently",
+      "open",
+    ]);
+    expect(await deskAccount(db, support.id, a.accountId)).toBeNull();
   });
 
   it("limits metrics to the desk's issues in the window", async () => {
@@ -122,6 +212,46 @@ describe("desk-scoped reads", () => {
     expect(scopeReceipts(failed, owners, test.id).map((r) => r.id)).toEqual([
       "11",
       "13",
+    ]);
+  });
+});
+
+describe("deskPeople", () => {
+  it("lists the desk's owners, draft deciders and teammates, not its customers or another desk's", async () => {
+    const a = await issueOn(test, "a");
+    const b = await issueOn(support, "b");
+    await db.query(
+      "update issues set owner_slack_id = 'U0OWNER' where id = $1",
+      [a.id],
+    );
+    await db.query(
+      "update issues set owner_slack_id = 'U0OTHERDESK' where id = $1",
+      [b.id],
+    );
+    await createDraft(db, { issueId: a.id, text: "d" });
+    await db.query(
+      "update drafts set status = 'approved', decided_by = 'U0DECIDER'",
+    );
+    const say = (
+      userId: string,
+      direction: "customer" | "internal",
+      n: number,
+    ) =>
+      linkMessage(db, {
+        issueId: a.id,
+        source: "slack",
+        sourceEventId: `ev-p${n}`,
+        direction,
+        slack: { channel: "C0X", ts: `1790400000.00010${n}` },
+        userId,
+        text: "t",
+      });
+    await say("U0CUSTOMER", "customer", 1);
+    await say("U0TEAMMATE", "internal", 2);
+    expect((await deskPeople(db, test.id)).sort()).toEqual([
+      "U0DECIDER",
+      "U0OWNER",
+      "U0TEAMMATE",
     ]);
   });
 });
