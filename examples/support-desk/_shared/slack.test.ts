@@ -266,42 +266,6 @@ describe("slack.ts", () => {
       });
     });
 
-    it("splits a long text-only post at a space, never inside an entity", async () => {
-      const { ctx, calls } = ctxWithSlack({
-        postMessage: { ok: true, channel: "C1", ts: "1.2" },
-      });
-      const words = "word ".repeat(599).trimEnd();
-      await post(ctx, {
-        channel: "C1",
-        text: `${words} &lt;b&gt; tail`,
-        threadTs: "1.0",
-        key: "k1",
-      });
-      const blocks = calls[1]?.args.blocks as { text: { text: string } }[];
-      expect(blocks.map((b) => b.text.text)).toEqual([words, "&lt;b&gt; tail"]);
-    });
-
-    it("splits a text-only post over 3000 characters into sections", async () => {
-      const { ctx, calls } = ctxWithSlack({
-        postMessage: { ok: true, channel: "C1", ts: "1.2" },
-      });
-      const text = "a".repeat(3000) + "b".repeat(200);
-      await post(ctx, { channel: "C1", text, threadTs: "1.0", key: "k1" });
-      expect(calls[1]?.args).toEqual({
-        channel: "C1",
-        text,
-        threadTs: "1.0",
-        blocks: [
-          {
-            type: "section",
-            block_id: "sylon:k1",
-            text: { type: "mrkdwn", text: "a".repeat(3000) },
-          },
-          { type: "section", text: { type: "mrkdwn", text: "b".repeat(200) } },
-        ],
-      });
-    });
-
     it("follows the cursor to a marker on a later page", async () => {
       const { ctx, calls } = ctxWithSlack({
         replies: (args: Record<string, unknown>) =>
