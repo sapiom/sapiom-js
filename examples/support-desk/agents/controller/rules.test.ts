@@ -4,6 +4,8 @@ import {
   dueEscalations,
   dueNudges,
   escalationKey,
+  escalationTimes,
+  nudgeRounds,
   type EscalationInput,
   nudgeKey,
   skipKey,
@@ -703,5 +705,152 @@ describe("with sla", () => {
     expect(at(new Date(drafted.getTime() + 15 * min), input)).toEqual([
       "draft_pending:draft-1:1",
     ]);
+  });
+});
+
+describe("nudgeRounds (when each next round comes due)", () => {
+  const rounds = (over: Partial<RuleInput>) =>
+    nudgeRounds({
+      issues: [],
+      drafts: [],
+      messages: [],
+      sent: [],
+      now: NOW,
+      minutes: MINUTES,
+      repeatMinutes: [60, 240],
+      ...over,
+    }).map((n) => [n.key, n.dueAt.toISOString()]);
+
+  it("dates a fresh condition at its threshold, due or not", () => {
+    const fresh = ago(60_000);
+    expect(rounds({ issues: [issue({ createdAt: fresh })] })).toEqual([
+      [
+        "no_owner:issue-1:1",
+        new Date(fresh.getTime() + AT_THRESHOLD).toISOString(),
+      ],
+      [
+        "no_draft:issue-1:1",
+        new Date(fresh.getTime() + AT_THRESHOLD).toISOString(),
+      ],
+    ]);
+  });
+
+  it("dates a repeat round at the later of the threshold and the gap after the last round", () => {
+    const sentAt = ago(10 * 60_000);
+    expect(
+      rounds({
+        issues: [issue({ ownerSlackId: "U1" })],
+        drafts: [draft()],
+        sent: [
+          { issueId: "issue-1", kind: "draft_pending:draft-1:1", sentAt },
+          { issueId: "issue-1", kind: "draft_pending:draft-1:2", sentAt },
+        ],
+      }),
+    ).toEqual([
+      [
+        "draft_pending:draft-1:3",
+        new Date(sentAt.getTime() + 240 * 60_000).toISOString(),
+      ],
+    ]);
+  });
+
+  it("dates nothing once the rounds run out, after a no-reply verdict, or on hold", () => {
+    expect(
+      rounds({
+        issues: [issue({ ownerSlackId: "U1" })],
+        drafts: [draft({ status: "approved" })],
+        repeatMinutes: [],
+        sent: [{ issueId: "issue-1", kind: "no_owner:issue-1:1", sentAt: NOW }],
+      }),
+    ).toEqual([]);
+    expect(
+      rounds({
+        issues: [issue({ ownerSlackId: "U1" })],
+        drafts: [draft({ status: "approved" })],
+        messages: [message()],
+        sent: [
+          {
+            issueId: "issue-1",
+            kind: skipKey("customer_waiting", "msg-1"),
+            sentAt: NOW,
+          },
+        ],
+      }),
+    ).toEqual([]);
+    expect(
+      rounds({
+        issues: [issue({ ownerSlackId: "U1", status: "on_hold" })],
+        drafts: [draft()],
+        messages: [message()],
+      }),
+    ).toEqual([]);
+  });
+
+  it("agrees with dueNudges at every instant", () => {
+    const input = {
+      issues: [issue({ createdAt: ago(3 * 60_000) })],
+      drafts: [],
+      messages: [message({ createdAt: ago(60_000) })],
+      sent: [],
+      minutes: MINUTES,
+      repeatMinutes: [60],
+    };
+    for (const offset of [
+      0,
+      2 * 60_000 - 1,
+      2 * 60_000,
+      4 * 60_000,
+      70 * 60_000,
+    ]) {
+      const now = new Date(NOW.getTime() + offset);
+      const due = nudgeRounds({ ...input, now })
+        .filter((n) => n.dueAt.getTime() <= now.getTime())
+        .map((n) => n.key);
+      expect(due).toEqual(dueNudges({ ...input, now }).map((n) => n.key));
+    }
+  });
+});
+
+describe("escalationTimes", () => {
+  const base: EscalationInput = {
+    issues: [issue({ createdAt: ago(10 * 60_000) })],
+    messages: [],
+    sent: [],
+    now: NOW,
+    levels: { "desk-1": [5, 60] },
+    defaultDeskId: "desk-1",
+  };
+
+  it("dates the first unsent level from the oldest holding condition", () => {
+    expect(escalationTimes(base)).toEqual([
+      {
+        issueId: "issue-1",
+        dueAt: new Date(ago(10 * 60_000).getTime() + 5 * 60_000),
+      },
+    ]);
+    expect(
+      escalationTimes({
+        ...base,
+        sent: [{ issueId: "issue-1", kind: escalationKey(1) }],
+      }),
+    ).toEqual([
+      {
+        issueId: "issue-1",
+        dueAt: new Date(ago(10 * 60_000).getTime() + 60 * 60_000),
+      },
+    ]);
+  });
+
+  it("dates nothing after the last level, for a desk with nobody to notify, or with no condition", () => {
+    expect(
+      escalationTimes({
+        ...base,
+        sent: [{ issueId: "issue-1", kind: escalationKey(2) }],
+      }),
+    ).toEqual([]);
+    expect(escalationTimes(base, new Set(["desk-1"]))).toEqual([]);
+    expect(
+      escalationTimes({ ...base, issues: [issue({ ownerSlackId: "U1" })] }),
+    ).toEqual([]);
   });
 });

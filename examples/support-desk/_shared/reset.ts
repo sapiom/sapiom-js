@@ -4,12 +4,14 @@
  * Intake links a new top-level customer message to any open issue of the account that Jev judges
  * to be the same problem, so issues left open from a rehearsal would capture the demo's messages.
  * Each issue moves through `setStatus` (the status machine), and its triage card is redrawn from
- * the row so the channel shows it Closed. Linear issues are left as they are.
+ * the row so the channel shows it Closed, and its controller timer is cancelled so it starts no
+ * run. Linear issues are left as they are.
  */
 import { issueCard, issueCardText } from "./blocks";
 import type { Db } from "./db";
 import { listDesks } from "./desks";
 import { OPEN_STATUSES, getAccount, setStatus } from "./issues";
+import { rescheduleIssue } from "./timers";
 import type { IssueStatus } from "./issues";
 import { update } from "./slack";
 import type { SlackCtx } from "./slack";
@@ -55,6 +57,15 @@ export async function resetBoard(
       continue;
     }
     const issue = await setStatus(db, row.id, "closed");
+    // A closed issue's next tick would only clear its timer; cancel it now instead. Best effort:
+    // a timer left behind costs one run that sends nothing.
+    if (issue.nextTickId)
+      await rescheduleIssue(db, ctx, issue.id).catch((err: unknown) =>
+        ctx.logger.warn("ticket timer not cancelled", {
+          issueId: issue.id,
+          err: String(err),
+        }),
+      );
     let card = "no card";
     if (issue.triageRootTs) {
       const account = await getAccount(db, issue.accountId);

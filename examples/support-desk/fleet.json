@@ -16,7 +16,6 @@
         "escalation",
         "controller",
         "urgent-pager",
-        "linear-sync",
         "watchdog",
         "digest"
       ]
@@ -25,7 +24,7 @@
       "provider": "linear",
       "relaySlug": "linear",
       "discover": true,
-      "requiredBy": ["escalation", "linear-sync"]
+      "requiredBy": ["escalation", "controller"]
     }
   ],
   "projects": [
@@ -44,10 +43,6 @@
     {
       "key": "controller",
       "path": "agents/controller"
-    },
-    {
-      "key": "linear-sync",
-      "path": "agents/linear-sync"
     },
     {
       "key": "urgent-pager",
@@ -113,16 +108,6 @@
       "project": "escalation",
       "kind": "event",
       "eventType": "issue.escalate"
-    },
-    {
-      "project": "controller",
-      "kind": "schedule_cron",
-      "cron": "*/2 * * * *"
-    },
-    {
-      "project": "linear-sync",
-      "kind": "schedule_cron",
-      "cron": "*/2 * * * *"
     },
     {
       "project": "urgent-pager",

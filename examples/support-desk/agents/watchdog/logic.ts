@@ -22,7 +22,6 @@ export const WATCHED_SLUGS: readonly string[] = [
   "copilot",
   "escalation",
   "controller",
-  "linear-sync",
   "urgent-pager",
   "digest",
 ].map((key) => agentSlug(key));
@@ -88,7 +87,7 @@ export function actionItems(
     items.push(
       "If no draft reached the triage thread, reply to the customer by hand.",
     );
-  if (/(escalation|linear-sync)$/.test(agent))
+  if (/(escalation|controller)$/.test(agent))
     items.push(
       "If the error is a Linear 401, 403 or scope error, reconnect Linear in Connectors.",
     );

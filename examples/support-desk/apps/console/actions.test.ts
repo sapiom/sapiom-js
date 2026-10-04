@@ -138,6 +138,14 @@ describe("planAction", () => {
       ok: false,
       status: 409,
     });
+    expect(planAction("resolve", target(), ACTOR)).toMatchObject({
+      ok: false,
+      status: 409,
+      reason: "the ticket is not On Hold",
+    });
+    expect(
+      planAction("resolve", target({ status: "on_hold" }), ACTOR),
+    ).toMatchObject({ ok: true });
     expect(planAction("dismiss", target({}, false), ACTOR)).toMatchObject({
       ok: false,
       status: 409,

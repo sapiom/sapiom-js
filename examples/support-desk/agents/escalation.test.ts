@@ -491,7 +491,7 @@ describe("escalation against the relay (mocked fetch)", () => {
         id: "SAP-900",
         uuid: "u-900",
         url: "https://linear.app/x/issue/SAP-900",
-        description: `Support desk issue #1 · ${marker(issueId)}\n\n…`,
+        description: `Support desk ticket 1 · ${marker(issueId)}\n\n…`,
       },
     ];
     const { ctx } = liveCtx();
@@ -716,5 +716,8 @@ describe("linearDescription", () => {
       "[Customer thread in Slack](https://slack.com/archives/C1/p1)",
     );
     expect(text).toContain(`${FLEET_ID}:i-1`);
+    // Linear autolinks a bare "#7" to a GitHub pull request; the number goes without it.
+    expect(text).toContain("Support desk ticket 7");
+    expect(text).not.toMatch(/#\d/);
   });
 });

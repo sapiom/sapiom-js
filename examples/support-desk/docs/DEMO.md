@@ -11,7 +11,7 @@ our own runs on 2026-10-02.
 2. **Install without urgent-pager.** `pnpm run setup --skip urgent-pager` (or plain
    `pnpm run setup`, which leaves optional agents out). Expect `no changes` if nothing moved since
    the last rehearsal, or about 40 s for a full deploy. Confirm the summary lists every trigger
-   as attached, including `controller ← cron */2 * * * *`.
+   as attached. The controller has none of its own: each ticket sets its own timer.
 3. **Take urgent-pager out** if a rehearsal left it in, so it can be added live: detach its
    `issue.created` trigger (`DELETE /v1/workflows/triggers/<id>`; the id is in
    `.sapiom/fleet-state.json`). setup re-attaches it.
@@ -46,8 +46,8 @@ our own runs on 2026-10-02.
    Issues. The triage thread gets "Tracked as SAP-n" with the link; the customer thread gets "I've passed
    this to our engineering team and will follow up in this thread." The card shows On Hold and the Linear id.
 9. **Nudges.** After the desk's `nudgeMinutes` (5 in the demo), the controller posts "No owner yet", "Draft waiting
-   for a decision" and "Customer is waiting for a reply" in the triage threads. To show it on demand, run
-   `sapiom agents run --input '{"jevCheck":true}'` in `agents/controller`.
+   for a decision" and "Customer is waiting for a reply" in the triage threads, when that ticket's timer
+   fires. To show it on demand, run `sapiom agents run --input '{"issueId":"<id>"}'` in `agents/controller`.
    With an `sla` key set (README, SLAs), the nudges follow each priority's target instead.
 
 Afterwards: `pnpm run reset-demo`, and cancel the Linear issues the escalation created.
@@ -71,10 +71,10 @@ in a test org or with a throwaway issue; it creates one Linear issue.
 
 ## Troubleshooting
 
-| Symptom                                     | Check                                                                                                |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| No receipt for a customer post              | The post came from a bot or was an edit; the connector drops both. Post as a real user.              |
-| A demo message joined an old issue          | An issue was left open. `pnpm run reset-demo`, then post again.                                      |
-| No draft card                               | The copilot's `issue.created` trigger is detached; rerun `pnpm run setup`.                           |
-| No DM for the outage                        | Intake classified it below urgent (the issue card shows the priority), or urgent-pager is not armed. |
-| Nudges every 2 minutes in the test channels | The controller cron is attached. Detach it between rehearsals; `pnpm run setup` re-attaches it.      |
+| Symptom                                        | Check                                                                                                            |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| No receipt for a customer post                 | The post came from a bot or was an edit; the connector drops both. Post as a real user.                          |
+| A demo message joined an old issue             | An issue was left open. `pnpm run reset-demo`, then post again.                                                  |
+| No draft card                                  | The copilot's `issue.created` trigger is detached; rerun `pnpm run setup`.                                       |
+| No DM for the outage                           | Intake classified it below urgent (the issue card shows the priority), or urgent-pager is not armed.             |
+| Nudges in the test channels between rehearsals | Open tickets keep their timers. `pnpm run reset-demo` closes them; a closed ticket's next tick clears its timer. |

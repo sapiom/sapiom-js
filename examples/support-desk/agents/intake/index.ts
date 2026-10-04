@@ -1,7 +1,9 @@
 /**
  * intake: the Slack source adapter. A customer message becomes a classified issue (or a follow-up
  * on an open one), an issue card in the triage channel, and an `issue.created` or
- * `issue.message_added` event. Also owns the `issue.*` buttons (Take, Close) and the 🎫 reaction.
+ * `issue.message_added` event. Also owns the `issue.*` buttons (Take, Close, Resolved) and the 🎫
+ * reaction. After each change to an issue it resets the issue's controller timer
+ * (`_shared/timers.ts`); a customer message on an On Hold issue also reads its Linear issue.
  *
  * Triggers: `slack.message.created`, `slack.reaction_added`, `slack.block_actions`. Triggers match
  * on type only, so `guard` filters and routes.
@@ -66,7 +68,13 @@ import {
   type Issue,
 } from "../../_shared/issues";
 import { commentIssue, getIssue as getLinearIssue } from "../../_shared/linear";
-import { resolution } from "../linear-sync/rules";
+import {
+  checkLinear,
+  redrawCard,
+  resolution,
+  resolveByHand,
+} from "../../_shared/linear-check";
+import { rescheduleIssue } from "../../_shared/timers";
 import {
   type SlackCtx,
   permalink,
@@ -442,6 +450,8 @@ const team = defineStep({
             )}`,
           });
       }
+      // The team answered: the customer_waiting and draft_pending clocks stop.
+      await rescheduleIssue(db, ctx, issue.id);
       return terminate({
         outcome: "team_reply",
         messageId: message.id,
@@ -898,7 +908,13 @@ const notify = defineStep({
   inputSchema: Persisted,
   async run(input, ctx) {
     return withDb(ctx, async (db) => {
-      const issue = await getIssue(db, input.issueId!);
+      let issue = await getIssue(db, input.issueId!);
+      // The customer wrote on an escalated issue: Linear may already be done with it, so read it
+      // now rather than at the On Hold check's next backoff point.
+      if (input.decision === "link" && issue.status === "on_hold") {
+        await checkLinear(ctx, db, issue, AGENT);
+        issue = await getIssue(db, issue.id);
+      }
       const envelope = {
         issueId: issue.id,
         accountId: issue.accountId,
@@ -920,6 +936,7 @@ const notify = defineStep({
               messageId: input.messageId,
               text: slackToPlain(input.text),
             });
+      await rescheduleIssue(db, ctx, issue.id);
       return goto("settle", {
         incoming: input.incoming,
         outcome: input.decision === "open" ? "opened" : "linked",
@@ -981,7 +998,7 @@ async function settleClicked(
 }
 
 /**
- * Closed issues leave linear-sync's On Hold scan, so an unresolved Linear ticket is flagged here.
+ * A closed issue's Linear issue is never read again, so an unresolved Linear ticket is flagged here.
  * Never throws: the close is already committed and a retried step would see it as already closed.
  */
 export async function noteOpenLinear(
@@ -1023,7 +1040,7 @@ export async function noteOpenLinear(
     await commentIssue(
       ctx,
       linear.id,
-      `Support issue #${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
+      `Support desk ticket ${issue.number} was closed in Slack while this ticket was still open. Cancel this ticket if it no longer needs work.`,
     );
   } catch (err) {
     ctx.logger.warn("open Linear comment not added", {
@@ -1045,9 +1062,9 @@ const button = defineStep({
     if (!issueId.success)
       return terminate({ skipped: `no issue id in ${action.action_id}` });
     const clicker = input.user.id;
+    const known = verb === "take" || verb === "close" || verb === "resolve";
     // Before any database work, so the click shows at once; every path below redraws the card.
-    if (verb === "take" || verb === "close")
-      await showWorking(ctx, input, verb, workingCard);
+    if (known) await showWorking(ctx, input, verb, workingCard);
 
     return withDb(ctx, async (db) => {
       // Restrict issue decisions to desk or stored card channels so forged customer clicks cannot
@@ -1098,10 +1115,47 @@ const button = defineStep({
       }
       const triageChannel = rows[0].triage_channel ?? owner.triageChannel;
       await recordRun(db, ctx, AGENT, issueId.data);
-      if (verb !== "take" && verb !== "close")
+      if (!known)
         return terminate({
           skipped: `unknown issue action ${action.action_id}`,
         });
+
+      if (verb === "resolve") {
+        const current = await getIssue(db, issueId.data);
+        const moved = await resolveByHand(
+          ctx,
+          db,
+          triageChannel,
+          current,
+          clicker,
+        );
+        const issue = moved ?? (await getIssue(db, issueId.data));
+        if (moved) await redrawCard(ctx, db, triageChannel, moved);
+        else
+          await refreshCard(
+            ctx,
+            db,
+            triageChannel,
+            issue,
+            await getAccount(db, issue.accountId),
+          );
+        if (input.container?.message_ts !== issue.triageRootTs)
+          await settleClicked(
+            ctx,
+            input,
+            moved
+              ? `Resolved by <@${clicker}>`
+              : `Not On Hold (${issue.status.replace("_", " ")})`,
+          );
+        await rescheduleIssue(db, ctx, issue.id);
+        return terminate({
+          outcome: verb,
+          changed: Boolean(moved),
+          issueId: issue.id,
+          status: issue.status,
+          owner: issue.ownerSlackId,
+        });
+      }
 
       // Decided under the row lock, so of two overlapping Close clicks only the one that moved the
       // issue posts "Closed by". Take on an unowned issue is last-click-wins by design.
@@ -1150,6 +1204,8 @@ const button = defineStep({
         if (verb === "close" && changed)
           await noteOpenLinear(ctx, triageChannel, issue);
       }
+      // Take stops no_owner; Close cancels the timer.
+      if (changed) await rescheduleIssue(db, ctx, issue.id);
       return terminate({
         outcome: verb,
         changed,
@@ -1164,7 +1220,7 @@ const button = defineStep({
 export const agent = defineAgent({
   name: AGENT,
   description:
-    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close and the ticket reaction.",
+    "Support desk intake: a customer Slack message becomes a classified issue or a follow-up, an issue card in triage, and an issue.* event. Handles Take, Close, Resolved and the ticket reaction, and resets each changed issue's controller timer.",
   entry: "guard",
   steps: {
     guard,

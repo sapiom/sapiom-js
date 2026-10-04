@@ -151,6 +151,17 @@ export function missingTriggers(
 export const RETIRED_TRIGGERS: readonly FleetTrigger[] = [
   // The watchdog's poll, replaced by `sapiom.run.failed`.
   { project: "watchdog", kind: "schedule_cron", cron: "*/5 * * * *" },
+  // The controller's scan, replaced by per-ticket timers (`_shared/timers.ts`).
+  { project: "controller", kind: "schedule_cron", cron: "*/2 * * * *" },
+];
+
+/**
+ * Agents fleet.json no longer lists. Setup detaches every trigger still attached to one, so a
+ * deployed copy stops running; the definition itself is left for the operator to delete.
+ */
+export const RETIRED_PROJECTS: readonly string[] = [
+  // Folded into the controller's On Hold tick and the Resolved button.
+  "linear-sync",
 ];
 
 /** One project's attached triggers that match a retired one; a disabled trigger is already gone. */

@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { getConfigOr, setConfig } from "../../_shared/config";
 import { memoryDb, type Db } from "../../_shared/db";
 import { upsertDesk } from "../../_shared/desks";
+import { agentSlug } from "../../_shared/fleet-id";
 import { ensureAccount, openIssue } from "../../_shared/issues";
 import { EXAMPLE_SLA } from "../../_shared/test-ctx";
 
@@ -54,8 +55,33 @@ function call(method: string, url: string, body?: unknown) {
 }
 
 let db: Db;
+/** The Sapiom API calls the server made; answered offline below. */
+const apiCalls: { method: string; url: string; body: unknown }[] = [];
 
 beforeAll(async () => {
+  // Offline: the server's Sapiom API calls get canned answers, and the key is a placeholder.
+  vi.stubEnv("SAPIOM_API_KEY", "test-key");
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+    const method = init.method ?? "GET";
+    apiCalls.push({
+      method,
+      url,
+      body: init.body ? JSON.parse(init.body as string) : undefined,
+    });
+    const json = (v: unknown) => new Response(JSON.stringify(v));
+    if (url.endsWith("/v1/workflows/definitions?limit=200"))
+      return json([{ id: "def-ctl", slug: agentSlug("controller") }]);
+    if (
+      url.endsWith(
+        `/v1/workflows/definitions/${agentSlug("controller")}/triggers`,
+      )
+    )
+      return json([]);
+    if (url.endsWith("/v1/workflows/executions") && method === "POST")
+      // The engine's answer: the run id is `executionId`, not `id`.
+      return json({ status: "running", executionId: "exec-rearm" });
+    return new Response("not found", { status: 404 });
+  });
   db = await memoryDb();
   captured.db = db;
   const desk = (
@@ -97,10 +123,19 @@ describe("console server SLA routes", () => {
     expect(bad.body.error).toMatch(/timeZone/);
     expect(await getConfigOr({ ...db }, "sla", null)).toBeNull();
 
+    apiCalls.length = 0;
+    // A saved target moves when tickets come due, so every open ticket's timer is reset.
     expect(await call("PUT", "/api/sla", EXAMPLE_SLA)).toEqual({
       status: 200,
-      body: { sla: EXAMPLE_SLA },
+      body: { sla: EXAMPLE_SLA, timers: { reset: true, run: "exec-rearm" } },
     });
+    expect(apiCalls.filter((c) => c.method === "POST")).toEqual([
+      {
+        method: "POST",
+        url: expect.stringMatching(/\/v1\/workflows\/executions$/),
+        body: { definitionId: "def-ctl", input: {} },
+      },
+    ]);
     expect(await call("GET", "/api/sla")).toEqual({
       status: 200,
       body: { sla: EXAMPLE_SLA },
@@ -112,7 +147,7 @@ describe("console server SLA routes", () => {
 
     expect(await call("DELETE", "/api/sla")).toEqual({
       status: 200,
-      body: { sla: null },
+      body: { sla: null, timers: { reset: true, run: "exec-rearm" } },
     });
     expect(await getConfigOr({ ...db }, "sla", null)).toBeNull();
   });
@@ -140,5 +175,23 @@ describe("console server SLA routes", () => {
     expect(issue.slaKind).toBe("first_response");
     expect(issue.slaLabel).toMatch(/^first response in 1[45]m$/);
     expect(typeof issue.slaDueAt).toBe("string");
+  });
+});
+
+describe("console server controller switch", () => {
+  it("names the started run in the switch's and Reset ticket timers' responses", async () => {
+    const off = await call("POST", "/api/agents/controller/off");
+    expect(off).toMatchObject({
+      status: 200,
+      body: { key: "controller", on: false, run: "exec-rearm" },
+    });
+    expect(await getConfigOr({ ...db }, "controller.paused", null)).toBe(true);
+    const on = await call("POST", "/api/agents/controller/on");
+    expect(on.body).toMatchObject({ on: true, run: "exec-rearm" });
+    expect(await getConfigOr({ ...db }, "controller.paused", null)).toBe(false);
+    expect(await call("POST", "/api/controller/run")).toEqual({
+      status: 200,
+      body: { executionId: "exec-rearm", status: "running" },
+    });
   });
 });

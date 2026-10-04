@@ -14,7 +14,7 @@ export type ActionOwner = (typeof ACTION_OWNERS)[number];
 
 /** The verbs M1 ships. A new verb is a new entry here plus a handler in the owning agent. */
 export const ACTIONS = {
-  issue: ["take", "close"],
+  issue: ["take", "close", "resolve"],
   draft: ["approve", "escalate", "dismiss"],
 } as const satisfies Record<ActionOwner, readonly string[]>;
 
@@ -169,6 +169,9 @@ export function issueCard(
   const buttons: Block[] = [];
   if (!issue.ownerSlackId && issue.status !== "closed")
     buttons.push(button("issue", "take", "Take", issue.id, "primary"));
+  // Engineering is done with an escalated issue: back to On You without waiting for Linear.
+  if (issue.status === "on_hold")
+    buttons.push(button("issue", "resolve", "Resolved", issue.id));
   if (issue.status !== "closed")
     buttons.push(button("issue", "close", "Close", issue.id));
   if (buttons.length)
@@ -283,6 +286,7 @@ const WORKING: Record<string, string> = {
   dismiss: "Dismissing",
   take: "Taking",
   close: "Closing",
+  resolve: "Resolving",
 };
 
 /**

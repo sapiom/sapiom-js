@@ -5,11 +5,11 @@
  * a fresh App Link wake shows exactly what a running one would. `pnpm run console:build` bundles
  * this file, the page and the `_shared` code into one `dist/server.mjs` that needs no install.
  *
- * Env: CONSOLE_API_KEY (the operator's org key, set by `console:publish`: it lists and
- * changes triggers, starts runs, replays receipts, redraws Slack cards and resolves the database),
- * PORT (default 3000), SAPIOM_API_URL (default production). SAPIOM_API_KEY is the org.read key the
- * platform injects into every App Link; it is only a fallback and cannot write, so a 403 from a
- * switch, Run now, Replay or Reset board means CONSOLE_API_KEY is missing or lacks write.
+ * Env: SAPIOM_API_KEY, the runtime key the platform injects into every App Link wake; on an
+ * org-only link it writes as the publisher. It lists and changes triggers, starts runs, replays
+ * receipts, redraws Slack cards and resolves the database. Nobody pastes a key: a 403 from a
+ * switch, Run now, Replay or Reset board means the link is not org-only or the publisher lacks
+ * that permission. PORT (default 3000), SAPIOM_API_URL (default production).
  *
  * There is no login of its own: the App Link admits only signed-in org members, and its preview
  * URL needs a one-hour token. Because the key is org-wide, every mutating route is scoped to the
@@ -29,7 +29,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { createClient } from "@sapiom/tools";
 
-import { deskEscalation, getConfigOr } from "../../_shared/config";
+import {
+  deskEscalation,
+  getConfigFresh,
+  getConfigOr,
+  setConfig,
+} from "../../_shared/config";
 import {
   DB_HANDLE,
   connectPostgres,
@@ -145,10 +150,10 @@ const API = (process.env.SAPIOM_API_URL ?? "https://api.sapiom.ai").replace(
   /\/+$/,
   "",
 );
-/** The operator's key from publish; the platform's own read-only runtime key is the fallback. */
-const API_KEY = process.env.CONSOLE_API_KEY ?? process.env.SAPIOM_API_KEY ?? "";
+/** The link's injected runtime key. */
+const API_KEY = process.env.SAPIOM_API_KEY ?? "";
 
-/** The operator-keyed client for calls that go through `@sapiom/tools` rather than `sapiom()`. */
+/** The runtime-keyed client for calls that go through `@sapiom/tools` rather than `sapiom()`. */
 const operatorClient = () => createClient({ apiKey: API_KEY });
 
 class HttpError extends Error {
@@ -213,10 +218,35 @@ async function attachedTriggers(
   }
 }
 
+/** Whether the controller's switch is off (`controller.paused`). */
+const controllerPaused = () =>
+  withConsoleDb((d) => getConfigOr(d, "controller.paused", false));
+
 async function fleetState() {
   return Promise.all(
     AGENTS.map(async (a) => {
       const attached = await attachedTriggers(a.slug);
+      // The controller has no trigger of its own: its switch is `controller.paused`, and its
+      // "trigger" is the per-ticket timers that switch arms or clears.
+      if (a.key === CONTROLLER) {
+        const paused = attached ? await controllerPaused() : true;
+        return {
+          key: a.key,
+          slug: a.slug,
+          optional: Boolean(a.optional),
+          deployed: attached !== null,
+          on: attached !== null && !paused,
+          triggers: attached
+            ? [
+                {
+                  label: "per-ticket timers",
+                  state: paused ? "paused" : "active",
+                  id: null,
+                },
+              ]
+            : [],
+        };
+      }
       return {
         key: a.key,
         slug: a.slug,
@@ -229,6 +259,24 @@ async function fleetState() {
   );
 }
 
+/** Start one controller run with no `issueId`: it resets every open ticket's timer. */
+async function rearmTimers() {
+  const slug = agentByKey(CONTROLLER)!.slug;
+  const definitionId = (await definitionIds()).get(slug);
+  if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
+  // The public API starts a run by definition id; the by-slug route is engine-internal. It answers
+  // `{ status, executionId }`; an older engine answered with `id`.
+  const started = await sapiom<{
+    executionId?: string;
+    id?: string;
+    status?: string;
+  }>("POST", "/v1/workflows/executions", { definitionId, input: {} });
+  return {
+    executionId: started.executionId ?? started.id ?? null,
+    status: started.status ?? null,
+  };
+}
+
 /** Turn one agent on or off; returns the trigger ids it created, resumed and deleted. */
 async function setAgent(key: string, on: boolean) {
   const agent = agentByKey(key);
@@ -239,6 +287,36 @@ async function setAgent(key: string, on: boolean) {
       409,
       `${agent.slug} is not deployed: run \`pnpm run setup --only ${key}\``,
     );
+  if (key === CONTROLLER) {
+    // Off: no ticket gets a timer and a tick that still fires sends nothing. Either way one run
+    // resets every open ticket's timer: off clears them, on arms them again.
+    const wasPaused = await withConsoleDb(async (d) => {
+      const was = await getConfigFresh(d, "controller.paused", false);
+      await setConfig(d, "controller.paused", !on, "console");
+      return was;
+    });
+    let run: { executionId: string | null };
+    try {
+      run = await rearmTimers();
+    } catch (err) {
+      // Off stands without the run: a tick that still fires sees the switch and clears itself.
+      // Turning on from off without the run would leave every ticket with no timer, so the
+      // switch goes back to off; an On for a controller already on changes nothing.
+      if (on && wasPaused)
+        await withConsoleDb((d) =>
+          setConfig(d, "controller.paused", true, "console"),
+        );
+      throw err;
+    }
+    return {
+      key,
+      on,
+      created: [],
+      resumed: [],
+      deleted: [],
+      ...(run.executionId ? { run: run.executionId } : {}),
+    };
+  }
   const plan = planSwitch(key, on, attached);
   const created: string[] = [];
   for (const t of plan.create) {
@@ -490,7 +568,12 @@ async function board(d: Db, desk: Desk, url: URL) {
   ]);
   const owners = await ownerNames(rows.map((r) => r.ownerSlackId));
   // Computed per request, so the column is live on every board refresh.
-  const messages = sla ? await issueMessages(d, rows.map((r) => r.id)) : [];
+  const messages = sla
+    ? await issueMessages(
+        d,
+        rows.map((r) => r.id),
+      )
+    : [];
   const slas = boardSla(rows, messages, sla, new Date());
   return {
     desk: desk.slug,
@@ -956,27 +1039,16 @@ const POST: [RegExp, Handler][] = [
       return { verb, untouched: LIVE_AGENT, agents: out };
     },
   ],
-  [
-    /^\/api\/controller\/run$/,
-    async () => {
-      const slug = agentByKey(CONTROLLER)!.slug;
-      const definitionId = (await definitionIds()).get(slug);
-      if (!definitionId) throw new HttpError(409, `${slug} is not deployed`);
-      // The public API starts a run by definition id; the by-slug route is engine-internal.
-      return sapiom("POST", "/v1/workflows/executions", {
-        definitionId,
-        input: {},
-      });
-    },
-  ],
+  // Run now: one controller run that resets every open ticket's timer; anything overdue fires
+  // within a minute.
+  [/^\/api\/controller\/run$/, () => rearmTimers()],
   [
     /^\/api\/board\/reset$/,
     async (_, body, url) => {
       // The page's confirm step sends this; a stray POST closes nothing.
       if (body.confirm !== "reset")
         throw new HttpError(400, 'send { "confirm": "reset" }');
-      // The Slack helpers fall back to the ambient connector, which holds the platform's read-only
-      // key; the operator's client is passed so the card redraw can write.
+      // The card redraw uses the same runtime-keyed client as every other call.
       const ctx = {
         isLocalTrace: false,
         logger: console,
@@ -1083,12 +1155,33 @@ function httpBody(res: { status: number; body: unknown }) {
   return res.body;
 }
 
-// Scope SLA edits to the fleet database because the operator key is org-wide; only saves record
+// Scope SLA edits to the fleet database because the runtime key is org-wide; only saves record
 // set_by.
 async function putSla(body: Record<string, unknown>) {
   const saved = await withConsoleDb((d) => saveSla(d, body));
   if (!saved.ok) throw new HttpError(400, saved.error);
   return { sla: saved.sla };
+}
+
+/**
+ * After a write that moves when tickets come due (nudge minutes, repeat gaps, escalation levels,
+ * SLA targets), reset every open ticket's timer, so a stored timer does not keep the old time. The
+ * write stands if the run cannot start; the response says so.
+ */
+async function retimed<T extends object>(write: Promise<T>) {
+  const res = await write;
+  try {
+    const run = await rearmTimers();
+    return { ...res, timers: { reset: true, run: run.executionId } };
+  } catch (err) {
+    return {
+      ...res,
+      timers: {
+        reset: false,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
 }
 
 const PUT: [RegExp, Handler][] = [
@@ -1101,35 +1194,41 @@ const PUT: [RegExp, Handler][] = [
   [
     /^\/api\/escalation$/,
     (_, body, url) =>
-      withConsoleDb(async (d) => {
-        const desk = await deskOf(d, url);
-        const res = httpBody(await putEscalation(d, desk, body));
-        // The escalation on-call is on the Acting-as list.
-        memberLists.delete(desk.id);
-        return res;
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          const desk = await deskOf(d, url);
+          const res = httpBody(await putEscalation(d, desk, body)) as object;
+          // The escalation on-call is on the Acting-as list.
+          memberLists.delete(desk.id);
+          return res;
+        }),
+      ),
   ],
   [
     /^\/api\/settings\/desk$/,
     (_, body, url) =>
-      withConsoleDb(async (d) => {
-        const desk = await deskOf(d, url);
-        const res = await putDeskSettings(d, desk, body);
-        // The Linear project or the on-call may have changed; drop what was cached for the desk.
-        projects.delete(desk.id);
-        memberLists.delete(desk.id);
-        return settingsView(d, desk, res);
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          const desk = await deskOf(d, url);
+          const res = await putDeskSettings(d, desk, body);
+          // The Linear project or the on-call may have changed; drop what was cached for the desk.
+          projects.delete(desk.id);
+          memberLists.delete(desk.id);
+          return settingsView(d, desk, res);
+        }),
+      ),
   ],
   [
     /^\/api\/settings\/fleet$/,
     (_, body, url) =>
-      withConsoleDb(async (d) => {
-        const desk = await deskOf(d, url);
-        return settingsView(d, desk, await putFleetSettings(d, desk, body));
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          const desk = await deskOf(d, url);
+          return settingsView(d, desk, await putFleetSettings(d, desk, body));
+        }),
+      ),
   ],
-  [/^\/api\/sla$/, (_, body) => putSla(body)],
+  [/^\/api\/sla$/, (_, body) => retimed(putSla(body))],
 ];
 
 const DELETE: [RegExp, Handler][] = [
@@ -1137,10 +1236,12 @@ const DELETE: [RegExp, Handler][] = [
   [
     /^\/api\/sla$/,
     () =>
-      withConsoleDb(async (d) => {
-        await clearSla(d);
-        return { sla: null };
-      }),
+      retimed(
+        withConsoleDb(async (d) => {
+          await clearSla(d);
+          return { sla: null };
+        }),
+      ),
   ],
 ];
 
