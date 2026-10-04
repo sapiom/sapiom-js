@@ -172,7 +172,11 @@ test("writes a stamped body without its footer, then is a no-op on the second ru
 // A hand edit anywhere in the committed snapshot, header included, fails this offline:
 // the file must be exactly what the generator renders from its own constants.
 test("the committed snapshot is the generator's output for its own body", async () => {
-  const snapshot = await import(OUTPUT_PATH);
+  // The generated file holds no types, so it loads as JavaScript on every supported Node.
+  const committed = await readFile(OUTPUT_PATH, "utf8");
+  const snapshot = await import(
+    `data:text/javascript,${encodeURIComponent(committed)}`
+  );
   const rendered = await prettier.format(
     renderModule({
       body: snapshot.AUTHORING_INSTRUCTIONS,
@@ -182,5 +186,5 @@ test("the committed snapshot is the generator's output for its own body", async 
     }),
     { filepath: OUTPUT_PATH },
   );
-  assert.equal(await readFile(OUTPUT_PATH, "utf8"), rendered);
+  assert.equal(committed, rendered);
 });
