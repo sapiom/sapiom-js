@@ -17,7 +17,7 @@
  *    hash and active build match `.sapiom/fleet-state.json` is left alone.
  * 5. Attach the fleet.json `triggers` that are missing, after listing the attached ones (cron
  *    triggers are not deduped server-side), and resume matching ones that are paused.
- *    `smokeTriggers` are never attached.
+ *    `smokeTriggers` are never attached. A trigger in `RETIRED_TRIGGERS` (scripts/fleet.ts) is detached.
  * 6. Write `.sapiom/fleet-state.json` (ids and hashes only).
  *
  * Selection: every project that is neither `optional` nor `smoke`; `--only <key>` acts on exactly
@@ -59,13 +59,13 @@ import {
 } from "./_shared/seed";
 import { SlackMethodError, replies, userInfo } from "./_shared/slack";
 import { assertFleetIdSynced } from "./scripts/fleet-id";
-import { WATCHDOG_SECRET, ensureWatchdogKey } from "./scripts/secrets";
 import {
   bundleHash,
   connectorsFor,
   missingTriggers,
   parseArgs,
   pausedToResume,
+  retiredToDetach,
   sameTrigger,
   selectProjects,
   triggerBody,
@@ -342,6 +342,10 @@ async function triggers(
       );
       changed(`${triggerLabel(t)}: attached (trigger ${made.id})`);
     }
+    for (const old of retiredToDetach(p.key, attached)) {
+      await client.request("DELETE", `/triggers/${old.id}`);
+      changed(`${p.key}: detached retired trigger ${old.id}`);
+    }
     const live = await client.get<AttachedTrigger[]>(
       `/definitions/${p.slug}/triggers`,
     );
@@ -350,33 +354,6 @@ async function triggers(
       label: triggerLabel(t),
     }));
   }
-}
-
-/** The watchdog's read-only key, set as an agent secret before its first cron tick. */
-async function secrets(
-  selected: FleetProject[],
-  client: GatewayClient,
-  state: FleetState,
-) {
-  const watchdog = selected.find((p) => p.key === "watchdog");
-  if (!watchdog) return;
-  console.log("secrets");
-  const definitionId = state.projects[watchdog.key]?.definitionId;
-  if (!definitionId)
-    throw new Error(
-      "watchdog has no deployed definition to attach a secret to",
-    );
-  const out = await ensureWatchdogKey(client, definitionId);
-  if (out.outcome === "present") return say(`${WATCHDOG_SECRET}: set`);
-  state.secrets = {
-    ...state.secrets,
-    [watchdog.key]: {
-      name: WATCHDOG_SECRET,
-      keyId: out.keyId,
-      at: new Date().toISOString(),
-    },
-  };
-  changed(`${WATCHDOG_SECRET}: provisioned a read-only key for the watchdog`);
 }
 
 async function main() {
@@ -395,7 +372,6 @@ async function main() {
   const state = loadState();
   try {
     await projects(selected, client, state);
-    await secrets(selected, client, state);
     if (args.noTriggers) console.log("triggers\n  skipped (--no-triggers)");
     else await triggers(selected, client, state);
   } finally {

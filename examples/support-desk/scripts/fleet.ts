@@ -143,6 +143,26 @@ export function missingTriggers(
 }
 
 /**
+ * Triggers fleet.json used to attach and no longer does. Setup otherwise never detaches a trigger,
+ * but one of these would keep firing into an entry step that no longer accepts its input.
+ */
+export const RETIRED_TRIGGERS: readonly FleetTrigger[] = [
+  // The watchdog's poll, replaced by `sapiom.run.failed`.
+  { project: "watchdog", kind: "schedule_cron", cron: "*/5 * * * *" },
+];
+
+/** One project's attached triggers that match a retired one; a disabled trigger is already gone. */
+export function retiredToDetach(
+  project: string,
+  attached: AttachedTrigger[],
+  retired: readonly FleetTrigger[] = RETIRED_TRIGGERS,
+): AttachedTrigger[] {
+  return retired
+    .filter((r) => r.project === project)
+    .flatMap((r) => attached.filter((a) => sameTrigger(r, a)));
+}
+
+/**
  * Paused triggers to resume: for each wanted trigger with no active match, a paused one that
  * matches it. A pause (by the Console, or after repeated failures) would otherwise leave the agent
  * quiet while setup reported its trigger as attached.
@@ -204,6 +224,4 @@ export interface FleetState {
     }
   >;
   triggers: Record<string, { id: string; label: string }[]>;
-  /** Secrets setup provisioned, by project: the secret's name and the minted key's id, never a value. */
-  secrets?: Record<string, { name: string; keyId?: string; at: string }>;
 }

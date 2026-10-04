@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { getConfig, getConfigOr, setConfig } from "./_shared/config";
 import { memoryDb } from "./_shared/db";
-import { Events, SlackEvents } from "./_shared/events";
+import { Events, PlatformEvents, SlackEvents } from "./_shared/events";
 import { accountByChannel } from "./_shared/issues";
 import { defaultDesk, deskBySlug, setDefaultDesk, upsertDesk } from "./_shared/desks";
 import {
@@ -39,6 +39,7 @@ describe("fleet.json", () => {
     const known = new Set([
       ...Object.keys(Events),
       ...Object.keys(SlackEvents),
+      ...Object.keys(PlatformEvents),
     ]);
     for (const t of [...fleet.triggers, ...fleet.smokeTriggers]) {
       expect(keys).toContain(t.project);

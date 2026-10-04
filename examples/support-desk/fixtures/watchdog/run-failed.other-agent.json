@@ -1,0 +1,15 @@
+{
+  "type": "sapiom.run.failed",
+  "description": "A run of an agent outside this fleet failed; the watchdog ignores it.",
+  "payload": {
+    "definitionId": "a1b2c3d4-0000-4000-8000-0000000000f1",
+    "slug": "price-checker",
+    "definitionName": "Price checker",
+    "executionId": "a1b2c3d4-0000-4000-8000-0000000000f2",
+    "failedStep": "scrape",
+    "attempt": 0,
+    "faultClass": "infra",
+    "startedAt": "2026-10-04T10:00:00.000Z",
+    "finishedAt": "2026-10-04T10:00:05.000Z"
+  }
+}

@@ -1,32 +1,22 @@
 /**
- * The watchdog's pure half: which failures are new, what to tell the team to do about each, and
- * the Slack message. No I/O, so every rule here is unit-tested without a network or a database.
+ * The watchdog's pure half: whether a failure is this fleet's, what to tell the team to do about
+ * it, and the Slack message. No I/O, so every rule here is unit-tested without a network or a
+ * database.
  */
-import { escapeMrkdwn, mrkdwnLink, slackToPlain } from "../../_shared/blocks";
+import { escapeMrkdwn, mrkdwnLink } from "../../_shared/blocks";
+import type { RunFailed } from "../../_shared/events";
 import { agentSlug } from "../../_shared/fleet-id";
 import type { Block } from "../../_shared/slack";
 
-/** First run: how far back to look when there is no cursor. */
-export const FIRST_LOOKBACK_MS = 60 * 60 * 1000;
-/**
- * Later runs start this far before the cursor. The list filters on start time and has no
- * finish-time filter, so a run that started before the cursor and failed after it is only seen if
- * the window reaches back past its start. This must exceed the longest plausible run; the
- * reported set makes the overlap harmless.
- */
-export const OVERLAP_MS = 6 * 60 * 60 * 1000;
-/** A "cannot poll" alert for the same problem repeats no more often than this. */
-export const PROBLEM_REPEAT_MS = 60 * 60 * 1000;
-/** Failures posted in one tick; the rest become a single "and N more" line. */
-export const MAX_POSTS = 10;
-export const ERROR_MAX = 300;
-
 export const APP_URL = "https://app.sapiom.ai";
-export const EVENTS_URL = `${APP_URL}/agents/events`;
 export const runUrl = (definitionId: string, executionId: string) =>
   `${APP_URL}/agents/${definitionId}/runs/${executionId}`;
 
-/** Slugs the watchdog polls: the fleet minus itself and the smoke agents. */
+/**
+ * Slugs the watchdog reports: the fleet minus itself and the smoke agents. `sapiom.run.failed`
+ * fires for every agent in the org, so anything else is another fleet's (or nobody's) business.
+ * The engine never sends the watchdog its own failure.
+ */
 export const WATCHED_SLUGS: readonly string[] = [
   "intake",
   "copilot",
@@ -37,230 +27,109 @@ export const WATCHED_SLUGS: readonly string[] = [
   "digest",
 ].map((key) => agentSlug(key));
 
-/** A row of `GET /v1/workflows/executions`. */
-export interface Execution {
-  id: string;
-  name?: string;
-  definitionId: string;
-  status: string;
-  currentStep?: string | null;
-  currentStepAttempt?: number | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-}
+export const isWatched = (slug: string) => WATCHED_SLUGS.includes(slug);
 
-export interface StepRecord {
-  /** The REST detail names it `stepName`; `name` is kept for older shapes. */
-  stepName?: string;
-  name?: string;
-  attempt?: number | null;
-  status: string;
-  error?: unknown;
-  faultClass?: string | null;
-}
-
-/** `GET /v1/workflows/executions/:id`: the row plus the error and per-step records. */
-export interface ExecutionDetail extends Execution {
-  error?: unknown;
-  traceId?: string | null;
-  steps?: StepRecord[];
-}
+/**
+ * One failure's dedup key. A resumed run that fails again is a new failure with the same
+ * execution id, so the finish time is part of the key, as it is of the event's own id.
+ */
+export const failureKey = (e: Pick<RunFailed, "executionId" | "finishedAt">) =>
+  `${e.executionId}:${e.finishedAt ?? ""}`;
 
 export interface Failure {
   executionId: string;
   slug: string;
   definitionId: string;
   step: string;
+  /** 0-based, as the API counts. */
   attempt: number | null;
-  error: string;
   faultClass: string | null;
   startedAt: string | null;
   finishedAt: string | null;
   issueNumber: number | null;
 }
 
-/** Where a poll starts. */
-export function lookbackFrom(cursor: Date | null, now: Date): Date {
-  return new Date(
-    cursor ? cursor.getTime() - OVERLAP_MS : now.getTime() - FIRST_LOOKBACK_MS,
-  );
-}
-
-/**
- * The failures to report, oldest first: not reported before, not the watchdog's own run, and
- * listed once even if two definitions' polls both returned it.
- */
-export function newFailures(
-  rows: Execution[],
-  reported: ReadonlySet<string>,
-  selfExecutionId: string,
-): Execution[] {
-  const seen = new Set<string>();
-  return rows
-    .filter((r) => {
-      if (r.id === selfExecutionId || reported.has(r.id) || seen.has(r.id))
-        return false;
-      seen.add(r.id);
-      return true;
-    })
-    .sort((a, b) => when(a).localeCompare(when(b)));
-}
-
-const when = (e: Execution) => e.finishedAt ?? e.startedAt ?? "";
-
-/** Post the first {@link MAX_POSTS}; the rest are only counted. */
-export function splitBatch<T>(items: T[]): { post: T[]; more: T[] } {
-  return { post: items.slice(0, MAX_POSTS), more: items.slice(MAX_POSTS) };
-}
-
-const text = (v: unknown): string => {
-  if (typeof v === "string") return v;
-  if (v && typeof v === "object") {
-    const m = (v as { message?: unknown }).message;
-    if (typeof m === "string") return m;
-    return JSON.stringify(v);
-  }
-  return "";
-};
-
-/** The failed step (the last one that failed, else the row's current step) and the error text. */
 export function describeFailure(
-  slug: string,
-  row: Execution,
-  detail: ExecutionDetail | null,
+  e: RunFailed,
   issueNumber: number | null,
 ): Failure {
-  const failed = [...(detail?.steps ?? [])]
-    .reverse()
-    .find((s) => s.status.toLowerCase() === "failed");
   return {
-    executionId: row.id,
-    slug,
-    definitionId: row.definitionId,
-    step:
-      failed?.stepName ??
-      failed?.name ??
-      detail?.currentStep ??
-      row.currentStep ??
-      "unknown",
-    attempt:
-      failed?.attempt ??
-      detail?.currentStepAttempt ??
-      row.currentStepAttempt ??
-      null,
-    // The step's own error names the cause (a 400 from a provider, a Slack error code); the run's
-    // error is usually only "exceeded retry cap", so it is the fallback.
-    error: text(failed?.error) || text(detail?.error) || "no error recorded",
-    faultClass: failed?.faultClass ?? null,
-    startedAt: row.startedAt ?? null,
-    finishedAt: row.finishedAt ?? null,
+    executionId: e.executionId,
+    slug: e.slug,
+    definitionId: e.definitionId,
+    step: e.failedStep ?? "unknown",
+    attempt: e.attempt ?? null,
+    faultClass: e.faultClass ?? null,
+    startedAt: e.startedAt ?? null,
+    finishedAt: e.finishedAt ?? null,
     issueNumber,
   };
 }
 
-const SLACK_ERRORS =
-  /not_in_channel|channel_not_found|missing_scope|invalid_auth|token_revoked|account_inactive|is_archived/i;
-const AUTH_OR_SCOPE =
-  /\b40[13]\b|unauthori[sz]ed|forbidden|invalid[_ ]grant|insufficient|scope|expired|token|authenticat|not connected/i;
-const TRANSIENT =
-  /\b(429|5\d\d)\b|rate.?limit|too many requests|overloaded|timed? ?out|timeout|bad gateway|unavailable|ECONNRESET/i;
-const DATABASE =
-  /database|postgres|ECONNREFUSED|connection terminated|relation ".*" does not exist|column ".*" does not exist|deadlock|\bsql\b/i;
-
-const REPLAY = "Replay the run from the Events page once it is fixed.";
+const REPLAY = "Replay the run from its page once the cause is fixed.";
 
 /**
- * Short imperative steps for one failure, most specific first. Several can apply (a Slack error
- * inside the copilot); the generic fallback appears only when nothing else matched.
+ * Short imperative steps for one failure. The event carries no error text, so the advice goes by
+ * fault class and agent, and each step names the error that it applies to; the run page shows the
+ * error itself.
  */
 export function actionItems(
   agent: string,
   step: string,
-  error: string,
-  faultClass?: string | null,
+  faultClass: string | null,
 ): string[] {
-  const items: string[] = [];
-  const e = error;
-  if (SLACK_ERRORS.test(e)) {
+  if (faultClass === "infra")
+    return [
+      "Sapiom could not run the step (dispatch or sandbox); the step's code did not fail.",
+      "Replay the run. If it fails the same way again, send Sapiom the run id.",
+    ];
+  const items = [`Open the run and read the ${step} step's error.`];
+  if (/copilot$/.test(agent))
     items.push(
-      "If the error is not_in_channel or channel_not_found, invite the Slack bot to the channel and check the channel id in config.",
-      "If it is missing_scope or invalid_auth, reconnect Slack in Connectors and grant the scopes it names.",
+      "If no draft reached the triage thread, reply to the customer by hand.",
     );
-  }
-  if (
-    (/linear|mcp/i.test(e) || /escalation/.test(agent)) &&
-    AUTH_OR_SCOPE.test(e) &&
-    !SLACK_ERRORS.test(e)
-  ) {
-    items.push("Reconnect Linear in Connectors and check its write scope.");
-  }
-  if (/no structured draft/i.test(e)) {
+  if (/(escalation|linear-sync)$/.test(agent))
     items.push(
-      "Reply to the customer by hand; the draft was not produced.",
-      "Check the copilot step logs for the model output.",
+      "If the error is a Linear 401, 403 or scope error, reconnect Linear in Connectors.",
     );
-  }
-  if (/model_not_available|llm\.services\.sapiom\.ai.*→ (400|404)\b/i.test(e)) {
-    items.push(
-      "The LLM gateway rejected the model: pass a routing label it serves (sonnet, opus, haiku) as `model`, not a model id, then redeploy the agent.",
-    );
-  }
-  if (/MissingConfigError|config key '.*' is not set/i.test(e)) {
-    items.push(
-      "Run `pnpm run setup` in examples/support-desk to seed the missing config key.",
-    );
-  }
-  if (DATABASE.test(e) && !/MissingConfigError/.test(e)) {
-    items.push(
-      "Check the fleet Postgres resource is up.",
-      "Run `pnpm run setup` to apply pending migrations if a table or column is missing.",
-    );
-  }
-  if (
-    TRANSIENT.test(e) ||
-    /transient|retryable|timeout/i.test(faultClass ?? "")
-  ) {
-    items.push(
-      "Treat as transient (rate limit or upstream 5xx): check the Jev decisions or LLM status.",
-    );
-  }
-  if (items.length === 0) {
-    items.push(
-      `Open the run and read the ${step} step log.`,
-      "Fix the cause named in the error.",
-    );
-  }
-  items.push(REPLAY);
+  items.push(
+    "If it is not_in_channel or channel_not_found, invite the Slack bot to the channel; if it is missing_scope or invalid_auth, reconnect Slack in Connectors.",
+    "If a table, column or config key is missing, rerun setup to apply migrations and seed config.",
+    "If it is a 429 or a 5xx, treat it as transient.",
+    REPLAY,
+  );
   return items;
 }
-
-export const truncate = (s: string, max = ERROR_MAX) =>
-  s.length > max ? `${s.slice(0, max - 1)}…` : s;
 
 const clock = (iso: string | null) =>
   iso ? iso.replace("T", " ").replace(/\.\d+Z$/, "Z") : "unknown";
 
-/** The one message per failed execution: Block Kit with a plain-text fallback. */
+const FAULT: Record<string, string> = {
+  infra: "infra (Sapiom's side)",
+  workload: "workload (the step's code)",
+};
+
+/** The one message per failure: Block Kit with a plain-text fallback. */
 export function failureMessage(f: Failure): { text: string; blocks: Block[] } {
-  const error = escapeMrkdwn(truncate(slackToPlain(f.error)));
   // Attempts are 0-based on the API; people count from 1.
   const attempt = f.attempt != null ? ` (attempt ${f.attempt + 1})` : "";
+  const step = escapeMrkdwn(f.step);
+  const head = `:rotating_light: ${f.slug} failed at ${step}${attempt}`;
+  const fault = f.faultClass
+    ? `\nFault: ${escapeMrkdwn(FAULT[f.faultClass] ?? f.faultClass)}`
+    : "";
   const issue = f.issueNumber != null ? `\nIssue: #${f.issueNumber}` : "";
-  const items = actionItems(f.slug, f.step, f.error, f.faultClass)
+  const items = actionItems(f.slug, f.step, f.faultClass)
     .map((i) => `• ${escapeMrkdwn(i)}`)
     .join("\n");
-  const head = `:rotating_light: ${f.slug} failed at ${f.step}${attempt}`;
   return {
-    // The fallback is read as mrkdwn too, so the run's error cannot carry a live mention.
-    text: escapeMrkdwn(
-      `${slackToPlain(head)}: ${truncate(slackToPlain(f.error), 120)}`,
-    ),
+    text: head,
     blocks: [
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `${head.replace(f.slug, `*${f.slug}*`)}${issue}\n\`\`\`${error.replace(/```/g, "'''")}\`\`\``,
+          text: `${head.replace(f.slug, `*${f.slug}*`)}${fault}${issue}`,
         },
       },
       {
@@ -278,43 +147,4 @@ export function failureMessage(f: Failure): { text: string; blocks: Block[] } {
       },
     ],
   };
-}
-
-export function moreMessage(n: number): string {
-  return `and ${n} more failed ${n === 1 ? "run" : "runs"}: ${mrkdwnLink(EVENTS_URL, "see the Events page")}`;
-}
-
-/**
- * A failed Sapiom API call. Keeps the status so the alert can say what to do, and drops an HTML
- * body (a gateway error page) that would otherwise be pasted into Slack.
- */
-export class ApiError extends Error {
-  constructor(
-    readonly request: string,
-    readonly status: number,
-    body: string,
-  ) {
-    const text = /^\s*</.test(body) ? "" : `: ${body.slice(0, 200)}`;
-    super(`${request} failed (${status})${text}`);
-    this.name = "ApiError";
-  }
-}
-
-/** The status of the failed call behind a poll problem, when there was one. */
-export function problemStatus(err: unknown): number | null {
-  if (err instanceof ApiError) return err.status;
-  const m = /failed \((\d{3})\)/.exec(String(err));
-  return m ? Number(m[1]) : null;
-}
-
-/** The line posted when the watchdog itself cannot read the API, so its own outage is not silent. */
-export function cannotPollMessage(problem: string, status: number | null = null): string {
-  const what = escapeMrkdwn(truncate(slackToPlain(problem)));
-  const advice =
-    status === 401 || status === 403
-      ? "Its key was refused: run `pnpm run setup --only watchdog` to re-provision it."
-      : status === null || status >= 500
-        ? "The Sapiom API was unavailable; the next tick retries. Act only if this repeats for an hour."
-        : "Check the watchdog's run log; run `pnpm run setup --only watchdog` if its key or config changed.";
-  return `:warning: Support desk watchdog cannot poll: ${what}. ${advice}`;
 }
