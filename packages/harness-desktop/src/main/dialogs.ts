@@ -38,12 +38,19 @@ export function initDialogs(deps: { mainWindow: BrowserWindow }): void {
   ipcMain.handle(REVEAL_PATH, (event, target): boolean => revealPath(event, target));
 }
 
+/** Reveal timestamps in the last minute; the same 30/min cap as `POST /api/fs/reveal`. */
+const recentReveals: number[] = [];
+const REVEALS_PER_MINUTE = 30;
+
 /** Exported for the unit test; reached only through the REVEAL_PATH handler. */
-export function revealPath(event: IpcMainInvokeEvent, target: unknown): boolean {
+export function revealPath(event: IpcMainInvokeEvent, target: unknown, now = Date.now()): boolean {
   // Same gate as the picker: page content served on this origin
   // (`/canvas/:sessionId/*`) must not be able to pop file-manager windows.
   if (!isTrustedSender(event)) return false;
   if (typeof target !== "string" || !isAbsolute(target) || !existsSync(target)) return false;
+  while (recentReveals.length > 0 && now - recentReveals[0]! > 60_000) recentReveals.shift();
+  if (recentReveals.length >= REVEALS_PER_MINUTE) return false;
+  recentReveals.push(now);
   shell.showItemInFolder(target);
   return true;
 }

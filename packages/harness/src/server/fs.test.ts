@@ -245,7 +245,7 @@ describe("POST /api/fs/reveal", () => {
     app.use(
       createFsRouter({
         findAgentPath: async (p) => (registered.has(p) ? p : null),
-        reveal: (cmd) => revealed.push(cmd),
+        reveal: (cmd) => void revealed.push(cmd),
         platform: "darwin",
       }),
     );
@@ -322,7 +322,7 @@ describe("POST /api/fs/reveal", () => {
         findAgentPath: async () => {
           throw new Error("registry unavailable");
         },
-        reveal: (cmd) => revealed.push(cmd),
+        reveal: (cmd) => void revealed.push(cmd),
       }),
     );
     app.use((_err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -346,6 +346,32 @@ describe("POST /api/fs/reveal", () => {
     }
   });
 
+  it("answers 500 when the file manager cannot be started", async () => {
+    const app = express();
+    app.use(
+      createFsRouter({
+        findAgentPath: () => agentDir,
+        reveal: () => Promise.reject(new Error("spawn xdg-open ENOENT")),
+      }),
+    );
+    const s = await new Promise<Server>((resolve) => {
+      const srv = app.listen(0, "127.0.0.1", () => resolve(srv));
+    });
+    try {
+      const address = s.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const res = await fetch(`http://127.0.0.1:${port}/api/fs/reveal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: agentDir }),
+      });
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { error: string }).error).toContain("ENOENT");
+    } finally {
+      await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  });
+
   it("rejects a missing or relative path with 400", async () => {
     expect((await post({})).status).toBe(400);
     expect((await post({ path: "my agent" })).status).toBe(400);
@@ -355,7 +381,7 @@ describe("POST /api/fs/reveal", () => {
 
   it("refuses everything when no registry lookup was provided", async () => {
     const app = express();
-    app.use(createFsRouter({ reveal: (cmd) => revealed.push(cmd) }));
+    app.use(createFsRouter({ reveal: (cmd) => void revealed.push(cmd) }));
     const bare = await new Promise<Server>((resolve) => {
       const s = app.listen(0, "127.0.0.1", () => resolve(s));
     });
@@ -379,7 +405,7 @@ describe("POST /api/fs/reveal rate limit", () => {
   it("answers 429 after 30 reveals in a minute", async () => {
     const app = express();
     const revealed: RevealCommand[] = [];
-    app.use(createFsRouter({ findAgentPath: () => os.tmpdir(), reveal: (cmd) => revealed.push(cmd) }));
+    app.use(createFsRouter({ findAgentPath: () => os.tmpdir(), reveal: (cmd) => void revealed.push(cmd) }));
     const s = await new Promise<Server>((resolve) => {
       const srv = app.listen(0, "127.0.0.1", () => resolve(srv));
     });

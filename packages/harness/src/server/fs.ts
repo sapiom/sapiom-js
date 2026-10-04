@@ -61,19 +61,23 @@ export function revealCommand(target: string, platform: NodeJS.Platform): Reveal
   return { command: "xdg-open", args: [target] };
 }
 
-function spawnReveal(cmd: RevealCommand): void {
-  const child = spawn(cmd.command, cmd.args, {
-    detached: true,
-    stdio: "ignore",
-    windowsVerbatimArguments: cmd.windowsVerbatimArguments,
+/**
+ * Settles once the OS has started the command (`spawn`) or failed to
+ * (`error`, e.g. no `xdg-open` on a headless box), so the route can report a
+ * file manager that never opened instead of answering 204.
+ */
+function spawnReveal(cmd: RevealCommand): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd.command, cmd.args, {
+      detached: true,
+      stdio: "ignore",
+      windowsVerbatimArguments: cmd.windowsVerbatimArguments,
+    });
+    child.once("spawn", () => resolve());
+    // Kept after settling: an unhandled 'error' event would crash the server.
+    child.on("error", reject);
+    child.unref();
   });
-  // A missing binary (no xdg-open on a headless box) arrives as an async
-  // 'error' event; without a listener it would crash the server. The request
-  // has already been answered, so the log is the only place it can surface.
-  child.on("error", (err) => {
-    console.error(`[harness] reveal failed (${cmd.command}): ${err.message}`);
-  });
-  child.unref();
 }
 
 export interface FsRouterDeps {
@@ -86,7 +90,7 @@ export interface FsRouterDeps {
    */
   findAgentPath?: (resolvedPath: string) => string | null | Promise<string | null>;
   /** Injectable for tests; defaults to spawning the platform command detached. */
-  reveal?: (cmd: RevealCommand) => void;
+  reveal?: (cmd: RevealCommand) => void | Promise<void>;
   /** Injectable for tests; defaults to `process.platform`. */
   platform?: NodeJS.Platform;
 }
@@ -219,7 +223,12 @@ export function createFsRouter(deps: FsRouterDeps = {}): ExpressRouter {
       res.status(404).json({ error: `no such folder: ${agentPath}` });
       return;
     }
-    reveal(revealCommand(agentPath, platform));
+    try {
+      await reveal(revealCommand(agentPath, platform));
+    } catch (err) {
+      res.status(500).json({ error: `could not open the file manager: ${(err as Error).message}` });
+      return;
+    }
     res.status(204).end();
   }
 

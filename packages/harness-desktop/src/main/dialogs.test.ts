@@ -72,4 +72,14 @@ describe("revealPath (REVEAL_PATH handler)", () => {
     expect(revealPath(main.event, 42)).toBe(false);
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
+
+  it("refuses a 31st reveal within a minute, then allows one after it", () => {
+    // Past the window of the reveals earlier tests made at Date.now().
+    const start = Date.now() + 10 * 60_000;
+    let accepted = 0;
+    for (let i = 0; i < 31; i++) if (revealPath(main.event, dir, start + i)) accepted += 1;
+    expect(accepted).toBe(30);
+    expect(revealPath(main.event, dir, start + 31)).toBe(false);
+    expect(revealPath(main.event, dir, start + 61_000)).toBe(true);
+  });
 });
