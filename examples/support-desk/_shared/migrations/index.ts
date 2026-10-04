@@ -282,4 +282,17 @@ from desks d
 where d.is_default and issues.desk_id is null and issues.triage_root_ts is not null;
 `,
   },
+  {
+    id: "090_digests",
+    sql: `-- Daily digest: one row per desk and day it was posted, inserted in the same transaction as the
+-- post, so a second fire on the same day posts nothing. Only _shared/issues.ts writes it.
+
+create table digests (
+  desk_id uuid not null references desks (id),
+  day date not null,
+  posted_at timestamptz not null default now(),
+  primary key (desk_id, day)
+);
+`,
+  },
 ];

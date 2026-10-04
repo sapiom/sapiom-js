@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ConfigSchemas,
   MissingConfigError,
   customerChannel,
+  deskEscalation,
   getConfig,
   getConfigOr,
   setConfig,
+  setDeskEscalation,
 } from "./config";
 import { memoryDb } from "./db";
+import { seedFleet } from "./seed";
 
 describe("config", () => {
   it("getConfigOr returns the fallback only when the key is unset", async () => {
@@ -88,5 +92,89 @@ describe("config", () => {
   it("rejects a value of the wrong shape", async () => {
     const db = await memoryDb();
     await expect(setConfig(db, "nudge.minutes", -1, "test")).rejects.toThrow();
+  });
+
+  describe("escalation", () => {
+    const levelsOk = (levels: unknown) =>
+      ConfigSchemas.escalation.safeParse({ support: { levels } }).success;
+
+    it("accepts 1 to 5 strictly ascending positive integer levels only", () => {
+      expect(levelsOk([30])).toBe(true);
+      expect(levelsOk([5, 30, 60, 120, 240])).toBe(true);
+      expect(levelsOk([])).toBe(false);
+      expect(levelsOk([30, 30])).toBe(false);
+      expect(levelsOk([60, 30])).toBe(false);
+      expect(levelsOk([1.5])).toBe(false);
+      expect(levelsOk([0])).toBe(false);
+      expect(levelsOk([1, 2, 3, 4, 5, 6])).toBe(false);
+    });
+
+    it("sets a desk entry when the key did not exist, and reads it back", async () => {
+      const db = await memoryDb();
+      expect(await deskEscalation(db, "support")).toBeNull();
+      const entry = { levels: [30, 120], groupId: "S0SUPPORT1" };
+      await setDeskEscalation(db, "support", entry, "console");
+      expect(await deskEscalation(db, "support")).toEqual(entry);
+      const [row] = await db.query<{ set_by: string }>(
+        "select set_by from config where key = 'escalation'",
+      );
+      expect(row.set_by).toBe("console");
+    });
+
+    it("turning one desk off keeps the other; the last one off leaves {}", async () => {
+      const db = await memoryDb();
+      await setDeskEscalation(db, "support", { levels: [30] }, "test");
+      await setDeskEscalation(db, "vip", { levels: [5] }, "test");
+      await setDeskEscalation(db, "support", null, "test");
+      expect(await deskEscalation(db, "support")).toBeNull();
+      expect(await deskEscalation(db, "vip")).toEqual({ levels: [5] });
+      await setDeskEscalation(db, "vip", null, "test");
+      expect(await getConfig(db, "escalation")).toEqual({});
+    });
+
+    it("two concurrent saves for different desks both survive", async () => {
+      const db = await memoryDb();
+      await Promise.all([
+        setDeskEscalation(db, "support", { levels: [30] }, "test"),
+        setDeskEscalation(db, "vip", { levels: [5] }, "test"),
+      ]);
+      expect(await getConfig(db, "escalation")).toEqual({
+        support: { levels: [30] },
+        vip: { levels: [5] },
+      });
+    });
+
+    it("reads a change written through another handle", async () => {
+      const db = await memoryDb();
+      await setDeskEscalation(db, "support", { levels: [5] }, "test");
+      expect(await deskEscalation(db, "support")).toEqual({ levels: [5] });
+      // The Console writes from its own process, so this handle's cache never sees it.
+      await db.query(
+        "update config set value = '{}'::jsonb where key = 'escalation'",
+      );
+      expect(await deskEscalation(db, "support")).toBeNull();
+    });
+
+    it("rejects an invalid entry without writing", async () => {
+      const db = await memoryDb();
+      await expect(
+        setDeskEscalation(db, "support", { levels: [60, 30] }, "test"),
+      ).rejects.toThrow();
+      expect(await getConfigOr(db, "escalation", null)).toBeNull();
+    });
+  });
+
+  it("nudge.repeat_minutes takes positive whole minutes, and setup leaves it unset by default", async () => {
+    const db = await memoryDb();
+    await seedFleet(db, "test");
+    expect(await getConfigOr(db, "nudge.repeat_minutes", null)).toBeNull();
+    for (const ok of [[], [60, 240]]) {
+      await setConfig(db, "nudge.repeat_minutes", ok, "test");
+      expect(await getConfig(db, "nudge.repeat_minutes")).toEqual(ok);
+    }
+    for (const bad of [[0], [-5], [1.5]])
+      await expect(
+        setConfig(db, "nudge.repeat_minutes", bad, "test"),
+      ).rejects.toThrow();
   });
 });

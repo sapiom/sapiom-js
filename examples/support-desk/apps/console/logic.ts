@@ -18,7 +18,13 @@ export interface FleetProject {
 
 export type FleetTrigger =
   | { project: string; kind: "event"; eventType: string }
-  | { project: string; kind: "schedule_cron"; cron: string };
+  | {
+      project: string;
+      kind: "schedule_cron";
+      cron: string;
+      /** IANA zone the cron runs in; unset means UTC, as on the server. */
+      timezone?: string;
+    };
 
 /** A trigger as `GET /v1/workflows/definitions/<slug>/triggers` lists it. */
 export interface AttachedTrigger {
@@ -27,11 +33,14 @@ export interface AttachedTrigger {
   status: string;
   eventType: string | null;
   cron: string | null;
+  timezone?: string | null;
   definitionSlug?: string;
 }
 
 /** The agents the Console operates: every fleet.json project except the smoke pair. */
-export const AGENTS: FleetProject[] = (fleet.projects as Omit<FleetProject, "slug">[])
+export const AGENTS: FleetProject[] = (
+  fleet.projects as Omit<FleetProject, "slug">[]
+)
   .map((p) => ({ ...p, slug: agentSlug(p.key) }))
   .filter((p) => !p.smoke);
 /** `triggers` only. `smokeTriggers` are never attached from the Console. */
@@ -57,17 +66,22 @@ export function sameTrigger(
   if (have.status === "disabled" || have.kind !== want.kind) return false;
   return want.kind === "event"
     ? have.eventType === want.eventType
-    : have.cron === want.cron;
+    : have.cron === want.cron &&
+        (have.timezone ?? "UTC") === (want.timezone ?? "UTC");
 }
 
 export function triggerLabel(t: FleetTrigger): string {
-  return t.kind === "event" ? t.eventType : `cron ${t.cron}`;
+  return t.kind === "event"
+    ? t.eventType
+    : `cron ${t.cron}${t.timezone ? ` ${t.timezone}` : ""}`;
 }
 
 export function triggerBody(t: FleetTrigger): Record<string, string> {
   return t.kind === "event"
     ? { kind: t.kind, eventType: t.eventType }
-    : { kind: t.kind, cron: t.cron };
+    : t.timezone
+      ? { kind: t.kind, cron: t.cron, timezone: t.timezone }
+      : { kind: t.kind, cron: t.cron };
 }
 
 export interface TriggerState {
@@ -143,8 +157,7 @@ export function fleetWideKeys(): string[] {
 // --- desks -----------------------------------------------------------------------------------
 
 export type DeskPick<D> =
-  | { ok: true; desk: D }
-  | { ok: false; status: 404 | 409; reason: string };
+  { ok: true; desk: D } | { ok: false; status: 404 | 409; reason: string };
 
 /**
  * The desk a request is about: the one named by `?desk=<slug>`, else the default desk. A page
@@ -212,7 +225,8 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
   },
   controller: {
     emits: ["issue.nudged"],
-    writes: "nudges, runs, events_log; posts nudges in triage threads",
+    writes:
+      "nudges, runs, events_log; posts nudges in triage threads, DMs on-call and mentions the support group when an issue escalates",
   },
   "linear-sync": {
     emits: ["issue.engineering_resolved"],
@@ -227,6 +241,11 @@ export const AGENT_ROLES: Record<string, AgentRole> = {
     emits: [],
     writes:
       "watchdog_state, watchdog_reported, watchdog_alerted; reads failed runs from the Sapiom API; posts each failure with action items",
+  },
+  digest: {
+    emits: [],
+    writes:
+      "digests, runs; posts the daily digest in each desk's triage channel",
   },
 };
 
@@ -253,8 +272,9 @@ export const TABLES: [string, string][] = [
   ["drafts", "AI reply drafts and their Approve / Escalate / Dismiss outcome"],
   [
     "nudges",
-    "follow-ups the controller already sent, one per issue and condition",
+    "follow-ups and escalations the controller already sent, one per issue, condition and round, or level",
   ],
+  ["digests", "daily digests already posted, one per desk and day"],
   ["runs", "each agent execution and the issue it worked on"],
   [
     "kb_articles",
@@ -267,7 +287,7 @@ export const TABLES: [string, string][] = [
   ],
   [
     "config",
-    "runtime config: customer channels, alerts channel, switches (desk settings live in desks)",
+    "runtime config: customer channels, alerts channel, switches, escalation per desk (other desk settings live in desks)",
   ],
   ["schema_migrations", "applied migrations"],
 ];
@@ -664,10 +684,7 @@ export type KbParse =
  * subset but at least one field. Strings are trimmed and may not be empty. Other keys are ignored,
  * so a request can never set `updated_by` or an id.
  */
-export function parseKbInput(
-  raw: unknown,
-  mode: "create" | "update",
-): KbParse {
+export function parseKbInput(raw: unknown, mode: "create" | "update"): KbParse {
   // A JSON body can be null, an array or a scalar; only an object has fields to read.
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
     return { ok: false, error: "body must be a JSON object" };

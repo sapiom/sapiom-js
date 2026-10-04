@@ -51,6 +51,7 @@ import { resetBoard } from "../../_shared/reset";
 import { permalink } from "../../_shared/slack";
 import replay from "../../scripts/replay.json";
 import page from "./index.html";
+import { getEscalation, putEscalation } from "./escalation";
 import {
   deskIssue,
   metricIssues,
@@ -768,6 +769,13 @@ const GET: [RegExp, Handler][] = [
         listArticles(d, { deskId: (await deskOf(d, url)).id }),
       ),
   ],
+  [
+    /^\/api\/escalation$/,
+    (_, __, url) =>
+      withConsoleDb(async (d) =>
+        httpBody(await getEscalation(d, await deskOf(d, url))),
+      ),
+  ],
 ];
 
 /** Every POST changes state, and each is scoped to the fleet. */
@@ -870,8 +878,24 @@ async function deleteKbArticle(id: string) {
   return { deleted: id };
 }
 
+function httpBody(res: { status: number; body: unknown }) {
+  if (res.status !== 200)
+    throw new HttpError(
+      res.status,
+      (res.body as { error?: string }).error ?? "request failed",
+    );
+  return res.body;
+}
+
 const PUT: [RegExp, Handler][] = [
   [/^\/api\/kb\/([^/]+)$/, ([id], body) => updateKbArticle(id!, body)],
+  [
+    /^\/api\/escalation$/,
+    (_, body, url) =>
+      withConsoleDb(async (d) =>
+        httpBody(await putEscalation(d, await deskOf(d, url), body)),
+      ),
+  ],
 ];
 
 const DELETE: [RegExp, Handler][] = [

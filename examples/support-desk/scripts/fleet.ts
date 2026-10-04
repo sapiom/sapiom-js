@@ -20,7 +20,13 @@ export interface FleetProject {
 
 export type FleetTrigger =
   | { project: string; kind: "event"; eventType: string }
-  | { project: string; kind: "schedule_cron"; cron: string };
+  | {
+      project: string;
+      kind: "schedule_cron";
+      cron: string;
+      /** IANA zone the cron runs in; unset means UTC, as on the server. */
+      timezone?: string;
+    };
 
 export interface FleetConnector {
   provider: string;
@@ -35,6 +41,7 @@ export interface AttachedTrigger {
   status: string;
   eventType: string | null;
   cron: string | null;
+  timezone?: string | null;
 }
 
 /** fleet.json's projects, each with its deployed slug: `<fleetId>-<key>`. */
@@ -120,7 +127,8 @@ export function sameTrigger(
   if (have.status === "disabled" || have.kind !== want.kind) return false;
   return want.kind === "event"
     ? have.eventType === want.eventType
-    : have.cron === want.cron;
+    : have.cron === want.cron &&
+        (have.timezone ?? "UTC") === (want.timezone ?? "UTC");
 }
 
 /**
@@ -154,13 +162,15 @@ export function pausedToResume(
 export function triggerLabel(t: FleetTrigger): string {
   return t.kind === "event"
     ? `${t.project} ← ${t.eventType}`
-    : `${t.project} ← cron ${t.cron}`;
+    : `${t.project} ← cron ${t.cron}${t.timezone ? ` ${t.timezone}` : ""}`;
 }
 
 export function triggerBody(t: FleetTrigger): Record<string, string> {
   return t.kind === "event"
     ? { kind: t.kind, eventType: t.eventType }
-    : { kind: t.kind, cron: t.cron };
+    : t.timezone
+      ? { kind: t.kind, cron: t.cron, timezone: t.timezone }
+      : { kind: t.kind, cron: t.cron };
 }
 
 /** Identity of what a deploy would push: the bundled code and its pinned dependencies. */
