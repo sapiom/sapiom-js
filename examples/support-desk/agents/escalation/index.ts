@@ -18,7 +18,7 @@
  * - A Closed issue gets no Linear issue and no replies: one triage line says it was not escalated.
  * - The move to On Hold and the `issue.on_hold` emit share a second locked transaction: a failed
  *   emit rolls the move back, and a closed or already On Hold issue emits nothing.
- * - Every run on an open issue that ends with it linked redraws the triage card from the row.
+ * - Redraw the triage card after linking so triage can see the stored Linear link.
  */
 import { defineAgent, defineStep, terminate } from "@sapiom/agent";
 import { z } from "zod/v4";
