@@ -298,37 +298,6 @@ describe("slack.ts", () => {
       expect(calls.map((c) => c.method)).toEqual(["replies", "postMessage"]);
     });
 
-    it("with lookupOnRetryOnly, stamps without a lookup on the first attempt and looks up on a retry", async () => {
-      const { ctx, calls } = ctxWithSlack({
-        replies: { ok: true, messages: [marked("1.5")] },
-        postMessage: { ok: true, channel: "C1", ts: "1.6" },
-      });
-      const input = {
-        channel: "C1",
-        text: "hi",
-        threadTs: "1.0",
-        key: "k1",
-        lookupOnRetryOnly: true,
-      };
-      (ctx as { attempts: number }).attempts = 0;
-      await expect(post(ctx, input)).resolves.toEqual({
-        channel: "C1",
-        ts: "1.6",
-      });
-      expect(calls.map((c) => c.method)).toEqual(["postMessage"]);
-      expect(calls[0].args).not.toHaveProperty("lookupOnRetryOnly");
-      expect((calls[0].args.blocks as { block_id: string }[])[0].block_id).toBe(
-        "sylon:k1",
-      );
-
-      (ctx as { attempts: number }).attempts = 1;
-      await expect(post(ctx, input)).resolves.toEqual({
-        channel: "C1",
-        ts: "1.5",
-      });
-      expect(calls.map((c) => c.method)).toEqual(["postMessage", "replies"]);
-    });
-
     it("posts as before with no thread", async () => {
       const { ctx, calls } = ctxWithSlack({
         postMessage: { ok: true, channel: "C1", ts: "1.2" },

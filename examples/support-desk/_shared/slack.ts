@@ -13,7 +13,7 @@ import { connectors } from "@sapiom/tools";
 export type SlackCtx = Pick<
   AgentExecutionContext<Record<string, unknown>>,
   "isLocalTrace" | "logger"
-> & { sapiom?: unknown; attempts?: number };
+> & { sapiom?: unknown };
 
 export interface SlackMessageRow {
   ts: string;
@@ -164,20 +164,12 @@ export async function post(
     blocks?: Block[];
     threadTs?: string;
     key?: string;
-    /**
-     * Skip the lookup on a step's first attempt: it shares the connector's per-account rate limit
-     * with every post. Only for a site whose earlier post can come only from a retry of this step.
-     */
-    lookupOnRetryOnly?: boolean;
   },
 ): Promise<{ channel: string; ts: string }> {
-  const { key, lookupOnRetryOnly, ...args } = input;
+  const { key, ...args } = input;
   if (key && args.threadTs) {
     const marker = `sylon:${key}`;
-    const earlier =
-      lookupOnRetryOnly && ctx.attempts === 0
-        ? undefined
-        : await findPosted(ctx, args.channel, args.threadTs, marker);
+    const earlier = await findPosted(ctx, args.channel, args.threadTs, marker);
     if (earlier) return { channel: args.channel, ts: earlier };
     args.blocks = args.blocks?.length
       ? [{ ...args.blocks[0], block_id: marker }, ...args.blocks.slice(1)]

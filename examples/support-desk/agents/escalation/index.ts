@@ -200,7 +200,6 @@ async function replyOnce(
     threadTs: input.threadTs,
     text: input.text,
     key: input.key,
-    lookupOnRetryOnly: true,
   });
   await linkMessage(db, {
     issueId: input.issueId,
