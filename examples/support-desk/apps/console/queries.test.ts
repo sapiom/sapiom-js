@@ -126,42 +126,41 @@ describe("desk-scoped reads", () => {
   });
 
   it("breaks a created_at tie between drafts by id, and still lets a newer draft win", async () => {
-    const a = await issueOn(test, "a");
-    const x = await createDraft(db, { issueId: a.id, text: "x" });
-    const y = await createDraft(db, { issueId: a.id, text: "y" });
-    // Ids opposite to insertion order, so the tie cannot resolve by insertion.
     const X = "00000000-0000-4000-8000-000000000002";
     const Y = "00000000-0000-4000-8000-000000000001";
     const at = "2026-01-01T00:00:00Z";
-    await db.query("update drafts set id = $1, created_at = $2 where id = $3", [
-      X,
-      at,
-      x.id,
-    ]);
-    await db.query("update drafts set id = $1, created_at = $2 where id = $3", [
-      Y,
-      at,
-      y.id,
-    ]);
-    const status = async () => (await boardIssues(db, test.id))[0]?.draftStatus;
-    const pending = async () =>
-      (await deskTicket(db, test.id, a.id))?.pendingDraft?.id;
+    // Both insertion orders, so only the id can settle the tie.
+    for (const order of [
+      [X, Y],
+      [Y, X],
+    ]) {
+      await db.query("delete from drafts");
+      const a = await issueOn(test, `a ${order[0]}`);
+      for (const id of order)
+        await db.query(
+          "insert into drafts (id, issue_id, text, created_at, status) values ($1, $2, 'd', $3, 'pending')",
+          [id, a.id, at],
+        );
+      const status = async () =>
+        (await boardIssues(db, test.id)).find((r) => r.id === a.id)
+          ?.draftStatus;
+      const pending = async () =>
+        (await deskTicket(db, test.id, a.id))?.pendingDraft?.id;
 
-    expect(await pending()).toBe(X);
-    expect(await status()).toBe("pending");
-    await db.query("update drafts set status = 'superseded' where id = $1", [
-      X,
-    ]);
-    expect(await status()).toBe("superseded");
-    expect(await pending()).toBe(Y);
+      expect(await pending()).toBe(X);
+      await db.query("update drafts set status = 'superseded' where id = $1", [
+        X,
+      ]);
+      expect(await status()).toBe("superseded");
 
-    await db.query(
-      "update drafts set created_at = $1::timestamptz + interval '1 minute' where id = $2",
-      [at, Y],
-    );
-    expect(await status()).toBe("pending");
-    await db.query("update drafts set status = 'pending' where id = $1", [X]);
-    expect(await pending()).toBe(Y);
+      await db.query(
+        "update drafts set status = 'pending', created_at = $1::timestamptz + interval '1 minute' where id = $2",
+        [at, Y],
+      );
+      expect(await status()).toBe("pending");
+      await db.query("update drafts set status = 'pending' where id = $1", [X]);
+      expect(await pending()).toBe(Y);
+    }
   });
 
   it("opens a ticket only on its own desk, with its pending draft", async () => {
