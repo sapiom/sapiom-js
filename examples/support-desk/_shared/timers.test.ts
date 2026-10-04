@@ -134,6 +134,21 @@ describe("rescheduleIssue", () => {
     );
   });
 
+  it("after a tick, a round due seconds from now keeps the short lead, not the stuck retry", async () => {
+    // The issue opened 4 min 50 s ago: no_owner and no_draft come due in 10 s.
+    const issue = await seed();
+    await db.query(
+      "update issues set created_at = now() - interval '290 seconds' where id = $1",
+      [issue.id],
+    );
+    const { ctx } = fakeCtx();
+    const before = await dbNow();
+    const out = await rescheduleIssue(db, ctx as never, issue.id, {
+      tick: true,
+    });
+    expect(out.at!.getTime()).toBeLessThan(before + MIN_LEAD_MS + 5_000);
+  });
+
   it("sets nothing while the controller is paused, and clears what was set", async () => {
     const issue = await seed();
     const { ctx, schedules } = fakeCtx();

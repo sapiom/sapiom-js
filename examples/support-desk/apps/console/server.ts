@@ -282,7 +282,18 @@ async function setAgent(key: string, on: boolean) {
     await withConsoleDb((d) =>
       setConfig(d, "controller.paused", !on, "console"),
     );
-    const run = await rearmTimers();
+    let run: { id?: string };
+    try {
+      run = await rearmTimers();
+    } catch (err) {
+      // Off stands without the run: a tick that still fires sees the switch and clears itself.
+      // On without the run would leave every ticket with no timer, so the switch goes back off.
+      if (on)
+        await withConsoleDb((d) =>
+          setConfig(d, "controller.paused", true, "console"),
+        );
+      throw err;
+    }
     return {
       key,
       on,

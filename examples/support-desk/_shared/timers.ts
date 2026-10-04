@@ -325,11 +325,14 @@ export async function rescheduleIssue(
     let at: Date | null = null;
     if (opts.at) at = opts.at;
     else if (due) {
-      const floor = opts.tick
-        ? nowMs + STUCK_RETRY_MINUTES * 60_000
-        : nowMs + MIN_LEAD_MS;
-      at =
-        due.dueAt.getTime() > nowMs + MIN_LEAD_MS ? due.dueAt : new Date(floor);
+      const dueMs = due.dueAt.getTime();
+      // Only work due when the tick ran counts as stuck: a time a few seconds ahead (or a timer
+      // that fired just before the database clock reached it) was never attempted.
+      const floor =
+        opts.tick && dueMs <= nowMs
+          ? nowMs + STUCK_RETRY_MINUTES * 60_000
+          : nowMs + MIN_LEAD_MS;
+      at = dueMs > nowMs + MIN_LEAD_MS ? due.dueAt : new Date(floor);
     }
 
     if (!at) {

@@ -263,7 +263,8 @@ the relay slug `linear`), and the Slack bot is in the triage channel and every c
 
    The controller gets no trigger: each ticket sets its own timer on it.
 
-   Expected: nine active triggers, and no run until a message arrives.
+   Expected: nine active triggers. No ticket run starts until a message arrives; the digest still
+   runs daily and the watchdog on a failed run.
 
 7. **Publish the Console.** `pnpm run console:build`, then `sapiom_dev_app_publish` with
    `dir: "apps/console"`, `slug: "support-desk-console"` and `name: "Support Desk"` (with another
