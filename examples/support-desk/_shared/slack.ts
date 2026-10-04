@@ -144,7 +144,8 @@ function cutLine(line: string): string[] {
 }
 
 /**
- * Escaped mrkdwn as section blocks that each fit Slack's limit (SAP-3863), cut on line breaks.
+ * Escaped mrkdwn as section blocks that each fit Slack's limit (SAP-3863): cut on line breaks,
+ * and inside a line only when that line alone is over the limit.
  * Only the first carries `blockId`: block ids must be unique in a message.
  */
 export function mrkdwnSections(mrkdwn: string, blockId: string): Block[] {
