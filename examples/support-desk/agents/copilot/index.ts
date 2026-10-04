@@ -431,7 +431,6 @@ async function draftReply(
           text: cardText(current),
           blocks: copilotCard(own, current, titles),
           key: `draft-card:${own.id}`,
-          lookupOnRetryOnly: true,
         });
         own = await setDraftCard(tx, own.id, card);
         posted = true;
@@ -464,7 +463,6 @@ async function draftReply(
       cardTs: published.own.cardTs,
       status: published.own.status,
       confidence,
-      // False only for the run that posted the card, including a retry that found its own post.
       reused: !published.posted,
     });
   });
@@ -611,7 +609,6 @@ const apply = defineStep({
             threadTs: customerRootTs,
             text: escapeMrkdwn(draft.text),
             key: sourceEventId,
-            lookupOnRetryOnly: true,
           });
           return (
             await linkMessage(tx, {

@@ -49,7 +49,7 @@ import {
   seedLocalFixtures,
 } from "./local";
 
-/** Arm one failure of a record write after its Slack post went out (SAP-3721 retry tests). */
+// SAP-3721: exercise retries across the gap between Slack acceptance and database persistence.
 const failOnce = vi.hoisted(() => ({
   linkMessage: false,
   setDraftCard: false,
@@ -1289,10 +1289,7 @@ describe("draft helpers", () => {
 describe("a retry after Slack accepted the post (SAP-3721)", () => {
   type Sent = { method: string; args: Record<string, unknown> };
 
-  /**
-   * A deployed-run ctx: the shared pool is the test database, and Slack keeps every post in its
-   * thread so `conversations.replies` returns it, as the gateway does.
-   */
+  // SAP-3721: Slack state must survive database rollback so retries can recover an unrecorded post.
   function liveCtx() {
     const t = ctxFor("exec-live");
     const sent: Sent[] = [];
@@ -1333,7 +1330,7 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
         return { ok: true, user: { id: args.user, name: args.user } };
       },
     };
-    Object.assign(t.ctx, { isLocalTrace: false, attempts: 0 });
+    (t.ctx as { isLocalTrace: boolean }).isLocalTrace = false;
     Object.assign(t.ctx.sapiom as Record<string, unknown>, {
       connectors: { slack },
       database: {
@@ -1345,8 +1342,7 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
         .filter((c) => c.method === "chat.postMessage")
         .filter((c) => c.args.channel === channel)
         .map((c) => c.args);
-    const retry = () => Object.assign(t.ctx, { attempts: 1 });
-    return { ...t, sent, posts, retry };
+    return { ...t, sent, posts };
   }
 
   beforeEach(async () => {
@@ -1377,7 +1373,6 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
     await expect(step("apply").run(decided.input, live.ctx)).rejects.toThrow(
       "linkMessage failed",
     );
-    live.retry();
     expect(
       await messageBySourceEventId(db, `draft:${FIXTURE_DRAFT}`),
     ).toBeNull();
@@ -1400,7 +1395,6 @@ describe("a retry after Slack accepted the post (SAP-3721)", () => {
     await expect(step("receive").run(created, live.ctx)).rejects.toThrow(
       "setDraftCard failed",
     );
-    live.retry();
 
     const done = await step("receive").run(created, live.ctx);
     const cards = live.posts("C0TRIAGE001");
