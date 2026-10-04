@@ -1047,9 +1047,8 @@ const button = defineStep({
       await showWorking(ctx, input, verb, workingCard);
 
     return withDb(ctx, async (db) => {
-      // Issue cards and nudges live only in a triage channel: the desk's, or the one the card was
-      // posted in before its desk's channel moved. A click from anywhere else (say a customer
-      // replaying a payload with a guessed issue id) is ignored before any write.
+      // Restrict issue decisions to desk or stored card channels so forged customer clicks cannot
+      // change an issue.
       const from = input.container?.channel_id;
       const rows = await db.query<{
         desk_id: string | null;

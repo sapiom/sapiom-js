@@ -1060,7 +1060,7 @@ describe("desks", () => {
   });
 
   describe("after the desk's triage channel moves", () => {
-    /** The fixture issue's card sits in C0TRIAGE001; then its desk moves to C0NEW. */
+    /** SAP-3722: distinguish the card's channel from the desk's channel to catch misaddressed updates. */
     async function cardedThenMoved() {
       await setTriageRoot(
         db,
