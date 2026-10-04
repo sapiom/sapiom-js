@@ -767,6 +767,14 @@ describe("project map chat host", () => {
     });
   });
 
+  it("gives the map chat no allowed shell tool, and leaves Studio sessions their shell", async () => {
+    await host.ensure(key);
+    await host.ensure("studio-a");
+    // bash is OpenCode 1.18.29's only shell tool; unset means allowed.
+    expect(start.mock.calls[0][0].config.permission?.bash).toBe("deny");
+    expect(start.mock.calls[1][0].config.permission?.bash).toBeUndefined();
+  });
+
   it("denies every ask for the map chat only", async () => {
     await host.ensure(key);
     await host.ensure("studio-a");

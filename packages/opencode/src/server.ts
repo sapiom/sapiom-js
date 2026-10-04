@@ -199,10 +199,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const handoffResult =
-  "Hand-off card shown. Tell the user in one sentence; do not start the work here.";
+  "Offered a session card; nothing has started. Tell the user in one sentence that you offered a session they can start. Do not say a session was created or prepared, and do not start the work here.";
 const handoffTool = {
   description:
-    "Offer the user a Claude Code session for work that does not belong in this chat: multi-file edits, building or changing an agent, long runs, or anything a denied permission blocked. Studio shows a card with a Start session button; the session receives the prompt as its first message.",
+    "Offer the user a Claude Code session for work that does not belong in this chat: multi-file edits, building or changing an agent, long runs, or anything a denied permission blocked. Studio shows a card; only when the user presses Start session does a session begin, with the prompt as its first message.",
   // OpenCode builds a JSON Schema from plain per-argument schemas; the
   // generated module stays import-free and validates in execute.
   args: {

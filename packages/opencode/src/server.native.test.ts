@@ -564,7 +564,7 @@ describe("pinned OpenCode 1.18.29", () => {
     expect(synthetic.state.rejected).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
-  it("offers the handoff plugin tool, records its call in history, and leaves no ask rule with neverAsk", async () => {
+  it("offers the handoff plugin tool, records its call in history, and leaves no ask rule or shell for the map chat", async () => {
     const token = "synthetic-bridge-grant";
     const calls: SyntheticCall[] = [
       {
@@ -586,6 +586,7 @@ describe("pinned OpenCode 1.18.29", () => {
         bridgeUrl: `${synthetic.origin}/runtime`,
         runtimeToken: token,
         neverAsk: true,
+        noShell: true,
       }),
     });
 
@@ -616,6 +617,13 @@ describe("pinned OpenCode 1.18.29", () => {
             ),
       );
       expect(effectiveAsks, agent.name).toEqual([]);
+      const shell = [...agent.permission]
+        .reverse()
+        .find(
+          (rule) =>
+            ["bash", "*"].includes(rule.permission) && rule.pattern === "*",
+        );
+      expect(shell?.action, agent.name).toBe("deny");
     }
 
     const parts = [];
@@ -645,6 +653,14 @@ describe("pinned OpenCode 1.18.29", () => {
           .find((part) => part.type === "tool"),
       );
     }
+    const offeredNames = new Set(
+      synthetic.state.modelRequests.flatMap((body) =>
+        (body.tools ?? []).map((tool) => tool.name),
+      ),
+    );
+    expect(offeredNames.has("bash")).toBe(false);
+    for (const kept of ["read", "apply_patch", "handoff"])
+      expect(offeredNames.has(kept), kept).toBe(true);
     // Code mode collapses MCP tools into execute; a plugin tool stays native.
     const offered = synthetic.state.modelRequests
       .flatMap((body) => body.tools ?? [])
@@ -665,7 +681,7 @@ describe("pinned OpenCode 1.18.29", () => {
         status: "completed",
         input: calls[0]!.arguments,
         output:
-          "Hand-off card shown. Tell the user in one sentence; do not start the work here.",
+          "Offered a session card; nothing has started. Tell the user in one sentence that you offered a session they can start. Do not say a session was created or prepared, and do not start the work here.",
       },
     });
     expect(parts[1]).toMatchObject({

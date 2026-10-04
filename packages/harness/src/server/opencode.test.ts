@@ -326,6 +326,10 @@ describe("Studio-scoped OpenCode transport", () => {
       system: expect.stringContaining("StudioAssistantResult/v2:"),
     });
     expect(native.body).not.toHaveProperty("format");
+    // A Studio session's Assistant keeps its shell; only the map chat has none.
+    expect((native.body as { system: string }).system).not.toContain(
+      "This chat has no shell",
+    );
     expect(native.headers.authorization).toBe("Basic native-only");
     for (const name of ["x-harness-token", "cookie", "x-opencode-directory"])
       expect(native.headers[name]).toBeUndefined();
@@ -593,6 +597,10 @@ describe("map chat transport", () => {
       body: JSON.stringify({ parts: [{ type: "text", text: "Long answer" }] }),
     });
     expect(prompt.status).toBe(204);
+    const sent = requests.find((item) =>
+      item.path.endsWith(`/session/${first}/prompt_async`),
+    )!.body as { system: string };
+    expect(sent.system).toContain("This chat has no shell");
     observe.mockClear();
     const reset = await request(`${mapKey}/reset`, { method: "POST" });
     expect(reset.status).toBe(200);

@@ -4,6 +4,11 @@ export interface SapiomOpenCodeConfigOptions {
   model?: string;
   /** Deny every rule OpenCode would otherwise ask the user about. */
   neverAsk?: boolean;
+  /**
+   * Remove the shell. OpenCode's external_directory rule covers file tools
+   * only, so a shell command could still write outside the project.
+   */
+  noShell?: boolean;
 }
 
 /**
@@ -25,6 +30,14 @@ export const deniedAskPermissions = {
     "*.env.example": "allow",
   },
 } as const;
+
+/**
+ * OpenCode 1.18.29's only shell tool is `bash` (permission key `bash`); a fully
+ * denied tool is dropped from the model's tool list. `execute` (code mode) is
+ * kept: it runs the hosted Sapiom MCP tools in OpenCode's interpreter, which
+ * has no process or filesystem access.
+ */
+export const deniedShellPermissions = { bash: "deny" } as const;
 
 /** Only a revocable runtime credential enters OpenCode; Studio holds the key. */
 export function createSapiomOpenCodeConfig(
@@ -49,7 +62,14 @@ export function createSapiomOpenCodeConfig(
     model: `sapiom/${model}`,
     enabled_providers: ["sapiom"],
     plugin: [],
-    ...(options.neverAsk ? { permission: deniedAskPermissions } : {}),
+    ...(options.neverAsk || options.noShell
+      ? {
+          permission: {
+            ...(options.neverAsk ? deniedAskPermissions : {}),
+            ...(options.noShell ? deniedShellPermissions : {}),
+          },
+        }
+      : {}),
     agent: {
       "sapiom-final-response": {
         mode: "primary",

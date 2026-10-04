@@ -2,10 +2,15 @@ import type { OpenCodeTurnMessage } from "./opencode-turn.js";
 
 // OpenCode 1.18.29 cannot read persisted json_schema format messages through
 // its history API. Keep normal text and bind a result marker to each request.
-export function openCodeCompletionPrompt() {
+export function openCodeCompletionPrompt(options: { noShell?: boolean } = {}) {
   const token = globalThis.crypto.randomUUID();
+  // The map chat has no shell (design I4); route shell work to a session
+  // instead of letting the model hunt for another way around a denial.
+  const noShell = options.noShell
+    ? " This chat has no shell, and tools outside the project are denied. When the request needs a shell command or a denied tool, call the handoff tool instead of trying another way, and say you offered a session the user can start."
+    : "";
   return {
-    system: `StudioAssistantResult/v2:${token}\nComplete the user's requested work before ending the turn, including any requested explanation. Finish necessary tool calls and examine their results before writing the final answer. A promise or plan to do the work is not completion. For conversational requests, provide the requested reply without unnecessary tool calls. When the request needs multi-file edits, building or changing an agent, a long run, or a permission that was denied, call the handoff tool with a short title and a self-contained prompt instead of doing the work here.\nBegin your final answer with exactly one of these bookkeeping lines, then write the answer on the following line, outside code blocks:\n<!-- studio-result:${token}:finished -->\n<!-- studio-result:${token}:failed -->\nUse finished only when the request is fulfilled. If you cannot finish, use failed and explain what remains and why. Do not include a result line in progress messages or alongside tool calls. Studio removes this line from the displayed answer; keep the rest of your answer in the format the user requested.`,
+    system: `StudioAssistantResult/v2:${token}\nComplete the user's requested work before ending the turn, including any requested explanation. Finish necessary tool calls and examine their results before writing the final answer. A promise or plan to do the work is not completion. For conversational requests, provide the requested reply without unnecessary tool calls. When the request needs multi-file edits, building or changing an agent, a long run, or a permission that was denied, call the handoff tool with a short title and a self-contained prompt instead of doing the work here.${noShell}\nBegin your final answer with exactly one of these bookkeeping lines, then write the answer on the following line, outside code blocks:\n<!-- studio-result:${token}:finished -->\n<!-- studio-result:${token}:failed -->\nUse finished only when the request is fulfilled. If you cannot finish, use failed and explain what remains and why. Do not include a result line in progress messages or alongside tool calls. Studio removes this line from the displayed answer; keep the rest of your answer in the format the user requested.`,
   };
 }
 

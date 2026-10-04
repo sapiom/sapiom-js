@@ -15,6 +15,12 @@ import {
 } from "./server.js";
 import { createSapiomOpenCodeConfig, deniedAskPermissions } from "./config.js";
 
+/** Actions the config grants each shell tool OpenCode 1.18.29 has. */
+const shellActions = (config: Record<string, unknown>) => {
+  const permission = (config.permission ?? {}) as Record<string, unknown>;
+  return ["bash"].map((tool) => permission[tool] ?? "allow (default)");
+};
+
 let directory: string;
 let server: OpenCodeServer | undefined;
 const command = {
@@ -372,7 +378,7 @@ describe("packaged OpenCode runtime", () => {
       "permission",
     );
     const config = createSapiomOpenCodeConfig({ ...options, neverAsk: true });
-    expect(config.permission).toBe(deniedAskPermissions);
+    expect(config.permission).toEqual(deniedAskPermissions);
     expect(JSON.stringify(config.permission)).not.toContain('"ask"');
     // OpenCode 1.18.29's default ask rules, each overridden.
     expect(config.permission).toMatchObject({
@@ -381,6 +387,26 @@ describe("packaged OpenCode runtime", () => {
       question: "deny",
       read: { "*.env": "deny", "*.env.*": "deny" },
     });
+  });
+
+  it("removes the shell only when asked, alongside the ask denials", () => {
+    const options = {
+      bridgeUrl: "http://127.0.0.1:1234/opencode-runtime/runtime",
+      runtimeToken: "token",
+    };
+    expect(shellActions(createSapiomOpenCodeConfig(options))).toEqual([
+      "allow (default)",
+    ]);
+    const mapChat = createSapiomOpenCodeConfig({
+      ...options,
+      neverAsk: true,
+      noShell: true,
+    });
+    expect(shellActions(mapChat)).toEqual(["deny"]);
+    expect(mapChat.permission).toMatchObject(deniedAskPermissions);
+    expect(
+      shellActions(createSapiomOpenCodeConfig({ ...options, noShell: true })),
+    ).toEqual(["deny"]);
   });
 
   it("generates a handoff tool that takes a title and a prompt and rejects empty input", async () => {
@@ -423,7 +449,7 @@ describe("packaged OpenCode runtime", () => {
       await expect(
         handoff.execute({ title: "Build it", prompt: "Build the agent." }),
       ).resolves.toBe(
-        "Hand-off card shown. Tell the user in one sentence; do not start the work here.",
+        "Offered a session card; nothing has started. Tell the user in one sentence that you offered a session they can start. Do not say a session was created or prepared, and do not start the work here.",
       );
       for (const args of [
         {},

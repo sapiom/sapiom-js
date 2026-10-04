@@ -508,8 +508,10 @@ export class OpenCodeHost {
         bridgeUrl: `${this.options.origin()}/opencode-runtime/${entry.credential.id}`,
         runtimeToken: entry.credential.token,
         model: this.options.bridge.model,
-        // The map chat's transport has no reply path for a permission prompt (I4).
+        // The map chat's transport has no reply path for a permission prompt,
+        // and it has no shell (I4).
         neverAsk: mapChatProjectId(entry.workspace.harnessSessionId) !== null,
+        noShell: mapChatProjectId(entry.workspace.harnessSessionId) !== null,
       });
       startupAttempted = true;
       server = await (this.options.start ?? startOpenCodeServer)({

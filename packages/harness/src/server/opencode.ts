@@ -169,7 +169,9 @@ export function createOpenCodeRouter(
           ? {
               body: JSON.stringify({
                 ...req.body,
-                ...openCodeCompletionPrompt(),
+                ...openCodeCompletionPrompt({
+                  noShell: mapChatProjectId(id) !== null,
+                }),
                 // Saved conversations may still remember a retired model.
                 model: hosted.model,
               }),
