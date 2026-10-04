@@ -135,7 +135,22 @@ export function userCheck(
   };
 }
 
-export function linearCheck(err: unknown | null, tools: number): Check {
+/**
+ * `listingFailures` names each team or project listing that was unavailable or failed, so an empty
+ * id list is never mistaken for an org with no teams or projects.
+ */
+export function linearCheck(
+  err: unknown | null,
+  tools: number,
+  listingFailures: readonly string[] = [],
+): Check {
+  if (err === null && listingFailures.length)
+    return {
+      target: "linear connector",
+      ok: false,
+      detail: `connected (${tools} tools), but ${listingFailures.join("; ")}`,
+      fix: "The Linear ids in this report are incomplete. Rerun setup; if it persists, reconnect Linear on the Sapiom Connectors page, or copy the team and project ids from Linear.",
+    };
   if (err === null)
     return {
       target: "linear connector",

@@ -267,22 +267,26 @@ export async function probeLinear(ctx: SlackCtx): Promise<{
   } catch (err) {
     return { check: linearCheck(err, 0), linear: null };
   }
+  const failures: string[] = [];
   const list = async (tool: string) => {
-    if (!names.includes(tool)) return null;
+    if (!names.includes(tool)) {
+      failures.push(`${tool} is not offered`);
+      return null;
+    }
     try {
       return await callTool(tool, {}, ctx);
     } catch (err) {
       ctx.logger.warn(`linear ${tool} failed`, { err: String(err) });
+      failures.push(`${tool} failed: ${String(err)}`);
       return null;
     }
   };
-  return {
-    check: linearCheck(null, names.length),
-    linear: {
-      teams: parseTeams(await list("list_teams")),
-      projects: parseProjects(await list("list_projects")),
-    },
+  // Partial results stay: a failed project listing still leaves the team ids usable.
+  const linear = {
+    teams: parseTeams(await list("list_teams")),
+    projects: parseProjects(await list("list_projects")),
   };
+  return { check: linearCheck(null, names.length, failures), linear };
 }
 
 const DatabaseOut = z.object({

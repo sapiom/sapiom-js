@@ -342,6 +342,39 @@ describe("probes", () => {
     expect(t.calls).toEqual(["linear list_teams", "linear list_projects"]);
   });
 
+  it("fails the check when a listing fails, keeping what did list", async () => {
+    const t = connectorCtx({
+      linear: {
+        list_teams: null,
+        list_projects: [{ id: "p1", name: "Support", teams: ["Core"] }],
+      },
+    });
+    const linear = (t.ctx.sapiom as { connectors: { linear: object } })
+      .connectors.linear as { callTool: (n: string) => Promise<unknown> };
+    const listed = linear.callTool.bind(linear);
+    linear.callTool = async (name) => {
+      if (name === "list_teams") throw new Error("rate limited");
+      return listed(name);
+    };
+    const out = await probeLinear(t.ctx as never);
+    expect(out.check).toMatchObject({ ok: false });
+    expect(out.check.detail).toMatch(/list_teams failed: .*rate limited/);
+    expect(out.check.fix).toMatch(/incomplete/);
+    expect(out.linear).toEqual({
+      teams: [],
+      projects: [{ id: "p1", name: "Support", teams: ["Core"] }],
+    });
+  });
+
+  it("fails the check when the connector does not offer a listing", async () => {
+    const out = await probeLinear(
+      connectorCtx({ linear: { list_teams: [], save_issue: null } })
+        .ctx as never,
+    );
+    expect(out.check).toMatchObject({ ok: false });
+    expect(out.check.detail).toMatch(/list_projects is not offered/);
+  });
+
   it("says how to connect Linear when the relay refuses", async () => {
     const out = await probeLinear(
       connectorCtx({ linear: new Error("relay 404: no linear connector") })
