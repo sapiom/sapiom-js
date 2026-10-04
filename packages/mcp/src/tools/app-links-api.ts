@@ -44,6 +44,8 @@ export interface AppLinkWire {
   wakeStatus?: string;
   /** Null until a bundle is activated; set on the publish response. */
   bundleSha256?: string | null;
+  /** What the app's injected `SAPIOM_API_KEY` may do right now (SAP-3851). */
+  runtimeKeyPermissions?: string[];
   updatedAt?: string;
 }
 
@@ -60,6 +62,9 @@ export interface ErrorBody {
   path?: unknown;
   bytes?: unknown;
   maxBytes?: unknown;
+  /** `RUNTIME_KEY_PERMISSION_*`: the permissions refused; `allowed` for `_NOT_ALLOWED` (SAP-3851). */
+  permissions?: unknown;
+  allowed?: unknown;
 }
 
 // ─── Transport ───────────────────────────────────────────────────────────────

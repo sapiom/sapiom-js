@@ -136,7 +136,9 @@ const jsonRes = (body: unknown, status = 200) => ({
 
 /** The happy-path backend: upsert → bundle → publish. */
 function mockHappyBackend(
-  overrides: Partial<typeof APP_LINK> = {},
+  overrides: Partial<typeof APP_LINK> & {
+    runtimeKeyPermissions?: string[];
+  } = {},
 ): ReturnType<typeof vi.fn> {
   // `overrides` exists for `visibility`: the summary branches on it, and the default
   // fixture is org-scoped, so the public branch is unreachable without this.
@@ -568,6 +570,58 @@ describe("sapiom_dev_app_publish tool", () => {
     });
   });
 
+  describe("runtimeKey (SAP-3851)", () => {
+    it("sends the resource's runtimeKey.permissions with the upsert and reports the live scope", async () => {
+      const fetchMock = mockHappyBackend({
+        runtimeKeyPermissions: ["org.read", "org.write"],
+      });
+      const dir = project(undefined, {
+        ...SANDBOX,
+        runtimeKey: { permissions: ["org.read", "org.write"] },
+      });
+
+      const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+        runtimeKeyPermissions: ["org.read", "org.write"],
+      });
+      expect(parse(res).runtimeKeyPermissions).toEqual([
+        "org.read",
+        "org.write",
+      ]);
+    });
+
+    it("sends no runtimeKeyPermissions when the resource has no runtimeKey, so the link keeps its scope", async () => {
+      const fetchMock = mockHappyBackend();
+
+      await setup().handler({ dir: project(), slug: "dash", name: "Dash" });
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty(
+        "runtimeKeyPermissions",
+      );
+    });
+
+    it("refuses a malformed runtimeKey before any HTTP call", async () => {
+      const fetchMock = mockHappyBackend();
+      const dir = project(undefined, {
+        ...SANDBOX,
+        runtimeKey: { permissions: "org.write" },
+      });
+
+      const res = await setup().handler({ dir, slug: "dash", name: "Dash" });
+
+      expect(res.isError).toBe(true);
+      expect(parse(res).error.code).toBe("INVALID_SANDBOX");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("the description tells the agent how to scope the key instead of pasting one", () => {
+      const { description } = setup();
+      expect(description).toContain("runtimeKey");
+      expect(description).toContain("SAPIOM_API_KEY is reserved");
+    });
+  });
+
   it("never bundles sapiom.json — its env block is the app's own secrets", async () => {
     const fetchMock = mockHappyBackend();
     const dir = project({ "index.html": "<h1>hi</h1>" });
@@ -706,6 +760,45 @@ describe("sapiom_dev_app_publish tool", () => {
         status: 403,
         code: "APP_LINK_MANAGEMENT_PERMISSION_REQUIRED",
         expect: /Republish without the management fields/,
+      },
+      {
+        label:
+          "RUNTIME_KEY_PERMISSION_REQUIRED names the permission and both fixes",
+        step: "create",
+        body: {
+          code: "RUNTIME_KEY_PERMISSION_REQUIRED",
+          message: "no",
+          permissions: ["org.write"],
+        },
+        status: 403,
+        code: "RUNTIME_KEY_PERMISSION_REQUIRED",
+        expect: /org\.write[\s\S]*runtimeKey\.permissions/,
+      },
+      {
+        label:
+          "RUNTIME_KEY_PERMISSION_REQUIRED at activate still says the link exists",
+        step: "publish",
+        body: {
+          code: "RUNTIME_KEY_PERMISSION_REQUIRED",
+          message: "no",
+          permissions: ["org.write"],
+        },
+        status: 403,
+        code: "RUNTIME_KEY_PERMISSION_REQUIRED",
+        expect: /org\.write/,
+      },
+      {
+        label: "RUNTIME_KEY_PERMISSION_NOT_ALLOWED lists what is allowed",
+        step: "create",
+        body: {
+          code: "RUNTIME_KEY_PERMISSION_NOT_ALLOWED",
+          message: "not allowed",
+          permissions: ["org.api_keys.write"],
+          allowed: ["org.read", "org.write"],
+        },
+        status: 400,
+        code: "RUNTIME_KEY_PERMISSION_NOT_ALLOWED",
+        expect: /may contain only org\.read, org\.write/,
       },
       {
         label: "401 points at re-authentication",

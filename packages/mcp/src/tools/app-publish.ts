@@ -46,6 +46,14 @@
  *   PUT  /v1/app-links/{id}/bundle
  *   POST /v1/app-links/{id}/publish
  *
+ * The app's server code calls Sapiom with the `SAPIOM_API_KEY` the platform
+ * injects into every link; by default it can only read. A resource that needs
+ * more names it in `sapiom.json` as `runtimeKey: { permissions: [...] }` (SAP-3851),
+ * read here from the raw entry because the sandbox schema does not carry it, and
+ * sent with the upsert. The backend owns the allowlist and refuses any permission
+ * the publishing credential does not hold. Absent means "leave the link's scope as
+ * it is", not "reset it".
+ *
  * Auth is the cached `sapiom_authenticate` credential as `x-api-key`, over the
  * App Links transport shared with the management tools (app-links-api.ts).
  *
@@ -155,7 +163,12 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       `Bundles are TEXT-ONLY (UTF-8 files; no images, fonts, or archives) and capped at ${BUNDLE_CAP_MIB} MiB; ` +
       "node_modules, .git, dotfiles, symlinks and the project's own sapiom.json are never uploaded — " +
       "install dependencies at wake via `build`. Both limits are checked locally, so a bad bundle costs no upload. " +
-      "Returns { url, appLinkId, bundleSha256, manifest }.",
+      "The app's server gets a SAPIOM_API_KEY injected at wake; it can only read (`org.read`) unless the " +
+      'sandbox resource in sapiom.json sets `"runtimeKey": { "permissions": ["org.read", "org.write"] }`, which ' +
+      "this tool sends with the publish. `org.write` lets the app's server start runs, emit events and change " +
+      "triggers; your credential must hold every permission it names. Never put a Sapiom API key in env: " +
+      "SAPIOM_API_KEY is reserved. " +
+      "Returns { url, appLinkId, bundleSha256, manifest, runtimeKeyPermissions }.",
     {
       dir: z
         .string()
@@ -227,6 +240,7 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
         // Collected (and binary-checked) before the first HTTP call, so a bad
         // file map costs no round trip and creates no half-published link.
         const files = collectBundleFiles(projectDir, cfg);
+        const runtimeKey = readRuntimeKey(projectDir, cfg.name);
 
         const api = (
           step: PublishStep,
@@ -265,6 +279,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           // an App Link's sandbox lifetime is an implementation detail of the
           // wake, and the whole point of publishing is to stop caring about it.
           ...(cfg.env === undefined ? {} : { env: cfg.env }),
+          ...(runtimeKey === undefined
+            ? {}
+            : { runtimeKeyPermissions: runtimeKey.permissions }),
         });
         // The id addresses the next two calls, so a body that is not the link
         // we asked for (a proxy's HTML error page answering 200, say) has to
@@ -310,6 +327,9 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
           appLinkId: published.id,
           bundleSha256: activeSha,
           manifest: bundle.manifest,
+          ...(published.runtimeKeyPermissions === undefined
+            ? {}
+            : { runtimeKeyPermissions: published.runtimeKeyPermissions }),
           ...(raced
             ? {
                 warning:
@@ -324,6 +344,36 @@ export function register(server: McpServer, env: ResolvedEnvironment): void {
       }
     },
   );
+}
+
+const runtimeKeySchema = z
+  .object({ permissions: z.array(z.string().min(1)) })
+  .strict();
+
+/**
+ * The resource's `runtimeKey` from the raw `sapiom.json` entry, or `undefined`
+ * when it has none. `getSandbox` has already parsed the file and validated the
+ * entry, so only the `runtimeKey` shape is checked here; which permissions are
+ * allowed is the backend's call.
+ */
+function readRuntimeKey(
+  projectDir: string,
+  resourceName: string,
+): { permissions: string[] } | undefined {
+  const file = JSON.parse(
+    readFileSync(path.join(projectDir, CONFIG_FILE), "utf8"),
+  ) as { resources?: Record<string, Record<string, unknown> | undefined> };
+  const value = file.resources?.[resourceName]?.runtimeKey;
+  if (value === undefined) return undefined;
+  const parsed = runtimeKeySchema.safeParse(value);
+  if (!parsed.success) {
+    throw new PreviewOperationError({
+      code: "INVALID_SANDBOX",
+      message: `Invalid runtimeKey on sandbox resource "${resourceName}" in ${CONFIG_FILE}. Nothing was created or published.`,
+      hint: 'Expected { "permissions": ["org.read", "org.write"] }, or remove runtimeKey for a read-only key.',
+    });
+  }
+  return parsed.data;
 }
 
 /** The one-line answer the agent can hand straight to the user. */
@@ -612,6 +662,32 @@ function publishError(
       hint: "Run sapiom_authenticate to sign in again.",
     });
   }
+  // The link asks for a runtime-key permission this credential lacks; at publish
+  // it can be a scope someone else set, so the copy names both fixes.
+  if (code === "RUNTIME_KEY_PERMISSION_REQUIRED") {
+    const missing = Array.isArray(bodyError.permissions)
+      ? bodyError.permissions.join(", ")
+      : "a permission";
+    return new PreviewOperationError({
+      code,
+      message: `The app's runtime key would need ${missing}, which this credential does not hold. ${left}`,
+      step: where,
+      hint:
+        "Publish with a credential that holds it (an org admin), or narrow `runtimeKey.permissions` in " +
+        "sapiom.json. If the scope was set on the link earlier, an `org.write` holder must change it.",
+    });
+  }
+  if (code === "RUNTIME_KEY_PERMISSION_NOT_ALLOWED") {
+    const allowed = Array.isArray(bodyError.allowed)
+      ? bodyError.allowed.join(", ")
+      : "the allowed permissions";
+    return new PreviewOperationError({
+      code,
+      message: `${message ?? "runtimeKey.permissions names a permission an app link's key cannot hold."} ${left}`,
+      step: where,
+      hint: `runtimeKey.permissions in sapiom.json may contain only ${allowed}.`,
+    });
+  }
   // A 403 has two distinct causes, and the fix differs: publish authority may
   // create a link and republish its content, but not re-expose an existing one.
   if (code === "APP_LINK_MANAGEMENT_PERMISSION_REQUIRED") {
@@ -620,7 +696,7 @@ function publishError(
       message: `${message ?? "Changing how an existing app link is exposed needs more than publish authority."} ${left}`,
       step: where,
       hint:
-        "Republish without the management fields (visibility, dailySpendCapUsd) to update the app in " +
+        "Republish without the management fields (visibility, dailySpendCapUsd, runtimeKey) to update the app in " +
         "place, or have someone with `org.write` change them once.",
     });
   }
